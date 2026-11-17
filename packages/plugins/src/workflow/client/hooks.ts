@@ -12,11 +12,12 @@ import {
   usePluginDoc,
   usePluginLocale,
   usePluginSessionDoc,
+  useSharedNowMs,
 } from '@helm/plugin-client'
 import { isScrolledToBottom } from './model-format.ts'
 import { parseSavedWorkflowList } from './model-library.ts'
 import type { SavedWorkflowView } from './model-library.ts'
-import { libListInvalid } from './copy.ts'
+import { libListInvalid, runResultInspectFailed } from './copy.ts'
 
 /** Follow streaming output only while the user stays pinned to the bottom; never steal scroll position after scrolling up into history. */
 export function useStreamFollow(content: unknown) {
@@ -36,10 +37,9 @@ export function useWorkflowRunsDoc<T = { runs: WorkflowRunSummary[] }>(docName: 
   return usePluginSessionDoc<T>(docName, conversationId !== undefined ? { conversationId } : undefined)
 }
 
-/** Running stopwatch: SSR first frame starts no clock; only the client-side useEffect advances it (deterministic rendering). */
+/** Shared 1Hz stopwatch (SSR first frame returns undefined; client shares a single module-level ticker across all active cards). */
 export function useElapsedNowMs(active: boolean): number | undefined {
-  const [nowMs] = useElapsedState(active)
-  return nowMs
+  return useSharedNowMs(active)
 }
 
 /** Workflow library loading state: list action + generation guard (reloads never splice stale responses). */
@@ -87,17 +87,77 @@ export function useWorkflowLibrary(): WorkflowLibraryState {
   return { items, error, loading, reload }
 }
 
-function useElapsedState(active: boolean): [number | undefined, (v: number) => void] {
-  const [nowMs, setNowMs] = useState<number | undefined>(undefined)
+export interface InspectedRunResultState {
+  hasResult: boolean
+  hasResolvedValue: boolean
+  result: unknown
+  loading: boolean
+  error: string | undefined
+}
+
+/**
+ * On-demand full result loader for slimmed projected runs (`hasResult: true`
+ * with `result: undefined`): calls `inspect` once when expanded and caches per
+ * `(run.id, run.updatedAt)` with generation race protection.
+ */
+export function useInspectedRunResult(
+  run: Pick<WorkflowRunSummary, 'id' | 'updatedAt' | 'result' | 'hasResult'>,
+  open: boolean,
+): InspectedRunResultState {
+  const ctx = usePluginContext()
+  const locale = usePluginLocale()
+  const cacheKey = `${run.id}:${run.updatedAt}`
+  const [cached, setCached] = useState<{ key: string; value: unknown } | undefined>(undefined)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | undefined>(undefined)
+  const generation = useRef(0)
+
+  const hasInline = run.result !== undefined
+  const hasAnyResult = hasInline || run.hasResult === true
+  const isCached = cached?.key === cacheKey
+
   useEffect(() => {
-    if (!active) return
-    setNowMs(Date.now())
-    const timer = globalThis.setInterval?.(() => setNowMs(Date.now()), 1000)
-    return () => {
-      if (timer !== undefined) globalThis.clearInterval?.(timer)
+    if (!open || hasInline || run.hasResult !== true || isCached) {
+      setLoading(false)
+      return
     }
-  }, [active])
-  return [nowMs, setNowMs]
+    const current = ++generation.current
+    setLoading(true)
+    setError(undefined)
+    void ctx
+      .callAction('inspect', { runId: run.id })
+      .then((raw) => {
+        if (generation.current !== current) return
+        if (
+          raw === null ||
+          typeof raw !== 'object' ||
+          Array.isArray(raw) ||
+          (raw as Record<string, unknown>)['run'] === null ||
+          typeof (raw as Record<string, unknown>)['run'] !== 'object' ||
+          Array.isArray((raw as Record<string, unknown>)['run'])
+        ) {
+          setError(runResultInspectFailed('invalid inspect payload', locale))
+          return
+        }
+        const inspectedRun = (raw as { run: Record<string, unknown> }).run
+        setCached({ key: cacheKey, value: inspectedRun['result'] })
+      })
+      .catch((err: unknown) => {
+        if (generation.current !== current) return
+        setError(runResultInspectFailed(err instanceof Error ? err.message : String(err), locale))
+      })
+      .finally(() => {
+        if (generation.current === current) setLoading(false)
+      })
+  }, [open, hasInline, run.hasResult, run.id, cacheKey, isCached, ctx, locale])
+
+  return {
+    hasResult: hasAnyResult,
+    hasResolvedValue: hasInline || isCached,
+    result: hasInline ? run.result : isCached ? cached.value : undefined,
+    loading,
+    error,
+  }
 }
 
 export { useConversation, useConversations, usePluginContext, usePluginDoc, usePluginSessionDoc }

@@ -91,13 +91,14 @@ function userMessageTexts(
 function findToolResultByCallId(
   detail: { entries: Array<{ model?: unknown[] }> },
   toolCallId: string,
-): { text: string; isError: boolean } {
+): { text: string; isError: boolean; details?: Record<string, unknown> } {
   for (const entry of detail.entries) {
     for (const msg of entry.model ?? []) {
       const m = msg as {
         role?: string
         toolCallId?: string
         isError?: boolean
+        details?: Record<string, unknown>
         content?: Array<{ type?: string; text?: string }>
       }
       if (m.role === 'toolResult' && m.toolCallId === toolCallId) {
@@ -105,7 +106,7 @@ function findToolResultByCallId(
           .filter((b) => b.type === 'text' && typeof b.text === 'string')
           .map((b) => b.text!)
           .join('')
-        return { text, isError: m.isError === true }
+        return { text, isError: m.isError === true, ...(m.details !== undefined ? { details: m.details } : {}) }
       }
     }
   }
@@ -263,7 +264,8 @@ describe('subagent fork 与 Git Worktree 集成（createHelm 端到端）', { ti
       const detailTurn2 = await app.kernel.getConversationDetail(parent.id, { limit: 50 })
       const forkResult = findToolResultByCallId(detailTurn2, 'call-wt-fork-1')
       assert.equal(forkResult.isError, false)
-      assert.ok(forkResult.text.includes(`conversationId=${child.id}`), `应附标准 footer：${forkResult.text}`)
+      assert.equal(forkResult.text.includes('[subagent '), false, `不应含旧 footer：${forkResult.text}`)
+      assert.equal((forkResult.details?.['execution'] as Record<string, unknown> | undefined)?.['conversationId'], child.id)
       assert.ok(forkResult.text.includes('已写入标记文件'))
 
       const wtAfterFork = (await app.kernel.plugins.invokeAction('builtin:workflow', 'list_worktrees', {})) as {

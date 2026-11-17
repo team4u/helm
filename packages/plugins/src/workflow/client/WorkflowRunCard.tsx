@@ -1,16 +1,18 @@
 /**
  * builtin:workflow plugin workflow run card components:
  * - WorkflowToolView: SubagentWorkflow tool calls in the timeline (tool.view
- *   extension point);
- * - WorkflowRunCardBody: the shared execution tree view of workflow run cards
- *   (timeline and workbench); the in-run node card family lives in
- *   WorkflowNodeCards, the replay form in WorkflowReplayForm.
+ *   extension point; skips root execution-tree rebuild when the run has no
+ *   child conversations);
+ * - WorkflowRunCardBody: shared execution tree view of workflow run cards;
+ * - WorkflowRunResultBox: shared collapsed preview + on-demand `inspect` full
+ *   result expansion for slimmed projected runs (`hasResult` / `resultPreview`).
  */
 import { useId, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ToolViewProps } from '@helm/protocol'
 import type { WorkflowRunSummary } from '../../contracts.js'
 import {
+  MarkdownText,
   PopoverClose,
   PopoverContent,
   PopoverRoot,
@@ -22,12 +24,11 @@ import {
   usePluginContext,
   usePluginLocale,
   useToolActivity,
+  type LocalizedText,
 } from '@helm/plugin-client'
 import { ToolCallDetailsInline } from './ToolCallDetailsInline.tsx'
 import { WorkflowNodeCard } from './WorkflowNodeCards.tsx'
-import { WorkflowReplayForm } from './WorkflowReplayForm.tsx'
-import { useElapsedNowMs, usePluginSessionDoc } from './hooks.ts'
-import { SPIN, RUN_BADGE, PHASE_ICON, EXECUTION_BADGE } from './presentation.ts'
+import { useElapsedNowMs, useInspectedRunResult, usePluginSessionDoc } from './hooks.ts'
 import { Icon } from './WorkflowIcon.tsx'
 import { cleanInlineMarkdown, stringifyPretty } from './model-format.ts'
 import { canSaveRunAsWorkflow, parseWorkflowArgsInput, parseWorkflowSaveResult } from './model-library.ts'
@@ -44,7 +45,7 @@ import {
   resolveWorkflowToolFallbackLabel,
 } from './model-run.ts'
 import type { DetachViewerScope } from './model-run.ts'
-import { aggregateExecutionNodes, buildExecutionTree } from './model-execution-tree.ts'
+import { aggregateExecutionNodes, buildExecutionTree, buildLeafNodesForRun } from './model-execution-tree.ts'
 import type { ExecutionNode } from './model-execution-tree.ts'
 import { collectExecutionApprovals } from './model-execution-view.ts'
 import { effectiveRunNodeStatus, executionRunStatus } from './model-execution-status.ts'
@@ -55,8 +56,18 @@ import {
   actionDetachDone,
   approvalsBadge,
   approvalsTitle,
+  EXECUTION_BADGE,
   executionStatusLabel,
   externalErrorJoiner,
+  PHASE_ICON,
+  REPLAY_ARGS_PLACEHOLDER,
+  replayArgsAria,
+  REPLAY_HINT,
+  replayMeta,
+  REPLAY_SUBMIT,
+  REPLAY_SUBMIT_ARIA,
+  REPLAY_SUBMIT_TITLE,
+  RUN_BADGE,
   RUN_CARD_ABORT_FAILED,
   RUN_CARD_CACHED_REPLAY,
   RUN_CARD_DETACH_FAILED,
@@ -83,6 +94,7 @@ import {
   runCardSubtreeStat,
   runCardTokensStat,
   selfStatusLabel,
+  SPIN,
   traceActiveNode,
   TRACE_BG_DISPATCHED,
   TRACE_RUN_BACKGROUND,
@@ -100,6 +112,7 @@ import {
   RUN_KV_SOURCE_RUN,
   RUN_KV_UPDATED_AT,
   RUN_NO_NODES,
+  RUN_RESULT_LOADING,
   RUN_RESULT_SECTION,
   RUN_CARD_DETACH_TITLE,
   RUN_CARD_MORE_ARIA,
@@ -108,9 +121,94 @@ import {
   runStatusLabel,
 } from './copy.ts'
 
-// ---------------------------------------------------------------------------
-// WorkflowToolView: tool.view extension point component (SubagentWorkflow tool row)
-// ---------------------------------------------------------------------------
+function WorkflowReplayForm(props: {
+  run: WorkflowRunSummary
+  replayArgs: string
+  onReplayArgsChange: (value: string) => void
+  replayError: string | undefined
+  busy: boolean
+  onReplay: () => void
+}): ReactNode {
+  const { run, busy, replayArgs, replayError } = props
+  const locale = usePluginLocale()
+  return (
+    <div className="workflow-replay-form">
+      <div className="workflow-replay-meta">
+        {replayMeta(run.id, run.conversationId, run.savedName, locale)}
+      </div>
+      <div className="workflow-replay-hint">{resolveLocalizedText(REPLAY_HINT, locale)}</div>
+      <div className="workflow-replay-row">
+        <input
+          className="workflow-replay-args"
+          type="text"
+          placeholder={resolveLocalizedText(REPLAY_ARGS_PLACEHOLDER, locale)}
+          value={replayArgs}
+          onChange={(e) => props.onReplayArgsChange(e.target.value)}
+          aria-label={replayArgsAria(run.id, locale)}
+        />
+        <button
+          type="button"
+          className="btn btn-xs"
+          disabled={busy}
+          onClick={props.onReplay}
+          aria-label={resolveLocalizedText(REPLAY_SUBMIT_ARIA, locale)}
+          title={resolveLocalizedText(REPLAY_SUBMIT_TITLE, locale)}
+        >
+          <Icon name="rotate-cw" size={11} className={busy ? SPIN : undefined} />
+          {resolveLocalizedText(REPLAY_SUBMIT, locale)}
+        </button>
+      </div>
+      {replayError !== undefined ? <div className="callout callout--error">{replayError}</div> : null}
+    </div>
+  )
+}
+
+export function WorkflowRunResultBox(props: {
+  run: WorkflowRunSummary
+  resultOpen: boolean
+  onToggleResult: () => void
+  sectionLabel?: LocalizedText
+  renderStringAsMarkdown?: boolean
+}): ReactNode {
+  const { run, resultOpen } = props
+  const locale = usePluginLocale()
+  const inspected = useInspectedRunResult(run, resultOpen)
+  const collapsedPreview = useMemo(
+    () => run.resultPreview ?? formatNodeOutputPreview(run.result, 160),
+    [run.resultPreview, run.result],
+  )
+  const resultPretty = useMemo(
+    () => (inspected.hasResolvedValue ? stringifyPretty(inspected.result) : undefined),
+    [inspected.hasResolvedValue, inspected.result],
+  )
+
+  if (run.status !== 'completed' || !inspected.hasResult) return null
+
+  return (
+    <div className="workflow-result-box">
+      <div className="workflow-result-header">
+        <span className="trace-section-label">{resolveLocalizedText(props.sectionLabel ?? RUN_RESULT_SECTION, locale)}</span>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={props.onToggleResult}>
+          <Icon name={resultOpen ? 'chevron-down' : 'chevron-right'} size={11} />
+          {resolveLocalizedText(resultOpen ? RUN_COLLAPSE_RESULT : RUN_EXPAND_RESULT, locale)}
+        </button>
+      </div>
+      {resultOpen ? (
+        inspected.loading ? (
+          <div className="loading-state">{resolveLocalizedText(RUN_RESULT_LOADING, locale)}</div>
+        ) : inspected.error !== undefined ? (
+          <div className="callout callout--error">{inspected.error}</div>
+        ) : props.renderStringAsMarkdown === true && typeof inspected.result === 'string' ? (
+          <MarkdownText text={inspected.result} />
+        ) : resultPretty !== undefined ? (
+          <pre className="code-block-pre workflow-node-pre selectable"><code>{resultPretty}</code></pre>
+        ) : null
+      ) : collapsedPreview !== undefined ? (
+        <div className="workflow-result-preview selectable" title={collapsedPreview}>{collapsedPreview}</div>
+      ) : null}
+    </div>
+  )
+}
 
 export function WorkflowToolView(props: ToolViewProps): ReactNode {
   const ctx = usePluginContext()
@@ -129,25 +227,38 @@ export function WorkflowToolView(props: ToolViewProps): ReactNode {
     () =>
       viewerConversationId !== undefined
         ? resolveWorkflowRunForTool(
-            { callId: props.callId, result: typeof props.result === 'string' ? props.result : undefined },
+            {
+              callId: props.callId,
+              structuredOutput: props.structuredOutput,
+              result: typeof props.result === 'string' ? props.result : undefined,
+            },
             viewerConversationId,
             runs,
           )
         : undefined,
-    [props.callId, props.result, viewerConversationId, runs],
+    [props.callId, props.structuredOutput, props.result, viewerConversationId, runs],
   )
 
-  const childNodes = useMemo(
+  const hasChildConversations = useMemo(
+    () => (run?.nodes ?? []).some((n) => n.conversationId !== undefined),
+    [run],
+  )
+  const leafOnlyNodes = useMemo(
+    () => (run !== undefined && !hasChildConversations ? buildLeafNodesForRun(run) : undefined),
+    [run, hasChildConversations],
+  )
+  const treeChildNodes = useMemo(
     () =>
-      run === undefined || viewerConversationId === undefined
+      run === undefined || viewerConversationId === undefined || !hasChildConversations
         ? []
         : (buildExecutionTree({
             rootConversationId: viewerConversationId,
             conversations,
             runs,
           }).find((node) => node.kind === 'workflow' && node.run?.id === run.id)?.children ?? []),
-    [run, viewerConversationId, conversations, runs],
+    [run, viewerConversationId, hasChildConversations, conversations, runs],
   )
+  const childNodes = leafOnlyNodes ?? treeChildNodes
   const subtree = useMemo(() => aggregateExecutionNodes(childNodes), [childNodes])
   const effectiveStatus = run !== undefined ? effectiveRunNodeStatus(run, subtree) : undefined
   const toolActive = run !== undefined ? run.status === 'running' : props.status === 'running'
@@ -159,7 +270,7 @@ export function WorkflowToolView(props: ToolViewProps): ReactNode {
   useToolActivity(props.callId, toolActive)
   const nowMs = useElapsedNowMs(toolActive)
   const resultText = typeof props.result === 'string' ? props.result : undefined
-  const isBgHandle = run === undefined && isBackgroundWorkflowResultHandle(resultText)
+  const isBgHandle = run === undefined && isBackgroundWorkflowResultHandle(props.structuredOutput, resultText)
 
   const elapsedMs = useMemo(() => {
     if (run !== undefined) return resolveRunElapsedMs(run, nowMs)
@@ -279,7 +390,6 @@ export function WorkflowToolView(props: ToolViewProps): ReactNode {
   )
 }
 
-/** Shared execution tree view of workflow run cards; in-flight buttons use a sync ref to prevent duplicate submissions. */
 export function WorkflowRunCardBody(props: {
   run: WorkflowRunSummary
   cardOpen: boolean
@@ -288,9 +398,7 @@ export function WorkflowRunCardBody(props: {
   onToggleResult: () => void
   toolProps?: { input?: unknown; result?: unknown; artifactRef?: string }
   inWorkbench: boolean
-  /** Viewer scope (conversation + ownership): foreground-sync run "Move to background" visibility check. */
   viewer?: DetachViewerScope
-  /** Unified execution tree children (deep descendants of agent node conversations; by default only the run's own nodes are shown). */
   childNodes?: ExecutionNode[]
 }): ReactNode {
   const ctx = usePluginContext()
@@ -307,28 +415,17 @@ export function WorkflowRunCardBody(props: {
   const sections = useMemo(() => buildWorkflowPhaseSections(run, locale), [run, locale])
   const logs = useMemo(() => extractWorkflowLogs(run), [run])
 
-  // Unified execution tree: subtree counts and descendant approvals (shown
-  // only when deep descendants exist, never fabricated).
   const childNodes = props.childNodes ?? []
   const subtree = useMemo(() => aggregateExecutionNodes(childNodes), [childNodes])
   const deeperCount = subtree.total - nodes.length
   const approvals = useMemo(() => collectExecutionApprovals(childNodes, 3, locale), [childNodes, locale])
   const descendantApprovals = subtree.blocked
-  // Main badge effective status: same source as the execution tree (the
-  // run's own terminal status + subtree aggregate); while background / deep
-  // subtasks are unsettled (working / blocked / error / pending) never fake
-  // completion; the own terminal status is labeled separately (a self
-  // failed / aborted run keeps its more specific terminal copy).
   const selfRunStatus = executionRunStatus(run)
   const effectiveStatus = effectiveRunNodeStatus(run, subtree)
 
-  // Running stopwatch (deterministic SSR first frame): the total duration
-  // advances with the stopwatch and freezes at the real createdAt →
-  // updatedAt boundary when finished.
   const nowMs = useElapsedNowMs(run.status === 'running')
   const elapsedMs = resolveRunElapsedMs(run, nowMs)
 
-  /** Sync ref against duplicates: rapid clicks before a re-render never dispatch twice; errors are notified honestly, never overwriting success. */
   const guarded = (dispatch: () => Promise<unknown>, failMessage: string): void => {
     if (inFlight.current) return
     inFlight.current = true
@@ -343,9 +440,6 @@ export function WorkflowRunCardBody(props: {
   const abort = (): void => {
     guarded(() => ctx.callAction('abort', { runId: run.id }), resolveLocalizedText(RUN_CARD_ABORT_FAILED, locale))
   }
-  // Move to background: only running foreground-sync runs (allowed while the
-  // parent turn's tool call blocks); detach releases the current call and
-  // settlement reports use steer.
   const detach = (): void => {
     guarded(
       () =>
@@ -361,12 +455,6 @@ export function WorkflowRunCardBody(props: {
       resolveLocalizedText(RUN_CARD_RESUME_FAILED, locale),
     )
   }
-  // Replay: a completed DSL run (including inline) starts a new run via
-  // resumeFromRunId, and the new run keeps the original conversation; blank
-  // args keep the original args, explicit args strictly parsed and override.
-  // The cache only reuses prefix nodes with identical call payloads; real
-  // re-execution starts at the first mismatch — no promise that changed args
-  // hit the cache.
   const replay = (): void => {
     const parsed = parseWorkflowArgsInput(replayArgs, locale)
     if (!parsed.ok) {
@@ -386,10 +474,6 @@ export function WorkflowRunCardBody(props: {
       resolveLocalizedText(RUN_CARD_REPLAY_FAILED, locale),
     )
   }
-
-  // One-click save of an inline run as a workflow definition (save
-  // fromRunId: the default name comes from meta.name; duplicates / syntax
-  // errors are rejected honestly by the action — success is never faked).
   const saveAsWorkflow = (): void => {
     guarded(
       () =>
@@ -409,8 +493,6 @@ export function WorkflowRunCardBody(props: {
       resolveLocalizedText(RUN_CARD_SAVE_FAILED, locale),
     )
   }
-
-  const resultJson = useMemo(() => stringifyPretty(run.result), [run.result])
 
   return (
     <section className="card workflow-run-card" aria-label={runCardAriaLabel(run.name, locale)}>
@@ -614,22 +696,11 @@ export function WorkflowRunCardBody(props: {
             ))}
             {nodes.length === 0 ? <div className="workflow-phase-empty">{resolveLocalizedText(RUN_NO_NODES, locale)}</div> : null}
           </div>
-          {run.status === 'completed' && resultJson !== undefined ? (
-            <div className="workflow-result-box">
-              <div className="workflow-result-header">
-                <span className="trace-section-label">{resolveLocalizedText(RUN_RESULT_SECTION, locale)}</span>
-                <button type="button" className="btn btn-ghost btn-sm" onClick={props.onToggleResult}>
-                  <Icon name={props.resultOpen ? 'chevron-down' : 'chevron-right'} size={11} />
-                  {resolveLocalizedText(props.resultOpen ? RUN_COLLAPSE_RESULT : RUN_EXPAND_RESULT, locale)}
-                </button>
-              </div>
-              {props.resultOpen ? (
-                <pre className="code-block-pre workflow-node-pre selectable"><code>{resultJson}</code></pre>
-              ) : (
-                <div className="workflow-result-preview selectable" title={formatNodeOutputPreview(run.result, 160)}>{formatNodeOutputPreview(run.result, 160)}</div>
-              )}
-            </div>
-          ) : null}
+          <WorkflowRunResultBox
+            run={run}
+            resultOpen={props.resultOpen}
+            onToggleResult={props.onToggleResult}
+          />
           {run.error !== undefined ? <p className="callout callout--error">{run.error}</p> : null}
         </>
       ) : null}

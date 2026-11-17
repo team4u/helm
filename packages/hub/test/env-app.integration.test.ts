@@ -156,13 +156,20 @@ test('跨节点后台原生 subagent：真实 WS 节点分配 worktree、执行�
   }
   assert.equal(inspect.run.status, 'completed')
 
-  const toolEntry = JSON.stringify(
-    (await env.hubEnv.kernel.getConversationDetail(parent.id, { limit: 50 })).entries
-      .filter((e) => e.kind === 'pi.tool-result')
-      .map((e) => e.model),
-  )
-  const wtId = /worktreeId=\\+"([^"\\\n]+)/.exec(toolEntry)?.[1]
+  const toolMessages = (await env.hubEnv.kernel.getConversationDetail(parent.id, { limit: 50 })).entries
+    .filter((e) => e.kind === 'pi.tool-result')
+    .flatMap((e) => (Array.isArray(e.model) ? e.model : []) as Array<{
+      toolName?: string
+      content?: Array<{ text?: string }>
+      details?: { execution?: { worktree?: { id?: string } } }
+    }>)
+  const subagentMsg = toolMessages.find((m) => m.toolName === 'subagent')
+  const parsedOutput = JSON.parse(subagentMsg?.content?.[0]?.text ?? '{}') as {
+    execution?: { worktree?: { id?: string } }
+  }
+  const wtId = parsedOutput.execution?.worktree?.id
   assert.ok(wtId && wtId.startsWith('integration-node:'))
+  assert.equal(subagentMsg?.details?.execution?.worktree?.id, wtId)
   const wtPath = wtId.slice('integration-node:'.length)
   assert.equal(child.cwd, wtPath)
   assert.equal(await readFile(join(wtPath, 'remote-proof.txt'), 'utf8'), 'remote-executor')

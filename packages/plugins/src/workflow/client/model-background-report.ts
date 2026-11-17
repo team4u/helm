@@ -2,54 +2,41 @@
  * Pure parsing layer for builtin:workflow background settlement reports
  * (precise takeover of helm.input via meta.renderer).
  *
- * Existing body contract: a single-line lead + '\n' + report JSON (produced
- * by deliverBackgroundReport). This module splits at the first newline and
- * strictly validates the fields actually read for display/navigation (runId
- * consistent with meta, a legal terminal status, positive-integer execution
- * conversation ids, ...); result is a business value — null/false/0/'' are all
- * legal, detection is by key presence only, never dropped via truthiness.
- * Corrupted data returns an invalid view (an explicit "malformed" marker plus
- * the raw text preserved for expanding/copying) — success is never faked.
+ * Reads the structured `entry.data.meta.report` payload injected by
+ * `background.ts` directly (zero prefix-string / newline scraping) and strictly
+ * validates every field consumed for display/navigation (`runId` consistent
+ * with `meta.backgroundRunId`, legal terminal status, positive-integer
+ * execution conversationId, `otherRunningTasks` array). Corrupted payloads
+ * return an explicit invalid view with `rawText` preserved for copy/inspect.
  */
-
 import { DEFAULT_HELM_LOCALE, type HelmLocale } from '@helm/plugin-client'
 import type { ConversationEntry } from '@helm/protocol'
 import { extractCleanPreviewLine, summarizeReadableJson } from './model-format.ts'
 
-/** Report kind (meta.kind; decides the card title). */
 export type BackgroundReportKind = 'subagent_report' | 'workflow_report'
 
-/** Terminal statuses (deliverBackgroundReport only delivers after a run reaches a terminal state; running is not a report). */
 export type BackgroundReportStatus = 'completed' | 'failed' | 'aborted'
 
-/** Snapshot of other in-flight runs at delivery time (display only, drives no logic). */
 export interface BackgroundReportOtherTask {
   runId: string
   name: string
   kind: string
 }
 
-/** Valid report view: an immutable snapshot of the entry itself; does not subscribe to runsDoc. */
 export interface BackgroundReportView {
   invalid: false
   kind: BackgroundReportKind
   runId: string
   status: BackgroundReportStatus
-  /** Delivery timestamp (epoch ms, from entry.createdAt or data.createdAt). */
   createdAt?: number
-  /** Whether the report carries a result key (the value may be any JSON value, including null/false/0/''). */
   hasResult: boolean
   result: unknown
-  /** Raw error digest on failure/abort (may be an empty string). */
   error: string | undefined
-  /** execution.conversationId (navigation entry only for positive integers; undefined without execution or when invalid). */
   executionConversationId: number | undefined
   otherRunningTasks: BackgroundReportOtherTask[]
-  /** Full raw body text (for copying; not duplicated into meta). */
   rawText: string
 }
 
-/** Corrupted report view: still expandable with the raw text copyable. */
 export interface BackgroundReportInvalidView {
   invalid: true
   createdAt?: number
@@ -75,11 +62,6 @@ function extractEntryCreatedAt(entry: ConversationEntry, data: Record<string, un
   return undefined
 }
 
-/**
- * Parse a report entry. Validation failures (shape/JSON/runId
- * mismatch/illegal terminal status, ...) return invalid; callers must never
- * render invalid as success.
- */
 export function parseBackgroundReportEntry(entry: ConversationEntry): BackgroundReportParse {
   const data = entry.data
   if (data === null || typeof data !== 'object' || Array.isArray(data)) return invalidOf(entry)
@@ -94,16 +76,7 @@ export function parseBackgroundReportEntry(entry: ConversationEntry): Background
   const backgroundRunId = typeof m.backgroundRunId === 'string' ? m.backgroundRunId : undefined
   if (kind === undefined || backgroundRunId === undefined || backgroundRunId === '') return invalidOf(entry)
 
-  // Body contract: first line is the lead + newline + JSON. No newline means
-  // the contract is violated.
-  const newlineIndex = d.text.indexOf('\n')
-  if (newlineIndex < 0) return invalidOf(entry)
-  let report: unknown
-  try {
-    report = JSON.parse(d.text.slice(newlineIndex + 1))
-  } catch {
-    return invalidOf(entry)
-  }
+  const report = m.report
   if (report === null || typeof report !== 'object' || Array.isArray(report)) return invalidOf(entry)
   const r = report as Record<string, unknown>
 
@@ -111,8 +84,6 @@ export function parseBackgroundReportEntry(entry: ConversationEntry): Background
   if (typeof r.status !== 'string' || !TERMINAL_STATUSES.has(r.status)) return invalidOf(entry)
   if (r.error !== undefined && typeof r.error !== 'string') return invalidOf(entry)
 
-  // execution: only the navigation-relevant conversationId is consumed
-  // (positive integer); other fields stay preserved in the raw text.
   let executionConversationId: number | undefined
   if (r.execution !== undefined) {
     if (r.execution === null || typeof r.execution !== 'object' || Array.isArray(r.execution)) {
@@ -125,8 +96,6 @@ export function parseBackgroundReportEntry(entry: ConversationEntry): Background
     }
   }
 
-  // otherRunningTasks: snapshot at delivery time; display fields strictly
-  // validated per item.
   const otherRunningTasks: BackgroundReportOtherTask[] = []
   if (r.otherRunningTasks !== undefined) {
     if (!Array.isArray(r.otherRunningTasks)) return invalidOf(entry)
@@ -171,12 +140,10 @@ function invalidOf(entry: ConversationEntry): BackgroundReportInvalidView {
   }
 }
 
-/** Failed, aborted or malformed reports default to expanded so anomalies are visible at a glance. */
 export function isBackgroundReportDefaultOpen(view: BackgroundReportParse): boolean {
   return view.invalid || view.status === 'failed' || view.status === 'aborted'
 }
 
-/** Collapsed one-line preview: cleans Markdown and pure heading lines; extracts readable key/value summaries from JSON; errors win on failure. */
 export function backgroundReportPreview(
   view: BackgroundReportView,
   maxChars: number,

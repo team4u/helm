@@ -11,7 +11,7 @@ ensureHappyDom()
 const { Screen } = await import('@helm/plugin-client')
 const { resetPluginClientCache, seedPluginClientModule } = await import('../src/lib/plugin-client.js')
 const { HostStoreProviders } = await import('./helpers/host-store.js')
-const { mountSharedPluginNamespaces } = await import('./helpers/workflow-client.js')
+const { mountSharedPluginNamespaces } = await import('./helpers/builtin-clients.js')
 mountSharedPluginNamespaces({ realHooks: true })
 
 const { createRoot } = await import('react-dom/client')

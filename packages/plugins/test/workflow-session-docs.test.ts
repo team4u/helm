@@ -146,14 +146,17 @@ afterEach(() => {
   rmSync(dataDir, { recursive: true, force: true })
 })
 
-/** 读会话分片（JSON 或 undefined）。 */
-function readShard(convId: number): { runs: Array<{ id: string; status: string; conversationId: number }> } | undefined {
-  const raw = sessionDocs.get('builtin:workflow', 'runs', convId)
-  return raw === undefined ? undefined : (JSON.parse(raw) as { runs: Array<{ id: string; status: string; conversationId: number }> })
+/** 读公开会话分片（内存瞬态投影）。 */
+function readShard(host: PluginHost, convId: number): { runs: Array<{ id: string; status: string; conversationId: number }> } {
+  return host.getPublicSessionDoc('builtin:workflow', 'runs', convId).value as {
+    runs: Array<{ id: string; status: string; conversationId: number }>
+  }
 }
 
-function readBadges(): { byConversation: Record<string, Record<string, unknown>> } {
-  return docs.get<{ byConversation: Record<string, Record<string, unknown>> }>('builtin:workflow:run-badges', { byConversation: {} })
+function readBadges(host: PluginHost): { byConversation: Record<string, Record<string, unknown>> } {
+  return host.getPublicDoc('builtin:workflow', 'run-badges').value as {
+    byConversation: Record<string, Record<string, unknown>>
+  }
 }
 
 function sessionDocEvents(): Array<{ doc: { conversationId: number } }> {
@@ -196,7 +199,7 @@ test('真实内核全局流不旁路广播 workflow.updated/settled 的完整输
   }
 })
 
-test('跨会话隔离：每父会话分片只含自己的 run；全局 runs 文档不再存在', { timeout: 60_000 }, async () => {
+test('跨会话隔离：每父会话分片只含自己的 run；瞬态投影零持久写入且无全局 runs 文档', { timeout: 60_000 }, async () => {
   const host = makeHost()
   await host.register(createWorkflowPlugin())
   const runIn = async (conversationId: number, name: string) =>
@@ -204,25 +207,26 @@ test('跨会话隔离：每父会话分片只含自己的 run；全局 runs 文�
   await runIn(1, 'conv-one')
   await runIn(2, 'conv-two')
 
-  const shard1 = readShard(1)
-  const shard2 = readShard(2)
-  assert.equal(shard1?.runs.length, 1, `会话 1 分片恰一条（实际 ${JSON.stringify(shard1)}）`)
-  assert.equal(shard2?.runs.length, 1, `会话 2 分片恰一条（实际 ${JSON.stringify(shard2)}）`)
-  assert.equal(shard1!.runs[0]!.conversationId, 1)
-  assert.equal(shard2!.runs[0]!.conversationId, 2)
-  // 全局 runs 文档（旧形态）不再写入：完整 run 摘要不进全局命名空间。
-  assert.equal(docs.store.has('builtin:workflow:runs'), false, '不得再写全局 runs 文档')
+  const shard1 = readShard(host, 1)
+  const shard2 = readShard(host, 2)
+  assert.equal(shard1.runs.length, 1, `会话 1 分片恰一条（实际 ${JSON.stringify(shard1)}）`)
+  assert.equal(shard2.runs.length, 1, `会话 2 分片恰一条（实际 ${JSON.stringify(shard2)}）`)
+  assert.equal(shard1.runs[0]!.conversationId, 1)
+  assert.equal(shard2.runs[0]!.conversationId, 2)
+  assert.equal(sessionDocs.writes.length, 0, 'runs 为 durable:false 瞬态会话文档，零持久写入')
+  assert.equal(docs.store.has('builtin:workflow:runs'), false, '不得写全局 runs 文档')
+  assert.equal(docs.store.has('builtin:workflow:run-badges'), false, 'run-badges 为 durable:false 瞬态文档，零持久写入')
   await host.dispose()
 })
 
-test('run-badges 全局角标只含导航元数据；摘要不变不重复写', { timeout: 60_000 }, async () => {
+test('run-badges 全局角标只含导航元数据；摘要不变不重复广播', { timeout: 60_000 }, async () => {
   const host = makeHost()
   await host.register(createWorkflowPlugin())
-  const badgeWritesBefore = docs.writes.filter((k) => k === 'builtin:workflow:run-badges').length
+  const badgeEventsBefore = badgeDocEvents().length
   await host.invokeAction('builtin:workflow', 'run', { script: `${META('badge')}return 1` }, { conversationId: 1 })
   await host.invokeAction('builtin:workflow', 'run', { script: `${META('badge2')}return 2` }, { conversationId: 1 })
 
-  const badges = readBadges()
+  const badges = readBadges(host)
   const entry = badges.byConversation['1']
   assert.ok(entry, `角标含会话 1（实际 ${JSON.stringify(badges)}）`)
   assert.equal(entry!['count'], 2, '计数为 2')
@@ -233,74 +237,65 @@ test('run-badges 全局角标只含导航元数据；摘要不变不重复写', 
       `run-badges 条目只允许 count/tone/footerText，发现 ${key}`,
     )
   }
-  const badgeJson = JSON.stringify(docs.get('builtin:workflow:run-badges', { byConversation: {} }))
+  const badgeJson = JSON.stringify(badges)
   assert.ok(!badgeJson.includes('nodes'), '角标不得含节点详情')
   assert.ok(!badgeJson.includes('output'), '角标不得含节点产出')
 
-  // 摘要不变不写：第三个 run 到终态后取基线，幂等 abort 不改变投影
-  // → 不得新增角标写入与事件。
+  // 摘要不变不发事件：第三个 run 到终态后取基线，幂等 abort 不改变投影。
   const stable = (await host.invokeAction('builtin:workflow', 'run', { script: `${META('badge3')}return 3`, wait: true }, { conversationId: 1 })) as { run: { id: string } }
-  const badgeWritesStable = docs.writes.filter((k) => k === 'builtin:workflow:run-badges').length
   const badgeEventsStable = badgeDocEvents().length
-  assert.ok(badgeWritesStable > badgeWritesBefore, 'run 变更后角标真实写入')
+  assert.ok(badgeEventsStable > badgeEventsBefore, 'run 变更后角标事件真实广播')
   await host.invokeAction('builtin:workflow', 'abort', { runId: stable.run.id })
-  assert.equal(
-    docs.writes.filter((k) => k === 'builtin:workflow:run-badges').length,
-    badgeWritesStable,
-    `幂等 abort 不改变摘要：不得再写角标（实际新增 ${docs.writes.filter((k) => k === 'builtin:workflow:run-badges').length - badgeWritesStable} 次）`,
-  )
   assert.equal(badgeDocEvents().length, badgeEventsStable, '摘要不变不得再发角标事件')
+  assert.equal(docs.writes.includes('builtin:workflow:run-badges'), false, '瞬态角标零持久写入')
   await host.dispose()
 })
 
-test('分片值不变不发 plugin.session_doc.updated（无写放大）', { timeout: 60_000 }, async () => {
+test('分片值不变不发 plugin.session_doc.updated（无事件/写放大）', { timeout: 60_000 }, async () => {
   const host = makeHost()
   await host.register(createWorkflowPlugin())
   // wait: true —— run 到终态后才返回，后续 sync 都是同值投影。
   const { run } = (await host.invokeAction('builtin:workflow', 'run', { script: `${META('stable')}return 1`, wait: true }, { conversationId: 1 })) as { run: { id: string; status: string } }
   assert.equal(run.status, 'completed')
   const eventsAfterRun = sessionDocEvents().length
-  const writesAfterRun = sessionDocs.writes.filter((k) => k === 'builtin:workflow:runs:1').length
 
   // 同值投影：对已终态 run 的 abort 是幂等 no-op；handler 尾部的 syncRunsDoc
-  // 必须经值比对跳过写入与事件（无写放大）。
+  // 必须经值比对跳过写入与事件。
   await host.invokeAction('builtin:workflow', 'abort', { runId: run.id })
   assert.equal(sessionDocEvents().length, eventsAfterRun, '值不变不得再发会话文档事件')
-  assert.equal(
-    sessionDocs.writes.filter((k) => k === 'builtin:workflow:runs:1').length,
-    writesAfterRun,
-    '值不变不得再写持久层',
-  )
+  assert.equal(sessionDocs.writes.length, 0, '瞬态分片零持久写入')
   await host.dispose()
 })
 
-test('删除的父会话不重建孤儿 doc；已持久分片无 runs 时清到空', { timeout: 60_000 }, async () => {
+test('删除的父会话不重建孤儿 doc；存活会话无 runs 时清到空', { timeout: 60_000 }, async () => {
   const host = makeHost()
   await host.register(createWorkflowPlugin())
   await host.invokeAction('builtin:workflow', 'run', { script: `${META('orphan')}return 1` }, { conversationId: 2 })
-  assert.ok(readShard(2), '会话 2 分片已写入')
+  assert.equal(readShard(host, 2).runs.length, 1, '会话 2 分片已写入')
 
-  // 会话 2 删除：store 级联清理（真实 HelmStore 同事务删除）；此处直接模拟
-  // 后续 sync——插件侧只依赖 listConversations 存在集合过滤，不重建分片。
   backend.conversations.delete(2)
-  sessionDocs.delete('builtin:workflow', 'runs', 2)
+  assert.throws(
+    () => host.getPublicSessionDoc('builtin:workflow', 'runs', 2),
+    (err: unknown) => err instanceof HelmError && err.code === 'not_found',
+  )
   // 触发一次投影（会话 1 新 run）：会话 2 的孤儿分片不得被重建。
   await host.invokeAction('builtin:workflow', 'run', { script: `${META('after-del')}return 1` }, { conversationId: 1 })
-  assert.equal(sessionDocs.get('builtin:workflow', 'runs', 2), undefined, '删除会话后不得重建孤儿分片')
+  assert.equal(
+    sessionDocEvents().filter((e) => e.doc.conversationId === 2).length,
+    1,
+    '删除会话 2 后不得再向会话 2 推送重投影事件',
+  )
 
-  // 已持久分片但 run 已不在（模拟引擎记录清空）：会话仍在 → 清到空分片。
-  // 通过 dispose+reopen 用空 records 持久层模拟：直接构造第二 host。
   await host.dispose()
   const host2 = makeHost()
   docs.store.delete('builtin:workflow:records')
   await host2.register(createWorkflowPlugin())
-  const shard1 = readShard(1)
-  assert.ok(shard1, '会话 1 分片仍存在')
-  assert.deepEqual(shard1!.runs, [], '会话存在但无 runs：分片清到空（不保留旧投影）')
+  const shard1 = readShard(host2, 1)
+  assert.deepEqual(shard1.runs, [], '会话存在但无 runs：分片为空（不保留旧投影）')
   await host2.dispose()
 })
 
-test('重启（同持久层新 host）：start 后最终投影一致，分片与角标真实恢复', { timeout: 60_000 }, async () => {
+test('重启（同持久层新 host）：start 后最终投影一致，分片与角标在内存中真实恢复', { timeout: 60_000 }, async () => {
   const host = makeHost()
   await host.register(createWorkflowPlugin())
   const started = (await host.invokeAction('builtin:workflow', 'run', { script: `${META('restart')}return 1`, wait: true }, { conversationId: 1 })) as { run: { id: string; status: string } }
@@ -308,27 +303,29 @@ test('重启（同持久层新 host）：start 后最终投影一致，分片与
 
   const host2 = makeHost()
   await host2.register(createWorkflowPlugin())
-  const shard = readShard(1)
-  const restored = shard?.runs.find((r) => r.id === started.run.id)
+  const shard = readShard(host2, 1)
+  const restored = shard.runs.find((r) => r.id === started.run.id)
   assert.ok(restored, `重启后分片含该 run（实际 ${JSON.stringify(shard)}）`)
   assert.equal(restored!.status, started.run.status, '重启后投影状态一致')
-  const badges = readBadges()
+  const badges = readBadges(host2)
   assert.equal(badges.byConversation['1']?.['count'], 1, '重启后角标恢复')
   await host2.dispose()
 })
 
-test('sessionDoc 声明与 docs 命名空间隔离：runs 为会话文档，records 保持私有全局', { timeout: 60_000 }, async () => {
+test('sessionDoc 声明与 docs 命名空间隔离：runs 与 run-badges 为瞬态公开文档，持久层只存私有记录', { timeout: 60_000 }, async () => {
   const host = makeHost()
   await host.register(createWorkflowPlugin())
-  // UI 声明合法性（sessionDocs 引用 public sessionDoc）在注册边界已通过（未抛）。
-  // 全局层只应存在私有存储与 run-badges（public），绝无全局 runs 文档。
+  await host.invokeAction('builtin:workflow', 'run', { script: `${META('ns-check')}return 1`, wait: true }, { conversationId: 1 })
   const globalKeys = [...docs.store.keys()].filter((k) => k.startsWith('builtin:workflow:'))
   assert.equal(globalKeys.includes('builtin:workflow:runs'), false)
+  assert.equal(globalKeys.includes('builtin:workflow:run-badges'), false, 'run-badges 为 durable:false 瞬态文档，不落持久层')
   assert.deepEqual(
-    globalKeys.filter((k) => !k.endsWith(':records') && !k.endsWith(':subagent-conversations') && !k.endsWith(':worktree-state')).sort(),
-    ['builtin:workflow:run-badges'],
-    `全局命名空间只留私有记录与 run-badges（实际 ${JSON.stringify(globalKeys)}）`,
+    globalKeys.filter((k) => !k.endsWith(':records') && !k.endsWith(':subagent-conversations') && !k.endsWith(':worktree-state')),
+    [],
+    `持久层全局命名空间只存私有记录（实际 ${JSON.stringify(globalKeys)}）`,
   )
+  assert.ok(host.getPublicDoc('builtin:workflow', 'run-badges'), 'run-badges 仍作为公开瞬态文档可读')
+  assert.ok(host.getPublicSessionDoc('builtin:workflow', 'runs', 1), 'runs 仍作为公开瞬态会话文档可读')
   await host.dispose()
 })
 
@@ -353,21 +350,21 @@ test('祖先聚合：后代发起的 run 进入祖先分片且保留原始归属
   const childRun = await runIn(11, 'child-run')
 
   // 后代 run 进入祖先分片；conversationId 保持原始归属（11，不改写为 1）。
-  const shard1 = readShard(1)
-  const shard11 = readShard(11)
-  assert.equal(shard1?.runs.length, 2, `根会话分片含自身 + 后代 run（实际 ${JSON.stringify(shard1?.runs.map((r) => r.id))}）`)
-  assert.equal(shard11?.runs.length, 1, '子会话分片只含自己的 run')
-  const projectedChild = shard1!.runs.find((r) => r.id === childRun.run.id)
+  const shard1 = readShard(host, 1)
+  const shard11 = readShard(host, 11)
+  assert.equal(shard1.runs.length, 2, `根会话分片含自身 + 后代 run（实际 ${JSON.stringify(shard1.runs.map((r) => r.id))}）`)
+  assert.equal(shard11.runs.length, 1, '子会话分片只含自己的 run')
+  const projectedChild = shard1.runs.find((r) => r.id === childRun.run.id)
   assert.ok(projectedChild, '后代 run 在根分片中')
   assert.equal(projectedChild!.conversationId, 11, 'run.conversationId 保持原始归属（不改写为投影目标）')
-  assert.equal(shard11!.runs[0]!.conversationId, 11)
-  assert.equal(shard1!.runs.some((r) => r.id === rootRun.run.id), true, '自身 run 仍在根分片')
+  assert.equal(shard11.runs[0]!.conversationId, 11)
+  assert.equal(shard1.runs.some((r) => r.id === rootRun.run.id), true, '自身 run 仍在根分片')
 
   // 无关会话不串台。
-  assert.equal(readShard(2) === undefined || readShard(2)!.runs.length === 0, true, '无关会话分片不含该子树 run')
+  assert.equal(readShard(host, 2).runs.length, 0, '无关会话分片不含该子树 run')
 
   // 角标同步祖先聚合：根会话计数含后代 run（按 run.id 去重后即 2）。
-  const badges = readBadges()
+  const badges = readBadges(host)
   assert.equal(badges.byConversation['1']?.['count'], 2, `根会话角标聚合后代 run（实际 ${JSON.stringify(badges)}）`)
   assert.equal(badges.byConversation['11']?.['count'], 1, '子会话角标只计自己')
   assert.equal(badges.byConversation['2'], undefined, '无关会话无角标')
@@ -386,15 +383,19 @@ test('父链环与缺父：不虚构祖先投影，投影有界完成', { timeou
   await host.invokeAction('builtin:workflow', 'run', { conversationId: 6, script: `${META('orphan-run')}return 1` }, { conversationId: 6 })
 
   // 环：有界完成；4 与 5 互为投影目标（各自的 run 各自可见，不重复、不悬挂）。
-  const shard4 = readShard(4)
-  const shard5 = readShard(5)
-  assert.equal(shard4?.runs.length, 1, '环上会话 4 分片有界完成（含自己发起的 run）')
-  assert.equal(shard5?.runs.length, 1, '环上会话 5 分片有界完成（4 视为其祖先）')
-  assert.equal(shard4!.runs[0]!.conversationId, 4, '原始归属保留')
+  const shard4 = readShard(host, 4)
+  const shard5 = readShard(host, 5)
+  assert.equal(shard4.runs.length, 1, '环上会话 4 分片有界完成（含自己发起的 run）')
+  assert.equal(shard5.runs.length, 1, '环上会话 5 分片有界完成（4 视为其祖先）')
+  assert.equal(shard4.runs[0]!.conversationId, 4, '原始归属保留')
   // 缺父：只投自己的分片，不虚构 999 的投影。
-  const shard6 = readShard(6)
-  assert.equal(shard6?.runs.length, 1, '缺父会话分片含自己的 run')
-  assert.equal(sessionDocs.get('builtin:workflow', 'runs', 999), undefined, '不虚构缺失祖先的分片')
+  const shard6 = readShard(host, 6)
+  assert.equal(shard6.runs.length, 1, '缺父会话分片含自己的 run')
+  assert.equal(
+    sessionDocEvents().some((e) => e.doc.conversationId === 999),
+    false,
+    '不虚构缺失祖先的分片事件',
+  )
   await host.dispose()
 })
 
@@ -403,25 +404,29 @@ test('会话删除事件触发重投影：祖先分片失去该子树 run，孤�
   const host = makeHost()
   await host.register(createWorkflowPlugin())
   await host.invokeAction('builtin:workflow', 'run', { conversationId: 11, script: `${META('del-run')}return 1` }, { conversationId: 11 })
-  assert.equal(readShard(1)?.runs.length, 1, '删除前根分片含后代 run')
+  assert.equal(readShard(host, 1).runs.length, 1, '删除前根分片含后代 run')
 
-  // 会话 11 删除（store 级联清理分片）→ conversation.deleted 事件 → 重投影。
+  // 会话 11 删除 → conversation.deleted 事件 → 重投影。
   backend.conversations.delete(11)
-  sessionDocs.delete('builtin:workflow', 'runs', 11)
+  const eventsFor11Before = sessionDocEvents().filter((e) => e.doc.conversationId === 11).length
   backend.emit('conversation.deleted', { conversationId: 11 })
   await tick()
 
-  assert.equal(readShard(1)?.runs.length, 0, `删除后根分片失去该子树 run（实际 ${JSON.stringify(readShard(1))}）`)
-  assert.equal(sessionDocs.get('builtin:workflow', 'runs', 11), undefined, '孤儿分片不重建')
-  assert.equal(readBadges().byConversation['1'], undefined, '角标不再计数已删子树 run')
+  assert.equal(readShard(host, 1).runs.length, 0, `删除后根分片失去该子树 run（实际 ${JSON.stringify(readShard(host, 1))}）`)
+  assert.equal(
+    sessionDocEvents().filter((e) => e.doc.conversationId === 11).length,
+    eventsFor11Before,
+    '孤儿分片不重建',
+  )
+  assert.equal(readBadges(host).byConversation['1'], undefined, '角标不再计数已删子树 run')
   await host.dispose()
 })
 
-test('conversation.upsert 树未变不重写（无写放大）；树变化（新增后代会话）后重投影', { timeout: 60_000 }, async () => {
+test('conversation.upsert 树未变不重写（无事件放大）；树变化（新增后代会话）后重投影', { timeout: 60_000 }, async () => {
   const host = makeHost()
   await host.register(createWorkflowPlugin())
   await host.invokeAction('builtin:workflow', 'run', { script: `${META('upsert-run')}return 1` }, { conversationId: 1 })
-  const writesBefore = sessionDocs.writes.filter((k) => k === 'builtin:workflow:runs:1').length
+  const eventsBefore = sessionDocEvents().filter((e) => e.doc.conversationId === 1).length
 
   // 树未变化（仅状态字段更新）：指纹不变，跳过重投影。
   const conv1 = backend.conversations.get(1)!
@@ -429,19 +434,19 @@ test('conversation.upsert 树未变不重写（无写放大）；树变化（新
   backend.emit('conversation.upsert', { conversation: backend.conversations.get(1) })
   await tick()
   assert.equal(
-    sessionDocs.writes.filter((k) => k === 'builtin:workflow:runs:1').length,
-    writesBefore,
-    '树未变不得重写分片',
+    sessionDocEvents().filter((e) => e.doc.conversationId === 1).length,
+    eventsBefore,
+    '树未变不得重复推送分片事件',
   )
 
-  // 新增后代会话（树变化）：重投影执行（幂等——无新 run，值不变不写），
+  // 新增后代会话（树变化）：重投影执行（幂等——无新 run，值不变不推事件），
   // 但指纹前进；随后该后代的 run 会正确进入根分片。
   backend.conversations.set(11, makeConversation(11, 1))
   backend.emit('conversation.upsert', { conversation: backend.conversations.get(11) })
   await tick()
   await host.invokeAction('builtin:workflow', 'run', { conversationId: 11, script: `${META('upsert-child')}return 2` }, { conversationId: 11 })
-  assert.equal(readShard(1)?.runs.length, 2, '新增后代会话发起的 run 进入根分片')
-  assert.equal(readShard(11)?.runs.length, 1)
+  assert.equal(readShard(host, 1).runs.length, 2, '新增后代会话发起的 run 进入根分片')
+  assert.equal(readShard(host, 11).runs.length, 1)
   await host.dispose()
 })
 
@@ -456,9 +461,8 @@ test('分片瘦身：runs 会话分片剥离大体积 result 并保留 hasResult
     { conversationId: 1 },
   )) as { run: WorkflowRunSummary }
 
-  const shard = sessionDocs.get('builtin:workflow', 'runs', 1)
-  assert.ok(shard)
-  const projected = (JSON.parse(shard) as { runs: WorkflowRunSummary[] }).runs.find((r) => r.id === started.run.id)
+  const shard = host.getPublicSessionDoc('builtin:workflow', 'runs', 1).value as { runs: WorkflowRunSummary[] }
+  const projected = shard.runs.find((r) => r.id === started.run.id)
   assert.ok(projected)
   assert.equal('result' in projected, false, 'runs 分片必须剥离原始 result')
   assert.equal(projected.hasResult, true)
@@ -568,10 +572,46 @@ test('增量投影与 100 条滑窗：upsertRun 零 listRuns 磁盘读，超出 
   assert.equal(latestSessionDoc.runs.some((r) => r.id === 'wf_done_10'), true)
 })
 
-test('conversation.deleted 清理受管子代理登记表（subagent-conversations GC）', { timeout: 60_000 }, async () => {
+test('conversation.deleted 同时清理受管子代理登记表与已移除 worktree 绑定元数据（保留 active worktree）', { timeout: 60_000 }, async () => {
   backend.conversations.set(21, makeConversation(21, 1))
   docs.set('builtin:workflow:subagent-conversations', {
     '21': { depth: 1, parentConversationId: 1, maxSubagentDepth: 2, createdAt: 1 },
+  })
+  docs.set('builtin:workflow:worktree-state', {
+    'worktree-agent-bindings': {
+      'agent-21': { childId: 21, parentConversationId: 1 },
+      'agent-keep': { childId: 22, parentConversationId: 1 },
+    },
+    'runtime/worktrees': {
+      version: 1,
+      records: [
+        {
+          id: 'local:/wt/removed-21',
+          nodeId: 'local',
+          repoRoot: '/repo',
+          path: '/wt/removed-21',
+          branch: 'helm/spawn-21',
+          baseBranch: 'main',
+          baseCommit: 'abc1234',
+          conversationId: 21,
+          status: 'removed',
+          createdAt: 1,
+          removedAt: 2,
+        },
+        {
+          id: 'local:/wt/active-21',
+          nodeId: 'local',
+          repoRoot: '/repo',
+          path: '/wt/active-21',
+          branch: 'helm/spawn-active-21',
+          baseBranch: 'main',
+          baseCommit: 'abc1234',
+          conversationId: 21,
+          status: 'active',
+          createdAt: 1,
+        },
+      ],
+    },
   })
   const host = makeHost()
   await host.register(createWorkflowPlugin())
@@ -584,5 +624,15 @@ test('conversation.deleted 清理受管子代理登记表（subagent-conversatio
 
   const afterGc = docs.get<Record<string, unknown>>('builtin:workflow:subagent-conversations', {})
   assert.equal('21' in afterGc, false, '会话删除后必须回收 subagent-conversations 中的孤儿条目')
+  const wtAfter = docs.get<Record<string, unknown>>('builtin:workflow:worktree-state', {})
+  const bindingsAfter = wtAfter['worktree-agent-bindings'] as Record<string, unknown>
+  assert.equal('agent-21' in bindingsAfter, false, '会话删除后必须回收 worktree-agent-bindings 中指向 21 的绑定')
+  assert.equal('agent-keep' in bindingsAfter, true, '无关会话绑定保持不变')
+  const recordsAfter = (wtAfter['runtime/worktrees'] as { records: Array<{ id: string }> }).records
+  assert.deepEqual(
+    recordsAfter.map((r) => r.id),
+    ['local:/wt/active-21'],
+    '已 removed 记录应被裁剪，active 记录必须保留',
+  )
   await host.dispose()
 })

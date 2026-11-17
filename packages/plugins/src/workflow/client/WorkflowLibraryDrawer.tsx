@@ -20,7 +20,6 @@ import {
   usePluginContext,
   usePluginLocale,
 } from '@helm/plugin-client'
-import { SPIN } from './presentation.ts'
 import { Icon } from './WorkflowIcon.tsx'
 import {
   buildWorkflowEditRequest,
@@ -33,6 +32,7 @@ import {
   LIB_ARGS_PLACEHOLDER,
   libArgsAria,
   LIB_CANCEL,
+  SPIN,
   LIB_CLOSE,
   LIB_COPY_EDIT_REQUEST,
   LIB_COPY_SOURCE,

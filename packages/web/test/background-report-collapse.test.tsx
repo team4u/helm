@@ -1,20 +1,10 @@
 /**
- * 后台结算汇报折叠展示测试（builtin:workflow 真实 client 编译产物 + Web 核心）。
- *
- * 覆盖：
- * 1. 纯解析 model-background-report：string/JSON result（null/false/0/空串不丢）、
- *    failed/aborted、无 execution、runId 不一致/非法终态/损坏输入 → invalid；
- * 2. BackgroundReportCard DOM（与宿主 .trace-row 同构的单行回执 + 原地展开面板）：
- *    完成态默认收起（标题/状态徽章/单行摘要，runId 与完整结果在展开后挂载，
- *    复制为图标动作）；失败/异常报文默认展开；复制原文实写入剪贴板、子会话
- *    导航不触发折叠、损坏显式“汇报数据格式异常”且可展开复制原文；
- * 3. 宿主派发：timelineRenderers（helpers/workflow-ui.ts 同步注册）按
- *    matchMeta.renderer 精确接管 helm.input，未标记输入不受影响；
- * 4. 排队中的非人类长文本通用折叠（HumanMessage）：agent 长文折叠可展开/收起、
- *    复制全文入口保留；human 输入与短文本不受影响。
+ * 宿主通用时间线插件接管与 queued 长文本折叠测试：
+ * - timeline.renderer 按 matchMeta.renderer 精确接管 helm.input，未标记输入不受影响；
+ * - queuedAgentTextCollapse / HumanMessage 对 agent 长文的折叠、展开/收起与统一灰色胶囊样式。
  */
 import assert from 'node:assert/strict'
-import { before, test } from 'node:test'
+import { test } from 'node:test'
 import * as React from 'react'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { act } from 'react'
@@ -23,417 +13,67 @@ import type {
   ConversationEntry,
   ConversationLive,
   ConversationSummary,
-  PluginClientContext as PluginClientContextType,
-  TimelineRendererProps,
+  PluginUiContribution,
 } from '@helm/protocol'
-import { PluginClientContext, createLocaleTranslator } from '@helm/plugin-client'
 import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
 import { emptyLiveState } from '../src/lib/live-state.js'
 import { getSessionDocState, subscribeSessionDoc } from '../src/lib/session-docs.js'
 import { buildTimelineItems, queuedAgentTextCollapse } from '../src/conversation/timeline-model.js'
-import { workflowUi } from './helpers/workflow-ui.js'
-import { importWorkflowClientModule, mountSharedPluginNamespaces } from './helpers/workflow-client.js'
-import type {
-  BackgroundReportParse,
-} from '../../plugins/src/workflow/client/model-background-report.ts'
 import { HostStoreProviders } from './helpers/host-store.js'
 import { readHostStyles } from './helpers/host-styles.js'
 
 const e = React.createElement
 
 GlobalRegistrator.register()
-mountSharedPluginNamespaces()
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
-// 与现有 SSR 测试一致：为 tsx 的 classic JSX 转换提供 React。
 ;(globalThis as Record<string, unknown>).React = React
 
-interface Model {
-  parseBackgroundReportEntry: (entry: ConversationEntry) => BackgroundReportParse
-  backgroundReportPreview: (view: Extract<BackgroundReportParse, { invalid: false }>, maxChars: number) => string
-}
-
-let model: Model
-let BackgroundReportCard: (props: TimelineRendererProps) => React.ReactElement
-
-before(async () => {
-  model = (await importWorkflowClientModule('model-background-report.ts')) as unknown as Model
-  const client = await importWorkflowClientModule()
-  BackgroundReportCard = client['BackgroundReportCard'] as typeof BackgroundReportCard
-}, { timeout: 60_000 })
-
 // ---------------------------------------------------------------------------
-// 构造工具
-// ---------------------------------------------------------------------------
-
-interface ReportOverrides {
-  kind?: 'subagent_report' | 'workflow_report'
-  runId?: string
-  report?: Record<string, unknown>
-  meta?: Record<string, unknown>
-  text?: string
-}
-
-function makeReportEntry(overrides: ReportOverrides = {}, entryId = '51'): ConversationEntry {
-  const runId = overrides.runId ?? 'wf_abc123'
-  const kind = overrides.kind ?? 'subagent_report'
-  const report = {
-    runId,
-    status: 'completed',
-    otherRunningTasks: [],
-    ...overrides.report,
-  }
-  return {
-    id: entryId,
-    kind: 'helm.input',
-    data: {
-      id: `helm:subagent-report:${runId}`,
-      text:
-        overrides.text ??
-        `后台子代理任务已结算。以下为运行 ${runId} 的结果数据（仅代表本次任务；otherRunningTasks 是投递时其余在途运行的快照）：\n${JSON.stringify(report)}`,
-      origin: 'agent',
-      createdAt: 100,
-      meta: { backgroundRunId: runId, kind, renderer: 'workflow:background-report', ...overrides.meta },
-    },
-  }
-}
-
-function drawerSpy(): { ctx: PluginClientContextType; calls: number[] } {
-  const calls: number[] = []
-  const ctx = {
-    pluginId: 'builtin:workflow',
-    callAction: async () => ({}),
-    submitInput: async () => {},
-    openScreen: () => {},
-    openSplitScreen: () => {},
-    openConversationDrawer: (id: number) => {
-      calls.push(id)
-    },
-    openArtifact: () => {},
-    openWorkbench: () => {},
-    closeWorkbench: () => {},
-    notify: () => {},
-    getPluginDoc: async () => undefined,
-    getPluginSessionDoc: async () => undefined,
-    conversationId: 1,
-    theme: 'dark',
-    locale: 'en' as const,
-    translate: createLocaleTranslator('en'),
-  } as unknown as PluginClientContextType
-  return { ctx, calls }
-}
-
-async function mountCard(
-  entry: ConversationEntry,
-  ctx: PluginClientContextType,
-): Promise<{ host: HTMLElement; unmount: () => void }> {
-  const host = document.createElement('div')
-  document.body.appendChild(host)
-  const root = createRoot(host)
-  await act(async () => {
-    root.render(e(PluginClientContext.Provider, { value: ctx }, e(BackgroundReportCard, { entry, conversationId: 1 })))
-  })
-  await act(async () => {})
-  return {
-    host,
-    unmount: () => {
-      act(() => root.unmount())
-      host.remove()
-    },
-  }
-}
-
-function clickButton(host: HTMLElement, label: string): void {
-  const btn = host.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)
-  assert.ok(btn, `应存在 aria-label=${label} 的按钮`)
-  act(() => btn.click())
-}
-
-/** 捕获 navigator.clipboard.writeText 写入内容（真实 CopyButton → copyToClipboard）。 */
-async function withCapturedClipboard(run: (captured: string[]) => Promise<void>): Promise<void> {
-  const captured: string[] = []
-  const original = Object.getOwnPropertyDescriptor(globalThis, 'navigator')
-  Object.defineProperty(globalThis, 'navigator', {
-    value: { clipboard: { writeText: async (text: string) => { captured.push(text) } } },
-    configurable: true,
-    writable: true,
-  })
-  try {
-    await run(captured)
-  } finally {
-    if (original !== undefined) Object.defineProperty(globalThis, 'navigator', original)
-  }
-}
-
-// ---------------------------------------------------------------------------
-// 1. 纯解析：result 语义 / 终态 / 损坏输入
-// ---------------------------------------------------------------------------
-
-test('parse: string 与 JSON result 均保留（null/false/0/空串不丢）', { timeout: 60_000 }, () => {
-  const cases: Array<{ result: unknown; expect: unknown }> = [
-    { result: '纯文本结论', expect: '纯文本结论' },
-    { result: { done: true, n: 2 }, expect: { done: true, n: 2 } },
-    { result: null, expect: null },
-    { result: false, expect: false },
-    { result: 0, expect: 0 },
-    { result: '', expect: '' },
-  ]
-  for (const c of cases) {
-    const view = model.parseBackgroundReportEntry(makeReportEntry({ report: { result: c.result, status: 'completed' } }))
-    assert.equal(view.invalid, false, `result=${JSON.stringify(c.result)} 应解析成功`)
-    if (!view.invalid) {
-      assert.equal(view.hasResult, true)
-      assert.deepEqual(view.result, c.expect)
-    }
-  }
-  // 未携带 result 键：hasResult=false（区别于 result:null）。
-  const none = model.parseBackgroundReportEntry(makeReportEntry({ report: {} }))
-  assert.equal(none.invalid, false)
-  if (!none.invalid) assert.equal(none.hasResult, false)
-})
-
-test('parse: failed/aborted 终态、error、execution、otherRunningTasks、meta 一致性', { timeout: 60_000 }, () => {
-  const failed = model.parseBackgroundReportEntry(
-    makeReportEntry({
-      kind: 'workflow_report',
-      report: {
-        status: 'failed',
-        error: 'gate 校验未通过',
-        otherRunningTasks: [{ runId: 'wf_x', name: '并行任务', kind: 'workflow' }],
-      },
-    }),
-  )
-  assert.equal(failed.invalid, false)
-  if (!failed.invalid) {
-    assert.equal(failed.kind, 'workflow_report')
-    assert.equal(failed.status, 'failed')
-    assert.equal(failed.error, 'gate 校验未通过')
-    assert.equal(failed.executionConversationId, undefined)
-    assert.deepEqual(failed.otherRunningTasks, [{ runId: 'wf_x', name: '并行任务', kind: 'workflow' }])
-  }
-
-  const aborted = model.parseBackgroundReportEntry(makeReportEntry({ report: { status: 'aborted', error: '被中止' } }))
-  assert.equal(aborted.invalid, false)
-  if (!aborted.invalid) assert.equal(aborted.status, 'aborted')
-
-  const withExec = model.parseBackgroundReportEntry(
-    makeReportEntry({ report: { status: 'completed', execution: { conversationId: 7, executionId: 9 } } }),
-  )
-  assert.equal(withExec.invalid, false)
-  if (!withExec.invalid) assert.equal(withExec.executionConversationId, 7)
-
-  // runId 与 meta 不一致 / 非法终态 / execution.conversationId 非正整数 / 快照项缺字段。
-  assert.equal(model.parseBackgroundReportEntry(makeReportEntry({ report: { runId: 'wf_other' } })).invalid, true)
-  assert.equal(model.parseBackgroundReportEntry(makeReportEntry({ report: { status: 'running' } })).invalid, true)
-  assert.equal(
-    model.parseBackgroundReportEntry(makeReportEntry({ report: { execution: { conversationId: 0 } } })).invalid,
-    true,
-  )
-  assert.equal(
-    model.parseBackgroundReportEntry(makeReportEntry({ report: { otherRunningTasks: [{ runId: 'wf_x' }] } })).invalid,
-    true,
-  )
-})
-
-test('parse: 损坏正文（无换行/非法 JSON/meta 缺失）返回 invalid 且保留原文', { timeout: 60_000 }, () => {
-  const noNewline = model.parseBackgroundReportEntry(
-    makeReportEntry({ text: '只有引导语没有 JSON' }),
-  )
-  assert.equal(noNewline.invalid, true)
-  if (noNewline.invalid) assert.equal(noNewline.rawText, '只有引导语没有 JSON')
-
-  const badJson = model.parseBackgroundReportEntry(
-    makeReportEntry({ text: '引导语\n{不是 JSON' }),
-  )
-  assert.equal(badJson.invalid, true)
-  if (badJson.invalid) assert.ok(badJson.rawText.includes('{不是 JSON'))
-
-  assert.equal(model.parseBackgroundReportEntry(makeReportEntry({ meta: { kind: 'other' } })).invalid, true)
-})
-
-test('preview: 完成看结果首行；失败优先错误且截断', { timeout: 60_000 }, () => {
-  const done = model.parseBackgroundReportEntry(makeReportEntry({ report: { result: 'abcdefgh\nsecond' } }))
-  if (!done.invalid) {
-    assert.equal(model.backgroundReportPreview(done, 120), 'abcdefgh')
-    assert.equal(model.backgroundReportPreview(done, 4), 'abcd…')
-  }
-  const failed = model.parseBackgroundReportEntry(makeReportEntry({ report: { status: 'failed', error: 'boom' } }))
-  if (!failed.invalid) assert.equal(model.backgroundReportPreview(failed, 120), 'boom')
-})
-
-// ---------------------------------------------------------------------------
-// 2. BackgroundReportCard DOM：默认收起 / 展开 / 复制 / 导航 / 损坏
-//    （复用 ExecutionCard 框架：subagent-live-card/header/trigger/actions/subline）
-// ---------------------------------------------------------------------------
-
-test('card: 默认收起（与宿主 .trace-row 同构单行），完整结果未挂载；展开后挂载并可收起', { timeout: 60_000 }, async () => {
-  const { ctx } = drawerSpy()
-  const entry = makeReportEntry({ report: { result: '首行结论\n\n详细正文第二段' } })
-  const { host, unmount } = await mountCard(entry, ctx)
-
-  const traceEntry = host.querySelector('.trace-entry')
-  assert.ok(traceEntry !== null, '渲染宿主同构 .trace-entry 容器')
-  const row = host.querySelector('.trace-row')
-  assert.ok(row !== null, '渲染 .trace-row 单行回执')
-  assert.equal(row.classList.contains('trace-row-error'), false, '正常完成态不带错误高亮')
-  assert.match(row.querySelector('.trace-tool-name')?.textContent ?? '', /^Subagent report$/)
-  assert.match(row.querySelector('.trace-row-right')?.textContent ?? '', /Completed/)
-  assert.equal(row.textContent?.includes('wf_abc123'), false, '收起态不常驻 runId')
-  assert.equal(row.querySelector('.trace-tool-summary')?.textContent, '首行结论')
-
-  const toggle = host.querySelector<HTMLButtonElement>('button.workflow-trace-toggle')
-  assert.ok(toggle, '折叠开关存在（左侧内容触发区兼任）')
-  assert.equal(toggle!.getAttribute('aria-expanded'), 'false')
-  assert.equal(toggle!.getAttribute('aria-label'), 'Expand Subagent report details')
-  const bodyId = toggle!.getAttribute('aria-controls')!
-  assert.ok(document.getElementById(bodyId), '收起时 aria-controls 仍指向真实区域')
-  const duplicate = await mountCard(entry, ctx)
-  const duplicateBodyId = duplicate.host.querySelector('button[aria-controls]')!.getAttribute('aria-controls')
-  assert.notEqual(duplicateBodyId, bodyId, '同一消息同时在分屏展示时控件 ID 不重复')
-  duplicate.unmount()
-
-  // 收起态不挂载完整正文；复制为图标动作（aria-label 明确，不常驻文字）。
-  assert.equal(host.textContent?.includes('详细正文第二段'), false)
-  assert.ok(host.querySelector('.workflow-report-expanded') === null)
-  const copyBtn = row.querySelector('button[aria-label="Copy"]')
-  assert.ok(copyBtn !== null, '复制原文图标动作在右侧动作区')
-  assert.equal(copyBtn!.textContent?.includes('复制原文'), false, '不得常驻文字按钮')
-
-  await act(async () => { toggle!.focus() })
-  act(() => toggle!.click())
-  assert.equal(toggle!.getAttribute('aria-expanded'), 'true')
-  const expanded = host.querySelector('.workflow-report-expanded')
-  assert.ok(expanded !== null, '展开后挂载详情面板')
-  assert.equal(expanded.textContent?.includes('wf_abc123'), true, '展开后展示完整 runId')
-  assert.equal(expanded.textContent?.includes('详细正文第二段'), true)
-  assert.match(expanded.textContent ?? '', /Result body/)
-  assert.ok(document.activeElement === toggle, '展开时折叠控件保留焦点与同一节点')
-
-  act(() => toggle!.click())
-  assert.equal(toggle!.getAttribute('aria-expanded'), 'false')
-  assert.ok(host.querySelector('.workflow-report-expanded') === null)
-  unmount()
-})
-
-test('card: 复制原文实写入完整正文到剪贴板，不触发折叠开关', { timeout: 60_000 }, async () => {
-  const { ctx } = drawerSpy()
-  const entry = makeReportEntry({ report: { result: '首行结论\n\n详细正文第二段' } })
-  const { host, unmount } = await mountCard(entry, ctx)
-  await withCapturedClipboard(async (captured) => {
-    const btn = host.querySelector<HTMLButtonElement>('button[aria-label="Copy"]')
-    assert.ok(btn)
-    await act(async () => { btn!.click() })
-    assert.equal(captured.length, 1, '实际写入剪贴板一次')
-    assert.equal(captured[0], (entry.data as { text: string }).text, '复制的是完整正文原文（引导语+JSON）')
-  })
-  assert.equal(host.querySelector('button[aria-expanded]')?.getAttribute('aria-expanded'), 'false', '复制不得触发折叠开关')
-  unmount()
-})
-
-test('card: JSON result 缩进代码块；失败默认展开直见错误；工作流标题与在途快照', { timeout: 60_000 }, async () => {
-  const { ctx } = drawerSpy()
-  // JSON result：展开渲染缩进代码块。
-  const jsonEntry = makeReportEntry({ kind: 'workflow_report', report: { result: { done: true } } })
-  const jsonMount = await mountCard(jsonEntry, ctx)
-  assert.match(jsonMount.host.textContent ?? '', /Workflow report/)
-  clickButton(jsonMount.host, 'Expand Workflow report details')
-  const code = jsonMount.host.querySelector('.workflow-report-expanded pre code')
-  assert.ok(code, 'JSON result 渲染代码块')
-  assert.match(code!.textContent ?? '', /"done": true/)
-  jsonMount.unmount()
-
-  // 失败：默认自动展开，错误摘要与完整错误信息同时直见。
-  const failEntry = makeReportEntry({
-    kind: 'workflow_report',
-    report: { status: 'failed', error: '工具执行失败：退出码 1' },
-  })
-  const failMount = await mountCard(failEntry, ctx)
-  assert.match(failMount.host.textContent ?? '', /Failed/)
-  assert.ok(failMount.host.querySelector('.trace-row.trace-row-error'), '失败态行带 trace-row-error 类')
-  const failSummary = failMount.host.querySelector('.trace-tool-summary.workflow-trace-error')
-  assert.ok(failSummary, '失败态摘要带 workflow-trace-error 类')
-  assert.match(failSummary?.textContent ?? '', /工具执行失败：退出码 1/)
-  assert.equal(failMount.host.querySelector('button[aria-expanded]')?.getAttribute('aria-expanded'), 'true', '失败态默认自动展开')
-  assert.match(failMount.host.querySelector('.workflow-report-expanded')?.textContent ?? '', /工具执行失败：退出码 1/)
-  clickButton(failMount.host, 'Collapse Workflow report details')
-  assert.equal(failMount.host.querySelector('button[aria-expanded]')?.getAttribute('aria-expanded'), 'false')
-  failMount.unmount()
-
-  // 在途快照：展开显示“投递时快照”标注与徽章。
-  const snapEntry = makeReportEntry({
-    report: { status: 'completed', result: 'ok', otherRunningTasks: [{ runId: 'wf_x', name: '并行任务', kind: 'subagent' }] },
-  })
-  const snapMount = await mountCard(snapEntry, ctx)
-  clickButton(snapMount.host, 'Expand Subagent report details')
-  assert.match(snapMount.host.textContent ?? '', /Other in-flight tasks at delivery \(snapshot\)/)
-  const chip = snapMount.host.querySelector('.execution-report-tasks .workflow-report-task-item')
-  assert.ok(chip, '在途任务渲染快照徽章')
-  assert.match(chip!.textContent ?? '', /并行任务/)
-  assert.match(chip!.textContent ?? '', /wf_x/)
-  assert.match(chip!.textContent ?? '', /Background subagent/)
-  snapMount.unmount()
-})
-
-test('card: execution.conversationId 才给子会话入口（图标动作打开抽屉，不触发折叠）', { timeout: 60_000 }, async () => {
-  const spy = drawerSpy()
-  // 无 execution：不渲染导航按钮。
-  const plain = await mountCard(makeReportEntry({ report: { result: 'ok' } }), spy.ctx)
-  assert.ok(plain.host.querySelector('button[aria-label^="Open subagent #"]') === null)
-  assert.equal(plain.host.textContent?.includes('Open subagent'), false)
-  plain.unmount()
-
-  const entry = makeReportEntry({ report: { result: 'ok', execution: { conversationId: 7 } } })
-  const { host, unmount } = await mountCard(entry, spy.ctx)
-  assert.match(host.querySelector('.trace-row .trace-tool-name')?.textContent ?? '', /Subagent report #7/, '头部显示子会话 ID')
-  const nav = host.querySelector<HTMLButtonElement>('button[aria-label="Open subagent #7"]')
-  assert.ok(nav, '有真实 execution 时渲染子会话图标入口')
-  act(() => nav!.click())
-  assert.deepEqual(spy.calls, [7])
-  assert.equal(host.querySelector('button[aria-expanded]')?.getAttribute('aria-expanded'), 'false', '导航不得触发折叠开关')
-  unmount()
-})
-
-test('card: 损坏数据显式“汇报数据格式异常”并默认展开，可收起并复制原文（不伪造成功）', { timeout: 60_000 }, async () => {
-  const { ctx } = drawerSpy()
-  const entry = makeReportEntry({ text: '引导语\n{坏 JSON', meta: { backgroundRunId: 'wf_bad', kind: 'subagent_report' } })
-  const { host, unmount } = await mountCard(entry, ctx)
-  assert.ok(host.querySelector('.trace-row.trace-row-error'), '损坏数据行带错误高亮')
-  assert.match(host.textContent ?? '', /Malformed report/)
-  assert.equal(host.textContent?.includes('Completed'), false, '损坏数据不得显示成功徽章')
-  assert.ok(host.querySelector('button[aria-label="Copy"]'), '复制原文入口保留')
-  assert.equal(host.querySelector('button[aria-expanded]')?.getAttribute('aria-expanded'), 'true', '损坏报文默认自动展开')
-  const expanded = host.querySelector('.workflow-report-expanded')
-  assert.ok(expanded, '展开后可见原文')
-  assert.match(expanded!.textContent ?? '', /\{坏 JSON/)
-  clickButton(host, 'Collapse Background report details')
-  assert.equal(host.querySelector('button[aria-expanded]')?.getAttribute('aria-expanded'), 'false')
-  clickButton(host, 'Expand Background report details')
-  assert.match(host.querySelector('.workflow-report-expanded')?.textContent ?? '', /\{坏 JSON/)
-  unmount()
-})
-
-// ---------------------------------------------------------------------------
-// 3. 宿主派发：matchMeta.renderer 精确接管（helpers/workflow-ui.ts 同步注册）
+// 1. 宿主派发：matchMeta.renderer 精确接管
 // ---------------------------------------------------------------------------
 
 test('宿主派发: renderer 标记的 helm.input 接管为插件卡，未标记输入不受影响', { timeout: 60_000 }, () => {
-  const renderers = groupUiContributions(workflowUi).timelineRenderers
+  const sampleUi: PluginUiContribution[] = [
+    {
+      pluginId: 'sample:report',
+      surface: 'timeline.renderer',
+      spec: {
+        id: 'sample-report',
+        kinds: ['helm.input'],
+        matchMeta: { renderer: 'sample:report-card' },
+        client: { module: 'index.tsx', export: 'SampleReportCard' },
+      },
+    },
+  ]
+  const renderers = groupUiContributions(sampleUi).timelineRenderers
   assert.equal(renderers.length, 1)
-  assert.equal(renderers[0]!.pluginId, 'builtin:workflow')
+  assert.equal(renderers[0]!.pluginId, 'sample:report')
 
+  const markedEntry: ConversationEntry = {
+    id: '51',
+    kind: 'helm.input',
+    data: {
+      id: 'sample:report:1',
+      text: '后台任务已结算',
+      origin: 'agent',
+      createdAt: 100,
+      meta: { renderer: 'sample:report-card' },
+    },
+  }
   const items = buildTimelineItems(
-    [makeReportEntry(), { id: '52', kind: 'helm.input', data: { text: '普通输入', origin: 'human' } }],
+    [markedEntry, { id: '52', kind: 'helm.input', data: { text: '普通输入', origin: 'human' } }],
     { timelineRenderers: renderers },
   )
   assert.equal(items[0]!.kind, 'plugin-card')
   if (items[0]!.kind === 'plugin-card') {
-    assert.equal(items[0]!.renderer.pluginId, 'builtin:workflow')
+    assert.equal(items[0]!.renderer.pluginId, 'sample:report')
     assert.equal(items[0]!.entryId, '51')
   }
   assert.equal(items[1]!.kind, 'human', '未标记 renderer 的 helm.input 仍走通用人类消息渲染')
 })
 
 // ---------------------------------------------------------------------------
-// 4. 排队中的非人类长文本通用折叠（HumanMessage）
+// 2. 排队中的非人类长文本通用折叠（HumanMessage）
 // ---------------------------------------------------------------------------
 
 test('queuedAgentTextCollapse: 阈值判定与预览截断', { timeout: 60_000 }, () => {

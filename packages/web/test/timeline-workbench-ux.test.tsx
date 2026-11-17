@@ -3,6 +3,7 @@ import { afterEach, test } from 'node:test'
 import * as React from 'react'
 import { act } from 'react'
 import type { Root } from 'react-dom/client'
+import { renderToString } from 'react-dom/server'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { ArtifactMetadata, ConversationSummary, PluginSummary, PluginUiContribution } from '@helm/protocol'
 import { buildTimelineItems, findLatestProcessTurnKey, type TimelineItem } from '../src/conversation/timeline-model.js'
@@ -640,4 +641,88 @@ test('WorkbenchDrawer and workbench-model support en and zh-CN localization', { 
   assert.ok(ui.host.querySelector('[aria-label="Close workbench"]') !== null)
   assert.match(ui.host.textContent ?? '', /Artifacts1/)
   assert.match(ui.host.textContent ?? '', /Registered artifact/)
+})
+
+test('ConversationPane 加载失败分屏分支：错误 + 重试 + 关闭分屏入口共存', { timeout: 60_000 }, () => {
+  const store = makeTestStore({
+    loadErrors: { 'conversation:42': '500 内部错误' },
+  })
+  const html = renderToString(
+    e(HostStoreProviders, { value: store }, e(ConversationPane, { conversationId: 42, isSplit: true, onCloseSplit: () => {} })),
+  )
+  assert.ok(html.includes('failed to load'), '分屏加载失败应显示错误')
+  assert.ok(html.includes('500 内部错误'))
+  assert.ok(html.includes('Retry'))
+  assert.ok(html.includes('split-close-btn'), '加载失败分屏分支必须有显式关闭入口')
+  assert.ok(html.includes('Close split view'))
+})
+
+test('ConversationPane 加载中分屏分支：仍有显式关闭分屏入口', { timeout: 60_000 }, () => {
+  const store = makeTestStore({})
+  const html = renderToString(
+    e(HostStoreProviders, { value: store }, e(ConversationPane, { conversationId: 42, isSplit: true, onCloseSplit: () => {} })),
+  )
+  assert.ok(html.includes('Loading conversation'), '应显示加载中态')
+  assert.ok(html.includes('split-close-btn'), '加载中分屏分支必须有显式关闭入口')
+})
+
+test('ConversationPane 非分屏分支：早退不渲染分屏关闭按钮', { timeout: 60_000 }, () => {
+  const store = makeTestStore({})
+  const html = renderToString(
+    e(HostStoreProviders, { value: store }, e(ConversationPane, { conversationId: 42 })),
+  )
+  assert.ok(!html.includes('split-close-btn'))
+})
+
+test('动态工作台按 scope/order/public-doc badge 渲染，首帧前保留深链、确认不可用后回退首个页签', { timeout: 60_000 }, async () => {
+  const requested = 'plugin:sample/queue'
+  const selections: string[] = []
+  const docs: Array<[string, string]> = []
+  const panels: PluginUiContribution[] = [
+    { pluginId: 'sample', surface: 'workbench.panel', spec: { id: 'late', label: '后置面板', order: 30, json: { root: 'text', elements: { text: { type: 'Text', props: { text: '后置内容' } } } } } },
+    { pluginId: 'sample', surface: 'workbench.panel', spec: { id: 'hidden', label: '其他档案', order: 0, scope: { profileIds: ['other'] }, badge: { doc: 'hidden', countField: 'count' }, json: {} } },
+    { pluginId: 'sample', surface: 'workbench.panel', spec: { id: 'queue', label: '动态队列', order: 10, badge: { doc: 'stats', byConversationField: 'byConversation' }, json: { root: 'text', elements: { text: { type: 'Text', props: { text: '队列内容' } } } } } },
+  ]
+  let store = makeTestStore({
+    sseConnected: false,
+    workbenchTab: requested,
+    setWorkbenchTab: (tab) => { selections.push(tab) },
+    ensurePluginDoc: async (id, doc) => { docs.push([id, doc]); return undefined },
+  })
+  const ui = mountNode()
+  await ui.render(store, e(WorkbenchDrawer, { conversationId: 1, inline: true }))
+  assert.deepEqual(selections, [], '初始快照前不能覆盖请求的合法深链')
+  const conv = makeConversation(1, { profileId: 'coder' })
+  store = {
+    ...store,
+    sseConnected: true,
+    conversations: [conv],
+    groupedUi: groupUiContributions(panels),
+    pluginDocs: {
+      'sample/stats': { byConversation: { '1': { count: 3, tone: 'warn', footerText: '3 项待处理' } } },
+      'sample/hidden': { count: 100 },
+    },
+  }
+  await ui.render(store, e(WorkbenchDrawer, { conversationId: 1, inline: true }))
+  assert.deepEqual(selections, [], '快照到达后有效深链仍然有效')
+  const labels = [...ui.host.querySelectorAll('.tab-btn')].map((button) => button.textContent)
+  assert.deepEqual(labels, ['动态队列3', 'Artifacts', '后置面板'])
+  assert.match(ui.host.textContent!, /3 项待处理/)
+  assert.doesNotMatch(ui.host.textContent!, /其他档案/)
+  assert.ok(!docs.some(([, doc]) => doc === 'hidden'), '不可见面板不应加载角标文档')
+
+  await ui.render(store, e(ConversationPane, { conversationId: 1 }))
+  const workbench = [...ui.host.querySelectorAll('button')].find((button) => button.textContent?.includes('Workbench'))
+  assert.ok(workbench !== undefined)
+  assert.match(workbench.textContent!, /3/)
+  assert.doesNotMatch(workbench.textContent!, /103/, '顶栏必须与抽屉使用同一 scope')
+
+  store = { ...store, workbenchTab: 'plugin:sample/removed' }
+  await ui.render(store, e(WorkbenchDrawer, { conversationId: 1, inline: true }))
+  assert.deepEqual(selections, [requested], '不可用页签应回退排序后的首个可用页签，而非硬编码 artifacts')
+  assert.match(ui.host.querySelector('.tab-btn-active')?.textContent ?? '', /动态队列/)
+  store = { ...store, groupedUi: groupUiContributions([]) }
+  await ui.render(store, e(WorkbenchDrawer, { conversationId: 1, inline: true }))
+  assert.deepEqual(selections, [requested, 'artifacts'])
+  assert.doesNotMatch(ui.host.textContent!, /动态队列|3 项待处理/)
 })

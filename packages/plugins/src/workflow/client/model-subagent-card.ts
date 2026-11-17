@@ -1,7 +1,7 @@
 /**
  * Pure logic for the builtin:workflow client: subagent card status badges,
- * task titles, total duration and the second-layer dynamic subline (formerly
- * subagent-live-model.ts; zero React/DOM dependencies).
+ * task titles, total duration and the second-layer dynamic subline (zero
+ * React/DOM dependencies).
  */
 import { DEFAULT_HELM_LOCALE, resolveLocalizedText, type HelmLocale } from '@helm/plugin-client'
 import type {
@@ -32,7 +32,6 @@ import {
   type SubagentBadgeLabelKey,
 } from './copy.ts'
 
-/** Subagent card status. */
 export type SubagentCardStatus = 'working' | 'blocked' | 'error' | 'done' | 'pending'
 
 export interface SubagentBadge {
@@ -41,38 +40,16 @@ export interface SubagentBadge {
   badge: string
 }
 
-/** Minimal linked-run view needed for badge / failure copy decisions. */
 export type SubagentRunView = Pick<WorkflowRunSummary, 'status' | 'syncForeground' | 'detachedAt'>
 
-/**
- * True background run: background-started or already detached (detaching to
- * the background makes it a background run); a foreground-sync run
- * (syncForeground and not detached) is just the parent turn's tool call
- * blocking — same semantics as the card's "Move to background" button, so its
- * copy must never claim to be background.
- */
 function isTrueBackgroundRun(run: SubagentRunView): boolean {
   return !(run.syncForeground === true && run.detachedAt === undefined)
 }
 
-/**
- * Failure fallback copy for a linked run: foreground-sync (not detached) says
- * plain execution failed, true background (background-started or detached)
- * keeps the explicit background wording.
- */
 export function runFailureFallbackLabel(run: SubagentRunView, locale: HelmLocale = DEFAULT_HELM_LOCALE): string {
   return runFailureFallbackCopy(isTrueBackgroundRun(run), locale)
 }
 
-/**
- * Card badge status: the real summary.status wins; the parent tool toolStatus
- * is only a fallback when there is no summary. The linked run status must
- * take part — while the run is still running, never show "Done" early. Only a
- * true background run (background-started or detached) may say "background";
- * a foreground-sync run is always plain running (the gate/settlement window
- * where the run is running but the subagent is idle/done also stays working —
- * never fake completion).
- */
 export function subagentBadge(
   summaryStatus: string | undefined,
   toolStatus: 'running' | 'done' | 'error' | 'unknown',
@@ -115,11 +92,6 @@ export function subagentBadge(
   return { status: 'pending', label: label('pending'), badge: 'badge-neutral' }
 }
 
-/**
- * Compact card heading title: only returns when summary.title is a meaningful
- * user title. Kernel-generated defaults (`子代理 #N` / `子会话 #N`) are
- * backend output conventions and deliberately stay unmatched here.
- */
 export function compactCardTitle(title: string | undefined, childConversationId: number): string | undefined {
   if (title === undefined) return undefined
   const trimmed = title.trim()
@@ -128,14 +100,12 @@ export function compactCardTitle(title: string | undefined, childConversationId:
   return trimmed
 }
 
-/** Structured-output contract boilerplate injected by spawn. */
 const STRUCTURED_OUTPUT_CONTRACT_RE = /<structured_output_contract>[\s\S]*?<\/structured_output_contract>/g
 
 function stripStructuredOutputContract(text: string): string {
   return text.replace(STRUCTURED_OUTPUT_CONTRACT_RE, '')
 }
 
-/** Last non-empty line of a text (dropping # / - leading prefixes). */
 function lastMeaningfulLine(text: string): string | undefined {
   const lines = text.split('\n')
   for (let i = lines.length - 1; i >= 0; i--) {
@@ -146,13 +116,6 @@ function lastMeaningfulLine(text: string): string | undefined {
   return undefined
 }
 
-/** Trailing `[subagent ...]` footer line (kernel footer metadata). */
-const SUBAGENT_FOOTER_TAIL_RE = /\n*\[subagent [^\]]*\]\s*$/
-
-function stripSubagentFooter(text: string): string {
-  return text.replace(SUBAGENT_FOOTER_TAIL_RE, '')
-}
-
 function inputEntryText(entry: ConversationEntry): string | undefined {
   if (entry.kind !== 'helm.input') return undefined
   if (entry.data === null || typeof entry.data !== 'object' || Array.isArray(entry.data)) return undefined
@@ -160,7 +123,6 @@ function inputEntryText(entry: ConversationEntry): string | undefined {
   return typeof text === 'string' && text.trim() !== '' ? text : undefined
 }
 
-/** Extract the started-at timestamp of the latest helm.input turn (recorded values only, never fabricated). */
 export function latestTurnStartedAt(entries: ReadonlyArray<ConversationEntry> | undefined): number | undefined {
   if (entries === undefined) return undefined
   for (let i = entries.length - 1; i >= 0; i--) {
@@ -216,23 +178,11 @@ export function resolveSubagentTaskTitle(
   return undefined
 }
 
-/**
- * Card total duration: only from real recorded boundaries — this parent tool
- * call's startedAt/durationMs, or the background run's createdAt / first-node
- * durationMs. While working / blocked (in flight, including awaiting
- * approval) the clock advances with nowMs; otherwise (including descendants
- * still running after the card itself settled) it freezes at the persisted
- * duration — the conversation createdAt never fabricates a resume's total.
- * When toolSummary.resultText is only a background dispatch handle (runId
- * present) and the background run has no settled duration yet, never fall
- * back to the ~34ms dispatch durationMs (omit honestly).
- */
 export function resolveSubagentElapsedMs(input: {
   backgroundRun?: WorkflowRunSummary
   toolSummary?: SubagentParentToolSummary
   startedAt?: number
   nowMs?: number
-  /** Effective self status: working / blocked count as in-flight dynamic timing, the rest freeze. */
   status?: SubagentCardStatus
 }): number | undefined {
   if (input.status === 'working' || input.status === 'blocked') {
@@ -251,24 +201,39 @@ export function resolveSubagentElapsedMs(input: {
     const elapsed = nodeDuration ?? input.backgroundRun.updatedAt - input.backgroundRun.createdAt
     return elapsed !== undefined && Number.isFinite(elapsed) && elapsed >= 0 ? elapsed : undefined
   }
-  // For a background dispatch handle the toolSummary.durationMs is just the
-  // dispatch confirmation (~34ms) — never present it as the task total.
-  if (parseSubagentExecutionInfo(input.toolSummary?.resultText)?.runId !== undefined) {
+  if (parseSubagentExecutionInfo(input.toolSummary?.structuredOutput, input.toolSummary?.resultText)?.runId !== undefined) {
     return undefined
   }
   const elapsed = input.toolSummary?.durationMs
   return elapsed !== undefined && Number.isFinite(elapsed) && elapsed >= 0 ? elapsed : undefined
 }
 
-/** Second-layer dynamic subline. */
 export interface SubagentHeaderSnippet {
   kind: 'tool' | 'thinking' | 'text' | 'doing' | 'blocked' | 'done' | 'error'
   tag?: string
   text: string
 }
 
-/** Extract the completion conclusion preview from the parent tool resultText. */
-export function extractSubagentResultPreview(resultText: string | undefined): string | undefined {
+function previewFromRecord(record: Record<string, unknown>): string | undefined {
+  for (const key of ['result', 'output', 'summary']) {
+    const v = record[key]
+    if (typeof v === 'string' && v.trim() !== '') {
+      const cleaned = extractCleanPreviewLine(v, 100)
+      if (cleaned !== '') return cleaned
+    }
+    if (v !== undefined && v !== null && typeof v === 'object') return firstLineOf(JSON.stringify(v), 100)
+  }
+  return firstLineOf(JSON.stringify(record), 100)
+}
+
+/** Extract the completion conclusion preview from structuredOutput or resultText. */
+export function extractSubagentResultPreview(
+  resultText: string | undefined,
+  structuredOutput?: unknown,
+): string | undefined {
+  if (structuredOutput !== undefined && structuredOutput !== null && typeof structuredOutput === 'object' && !Array.isArray(structuredOutput)) {
+    return previewFromRecord(structuredOutput as Record<string, unknown>)
+  }
   if (resultText === undefined) return undefined
   const trimmed = resultText.trim()
   if (trimmed === '') return undefined
@@ -276,30 +241,26 @@ export function extractSubagentResultPreview(resultText: string | undefined): st
     try {
       const parsed: unknown = JSON.parse(trimmed)
       if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        const record = parsed as Record<string, unknown>
-        for (const key of ['result', 'output', 'summary']) {
-          const v = record[key]
-          if (typeof v === 'string' && v.trim() !== '') {
-            const cleaned = extractCleanPreviewLine(v, 100)
-            if (cleaned !== '') return cleaned
-          }
-          if (v !== undefined && v !== null && typeof v === 'object') return firstLineOf(JSON.stringify(v), 100)
-        }
-        return firstLineOf(JSON.stringify(parsed), 100)
+        return previewFromRecord(parsed as Record<string, unknown>)
       }
     } catch {
       // Not JSON: fall back to plain text handling.
     }
   }
-  const stripped = stripSubagentFooter(trimmed)
-  if (stripped.trim() === '') return undefined
-  const cleaned = extractCleanPreviewLine(stripped, 100)
+  const cleaned = extractCleanPreviewLine(trimmed, 100)
   return cleaned !== '' ? cleaned : undefined
 }
 
-/** Extract the error text from the parent tool resultText. */
 function errorTextFromToolSummary(toolSummary: SubagentParentToolSummary | undefined): string | undefined {
   if (toolSummary === undefined) return undefined
+  const structured = toolSummary.structuredOutput
+  if (structured !== undefined && structured !== null && typeof structured === 'object' && !Array.isArray(structured)) {
+    const record = structured as Record<string, unknown>
+    const errField = record['error'] ?? (record['ok'] === false ? record['result'] : undefined)
+    if (typeof errField === 'string' && errField.trim() !== '') {
+      return firstLineOf(errField, 100)
+    }
+  }
   const raw = toolSummary.resultText?.trim()
   if (raw !== undefined && raw !== '' && raw.startsWith('{')) {
     try {
@@ -315,13 +276,11 @@ function errorTextFromToolSummary(toolSummary: SubagentParentToolSummary | undef
     }
   }
   if (toolSummary.isError === true && raw !== undefined && raw !== '') {
-    const stripped = stripSubagentFooter(raw)
-    if (stripped.trim() !== '') return firstLineOf(stripped, 100)
+    return firstLineOf(raw, 100)
   }
   return undefined
 }
 
-/** Error text for a failed linked run (foreground sync and true background have different fallback copy). */
 function backgroundRunError(backgroundRun: WorkflowRunSummary, locale: HelmLocale): string | undefined {
   const fallback = runFailureFallbackLabel(backgroundRun, locale)
   if (backgroundRun.error !== undefined && backgroundRun.error.trim() !== '') {
@@ -334,17 +293,23 @@ function backgroundRunError(backgroundRun: WorkflowRunSummary, locale: HelmLocal
   return fallback
 }
 
-/** One-line preview produced by a background run. */
 function backgroundRunResultPreview(backgroundRun: WorkflowRunSummary | undefined): string | undefined {
   if (backgroundRun === undefined) return undefined
   const nodeOutput = backgroundRun.nodes?.[0]?.output
-  const preview = extractSubagentResultPreview(
-    typeof nodeOutput === 'string' ? nodeOutput : nodeOutput !== undefined ? JSON.stringify(nodeOutput) : backgroundRun.result !== undefined ? (typeof backgroundRun.result === 'string' ? backgroundRun.result : JSON.stringify(backgroundRun.result)) : undefined,
-  )
-  return preview
+  if (nodeOutput !== undefined) {
+    return extractSubagentResultPreview(typeof nodeOutput === 'string' ? nodeOutput : JSON.stringify(nodeOutput))
+  }
+  if (backgroundRun.result !== undefined) {
+    return extractSubagentResultPreview(
+      typeof backgroundRun.result === 'string' ? backgroundRun.result : JSON.stringify(backgroundRun.result),
+    )
+  }
+  if (backgroundRun.resultPreview !== undefined) {
+    return extractSubagentResultPreview(backgroundRun.resultPreview)
+  }
+  return undefined
 }
 
-/** Last erroring tool output or message text among entries. */
 function lastErrorLine(entries: ReadonlyArray<ConversationEntry> | undefined): string | undefined {
   if (entries === undefined) return undefined
   const latestInputIndex = entries.findLastIndex((entry) => entry.kind === 'helm.input')
@@ -362,7 +327,6 @@ function lastErrorLine(entries: ReadonlyArray<ConversationEntry> | undefined): s
   return undefined
 }
 
-/** Last assistant text among entries (structured-output contract boilerplate and Markdown prefixes stripped). */
 function lastAssistantText(entries: ReadonlyArray<ConversationEntry> | undefined): string | undefined {
   if (entries === undefined) return undefined
   const latestInputIndex = entries.findLastIndex((entry) => entry.kind === 'helm.input')
@@ -379,7 +343,6 @@ function lastAssistantText(entries: ReadonlyArray<ConversationEntry> | undefined
   return undefined
 }
 
-/** Second-layer dynamic subline derivation (branched by badgeStatus; undefined when no valid text). */
 export function resolveSubagentHeaderSnippet(
   input: {
     badgeStatus: SubagentCardStatus
@@ -403,8 +366,6 @@ export function resolveSubagentHeaderSnippet(
   }
   if (input.badgeStatus === 'error') {
     if (input.backgroundRun?.status === 'failed' || input.backgroundRun?.status === 'aborted') {
-      // A foreground-sync run failure must not claim "background"; true
-      // background keeps the original copy.
       const failText = input.backgroundRun.status === 'aborted'
         ? subagentBadgeLabel('aborted', locale)
         : runFailureFallbackLabel(input.backgroundRun, locale)
@@ -460,7 +421,10 @@ export function resolveSubagentHeaderSnippet(
     if (fromRun !== undefined) return { kind: 'done', text: fromRun }
     const fromEntries = lastAssistantText(input.entries)
     if (fromEntries !== undefined) return { kind: 'done', text: fromEntries }
-    const fromTool = input.backgroundRun === undefined ? extractSubagentResultPreview(input.toolSummary?.resultText) : undefined
+    const fromTool =
+      input.backgroundRun === undefined
+        ? extractSubagentResultPreview(input.toolSummary?.resultText, input.toolSummary?.structuredOutput)
+        : undefined
     if (fromTool !== undefined) return { kind: 'done', text: fromTool }
     return undefined
   }

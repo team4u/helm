@@ -3,17 +3,17 @@
  *
  * 职责：
  * - 内存增量维护 `Map<string, WorkflowRunSummary>`：start / 显式动作通过
- *   sync/syncFinal 从持久层水合；运行期高频进度与结算走 upsertRun(summary)
- *   O(1) 内存单条更新并重投影，零磁盘读取；
- * - 公共 `runs` 投影按会话分片（ctx.sessionDoc，每会话分片含自身及后代
- *   发起的 run——沿真实会话父链防环/缺父，run.conversationId 保持原始归属）：
+ *   sync 从持久层水合；运行期高频进度与结算走 upsertRun(summary) O(1)
+ *   内存单条更新并重投影，零磁盘读取；
+ * - 公共 `runs`（ctx.sessionDoc）与 `run-badges`（ctx.doc）均为纯内存瞬态
+ *   投影（`durable: false`，零 SQLite 写放大）：`runs` 按会话分片（含自身及后代
+ *   发起的 run，沿真实会话父链防环/缺父，run.conversationId 保持原始归属），
  *   单会话分片按 MAX_PROJECTED_RUNS_PER_CONVERSATION（100）滑窗截断（始终
  *   保留全部 running，剩余槽位按 createdAt 倒序取最新终态），并剥离原始
  *   result 仅保留 hasResult + resultPreview（完整 result 经 inspect 按需读取）；
- * - 全局仅保留紧凑 `run-badges` 角标文档（基于全量会话聚合计算准确 count/
- *   tone/footerText，按 run.id 去重，不受 100 条分片滑窗截断影响）；
- * - 值缓存幂等写入（值相等跳过，无写放大）；受控 stop 时序：stopping 标记
- *   拦截运行期后台回调，最终同步走 syncFinal（不受拦截，失败如实上抛）。
+ * - 全局 `run-badges` 角标文档基于全量会话聚合计算准确 count/tone/footerText
+ *   （按 run.id 去重，不受 100 条分片滑窗截断影响）；
+ * - 值缓存幂等写入（值相等跳过，不发多余 SSE 事件）；stopping 门拦截关停期残留回调。
  */
 import type { PluginDocHandle, PluginSessionDocHandle } from '@helm/protocol'
 import {
@@ -27,19 +27,15 @@ export const MAX_PROJECTED_RUNS_PER_CONVERSATION = 100
 
 const RESULT_PREVIEW_MAX_CHARS = 200
 
-/** runs 分片 + 角标投影（含内存增量更新、滑窗瘦身、stopping 门与树指纹缓存）。 */
+/** runs 分片 + 角标瞬态投影（含内存增量更新、滑窗瘦身、stopping 门与树指纹缓存）。 */
 export interface RunsProjection {
   /** 全量重读持久层并刷新投影（start / 显式控制动作入口；stopping 后为 no-op）。 */
   sync(): void
   /** 运行期单条 run O(1) 内存增量更新并重投影（零磁盘 I/O；stopping 后为 no-op）。 */
   upsertRun(run: WorkflowRunSummary): void
-  /** 受控 stop 末尾的最终全量投影：禁止被 stopping 拦截；读写失败如实上抛（不吞）。 */
-  syncFinal(): void
   /** 置停止标记：stop 之后的引擎回调不再触碰 runs 投影（doc 句柄已交还）。 */
   beginStopping(): void
   isStopping(): boolean
-  /** start 时从持久层快照已写分片的会话集合（此后增量维护）。 */
-  adoptPersistedConversations(ids: Iterable<number>): void
   /** 会话树（id + 父链）变化后的重投影；树未变跳过（无写放大）。 */
   reprojectOnConversationTreeChange(): void
   /** 会话删除后的重投影（孤儿分片不重建）。 */
@@ -98,7 +94,6 @@ export function createRunsProjection(deps: {
 
   const writtenRunsByConv = new Map<number, string>()
   let writtenBadgesJson = ''
-  const persistedRunsConvs = new Set<number>()
   let conversationTreeFingerprint = ''
 
   function hydrateFromListRuns(): void {
@@ -145,9 +140,8 @@ export function createRunsProjection(deps: {
         runsByConversation.set(target, list)
       }
     }
-    for (const convId of persistedRunsConvs) {
+    for (const convId of [...writtenRunsByConv.keys()]) {
       if (!existing.has(convId)) {
-        persistedRunsConvs.delete(convId)
         writtenRunsByConv.delete(convId)
         continue
       }
@@ -160,7 +154,6 @@ export function createRunsProjection(deps: {
       if (writtenRunsByConv.get(convId) === key) continue
       runsDoc.set(convId, { runs: projectedRuns })
       writtenRunsByConv.set(convId, key)
-      persistedRunsConvs.add(convId)
     }
 
     const byConversation: WorkflowRunBadgesDocState['byConversation'] = {}
@@ -197,11 +190,6 @@ export function createRunsProjection(deps: {
     projectFromMemory()
   }
 
-  function syncFinal(): void {
-    hydrateFromListRuns()
-    projectFromMemory()
-  }
-
   function reprojectOnConversationTreeChange(): void {
     if (stopping) return
     try {
@@ -235,14 +223,10 @@ export function createRunsProjection(deps: {
   return {
     sync,
     upsertRun,
-    syncFinal,
     beginStopping: () => {
       stopping = true
     },
     isStopping: () => stopping,
-    adoptPersistedConversations: (ids) => {
-      for (const convId of ids) persistedRunsConvs.add(convId)
-    },
     reprojectOnConversationTreeChange,
     reprojectOnConversationDeleted,
   }

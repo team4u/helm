@@ -14,7 +14,6 @@ import type { ReactNode } from 'react'
 import type { WorkflowNodeState } from '../../contracts.js'
 import { formatCompactTimestamp, formatDurationMs, resolveLocalizedText, usePluginContext, usePluginLocale } from '@helm/plugin-client'
 import { useElapsedNowMs } from './hooks.ts'
-import { SPIN, NODE_BADGE } from './presentation.ts'
 import { Icon } from './WorkflowIcon.tsx'
 import { SubagentLiveCard } from './SubagentCard.tsx'
 import { WorktreeInspectSection } from './WorktreeInspectSection.tsx'
@@ -31,6 +30,7 @@ import {
   actionCleanupDone,
   actionCleanupFailed,
   BADGE_CACHED,
+  NODE_BADGE,
   NODE_BADGE_ACTION,
   NODE_BADGE_EXTERNAL,
   NODE_BADGE_SUBAGENT,
@@ -50,6 +50,7 @@ import {
   nodeStatusLabel,
   NODE_TAG_ERROR,
   NODE_TAG_OUTPUT,
+  SPIN,
   worktreeBadgeTitle,
 } from './copy.ts'
 import type { ExecutionNode } from './model-execution-tree.ts'

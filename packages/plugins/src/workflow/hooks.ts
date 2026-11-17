@@ -150,7 +150,10 @@ export function registerWorkflowHooks(ctx: HelmPluginContext, deps: WorkflowHook
   ctx.host.onEvent('conversation.deleted', (raw) => {
     if (!projection.isStopping()) {
       const deletedId = extractDeletedConversationId(raw)
-      if (deletedId !== undefined) registry.pruneConversation(deletedId)
+      if (deletedId !== undefined) {
+        registry.pruneConversation(deletedId)
+        isolation.pruneConversation(deletedId)
+      }
     }
     projection.reprojectOnConversationDeleted()
   })
