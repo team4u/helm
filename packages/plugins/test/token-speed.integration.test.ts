@@ -3,12 +3,11 @@
  * Kernel / sessionDoc 持久层 + faux provider 按真实时间节流流式，~500ms 生成）。
  *
  * 覆盖生命周期全景：
- * 1. 默认停用：无 UI 贡献（COMPOSER_STATUS_SLOT 无注册）；
- * 2. 启用：UI 插槽注册 + client 模块（index.tsx）真实编译产物；
- * 3. 生成结束前：speed sessionDoc 已有非零实时 TPS（decoding 流式观测）；
- * 4. 终态：provider usage 对账（outputTokens = 最终 usage.output，source 翻转）；
- * 5. reset（pi.reset marker）：上一回合 settled 文档彻底清空；
- * 6. 停用：文档读取 404、UI 贡献消失；重启用：上周期持久行被 prepare 清空，
+ * 1. 默认启用：createHelm 启动即启用，UI 插槽注册（COMPOSER_STATUS_SLOT）与 client 模块（index.tsx）真实编译产物就绪；
+ * 2. 生成结束前：speed sessionDoc 已有非零实时 TPS（decoding 流式观测）；
+ * 3. 终态：provider usage 对账（outputTokens = 最终 usage.output，source 翻转）；
+ * 4. reset（pi.reset marker）：上一回合 settled 文档彻底清空；
+ * 5. 停用：文档读取 404、UI 贡献消失；重启用：上周期持久行被 prepare 清空，
  *    绝不把旧实时态冒充当前（宁显示空，由新流量重建）。
  *
  * 纪律：仅测试数据目录（tmpdir），不访问用户 ~/.helm；不起固定端口（纯
@@ -83,29 +82,22 @@ async function pollSpeedDoc(
   }
 }
 
-test('token-speed 集成：默认停用无 UI → 启用全链路流式测量 → reset 清空 → 停用/重启用无过期实时态', { timeout: 60_000 }, async () => {
+test('token-speed 集成：默认启用 UI 就绪 → 全链路流式测量 → reset 清空 → 停用/重启用无过期实时态', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
-    // ---- 1. 默认停用：无 UI 贡献 -----------------------------------------
+    // ---- 1. 默认启用：COMPOSER_STATUS_SLOT 注册 + client 模块真实编译 -----
     const summary = env.app.kernel.plugins.list().find((item) => item.id === TOKEN_SPEED_PLUGIN_ID)
     assert.ok(summary, '组合根必须注册 builtin:token-speed')
-    assert.equal(summary.enabled, false, '默认停用')
-    assert.ok(
-      !env.app.kernel.plugins.listUi().some((item) => item.pluginId === TOKEN_SPEED_PLUGIN_ID),
-      '停用时零 UI 贡献',
-    )
-
-    // ---- 2. 启用：COMPOSER_STATUS_SLOT 注册 + client 模块真实编译 ---------
-    await env.app.kernel.plugins.enable(TOKEN_SPEED_PLUGIN_ID)
+    assert.equal(summary.enabled, true, '默认启用')
     const slot = env.app.kernel.plugins
       .listUi()
       .find((item) => item.pluginId === TOKEN_SPEED_PLUGIN_ID && (item.spec as { target?: string }).target === COMPOSER_STATUS_SLOT)
-    assert.ok(slot, '启用后必须向 COMPOSER_STATUS_SLOT 注册徽标贡献')
+    assert.ok(slot, '默认启用即向 COMPOSER_STATUS_SLOT 注册徽标贡献')
     const client = await env.app.kernel.plugins.getClientModule(TOKEN_SPEED_PLUGIN_ID, 'index.tsx')
     assert.ok(client.code.length > 0, 'client 模块编译产出非空')
     assert.match(client.code, /TokenSpeedStatusBadge/, '编译产物包含徽标组件')
 
-    // ---- 3/4. 真实流式回合：生成中非零实时 TPS，终态 provider 对账 ----------
+    // ---- 2/3. 真实流式回合：生成中非零实时 TPS，终态 provider 对账 ----------
     env.faux.setResponses([fauxAssistantMessage(STREAM_TEXT)])
     const conv = await env.app.kernel.createConversation({ title: 'token-speed 集成测速' })
     await env.app.kernel.submitInput(conv.id, '请流式生成测速文本')
@@ -132,7 +124,7 @@ test('token-speed 集成：默认停用无 UI → 启用全链路流式测量 �
     assert.ok(settled!.tps! > 0, '终态对账速率 > 0')
     assert.ok(settled!.decodeMs > 0, '真实流式时长在观测粒度内可测')
 
-    // ---- 5. reset：pi.reset marker 清空上一回合 settled 文档 ----------------
+    // ---- 4. reset：pi.reset marker 清空上一回合 settled 文档 ----------------
     await env.app.kernel.resetConversation(conv.id, { handoff: 'token-speed 集成交接' })
     assert.equal(speedDocOf(env, conv.id), null, 'reset 后不回退显示旧 TPS')
     // reset 后新回合从零重建（证明清空是「宁空不假」而非永久损坏）。
@@ -148,7 +140,7 @@ test('token-speed 集成：默认停用无 UI → 启用全链路流式测量 �
     )
     assert.equal(rebuilt!.outputTokens, 40, '新回合测量从零累计')
 
-    // ---- 6. 停用：文档 404、UI 消失；重启用：prepare 清上周期持久行 --------
+    // ---- 5. 停用：文档 404、UI 消失；重启用：prepare 清上周期持久行 --------
     await env.app.kernel.plugins.disable(TOKEN_SPEED_PLUGIN_ID)
     assert.ok(
       !env.app.kernel.plugins.listUi().some((item) => item.pluginId === TOKEN_SPEED_PLUGIN_ID),
@@ -207,7 +199,7 @@ test('token-speed 集成：多工具轮——工具执行期保持有效 TPS 且
         })
       },
     })
-    await env.app.kernel.plugins.enable(TOKEN_SPEED_PLUGIN_ID)
+    assert.equal(env.app.kernel.plugins.list().find((item) => item.id === TOKEN_SPEED_PLUGIN_ID)?.enabled, true, '默认启用无需显式 enable')
 
     env.faux.setResponses([
       fauxAssistantMessage([fauxToolCall('slow_speed_probe', { payload: 'p'.repeat(240) })], { stopReason: 'toolUse' }),
