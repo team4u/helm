@@ -1,50 +1,59 @@
 /**
- * 计算节点管理弹窗纯函数模块：
- * 节点 ID 校验、受控机接入命令生成、容量与时长格式化、
- * SemVer 版本比较与节点自升级门控。
- * 全部无副作用，便于单测与 Fast Refresh 隔离。
+ * Pure-function model for the compute node modal:
+ * node ID validation, controlled-machine enrollment command generation,
+ * usage and uptime formatting, SemVer comparison and node self-upgrade
+ * gating. All side-effect free for easy unit testing and Fast Refresh
+ * isolation.
+ *
+ * Display-copy functions take an optional `t` and default to the English
+ * bridge translator: the owning UI (nodes partition) and other consumers
+ * keep rendering English until they migrate and pass their own translator.
  */
 
 import type { NodeInfo, NodeUpgradeCheckResult } from '@helm/protocol/browser'
 import { formatBytes } from '../lib/format.js'
+import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 
 export { formatBytes }
 
-/** 节点 ID 约束（与内核 issueNodeToken 校验同源：字母数字开头，可含 . _ -，最长 128）。 */
+/** Node ID constraint (same source as the kernel issueNodeToken validation: starts alphanumeric, may contain . _ -, max 128). */
 export const NODE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 
 export type NodeIdValidation = { ok: true; nodeId: string } | { ok: false; error: string }
 
-/** 校验接入节点 ID 输入：trim、保留字与字符集规则。 */
-export function validateNodeIdInput(raw: string): NodeIdValidation {
+/** Validate an enrollment node ID input: trim, reserved names and charset rules. */
+export function validateNodeIdInput(raw: string, t?: WebMessageTranslator): NodeIdValidation {
+  const tt = t ?? englishWebTranslator
   const nodeId = raw.trim()
-  if (nodeId === '') return { ok: false, error: 'Enter a node ID' }
-  if (nodeId === 'local') return { ok: false, error: 'local is the built-in local node; no access token needed' }
+  if (nodeId === '') return { ok: false, error: tt('modals.nodeId.empty') }
+  if (nodeId === 'local') return { ok: false, error: tt('modals.nodeId.localReserved') }
   if (!NODE_ID_PATTERN.test(nodeId)) {
-    return { ok: false, error: 'Node ID must start with a letter or digit and contain only letters, digits and . _ - (max 128 characters)' }
+    return { ok: false, error: tt('modals.nodeId.invalidChars') }
   }
   return { ok: true, nodeId }
 }
 
 export interface NodeConnectGuide {
-  /** 前台连接（调试用）：绑定 JOIN 令牌并前台常驻运行，Ctrl+C 退出，不安装守护进程。 */
+  /** Foreground connection (debug): binds the JOIN token and stays in the foreground; Ctrl+C exits; no daemon installed. */
   connectCommand: string
-  /** 后台启动守护进程：复用磁盘上已绑定身份，无需令牌。 */
+  /** Start the daemon in the background: reuses the identity already bound on disk, no token needed. */
   startDaemonCommand: string
-  /** 一键接入：以 --token 绑定节点身份并后台 detached 启动（推荐）。 */
+  /** One-line enrollment: binds the node identity with --token and starts detached in the background (recommended). */
   oneLineCommand: string
   serviceInstallCommand: string
   doctorCommand: string
 }
 
-/** 生成受控机接入命令集（hubOrigin 如 http://192.168.1.10:3202）。 */
+/** Build the controlled-machine enrollment command set (hubOrigin e.g. http://192.168.1.10:3202). */
 export function buildNodeConnectGuide(
   hubOrigin: string,
   issued: { nodeId: string; token: string },
 ): NodeConnectGuide {
-  // connect 是前台常驻命令（Ctrl/Cmd+C 才退出），用 && 串联后续命令永远不会执行；
-  // 一步接入用 start -d：其 detach 路径支持 --token 绑定身份后拉起后台守护进程，
-  // 且子进程 argv 不含 token（避免长期驻留进程的命令行泄漏令牌）。
+  // connect stays in the foreground (only Ctrl/Cmd+C exits), so chaining with
+  // && would never run the rest; one-line enrollment uses start -d: its
+  // detach path supports binding the identity with --token and then spawning
+  // the background daemon, and the child argv carries no token (avoiding
+  // token leaks from long-running process command lines).
   return {
     connectCommand: `helm-node connect ${hubOrigin} --token ${issued.token}`,
     startDaemonCommand: 'helm-node start -d',
@@ -54,7 +63,7 @@ export function buildNodeConnectGuide(
   }
 }
 
-/** 运行时长格式化（天/小时/分钟）。 */
+/** Uptime formatting (days/hours/minutes; compact locale-neutral units). */
 export function formatUptime(uptimeSec: number | undefined): string {
   if (uptimeSec === undefined || !Number.isFinite(uptimeSec) || uptimeSec < 0) return '--'
   const totalMin = Math.floor(uptimeSec / 60)
@@ -75,33 +84,34 @@ export interface NodeUsageInfo {
   label: string
 }
 
-/** 会话/选择器展示用的节点选项文案：id + 本机/离线标注。 */
-export function nodeOptionLabel(node: NodeInfo): string {
-  if (node.kind === 'local') return `${node.id} (local)`
-  return node.online ? node.id : `${node.id} (offline)`
+/** Node option label for conversation/profile pickers: id + local/offline annotation. */
+export function nodeOptionLabel(node: NodeInfo, t?: WebMessageTranslator): string {
+  const tt = t ?? englishWebTranslator
+  if (node.kind === 'local') return tt('modals.nodeOption.local', { id: node.id })
+  return node.online ? node.id : tt('modals.nodeOption.offline', { id: node.id })
 }
 
-/** 节点版本展示：确保带 v 前缀（'0.1.0' -> 'v0.1.0'）；空或空白返回 null。 */
+/** Node version display: ensure the v prefix ('0.1.0' -> 'v0.1.0'); blank returns null. */
 export function formatNodeVersion(version?: string): string | null {
   const trimmed = (version ?? '').trim()
   if (trimmed === '') return null
   return trimmed.startsWith('v') ? trimmed : `v${trimmed}`
 }
 
-/** SemVer 解析结果（build metadata 按规范忽略，不参与比较）。 */
+/** Parsed SemVer (build metadata ignored per the spec; not compared). */
 export interface ParsedNodeSemver {
   major: number
   minor: number
   patch: number
-  /** 预发布标识段（如 ['beta', '1']）；正式版为空数组。 */
+  /** Pre-release identifier segments (e.g. ['beta', '1']); empty for stable releases. */
   prerelease: string[]
 }
 
-// semver.org 官方文法（数值段禁前导零），另容忍 v 前缀。
+// Official semver.org grammar (numeric segments forbid leading zeros), v prefix tolerated.
 const SEMVER_PATTERN =
   /^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/
 
-/** 解析 SemVer；空白或非法（如 0.1、01.2.3、garbage）返回 null。 */
+/** Parse SemVer; blank or invalid (e.g. 0.1, 01.2.3, garbage) returns null. */
 export function parseNodeSemver(version: string): ParsedNodeSemver | null {
   const match = SEMVER_PATTERN.exec(version.trim())
   if (match === null) return null
@@ -117,7 +127,8 @@ export function parseNodeSemver(version: string): ParsedNodeSemver | null {
   }
 }
 
-/** 预发布段比较：正式 > 预发布；数字段按数值、数字 < 字母数字、段多者大。 */
+/** Pre-release comparison: stable > pre-release; numeric segments compare numerically,
+ * numeric < alphanumeric, more segments win. */
 function comparePrerelease(a: string[], b: string[]): number {
   if (a.length === 0 && b.length === 0) return 0
   if (a.length === 0) return 1
@@ -144,7 +155,7 @@ function comparePrerelease(a: string[], b: string[]): number {
   return 0
 }
 
-/** SemVer 优先级比较：a > b 返回 1、a < b 返回 -1、相等返回 0；任一侧非法无法比较返回 0。 */
+/** SemVer precedence: a > b returns 1, a < b returns -1, equal returns 0; an invalid side is incomparable and returns 0. */
 export function compareNodeSemver(a: string, b: string): number {
   const pa = parseNodeSemver(a)
   const pb = parseNodeSemver(b)
@@ -161,43 +172,48 @@ export function compareNodeSemver(a: string, b: string): number {
   return comparePrerelease(pa.prerelease, pb.prerelease)
 }
 
-/** 节点版本是否落后于 Hub（local 节点）版本：任一为空或非法 SemVer 视为无法判定（false）。 */
+/** Whether the node (local node) version is behind the Hub: blank or invalid SemVer on either side counts as undecidable (false). */
 export function isNodeBehindHub(nodeVersion?: string, hubVersion?: string): boolean {
   if (parseNodeSemver(nodeVersion ?? '') === null || parseNodeSemver(hubVersion ?? '') === null) return false
   return compareNodeSemver(hubVersion ?? '', nodeVersion ?? '') > 0
 }
 
-/** 确认升级门控结果：ok 为可点击；hint 为禁用原因（ok 时为 null）。 */
+/** Upgrade confirm gating result: ok means clickable; hint is the disable reason (null when ok). */
 export interface NodeUpgradeConfirmability {
   ok: boolean
   hint: string | null
 }
 
-/** 确认升级门控：离线、缺检查且无明确合法目标、已最新且无 force/目标时拒绝。 */
-export function canConfirmNodeUpgrade(input: {
-  online: boolean
-  check: NodeUpgradeCheckResult | null
-  targetVersion: string
-  force: boolean
-}): NodeUpgradeConfirmability {
-  if (!input.online) return { ok: false, hint: 'Node is offline; cannot upgrade' }
+/** Upgrade confirm gating: reject when offline, no check and no explicit valid
+ * target, or already up to date without force/target. */
+export function canConfirmNodeUpgrade(
+  input: {
+    online: boolean
+    check: NodeUpgradeCheckResult | null
+    targetVersion: string
+    force: boolean
+  },
+  t?: WebMessageTranslator,
+): NodeUpgradeConfirmability {
+  const tt = t ?? englishWebTranslator
+  if (!input.online) return { ok: false, hint: tt('modals.nodeUpgrade.offline') }
   const explicit = input.targetVersion.trim()
   if (explicit !== '' && parseNodeSemver(explicit) === null) {
-    return { ok: false, hint: 'Target version is not valid SemVer (e.g. 0.2.0)' }
+    return { ok: false, hint: tt('modals.nodeUpgrade.invalidTarget') }
   }
   if (input.check === null) {
     return explicit === ''
-      ? { ok: false, hint: 'Check for updates first, or enter an explicit target version' }
+      ? { ok: false, hint: tt('modals.nodeUpgrade.checkFirst') }
       : { ok: true, hint: null }
   }
   if (input.check.updateAvailable) return { ok: true, hint: null }
   if (explicit === '' && !input.force) {
-    return { ok: false, hint: 'Already up to date; tick force reinstall/retry or enter a target version' }
+    return { ok: false, hint: tt('modals.nodeUpgrade.upToDate') }
   }
   return { ok: true, hint: null }
 }
 
-/** 确认升级将安装的目标：显式输入优先；否则固定为本次检查的 latestVersion（无检查且无输入为 null）。 */
+/** Target the confirmed upgrade will install: explicit input wins; otherwise fixed to this check's latestVersion (null when no check and no input). */
 export function resolveUpgradeTarget(
   check: NodeUpgradeCheckResult | null,
   targetVersion: string,
@@ -207,10 +223,11 @@ export function resolveUpgradeTarget(
   return check !== null && check.latestVersion.trim() !== '' ? check.latestVersion : null
 }
 
-/** 占用量计算（free + total -> used / 百分比 / 文案）；数据缺失返回 null。 */
+/** Usage computation (free + total -> used / percent / label); missing data returns null. */
 export function formatUsage(
   freeBytes: number | undefined,
   totalBytes: number | undefined,
+  t?: WebMessageTranslator,
 ): NodeUsageInfo | null {
   if (
     freeBytes === undefined ||
@@ -223,12 +240,17 @@ export function formatUsage(
   ) {
     return null
   }
+  const tt = t ?? englishWebTranslator
   const usedBytes = totalBytes - freeBytes
   const percent = Math.round((usedBytes / totalBytes) * 100)
   return {
     usedBytes,
     totalBytes,
     percent,
-    label: `${formatBytes(usedBytes)} / ${formatBytes(totalBytes)}（${percent}%）`,
+    label: tt('modals.nodeUsage.label', {
+      used: formatBytes(usedBytes),
+      total: formatBytes(totalBytes),
+      percent,
+    }),
   }
 }

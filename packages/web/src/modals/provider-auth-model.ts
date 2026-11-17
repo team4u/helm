@@ -1,7 +1,7 @@
 import type { ModelProviderSummary, ProviderConfig } from '@helm/protocol/browser'
 import type { CredentialStatus, ModelDescriptor } from '../lib/api.js'
 
-/** 供应商列表条目：透传目录中的 dynamic/baseUrl 等通用元数据，不转属任何插件。 */
+/** Provider list entry: passes through catalog metadata like dynamic/baseUrl verbatim; never re-attributes providers to plugins. */
 export interface ProviderEntry extends ModelProviderSummary {
   hasStoredKey: boolean
   available: boolean
@@ -10,7 +10,7 @@ export interface ProviderEntry extends ModelProviderSummary {
 
 export type ProviderFilter = 'all' | 'configured' | 'unconfigured'
 
-/** 注册目录为主；保留停用网关与遗留凭据的管理入口，不推断不存在的供应商能力。 */
+/** Catalog is authoritative; keep management entries for disabled gateways and legacy credentials without inferring provider capabilities that do not exist. */
 export function buildProviderEntries(
   catalog: ModelProviderSummary[],
   gateways: ProviderConfig[],

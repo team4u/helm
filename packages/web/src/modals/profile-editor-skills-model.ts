@@ -1,24 +1,27 @@
 /**
- * Profile 编辑器「可用技能」区块纯逻辑（ProfileBasicTab SkillsSection 消费）。
+ * Pure logic for the profile editor "available skills" section (consumed by
+ * ProfileBasicTab SkillsSection).
  *
- * 语义对齐协议 isSkillAvailable：undefined = 全部可用技能；[] = 显式禁用全部；
- * 非空数组 = 白名单。停用插件托管的技能永远不可选（不可新勾选），
- * 但已配置在白名单里的失效技能（缺失 / 插件停用）必须保留展示、可移除，
- * 保存其它字段时不得暗中删除。
+ * Semantics align with the protocol isSkillAvailable: undefined = all
+ * available skills; [] = explicitly disable all; a non-empty array =
+ * allowlist. Skills managed by a disabled plugin are never selectable (no
+ * new checks), but stale skills already configured in the allowlist (missing
+ * / plugin disabled) must stay visible and removable — saving other fields
+ * must never silently delete them.
  */
 
 import type { Profile, SkillSummary } from '@helm/protocol/browser'
 
-/** 技能区块的三种编辑模式：跟随全部（skills=undefined）/ 白名单 / 显式禁用（skills=[]）。 */
+/** The three edit modes of the skills section: follow all (skills=undefined) / allowlist / explicitly none (skills=[]). */
 export type SkillsEditMode = 'all' | 'allowlist' | 'none'
 
-/** 从 Profile.skills 推断编辑模式（undefined -> all，[] -> none，非空 -> allowlist）。 */
+/** Infer the edit mode from Profile.skills (undefined -> all, [] -> none, non-empty -> allowlist). */
 export function skillsEditMode(skills: string[] | undefined): SkillsEditMode {
   if (skills === undefined) return 'all'
   return skills.length === 0 ? 'none' : 'allowlist'
 }
 
-/** 模式切换：all 将 skills 置 undefined；none 置 []；allowlist 保持现有白名单（空则起于 []）。 */
+/** Mode switch: all sets skills to undefined; none sets []; allowlist keeps the existing allowlist (starting from [] when unset). */
 export function skillsForEditMode(skills: string[] | undefined, mode: SkillsEditMode): string[] | undefined {
   switch (mode) {
     case 'all':
@@ -31,7 +34,9 @@ export function skillsForEditMode(skills: string[] | undefined, mode: SkillsEdit
 }
 
 /**
- * 白名单勾选切换：勾选仅允许可选技能（停用/缺失拒绝）；移除恒生效（含不可用技能的显式移除）。
+ * Allowlist check toggling: checking only allows selectable skills (disabled/
+ * missing rejected); unchecking always works (including explicit removal of
+ * unavailable skills).
  */
 export function toggleSkillInAllowlist(
   skills: string[],
@@ -48,29 +53,31 @@ export function toggleSkillInAllowlist(
 
 export interface SkillEditRow {
   skill: SkillSummary
-  /** 白名单已包含（含失效技能——保留展示）。 */
+  /** Included in the allowlist (including stale skills — kept visible). */
   checked: boolean
-  /** 可新勾选：可见（托管插件启用）技能才可选；停用托管技能不可勾选。 */
+  /** Newly checkable: only visible (managing plugin enabled) skills are selectable; disabled managed skills cannot be checked. */
   selectable: boolean
-  /** 已配置但缺失（技能目录已无此 id）——不可勾选、可移除。 */
+  /** Configured but missing (no such id in the skill catalog) — not checkable, removable. */
   missing: boolean
-  /** 已配置但托管插件停用——不可勾选、可移除。 */
+  /** Configured but the managing plugin is disabled — not checkable, removable. */
   pluginDisabled: boolean
 }
 
 export interface SkillsSectionModel {
-  /** 可见技能（托管插件启用），即可勾选范围。 */
+  /** Visible skills (managing plugin enabled): the checkable scope. */
   visible: SkillEditRow[]
-  /** 已配置但失效的技能（缺失 / 插件停用），保留展示与移除入口。 */
+  /** Configured but stale skills (missing / plugin disabled): kept visible with a removal entry. */
   unavailable: SkillEditRow[]
 }
 
 /**
- * 组装技能区块行模型：
- * - 可见技能按目录顺序全部列出（勾选状态来自白名单，未配置为未勾选）；
- * - 白名单中目录已无对应技能的 id 生成 missing 行；
- * - 白名单中托管插件停用的技能生成 pluginDisabled 行（目录里存在但不可选）；
- * - undefined（全部）模式下仅展示可见技能清单，无任何失效行。
+ * Build the skills section row model:
+ * - visible skills list the whole catalog in order (check state from the
+ *   allowlist; unchecked when unconfigured);
+ * - allowlist ids absent from the catalog produce missing rows;
+ * - allowlist skills whose managing plugin is disabled produce pluginDisabled
+ *   rows (present in the catalog but not selectable);
+ * - undefined (all) mode lists only visible skills, with no stale rows.
  */
 export function buildSkillsSectionModel(
   skills: string[] | undefined,

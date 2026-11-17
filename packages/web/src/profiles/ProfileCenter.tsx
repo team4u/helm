@@ -3,6 +3,7 @@ import type { Profile } from './profile-center-model.js'
 import {
   buildProfileCategoryCounts,
   filterProfiles,
+  profileCategoryTabLabel,
   PROFILE_CATEGORY_TABS,
   type ProfileCategoryTab,
 } from './profile-center-model.js'
@@ -11,23 +12,23 @@ import { ProfileDetailDrawer } from './ProfileDetailDrawer.js'
 import { HelmIcon } from '@helm/plugin-client'
 import { assetsApi } from '../lib/api.js'
 import { useHelmStore } from '../lib/store-context.js'
+import { useWebLocale } from '../i18n/use-web-locale.js'
 import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
 
 export interface ProfileCenterProps {
   isSplit?: boolean
   onCloseSplit?: () => void
-  /** 显式指定详情抽屉是否内联渲染（便于测试与 SSR 统一断言） */
+  /** Render the detail drawer inline explicitly (for tests and unified SSR assertions). */
   inlineDrawer?: boolean
 }
 
 /**
- * 全屏智能体角色中心（Profile Center）主视图：
- * - 升格为系统一级主舞台全屏视图；
- * - 顶栏：标题、副标题、统计摘要、新建角色按钮与分屏关闭操作；
- * - 工具栏：多维检索搜索框与分类药丸标签栏（带数量徽章）；
- * - 内容区：响应式卡片流式网格或空状态；
- * - 详情与配置抽屉：右侧滑出 ProfileDetailDrawer，与 store.primaryTarget 紧密同步；
- * - 严格遵循零 Emoji 铁律与 Fast Refresh 规范。
+ * Full-screen agent profile center (primary stage):
+ * - top bar: title, subtitle, summary stats, new-profile button and split-close actions;
+ * - toolbar: multi-dimension search box and category pill tabs (with count badges);
+ * - content: responsive card grid or empty state;
+ * - detail & edit drawer: right slide-over ProfileDetailDrawer synced with store.primaryTarget;
+ * - follows the zero-emoji rule and Fast Refresh conventions strictly.
  */
 export function ProfileCenter({
   isSplit = false,
@@ -35,6 +36,7 @@ export function ProfileCenter({
   inlineDrawer = false,
 }: ProfileCenterProps): React.JSX.Element {
   const store = useHelmStore()
+  const { t } = useWebLocale()
   const [query, setQuery] = useState('')
   const [activeTab, setActiveTab] = useState<ProfileCategoryTab>('all')
   const [isCreatingNew, setIsCreatingNew] = useState(false)
@@ -120,8 +122,8 @@ export function ProfileCenter({
     store.pushNotice({
       type: 'notification',
       level: 'info',
-      title: 'Profile saved',
-      body: `${saved.name || saved.id} configuration updated`,
+      title: t('profiles.notice.savedTitle'),
+      body: t('profiles.notice.savedBody', { name: saved.name || saved.id }),
     })
     openCenterTarget(saved.id)
   }
@@ -132,8 +134,8 @@ export function ProfileCenter({
     store.pushNotice({
       type: 'notification',
       level: 'info',
-      title: 'Profile deleted',
-      body: `Profile ${deletedId} permanently deleted`,
+      title: t('profiles.notice.deletedTitle'),
+      body: t('profiles.notice.deletedBody', { id: deletedId }),
     })
     openCenterTarget(undefined)
   }
@@ -165,7 +167,7 @@ export function ProfileCenter({
         <div className="primary-center-title-wrap pane-title-group">
           <div className="primary-center-title">
             <HelmIcon name="bot" size={14} />
-            <span>Agent Profile Center</span>
+            <span>{t('profiles.center.title')}</span>
           </div>
         </div>
 
@@ -176,7 +178,7 @@ export function ProfileCenter({
             onClick={handleCreateNew}
           >
             <HelmIcon name="plus" size={12} />
-            <span className="pane-action-label">New profile</span>
+            <span className="pane-action-label">{t('profiles.center.newProfile')}</span>
           </button>
           {isSplit ? (
             <CloseSplitButton onCloseSplit={onCloseSplit} />
@@ -195,17 +197,17 @@ export function ProfileCenter({
           <HelmIcon name="search" size={14} />
           <input
             type="text"
-            placeholder="Search profile name, ID, model, tags or skills…"
+            placeholder={t('profiles.center.searchPlaceholder')}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            aria-label="Search profiles"
+            aria-label={t('profiles.center.searchLabel')}
           />
           {query && (
             <button
               type="button"
               className="btn btn-ghost btn-sm primary-search-clear"
-              title="Clear search"
-              aria-label="Clear search"
+              title={t('profiles.center.clearSearch')}
+              aria-label={t('profiles.center.clearSearch')}
               onClick={() => setQuery('')}
             >
               <HelmIcon name="x" size={12} />
@@ -216,7 +218,7 @@ export function ProfileCenter({
         <div
           className="primary-category-pills"
           role="tablist"
-          aria-label="Filter by profile category"
+          aria-label={t('profiles.center.filterLabel')}
         >
           {PROFILE_CATEGORY_TABS.map((tab) => {
             const count = categoryCounts[tab.key] ?? 0
@@ -230,7 +232,7 @@ export function ProfileCenter({
                 className={`primary-category-pill${isActive ? ' is-active' : ''}`}
                 onClick={() => setActiveTab(tab.key)}
               >
-                <span>{tab.label}</span>
+                <span>{profileCategoryTabLabel(tab.key, t)}</span>
                 <span className="badge tabular-nums">{count}</span>
               </button>
             )
@@ -257,10 +259,8 @@ export function ProfileCenter({
             <div className="primary-center-empty-icon">
               <HelmIcon name="search" size={28} />
             </div>
-            <div className="primary-center-empty-text">No matching profiles</div>
-            <div className="primary-center-empty-hint">
-              Try adjusting the search keywords or switching category tabs.
-            </div>
+            <div className="primary-center-empty-text">{t('profiles.center.emptyTitle')}</div>
+            <div className="primary-center-empty-hint">{t('profiles.center.emptyHint')}</div>
             {(query || activeTab !== 'all') && (
               <button
                 type="button"
@@ -268,7 +268,7 @@ export function ProfileCenter({
                 onClick={handleResetFilters}
               >
                 <HelmIcon name="rotate-ccw" size={12} />
-                <span>Reset filters</span>
+                <span>{t('profiles.center.resetFilters')}</span>
               </button>
             )}
           </div>

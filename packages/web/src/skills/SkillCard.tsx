@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import type { SkillSummary } from '@helm/protocol/browser'
 import { copyToClipboard, HelmIcon } from '@helm/plugin-client'
+import { useWebLocale } from '../i18n/use-web-locale.js'
 import { getSkillSourceBadge } from './skill-center-model.js'
 
 export interface SkillCardProps {
@@ -10,22 +11,26 @@ export interface SkillCardProps {
 }
 
 /**
- * 全屏技能中心单张技能卡片视图组件：
- * - 响应式网格流单元，遵循 1px 发丝边框与克制低饱和设计系统规范；
- * - 顶部展示名称、有效来源徽章（内置 / 共享 / 工作区 / 插件）与等宽 ID；
- * - 中部展示功能说明；
- * - 底部展示可一键复制的 `/skill:<id>` 指令胶囊与参考文件数（为 0 时省略）；
- * - 支持鼠标点击与键盘无障碍交互（Enter / Space 激活）；
- * - 严格遵循零 Emoji 铁律与 Fast Refresh 规范。
+ * One skill card in the full-screen skill center:
+ * - a responsive grid cell following the 1px hairline border and restrained
+ *   low-saturation design system;
+ * - header shows the name, effective source badge (built-in / shared /
+ *   workspace / plugin) and the monospace ID;
+ * - middle shows the description;
+ * - footer shows the one-click-copy `/skill:<id>` command pill and the
+ *   reference file count (omitted when 0);
+ * - mouse click and keyboard accessibility (Enter / Space) both activate;
+ * - follows the zero-emoji rule and Fast Refresh conventions strictly.
  */
 export function SkillCard({
   skill,
   selected = false,
   onSelect,
 }: SkillCardProps): React.JSX.Element {
-  const sourceBadge = getSkillSourceBadge(skill)
+  const { t } = useWebLocale()
+  const sourceBadge = getSkillSourceBadge(skill, t)
   const refCount = skill.references?.length ?? 0
-  const description = skill.description || 'No description'
+  const description = skill.description || t('skills.card.noDescription')
   const slashCommand = `/skill:${skill.id}`
   const [copied, setCopied] = useState(false)
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -89,7 +94,7 @@ export function SkillCard({
             <span className="primary-card-name" title={skill.name || skill.id}>
               {skill.name || skill.id}
             </span>
-            <span className={badgeClass} title={`Source: ${sourceBadge.label}`}>
+            <span className={badgeClass} title={t('skills.card.sourceTitle', { label: sourceBadge.label })}>
               {sourceBadge.label}
             </span>
           </div>
@@ -110,18 +115,18 @@ export function SkillCard({
           <button
             type="button"
             className="primary-card-pill mono"
-            title={`Copy slash command ${slashCommand}`}
-            aria-label={`Copy slash command ${slashCommand}`}
+            title={t('skills.card.copyCommandTitle', { command: slashCommand })}
+            aria-label={t('skills.card.copyCommandTitle', { command: slashCommand })}
             onClick={(e) => void handleCopyCommand(e)}
             onKeyDown={(e) => e.stopPropagation()}
           >
             <HelmIcon name={copied ? 'check' : 'copy'} size={10} />
-            <span>{copied ? 'Copied' : slashCommand}</span>
+            <span>{copied ? t('skills.card.copied') : slashCommand}</span>
           </button>
           {refCount > 0 && (
-            <span className="primary-card-pill" title={`${refCount} reference files`}>
+            <span className="primary-card-pill" title={t('skills.card.referenceFiles', { count: refCount })}>
               <HelmIcon name="file-text" size={11} />
-              <span>{`${refCount} reference files`}</span>
+              <span>{t('skills.card.referenceFiles', { count: refCount })}</span>
             </span>
           )}
         </div>

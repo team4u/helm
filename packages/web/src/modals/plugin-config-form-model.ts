@@ -1,19 +1,22 @@
 /**
- * 插件配置表单纯数据模型（PluginDetailDrawer / PluginCenter 消费）。
+ * Pure data model for the plugin config form (consumed by PluginDetailDrawer
+ * / PluginCenter).
  *
- * secret 字段的服务端契约：GET config 只回 '******' 掩码（已配置）或空串
- * （未配置），明文绝不出站。因此表单侧必须遵守两条铁律：
- * 1. 掩码绝不能当真值灌入表单——否则一次未改动的保存就会把六颗星
- *    写进 credentials.json，覆盖真实密钥；
- * 2. 保存时 secret 空串表示「未改动，保持已存密钥」，只有用户输入了
- *    新值才提交该字段。
+ * Server contract for secret fields: GET config only returns the '******'
+ * mask (configured) or an empty string (unconfigured); plaintext never leaves
+ * the server. The form side therefore obeys two hard rules:
+ * 1. The mask must never be poured into the form as a real value — one
+ *    unchanged save would write six asterisks into credentials.json,
+ *    overwriting the real key;
+ * 2. On save, an empty secret string means "unchanged, keep the stored key";
+ *    the field is only submitted when the user types a new value.
  */
 
 import type { PluginConfigFieldSchema, PluginConfigFieldSource } from '@helm/protocol/browser'
 
 export type ConfigValue = string | number | boolean
 
-/** 表单初始值：secret 一律空串；非 secret 回显服务端值或缺省 default。 */
+/** Initial form values: secrets always empty; non-secrets echo the server value or the schema default. */
 export function configFieldInitialValue(
   schemaField: Pick<PluginConfigFieldSchema, 'default' | 'type' | 'secret'>,
   raw: unknown,
@@ -27,15 +30,16 @@ export function configFieldInitialValue(
   return schemaField.type === 'boolean' ? false : schemaField.type === 'number' ? 0 : ''
 }
 
-/** 服务端掩码（'******'）：GET config 对已配置 secret 的固定回显。 */
+/** Server-side mask ('******'): the fixed GET config echo for a configured secret. */
 export const SECRET_MASK = '******'
 export function secretConfigured(raw: unknown): boolean {
   return typeof raw === 'string' && raw.length > 0
 }
 
 /**
- * 保存载荷：非 secret 字段全量提交（维持既有合并语义）；secret 字段仅在
- * 用户输入了非空新值时提交。掩码与空串都绝不入载荷。
+ * Save payload: non-secret fields are submitted in full (existing merge
+ * semantics preserved); secret fields are submitted only when the user typed
+ * a non-empty new value. Masks and empty strings never enter the payload.
  */
 export function buildPluginConfigPayload(
   schema: Record<string, PluginConfigFieldSchema>,
@@ -45,7 +49,8 @@ export function buildPluginConfigPayload(
   for (const [key, field] of Object.entries(schema)) {
     const value = values[key]
     if (field.secret === true) {
-      // 掩码与空白都视为「未改动」：即使异常路径把掩码灌进表单也绝不能写进凭据库。
+      // Mask and blank both count as "unchanged": even if an abnormal path
+      // poured the mask into the form, it must never reach the credential store.
       const trimmed = typeof value === 'string' ? value.trim() : ''
       if (trimmed.length > 0 && trimmed !== SECRET_MASK) payload[key] = trimmed
       continue
@@ -56,10 +61,11 @@ export function buildPluginConfigPayload(
 }
 
 /**
- * 单字段可否重置：
- * - source === 'configured'：磁盘存在用户显式覆写键，发送 null 可清除；
- * - 未提供 sources（旧内核）时，对已配置的 secret 字段（回显掩码非空串）
- *   同样允许清除，避免凭据无法收回。
+ * Whether a single field can be reset:
+ * - source === 'configured': an explicit user override key exists on disk;
+ *   sending null clears it;
+ * - without sources (older kernels), a configured secret field (mask echo
+ *   non-empty) is also resettable so credentials can be revoked.
  */
 export function canResetConfigField(
   fieldSchema: PluginConfigFieldSchema,
@@ -71,7 +77,7 @@ export function canResetConfigField(
   return fieldSchema.secret === true && secretConfigured(rawValue)
 }
 
-/** 单字段重置载荷：发送 { [key]: null } 清除显式覆写值，回退 schema.default。 */
+/** Reset payload for a single field: send { [key]: null } to clear the explicit override and fall back to schema.default. */
 export function buildResetFieldPayload(key: string): Record<string, null> {
   return { [key]: null }
 }

@@ -3,6 +3,7 @@ import type { SkillSummary } from '@helm/protocol/browser'
 import { HelmIcon, CopyButton, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle, Select } from '@helm/plugin-client'
 import type { SelectOption } from '@helm/plugin-client'
 import { CodeBlockView, MarkdownView } from '../conversation/MarkdownView.js'
+import { useWebLocale } from '../i18n/use-web-locale.js'
 import {
   getSkillSourceBadge,
   skillsApi,
@@ -18,31 +19,37 @@ export interface SkillDetailDrawerProps {
   skill: SkillSummary | null
   open: boolean
   onClose: () => void
-  /** 显式指定是否内联渲染（便于测试与 SSR 统一断言） */
+  /** Render inline explicitly (for tests and unified SSR assertions). */
   inline?: boolean
-  /** 初始内容注入（主要供 SSR 测试断言文档区使用） */
+  /** Initial content injection (mainly for SSR tests asserting the doc area). */
   initialContent?: string
-  /** 自定义文件读取实现，默认使用 skillsApi.read */
+  /** Custom file reading implementation; defaults to skillsApi.read. */
   readSkill?: (id: string, path?: string) => Promise<{ text: string }>
 }
 
-/** Markdown 文件的阅读模式：富文本渲染或等宽源码。 */
+/** Reading mode for Markdown files: rich rendering or monospace source. */
 type SkillViewMode = 'rich' | 'source'
 
 /**
- * 全屏技能中心详情与紧凑文件阅读器抽屉组件：
- * - 基于 Radix UI Dialog 封装，520px-560px 右侧滑出抽屉；
- * - 顶部展示图标、名称、来源徽章（内置 / 共享 / 工作区 / 插件）、技能 ID 与关闭按钮；
- * - Header 下方是单行紧凑文件工具条，再下方的单一滚动阅读区占满剩余全部视口高度；
- * - 多文件时以公共 Select 下拉切换（短文件名 + 目录辅助信息），
- *   单文件时直接展示文件名，不再渲染多文件标签墙；
- * - Markdown 文件支持「富文本 / 源码」双模式阅读，桌面/移动端完全统一：
- *   富文本模式把头部 YAML frontmatter 转换为「技能元数据」Markdown 表格，
- *   与正文同处单一 .skill-reader-doc 内容流（不做移动端特殊元数据布局，
- *   不在工具条与正文之间渲染独立描述块）；源码模式保留原始 YAML 不转换；
- *   代码类文件用 CodeBlockView 按后缀推导语言高亮；
- * - 异步调用 skillsApi.read，使用代数防竞态（loadGenerationRef）防止多任务交错覆盖；
- * - 严格遵循零 Emoji 铁律与 Fast Refresh 规范。
+ * Skill center detail drawer with a compact file reader:
+ * - built on the Radix UI Dialog wrapper, 520px-560px right slide-over;
+ * - header shows the icon, name, source badge (built-in / shared / workspace /
+ *   plugin), skill ID and the close button;
+ * - below the header is a single-row compact file toolbar, then one scrolling
+ *   reader area filling the rest of the viewport;
+ * - multiple files switch through the common Select dropdown (short file name
+ *   + directory hint); a single file shows its name directly, no file tab
+ *   wall;
+ * - Markdown files support rich-text / source dual-mode reading, unified
+ *   across desktop and mobile: rich mode converts the leading YAML
+ *   frontmatter into a "skill metadata" Markdown table inside the single
+ *   .skill-reader-doc content flow (no mobile-specific metadata layout, no
+ *   standalone description block between toolbar and body); source mode keeps
+ *   the raw YAML unconverted; code files use CodeBlockView with
+ *   suffix-derived highlighting;
+ * - async reads go through skillsApi.read with algebraic race protection
+ *   (loadGenerationRef) so interleaved loads never overwrite each other;
+ * - follows the zero-emoji rule and Fast Refresh conventions strictly.
  */
 export function SkillDetailDrawer({
   skill,
@@ -52,6 +59,7 @@ export function SkillDetailDrawer({
   initialContent,
   readSkill,
 }: SkillDetailDrawerProps): React.JSX.Element {
+  const { t } = useWebLocale()
   const [loading, setLoading] = useState(false)
   const [content, setContent] = useState<string>(() => initialContent ?? '')
   const [error, setError] = useState<string | null>(null)
@@ -59,7 +67,7 @@ export function SkillDetailDrawer({
   const [viewMode, setViewMode] = useState<SkillViewMode>('rich')
   const loadGenerationRef = useRef(0)
 
-  const files = useMemo(() => buildSkillFileList(skill?.references), [skill?.references])
+  const files = useMemo(() => buildSkillFileList(skill?.references, t), [skill?.references, t])
   const activeIndex = Math.max(
     0,
     files.findIndex((f) => f.path === activePath),
@@ -69,13 +77,13 @@ export function SkillDetailDrawer({
   const isMarkdown = isSkillMarkdownFile(activePath)
   const richText = isMarkdown && viewMode === 'rich'
 
-  // 切换技能时重置到根规程 SKILL.md 与富文本模式
+  // Switching skills resets to the root SKILL.md and rich-text mode
   useEffect(() => {
     setActivePath('')
     setViewMode('rich')
   }, [skill?.id])
 
-  // 异步获取规程文件内容，严格防竞态
+  // Async load of the skill file content with strict race protection
   useEffect(() => {
     if (!skill || !open) {
       if (initialContent === undefined) {
@@ -106,7 +114,7 @@ export function SkillDetailDrawer({
       })
   }, [skill?.id, activePath, open, readSkill, initialContent])
 
-  const sourceBadge = skill ? getSkillSourceBadge(skill) : null
+  const sourceBadge = skill ? getSkillSourceBadge(skill, t) : null
   const badgeClass =
     sourceBadge?.variant === 'builtin'
       ? 'badge badge-neutral'
@@ -122,7 +130,7 @@ export function SkillDetailDrawer({
     meta: f.meta,
   }))
 
-  const displayText = richText ? renderSkillDocMarkdown(content) : content
+  const displayText = richText ? renderSkillDocMarkdown(content, t) : content
   const sourceLanguage = skillFileLanguage(activePath)
   const lineCount = content === '' ? 0 : content.split('\n').length
 
@@ -139,7 +147,11 @@ export function SkillDetailDrawer({
         <DialogContent
           className="primary-drawer-content skill-drawer-content"
           role="dialog"
-          aria-label={skill ? `${skill.name || skill.id} skill details` : 'Skill details'}
+          aria-label={
+            skill
+              ? t('skills.drawer.detailsTitle', { name: skill.name || skill.id })
+              : t('skills.drawer.detailsFallback')
+          }
         >
           {/* Drawer top header */}
           <div className="primary-drawer-header">
@@ -147,10 +159,10 @@ export function SkillDetailDrawer({
               <div className="primary-drawer-title-col">
                 <div className="primary-drawer-title-row">
                   <DialogTitle className="primary-drawer-title break-word">
-                    {skill?.name || skill?.id || 'Skill details'}
+                    {skill?.name || skill?.id || t('skills.drawer.detailsFallback')}
                   </DialogTitle>
                   {sourceBadge && (
-                    <span className={badgeClass} title={`Source: ${sourceBadge.label}`}>
+                    <span className={badgeClass} title={t('skills.card.sourceTitle', { label: sourceBadge.label })}>
                       {sourceBadge.label}
                     </span>
                   )}
@@ -161,7 +173,7 @@ export function SkillDetailDrawer({
                   </div>
                 )}
                 {skill?.source === 'agents' && (
-                  <div className="text-subtle">Machine-level shared root</div>
+                  <div className="text-subtle">{t('skills.drawer.machineSharedRoot')}</div>
                 )}
               </div>
             </div>
@@ -169,8 +181,8 @@ export function SkillDetailDrawer({
               <button
                 type="button"
                 className="btn btn-ghost btn-icon-sm"
-                aria-label="Close"
-                title="Close"
+                aria-label={t('common.close')}
+                title={t('common.close')}
               >
                 <HelmIcon name="x" size={14} />
               </button>
@@ -180,12 +192,12 @@ export function SkillDetailDrawer({
           {/* Drawer body: outer area does not scroll; the reader is the only scroll container */}
           <div className="primary-drawer-body">
             {!skill ? (
-              <div className="empty-state">No skill selected</div>
+              <div className="empty-state">{t('skills.drawer.noSkillSelected')}</div>
             ) : (
               <>
                 {/* Compact file reader: single toolbar row + single scrollable reader */}
                 <div className="skill-reader">
-                  <div className="skill-reader-toolbar" role="group" aria-label="Skill file reader toolbar">
+                  <div className="skill-reader-toolbar" role="group" aria-label={t('skills.drawer.toolbarLabel')}>
                     <div className="skill-reader-file">
                       {files.length > 1 ? (
                         <Select
@@ -195,7 +207,7 @@ export function SkillDetailDrawer({
                           value={activePath}
                           options={fileOptions}
                           onChange={(ev) => setActivePath(ev.target.value)}
-                          aria-label="Choose a skill file"
+                          aria-label={t('skills.drawer.chooseFile')}
                           prefixIcon="file-text"
                         />
                       ) : (
@@ -210,50 +222,53 @@ export function SkillDetailDrawer({
                       {loading && (
                         <span className="skill-reader-loading text-subtle">
                           <HelmIcon name="loader" size={12} className="spin" />
-                          <span>Loading…</span>
+                          <span>{t('common.loading')}</span>
                         </span>
                       )}
                       {isMarkdown && (
                         <div
                           className="segmented-control skill-reader-mode"
                           role="group"
-                          aria-label="Reading mode"
+                          aria-label={t('skills.drawer.readingMode')}
                         >
                           <button
                             type="button"
                             className="segmented-control-btn"
                             aria-pressed={richText}
-                            title="Rich Markdown reading"
+                            title={t('skills.drawer.richTitle')}
                             onClick={() => setViewMode('rich')}
                           >
                             <HelmIcon name="eye" size={12} />
-                            <span>Rich text</span>
+                            <span>{t('skills.drawer.richMode')}</span>
                           </button>
                           <button
                             type="button"
                             className="segmented-control-btn"
                             aria-pressed={viewMode === 'source'}
-                            title="View monospace source"
+                            title={t('skills.drawer.sourceTitle')}
                             onClick={() => setViewMode('source')}
                           >
                             <HelmIcon name="code" size={12} />
-                            <span>Source</span>
+                            <span>{t('skills.drawer.sourceMode')}</span>
                           </button>
                         </div>
                       )}
                       <span
                         className="badge badge-neutral tabular-nums skill-reader-index"
-                        title={`File ${activeIndex + 1} of ${files.length}`}
+                        title={t('skills.drawer.fileIndexTitle', { index: activeIndex + 1, total: files.length })}
                       >
                         {`${activeIndex + 1}/${files.length}`}
                       </span>
-                      <span className="skill-reader-lines tabular-nums" title={`${activeDisplayPath} total lines`}>
-                        {lineCount > 0 ? `${lineCount} lines` : '--'}
+                      <span
+                        className="skill-reader-lines tabular-nums"
+                        title={t('skills.drawer.linesTitle', { file: activeDisplayPath })}
+                      >
+                        {lineCount > 0 ? t('skills.drawer.linesCount', { count: lineCount }) : '--'}
                       </span>
                       <CopyButton
                         className="btn btn-ghost btn-sm skill-reader-copy"
                         text={content}
-                        label="Copy"
+                        label={t('skills.drawer.copy')}
                       />
                     </div>
                   </div>
@@ -265,15 +280,15 @@ export function SkillDetailDrawer({
                       {error ? (
                         <div className="callout callout-error" role="alert">
                           <HelmIcon name="alert-circle" size={13} />
-                          <span className="callout-text">{`Failed to read: ${error}`}</span>
+                          <span className="callout-text">{t('skills.drawer.readFailed', { error })}</span>
                         </div>
                       ) : loading && content === '' ? (
                         <div className="skill-reader-placeholder text-subtle">
                           <HelmIcon name="loader" size={13} className="spin" />
-                          <span>Reading skill content…</span>
+                          <span>{t('skills.drawer.readingContent')}</span>
                         </div>
                       ) : content === '' ? (
-                        <div className="skill-reader-placeholder text-subtle">The file is empty</div>
+                        <div className="skill-reader-placeholder text-subtle">{t('skills.drawer.fileEmpty')}</div>
                       ) : richText ? (
                         <div className="skill-reader-doc selectable">
                           <MarkdownView text={displayText} />

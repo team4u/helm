@@ -1,40 +1,39 @@
 import React, { useMemo, useState } from 'react'
 import { HelmIcon } from '@helm/plugin-client'
 import { useHelmStore } from '../lib/store-context.js'
+import { useWebLocale } from '../i18n/use-web-locale.js'
 import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
 import { SkillCard } from './SkillCard.js'
 import { SkillDetailDrawer } from './SkillDetailDrawer.js'
 import {
   buildSkillCategoryCounts,
   filterSkills,
-  summarizeSkills,
+  skillCategoryTabLabel,
   type SkillCategoryTab,
 } from './skill-center-model.js'
 
 export interface SkillCenterProps {
   isSplit?: boolean
   onCloseSplit?: () => void
-  /** 显式指定详情抽屉是否内联渲染（便于测试与 SSR 统一断言） */
+  /** Render the detail drawer inline explicitly (for tests and unified SSR assertions). */
   inlineDrawer?: boolean
 }
 
-const CATEGORY_TABS: Array<{ key: SkillCategoryTab; label: string }> = [
-  { key: 'all', label: 'All' },
-  { key: 'builtin', label: 'Built-in' },
-  { key: 'plugins', label: 'Plugins' },
-  { key: 'agents', label: 'Shared' },
-  { key: 'workspace', label: 'Workspace' },
-]
+const CATEGORY_TABS: SkillCategoryTab[] = ['all', 'builtin', 'plugins', 'agents', 'workspace']
 
 /**
- * 全屏技能中心（Skill Center）主视图容器：
- * - 升格为系统一级全屏视图，统一管理大模型工具技能、规程与代码参考指引；
- * - 顶栏：标题、副标题、分屏操作按钮与技能统计徽章；
- * - 检索栏：输入框支持模糊搜索 ID / 名称 / 描述 / 参考文件路径，联动分类药丸标签；
- * - 响应式卡片网格：消费 SkillCard 呈现流式卡片，零 Emoji；
- * - 详情与文档预览抽屉：联动 SkillDetailDrawer 展示 SKILL.md 与 references/*.md；
- * - 与 URL Hash 深度联动：支持 #/settings/skills/<skillId> 深链直达与浏览器历史栈同步；
- * - 严格遵循零 Emoji 铁律与 Fast Refresh 规范。
+ * Full-screen skill center (primary stage) container:
+ * - a system-level full-screen view managing model tool skills, playbooks and
+ *   code reference guides;
+ * - top bar: title, split actions and the refresh action;
+ * - search bar: fuzzy search across ID / name / description / reference file
+ *   paths, combined with category pill tabs;
+ * - responsive card grid: SkillCard cells, zero emoji;
+ * - detail & doc reader drawer: SkillDetailDrawer showing SKILL.md and
+ *   references/*.md;
+ * - deep URL integration: #/settings/skills/<skillId> direct links and
+ *   browser history sync;
+ * - follows the zero-emoji rule and Fast Refresh conventions strictly.
  */
 export function SkillCenter({
   isSplit = false,
@@ -42,6 +41,7 @@ export function SkillCenter({
   inlineDrawer = false,
 }: SkillCenterProps): React.JSX.Element {
   const store = useHelmStore()
+  const { t } = useWebLocale()
   const [query, setQuery] = useState('')
   const [activeTab, setActiveTab] = useState<SkillCategoryTab>('all')
 
@@ -93,7 +93,7 @@ export function SkillCenter({
         <div className="primary-center-title-wrap pane-title-group">
           <div className="primary-center-title">
             <HelmIcon name="sparkles" size={14} />
-            <span>Skills Center</span>
+            <span>{t('skills.center.title')}</span>
           </div>
         </div>
 
@@ -102,10 +102,10 @@ export function SkillCenter({
             type="button"
             className="btn btn-sm"
             onClick={() => void store.refreshAssets?.()}
-            title="Refresh skill list"
+            title={t('skills.center.refreshTitle')}
           >
             <HelmIcon name="refresh-cw" size={12} />
-            <span className="pane-action-label">Refresh</span>
+            <span className="pane-action-label">{t('common.refresh')}</span>
           </button>
           {isSplit ? (
             <CloseSplitButton onCloseSplit={onCloseSplit} />
@@ -124,17 +124,17 @@ export function SkillCenter({
           <HelmIcon name="search" size={14} />
           <input
             type="text"
-            placeholder="Search skill name, ID, description or reference files…"
+            placeholder={t('skills.center.searchPlaceholder')}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            aria-label="Search skills"
+            aria-label={t('skills.center.searchLabel')}
           />
           {query && (
             <button
               type="button"
               className="btn btn-ghost btn-sm primary-search-clear"
-              title="Clear search"
-              aria-label="Clear search"
+              title={t('skills.center.clearSearch')}
+              aria-label={t('skills.center.clearSearch')}
               onClick={() => setQuery('')}
             >
               <HelmIcon name="x" size={12} />
@@ -142,20 +142,20 @@ export function SkillCenter({
           )}
         </div>
 
-        <div className="primary-category-pills" role="tablist" aria-label="Filter by skill category">
-          {CATEGORY_TABS.map((tab) => {
-            const count = categoryCounts[tab.key] ?? 0
-            const isActive = activeTab === tab.key
+        <div className="primary-category-pills" role="tablist" aria-label={t('skills.center.filterLabel')}>
+          {CATEGORY_TABS.map((tabKey) => {
+            const count = categoryCounts[tabKey] ?? 0
+            const isActive = activeTab === tabKey
             return (
               <button
-                key={tab.key}
+                key={tabKey}
                 type="button"
                 role="tab"
                 aria-selected={isActive}
                 className={`primary-category-pill${isActive ? ' is-active' : ''}`}
-                onClick={() => setActiveTab(tab.key)}
+                onClick={() => setActiveTab(tabKey)}
               >
-                <span>{tab.label}</span>
+                <span>{skillCategoryTabLabel(tabKey, t)}</span>
                 <span className="badge tabular-nums">{count}</span>
               </button>
             )
@@ -181,10 +181,8 @@ export function SkillCenter({
             <div className="primary-center-empty-icon">
               <HelmIcon name="search" size={28} />
             </div>
-            <div className="primary-center-empty-text">No matching skills</div>
-            <div className="primary-center-empty-hint">
-              Try adjusting the search keywords or switching category tabs.
-            </div>
+            <div className="primary-center-empty-text">{t('skills.center.emptyTitle')}</div>
+            <div className="primary-center-empty-hint">{t('skills.center.emptyHint')}</div>
             {(query || activeTab !== 'all') && (
               <button
                 type="button"
@@ -195,7 +193,7 @@ export function SkillCenter({
                 }}
               >
                 <HelmIcon name="rotate-ccw" size={12} />
-                <span>Reset filters</span>
+                <span>{t('skills.center.resetFilters')}</span>
               </button>
             )}
           </div>

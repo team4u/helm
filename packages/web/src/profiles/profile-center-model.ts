@@ -11,6 +11,7 @@ import {
   PROFILE_STARTER_PROMPT_MAX_LENGTH,
 } from '@helm/protocol/browser'
 import { assetsApi, type ModelDescriptor } from '../lib/api.js'
+import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 import type { SelectOption } from '@helm/plugin-client'
 
 declare module '@helm/protocol/browser' {
@@ -26,6 +27,11 @@ import type { Profile } from '@helm/protocol/browser'
 
 export type ProfileCategoryTab = 'all' | 'system' | 'custom' | 'herdr'
 
+/**
+ * Category tab constant. Kept with English labels for backward compatibility
+ * of the export; rendering must resolve labels through
+ * {@link profileCategoryTabLabel} so display copy follows the active locale.
+ */
 export const PROFILE_CATEGORY_TABS: Array<{ key: ProfileCategoryTab; label: string }> = [
   { key: 'all', label: 'All' },
   { key: 'system', label: 'Built-in' },
@@ -33,16 +39,27 @@ export const PROFILE_CATEGORY_TABS: Array<{ key: ProfileCategoryTab; label: stri
   { key: 'herdr', label: 'Herdr' },
 ]
 
-/**
- * 判断是否为系统内置或受插件托管的保护角色
- */
+/** Localized category tab label ('all'/'system' reuse the common table). */
+export function profileCategoryTabLabel(tab: ProfileCategoryTab, t?: WebMessageTranslator): string {
+  const tt = t ?? englishWebTranslator
+  switch (tab) {
+    case 'all':
+      return tt('common.all')
+    case 'system':
+      return tt('common.builtIn')
+    case 'custom':
+      return tt('profiles.tab.custom')
+    case 'herdr':
+      return tt('profiles.tab.herdr')
+  }
+}
+
+/** Whether the profile is a protected built-in or plugin-managed profile. */
 export function isSystemProfile(p: Profile): boolean {
   return Boolean(p.isSystem || p.managedByPlugin)
 }
 
-/**
- * 判断是否为绑定了 Herdr 外部运行时的角色
- */
+/** Whether the profile is bound to a Herdr external runtime. */
 export function isHerdrProfile(p: Profile): boolean {
   return Boolean(
     p.runtime?.kind === 'herdr' ||
@@ -50,16 +67,16 @@ export function isHerdrProfile(p: Profile): boolean {
   )
 }
 
-/**
- * 读取角色的默认绑定模型
- */
+/** Resolve the profile's bound default model. */
 export function resolveProfileModel(p: Profile): string | undefined {
   return p.defaultModel ?? p.model
 }
 
 /**
- * 提取模型展示短名：剥离 provider/ 路径前缀（与 Composer 模型选择器、模型中心卡片同口径）；
- * 空白或仅分隔符时按空/原值兜底，完整路径保留在悬浮提示与详情抽屉中。
+ * Short display name for a bound model: strips the provider/ path prefix
+ * (same normalization as the Composer model picker and model center cards);
+ * blank or separator-only values fall back to empty/original, while the full
+ * path is preserved in hover titles and the detail drawer.
  */
 export function formatShortModelName(model: string | undefined): string | undefined {
   if (model === undefined) return undefined
@@ -70,17 +87,22 @@ export function formatShortModelName(model: string | undefined): string | undefi
 }
 
 /**
- * 构造角色绑定的可选模型下拉列表：
- * - 第一项恒为「跟随系统默认」（value: ''）；
- * - 过滤只展示已配置且未禁用的模型（available 且非 disabled），未配置/已禁用的不能作为正常可选项；
- * - 若当前角色已配置的模型不在可选列表内（例如凭据失效、外部模型或已被禁用），
- *   保留该项并分别标注「未配置」或「已禁用」，确保既有值不丢失且明确提示。
+ * Build the selectable model options for a profile binding:
+ * - the first entry is always "Follow system default" (value: '');
+ * - only configured and non-disabled models are listed (available and not
+ *   disabled); unconfigured/disabled models are not normal options;
+ * - if the profile's currently configured model is not selectable (e.g.
+ *   credentials gone, external model, or disabled), it is kept and annotated
+ *   as "not configured" or "disabled" so existing values never disappear
+ *   silently.
  */
 export function buildProfileModelOptions(
   models: ModelDescriptor[],
   currentModel?: string,
+  t?: WebMessageTranslator,
 ): SelectOption<string>[] {
-  const list: SelectOption<string>[] = [{ value: '', label: 'Follow system default' }]
+  const tt = t ?? englishWebTranslator
+  const list: SelectOption<string>[] = [{ value: '', label: tt('profiles.modelOption.followSystemDefault') }]
   const trimmedCurrent = currentModel?.trim() ?? ''
   for (const m of models) {
     if (!m.available || m.disabled === true) continue
@@ -91,15 +113,15 @@ export function buildProfileModelOptions(
     const disabled = models.some((m) => m.id === trimmedCurrent && m.disabled === true)
     list.push({
       value: trimmedCurrent,
-      label: disabled ? `${trimmedCurrent} (disabled)` : `${trimmedCurrent} (not configured)`,
+      label: disabled
+        ? tt('profiles.modelOption.disabled', { model: trimmedCurrent })
+        : tt('profiles.modelOption.notConfigured', { model: trimmedCurrent }),
     })
   }
   return list
 }
 
-/**
- * 根据搜索关键字与分类标签过滤 Profile 列表
- */
+/** Filter the profile list by search query and category tab. */
 export function filterProfiles(
   profiles: Profile[],
   options: { query: string; categoryTab: ProfileCategoryTab },
@@ -108,7 +130,7 @@ export function filterProfiles(
   const q = query.trim().toLowerCase()
 
   return profiles.filter((p) => {
-    // 1. 分类匹配
+    // 1. Category match
     if (categoryTab === 'system' && !isSystemProfile(p)) {
       return false
     }
@@ -119,7 +141,8 @@ export function filterProfiles(
       return false
     }
 
-    // 2. 搜索匹配：匹配 profile.id, profile.name, profile.description, profile.tags, profile.defaultModel, profile.system, profile.skills
+    // 2. Search match: profile.id, profile.name, profile.description,
+    //    profile.tags, profile.defaultModel, profile.system, profile.skills
     if (!q) {
       return true
     }
@@ -137,9 +160,7 @@ export function filterProfiles(
   })
 }
 
-/**
- * 计算各分类下的角色数量
- */
+/** Count profiles per category tab. */
 export function buildProfileCategoryCounts(
   profiles: Profile[],
 ): Record<ProfileCategoryTab, number> {
@@ -166,9 +187,7 @@ export function buildProfileCategoryCounts(
   }
 }
 
-/**
- * 汇总角色统计信息
- */
+/** Summarize profile counts. */
 export function summarizeProfiles(profiles: Profile[]): {
   total: number
   system: number
@@ -182,63 +201,63 @@ export function summarizeProfiles(profiles: Profile[]): {
   }
 }
 
-/**
- * 校验新建 Profile ID 的合法性（字母、数字与连字符，1-64 字符）
- */
+/** Validate a new profile ID (letters, digits and hyphens, 1-64 chars). */
 export function profileIdValid(id: string): boolean {
   return /^[a-z0-9][a-z0-9-]{0,63}$/.test(id)
 }
 
-/** 表单内编辑中的引导词条目（尚未保存，允许临时空值）。 */
+/** A starter entry being edited in the form (not saved yet; transient blanks allowed). */
 export interface StarterDraft {
   label: string
   prompt: string
 }
 
-/** Unicode 码点计数（代理对计 1；与服务层/HTTP 边界同口径）。 */
+/** Count Unicode code points (surrogate pairs count as 1; same as the service/HTTP boundary). */
 function starterCodePoints(text: string): number {
   let count = 0
   for (const _ of text) count += 1
   return count
 }
 
-/** 校验单条编辑草稿；返回首个错误文案，合法返回 null。 */
-export function validateStarterDraft(draft: StarterDraft): string | null {
+/** Validate one draft starter; returns the first error copy, or null when valid. */
+export function validateStarterDraft(draft: StarterDraft, t?: WebMessageTranslator): string | null {
+  const tt = t ?? englishWebTranslator
   const label = draft.label.trim()
-  if (starterCodePoints(label) === 0) return 'Title cannot be empty after trimming whitespace'
+  if (starterCodePoints(label) === 0) return tt('profiles.starter.error.titleEmpty')
   if (starterCodePoints(label) > PROFILE_STARTER_LABEL_MAX_LENGTH) {
-    return `Title must be at most ${PROFILE_STARTER_LABEL_MAX_LENGTH} Unicode code points`
+    return tt('profiles.starter.error.titleTooLong', { max: PROFILE_STARTER_LABEL_MAX_LENGTH })
   }
-  if (draft.prompt.trim() === '') return 'Prompt cannot be whitespace only'
+  if (draft.prompt.trim() === '') return tt('profiles.starter.error.promptWhitespace')
   if (starterCodePoints(draft.prompt) > PROFILE_STARTER_PROMPT_MAX_LENGTH) {
-    return `Prompt must be at most ${PROFILE_STARTER_PROMPT_MAX_LENGTH} Unicode code points`
+    return tt('profiles.starter.error.promptTooLong', { max: PROFILE_STARTER_PROMPT_MAX_LENGTH })
   }
   return null
 }
 
-/** 校验整份 starters 草稿；通过返回 null，否则返回（索引, 错误）。 */
+/** Validate the whole starters draft; null when valid, else (index, error). */
 export function validateStarterDrafts(
   drafts: StarterDraft[],
+  t?: WebMessageTranslator,
 ): { index: number; error: string } | null {
   for (let i = 0; i < drafts.length; i++) {
-    const error = validateStarterDraft(drafts[i]!)
+    const error = validateStarterDraft(drafts[i]!, t)
     if (error !== null) return { index: i, error }
   }
   return null
 }
 
-/** Profile.starters -> 表单草稿（未定义时为空列表：保存为空=清空）。 */
+/** Profile.starters -> form drafts (undefined becomes an empty list: saving empty clears). */
 export function startersToDrafts(starters: ProfileStarterPrompt[] | undefined): StarterDraft[] {
   return (starters ?? []).map((s) => ({ label: s.label, prompt: s.prompt }))
 }
 
-/** 空白会话可展示的引导词：空数组回退 undefined（宿主默认提示由 UI 层另行处理）。 */
+/** Starters shown on empty conversations: empty array falls back to undefined (host default hint is handled by the UI layer). */
 export function visibleStarters(profile: Profile | undefined): ProfileStarterPrompt[] | undefined {
   const starters = profile?.starters
   return starters !== undefined && starters.length > 0 ? starters : undefined
 }
 
-/** 是否已达上限（禁止继续新增）。 */
+/** Whether the starter cap is reached (no further additions). */
 export function startersAtLimit(drafts: StarterDraft[]): boolean {
   return drafts.length >= PROFILE_STARTERS_MAX_ITEMS
 }
@@ -250,7 +269,8 @@ export interface EffectiveProfileModelInfo {
 }
 
 /**
- * 解析角色在界面上实际生效的模型与思考档位（自身绑定优先，否则继承全局默认）
+ * Resolve the model and thinking level actually in effect for a profile
+ * (own binding first, then the global default).
  */
 export function resolveEffectiveProfileModel(
   profile: Profile,
@@ -277,9 +297,7 @@ export function resolveEffectiveProfileModel(
   return { source: 'unset' }
 }
 
-/**
- * 格式化角色默认计算节点与工作目录归属
- */
+/** Format the profile's default compute node and working directory location. */
 export function formatProfileLocation(profile: Profile): {
   nodeId: string
   isRemoteNode: boolean
@@ -304,14 +322,14 @@ export interface ProfileActivitySummary {
   stateLabel: string
 }
 
-/**
- * 汇总角色当前关联会话活跃度与托管插件启用状态
- */
+/** Summarize the profile's conversation activity and managing plugin status. */
 export function summarizeProfileActivity(
   profile: Profile,
   conversations: ConversationSummary[] = [],
   plugins: PluginSummary[] = [],
+  t?: WebMessageTranslator,
 ): ProfileActivitySummary {
+  const tt = t ?? englishWebTranslator
   let conversationCount = 0
   let workingCount = 0
   let blockedCount = 0
@@ -338,7 +356,7 @@ export function summarizeProfileActivity(
       errorCount,
       managingPluginDisabled,
       stateKind: 'plugin-disabled',
-      stateLabel: 'Plugin disabled',
+      stateLabel: tt('profiles.activity.pluginDisabled'),
     }
   }
   if (workingCount > 0) {
@@ -349,7 +367,10 @@ export function summarizeProfileActivity(
       errorCount,
       managingPluginDisabled,
       stateKind: 'working',
-      stateLabel: workingCount > 1 ? `Running (${workingCount})` : 'Running',
+      stateLabel:
+        workingCount > 1
+          ? tt('profiles.activity.runningCount', { count: workingCount })
+          : tt('profiles.activity.running'),
     }
   }
   if (blockedCount > 0) {
@@ -360,7 +381,10 @@ export function summarizeProfileActivity(
       errorCount,
       managingPluginDisabled,
       stateKind: 'blocked',
-      stateLabel: blockedCount > 1 ? `Pending approval (${blockedCount})` : 'Pending approval',
+      stateLabel:
+        blockedCount > 1
+          ? tt('profiles.activity.pendingApprovalCount', { count: blockedCount })
+          : tt('profiles.activity.pendingApproval'),
     }
   }
   if (errorCount > 0) {
@@ -371,7 +395,8 @@ export function summarizeProfileActivity(
       errorCount,
       managingPluginDisabled,
       stateKind: 'error',
-      stateLabel: errorCount > 1 ? `Errors (${errorCount})` : 'Has errors',
+      stateLabel:
+        errorCount > 1 ? tt('profiles.activity.errors', { count: errorCount }) : tt('profiles.activity.hasErrors'),
     }
   }
   if (conversationCount > 0) {
@@ -382,7 +407,7 @@ export function summarizeProfileActivity(
       errorCount,
       managingPluginDisabled,
       stateKind: 'active',
-      stateLabel: `${conversationCount} conversations`,
+      stateLabel: tt('profiles.activity.conversations', { count: conversationCount }),
     }
   }
   return {
@@ -392,13 +417,11 @@ export function summarizeProfileActivity(
     errorCount,
     managingPluginDisabled,
     stateKind: 'idle',
-    stateLabel: 'Standing by',
+    stateLabel: tt('profiles.activity.standingBy'),
   }
 }
 
-/**
- * 角色 API 封装对象
- */
+/** Profile HTTP API facade. */
 export const profilesApi = {
   list: () => assetsApi.listProfiles(),
   get: (id: string) => assetsApi.getProfile(id),

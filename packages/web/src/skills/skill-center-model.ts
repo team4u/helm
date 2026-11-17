@@ -1,11 +1,14 @@
 /**
- * 技能中心纯函数模型与分类过滤
+ * Skill center pure-function model and category filtering.
  *
- * 提供技能分类推导、多维检索（名称/ID/描述/参考文件）、来源区分及指标统计。
- * 遵循前端 Fast Refresh 规范：纯函数、常量与数据模型统一定义于此，不与组件混写。
+ * Provides skill category derivation, multi-dimension search (name / ID /
+ * description / reference files), source distinction and metric summaries.
+ * Follows the web Fast Refresh rule: pure functions, constants and data
+ * models live here, never mixed into components.
  */
 import type { SkillSummary } from '@helm/protocol/browser'
 import { assetsApi } from '../lib/api.js'
+import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 
 export type SkillCategoryTab = 'all' | 'builtin' | 'plugins' | 'agents' | 'workspace'
 
@@ -23,23 +26,24 @@ export interface SkillSummaryStats {
 }
 
 /**
- * 判断技能是否为系统内置核心技能：
- * - managedByPlugin 声明以 'builtin:' 起头
+ * Whether the skill is a system built-in core skill:
+ * - managedByPlugin starts with 'builtin:'
  */
 export function isSkillBuiltin(skill: SkillSummary): boolean {
   return Boolean(skill.managedByPlugin?.startsWith('builtin:'))
 }
 
 /**
- * 判断技能是否由三方/外部扩展插件托管：
- * - managedByPlugin 有值且不以 'builtin:' 起头
+ * Whether the skill is managed by a third-party / external plugin:
+ * - managedByPlugin set and not starting with 'builtin:'
  */
 export function isSkillPlugin(skill: SkillSummary): boolean {
   return Boolean(skill.managedByPlugin && !skill.managedByPlugin.startsWith('builtin:'))
 }
 
 /**
- * 判断技能是否来自机器级共享根（~/.agents/skills，pi 生态技能库）：
+ * Whether the skill comes from the machine-level shared root
+ * (~/.agents/skills, the pi ecosystem skill library):
  * - source === 'agents'
  */
 export function isSkillAgents(skill: SkillSummary): boolean {
@@ -47,16 +51,14 @@ export function isSkillAgents(skill: SkillSummary): boolean {
 }
 
 /**
- * 判断技能是否为本地工作区私有技能：
- * - 无 managedByPlugin 且非机器级共享根来源
+ * Whether the skill is private to the local workspace:
+ * - no managedByPlugin and not from the machine-level shared root
  */
 export function isSkillWorkspace(skill: SkillSummary): boolean {
   return !skill.managedByPlugin && !isSkillAgents(skill)
 }
 
-/**
- * 判断技能是否命中指定的分类药丸标签
- */
+/** Whether the skill matches the given category pill tab. */
 export function isSkillInTab(skill: SkillSummary, tab: SkillCategoryTab): boolean {
   if (tab === 'all') return true
   if (tab === 'builtin') return isSkillBuiltin(skill)
@@ -67,13 +69,14 @@ export function isSkillInTab(skill: SkillSummary, tab: SkillCategoryTab): boolea
 }
 
 /**
- * 按多维条件过滤技能列表（纯函数，返回新数组，不修改原数组）
+ * Filter the skill list by multiple conditions (pure; returns a new array,
+ * never mutates the input).
  *
- * 搜索匹配范围：
+ * Search match scopes:
  * - skill.id
  * - skill.name
  * - skill.description
- * - skill.references 各子项路径
+ * - each skill.references path
  */
 export function filterSkills(
   skills: SkillSummary[],
@@ -84,12 +87,12 @@ export function filterSkills(
   const tab = options.categoryTab ?? 'all'
 
   return skills.filter((skill) => {
-    // 1. 分类标签筛选
+    // 1. Category tab filter
     if (tab !== 'all' && !isSkillInTab(skill, tab)) {
       return false
     }
 
-    // 2. 关键字搜索匹配
+    // 2. Keyword search
     if (query) {
       const matchId = (skill.id ?? '').toLowerCase().includes(query)
       const matchName = (skill.name ?? '').toLowerCase().includes(query)
@@ -104,9 +107,7 @@ export function filterSkills(
   })
 }
 
-/**
- * 计算分类标签的数量统计
- */
+/** Count skills per category tab. */
 export function buildSkillCategoryCounts(skills: SkillSummary[]): Record<SkillCategoryTab, number> {
   const list = Array.isArray(skills) ? skills : []
   let builtin = 0
@@ -135,9 +136,7 @@ export function buildSkillCategoryCounts(skills: SkillSummary[]): Record<SkillCa
   }
 }
 
-/**
- * 汇总技能统计指标
- */
+/** Summarize skill metrics. */
 export function summarizeSkills(skills: SkillSummary[]): SkillSummaryStats {
   const counts = buildSkillCategoryCounts(skills)
   return {
@@ -150,28 +149,48 @@ export function summarizeSkills(skills: SkillSummary[]): SkillSummaryStats {
 }
 
 /**
- * 获取技能来源徽章标签与类型（agents 判定最前：共享技能必然无
- * managedByPlugin，但语义上是独立分类，不以插件维度收编）
+ * Resolve the skill's source badge label and variant (agents checked first:
+ * shared skills never carry managedByPlugin, but they are semantically their
+ * own category, not folded into the plugin dimension).
  */
-export function getSkillSourceBadge(skill: SkillSummary): {
+export function getSkillSourceBadge(
+  skill: SkillSummary,
+  t?: WebMessageTranslator,
+): {
   label: string
   variant: 'builtin' | 'workspace' | 'plugin' | 'agents'
 } {
+  const tt = t ?? englishWebTranslator
   if (isSkillAgents(skill)) {
-    return { label: 'Shared', variant: 'agents' }
+    return { label: tt('skills.category.shared'), variant: 'agents' }
   }
   if (isSkillBuiltin(skill)) {
-    return { label: 'Built-in', variant: 'builtin' }
+    return { label: tt('common.builtIn'), variant: 'builtin' }
   }
   if (isSkillPlugin(skill)) {
-    return { label: skill.managedByPlugin ?? 'Plugins', variant: 'plugin' }
+    return { label: skill.managedByPlugin ?? tt('skills.category.plugins'), variant: 'plugin' }
   }
-  return { label: 'Workspace', variant: 'workspace' }
+  return { label: tt('skills.category.workspace'), variant: 'workspace' }
 }
 
-/**
- * 技能 HTTP API 调用代理封装，供技能中心与抽屉消费
- */
+/** Localized category tab label ('all'/'builtin' reuse the common table). */
+export function skillCategoryTabLabel(tab: SkillCategoryTab, t?: WebMessageTranslator): string {
+  const tt = t ?? englishWebTranslator
+  switch (tab) {
+    case 'all':
+      return tt('common.all')
+    case 'builtin':
+      return tt('common.builtIn')
+    case 'plugins':
+      return tt('skills.category.plugins')
+    case 'agents':
+      return tt('skills.category.shared')
+    case 'workspace':
+      return tt('skills.category.workspace')
+  }
+}
+
+/** Skill HTTP API facade consumed by the skill center and drawer. */
 export const skillsApi = {
   read: (id: string, path?: string) => assetsApi.readSkill(id, path),
   list: () => assetsApi.listSkills(),

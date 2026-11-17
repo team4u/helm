@@ -10,14 +10,15 @@ import {
 } from './profile-center-model.js'
 import { HelmIcon } from '@helm/plugin-client'
 import { HelmStoreContext } from '../lib/store-context.js'
+import { useWebLocale } from '../i18n/use-web-locale.js'
 
 export interface ProfileCardProps {
   profile: Profile
   selected?: boolean
   onSelect: () => void
-  /** 可选：全局默认模型配置（缺省时读取 store.defaultModelInfo） */
+  /** Optional: global default model info (defaults to store.defaultModelInfo). */
   defaultModelInfo?: { defaultModel: string; defaultThinkingLevel: string } | null
-  /** 可选：点击右下角「对话」直达动作（缺省通过 store.openTarget 跳转 #/a/<profileId>） */
+  /** Optional: bottom-right "Conversation" direct action (defaults to store.openTarget -> #/a/<profileId>). */
   onStartChat?: () => void
 }
 
@@ -31,10 +32,13 @@ const ACTIVITY_BADGE_CLASS = {
 } as const
 
 /**
- * 智能体角色卡片组件：
- * - 消费 .primary-card 视觉规范，紧凑展示角色名称/ID、系统锁、运行态、有效模型（含思考档位/全局继承标识）、节点与工作目录、技能数及右下角直达对话按钮；
- * - 键盘 Enter/Space 与点击打开右侧详情抽屉；
- * - 严格遵循零 Emoji 铁律与零内联样式。
+ * Agent profile card:
+ * - renders the .primary-card visual spec, compactly showing the profile
+ *   name/ID, system lock, activity state, effective model (with thinking
+ *   level / global-inheritance markers), node and working directory, skill
+ *   count, and the bottom-right direct-conversation button;
+ * - keyboard Enter/Space and click open the right detail drawer;
+ * - follows the zero-emoji and zero-inline-style rules strictly.
  */
 export function ProfileCard({
   profile,
@@ -44,6 +48,7 @@ export function ProfileCard({
   onStartChat,
 }: ProfileCardProps): React.JSX.Element {
   const store = useContext(HelmStoreContext)
+  const { t } = useWebLocale()
   const isSystem = isSystemProfile(profile)
   const isHerdr = isHerdrProfile(profile)
   const effectiveModel = resolveEffectiveProfileModel(
@@ -55,13 +60,14 @@ export function ProfileCard({
     profile,
     store?.conversations ?? [],
     store?.plugins ?? [],
+    t,
   )
   const displayName = profile.name || profile.id
 
   const skillsLabel =
     profile.skills === undefined
-      ? 'All available skills'
-      : `${profile.skills.length} skills`
+      ? t('profiles.card.allSkills')
+      : t('profiles.card.skillsCount', { count: profile.skills.length })
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     if (event.key === 'Enter' || event.key === ' ') {
@@ -82,19 +88,18 @@ export function ProfileCard({
 
   const shortModelName = formatShortModelName(effectiveModel.model)
 
+  const thinkingSuffix = effectiveModel.thinkingLevel
+    ? t('profiles.card.thinkingSuffix', { level: effectiveModel.thinkingLevel })
+    : ''
   const modelTitle = effectiveModel.model
     ? effectiveModel.source === 'bound'
-      ? `Bound model: ${effectiveModel.model}${
-          effectiveModel.thinkingLevel ? ` (thinking level: ${effectiveModel.thinkingLevel})` : ''
-        }`
-      : `Inherits global default model: ${effectiveModel.model}${
-          effectiveModel.thinkingLevel ? ` (thinking level: ${effectiveModel.thinkingLevel})` : ''
-        }`
-    : 'Follow global default model configuration'
+      ? t('profiles.card.boundModel', { model: effectiveModel.model }) + thinkingSuffix
+      : t('profiles.card.inheritModel', { model: effectiveModel.model }) + thinkingSuffix
+    : t('profiles.card.followGlobalTitle')
 
   const locationText = location.cwd
     ? `${location.nodeId} · ${location.cwd}`
-    : `${location.nodeId} · default working directory`
+    : t('profiles.card.defaultCwd', { nodeId: location.nodeId })
 
   return (
     <div
@@ -113,14 +118,14 @@ export function ProfileCard({
               {displayName}
             </span>
             {isSystem && (
-              <span className="primary-card-pill mono" title="Built-in system profile">
+              <span className="primary-card-pill mono" title={t('profiles.card.systemPillTitle')}>
                 <HelmIcon name="lock" size={10} />
-                <span>System</span>
+                <span>{t('profiles.card.systemPill')}</span>
               </span>
             )}
             <span
               className={`${ACTIVITY_BADGE_CLASS[activity.stateKind]} tabular-nums`}
-              title={`Activity: ${activity.stateLabel}`}
+              title={t('profiles.card.activityTitle', { label: activity.stateLabel })}
             >
               {activity.stateLabel}
             </span>
@@ -130,11 +135,14 @@ export function ProfileCard({
       </div>
 
       <div className="primary-card-desc" title={profile.description || undefined}>
-        {profile.description || 'No description'}
+        {profile.description || t('profiles.card.noDescription')}
       </div>
 
       <div className="flex-col-xs">
-        <div className="flex-row primary-card-location text-subtle mono" title={`Node and directory: ${locationText}`}>
+        <div
+          className="flex-row primary-card-location text-subtle mono"
+          title={t('profiles.card.locationTitle', { location: locationText })}
+        >
           <HelmIcon name={location.isRemoteNode ? 'server' : 'laptop'} size={11} />
           <span className="break-word">{locationText}</span>
         </div>
@@ -151,23 +159,23 @@ export function ProfileCard({
           ) : (
             <span className="primary-card-pill" title={modelTitle}>
               <HelmIcon name="cpu" size={10} />
-              <span className="primary-card-pill-label">Follow global default</span>
+              <span className="primary-card-pill-label">{t('profiles.card.followGlobalDefault')}</span>
             </span>
           )}
           {effectiveModel.source === 'global' && (
             <span
               className="primary-card-pill"
-              title={`Inherits global default model: ${effectiveModel.model}`}
+              title={t('profiles.card.inheritModel', { model: effectiveModel.model ?? '' })}
             >
-              <span>Global default</span>
+              <span>{t('profiles.card.globalDefault')}</span>
             </span>
           )}
-          <span className="primary-card-pill" title={`Skills: ${skillsLabel}`}>
+          <span className="primary-card-pill" title={t('profiles.card.skillsTitle', { label: skillsLabel })}>
             <HelmIcon name="wrench" size={10} />
             <span className="primary-card-pill-label">{skillsLabel}</span>
           </span>
           {isHerdr && (
-            <span className="primary-card-pill" title="Herdr external runtime">
+            <span className="primary-card-pill" title={t('profiles.card.herdrRuntimeTitle')}>
               <HelmIcon name="terminal" size={10} />
               <span>Herdr</span>
             </span>
@@ -178,8 +186,8 @@ export function ProfileCard({
       <div className="primary-card-footer">
         <span className="text-subtle tabular-nums">
           {activity.conversationCount > 0
-            ? `Linked to ${activity.conversationCount} conversations`
-            : 'No linked conversations'}
+            ? t('profiles.card.linkedConversations', { count: activity.conversationCount })
+            : t('profiles.card.noLinkedConversations')}
         </span>
         {profile.humanSelectable !== false && (
           <button
@@ -188,14 +196,14 @@ export function ProfileCard({
             disabled={activity.managingPluginDisabled}
             title={
               activity.managingPluginDisabled
-                ? 'The owning managed plugin is disabled; cannot start a new conversation'
-                : `Start a new conversation with ${displayName}`
+                ? t('profiles.card.chatDisabledTitle')
+                : t('profiles.card.startConversationTitle', { name: displayName })
             }
             onClick={handleChatClick}
             onKeyDown={(e) => e.stopPropagation()}
           >
             <HelmIcon name="message-square" size={12} />
-            <span>Conversation</span>
+            <span>{t('profiles.card.conversationAction')}</span>
           </button>
         )}
       </div>

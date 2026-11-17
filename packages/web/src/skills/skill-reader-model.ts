@@ -1,31 +1,33 @@
 /**
- * 技能文件阅读器纯函数模型
+ * Pure-function model for the skill file reader.
  *
- * 为 SkillDetailDrawer 的紧凑文件阅读器提供文件清单构建、Markdown 判定、
- * YAML frontmatter 解析与 Markdown 元数据表格转换、语法语言推导等纯函数。
- * 遵循前端 Fast Refresh 规范：纯函数与常量统一定义于此，不与组件混写。
+ * Provides the compact file reader of SkillDetailDrawer with file list
+ * building, Markdown detection, YAML frontmatter parsing, Markdown metadata
+ * table conversion and syntax language derivation. Follows the web Fast
+ * Refresh rule: pure functions and constants live here, never in components.
  */
 import { detectLanguage } from '../conversation/code-language.js'
+import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 
-/** 主规程文件名（读取路径约定为空串，展示为 SKILL.md）。 */
+/** Main skill file name (read path convention is the empty string; displayed as SKILL.md). */
 export const SKILL_MAIN_FILENAME = 'SKILL.md'
 
-/** 技能元数据表格的 Markdown 标题文案（置于 frontmatter 转换表格之前）。 */
+/** Markdown heading for the skill metadata table (English compatibility fallback; rendering goes through the translator). */
 export const SKILL_FRONTMATTER_TABLE_HEADING = 'Skill metadata'
 
-/** 阅读器中的单个技能文件条目。 */
+/** One skill file entry in the reader. */
 export interface SkillFileEntry {
-  /** 读取路径：空串表示主规程 SKILL.md */
+  /** Read path: the empty string means the main SKILL.md */
   path: string
-  /** 短文件名（basename），用于下拉选项与工具条主展示 */
+  /** Short file name (basename) for dropdown options and the toolbar label */
   fileName: string
-  /** 目录/来源辅助信息（如 'references/' 或 '主规程'） */
+  /** Directory / origin hint (e.g. 'references/' or the main-file label) */
   meta: string
-  /** 完整相对路径（title 提示与单文件态展示） */
+  /** Full relative path (title hints and single-file display) */
   displayPath: string
 }
 
-/** 取路径 basename（兼容携带查询串的路径；空路径返回空串）。 */
+/** Take the path basename (query-string tolerant; an empty path returns ''). */
 export function skillFileBasename(path: string): string {
   const normalized = (path ?? '').split('?')[0]?.split('#')[0] ?? ''
   const idx = normalized.lastIndexOf('/')
@@ -33,17 +35,22 @@ export function skillFileBasename(path: string): string {
 }
 
 /**
- * 构建技能文件清单：主规程 SKILL.md 置顶，references 依原序排列。
- * 空串、非字符串引用项被过滤，保证清单恒定有效。
+ * Build the skill file list: the main SKILL.md first, then references in
+ * their original order. Empty and non-string reference entries are filtered
+ * so the list is always valid.
  */
-export function buildSkillFileList(references?: readonly string[] | null): SkillFileEntry[] {
+export function buildSkillFileList(
+  references?: readonly string[] | null,
+  t?: WebMessageTranslator,
+): SkillFileEntry[] {
+  const tt = t ?? englishWebTranslator
   const refs = Array.isArray(references)
     ? references.filter((ref): ref is string => typeof ref === 'string' && ref.trim() !== '')
     : []
   const main: SkillFileEntry = {
     path: '',
     fileName: SKILL_MAIN_FILENAME,
-    meta: 'Main file',
+    meta: tt('skills.reader.mainFile'),
     displayPath: SKILL_MAIN_FILENAME,
   }
   const rest = refs.map((ref) => {
@@ -54,7 +61,7 @@ export function buildSkillFileList(references?: readonly string[] | null): Skill
   return [main, ...rest]
 }
 
-/** 判断文件是否按 Markdown 渲染（空串视为主规程 SKILL.md）。 */
+/** Whether the file renders as Markdown (the empty string means the main SKILL.md). */
 export function isSkillMarkdownFile(path: string): boolean {
   const name = skillFileBasename(path ?? '') || SKILL_MAIN_FILENAME
   const dot = name.lastIndexOf('.')
@@ -62,21 +69,22 @@ export function isSkillMarkdownFile(path: string): boolean {
   return ext === 'md' || ext === 'markdown'
 }
 
-/** frontmatter 中解析出的单个字段（键与其标量值），按原 YAML 顺序保留。 */
+/** One parsed frontmatter field (key and scalar value), kept in original YAML order. */
 export interface SkillFrontmatterField {
   key: string
   value: string
 }
 
-/** SKILL.md 顶部 frontmatter 解析结果：字段序列与围栏之后的正文。 */
+/** Parsed top frontmatter of SKILL.md: the field sequence and the body after the fence. */
 export interface SkillFrontmatterDoc {
   fields: SkillFrontmatterField[]
   body: string
 }
 
-/** 剥离 YAML 单行标量首尾对称的单/双引号（双引号还原 \" 与 \\ 转义，
- * 单引号还原 '' 转义；不对称引号原样保留，不伪造解析）。
- * 语义与 kernel parseSkillFrontmatter 的 stripQuotedScalar 保持一致。 */
+/** Strip symmetric leading/trailing single/double quotes from a YAML single-line
+ * scalar (double quotes restore \" and \\ escapes, single quotes restore ''
+ * escapes; asymmetric quotes stay verbatim — never fabricate a parse).
+ * Semantics match stripQuotedScalar of the kernel parseSkillFrontmatter. */
 function stripQuotedScalar(value: string): string {
   if (value.length < 2) return value
   const first = value[0]
@@ -87,11 +95,14 @@ function stripQuotedScalar(value: string): string {
   return inner.replace(/''/g, "'")
 }
 
-/** 解析 SKILL.md 顶部 YAML frontmatter（--- ... --- / ... 围栏）为字段序列与正文。
- * 值语法与 kernel parseSkillFrontmatter 的最小集对齐：单行标量（剥首尾对称
- * 引号）与块标量——折叠型 > / >-（连续缩进行 trim 后以空格拼接）与保留型
- * | / |-（去公共缩进后以换行拼接）；不匹配键模式的行（注释/空行等）跳过。
- * 无围栏或未闭合时返回 null，调用方原文回退，绝不截断正文。 */
+/** Parse the top YAML frontmatter of SKILL.md (--- ... --- / ... fences) into a
+ * field sequence and body. Value syntax aligns with the minimal set of the
+ * kernel parseSkillFrontmatter: single-line scalars (symmetric quotes
+ * stripped) and block scalars — folded > / >- (trimmed consecutive indented
+ * lines joined by spaces) and literal | / |- (common indent removed, lines
+ * joined by newlines); lines not matching the key pattern (comments, blanks)
+ * are skipped. Returns null when the fence is missing or unclosed; callers
+ * fall back to the raw text — the body is never truncated. */
 export function extractSkillFrontmatter(text: string): SkillFrontmatterDoc | null {
   const lines = text.split(/\r?\n/)
   if (lines[0] === undefined || lines[0]!.trim() !== '---') return null
@@ -104,7 +115,8 @@ export function extractSkillFrontmatter(text: string): SkillFrontmatterDoc | nul
     if (m === null || m[1] === undefined) continue
     const key = m[1]
     const inline = (m[2] ?? '').trim()
-    // 块标量：> / >- / | / |- 后续连续缩进行（浅于首个非空行缩进即块结束）为值体
+    // Block scalar: > / >- / | / |- followed by consecutive indented lines
+    // (the block ends at the first line indented shallower than the first non-empty line)
     if (inline === '>' || inline === '>-' || inline === '|' || inline === '|-') {
       const block: string[] = []
       let indent = -1
@@ -134,9 +146,11 @@ export function extractSkillFrontmatter(text: string): SkillFrontmatterDoc | nul
   return { fields, body: rest.join('\n') }
 }
 
-/** Markdown 表格单元格安全转义：反斜杠与竖线转义防破坏表格列结构，
- * & 与 < 转字符引用防 react-markdown 把值误当原始 HTML 吞掉，
- * 换行折成空格保证单元格单行（GFM 表格单元格不含块级换行）。 */
+/** Escape a Markdown table cell safely: backslashes and pipes are escaped to
+ * keep the column structure intact, & and < become character references so
+ * react-markdown does not swallow the value as raw HTML, and newlines fold
+ * into spaces so a cell stays single-line (GFM table cells carry no block
+ * line breaks). */
 function escapeTableCellValue(value: string): string {
   return value
     .replace(/\\/g, '\\\\')
@@ -146,37 +160,45 @@ function escapeTableCellValue(value: string): string {
     .replace(/\r\n?|\n/g, ' ')
 }
 
-/** 把 frontmatter 字段序列转换为 Markdown 表格（含「技能元数据」标题行）。
- * 字段按原 YAML 顺序保留；空字段序列返回空串（无可渲染内容）。 */
-export function renderSkillFrontmatterTable(fields: readonly SkillFrontmatterField[]): string {
+/** Convert the frontmatter field sequence into a Markdown table (with the
+ * "skill metadata" heading row). Fields keep their original YAML order; an
+ * empty field sequence returns '' (nothing to render). */
+export function renderSkillFrontmatterTable(
+  fields: readonly SkillFrontmatterField[],
+  t?: WebMessageTranslator,
+): string {
+  const tt = t ?? englishWebTranslator
   if (fields.length === 0) return ''
   const rows = fields.map(
     (f) => `| ${escapeTableCellValue(f.key)} | ${escapeTableCellValue(f.value)} |`,
   )
   return [
-    `## ${SKILL_FRONTMATTER_TABLE_HEADING}`,
+    `## ${tt('skills.reader.metadataHeading')}`,
     '',
-    '| Field | Value |',
+    `| ${tt('skills.reader.fieldHeader')} | ${tt('skills.reader.valueHeader')} |`,
     '| --- | --- |',
     ...rows,
   ].join('\n')
 }
 
-/** 富文本阅读模式统一文档视图：把 SKILL.md 顶部 YAML frontmatter 转换为
- * Markdown 元数据表格，正文紧随其后，元数据与正文处于同一内容流（桌面/
- * 移动端共用同一 DOM 与渲染逻辑）。无 frontmatter 时正文原样返回；围栏
- * 未闭合或首行非 --- 围栏时原文回退，绝不截断正文。源码模式不经此转换。 */
-export function renderSkillDocMarkdown(text: string): string {
+/** Unified document view for rich reading mode: converts the top YAML
+ * frontmatter of SKILL.md into a Markdown metadata table with the body right
+ * after it in the same content flow (desktop and mobile share the same DOM
+ * and rendering logic). Without frontmatter the body returns verbatim; an
+ * unclosed fence or a non-'---' first line falls back to the raw text — the
+ * body is never truncated. Source mode bypasses this conversion. */
+export function renderSkillDocMarkdown(text: string, t?: WebMessageTranslator): string {
   const parsed = extractSkillFrontmatter(text)
   if (parsed === null) return text
-  const table = renderSkillFrontmatterTable(parsed.fields)
+  const table = renderSkillFrontmatterTable(parsed.fields, t)
   if (table === '') return parsed.body
   return parsed.body === '' ? table : `${table}\n\n${parsed.body}`
 }
 
 /**
- * 推导技能文件的语法高亮语言（源码模式与代码类文件消费）：
- * 由文件名后缀推导，主规程按 SKILL.md 推导为 markdown；无法识别返回空串。
+ * Derive the syntax highlighting language of a skill file (consumed by source
+ * mode and code files): derived from the file suffix, the main skill file
+ * derives as markdown from SKILL.md; returns '' when unrecognized.
  */
 export function skillFileLanguage(path: string): string {
   return detectLanguage(skillFileBasename(path ?? '') || SKILL_MAIN_FILENAME, undefined)
