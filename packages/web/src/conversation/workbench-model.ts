@@ -6,7 +6,8 @@
  * - 汇总顶栏「工作台」按钮总角标计数与最高优先级色调（warn > accent > neutral）；
  * - 解析当前有效激活页签（无效页签回退首个可用页签）。
  */
-import type { ArtifactKind, ArtifactMetadata, WorkbenchPanelBadgeSpec, WorkbenchPanelSpec } from '@helm/protocol/browser'
+import type { ArtifactKind, ArtifactMetadata, HelmLocale, WorkbenchPanelBadgeSpec, WorkbenchPanelSpec } from '@helm/protocol/browser'
+import { resolveLocalizedText } from '@helm/protocol/browser'
 import type { GroupedUiSpecs } from '../lib/types.js'
 
 export type WorkbenchBadgeTone = 'warn' | 'accent' | 'neutral'
@@ -85,7 +86,8 @@ export function resolveWorkbenchPanelBadge(
 /**
  * 计算当前会话可用的工作台页签列表：
  * - 内置「产物 (N)」页签固定 order 20；
- * - 插件 workbench.panel 按 spec.order ?? 50 升序合并；
+ * - 插件 workbench.panel 按 spec.order ?? 50 升序合并，label 属
+ *   LocalizedText 显示元数据，按传入 locale 解析（解析为空回退 spec.id）；
  * - 每面板角标经 resolveWorkbenchPanelBadge 从 pluginDocs 提取。
  */
 export function buildWorkbenchTabs(input: {
@@ -96,6 +98,8 @@ export function buildWorkbenchTabs(input: {
   artifactCount: number
   /** 当前会话 ID（badge 按会话索引时使用）。 */
   conversationId: number | undefined
+  /** 面板 label（LocalizedText）的解析 locale。 */
+  locale: HelmLocale
 }): WorkbenchTab[] {
   const tabs: WorkbenchTab[] = [
     {
@@ -114,7 +118,7 @@ export function buildWorkbenchTabs(input: {
         : { count: 0, tone: 'neutral' as const }
     tabs.push({
       id: `plugin:${panel.pluginId}/${panel.spec.id}`,
-      label: panel.spec.label ?? panel.spec.id,
+      label: resolveLocalizedText(panel.spec.label, input.locale) || panel.spec.id,
       order: panel.spec.order ?? 50,
       count: resolved.count,
       tone: resolved.tone,

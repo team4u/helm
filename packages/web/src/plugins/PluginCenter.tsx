@@ -1,8 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import type { PluginSummary } from '@helm/protocol/browser'
+import { resolveLocalizedText } from '@helm/protocol/browser'
 import { ApiClientError, pluginsApi } from '../lib/api.js'
 import { HelmIcon } from '@helm/plugin-client'
 import { useHelmStore } from '../lib/store-context.js'
+import { useWebLocale } from '../i18n/use-web-locale.js'
 import { PluginCard } from './PluginCard.js'
 import { PluginDetailDrawer } from './PluginDetailDrawer.js'
 import { PluginInstallModal } from './PluginInstallModal.js'
@@ -41,6 +43,7 @@ export function PluginCenter({
   inlineDrawer = false,
 }: PluginCenterProps): React.JSX.Element {
   const store = useHelmStore()
+  const { locale } = useWebLocale()
   const [query, setQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState<PluginStatusFilter>('all')
   const [togglingId, setTogglingId] = useState<string | null>(null)
@@ -53,8 +56,8 @@ export function PluginCenter({
   const statusSummary = useMemo(() => summarizePlugins(plugins), [plugins])
 
   const filteredPlugins = useMemo(() => {
-    return filterPlugins(plugins, { query, status: statusFilter })
-  }, [plugins, query, statusFilter])
+    return filterPlugins(plugins, { query, status: statusFilter }, locale)
+  }, [plugins, query, statusFilter, locale])
 
   const currentTarget = isSplit ? store.splitTarget : store.primaryTarget
   const selectedPluginId =
@@ -141,7 +144,7 @@ export function PluginCenter({
           type: 'notification',
           level: 'info',
           title: 'Plugin enabled',
-          body: `${plugin.name || plugin.id} enabled successfully`,
+          body: `${resolveLocalizedText(plugin.name, locale) || plugin.id} enabled successfully`,
         })
       } else {
         await pluginsApi.disable(plugin.id, options)
@@ -149,7 +152,7 @@ export function PluginCenter({
           type: 'notification',
           level: 'info',
           title: 'Plugin disabled',
-          body: `${plugin.name || plugin.id} disabled successfully`,
+          body: `${resolveLocalizedText(plugin.name, locale) || plugin.id} disabled successfully`,
         })
       }
     } catch (err) {

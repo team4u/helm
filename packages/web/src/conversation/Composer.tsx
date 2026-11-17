@@ -1,11 +1,12 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ComposerScopeProps, ConversationSummary } from '@helm/protocol/browser'
-import { COMPOSER_DOCK_SLOT, COMPOSER_STATUS_SLOT } from '@helm/protocol/browser'
+import { COMPOSER_DOCK_SLOT, COMPOSER_STATUS_SLOT, resolveLocalizedText } from '@helm/protocol/browser'
 import { conversationsApi } from '../lib/api.js'
 import { buildSlashMenuItems, pluginSlashCommandsFor } from '../lib/commands-model.js'
 import { HelmIcon, PluginSlot } from '@helm/plugin-client'
 import { matchesUiScope } from '../lib/types.js'
 import { useHelmStore } from '../lib/store-context.js'
+import { useWebLocale } from '../i18n/use-web-locale.js'
 import { collectEnabledPluginIds } from '../shell/sidebar-model.js'
 import { slashMenuSkills } from './slash-menu-skills.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
@@ -71,6 +72,7 @@ function ContextUsageStatus({ conversation }: { conversation: ConversationSummar
 
 export function Composer({ conversation, prefill, onSendingChange, onNewThread }: ComposerProps) {
   const store = useHelmStore()
+  const { locale } = useWebLocale()
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const composerBoxRef = useRef<HTMLDivElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
@@ -203,9 +205,9 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
   )
   useEffect(() => {
     setSlashMenuItems(
-      buildSlashMenuItems(availableSkills, slashPluginCommands, runPluginCommand),
+      buildSlashMenuItems(availableSkills, slashPluginCommands, runPluginCommand, locale),
     )
-  }, [availableSkills, slashPluginCommands, runPluginCommand])
+  }, [availableSkills, slashPluginCommands, runPluginCommand, locale])
 
   const composer = useComposerController({
     text,
@@ -535,7 +537,10 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
                         }}
                       >
                         <HelmIcon name="layers" size={15} />
-                        {widgetsExpanded ? 'Collapse' : 'View'}{widgets.length === 1 ? widgets[0]?.spec.title ?? 'Conversation panels' : `Conversation panels (${widgets.length})`}
+                        {widgetsExpanded ? 'Collapse' : 'View'}
+                        {widgets.length === 1
+                          ? resolveLocalizedText(widgets[0]!.spec.title ?? '', locale) || 'Conversation panels'
+                          : `Conversation panels (${widgets.length})`}
                       </button>
                     ) : null}
                   </div>

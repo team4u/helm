@@ -4,7 +4,8 @@
  * 提供多维检索（名称/ID/工具/动作）、状态筛选及指标统计。
  * 遵循前端规范：纯属性驱动，零 ID 硬编码猜测。
  */
-import type { PluginSummary } from '@helm/protocol/browser'
+import type { HelmLocale, PluginSummary } from '@helm/protocol/browser'
+import { resolveLocalizedText } from '@helm/protocol/browser'
 
 export type PluginStatusFilter = 'all' | 'enabled' | 'disabled'
 
@@ -32,9 +33,15 @@ export function isPluginFailed(plugin: PluginSummary): boolean {
 }
 
 /**
- * 按多维条件过滤插件列表（纯函数，返回新数组，不修改原数组）
+ * 按多维条件过滤插件列表（纯函数，返回新数组，不修改原数组）。
+ * 名称匹配消费按当前 locale 解析后的显示名（display copy），机器 ID 与
+ * tools/actions 契约名保持原样匹配。
  */
-export function filterPlugins(plugins: PluginSummary[], filter: PluginFilterState): PluginSummary[] {
+export function filterPlugins(
+  plugins: PluginSummary[],
+  filter: PluginFilterState,
+  locale: HelmLocale,
+): PluginSummary[] {
   if (!Array.isArray(plugins)) return []
   const query = filter.query?.trim().toLowerCase() ?? ''
   const status = filter.status ?? 'all'
@@ -46,7 +53,7 @@ export function filterPlugins(plugins: PluginSummary[], filter: PluginFilterStat
 
     // 2. 关键字搜索匹配（name / id / tools / actions）
     if (query) {
-      const matchName = (plugin.name ?? '').toLowerCase().includes(query)
+      const matchName = resolveLocalizedText(plugin.name, locale).toLowerCase().includes(query)
       const matchId = (plugin.id ?? '').toLowerCase().includes(query)
       const matchTools = (plugin.tools ?? []).some((tool) => (tool ?? '').toLowerCase().includes(query))
       const matchActions = (plugin.actions ?? []).some((action) => (action ?? '').toLowerCase().includes(query))

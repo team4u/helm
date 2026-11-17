@@ -409,10 +409,33 @@ test('workbench-model 与 ArtifactsTab 严格分离正式产物与 spill、去�
     pluginDocs: {},
     artifactCount: countDeliverableArtifacts([registered, uploaded, spill1]),
     conversationId: 1,
+    locale: 'en',
   })
   assert.equal(tabs[0]?.label, 'Artifacts')
   assert.equal(tabs[0]?.count, 2)
   assert.deepEqual(buildWorkbenchFooter(tabs), [])
+
+  // 面板 label 属 LocalizedText 显示元数据：按 locale 解析（纯字符串透传）
+  const localizedPanels = [
+    { pluginId: 'builtin:superagent', surface: 'workbench.panel' as const, spec: { id: 'runs', label: { en: 'Workflow runs', 'zh-CN': '工作流运行' } } },
+    { pluginId: 'community:logger', surface: 'workbench.panel' as const, spec: { id: 'logs', label: 'Logger panels' } },
+  ]
+  assert.equal(
+    buildWorkbenchTabs({ groupedUi: groupUiContributions(localizedPanels), pluginDocs: {}, artifactCount: 0, conversationId: undefined, locale: 'zh-CN' })
+      .find((tab) => tab.id === 'plugin:builtin:superagent/runs')?.label,
+    '工作流运行',
+  )
+  assert.equal(
+    buildWorkbenchTabs({ groupedUi: groupUiContributions(localizedPanels), pluginDocs: {}, artifactCount: 0, conversationId: undefined, locale: 'en' })
+      .find((tab) => tab.id === 'plugin:builtin:superagent/runs')?.label,
+    'Workflow runs',
+  )
+  assert.equal(
+    buildWorkbenchTabs({ groupedUi: groupUiContributions(localizedPanels), pluginDocs: {}, artifactCount: 0, conversationId: undefined, locale: 'zh-CN' })
+      .find((tab) => tab.id === 'plugin:community:logger/logs')?.label,
+    'Logger panels',
+    '纯字符串 label 任意 locale 原样',
+  )
 
   const fetchedUrls: string[] = []
   let failDownload = false

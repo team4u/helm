@@ -387,8 +387,9 @@ export function AgentStandingsGroup({
         plugins: store.plugins,
         sidebarItems: store.groupedUi.sidebarItems,
         sidebarSections: store.groupedUi.sidebarSections,
+        locale: store.locale,
       }),
-    [store.profiles, store.conversations, store.plugins, store.groupedUi.sidebarItems, store.groupedUi.sidebarSections],
+    [store.profiles, store.conversations, store.plugins, store.groupedUi.sidebarItems, store.groupedUi.sidebarSections, store.locale],
   )
 
   const visibleStandings = useMemo(

@@ -320,7 +320,7 @@ export function WorkbenchDrawer(props: WorkbenchDrawerProps) {
                 pluginId={activePanel.pluginId}
                 spec={activePanel.spec}
                 conversationId={conversationId}
-                label={`Workbench ${activePanel.spec.label ?? activePanel.spec.id}`}
+                label={`Workbench ${activePanel.label}`}
                 slotProps={{ conversation: conversation ?? { id: conversationId } }}
               />
             </div>

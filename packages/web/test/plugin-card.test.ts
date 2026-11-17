@@ -12,9 +12,11 @@ const e = React.createElement
 // 动态导入待测组件（TDD 初始阶段因未实现将失败）
 const { PluginCard } = await import('../src/plugins/PluginCard.js')
 const {
+  getPluginDescription,
   resolvePluginIcon,
   DEFAULT_PLUGIN_ICON,
 } = await import('../src/plugins/plugin-card-model.js')
+const { HelmStoreContext, makeTestStore } = await import('./helpers/store.js')
 
 // ---------------------------------------------------------------------------
 // 辅助 Mock 插件数据
@@ -488,4 +490,90 @@ test('PluginCard：完全不渲染卡片图标容器，名称与 ID 靠左对齐
   assert.doesNotMatch(html, /plugin-card-icon-wrap/)
   assert.match(html, /无图标插件/)
   assert.match(html, /test:no-icon/)
+})
+
+// ---------------------------------------------------------------------------
+// 3. LocalizedText 显示元数据：name/description 按 store 权威 locale 解析
+// ---------------------------------------------------------------------------
+
+test('getPluginDescription：LocalizedText 地图按 locale 解析，纯字符串透传，未声明回退能力透视', { timeout: 60_000 }, () => {
+  const localized = makePlugin({
+    name: { en: 'Workflow Engine', 'zh-CN': '工作流引擎' },
+    description: { en: 'Orchestrates sub-agents.', 'zh-CN': '编排子代理执行任务。' },
+    tools: ['subagent'],
+    actions: [],
+    hooks: [],
+  })
+  assert.equal(getPluginDescription(localized, 'zh-CN'), '编排子代理执行任务。')
+  assert.equal(getPluginDescription(localized, 'en'), 'Orchestrates sub-agents.')
+  // 地图缺当前语言键时回落 en（协议 resolveLocalizedText 语义）
+  assert.equal(getPluginDescription(makePlugin({ description: { en: 'English only.' } }), 'zh-CN'), 'English only.')
+  // 纯字符串描述（向后兼容）在任意 locale 下原样返回
+  assert.equal(getPluginDescription(makePlugin({ description: '纯字符串描述' }), 'zh-CN'), '纯字符串描述')
+  // 未声明描述回退能力透视文案（保持既有行为）
+  assert.match(
+    getPluginDescription(
+      makePlugin({ description: undefined, tools: ['subagent'], actions: [], hooks: [] }),
+      'en',
+    ),
+    /Provides 1 tools capabilities\./,
+  )
+})
+
+test('PluginCard：插件名与描述按 store locale 解析，切换 en -> zh-CN 即时重渲染', { timeout: 60_000 }, () => {
+  const plugin = makePlugin({
+    id: 'community:glossary',
+    name: { en: 'Glossary', 'zh-CN': '术语表' },
+    description: { en: 'Bilingual glossary cards.', 'zh-CN': '双语术语卡片。' },
+  })
+
+  let committedLocale: 'en' | 'zh-CN' = 'en'
+  function LocaleHarness(): React.JSX.Element {
+    const [locale, setLocale] = React.useState<'en' | 'zh-CN'>('en')
+    committedLocale = locale
+    const store = React.useMemo(
+      () => makeTestStore({ locale, setLocale: (next) => setLocale(next) }),
+      [locale],
+    )
+    return e(
+      HelmStoreContext.Provider,
+      { value: store },
+      e(PluginCard, { plugin, selected: false, onSelect: () => {}, onToggle: () => {} }),
+      e('button', { type: 'button', onClick: () => setLocale(locale === 'en' ? 'zh-CN' : 'en') }, 'switch-locale'),
+    )
+  }
+
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = ReactDOMClient.createRoot(container)
+  try {
+    act(() => {
+      root.render(e(LocaleHarness))
+    })
+    assert.match(container.textContent, /Glossary/)
+    assert.match(container.textContent, /Bilingual glossary cards\./)
+    assert.ok(!container.textContent!.includes('术语表'), 'en 下不得渲染 zh-CN 文案')
+
+    const switchBtn = [...container.querySelectorAll('button')].find(
+      (b) => b.textContent === 'switch-locale',
+    ) as HTMLButtonElement
+    act(() => {
+      switchBtn.click()
+    })
+    assert.equal(committedLocale, 'zh-CN')
+    assert.match(container.textContent, /术语表/)
+    assert.match(container.textContent, /双语术语卡片。/)
+    assert.ok(!container.textContent!.includes('Glossary'), 'zh-CN 下不得残留 en 文案')
+
+    act(() => {
+      switchBtn.click()
+    })
+    assert.equal(committedLocale, 'en')
+    assert.match(container.textContent, /Glossary/, '切回 en 立即恢复英文展示名')
+  } finally {
+    act(() => {
+      root.unmount()
+    })
+    container.remove()
+  }
 })

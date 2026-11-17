@@ -6,6 +6,7 @@
 import * as React from 'react'
 import { useMemo } from 'react'
 import { HelmIcon } from '@helm/plugin-client'
+import { resolveLocalizedText, type ScreenSpec } from '@helm/protocol/browser'
 import { useHelmStore } from '../lib/store-context.js'
 import type { ResolvedTarget } from '../lib/types.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
@@ -94,20 +95,15 @@ export function ScreenHost({ pluginId, screenId, isSplit, onCloseSplit }: Screen
     )
   }
 
-  const spec = matched.spec as {
-    label?: string
-    icon?: string
-    json?: Record<string, unknown>
-    docs?: string[]
-    client?: { module: string; export: string }
-  }
+  // 视图标题（ScreenSpec.label）属 LocalizedText 显示元数据：按 store 权威 locale 解析。
+  const spec = matched.spec as ScreenSpec
 
   return (
     <div className="helm-pane">
       <div className="pane-topbar">
         <div className="pane-title-group">
           {spec.icon !== undefined && <HelmIcon name={spec.icon} size={14} />}
-          <span className="pane-title">{spec.label ?? `${pluginId}/${screenId}`}</span>
+          <span className="pane-title">{resolveLocalizedText(spec.label, store.locale) || `${pluginId}/${screenId}`}</span>
         </div>
         <div className="pane-actions">
           {isSplit ? (

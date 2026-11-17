@@ -1,5 +1,6 @@
 import React, { useContext } from 'react'
 import type { PluginSummary } from '@helm/protocol/browser'
+import { DEFAULT_HELM_LOCALE, resolveLocalizedText } from '@helm/protocol/browser'
 import { HelmIcon, Switch } from '@helm/plugin-client'
 import { HelmStoreContext } from '../lib/store-context.js'
 import {
@@ -32,7 +33,11 @@ export function PluginCard({
   toggling = false,
 }: PluginCardProps): React.JSX.Element {
   const store = useContext(HelmStoreContext)
-  const description = getPluginDescription(plugin)
+  // 展示名 / 描述属 LocalizedText 显示元数据：按 store 的权威 locale 解析；
+  // 组件保留无 Provider 的 SSR 渲染容忍（缺省英文桥接）。
+  const locale = store?.locale ?? DEFAULT_HELM_LOCALE
+  const name = resolveLocalizedText(plugin.name, locale) || plugin.id
+  const description = getPluginDescription(plugin, locale)
   const isLocked = plugin.locked === true
   // 已启用且有 Screen 贡献时提供快捷打开（主屏/右屏），经 store.openTarget 唯一导航。
   const primaryScreen =
@@ -87,8 +92,8 @@ export function PluginCard({
       <div className="plugin-card-header">
         <div className="plugin-card-meta">
           <div className="plugin-card-title-row">
-            <span className="plugin-card-name" title={plugin.name || plugin.id}>
-              {plugin.name || plugin.id}
+            <span className="plugin-card-name" title={name}>
+              {name}
             </span>
             {versionLabel && (
               <span className="plugin-card-version" title={`Version ${versionLabel}`}>
@@ -165,7 +170,7 @@ export function PluginCard({
               type="button"
               className="btn btn-xs plugin-card-open-btn"
               title="Open plugin view"
-              aria-label={`Open ${plugin.name || plugin.id} view`}
+              aria-label={`Open ${name} view`}
               onClick={(e) => {
                 e.stopPropagation()
                 store?.openTarget({
@@ -194,7 +199,7 @@ export function PluginCard({
               onChange={(checked) => {
                 void onToggle(checked)
               }}
-              aria-label={`${plugin.name || plugin.id} switch`}
+              aria-label={`${name} switch`}
               title={switchTitle}
             />
           </div>

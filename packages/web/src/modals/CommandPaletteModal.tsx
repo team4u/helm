@@ -2,8 +2,10 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { SearchHit } from '@helm/protocol/browser'
 import { searchApi } from '../lib/api.js'
 import { commandActionPluginId, commandHint, commandsForConversation } from '../lib/commands-model.js'
+import { resolveLocalizedText } from '@helm/protocol/browser'
 import { HelmIcon, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle } from '@helm/plugin-client'
 import { useHelmStore } from '../lib/store-context.js'
+import { useWebLocale } from '../i18n/use-web-locale.js'
 import {
   activeTargetForPanel,
   formatModShortcut,
@@ -20,6 +22,7 @@ type PaletteRow =
 
 export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
   const store = useHelmStore()
+  const { locale } = useWebLocale()
   const [query, setQuery] = useState('')
   const [hits, setHits] = useState<SearchHit[]>([])
   const [searching, setSearching] = useState(false)
@@ -271,8 +274,8 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
       commandsForConversation(store.groupedUi.commands, paletteConversation).map((cmd) => ({
         kind: 'command' as const,
         id: `plugin:${cmd.pluginId}/${cmd.spec.id}`,
-        title: cmd.spec.title,
-        hint: commandHint(cmd.spec, cmd.pluginId),
+        title: resolveLocalizedText(cmd.spec.title, locale),
+        hint: commandHint(cmd.spec, cmd.pluginId, locale),
         icon: cmd.spec.icon ?? 'zap',
         keywords: cmd.spec.keywords,
         run: () => {
@@ -284,7 +287,7 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
                 type: 'notification',
                 level: 'info',
                 title: 'Command executed',
-                body: cmd.spec.title,
+                body: resolveLocalizedText(cmd.spec.title, locale),
               }),
             )
             .catch((err: unknown) =>
@@ -297,7 +300,7 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
             )
         },
       })),
-    [store, paletteConversation],
+    [store, paletteConversation, locale],
   )
 
   const conversationRows = useMemo<Array<PaletteRow>>(
@@ -325,7 +328,7 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
       (store.plugins ?? []).map((plugin) => ({
         kind: 'command' as const,
         id: `plugin-item:${plugin.id}`,
-        title: `Plugin: ${plugin.name || plugin.id}`,
+        title: `Plugin: ${resolveLocalizedText(plugin.name, locale) || plugin.id}`,
         hint: `View and configure ${plugin.id} in the plugin center`,
         icon: 'boxes',
         keywords: [
@@ -333,7 +336,7 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
           'plugins',
           'Plugins',
           plugin.id,
-          plugin.name ?? '',
+          resolveLocalizedText(plugin.name, locale),
           ...(plugin.tools ?? []),
           ...(plugin.actions ?? []),
         ],
@@ -342,7 +345,7 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
           store.openTarget({ kind: 'plugins', pluginId: plugin.id })
         },
       })),
-    [store.plugins, store.openTarget, close],
+    [store.plugins, store.openTarget, close, locale],
   )
 
   const recentConversationRows = useMemo<Array<PaletteRow>>(
@@ -506,7 +509,7 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
                 }}
               >
                 <span>
-                  {previewCmd.spec.title} · {previewCmd.pluginId}
+                  {resolveLocalizedText(previewCmd.spec.title, locale)} · {previewCmd.pluginId}
                 </span>
                 <button
                   type="button"

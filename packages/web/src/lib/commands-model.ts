@@ -5,7 +5,14 @@
  * 光标插入/触发词清理的纯文本计算，以及命令面板的会话作用域过滤与 hint 派生。
  * 纯函数无 React 依赖，供 Composer / CommandPaletteModal 与单测共同消费。
  */
-import { RESERVED_SLASH_COMMANDS, type CommandSpec, type ConversationSummary, type NotificationEvent } from '@helm/protocol/browser'
+import {
+  RESERVED_SLASH_COMMANDS,
+  resolveLocalizedText,
+  type CommandSpec,
+  type ConversationSummary,
+  type HelmLocale,
+  type NotificationEvent,
+} from '@helm/protocol/browser'
 import { matchesUiScope } from './types.js'
 
 /** 宿主保留的会话内管理命令斜杠词；插件 slash 声明不得覆盖（后端注册边界拒绝，前端防御性跳过）。 */
@@ -77,9 +84,11 @@ export function commandActionPluginId(cmd: QualifiedCommand): string {
   return cmd.spec.actionPluginId ?? cmd.pluginId
 }
 
-/** 命令面板行 hint：优先插件声明 description，回退 action 寻址（pluginId / actionId）。 */
-export function commandHint(spec: CommandSpec, pluginId: string): string {
-  if (spec.description !== undefined && spec.description !== '') return spec.description
+/** 命令面板行 hint：优先插件声明 description（按 locale 解析的显示文案），回退 action 寻址（pluginId / actionId）。 */
+export function commandHint(spec: CommandSpec, pluginId: string, locale: HelmLocale): string {
+  const description =
+    spec.description !== undefined ? resolveLocalizedText(spec.description, locale) : undefined
+  if (description !== undefined && description !== '') return description
   if (spec.actionId !== undefined) return `${spec.actionPluginId ?? pluginId} / ${spec.actionId}`
   return spec.actionPluginId ?? pluginId
 }
@@ -95,12 +104,14 @@ export interface SlashMenuItem {
 
 /**
  * 合并斜杠菜单条目：宿主内置管理命令 → 可见技能 → 满足作用域的插件命令。
- * 插件命令选中即执行（run），不把触发词回填草稿。
+ * 插件命令选中即执行（run），不把触发词回填草稿；hint 消费按 locale
+ * 解析后的 description/title 显示文案。
  */
 export function buildSlashMenuItems(
   visibleSkills: ReadonlyArray<{ id: string; name: string }>,
   pluginSlash: ReadonlyArray<QualifiedCommand>,
   runPluginCommand: (cmd: QualifiedCommand) => void,
+  locale: HelmLocale,
 ): SlashMenuItem[] {
   const builtin: SlashMenuItem[] = [
     { id: '/new', label: '/new', hint: 'Start new topic', apply: '/new' },
@@ -113,12 +124,19 @@ export function buildSlashMenuItems(
     hint: s.name,
     apply: `/${SKILL_SLASH_PREFIX}${s.id} `,
   }))
-  const plugins: SlashMenuItem[] = pluginSlash.map((cmd) => ({
-    id: `plugin:${cmd.pluginId}/${cmd.spec.id}`,
-    label: `/${cmd.spec.slash}`,
-    hint: cmd.spec.description ?? cmd.spec.title,
-    run: () => runPluginCommand(cmd),
-  }))
+  const plugins: SlashMenuItem[] = pluginSlash.map((cmd) => {
+    const description =
+      cmd.spec.description !== undefined ? resolveLocalizedText(cmd.spec.description, locale) : undefined
+    return {
+      id: `plugin:${cmd.pluginId}/${cmd.spec.id}`,
+      label: `/${cmd.spec.slash}`,
+      hint:
+        description !== undefined && description !== ''
+          ? description
+          : resolveLocalizedText(cmd.spec.title, locale),
+      run: () => runPluginCommand(cmd),
+    }
+  })
   return [...builtin, ...skills, ...plugins]
 }
 
@@ -149,6 +167,8 @@ export function replaceSlashToken(
 export interface PluginSlashExecDeps {
   invokePluginAction: (pluginId: string, actionId: string, input: unknown, conversationId?: number) => Promise<unknown>
   pushNotice: (notice: NotificationEvent) => void
+  /** 通知正文中命令 title（LocalizedText 显示文案）的解析 locale。 */
+  locale: HelmLocale
   conversationId?: number
 }
 
@@ -162,7 +182,7 @@ export async function executePluginSlashAction(cmd: QualifiedCommand, deps: Plug
       type: 'notification',
       level: 'info',
       title: 'Command executed',
-      body: `${cmd.spec.slash !== undefined ? `/${cmd.spec.slash} · ` : ''}${cmd.spec.title}`,
+      body: `${cmd.spec.slash !== undefined ? `/${cmd.spec.slash} · ` : ''}${resolveLocalizedText(cmd.spec.title, deps.locale)}`,
       ...(deps.conversationId !== undefined ? { conversationId: deps.conversationId } : {}),
     })
   } catch (err: unknown) {

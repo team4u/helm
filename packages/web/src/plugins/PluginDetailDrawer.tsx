@@ -5,7 +5,8 @@ import {
   pluginErrorStageLabel,
   type PluginUsageItem,
 } from './plugin-card-model.js'
-import type { PluginSummary } from '@helm/protocol/browser'
+import type { HelmLocale, PluginSummary } from '@helm/protocol/browser'
+import { DEFAULT_HELM_LOCALE, resolveLocalizedText } from '@helm/protocol/browser'
 import { ApiClientError, pluginsApi, type PluginConfigResponse } from '../lib/api.js'
 import { HelmIcon, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle, Switch } from '@helm/plugin-client'
 import { HelmStoreContext } from '../lib/store-context.js'
@@ -58,6 +59,8 @@ export interface PluginDetailDrawerProps {
 export interface PluginConfigFormProps {
   pluginId: string
   config: PluginConfigResponse
+  /** 配置字段 label/description（LocalizedText）的解析 locale。 */
+  locale: HelmLocale
   onSaved: () => void
 }
 
@@ -80,6 +83,7 @@ function initialFormValues(config: PluginConfigResponse): Record<string, ConfigV
 export function PluginConfigForm({
   pluginId,
   config,
+  locale,
   onSaved,
 }: PluginConfigFormProps): React.JSX.Element {
   const entries = Object.entries(config.schema ?? {})
@@ -140,7 +144,9 @@ export function PluginConfigForm({
             <div key={key} className="form-grid plugin-config-row">
               <label htmlFor={fieldId} className="form-grid-label plugin-config-field-label">
                 {schema.secret === true && <HelmIcon name="lock" size={11} />}
-                <span className="plugin-config-field-name">{schema.label ?? key}</span>
+                <span className="plugin-config-field-name">
+                  {schema.label !== undefined ? resolveLocalizedText(schema.label, locale) || key : key}
+                </span>
                 {schema.required && <span className="text-err">*</span>}
                 {source === 'configured' && (
                   <span className="badge badge-neutral plugin-config-source-tag" title="Explicitly configured by user">
@@ -187,8 +193,12 @@ export function PluginConfigForm({
                       schema.secret
                         ? secretConfigured(config.values?.[key])
                           ? 'Configured (leave empty to keep unchanged)'
-                          : (schema.description ?? 'Not configured')
-                        : schema.description
+                          : (schema.description !== undefined
+                              ? resolveLocalizedText(schema.description, locale)
+                              : '') || 'Not configured'
+                        : schema.description !== undefined
+                          ? resolveLocalizedText(schema.description, locale)
+                          : undefined
                     }
                     value={String(values[key] ?? '')}
                     onChange={(e) => setValues((prev) => ({ ...prev, [key]: e.target.value }))}
@@ -254,6 +264,9 @@ export function PluginDetailDrawer({
   inline = false,
 }: PluginDetailDrawerProps): React.JSX.Element {
   const store = useContext(HelmStoreContext)
+  // LocalizedText 显示元数据（插件名 / 配置字段 label / 设置面板 label）按
+  // store 权威 locale 解析；保留无 Provider 的 SSR 渲染容忍（缺省英文桥接）。
+  const locale = store?.locale ?? DEFAULT_HELM_LOCALE
   const [config, setConfig] = useState<(PluginConfigResponse & { pluginId: string }) | null>(null)
   const [loadingConfig, setLoadingConfig] = useState(false)
   const [configError, setConfigError] = useState<string | null>(null)
@@ -340,7 +353,7 @@ export function PluginDetailDrawer({
         type: 'notification',
         level: 'info',
         title: 'Plugin package updated',
-        body: `${plugin.name || plugin.id}：${noticeBody}`,
+        body: `${resolveLocalizedText(plugin.name, locale) || plugin.id}：${noticeBody}`,
       })
       onPackageChanged?.()
     } catch (err) {
@@ -361,7 +374,7 @@ export function PluginDetailDrawer({
         type: 'notification',
         level: 'info',
         title: 'Plugin package uninstalled',
-        body: `${plugin.name || plugin.id} removed (${plugin.id})`,
+        body: `${resolveLocalizedText(plugin.name, locale) || plugin.id} removed (${plugin.id})`,
       })
       setConfirmRemoveOpen(false)
       onRemoved?.()
@@ -404,7 +417,11 @@ export function PluginDetailDrawer({
         <DialogContent
           className="plugin-drawer-content"
           role="dialog"
-          aria-label={plugin ? `${plugin.name || plugin.id} details` : 'Plugin details'}
+          aria-label={
+            plugin
+              ? `${resolveLocalizedText(plugin.name, locale) || plugin.id} details`
+              : 'Plugin details'
+          }
         >
           {/* Header metadata */}
           <div className="plugin-drawer-header">
@@ -412,7 +429,7 @@ export function PluginDetailDrawer({
               <div className="plugin-drawer-title-col">
                 <div className="plugin-drawer-title-row">
                   <DialogTitle className="plugin-drawer-title">
-                    {plugin?.name || plugin?.id || 'Plugin details'}
+                    {(plugin !== null ? resolveLocalizedText(plugin.name, locale) : '') || plugin?.id || 'Plugin details'}
                   </DialogTitle>
                   {versionLabel && (
                     <span className="badge badge-neutral mono" title={`Version ${versionLabel}`}>
@@ -437,7 +454,7 @@ export function PluginDetailDrawer({
                 </div>
                 {plugin && <div className="plugin-drawer-id mono">{plugin.id}</div>}
                 {plugin && (
-                  <div className="plugin-drawer-desc">{getPluginDescription(plugin)}</div>
+                  <div className="plugin-drawer-desc">{getPluginDescription(plugin, locale)}</div>
                 )}
                 {plugin?.status === 'failed' && plugin.error && (
                   <div className="plugin-drawer-failed-note" role="note">
@@ -731,6 +748,7 @@ export function PluginDetailDrawer({
                     <PluginConfigForm
                       pluginId={plugin.id}
                       config={config}
+                      locale={locale}
                       onSaved={() => void reloadConfig(plugin.id)}
                     />
                   ) : (
@@ -746,7 +764,8 @@ export function PluginDetailDrawer({
                       <span>
                         {settingsPanels.length > 1
                           ? `Extension settings panels (${settingsPanels.length})`
-                          : (settingsPanels[0]!.spec.label || 'Extension settings panels')}
+                          : resolveLocalizedText(settingsPanels[0]!.spec.label, locale) ||
+                            'Extension settings panels'}
                       </span>
                     </h4>
                     {settingsPanels.map((panel) => (
@@ -756,7 +775,7 @@ export function PluginDetailDrawer({
                       >
                         {settingsPanels.length > 1 && (
                           <div className="plugin-settings-panel-title">
-                            {panel.spec.label || panel.spec.id}
+                            {resolveLocalizedText(panel.spec.label, locale) || panel.spec.id}
                           </div>
                         )}
                         <PluginUiView
@@ -794,7 +813,9 @@ export function PluginDetailDrawer({
             </div>
             <div className="modal-body">
               <AlertDialogDescription className="plugin-remove-confirm-desc">
-                Uninstall {plugin?.name || plugin?.id} ({plugin?.id})? The install directory and registry entry will be deleted; this cannot be undone.
+                Uninstall{' '}
+                {(plugin !== null ? resolveLocalizedText(plugin.name, locale) : '') || plugin?.id || ''}{' '}
+                ({plugin?.id})? The install directory and registry entry will be deleted; this cannot be undone.
               </AlertDialogDescription>
             </div>
             <div className="modal-footer">

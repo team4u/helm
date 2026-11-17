@@ -7,11 +7,14 @@
 
 import type {
   ConversationSummary,
+  HelmLocale,
+  LocalizedText,
   Profile,
   SidebarItemSpec,
   SidebarSectionSpec,
   SkillSummary,
 } from '@helm/protocol/browser'
+import { resolveLocalizedText } from '@helm/protocol/browser'
 import type { HelmStoreValue, QualifiedUiSpec, ResolvedTarget } from '../lib/types.js'
 import { resolveTargetString } from '../lib/types.js'
 import { ARCHIVED_TAG, isConversationArchived } from '../conversation/archive-model.js'
@@ -160,14 +163,16 @@ export interface AgentStandingsInput {
   plugins: ReadonlyArray<{ id: string; enabled: boolean }>
   sidebarItems?: Array<QualifiedUiSpec<SidebarItemSpec>>
   sidebarSections?: Array<QualifiedUiSpec<SidebarSectionSpec>>
+  /** 显示名解析 locale（sidebar.item label 属 LocalizedText 显示元数据）。 */
+  locale: HelmLocale
 }
 
 /** Agent 名下二级历史会话子列表默认显示条数（超出可展开）。 */
 export const AGENT_SUB_LIST_PREVIEW = 5
 
-/** 左栏展示名的 pin 元信息（按 profileId 归集）。 */
+/** 左栏展示名的 pin 元信息（按 profileId 归集；label 为未解析的 LocalizedText 显示元数据）。 */
 interface SidebarPinMeta {
-  label?: string
+  label?: LocalizedText
   order?: number
 }
 
@@ -179,7 +184,7 @@ interface SidebarPinMeta {
  * - 插件停用后其 managedByPlugin 站位与 ownedBy=helm/bot 遗留会话自动隐藏。
  */
 export function buildAgentStandings(input: AgentStandingsInput): AgentStanding[] {
-  const { profiles, conversations, plugins, sidebarItems = [], sidebarSections = [] } = input
+  const { profiles, conversations, plugins, sidebarItems = [], sidebarSections = [], locale } = input
   const enabledPluginIds = collectEnabledPluginIds(plugins)
   const partition = partitionSidebarUi(sidebarItems, sidebarSections)
 
@@ -268,7 +273,10 @@ export function buildAgentStandings(input: AgentStandingsInput): AgentStanding[]
     const sorted = sortAgentConversations(byProfile.get(profileId) ?? [])
     standings.push({
       profileId,
-      label: meta?.label || profile?.name || profileId,
+      label:
+        (meta?.label !== undefined ? resolveLocalizedText(meta.label, locale) : '') ||
+        profile?.name ||
+        profileId,
       order,
       canCreateConversation,
       conversations: sorted,
@@ -293,10 +301,12 @@ export function buildAgentStandings(input: AgentStandingsInput): AgentStanding[]
 /**
  * 提取 sidebar.item 中 target 解析为 screen: 的视图导航项，
  * 供左栏独立「视图」分组渲染（与智能体站位彻底分流）。
+ * label 属 LocalizedText 显示元数据，按传入 locale 解析。
  */
 export function extractSidebarViews(
   sidebarItems: Array<QualifiedUiSpec<SidebarItemSpec>>,
   conversations: ConversationSummary[],
+  locale: HelmLocale,
 ): SidebarViewItem[] {
   const views: SidebarViewItem[] = []
   for (const item of sidebarItems) {
@@ -307,7 +317,7 @@ export function extractSidebarViews(
     views.push({
       key: `${item.pluginId}/${item.spec.id}`,
       pluginId: item.pluginId,
-      label: item.spec.label,
+      label: resolveLocalizedText(item.spec.label, locale),
       icon: item.spec.icon ?? 'panel-right',
       order: item.spec.order ?? 100,
       target: resolved,

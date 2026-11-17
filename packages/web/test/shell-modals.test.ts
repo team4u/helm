@@ -149,6 +149,8 @@ function standingsInput(overrides?: Partial<Parameters<typeof buildAgentStanding
     plugins,
     sidebarItems,
     sidebarSections,
+    // 中文功能夹具均为纯字符串 LocalizedText：'en' 解析原样透传，断言不受 locale 影响。
+    locale: 'en' as const,
     ...overrides,
   }
 }
@@ -261,7 +263,7 @@ test('buildAgentStandings：Profile 已删的人类历史对话生成孤儿兜�
 })
 
 test('buildAgentStandings：资产未加载时按真实会话的 profileId 展示，不编造默认 Profile', { timeout: 60_000 }, () => {
-  const input = { profiles: [], plugins: [], sidebarItems: [], sidebarSections: [] }
+  const input = { profiles: [], plugins: [], sidebarItems: [], sidebarSections: [], locale: 'en' as const }
   const standings = buildAgentStandings({
     ...input,
     conversations: [conv({ id: 80, profileId: 'loading-profile' })],
@@ -276,6 +278,7 @@ test('buildAgentStandings：资产未加载时按真实会话的 profileId 展�
 
 test('buildAgentStandings：assistant 站位排序由 sidebar.item pinMeta 驱动（order:0）', { timeout: 60_000 }, () => {
   const standings = buildAgentStandings({
+    locale: 'en',
     profiles: [],
     conversations: [conv({ id: 1, title: '个人助理', profileId: 'assistant' })],
     plugins: [{ id: 'builtin:profile', enabled: true }],
@@ -338,6 +341,7 @@ test('buildArchivedConversationList 只展示人类根会话并按创建时间�
   assert.deepEqual(items.map((item) => item.conv.id), [2, 1])
   assert.equal(items[0]?.profileLabel, '个人助理')
   assert.equal(buildAgentStandings({
+    locale: 'en',
     profiles: [{ id: 'assistant', name: '个人助理' }],
     conversations: archived,
     plugins: [],
@@ -353,6 +357,7 @@ test('buildAgentStandings：按 createdAt 倒序（updatedAt 推进不重排）�
     conv({ id: 11, profileId: 'assistant', createdAt: 5000, updatedAt: 99999 }),
   ]
   const standings = buildAgentStandings({
+    locale: 'en',
     profiles: [{ id: 'assistant', name: '个人助理' }],
     conversations: sameTime,
     plugins: [{ id: 'builtin:profile', enabled: true }],
@@ -370,7 +375,7 @@ test('buildAgentStandings：按 createdAt 倒序（updatedAt 推进不重排）�
 // ---------------------------------------------------------------------------
 
 test('extractSidebarViews 提取 screen: 导航项并按 order 排序，不混入 Agent 站位', { timeout: 60_000 }, () => {
-  const views = extractSidebarViews(sidebarItems, conversations)
+  const views = extractSidebarViews(sidebarItems, conversations, 'en')
   assert.deepEqual(
     views.map((v) => v.key),
     ['builtin:superagent/recall', 'builtin:herdr/herdr'],
@@ -388,8 +393,43 @@ test('extractSidebarViews：无 icon 的视图项兜底 panel-right 图标', { t
   const views = extractSidebarViews(
     [{ pluginId: 'p', spec: { id: 'x', label: 'X', target: 'screen:p/home' } }],
     [],
+    'en',
   )
   assert.equal(views[0]!.icon, 'panel-right')
+})
+
+test('LocalizedText 侧栏显示名：站位 pin label 与视图 label 均按 locale 解析', { timeout: 60_000 }, () => {
+  const items = [
+    // 会话指向型 sidebar.item：pin label 覆盖站位默认展示名（LocalizedText 地图）
+    {
+      pluginId: 'builtin:profile',
+      spec: { id: 'root', label: { en: 'Assistant', 'zh-CN': '个人助理' }, target: 'conversation:1', order: 0 },
+    },
+    // screen: 视图项 label（LocalizedText 地图）
+    {
+      pluginId: 'builtin:superagent',
+      spec: { id: 'recall', label: { en: 'Recall graph', 'zh-CN': '召回图谱' }, target: 'screen:builtin:superagent/recall-graph' },
+    },
+    // 纯字符串 label（向后兼容）任意 locale 原样
+    { pluginId: 'builtin:herdr', spec: { id: 'herdr', label: 'Herdr 终端', target: 'screen:builtin:herdr/overview' } },
+  ]
+  const conversations = [conv({ id: 1, title: '根会话', profileId: 'assistant' })]
+  const zhStandings = buildAgentStandings({
+    ...standingsInput({ conversations, sidebarItems: items }),
+    locale: 'zh-CN',
+  })
+  assert.equal(zhStandings.find((s) => s.profileId === 'assistant')?.label, '个人助理')
+  const enStandings = buildAgentStandings({
+    ...standingsInput({ conversations, sidebarItems: items }),
+    locale: 'en',
+  })
+  assert.equal(enStandings.find((s) => s.profileId === 'assistant')?.label, 'Assistant')
+
+  const zhViews = extractSidebarViews(items, conversations, 'zh-CN')
+  assert.equal(zhViews.find((v) => v.key === 'builtin:superagent/recall')?.label, '召回图谱')
+  assert.equal(zhViews.find((v) => v.key === 'builtin:herdr/herdr')?.label, 'Herdr 终端')
+  const enViews = extractSidebarViews(items, conversations, 'en')
+  assert.equal(enViews.find((v) => v.key === 'builtin:superagent/recall')?.label, 'Recall graph')
 })
 
 test('partitionSidebarUi 提取 profile / 会话 / section 标签去重规则', { timeout: 60_000 }, () => {
@@ -967,6 +1007,7 @@ function makeTestStore(partial: Partial<HelmStoreValue> = {}): HelmStoreValue {
 
 test('批量选择状态计算：全选、反选与单选切换', { timeout: 60_000 }, () => {
   const standings = buildAgentStandings({
+    locale: 'en',
     profiles: [
       { id: 'assistant', name: '个人助理' },
       { id: 'coder', name: '代码助手' },

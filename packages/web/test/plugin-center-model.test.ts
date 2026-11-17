@@ -39,7 +39,7 @@ test('filterPlugins: 空 query 返回全量克隆列表', { timeout: 60_000 }, (
     makePlugin({ id: 'builtin:profile', name: '个人助理' }),
     makePlugin({ id: 'builtin:workflow', name: '工作流引擎' }),
   ]
-  const result = filterPlugins(plugins, { query: '', status: 'all' })
+  const result = filterPlugins(plugins, { query: '', status: 'all' }, 'en')
   assert.equal(result.length, 2)
   assert.notEqual(result, plugins)
 })
@@ -50,11 +50,11 @@ test('filterPlugins: 按名称检索匹配且不区分大小写', { timeout: 60_
     makePlugin({ id: 'builtin:workflow', name: '工作流引擎' }),
     makePlugin({ id: 'community:slack', name: 'Slack Bot' }),
   ]
-  const result = filterPlugins(plugins, { query: '工作流' })
+  const result = filterPlugins(plugins, { query: '工作流' }, 'en')
   assert.equal(result.length, 1)
   assert.equal(result[0]?.id, 'builtin:workflow')
 
-  const upperResult = filterPlugins(plugins, { query: 'SLACK' })
+  const upperResult = filterPlugins(plugins, { query: 'SLACK' }, 'en')
   assert.equal(upperResult.length, 1)
   assert.equal(upperResult[0]?.id, 'community:slack')
 })
@@ -65,7 +65,7 @@ test('filterPlugins: 按插件 ID 模糊匹配', { timeout: 60_000 }, () => {
     makePlugin({ id: 'builtin:workflow', name: '工作流引擎' }),
     makePlugin({ id: 'community:slack', name: 'Slack Bot' }),
   ]
-  const result = filterPlugins(plugins, { query: 'workflow' })
+  const result = filterPlugins(plugins, { query: 'workflow' }, 'en')
   assert.equal(result.length, 1)
   assert.equal(result[0]?.id, 'builtin:workflow')
 })
@@ -75,11 +75,11 @@ test('filterPlugins: 按暴露的 tools 列表项匹配', { timeout: 60_000 }, (
     makePlugin({ id: 'builtin:profile', name: '个人助理', tools: ['update_memory', 'load_skill'] }),
     makePlugin({ id: 'builtin:workflow', name: '工作流引擎', tools: ['subagent', 'cleanup_worktree'] }),
   ]
-  const result = filterPlugins(plugins, { query: 'subagent' })
+  const result = filterPlugins(plugins, { query: 'subagent' }, 'en')
   assert.equal(result.length, 1)
   assert.equal(result[0]?.id, 'builtin:workflow')
 
-  const partialResult = filterPlugins(plugins, { query: 'MEMORY' })
+  const partialResult = filterPlugins(plugins, { query: 'MEMORY' }, 'en')
   assert.equal(partialResult.length, 1)
   assert.equal(partialResult[0]?.id, 'builtin:profile')
 })
@@ -89,7 +89,7 @@ test('filterPlugins: 按暴露的 actions 列表项匹配', { timeout: 60_000 },
     makePlugin({ id: 'builtin:workflow', name: '工作流引擎', actions: ['run', 'runs', 'inspect', 'abort'] }),
     makePlugin({ id: 'builtin:herdr', name: 'Herdr 控制台', actions: ['bridge_status', 'resume'] }),
   ]
-  const result = filterPlugins(plugins, { query: 'inspect' })
+  const result = filterPlugins(plugins, { query: 'inspect' }, 'en')
   assert.equal(result.length, 1)
   assert.equal(result[0]?.id, 'builtin:workflow')
 })
@@ -100,11 +100,11 @@ test('filterPlugins: 状态筛选 enabled 与 disabled', { timeout: 60_000 }, ()
     makePlugin({ id: 'builtin:workflow', enabled: true }),
     makePlugin({ id: 'builtin:herdr', enabled: false }),
   ]
-  const enabledOnly = filterPlugins(plugins, { status: 'enabled' })
+  const enabledOnly = filterPlugins(plugins, { status: 'enabled' }, 'en')
   assert.equal(enabledOnly.length, 2)
   assert.equal(enabledOnly.every((p) => p.enabled), true)
 
-  const disabledOnly = filterPlugins(plugins, { status: 'disabled' })
+  const disabledOnly = filterPlugins(plugins, { status: 'disabled' }, 'en')
   assert.equal(disabledOnly.length, 1)
   assert.equal(disabledOnly[0]?.id, 'builtin:herdr')
 })
@@ -116,13 +116,41 @@ test('filterPlugins: 多条件组合筛选及无匹配回退', { timeout: 60_000
     makePlugin({ id: 'builtin:superagent', name: 'SuperAgent', enabled: true, tools: ['subagent'] }),
   ]
   // 查找：enabled + 'subagent'
-  const match = filterPlugins(plugins, { query: 'subagent', status: 'enabled' })
+  const match = filterPlugins(plugins, { query: 'subagent', status: 'enabled' }, 'en')
   assert.equal(match.length, 1)
   assert.equal(match[0]?.id, 'builtin:superagent')
 
   // 条件冲突无匹配
-  const empty = filterPlugins(plugins, { query: 'not-found', status: 'enabled' })
+  const empty = filterPlugins(plugins, { query: 'not-found', status: 'enabled' }, 'en')
   assert.equal(empty.length, 0)
+})
+
+test('filterPlugins: LocalizedText 地图名按当前 locale 解析后匹配（机器 ID 匹配不受 locale 影响）', { timeout: 60_000 }, () => {
+  const plugins: PluginSummary[] = [
+    makePlugin({ id: 'community:glossary', name: { en: 'Glossary', 'zh-CN': '术语表' } }),
+    makePlugin({ id: 'community:logger', name: 'Logger' }),
+  ]
+  // zh-CN 下按解析后的中文展示名检索命中
+  assert.deepEqual(
+    filterPlugins(plugins, { query: '术语' }, 'zh-CN').map((p) => p.id),
+    ['community:glossary'],
+  )
+  // en 下按英文展示名检索命中；中文检索不再命中（解析结果已是英文）
+  assert.deepEqual(
+    filterPlugins(plugins, { query: 'glossary' }, 'en').map((p) => p.id),
+    ['community:glossary'],
+  )
+  assert.equal(filterPlugins(plugins, { query: '术语' }, 'en').length, 0)
+  // 插件 ID 是机器标识，任何 locale 下原样匹配
+  assert.deepEqual(
+    filterPlugins(plugins, { query: 'glossary' }, 'zh-CN').map((p) => p.id),
+    ['community:glossary'],
+  )
+  // 纯字符串名（向后兼容）在任何 locale 下原样匹配
+  assert.deepEqual(
+    filterPlugins(plugins, { query: 'logger' }, 'zh-CN').map((p) => p.id),
+    ['community:logger'],
+  )
 })
 
 test('summarizePlugins: 空数组统计全零', { timeout: 60_000 }, () => {

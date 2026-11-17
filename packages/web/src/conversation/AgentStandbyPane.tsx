@@ -227,6 +227,7 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
     void executePluginSlashAction(cmd, {
       invokePluginAction: store.invokePluginAction,
       pushNotice: store.pushNotice,
+      locale: store.locale,
       ...(record.conversationId !== undefined ? { conversationId: record.conversationId } : {}),
     }).then(() => {
       if (epoch !== currentStandbyDraftEpoch()) return
@@ -516,8 +517,8 @@ function StandbyComposer({
   })
 
   const slashMenuItems = useMemo(
-    () => buildSlashMenuItems(availableSkills, slashPluginCommands, onRunPluginCommand),
-    [availableSkills, slashPluginCommands, onRunPluginCommand],
+    () => buildSlashMenuItems(availableSkills, slashPluginCommands, onRunPluginCommand, store.locale),
+    [availableSkills, slashPluginCommands, onRunPluginCommand, store.locale],
   )
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {

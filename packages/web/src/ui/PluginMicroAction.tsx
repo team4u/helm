@@ -12,8 +12,10 @@
 import { useState } from 'react'
 import type { ReactNode } from 'react'
 import type { UiActionSpec } from '@helm/protocol/browser'
+import { resolveLocalizedText } from '@helm/protocol/browser'
 import { HelmIcon } from '@helm/plugin-client'
 import { useHelmStore } from '../lib/store-context.js'
+import { useWebLocale } from '../i18n/use-web-locale.js'
 import type { QualifiedUiSpec } from '../lib/types.js'
 import { PluginUiView } from './PluginUiView.js'
 import { DropdownMenuItem } from './DropdownMenu.js'
@@ -45,6 +47,7 @@ export function PluginMicroAction({
   onInvoked,
 }: PluginMicroActionProps): ReactNode {
   const store = useHelmStore()
+  const { locale } = useWebLocale()
   const [pending, setPending] = useState(false)
   const spec = action.spec
 
@@ -61,7 +64,8 @@ export function PluginMicroAction({
     )
   }
 
-  const label = spec.label || spec.id
+  // 动作 label 属 LocalizedText 显示元数据：按当前 locale 解析，空值回退 spec.id。
+  const label = resolveLocalizedText(spec.label, locale) || spec.id
   const run = async (): Promise<void> => {
     if (pending || spec.actionId === undefined) return
     setPending(true)

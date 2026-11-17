@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { ConversationSummary } from '@helm/protocol/browser'
+import { resolveLocalizedText } from '@helm/protocol/browser'
 import { HelmIcon } from '@helm/plugin-client'
 import { useHelmStore } from '../lib/store-context.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
@@ -112,6 +113,7 @@ function SidebarSectionGroup({
 }) {
   const spec = section.spec
   const tag = spec.filterTag as string
+  const sectionLabel = resolveLocalizedText(spec.label, store.locale)
   const convs = useMemo(
     // 按创建时间倒序固定排列（同刻按 id 决胜）：分组内会话后台跑动推进 updatedAt 不再引起跳位。
     () =>
@@ -136,7 +138,7 @@ function SidebarSectionGroup({
         >
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
             {spec.icon !== undefined && <HelmIcon name={spec.icon} size={12} />}
-            <span className="nav-item-label">{spec.label}</span>
+            <span className="nav-item-label">{sectionLabel}</span>
           </span>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
             <span className="badge badge-neutral tabular-nums">{convs.length}</span>
@@ -147,7 +149,7 @@ function SidebarSectionGroup({
         <div className="sidebar-group-header">
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
             <HelmIcon name={spec.icon} size={12} />
-            {spec.label}
+            {sectionLabel}
           </span>
           <span className="tabular-nums">{convs.length}</span>
         </div>
@@ -169,8 +171,8 @@ function SidebarSectionGroup({
 /** 独立「视图」分组：screen: 导航项 + 无导航 target 的自定义客户端侧栏组件。 */
 function ViewNavGroup({ store }: { store: HelmStoreValue }) {
   const viewItems = useMemo(
-    () => extractSidebarViews(store.groupedUi.sidebarItems, store.conversations),
-    [store.groupedUi.sidebarItems, store.conversations],
+    () => extractSidebarViews(store.groupedUi.sidebarItems, store.conversations, store.locale),
+    [store.groupedUi.sidebarItems, store.conversations, store.locale],
   )
   const clientItems = store.groupedUi.sidebarItems.filter(
     (item) => item.spec.client !== undefined && resolveTargetString(item.spec.target ?? '', store.conversations) === null,

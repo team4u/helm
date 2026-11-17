@@ -104,6 +104,7 @@ test('buildSlashMenuItems：三源合并，插件命令 run 不回填', { timeou
     [{ id: 'review', name: '代码审查' }],
     [cmd('p1', { slash: 'archive', actionId: 'archive', title: '归档' })],
     (c) => executed.push(c.pluginId),
+    'en',
   )
   assert.deepEqual(
     items.map((i) => i.id),
@@ -148,6 +149,7 @@ test('executePluginSlashAction：成功/失败统一通知与可选 conversation
       return { ok: true }
     },
     pushNotice: (n) => { notices.push(n) },
+    locale: 'en',
   })
   assert.deepEqual(invoked, [{ pluginId: 'p1', actionId: 'ping', conversationId: undefined }])
   assert.equal(notices[0]!.level, 'info')
@@ -157,6 +159,7 @@ test('executePluginSlashAction：成功/失败统一通知与可选 conversation
     executePluginSlashAction(cmd('p1', { slash: 'ping', title: '诊断', actionId: 'ping' }), {
       invokePluginAction: async () => { throw new Error('offline') },
       pushNotice: (n) => { notices.push(n) },
+      locale: 'en',
       conversationId: 7,
     }),
     /offline/,
@@ -169,10 +172,56 @@ test('executePluginSlashAction：成功/失败统一通知与可选 conversation
 test('commandActionPluginId / commandHint：跨插件路由与 hint 派生', { timeout: 60_000 }, () => {
   assert.equal(commandActionPluginId(cmd('p1', { actionId: 'a' })), 'p1')
   assert.equal(commandActionPluginId(cmd('p1', { actionId: 'a', actionPluginId: 'p2' })), 'p2')
-  assert.equal(commandHint({ id: 'x', title: 't', description: '归档当前会话' } as never, 'p1'), '归档当前会话')
-  assert.equal(commandHint({ id: 'x', title: 't', actionId: 'a' } as never, 'p1'), 'p1 / a')
-  assert.equal(commandHint({ id: 'x', title: 't', actionId: 'a', actionPluginId: 'p2' } as never, 'p1'), 'p2 / a')
-  assert.equal(commandHint({ id: 'x', title: 't' } as never, 'p1'), 'p1')
+  assert.equal(commandHint({ id: 'x', title: 't', description: '归档当前会话' } as never, 'p1', 'en'), '归档当前会话')
+  assert.equal(commandHint({ id: 'x', title: 't', actionId: 'a' } as never, 'p1', 'en'), 'p1 / a')
+  assert.equal(commandHint({ id: 'x', title: 't', actionId: 'a', actionPluginId: 'p2' } as never, 'p1', 'en'), 'p2 / a')
+  assert.equal(commandHint({ id: 'x', title: 't' } as never, 'p1', 'en'), 'p1')
+})
+
+test('LocalizedText 命令元数据：hint 与通知正文按 locale 解析，纯字符串透传', { timeout: 60_000 }, async () => {
+  // commandHint：description 地图按 locale 解析；空解析回落 action 寻址
+  const localizedSpec = {
+    id: 'x',
+    title: { en: 'Archive', 'zh-CN': '归档会话' },
+    description: { en: 'Archive the current conversation.', 'zh-CN': '归档当前会话。' },
+    actionId: 'archive',
+  } as never
+  assert.equal(commandHint(localizedSpec, 'p1', 'zh-CN'), '归档当前会话。')
+  assert.equal(commandHint(localizedSpec, 'p1', 'en'), 'Archive the current conversation.')
+  assert.equal(commandHint({ id: 'x', title: 't', description: { en: '' } } as never, 'p1', 'zh-CN'), 'p1', '空描述回落 action 寻址')
+
+  // buildSlashMenuItems：hint 优先解析后的 description，缺省回落解析后的 title
+  const items = buildSlashMenuItems(
+    [],
+    [
+      cmd('p1', { slash: 'archive', actionId: 'archive', title: { en: 'Archive', 'zh-CN': '归档' }, description: { en: 'Archive it.', 'zh-CN': '归档它。' } }),
+      cmd('p2', { slash: 'clean', actionId: 'clean', title: { en: 'Clean', 'zh-CN': '清理' } }),
+    ],
+    () => {},
+    'zh-CN',
+  )
+  assert.equal(items.find((i) => i.id === 'plugin:p1/cmd-p1')?.hint, '归档它。')
+  assert.equal(items.find((i) => i.id === 'plugin:p2/cmd-p2')?.hint, '清理')
+  const enItems = buildSlashMenuItems(
+    [],
+    [cmd('p2', { slash: 'clean', actionId: 'clean', title: { en: 'Clean', 'zh-CN': '清理' } })],
+    () => {},
+    'en',
+  )
+  assert.equal(enItems.find((i) => i.id === 'plugin:p2/cmd-p2')?.hint, 'Clean')
+
+  // executePluginSlashAction：成功通知正文中的 title 按注入 locale 解析
+  const notices: Array<{ level: string; body?: string }> = []
+  await executePluginSlashAction(
+    cmd('p3', { slash: 'ping', actionId: 'ping', title: { en: 'Ping', 'zh-CN': '探测' } }),
+    {
+      invokePluginAction: async () => undefined,
+      pushNotice: (n) => { notices.push(n as { level: string; body?: string }) },
+      locale: 'zh-CN',
+    },
+  )
+  assert.equal(notices.length, 1)
+  assert.equal(notices[0]!.body, '/ping · 探测', '通知正文消费解析后的 title 显示文案')
 })
 
 test('commandsForConversation：⌘K 与 / 同一作用域过滤', { timeout: 60_000 }, () => {

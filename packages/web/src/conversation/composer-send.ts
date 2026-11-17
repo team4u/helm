@@ -234,6 +234,7 @@ export function useComposerSend(input: ComposerSendInput): ComposerSendApi {
       executePluginSlashAction(cmd, {
         invokePluginAction: store.invokePluginAction,
         pushNotice: store.pushNotice,
+        locale: store.locale,
         conversationId: conversation.id,
       }),
     [store, conversation.id],

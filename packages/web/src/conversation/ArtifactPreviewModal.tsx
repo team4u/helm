@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ArtifactMetadata, ArtifactPreviewerProps } from '@helm/protocol/browser'
+import { resolveLocalizedText } from '@helm/protocol/browser'
 import { artifactsApi } from '../lib/api.js'
 import { HelmIcon, CopyButton, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle, Select, SegmentedControl } from '@helm/plugin-client'
 import { useHelmStore } from '../lib/store-context.js'
+import { useWebLocale } from '../i18n/use-web-locale.js'
 import { useIsMobile } from './composer-model.js'
 import { detectLanguage } from './code-language.js'
 import { CodeBlockView, MarkdownView } from './MarkdownView.js'
@@ -58,6 +60,7 @@ function buildPreviewerProps(
  */
 export function ArtifactPreviewModal({ artifactId, conversationId, onClose, inline }: ArtifactPreviewModalProps) {
   const store = useHelmStore()
+  const { locale } = useWebLocale()
   const [state, setState] = useState<LoadState>({ phase: 'loading' })
   const [view, setView] = useState<'rich' | 'source'>('rich')
   const [text, setText] = useState<string | null>(null)
@@ -277,8 +280,8 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose, inli
                   { value: 'default', label: 'Default preview' },
                   ...matchedPreviewers.map((p) => ({
                     value: `${p.pluginId}/${p.spec.id}`,
-                    label: p.spec.label,
-                    meta: p.spec.title,
+                    label: resolveLocalizedText(p.spec.label, locale),
+                    meta: p.spec.title !== undefined ? resolveLocalizedText(p.spec.title, locale) : undefined,
                   })),
                 ]}
               />
@@ -362,7 +365,7 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose, inli
                       text,
                     ),
                   }}
-                  label={`Preview ${selected.spec.label}`}
+                  label={`Preview ${resolveLocalizedText(selected.spec.label, locale)}`}
                 />
               </div>
               {textState === 'exceeded' ? (

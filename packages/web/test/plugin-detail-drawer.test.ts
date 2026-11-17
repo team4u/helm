@@ -803,6 +803,7 @@ test('PluginConfigForm：按 sources 渲染已配置/默认标识与单字段重
         e(PluginConfigForm, {
           pluginId: 'test:source',
           config: await pluginsApi.getConfig('test:source'),
+          locale: 'en',
           onSaved: () => {
             reloadCount++
           },
@@ -851,6 +852,7 @@ test('PluginConfigForm：必填且无 default 的字段不渲染重置按钮', {
       root.render(
         e(PluginConfigForm, {
           pluginId: 'test:required',
+          locale: 'en',
           config: {
             values: { token: 'abc' },
             schema: {
@@ -950,6 +952,7 @@ test('PluginConfigForm：长标签与「默认 / 已配置」徽章防拆字碰�
   const html = renderToString(
     e(PluginConfigForm, {
       pluginId: 'builtin:herdr',
+      locale: 'en',
       config: {
         values: {
           agentStartTimeoutMs: 15000,
@@ -972,4 +975,24 @@ test('PluginConfigForm：长标签与「默认 / 已配置」徽章防拆字碰�
   assert.match(html, /plugin-config-field-name">agent 启动超时（毫秒）<\/span>/)
   assert.match(html, /text-subtle plugin-config-source-tag"[^>]*>Default<\/span>/)
   assert.match(html, /badge badge-neutral plugin-config-source-tag"[^>]*>Configured<\/span>/)
+})
+
+test('PluginConfigForm：字段 label/description 属 LocalizedText，按 locale 解析后渲染', { timeout: 60_000 }, () => {
+  const config: PluginConfigResponse = {
+    values: {},
+    schema: {
+      apiKey: { type: 'string', label: { en: 'API key', 'zh-CN': '接口密钥' }, description: { en: 'Provider credential.', 'zh-CN': '供应商凭据。' }, secret: true },
+      region: { type: 'string', label: 'Region' },
+    },
+  }
+  const zhHtml = renderToString(e(PluginConfigForm, { pluginId: 'community:glossary', locale: 'zh-CN', config, onSaved: () => {} }))
+  assert.match(zhHtml, /接口密钥/)
+  assert.match(zhHtml, /供应商凭据。/)
+  assert.ok(!zhHtml.includes('API key'), 'zh-CN 下不得渲染 en 字段名')
+  // 纯字符串 label（向后兼容）原样；缺当前语言键回落 en
+  assert.match(zhHtml, /Region/)
+  const enHtml = renderToString(e(PluginConfigForm, { pluginId: 'community:glossary', locale: 'en', config, onSaved: () => {} }))
+  assert.match(enHtml, /API key/)
+  assert.match(enHtml, /Provider credential\./)
+  assert.ok(!enHtml.includes('接口密钥'), 'en 下不得渲染 zh-CN 字段名')
 })
