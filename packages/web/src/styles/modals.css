@@ -1,10 +1,10 @@
 /* ==========================================================================
- * 居中模态弹窗（Modals）
- * 本文件为宿主样式分片，全局级联顺序由 src/styles.css 的 @import 顺序决定。
+ * Centered modal dialogs (Modals)
+ * Host style shard; the global cascade order is decided by the @import order in src/styles.css.
  * ========================================================================== */
 /* ==========================================================================
- * 5. 居中模态弹窗 (Modals) 与经典大深影
- * 规范：毛玻璃遮罩、14px 圆角、投影环发丝边与大深影、1px solid var(--line-2) 分隔
+ * 5. Centered modals with the classic deep shadow
+ * Spec: frosted-glass backdrop, 14px radius, shadow-ring hairline plus deep shadow, 1px solid var(--line-2) separators
  * ========================================================================== */
 
 .modal-backdrop {
@@ -62,7 +62,7 @@
   height: auto;
 }
 
-/* 左右分栏模态弹窗原语 */
+/* Left/right split modal primitive */
 .modal-body-split,
 .asset-modal-body {
   display: flex;
@@ -86,7 +86,7 @@
   overflow-y: auto;
 }
 
-/* 代码片段展示框原语 */
+/* Code snippet display box primitive */
 .code-box {
   display: block;
   font-family: var(--font-mono);
@@ -97,8 +97,8 @@
   word-break: break-all;
 }
 
-/* 技能详情抽屉：紧凑文件阅读器 */
-/* 抽屉主体外层不滚动，唯一滚动容器为阅读区 .skill-reader-scroll，
+/* Skill detail drawer: compact file reader */
+/* The drawer body outer layer never scrolls; the single scroll container is the reading area .skill-reader-scroll,
    Avoid double scrollbars between the outer primary-drawer-body and the inner reading area */
 .skill-drawer-content .primary-drawer-body {
   overflow: hidden;
@@ -115,7 +115,7 @@
   gap: 8px;
 }
 
-/* 单一滚动阅读区：占满剩余全部视口高度，元数据表格与正文同流滚动 */
+/* Single scrolling reading area: fills all remaining viewport height; the metadata table and body scroll in one flow */
 .skill-reader-scroll {
   flex: 1;
   min-height: 0;
@@ -219,7 +219,7 @@
   font-size: 12px;
 }
 
-/* 富文本阅读区：随阅读区滚动流自然生长，自身不滚动；
+/* Rich-text reading area: grows naturally with the reading-area scroll flow, never scrolling itself;
    The frontmatter metadata table and the body share this content flow */
 .skill-reader-doc {
   padding: 14px 16px 18px;
@@ -232,7 +232,7 @@
   font-size: 13.5px;
 }
 
-/* 源码阅读区：代码块随阅读区滚动流自然生长，横向滚动由 code-block-pre 自理 */
+/* Source reading area: code blocks grow naturally with the reading flow; horizontal scrolling is handled by code-block-pre itself */
 .skill-reader-code {
   min-width: 0;
   display: flex;
@@ -243,7 +243,7 @@
   margin: 0;
 }
 
-/* 弹窗常用无内联布局原语 */
+/* Common inline layout primitives for modals */
 .flex-1 { flex: 1; min-width: 0; }
 .flex-row { display: flex; align-items: center; gap: 6px; }
 .flex-row-between { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
@@ -341,7 +341,7 @@
   cursor: not-allowed;
 }
 
-/* 通用信息提示原语（core 自有；与任何插件样式无关） */
+/* Common modal no-inline-layout primitives */
 .callout {
   padding: 9px 12px;
   border-radius: var(--radius-sm);

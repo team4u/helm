@@ -1,9 +1,9 @@
 /* ==========================================================================
- * 对话画布补充细节与全屏插件中心
- * 本文件为宿主样式分片，全局级联顺序由 src/styles.css 的 @import 顺序决定。
+/* Plan A: the system center lives only in the Activity Rail; the legacy footer markup is kept purely for existing navigation contracts. */
+ * Conversation canvas supplementary details and the full-screen plugin center
  * ========================================================================== */
 /* ==========================================================================
- * 9. 对话画布与工作台补充细节样式
+ * Host style shard; the global cascade order is decided by the @import order in src/styles.css.
  * ========================================================================== */
 
 @keyframes convSpin360 {
@@ -20,7 +20,7 @@
 }
 
 /* --------------------------------------------------------------------------
- * 全屏插件中心：容器、顶栏、检索工具栏、卡片网格与空态
+ * 9. Conversation canvas and workbench supplementary styles
  * -------------------------------------------------------------------------- */
 
 .plugin-center {
@@ -48,8 +48,8 @@
 }
 
 /*
- * 搜索框统一规范：与 .primary-search-box 保持一致的结构与视觉
- * （容器提供描边/背景/focus 高亮，内层 input 透明无边框，唯一清除按钮）。
+ * Full-screen plugin center: container, topbar, search toolbar, card grid and empty state
+ * Search box unified spec: the same structure and visuals as .primary-search-box
  */
 .plugin-search-box {
   display: flex;
@@ -326,7 +326,7 @@
   flex-shrink: 0;
 }
 
-/* 时间线内嵌自定义卡片重置内边距与外框，由内部 spec 自行定义结构 */
+ * (the container provides border/background/focus highlight; the inner input is transparent and borderless with a single clear button).
 [data-entry-id] > .plugin-card {
   padding: 0;
   background: transparent;
@@ -336,7 +336,7 @@
   cursor: default;
 }
 
-/* 插件卡片悬停操作条：与消息 hover 条同语义（纯图标、悬停/聚焦可见） */
+/* Timeline-embedded custom cards reset padding and frame; the inner spec defines its own structure */
 .plugin-card-hover-bar {
   opacity: 0;
   transition: opacity 120ms ease;
@@ -353,7 +353,7 @@
 }
 
 /* --------------------------------------------------------------------------
- * 全屏插件中心：插件详情与深度配置抽屉 (PluginDetailDrawer)
+/* Plugin card hover action bar: same semantics as the message hover bar (icon-only, visible on hover/focus) */
  * -------------------------------------------------------------------------- */
 
 .plugin-drawer-backdrop {
@@ -480,7 +480,7 @@
   gap: 8px;
 }
 
-/* 抽屉操作区：视图快捷打开（主屏/右屏）与启停按钮；窄屏自动折行不溢出 */
+ * Full-screen plugin center: plugin detail and deep-config drawer (PluginDetailDrawer)
 .plugin-drawer-screen-actions {
   display: flex;
   align-items: center;
@@ -509,7 +509,7 @@
   gap: 6px;
 }
 
-/* 故障态卡片：发丝红边提示但不劫持全局布局 */
+/* Drawer action area: quick-open views (primary/split) and the enable/disable buttons; wraps instead of overflowing on narrow screens */
 .plugin-card.is-failed {
   border-color: var(--err-border);
 }
@@ -523,7 +523,7 @@
   text-overflow: ellipsis;
 }
 
-/* 故障诊断框与占用确认内容排版 */
+/* Faulted card: hairline red border hint without hijacking the global layout */
 .plugin-diagnostic-body,
 .plugin-inuse-body {
   display: flex;
@@ -560,7 +560,7 @@
   margin-top: 4px;
 }
 
-/* 配置字段：标签与默认/已配置标记不拆字碰撞，控件与单字段重置微操作同行 */
+/* Doctor report box and in-use confirmation content layout */
 .form-grid.plugin-config-row {
   grid-template-columns: minmax(140px, 176px) minmax(0, 1fr);
 }
@@ -676,7 +676,7 @@
 }
 
 /* ==========================================================================
- * 插件包管理：安装模态 / 受管包元数据与操作 / doctor 检查结果
+/* Config fields: label and default/configured badges never collide or wrap mid-word; the control and per-field reset micro-action share one row */
  * ========================================================================== */
 
 .plugin-install-modal {

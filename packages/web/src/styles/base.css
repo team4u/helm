@@ -1,9 +1,9 @@
 /* ==========================================================================
- * 全局重置、选择控制与超细滚动条
- * 本文件为宿主样式分片，全局级联顺序由 src/styles.css 的 @import 顺序决定。
+ * Global resets, selection control and ultra-thin scrollbars
+ * Host style shard; the global cascade order is decided by the @import order in src/styles.css.
  * ========================================================================== */
 /* ==========================================================================
- * 1. 全局重置与桌面应用级选择控制
+ * 1. Global resets and desktop-app-grade selection control
  * ========================================================================== */
 
 *,
@@ -29,7 +29,7 @@ body,
   user-select: text;
 }
 
-/* 允许复制的文本区域显式开启 user-select: text */
+/* Explicitly enable user-select: text for copyable text areas */
 .selectable,
 .msg-ai-body,
 .msg-human-pill,
@@ -67,8 +67,8 @@ button,
 }
 
 /* ==========================================================================
- * 1. 全局超细内嵌滚动条 (Overlay Scrollbars)
- * 规范：8px 细槽、2px 透明内边距衬托 4px 居中悬浮滑块、悬停加深为 var(--fg-muted)
+ * 1. Global ultra-thin overlay scrollbars
+ * Spec: an 8px thin track, 2px transparent padding framing a 4px centered floating thumb, deepening to var(--fg-muted) on hover
  * ========================================================================== */
 
 ::-webkit-scrollbar {

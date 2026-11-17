@@ -1,13 +1,18 @@
 /**
- * 浏览器 Notification API 与 Service Worker 通知边界封装：
- * 全 Web 应用仅此模块触碰全局 Notification 与 navigator.serviceWorker。
- * 偏好与状态机在 store / quiet-notify-model，便于在 happy-dom 下测试其余层
- * 并在无 Notification / 非安全上下文时如实降级。
+ * Browser Notification API and Service Worker notification boundary wrapper:
+ * this is the only module in the whole Web app that touches the global
+ * Notification and navigator.serviceWorker. Preferences and the state machine
+ * live in store / quiet-notify-model so the remaining layers stay testable
+ * under happy-dom and degrade honestly without Notification / in insecure
+ * contexts.
  *
- * 桌面端优先使用已激活的 Service Worker（统一点击聚焦与路由语义），未激活或
- * 不可用时回退 `new Notification(...)`；安卓 Chrome（仅允许经 SW showNotification
- * 投递且禁止 `new Notification` 构造）在 SW 尚未缓存完成时异步探测 `getRegistration('/')`
- * 补发，同步返回值始终保持诚实（未确认送达返回 false）。
+ * Desktop prefers the activated Service Worker (unified click-focus and routing
+ * semantics) and falls back to `new Notification(...)` when it is inactive or
+ * unavailable; Android Chrome (which only allows SW showNotification delivery
+ * and forbids the `new Notification` constructor) is probed asynchronously via
+ * `getRegistration('/')` for a redelivery while the SW is not cached yet — the
+ * synchronous return stays honest either way (false when delivery is
+ * unconfirmed).
  */
 import type { BrowserNotificationPermission } from '../shell/quiet-notify-model.js'
 
@@ -67,7 +72,7 @@ function ensureServiceWorkerMessageListener(container: ServiceWorkerContainer): 
     try {
       messageListenerContainer.removeEventListener('message', handleServiceWorkerMessage)
     } catch {
-      // 忽略旧容器解绑异常
+      // Ignore unbind errors from the previous container
     }
   }
   if (typeof container.addEventListener !== 'function') return
@@ -75,7 +80,7 @@ function ensureServiceWorkerMessageListener(container: ServiceWorkerContainer): 
     container.addEventListener('message', handleServiceWorkerMessage)
     messageListenerContainer = container
   } catch {
-    // 忽略监听器注册失败
+    // Ignore listener registration failures
   }
 }
 
@@ -142,13 +147,14 @@ async function fallbackViaExistingServiceWorkerRegistration(
     if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return
     showViaServiceWorkerRegistration(reg, request)
   } catch {
-    // 非安全上下文或容器异常静默降级
+    // Insecure context or container failure: degrade silently
   }
 }
 
 /**
- * 幂等注册零缓存 Service Worker（/sw.js, scope '/'）并挂载单次 message 监听器。
- * 非安全上下文、不支持或浏览器注册失败时静默降级返回 null。
+ * Idempotently register the zero-cache Service Worker (/sw.js, scope '/') and
+ * mount the single message listener. Degrades silently to null in insecure
+ * contexts, when unsupported, or when the browser registration fails.
  */
 export async function registerBrowserNotificationServiceWorker(): Promise<ServiceWorkerRegistration | null> {
   const container = getServiceWorkerContainer()
@@ -179,7 +185,7 @@ export async function registerBrowserNotificationServiceWorker(): Promise<Servic
   return task
 }
 
-/** 供单元测试重置模块级 Service Worker 缓存、在途 Promise、click handler 与事件监听。 */
+/** Reset module-level Service Worker caches, in-flight promises, click handlers and event listeners for unit tests. */
 export function resetBrowserNotificationServiceWorkerForTest(): void {
   swStateGeneration += 1
   cachedRegistration = null
@@ -190,23 +196,25 @@ export function resetBrowserNotificationServiceWorkerForTest(): void {
     try {
       messageListenerContainer.removeEventListener('message', handleServiceWorkerMessage)
     } catch {
-      // 忽略清理期间测试替身抛错
+      // Ignore test-stand-in throws during cleanup
     }
   }
   messageListenerContainer = null
 }
 
-/** 读取当前通知权限；宿主无 Notification API 返回 'unsupported'。 */
+/** Read the current notification permission; hosts without the Notification API return 'unsupported'. */
 export function readBrowserNotificationPermission(): BrowserNotificationPermission {
   if (typeof Notification === 'undefined') return 'unsupported'
   return Notification.permission
 }
 
 /**
- * 判定当前页面是否处于前台活跃且聚焦态：
- * - 无 document（非 DOM/SSR 环境）返回 false；
- * - 否则要求页面未隐藏（!document.hidden）且窗口聚焦（document.hasFocus()）。
- * 供前台自动清未读（仅活跃时清）与后台通知投递（!isPageActive() 时投递）共用。
+ * Whether the current page is foreground-active and focused:
+ * - no document (non-DOM/SSR environment) returns false;
+ * - otherwise the page must be visible (!document.hidden) and the window
+ *   focused (document.hasFocus()).
+ * Shared by foreground auto-clearing of unread (clear only while active) and
+ * background notification delivery (deliver when !isPageActive()).
  */
 export function isPageActive(): boolean {
   if (typeof document === 'undefined') return false
@@ -214,9 +222,12 @@ export function isPageActive(): boolean {
 }
 
 /**
- * 请求通知权限（必须由用户手势触发，如开关点击）：返回最终权限。旧回调
- * 形态（返回 undefined）回退读取当前权限；宿主不支持返回 'unsupported'。
- * 拿到 granted 时若尚未缓存 SW registration，非阻塞触发注册以保障移动浏览器投递。
+ * Request notification permission (must be triggered by a user gesture such as
+ * a toggle click): returns the final permission. The legacy callback form
+ * (returning undefined) falls back to reading the current permission;
+ * unsupported hosts return 'unsupported'. On granted, if no SW registration is
+ * cached yet, registration is triggered non-blockingly to keep mobile-browser
+ * delivery working.
  */
 export async function requestBrowserNotificationPermission(): Promise<BrowserNotificationPermission> {
   if (typeof Notification === 'undefined') return 'unsupported'
@@ -241,14 +252,14 @@ export async function requestBrowserNotificationPermission(): Promise<BrowserNot
 export interface BrowserNotificationRequest {
   title: string
   body?: string
-  /** 同 tag 的新通知替换旧通知（避免堆积）。 */
+  /** A new notification with the same tag replaces the old one (no pile-up). */
   tag?: string
-  /** 点击通知后默认导航的同源相对路径（如 `/#/c/123`）。 */
+  /** Same-origin relative path navigated to on notification click (e.g. `/#/c/123`). */
   url?: string
   onClick?: () => void
 }
 
-/** 投递一条浏览器通知；确认发起投递返回 true，未授权或未确认送达返回 false。 */
+/** Deliver one browser notification; returns true once delivery is confirmed as started, false when unauthorized or unconfirmed. */
 export function showBrowserNotification(request: BrowserNotificationRequest): boolean {
   if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return false
 

@@ -5,7 +5,8 @@ import { useOverlayChildStyle } from '@helm/plugin-client'
 export interface DropdownMenuPortalProps extends DropdownMenuPrimitive.DropdownMenuPortalProps {}
 
 /**
- * SSR 容错 Portal：在服务端渲染 (typeof window === 'undefined') 阶段直接渲染 children。
+ * SSR-tolerant portal: renders children directly during server-side rendering
+ * (typeof window === 'undefined').
  */
 export function DropdownMenuPortal({ children, container }: DropdownMenuPortalProps) {
   if (typeof window === 'undefined') {
@@ -150,7 +151,7 @@ export const DropdownMenuArrow = React.forwardRef<
 DropdownMenuArrow.displayName = 'DropdownMenuArrow'
 
 /**
- * 通用 Radix DropdownMenu 封装组件
+ * Generic Radix DropdownMenu wrapper component.
  */
 export function DropdownMenu(props: DropdownMenuPrimitive.DropdownMenuProps) {
   return <DropdownMenuPrimitive.Root {...props} />

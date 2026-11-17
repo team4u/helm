@@ -1,9 +1,9 @@
 /* ==========================================================================
- * 全视口主控台骨架与右侧抽屉（Workbench / Conversation Drawer）
- * 本文件为宿主样式分片，全局级联顺序由 src/styles.css 的 @import 顺序决定。
+/* Modal full-screen overlay mode and the Mermaid canvas layer */
+ * Full-viewport console skeleton and right drawers (Workbench / Conversation Drawer)
  * ========================================================================== */
 /* ==========================================================================
- * 2. 全视口多栏主控台骨架（Sidebar + Primary Pane + Split Pane + Workbench）
+ * Host style shard; the global cascade order is decided by the @import order in src/styles.css.
  * ========================================================================== */
 
 .helm-shell {
@@ -25,7 +25,7 @@
   overflow: hidden;
 }
 
-/* Activity Rail：48px 空间切换 + 系统中心 + 主题 */
+ * 2. Full-viewport multi-column console skeleton (Sidebar + Primary Pane + Split Pane + Workbench)
 .activity-rail {
   width: 48px;
   min-width: 48px;
@@ -49,7 +49,7 @@
   gap: 2px;
 }
 
-/* 系统中心入口已收敛到「设置」空间：中部区域仅作弹性占位。 */
+/* Activity Rail: 48px space switcher + system center + theme */
 .activity-rail-centers {
   flex: 1;
   min-height: 0;
@@ -57,8 +57,8 @@
   padding-bottom: 4px;
 }
 
-/* 设置空间导航列表：行结构同智能体站位行（nav-item-main 图标文本），
- * 由 .nav-item 统一接管高度/内边距/高亮，这里只保留分组间距。 */
+/* System center entries have converged into the "settings" space: the middle area is just a flexible spacer now. */
+/* Settings space navigation list: row structure mirrors the agent standing rows (nav-item-main icon+text),
 .settings-nav {
   gap: 2px;
 }
@@ -100,7 +100,7 @@
   padding-bottom: max(8px, env(safe-area-inset-bottom));
 }
 
-/* Context Sidebar：随空间切换内容（约 248px） */
+ * with height/padding/highlight owned by .nav-item; only group spacing is kept here. */
 .sidebar-context {
   flex: 1;
   min-width: 0;
@@ -165,7 +165,7 @@
   z-index: 5;
 }
 
-/* 桌面端侧栏折叠（Mod+B 切换）：仅保留 48px Activity Rail；移动端抽屉不受影响 */
+/* Context Sidebar: content switches with the space (about 248px) */
 .desktop-sidebar-expand-btn {
   display: none;
 }
@@ -183,7 +183,7 @@
   }
 }
 
-/* 内核连接过渡与认证解锁门禁 */
+/* Desktop sidebar collapse (Mod+B toggle): only the 48px Activity Rail remains; the mobile drawer is unaffected */
 .app-loading-screen {
   width: 100vw;
   display: flex;
@@ -252,7 +252,7 @@
   flex-shrink: 0;
 }
 
-/* 工作台抽屉遮罩：与 primary-drawer 同规范的毛玻璃遮罩，点击关闭 */
+/* Kernel connection transition and the auth unlock gate */
 .workbench-backdrop {
   position: fixed;
   inset: 0;
@@ -280,8 +280,8 @@
 }
 
 /* ==========================================================================
- * 2. 子代理会话侧边抽屉 (Conversation Drawer)
- * 规范：毛玻璃遮罩 (blur 8px saturate 1.1)、平滑全高滑出动效、深阴影
+/* Workbench drawer backdrop: frosted-glass backdrop on the same spec as primary-drawer, click to close */
+ * 2. Subagent conversation side drawer (Conversation Drawer)
  * ========================================================================== */
 
 .conversation-drawer-backdrop {
@@ -310,7 +310,7 @@
   animation: drawerSlideIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-/* 右侧滑出抽屉通用入场动效（conversation / plugin / workbench / primary 抽屉共用） */
+/* Shared slide-in animation for right drawers (conversation / plugin / workbench / primary) */
 @keyframes drawerSlideIn {
   from { transform: translateX(100%); }
   to { transform: translateX(0); }

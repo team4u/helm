@@ -1,8 +1,8 @@
 /* ==========================================================================
- * 通用设计系统原语：按钮、徽章、行、卡片、表格、分屏与输入框
- * 本文件为宿主样式分片，全局级联顺序由 src/styles.css 的 @import 顺序决定。
+ * Plugin package management: install modal / managed package metadata and actions / doctor results
+ * Generic design-system primitives: buttons, badges, rows, cards, tables, split panes and inputs
  * ========================================================================== */
-/* 次级/轮廓操作按钮 */
+ * Host style shard; the global cascade order is decided by the @import order in src/styles.css.
 .btn-secondary {
   height: 27px;
   padding: 0 10px;
@@ -18,7 +18,7 @@
   color: var(--fg);
 }
 
-/* 主要操作按钮（Solid Accent） */
+/* Secondary/outline action buttons */
 .btn-primary {
   height: 27px;
   border: none;
@@ -37,7 +37,7 @@
   filter: brightness(0.96);
 }
 
-/* 危险操作按钮（软底色 + 警示红） */
+/* Primary action button (solid accent) */
 .btn-danger {
   border: 1px solid var(--err-border);
   background: var(--err-bg);
@@ -50,7 +50,7 @@
   filter: brightness(0.98);
 }
 
-/* 幽灵/文本操作按钮 */
+/* Danger action button (soft background + alert red) */
 .btn-ghost {
   height: 27px;
   border: none;
@@ -67,7 +67,7 @@
   background: var(--bg-hover);
 }
 
-/* 尺寸阶梯修饰类 */
+/* Ghost/text action buttons */
 .btn-sm {
   height: 28px;
   padding: 0 8px;
@@ -75,7 +75,7 @@
   border-radius: var(--radius-xs);
 }
 
-/* 紧凑小按钮：胶囊卡头部 / 工作台窄列内联动作 */
+/* Size-step modifier classes */
 .btn-xs {
   height: 22px;
   padding: 0 6px;
@@ -88,12 +88,12 @@
   border-radius: var(--radius-pill);
 }
 
-/* 纯图标按钮原语：固定正方形与内边距归零 */
+/* Compact small button: capsule card headers / workbench narrow-column inline actions */
 .btn-icon { width: 32px; height: 32px; padding: 0 !important; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
 .btn-icon-sm { width: 28px; height: 28px; padding: 0 !important; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
 .btn-icon-xs { width: 22px; height: 22px; padding: 0 !important; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
 
-/* 紧凑原生图标按钮（26px x 26px，圆角 7px） */
+/* Icon-only button primitive: fixed square with zeroed padding */
 .composer-icon-button,
 .composer-toolbar .composer-icon-button {
   width: 26px;
@@ -123,7 +123,7 @@
   cursor: not-allowed;
 }
 
-/* 1px 细线状态徽章 */
+/* Compact native icon button (26px x 26px, 7px radius) */
 .badge {
   display: inline-flex;
   align-items: center;
@@ -165,7 +165,7 @@
   color: var(--err);
 }
 
-/* 1px 发丝分隔列表 */
+/* 1px thin-line status badges */
 .list {
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
@@ -174,7 +174,7 @@
   flex: none;
 }
 
-/* 行原语：列表内与平铺场景通用行骨架，相邻行间以 1px 发丝线分割 */
+/* 1px hairline divided list */
 .list > .row,
 .row {
   display: flex;
@@ -203,7 +203,7 @@
   border-bottom: none;
 }
 
-/* 列表导航交互项原语 */
+/* Row primitive: the generic row skeleton for in-list and tiled scenes; adjacent rows split by a 1px hairline */
 .list-item-btn {
   display: flex;
   flex-direction: column;
@@ -245,7 +245,7 @@
   gap: 6px;
 }
 
-/* 卡片与表单 */
+/* List navigation interactive item primitive */
 .card {
   background: var(--bg-elevated);
   border: 1px solid var(--border);
@@ -253,7 +253,7 @@
   padding: 12px 14px;
 }
 
-/* 静音平铺容器原语 */
+/* Cards and forms */
 .section-flat {
   background: var(--bg-subtle);
   border: 1px solid var(--border);
@@ -269,7 +269,7 @@
   gap: 6px;
   flex-wrap: wrap;
 }
-/* 同插件多 settings.panel：面板间分隔与独立挂载区域 */
+/* Quiet tiled container primitive */
 .plugin-settings-panels + .plugin-settings-panels {
   border-top: 1px solid var(--border);
   padding-top: 10px;
@@ -286,7 +286,7 @@
   color: var(--fg);
 }
 
-/* 统一搜索输入框原语（容器式：描边/背景/focus 高亮全部由容器提供，
+/* Multiple settings.panels from one plugin: separators and independent mount areas between panels */
    The inner input is transparent and frameless, following the shared search box spec) */
 .search-box {
   display: flex;
@@ -338,7 +338,7 @@
   align-items: center;
 }
 
-/* 统一空状态原语 */
+/* Unified search input primitive (container-based: border/background/focus highlight all provided by the container,
 .empty-state {
   display: flex;
   flex-direction: column;
@@ -372,7 +372,7 @@
   font-size: 12px;
 }
 
-/* 表单两列网格对齐原语 */
+/* Unified empty-state primitive */
 .form-grid {
   display: grid;
   grid-template-columns: 130px 1fr;
@@ -396,9 +396,9 @@
 }
 
 /* ==========================================================================
- * 通用设计系统表格原语 (Table Primitives)
- * 供主框架全局及所有扩展插件（Herdr / SuperAgent / Triggers / Magpie 等）统一复用
- * 杜绝每个插件自立门户重复拷贝表格样式
+/* Form two-column grid alignment primitive */
+ * Generic design-system table primitives (Table Primitives)
+ * Shared uniformly by the main framework and every extension plugin (Herdr / SuperAgent / Triggers / Magpie, etc.)
  * ========================================================================== */
 
 .helm-table-wrap,
@@ -489,8 +489,8 @@
 }
 
 /* ==========================================================================
- * 通用设计系统页面与分节原语 (Screen & Section Primitives)
- * 供全屏一级主舞台、扩展插件视图（Herdr / SuperAgent / Triggers / Magpie）统一排版
+ * so no plugin forks its own copy of table styles
+ * Generic design-system page and section primitives (Screen & Section Primitives)
  * ========================================================================== */
 
 .screen-container {
@@ -527,7 +527,7 @@
   margin-left: auto;
 }
 
-/* ScreenHost 已渲染顶栏 .pane-topbar 时抑制内层重复大标题，保留副标题与右侧动作栏；
+ * Shared layout for full-screen primary stages and extension plugin views (Herdr / SuperAgent / Triggers / Magpie)
    If an inner page header has only a title without subtitle/actions, the whole bar collapses to zero to avoid double headers. */
 .screen-host-stage .screen-header .screen-title,
 .screen-host-stage .screen-header > .screen-section-title,
@@ -573,8 +573,8 @@
 }
 
 /* ==========================================================================
- * 统一信息提示横幅与快捷键提示原语 (Callout & Kbd Hint Primitives)
- * 供全仓宿主与全部插件统一复用（web-frontend.md：.callout-error / .callout-warn / .callout-ok）
+/* When ScreenHost already renders the .pane-topbar, suppress the duplicate inner headline while keeping the subtitle and right action area;
+ * Unified info callout and keyboard-hint primitives (Callout & Kbd Hint Primitives)
  * ========================================================================== */
 
 .callout {
@@ -639,7 +639,7 @@
 }
 
 /* ==========================================================================
- * 通用键值对概览原语 (Key-Value Grid Primitives)
+ * Reused across the whole host and all plugins (web-frontend.md: .callout-error / .callout-warn / .callout-ok)
  * ========================================================================== */
 
 .helm-kv-grid,
@@ -663,7 +663,7 @@
 }
 
 /* ==========================================================================
- * 通用加载中与堆叠布局原语 (Loading & Stack Primitives)
+ * Generic key-value overview primitives (Key-Value Grid Primitives)
  * ========================================================================== */
 
 .loading-state {
@@ -682,16 +682,16 @@
 }
 
 /* ==========================================================================
- * 通用表单输入框、Textarea 与搜索栏原语
+ * Generic loading and stack layout primitives (Loading & Stack Primitives)
  *
- * 搜索框统一规范（全站唯一搜索外观）：
- *   - 搜索输入一律用 type="text"，禁止 type="search"（原生自带清除 X，
- *     会与自定义清除按钮叠出双 X，且易产生双层描边/高亮套高亮）。
- *   - 外观统一交给容器类（.search-box / .primary-search-box /
- *   .plugin-search-box / .sidebar-search），内层 input 必须
- *     border: none; background: transparent，避免高亮套高亮。
- *   - 清除按钮最多一个，由容器类内的自定义按钮提供。
- *   - 兜底：即使误用 type="search"，也强制去掉原生清除按钮。
+ * Generic form inputs, textarea and search bar primitives
+ * Search box unified spec (the one search look for the whole app):
+ *   - search inputs always use type="text"; type="search" is forbidden (the native clear X
+ *     would stack a double X with the custom clear button and easily produce double borders/highlights).
+ *   - the look is owned by container classes (.search-box / .primary-search-box /
+ *   .plugin-search-box / .sidebar-search); the inner input must be
+ *     border: none; background: transparent, avoiding highlight-over-highlight.
+ *   - at most one clear button, provided by the custom button inside the container class.
  */
 
 .input,
@@ -769,9 +769,9 @@ input::placeholder {
 }
 
 /*
- * 注意：搜索输入框不再使用独立原语 .search-input（已删，死代码）。
- * 搜索框一律采用容器结构：.search-box / .primary-search-box / .plugin-search-box /
- * .sidebar-search，描边/背景/focus 高亮由容器提供，内层 input 透明无边框，
- * 并由文件末尾的统一兑底块中和全局 input 规则（见「搜索框统一规范兑底」）。
+ *   - Fallback: even a mistaken type="search" gets its native clear button force-removed.
+ * Note: search inputs no longer use a standalone .search-input primitive (deleted dead code).
+ * Search boxes always use the container structure: .search-box / .primary-search-box / .plugin-search-box /
+ * .sidebar-search; border/background/focus highlight come from the container while the inner input stays transparent and borderless,
  */
 

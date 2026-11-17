@@ -1,9 +1,9 @@
 /* ==========================================================================
- * AskDoc 置底审批卡与 Composer 底栏
- * 本文件为宿主样式分片，全局级联顺序由 src/styles.css 的 @import 顺序决定。
+ * AskDoc bottom approval card and Composer bottom bar
+ * Host style shard; the global cascade order is decided by the @import order in src/styles.css.
  * ========================================================================== */
 /* ==========================================================================
- * 6. AskDoc 置底悬停审批卡 & Composer 底栏微操舱
+ * 6. AskDoc hover approval card & Composer bottom mini control deck
  * ========================================================================== */
 
 .ask-dock-stack {
@@ -148,7 +148,7 @@
   border-color: var(--fg-muted);
 }
 
-/* 空会话起始环境配置条：开聊前可配节点与目录，发消息后不再渲染 */
+/* Empty-conversation starter env bar: configure node and cwd before chatting; no longer rendered once a message is sent */
 .composer-env-bar {
   display: flex;
   align-items: center;
@@ -171,7 +171,7 @@
   color: var(--fg-subtle);
 }
 
-/* 修复：.input 默认 padding 6px 10px 会把 height:22px 的 select 文字裁切，
+/* Fix: the default .input padding 6px 10px clips text in a height:22px select,
    Both classes raise specificity and give enough row height; 30px tall on mobile with 16px font. */
 .input.composer-env-select {
   height: 28px;

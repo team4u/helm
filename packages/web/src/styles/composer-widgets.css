@@ -1,6 +1,6 @@
 /* ==========================================================================
- * Composer 挂件与附件缩略图
- * 本文件为宿主样式分片，全局级联顺序由 src/styles.css 的 @import 顺序决定。
+ * Composer widgets and attachment thumbnails
+ * Host style shard; the global cascade order is decided by the @import order in src/styles.css.
  * ========================================================================== */
 
 .attachment-image-thumb {
@@ -98,7 +98,7 @@
   line-height: 1.4;
 }
 
-/* Composer 顶部直出托盘插槽（COMPOSER_DOCK_SLOT）：无在途贡献时归零高度与 flex 间距 */
+/* Composer top dock slot (COMPOSER_DOCK_SLOT): collapses to zero height and no flex gap when no live contributions */
 .composer-dock-slot {
   display: flex;
   flex-direction: column;
@@ -108,7 +108,7 @@
   display: none;
 }
 
-/* 移动端忙时独立发送双按钮（[插话] / [排队]） */
+/* Mobile busy-state split send buttons ([Steer] / [Queue]) */
 .composer-busy-mobile-actions {
   display: inline-flex;
   align-items: center;
@@ -142,7 +142,7 @@
   color: var(--fg-subtle);
 }
 
-/* ModelPicker 搜索栏与空态 */
+/* ModelPicker search bar and empty state */
 .composer-model-search-bar {
   display: flex;
   align-items: center;

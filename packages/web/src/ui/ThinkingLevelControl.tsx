@@ -1,12 +1,13 @@
 import React from 'react'
 import { Tabs, TabsList, TabsTrigger } from '@helm/plugin-client'
+import { useWebLocale } from '../i18n/use-web-locale.js'
 
 export interface ThinkingLevelControlProps {
-  /** 选中值：实际生效的具体档位。 */
+  /** Selected value: the concrete level actually in effect. */
   value: string
-  /** 目标模型支持的思考档位列表（空或仅 off 时不渲染，由调用方决定）。 */
+  /** Thinking levels the target model supports (render nothing when empty or off-only; the caller decides). */
   levels: ReadonlyArray<string>
-  /** 选中档位变化。 */
+  /** Selected level change. */
   onPick: (level: string) => void
   disabled?: boolean
   className?: string
@@ -14,11 +15,15 @@ export interface ThinkingLevelControlProps {
 }
 
 /**
- * 思考档位分段按钮组（会话模型浮层、待命卡与角色卡抽屉共用）：
- * - 基于 Radix Tabs 原语的 segmented-control；
- * - 纯实体档位展示（对齐 Pi Agent，移除「默认」伪档位），所见即所得；
- * - 外部传入空串或无效值时，安全回退至模型支持的有效档位；
- * - 严格遵循零 Emoji 铁律。
+ * Thinking level segmented control (shared by the conversation model popover,
+ * standby cards and the profile drawer):
+ * - segmented-control built on the Radix Tabs primitive;
+ * - plain entity levels only (aligned with Pi Agent, no fake "Default" level),
+ *   what you see is what you get;
+ * - an empty or invalid incoming value falls back safely to a level the model
+ *   supports;
+ * - strictly follows the zero-Emoji rule. The default aria-label resolves from
+ *   the active locale (an explicit aria-label prop wins).
  */
 export function ThinkingLevelControl({
   value,
@@ -26,13 +31,14 @@ export function ThinkingLevelControl({
   onPick,
   disabled = false,
   className = 'composer-thinking-row',
-  'aria-label': ariaLabel = 'Thinking level',
+  'aria-label': ariaLabel,
 }: ThinkingLevelControlProps): React.JSX.Element | null {
+  const { t } = useWebLocale()
   if (levels.length === 0) return null
   const safeValue = levels.includes(value) ? value : (levels[0] ?? '')
   return (
     <Tabs value={safeValue} onValueChange={onPick} variant="segmented" style={{ width: '100%' }}>
-      <TabsList className={`segmented-control ${className}`.trim()} aria-label={ariaLabel}>
+      <TabsList className={`segmented-control ${className}`.trim()} aria-label={ariaLabel ?? t('ui.thinking.levelLabel')}>
         {levels.map((level) => (
           <TabsTrigger key={level} value={level} disabled={disabled} onClick={() => onPick(level)}>
             {level}

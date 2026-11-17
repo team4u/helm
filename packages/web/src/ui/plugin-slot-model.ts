@@ -1,24 +1,28 @@
 /**
- * PluginSlot 纯逻辑：贡献项匹配与稳定排序（无组件导出，供单测直接验证）。
+ * PluginSlot pure logic: contribution matching plus stable ordering (no
+ * component exports; directly unit-testable).
  *
- * 排序规则：priority 降序 -> order 升序 -> 贡献顺序（groupedUi.pluginSlots
- * 的数组序，先注册先命中）；三者合成一次稳定排序。
+ * Ordering rule: priority desc -> order asc -> contribution order (the array
+ * order inside groupedUi.pluginSlots, first registered wins); the three keys
+ * compose into a single stable sort.
  */
 import type { ConversationScope, PluginSlotContributionSpec } from '@helm/protocol/browser'
 import type { QualifiedUiSpec } from '../lib/types.js'
 
 export type SlotContribution = QualifiedUiSpec<PluginSlotContributionSpec>
 
-/** 全限定插槽名 '<ownerPluginId>/<slotName>' 的格式校验（恰一个 '/'）。 */
+/** Format check for the fully qualified slot name '<ownerPluginId>/<slotName>' (exactly one '/'). */
 export function isValidSlotTarget(target: string): boolean {
   const slash = target.indexOf('/')
   return slash > 0 && slash < target.length - 1 && target.indexOf('/', slash + 1) < 0
 }
 
 /**
- * 收集命中目标插槽的贡献项：target 全等匹配 + scope 过滤 + 稳定排序。
- * scopeFilter 由调用方绑定当前会话（matchesUiScope）；无会话上下文时仅
- * 无 scope 声明的贡献项命中（与会话级 UI 扩展点同一语义）。
+ * Collect contributions hitting the target slot: exact target match + scope
+ * filter + stable ordering. The caller binds scopeFilter to the current
+ * conversation (matchesUiScope); without conversation context only
+ * contributions without a scope declaration hit (same semantics as the
+ * conversation-scoped UI extension points).
  */
 export function collectSlotItems(
   contributions: ReadonlyArray<SlotContribution>,
@@ -31,7 +35,7 @@ export function collectSlotItems(
     if (!scopeFilter(item.spec.scope)) continue
     matched.push(item)
   }
-  // 稳定排序：priority 降序、order 升序（缺省 100），同分保持贡献顺序
+  // Stable ordering: priority desc, order asc (default 100), ties keep contribution order
   return matched
     .map((item, index) => ({ item, index }))
     .sort(

@@ -5,7 +5,7 @@ import { useOverlayChildStyle } from '@helm/plugin-client'
 export interface TooltipProviderProps extends TooltipPrimitive.TooltipProviderProps {}
 
 /**
- * 全局或局部 TooltipProvider 包装器
+ * Global or scoped TooltipProvider wrapper.
  */
 export function TooltipProvider({
   delayDuration = 300,
@@ -33,7 +33,8 @@ export const TooltipTrigger = TooltipPrimitive.Trigger
 export interface TooltipPortalProps extends TooltipPrimitive.TooltipPortalProps {}
 
 /**
- * SSR 容错 Portal：在服务端渲染 (typeof window === 'undefined') 阶段直接渲染 children。
+ * SSR-tolerant portal: renders children directly during server-side rendering
+ * (typeof window === 'undefined').
  */
 export function TooltipPortal({ children, container }: TooltipPortalProps) {
   if (typeof window === 'undefined') {
@@ -96,9 +97,10 @@ export interface TooltipProps {
 }
 
 /**
- * 极简悬浮提示组件：
- * - 自动包装 Provider 与 Portal，在无外层 Provider 场景下依然能安全独立渲染（对 SSR/单测友好）；
- * - 纯图标按钮的悬浮提示与 aria-label 对应。
+ * Minimal hover tooltip:
+ * - wraps Provider and Portal automatically so it renders safely standalone
+ *   even without an outer Provider (SSR/unit-test friendly);
+ * - the hover tooltip of an icon-only button mirrors its aria-label.
  */
 export function Tooltip({
   content,

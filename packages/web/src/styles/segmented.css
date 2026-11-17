@@ -1,9 +1,9 @@
 /* ==========================================================================
- * 分段控制器与 Tabs 原语
- * 本文件为宿主样式分片，全局级联顺序由 src/styles.css 的 @import 顺序决定。
+ * Segmented control and Tabs primitives
+ * Host style shard; the global cascade order is decided by the @import order in src/styles.css.
  * ========================================================================== */
 /* ==========================================================================
- * 分段控制器原语（SegmentedControl & Tabs）
+ * Segmented control primitives (SegmentedControl & Tabs)
  * ========================================================================== */
 
 .helm-tabs-segmented {
@@ -59,7 +59,7 @@
   opacity: 0.45;
   cursor: not-allowed;
 }
-/* 模态弹窗全屏覆盖模式与 Mermaid 画布图层 */
+
 .modal-fullscreen-backdrop {
   position: fixed !important;
   inset: 0 !important;

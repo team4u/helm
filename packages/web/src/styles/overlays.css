@@ -1,9 +1,9 @@
 /* ==========================================================================
- * Toast 通知与 Radix 浮层原语（Popover / DropdownMenu / Tooltip）与补全浮层
- * 本文件为宿主样式分片，全局级联顺序由 src/styles.css 的 @import 顺序决定。
+ * Conversation outline quick-nav popover (ConversationOutlinePopover)
+ * Toast notices and Radix overlay primitives (Popover / DropdownMenu / Tooltip) and the completion popover
  * ========================================================================== */
 /* ==========================================================================
- * 10. Toast 通知浮层
+ * Host style shard; the global cascade order is decided by the @import order in src/styles.css.
  * ========================================================================== */
 
 .toast-overlay {
@@ -53,7 +53,7 @@
 .composer-model-popover .input { width: 100%; }
 
 
-/* 会话面板早退分支（加载失败/加载中）：错误信息与操作横排，分屏关闭入口始终可见 */
+ * 10. Toast notice overlay
 .pane-error {
   padding: 16px;
   gap: 10px;
@@ -86,7 +86,7 @@
 
 /* ==========================================================================
  * Radix UI Primitives: Popover, DropdownMenu, Tooltip
- * 视觉规范：1px 发丝边框、--bg-elevated 背景、var(--radius-sm, 7px) 微圆角、极简低饱和
+/* Conversation pane early-exit branches (load failed / loading): error message and actions in a row; the split-close entry stays visible */
  * ========================================================================== */
 
 [data-radix-popper-content-wrapper] {
@@ -212,7 +212,7 @@
   stroke-width: 1px;
 }
 
-/* Radix Popper Wrapper 嵌套适配 */
+ * Visual spec: 1px hairline border, --bg-elevated background, var(--radius-sm, 7px) slight rounding, minimal low saturation
 [data-radix-popper-content-wrapper] .pane-more-popover {
   position: static;
   top: auto;
@@ -238,7 +238,7 @@
   border-radius: var(--radius-sm, 7px);
 }
 
-/* 加宽下拉面板：长模型 ID（如 anthropic/claude-…）完整可读，溢出省略并保留 title 提示 */
+/* Radix Popper wrapper nesting adaptation */
 .helm-select-popover-wide {
   max-width: 520px;
 }
@@ -257,8 +257,8 @@
 
 
 /* --------------------------------------------------------------------------
- * 全屏资源中心通用矩阵（Profiles / Skills / Nodes / Models）统一视觉系统
- * 继承自 PluginCenter 规范架构：容器、顶栏、检索栏、网格与 540px 滑出抽屉
+/* Widened dropdown panel: long model ids (e.g. anthropic/claude-…) stay fully readable, ellipsized on overflow with the title hint kept */
+ * Full-screen resource centers (Profiles / Skills / Nodes / Models) share one visual system
  * -------------------------------------------------------------------------- */
 .primary-center {
   display: flex;
@@ -324,8 +324,8 @@
   white-space: nowrap;
 }
 
-/* 模型与凭证中心：全局默认模型状态横幅 */
-/* 模型中心顶部 Tab 栏（供应商 / 全局默认）与全局默认配置面板 */
+ * inheriting the PluginCenter spec architecture: container, topbar, search bar, grid and the 540px slide-out drawer
+/* Models & credentials center: global default model status banner */
 .model-center-tabs {
   padding: 0 20px;
   border-bottom: 1px solid var(--border);
@@ -356,7 +356,7 @@
   border-bottom-color: var(--fg);
 }
 
-/* 模型中心主 Tab 容器与激活内容区：恢复视口高度约束与原生滚动 */
+/* Model center top tab bar (providers / global defaults) and the global-default config panel */
 .model-center-main-tabs {
   flex: 1;
   min-height: 0;
@@ -395,7 +395,7 @@
   max-width: 640px;
 }
 
-/* 供应商 Tab 内部工具栏（位于滚动区内，去边框） */
+/* Model center main tab container and active content area: restore viewport-height constraint with native scrolling */
 .model-toolbar-inline.primary-center-toolbar {
   border-bottom: none;
   padding: 0 0 12px;
@@ -705,7 +705,7 @@
   white-space: nowrap;
 }
 
-/* 520px/540px 右侧滑出抽屉通用规范（模型/Profile/节点/技能四大中心） */
+/* Provider tab inner toolbar (inside the scroll area, borderless) */
 .primary-drawer-backdrop {
   position: fixed;
   inset: 0;
@@ -816,7 +816,7 @@
   }
 }
 
-/* 产物预览：插件预览器选择与插件视图容器 */
+/* Shared 520px/540px right slide-out drawer spec (the models/profiles/nodes/skills centers) */
 .artifact-previewer-select {
   width: 132px;
   flex-shrink: 0;
@@ -836,7 +836,7 @@
 }
 
 /* ============================================================================
- * composerCompleter 补全浮层（Radix Popover 锚定在 .composer-box 上方）
+/* Artifact preview: plugin previewer selection and the plugin view container */
  * ========================================================================== */
 .composer-completion-popover {
   width: min(420px, calc(100vw - 16px));
@@ -859,7 +859,7 @@
   color: var(--danger, var(--fg-muted));
 }
 
-/* Profile 详情抽屉：空白会话引导词编辑区块（紧凑列表，label/prompt 增删）。 */
+ * composerCompleter completion popover (Radix Popover anchored above .composer-box)
 .profile-starters-header { justify-content: space-between; }
 .profile-starters-list { display: flex; flex-direction: column; gap: 8px; }
 .profile-starters-empty { padding: 2px 0; }
@@ -879,7 +879,7 @@
 .profile-starter-remove { position: absolute; top: 6px; right: 4px; }
 .profile-starter-add { margin-top: 6px; }
 
-/* ConversationTimeline：空白会话引导词按钮组（仅回填草稿，不直接发送）。 */
+/* Profile detail drawer: blank-conversation starter prompt editor block (compact list, add/remove label/prompt). */
 .timeline-starters { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 0 12px; }
 .timeline-starter-btn {
   display: inline-flex;
@@ -909,7 +909,7 @@
   .timeline-starter-btn { font-size: 12px; }
 }
 
-/* A 方案：系统中心只在 Activity Rail 出现，保留旧 footer 标记仅为兼容既有导航契约。 */
+/* ConversationTimeline: blank-conversation starter prompt buttons (draft backfill only, never sends directly). */
 .activity-rail-brand {
   position: relative;
   width: 34px;

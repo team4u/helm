@@ -1,7 +1,7 @@
-/* Helm 宿主样式入口（Quiet Surface 设计系统）。
- * 全部规则按原级联顺序拆分在 src/styles/ 分片中，@import 顺序即规则顺序，
- * 调整分片顺序前先核对样式覆盖关系（例如 search-box.css 必须位于全部 input 规则之后）。
- * 窄面板、移动端与减少动画偏好见 responsive.css（由 main.tsx 在本入口之后引入）。 */
+/* Helm host stylesheet entry (Quiet Surface design system).
+ * All rules are split into src/styles/ shards preserving the original cascade order; the @import order is the rule order,
+ * so verify style override relationships before reordering shards (e.g. search-box.css must come after every input rule).
+ * Narrow panes, mobile and reduced-motion preferences live in responsive.css (imported by main.tsx after this entry). */
 @import './styles/tokens.css';
 @import './styles/base.css';
 @import './styles/shell.css';
