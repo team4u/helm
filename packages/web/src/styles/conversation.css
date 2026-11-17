@@ -863,6 +863,12 @@ pre {
   gap: 6px;
 }
 
+@media (min-width: 681px) {
+  .modal-body.preview-modal-body {
+    padding: 28px 40px;
+  }
+}
+
 .preview-modal-loading {
   display: flex;
   align-items: center;
