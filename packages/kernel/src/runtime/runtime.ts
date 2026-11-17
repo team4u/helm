@@ -79,6 +79,10 @@ import {
 } from './runtime-host-backend.js'
 import { formatDiagnosticError, type KernelDiagnosticInput } from './diagnostics.js'
 import {
+  readWorkspaceFile,
+  type ConversationFileContent,
+} from './workspace-files.js'
+import {
   bootstrapKernelRuntime,
   ensureInitialConversation,
   recoverExistingConversations,
@@ -636,6 +640,23 @@ export class KernelRuntime {
   /** single timeline item (not truncate, already redaction;GET /api/conversations/:id/entries/:entryId). */
   getConversationEntry(id: number, entryId: number): Promise<ConversationEntry> {
     return this.conversations.getConversationEntry(id, entryId)
+  }
+
+  /** read a file strictly inside conversation's bound workspace (text files are redacted via SecretStash). */
+  async readConversationFile(
+    id: number,
+    path: string,
+    signal?: AbortSignal,
+  ): Promise<ConversationFileContent> {
+    const summary = this.getConversation(id)
+    return readWorkspaceFile({
+      nodeId: summary.nodeId ?? 'local',
+      cwd: summary.cwd,
+      rawPath: path,
+      envFabric: this.envFabric,
+      redact: (text) => this.stashService.redact(text),
+      signal,
+    })
   }
 
   async createConversation(init: ConversationInit = {}): Promise<ConversationSummary> {

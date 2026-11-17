@@ -3,6 +3,7 @@
  */
 
 export { KernelRuntime, type KernelRuntimeOptions } from './runtime.js'
+export { readWorkspaceFile, type ConversationFileContent, type ReadWorkspaceFileDeps } from './workspace-files.js'
 export {
   isStrictSemVer,
   normalizeExplicitVersion,

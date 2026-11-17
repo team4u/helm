@@ -18,6 +18,7 @@ import {
   requirePositional,
   resolveConversationTarget,
   validateEnum,
+  writeDownloadedOutput,
 } from './shared.js'
 
 const WHEN_BUSY = ['steer', 'followUp', 'reject'] as const
@@ -189,6 +190,64 @@ export function conversationsCommands(): CommandSpec[] {
       const entryId = parsePositiveInt((second ?? first) as string, 'entryId')
       const hub = await ctx.hub()
       printResult(ctx, await hub.get<unknown>(`/api/conversations/${id}/entries/${entryId}`))
+    },
+  })
+
+  // ---- conversations file (workspace file read) ----
+  cmds.push({
+    path: ['conversations', 'file'],
+    description: 'read file in conversation workspace (GET /api/conversations/:id/files/content)',
+    flags: [
+      ...convFlags,
+      { name: 'output', type: 'string', help: 'output file path (resolved against CLI caller cwd)' },
+    ],
+    positional: '[id] <path>',
+    async run(ctx: CommandContext) {
+      const parsed = parseFlags(
+        [
+          { name: 'current', type: 'boolean' },
+          { name: 'output', type: 'string' },
+        ],
+        ctx.args,
+      )
+      const first = parsed.positionals[0]
+      const second = parsed.positionals[1]
+      assertNoExtraPositionals(parsed.positionals, 2)
+      if (first === undefined) {
+        throw new CliError('missing <path> location parameter ([id] <path>, conversation target available --current)', 'missing_positional')
+      }
+      const id = resolveConversationTarget(parsed.flags, second === undefined ? undefined : first, ctx.env)
+      const filePath = (second ?? first) as string
+      if (filePath.trim() === '') {
+        throw new CliError('workspace file path cannot be empty', 'invalid_path')
+      }
+      const output = flagValue<string>(parsed.flags, 'output')
+      const hub = await ctx.hub()
+      const response = await hub.raw(`/api/conversations/${id}/files/content?path=${encodeURIComponent(filePath)}`)
+      if (output !== undefined) {
+        await writeDownloadedOutput(ctx, response, output, 'workspace file')
+        return
+      }
+      const contentType = response.headers.get('content-type') ?? ''
+      const baseMime = contentType.split(';', 1)[0]!.trim().toLowerCase()
+      const isText =
+        baseMime.startsWith('text/') ||
+        baseMime === 'application/json' ||
+        baseMime === 'application/xml' ||
+        baseMime === 'image/svg+xml' ||
+        baseMime === 'text/yaml'
+      if (!isText) {
+        throw new CliError(
+          `workspace file is binary (${contentType || 'unknown type'}): use --output <path>`,
+          'binary_content_requires_output',
+        )
+      }
+      const text = await response.text()
+      if (ctx.json) {
+        printResult(ctx, { conversationId: id, path: filePath, contentType, text })
+      } else {
+        printPlainText(ctx, text)
+      }
     },
   })
 

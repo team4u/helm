@@ -72,6 +72,7 @@ export const CORE_CLI_COMMAND_PATHS = [
   'conversations list',
   'conversations get',
   'conversations entry',
+  'conversations file',
   'conversations create',
   'conversations update',
   'conversations delete',

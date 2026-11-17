@@ -61,6 +61,9 @@ import type {
 } from '../services/index.js'
 import type { EnvFabric } from '../env/index.js'
 import type { NodeForwardEvent, NodeForwardSession } from '../env/forward.js'
+import type { ConversationFileContent } from '../runtime/workspace-files.js'
+
+export type { ConversationFileContent }
 
 export type { RealAuthService }
 export type {
@@ -260,6 +263,12 @@ export interface KernelRuntimeLike {
     id: number,
     entryId: number,
   ): Promise<ConversationEntry> | ConversationEntry
+  /** GET /api/conversations/:id/files/content consume: read workspace file strictly inside conversation cwd. */
+  readConversationFile?(
+    id: number,
+    path: string,
+    signal?: AbortSignal,
+  ): Promise<ConversationFileContent>
   createConversation(init?: ConversationInit): Promise<ConversationSummary> | ConversationSummary
   updateConversation(id: number, patch: ConversationPatch): Promise<ConversationSummary> | ConversationSummary
   deleteConversation(id: number): Promise<void> | void

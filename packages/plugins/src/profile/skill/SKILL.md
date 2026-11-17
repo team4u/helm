@@ -29,6 +29,7 @@ managedByPlugin: {{MANAGED_BY}}
 - `helm conversations list [--profile <id>] [--status <s>] [--tag <t>]`: top-level conversations only by default (noise reduction); `--all` includes all derived sub-conversations such as subagents; `--parent <id>` lists exactly one conversation's direct children (mutually exclusive with --all).
 - `helm conversations get [id] [--current] [--limit N] [--cursor <c>]` (with a paginated timeline)
 - `helm conversations entry [id] <entryId> [--current]` (full text of a single timeline entry; detail pagination truncates head/tail of very long plain-text tool-results, and this command returns the untruncated original)
+- `helm conversations file [id] <path> [--current] [--output <path>]` (read a file strictly inside the conversation's bound workspace on the target node; text files are redacted via SecretStash, binary files require `--output`)
 - `helm conversations create [--title <t>] [--profile-id <id>] [--node <nodeId>] [--cwd <dir>] [--model <m>] [--tags <t>]`
 - `helm conversations update <id> --title/--model/--thinking/--profile-id/--node/--cwd/--pinned/--unread`
 - `helm conversations reset [id] [--current] [--handoff <text>]` (reset context; handoff becomes the first message)

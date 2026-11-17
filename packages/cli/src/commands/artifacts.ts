@@ -4,41 +4,19 @@ import path from 'node:path'
 import { CliError } from '../errors.js'
 import { flagValue, parseFlags } from '../args.js'
 import type { CommandContext, CommandSpec } from './shared.js'
-import { printPlainText, printResult, requirePositional, resolveConversationTarget } from './shared.js'
+import {
+  pathDetails,
+  pathDiagLines,
+  printPlainText,
+  printResult,
+  requirePositional,
+  resolveCallerPath,
+  resolveConversationTarget,
+  writeDownloadedOutput,
+} from './shared.js'
 import { printValue } from '../output.js'
 
 const convFlags = [{ name: 'current', type: 'boolean', help: 'use env HELM_CONVERSATION_ID' }] as const
-
-/**
- * by caller (CLI process)cwd local path parse is absolute path: never by HELM_CWD static default switch,
- * also does not all find. directory difference itself is legal cd, only as diagnose attach note return.
- */
-function resolveCallerPath(ctx: CommandContext, requested: string): { resolvedPath: string; sessionCwd?: string } {
-  const resolvedPath = path.resolve(ctx.cwd, requested)
-  let sessionCwd: string | undefined
-  if (ctx.env['HELM_ENV'] === '1') {
-    const managed = ctx.env['HELM_CWD']
-    if (managed && managed !== ctx.cwd) sessionCwd = managed
-  }
-  return { resolvedPath, sessionCwd }
-}
-
-/** path diagnose structure details(--json message seal supply script consume). */
-function pathDetails(requested: string, resolvedPath: string, ctx: CommandContext, sessionCwd?: string): Record<string, string> {
-  return {
-    requestedPath: requested,
-    resolvedPath,
-    cliCwd: ctx.cwd,
-    ...(sessionCwd !== undefined ? { sessionCwd } : {}),
-  }
-}
-
-/** person class can read many row diagnose (contains optional conversation cwd attach note). */
-function pathDiagLines(requested: string, resolvedPath: string, ctx: CommandContext, sessionCwd?: string): string {
-  const hint =
-    sessionCwd !== undefined ? `\n  conversation cwd(HELM_CWD)=${sessionCwd}(directory difference belong legal cd; relative path still by CLI cwd parse)` : ''
-  return `\n  request path=${requested}\n  absolute path=${resolvedPath}\n  CLI cwd=${ctx.cwd}${hint}`
-}
 
 export function artifactsCommands(): CommandSpec[] {
   const cmds: CommandSpec[] = []
@@ -128,32 +106,7 @@ export function artifactsCommands(): CommandSpec[] {
       const contentType = response.headers.get('content-type') ?? ''
       const isText = contentType.startsWith('text/') || contentType.includes('json') || contentType.includes('yaml') || contentType === ''
       if (output !== undefined) {
-        const fsp = await import('node:fs/promises')
-        const { resolvedPath, sessionCwd } = resolveCallerPath(ctx, output)
-        // complete receive after only then write file, transfer failed cannot by mistakenly report is write failed or override already has deliver file.
-        let buffer: Buffer
-        try {
-          buffer = Buffer.from(await response.arrayBuffer())
-        } catch (err) {
-          throw new CliError(
-            `download artifact content failed (${err instanceof Error ? err.message : String(err)})${pathDiagLines(output, resolvedPath, ctx, sessionCwd)}`,
-            'download_failed',
-            1,
-            pathDetails(output, resolvedPath, ctx, sessionCwd),
-          )
-        }
-        try {
-          await fsp.writeFile(resolvedPath, buffer)
-        } catch (err) {
-          throw new CliError(
-            `write artifact file failed (${err instanceof Error ? err.message : String(err)})${pathDiagLines(output, resolvedPath, ctx, sessionCwd)}`,
-            'write_failed',
-            1,
-            pathDetails(output, resolvedPath, ctx, sessionCwd),
-          )
-        }
-        if (ctx.json) printValue(ctx.io, { written: resolvedPath, bytes: buffer.byteLength }, true)
-        else ctx.io.out(`already write ${resolvedPath}(${buffer.byteLength} byte)\n`)
+        await writeDownloadedOutput(ctx, response, output, 'artifact')
         return
       }
       if (!isText) {

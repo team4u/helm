@@ -11,7 +11,7 @@ import type { ArtifactMetadata } from '@helm/protocol'
 import { realpath as nodeFsRealpath, readFile as nodeFsReadFile } from 'node:fs/promises'
 import { join as joinPath, sep as PATH_SEP } from 'node:path'
 import { MAX_ARTIFACT_BYTES } from '../services/artifacts.js'
-import { errorResponse, jsonOk, readBinaryBodyWithLimit, readJsonBody, type JsonRedactor } from './http-utils.js'
+import { buildContentDisposition, errorResponse, jsonOk, readBinaryBodyWithLimit, readJsonBody, type JsonRedactor } from './http-utils.js'
 import { decodeSegment } from './route-match.js'
 import type { KernelRuntimeLike } from './contracts.js'
 import { requireIdParam, ValidationError } from './validate.js'
@@ -40,11 +40,8 @@ export async function handleArtifactsDomain(
       'content-type': metadata.mimeType,
       'content-length': String(buffer.byteLength),
       'cache-control': 'private, max-age=31536000, immutable',
+      'content-disposition': buildContentDisposition(metadata.name, inline),
     }
-    const disposition = inline ? 'inline' : 'attachment'
-    const fallbackName = metadata.name.replace(/[^\x20-\x7e]|["\\]/g, '_')
-    const encodedName = encodeURIComponent(metadata.name).replace(/[!'()*]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`)
-    headers['content-disposition'] = `${disposition}; filename="${fallbackName}"; filename*=UTF-8''${encodedName}`
     // original byte direct pass (two enter system do not rotate string, does not JSON redaction buffer).
     return new Response(buffer as unknown as BodyInit, { headers })
   }

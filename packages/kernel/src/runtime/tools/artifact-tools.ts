@@ -58,14 +58,17 @@ export interface ArtifactReadHandle {
 /** single time read chunk large small (has boundary loop read, avoid once occupy 15 MiB buffer). */
 const ARTIFACT_READ_CHUNK_BYTES = 256 * 1024
 
-/** local open flag:O_RDONLY + platform support when O_NONBLOCK.stat preflight and open between store in
+/** local open flag:O_RDONLY + platform support when O_NONBLOCK (+ optional O_NOFOLLOW).stat preflight and open between store in
  *  race window (ordinary file by swap into FIFO/device file will make pure O_RDONLY  open unbounded block),
  *  O_NONBLOCK let open immediately return, by the same fd on fstat right threat reject;Windows
  *  libuv unsupported O_NONBLOCK, only use O_RDONLY(Windows without FIFO, risk side different). */
-function artifactOpenFlags(): number {
-  return process.platform === 'win32'
-    ? fsConstants.O_RDONLY
-    : fsConstants.O_RDONLY | (fsConstants as { O_NONBLOCK?: number }).O_NONBLOCK!
+export function artifactOpenFlags(opts?: { noFollow?: boolean }): number {
+  if (process.platform === 'win32') return fsConstants.O_RDONLY
+  return (
+    fsConstants.O_RDONLY |
+    (fsConstants as { O_NONBLOCK?: number }).O_NONBLOCK! |
+    (opts?.noFollow ? ((fsConstants as { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0) : 0)
+  )
 }
 
 /**
