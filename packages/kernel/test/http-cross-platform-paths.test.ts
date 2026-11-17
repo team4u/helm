@@ -1,16 +1,16 @@
 /**
- * across platform absolute path and through use runtime identifier boundary regression (HTTP + service layer).
+ * Boundary regressions for cross-platform absolute paths and generic runtime identifiers (HTTP + service layers).
  *
- * override:
- * 1. conversation init/patch  cwd:POSIX `/`,Windows symbol (`C:\\work` / `D:/repo`) and
- *    UNC(`\\\\srv\\share\\dir`) absolute path let through; symbol each other for (`C:relative`) and pure each other for
- *    path reject (align runtime/tools.ts isAbsoluteTargetPath semantics, kernel independent of
- *    Hub host platform rule decide remote/Windows target path shape);
- * 2. Profile runtime.workspace the same across platform absolute path validate (service layer validateProfileInput
- *    and HTTP parseProfileRuntime double boundary same rule);
- * 3. runtime.kind zero plugin enumeration hard encode: kernel only validate external runtime identifier symbol format
- *    (^[a-z][a-z0-9_-]{0,31}$), do not point name any plugin - -'herdr' / 'docker' etc.
- *    everything legal identifier let through, illegal format (large write, empty string, special character, over long) reject.
+ * Coverage:
+ * 1. conversation init/patch cwd: allows POSIX `/`, Windows drive paths (`C:\\work` / `D:/repo`), and
+ *    UNC paths (`\\\\srv\\share\\dir`); rejects drive-relative paths (`C:relative`) and pure relative
+ *    paths (aligned with runtime/tools.ts isAbsoluteTargetPath semantics so kernel handles remote/Windows
+ *    target path shapes independently of the Hub host OS);
+ * 2. Profile runtime.workspace uses identical cross-platform absolute path validation (enforced consistently
+ *    at both service layer validateProfileInput and HTTP layer parseProfileRuntime);
+ * 3. runtime.kind has zero hardcoded plugin enums: kernel only validates external runtime identifier format
+ *    (^[a-z][a-z0-9_-]{0,31}$) without special-casing plugin names -- valid identifiers like 'herdr' /
+ *    'docker' pass, while invalid formats (uppercase, empty, special chars, oversized) reject.
  */
 
 import { strict as assert } from 'node:assert'
@@ -40,53 +40,53 @@ after(async () => {
 })
 
 // ---------------------------------------------------------------------------
-// 1. conversation cwd across platform absolute path (parseConversationInit / parseConversationPatch)
+// 1. Conversation cwd cross-platform absolute paths (parseConversationInit / parseConversationPatch)
 // ---------------------------------------------------------------------------
 
-describe('conversation cwd across platform absolute path validate', { timeout: 60_000 }, () => {
+describe('conversation cwd cross-platform absolute path validation', { timeout: 60_000 }, () => {
   const valid: Array<[string, string]> = [
-    ['POSIX ', '/'],
+    ['POSIX root', '/'],
     ['POSIX absolute', '/srv/work/helm'],
-    ['Windows symbol backslash', 'C:\\work\\helm'],
-    ['Windows symbol correct slash', 'D:/repo/project'],
-    ['small write symbol', 'c:\\Users\\dev'],
+    ['Windows drive backslash', 'C:\\work\\helm'],
+    ['Windows drive forward slash', 'D:/repo/project'],
+    ['lowercase drive letter', 'c:\\Users\\dev'],
     ['UNC path', '\\\\srv\\share\\dir'],
   ]
   const invalid: Array<[string, string]> = [
-    ['symbol each other for (without isolate)', 'C:relative'],
-    ['bare symbol', 'C:'],
+    ['drive-relative (missing separator)', 'C:relative'],
+    ['bare drive letter', 'C:'],
     ['pure relative path', 'work/dir'],
-    ['empty string (init semantics is not provide with outside illegal value)', ''],
-    ['single point each other for', './x'],
-    ['on jump each other for', '../x'],
+    ['empty string (invalid whenever explicitly provided outside init default)', ''],
+    ['dot-relative', './x'],
+    ['parent-relative', '../x'],
   ]
 
   for (const [why, cwd] of valid) {
-    it(`init cwd let through:${why} (${JSON.stringify(cwd)})`, timeout, () => {
+    it(`init cwd allows ${why} (${JSON.stringify(cwd)})`, timeout, () => {
       const init = parseConversationInit({ cwd })
       assert.equal(init.cwd, cwd)
     })
-    it(`patch cwd let through:${why} (${JSON.stringify(cwd)})`, timeout, () => {
+    it(`patch cwd allows ${why} (${JSON.stringify(cwd)})`, timeout, () => {
       const patch = parseConversationPatch({ cwd })
       assert.equal(patch.cwd, cwd)
     })
   }
 
   for (const [why, cwd] of invalid) {
-    it(`init cwd reject:${why} (${JSON.stringify(cwd)})`, timeout, () => {
+    it(`init cwd rejects ${why} (${JSON.stringify(cwd)})`, timeout, () => {
       assert.throws(() => parseConversationInit({ cwd }), ValidationError)
     })
-    it(`patch cwd reject:${why} (${JSON.stringify(cwd)})`, timeout, () => {
+    it(`patch cwd rejects ${why} (${JSON.stringify(cwd)})`, timeout, () => {
       assert.throws(() => parseConversationPatch({ cwd }), ValidationError)
     })
   }
 })
 
 // ---------------------------------------------------------------------------
-// 2. Profile runtime.workspace across platform absolute path (service layer + HTTP double boundary)
+// 2. Profile runtime.workspace cross-platform absolute paths (service + HTTP layers)
 // ---------------------------------------------------------------------------
 
-describe('Profile runtime.workspace across platform absolute path', { timeout: 60_000 }, () => {
+describe('Profile runtime.workspace cross-platform absolute paths', { timeout: 60_000 }, () => {
   const validWorkspaces = [
     '/workspace/proj',
     'C:\\build\\helm',
@@ -96,14 +96,14 @@ describe('Profile runtime.workspace across platform absolute path', { timeout: 6
   const invalidWorkspaces = ['relative/ws', 'C:relative', '.', './x']
 
   for (const workspace of validWorkspaces) {
-    it(`service layer let through ${JSON.stringify(workspace)}`, timeout, () => {
+    it(`service layer allows ${JSON.stringify(workspace)}`, timeout, () => {
       const profile = validateProfileInput({
         id: 'ws-ok',
         runtime: { kind: 'herdr', agent: 'agy', workspace },
       })
       assert.equal(profile.runtime?.workspace, workspace)
     })
-    it(`HTTP boundary let through ${JSON.stringify(workspace)}`, timeout, () => {
+    it(`HTTP layer allows ${JSON.stringify(workspace)}`, timeout, () => {
       const body = parseProfileBody(
         { id: 'ws-ok', runtime: { kind: 'herdr', agent: 'agy', workspace } },
         { requireId: true },
@@ -113,7 +113,7 @@ describe('Profile runtime.workspace across platform absolute path', { timeout: 6
   }
 
   for (const workspace of invalidWorkspaces) {
-    it(`service layer reject ${JSON.stringify(workspace)}`, timeout, () => {
+    it(`service layer rejects ${JSON.stringify(workspace)}`, timeout, () => {
       assert.throws(() =>
         validateProfileInput({
           id: 'ws-bad',
@@ -122,7 +122,7 @@ describe('Profile runtime.workspace across platform absolute path', { timeout: 6
         /absolute path/,
       )
     })
-    it(`HTTP boundary reject ${JSON.stringify(workspace)}`, timeout, () => {
+    it(`HTTP layer rejects ${JSON.stringify(workspace)}`, timeout, () => {
       assert.throws(
         () =>
           parseProfileBody(
@@ -136,13 +136,13 @@ describe('Profile runtime.workspace across platform absolute path', { timeout: 6
 })
 
 // ---------------------------------------------------------------------------
-// 3. runtime.kind zero plugin enumeration hard encode (kernel only validate identifier symbol format)
+// 3. Generic runtime.kind validation (zero hardcoded plugin enums in kernel)
 // ---------------------------------------------------------------------------
 
-describe('runtime.kind through use external runtime identifier validate (kernel zero plugin enumeration hard encode)', { timeout: 60_000 }, () => {
+describe('runtime.kind generic external runtime identifier validation (no hardcoded plugin enums)', { timeout: 60_000 }, () => {
   const validKinds = ['herdr', 'docker', 'a', 'dev-box_runtime2']
   const invalidKinds = [
-    // kernel do not hard encode 'herdr': test reject is illegal format itself, while non- unknown plugin name.
+    // Kernel never hardcodes 'herdr': rejected strings fail syntax rules rather than plugin allowlists.
     '',
     'Herdr',
     'HERDR',
@@ -153,14 +153,14 @@ describe('runtime.kind through use external runtime identifier validate (kernel 
   ]
 
   for (const kind of validKinds) {
-    it(`service layer let through identifier ${JSON.stringify(kind)}`, timeout, () => {
+    it(`service layer allows identifier ${JSON.stringify(kind)}`, timeout, () => {
       const profile = validateProfileInput({
         id: 'kind-ok',
         runtime: { kind, agent: 'agy' },
       })
       assert.equal(profile.runtime?.kind, kind)
     })
-    it(`HTTP boundary let through identifier ${JSON.stringify(kind)}`, timeout, () => {
+    it(`HTTP layer allows identifier ${JSON.stringify(kind)}`, timeout, () => {
       const body = parseProfileBody(
         { id: 'kind-ok', runtime: { kind, agent: 'agy' } },
         { requireId: true },
@@ -170,7 +170,7 @@ describe('runtime.kind through use external runtime identifier validate (kernel 
   }
 
   for (const kind of invalidKinds) {
-    it(`service layer reject illegal identifier ${JSON.stringify(kind)}`, timeout, () => {
+    it(`service layer rejects invalid identifier ${JSON.stringify(kind)}`, timeout, () => {
       assert.throws(
         () =>
           validateProfileInput({
@@ -180,7 +180,7 @@ describe('runtime.kind through use external runtime identifier validate (kernel 
         /external runtime identifier/,
       )
     })
-    it(`HTTP boundary reject illegal identifier ${JSON.stringify(kind)}`, timeout, () => {
+    it(`HTTP layer rejects invalid identifier ${JSON.stringify(kind)}`, timeout, () => {
       assert.throws(
         () =>
           parseProfileBody(
@@ -192,14 +192,14 @@ describe('runtime.kind through use external runtime identifier validate (kernel 
     })
   }
 
-  it('kind non- string (number/null) service layer reject', timeout, () => {
+  it('service layer rejects non-string kind (number/null)', timeout, () => {
     assert.throws(() =>
       validateProfileInput({ id: 'kind-bad', runtime: { kind: 42, agent: 'agy' } as never }),
     )
   })
 })
 
-test('validateProfileInput keep ProfileRuntime the rest field (agent/args/nodeId/env)', timeout, () => {
+test('validateProfileInput preserves remaining ProfileRuntime fields (agent/args/nodeId/env)', timeout, () => {
   const profile = validateProfileInput({
     id: 'full-rt',
     runtime: {

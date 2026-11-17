@@ -1,20 +1,21 @@
 /**
- * external plugin frontend subject to control npm dependency (clientDependencies) contract test:
- * - manifest parse:plugin.json clientDependencies and package.json helm.clientDependencies
- *   merge dedupe; illegal note symbol (each other for/absolute path,.. segment, non- string) explicit plugin_manifest_invalid;
- * - normalizeDefinition: manifest note symbol mapping is npmDependencies(parse = plugin itself directory),
- *   code inside declaration npmDependencies one rule strip (do not put open any parse);
+ * Contract tests for managed frontend npm dependencies (`clientDependencies`) in external plugins:
+ * - Manifest parsing: merges and deduplicates `plugin.json` clientDependencies and `package.json`
+ *   helm.clientDependencies; rejects invalid specifiers (relative/absolute paths, `..` segments,
+ *   non-strings) with plugin_manifest_invalid;
+ * - normalizeDefinition: maps manifest specifiers to npmDependencies (resolved from plugin root dir)
+ *   and strips any npmDependencies declared directly in code (blocking arbitrary resolution);
  * - assertExternalDefinition display-copy name: LocalizedText rule at the import
  *   boundary (pure-function drive, no fixture files — see test comment);
- * - plugin between dependency manifest (plugin.json dependencies / package.json helm.dependencies)
- *   merge enter define;package.json top-level dependencies(npm semantics) never mistakenly read;
- * - real compile chain: declaration note symbol can from plugin directory node_modules parse enter bundle;
- *   not declaration bare dependency explicit reject; already declaration but not installed to out can diagnose error;
- * - doctor all chain and produce the same compile opening path (client check carries subject to control npm roots);
- * - managed install:installRuntimeDeps patch install manifest declaration frontend dependency (--no-save, do not
- *   package.json), version takes precedence take package.json already declaration range.
+ * - Inter-plugin dependencies manifest (`plugin.json` dependencies / `package.json` helm.dependencies)
+ *   merges into definition; top-level npm `package.json` dependencies are never misread as plugin deps;
+ * - Real compilation pipeline: declared specifiers resolve into bundle from plugin node_modules;
+ *   undeclared bare imports reject explicitly; declared-but-uninstalled modules emit clear diagnostics;
+ * - doctor runs the same compiler resolution path end-to-end (client check carries managed npmRoots);
+ * - Managed install: installRuntimeDeps installs manifest frontend deps (`--no-save` without
+ *   modifying package.json), taking declared version ranges from package.json first.
  *
- * runner: tsx --test; each items explicit timeout: 60_000 guard against deadlock.
+ * Runner: tsx --test; every test specifies timeout: 60_000 against deadlocks.
  */
 import test, { beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
@@ -49,7 +50,7 @@ function writeJson(path: string, value: unknown): void {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, 'utf8')
 }
 
-/** install match a carries frontend dependency real external plugin directory (name control directory name, convenient at many directory mutual do not interference). */
+/** Scaffolds a realistic external plugin directory with frontend dependencies (unique dir name keeps parallel fixtures isolated). */
 function makePluginDir(options: { name?: string; clientDeps?: string[]; installLib?: boolean } = {}): string {
   const dir = join(workDir, options.name ?? 'chart-plugin')
   mkdirSync(join(dir, 'client'), { recursive: true })
@@ -68,7 +69,7 @@ function makePluginDir(options: { name?: string; clientDeps?: string[]; installL
   definePlugin(ctx) {
     ctx.ui.workbenchPanel({
       id: 'chart-panel',
-      label: 'diagram table',
+      label: 'Chart Panel',
       client: { module: 'index.tsx', export: 'ChartPanel' },
     })
   },
@@ -89,7 +90,7 @@ export function ChartPanel() {
   return dir
 }
 
-/** in plugin directory inside install false npm package fake-chart-lib(ESM entry). */
+/** Installs fake npm package `fake-chart-lib` (ESM entry) inside the plugin's node_modules. */
 function installFakeLib(dir: string): void {
   const libDir = join(dir, 'node_modules', 'fake-chart-lib')
   mkdirSync(libDir, { recursive: true })
@@ -109,7 +110,7 @@ function installFakeLib(dir: string): void {
 
 async function importNormalized(dir: string) {
   const entry = await resolvePluginEntry(dir)
-  assert.ok(entry, 'entry should can parse')
+  assert.ok(entry, 'plugin entry should resolve')
   return normalizeDefinition(await importPluginDefinition(dir, entry), dir)
 }
 
@@ -120,16 +121,16 @@ function throwsCode(fn: () => unknown, code: string): HelmError {
   } catch (err) {
     caught = err
   }
-  assert.ok(caught instanceof HelmError, `expectation HelmError, actual:${String(caught)}`)
+  assert.ok(caught instanceof HelmError, `expected HelmError, got ${String(caught)}`)
   assert.equal(caught.code, code)
   return caught
 }
 
 // ---------------------------------------------------------------------------
-// manifest parse and archive one
+// Manifest parsing and normalization
 // ---------------------------------------------------------------------------
 
-test('plugin.json and package.json helm.clientDependencies merge dedupe; illegal note symbol explicit reject', { timeout: 60_000 }, async () => {
+test('plugin.json and package.json helm.clientDependencies merge and deduplicate; invalid specifiers reject explicitly', { timeout: 60_000 }, async () => {
   const dir = makePluginDir({ clientDeps: ['fake-chart-lib'] })
   writeJson(join(dir, 'package.json'), {
     name: 'chart-plugin-pkg',
@@ -150,12 +151,12 @@ test('plugin.json and package.json helm.clientDependencies merge dedupe; illegal
   throwsCode(() => readHelmClientDependencies(badName), 'plugin_manifest_invalid')
 })
 
-test('normalizeDefinition: manifest note symbol mapping npmDependencies(parse = plugin directory), code inside declaration strip', { timeout: 60_000 }, async () => {
+test('normalizeDefinition maps manifest specifiers to npmDependencies (plugin dir) and strips code-level declarations', { timeout: 60_000 }, async () => {
   const dir = makePluginDir({ clientDeps: ['fake-chart-lib'] })
   const entry = await resolvePluginEntry(dir)
   assert.ok(entry)
   const raw = await importPluginDefinition(dir, entry)
-  // code inside malicious/self carries npmDependencies(points to any) must by strip.
+  // Code-injected/self-declared npmDependencies pointing elsewhere must be stripped.
   const withCodeDeps = { ...raw, npmDependencies: { react: '/usr/share/evil' } }
   const normalized = normalizeDefinition(withCodeDeps, dir)
   assert.deepEqual(normalized.npmDependencies, { 'fake-chart-lib': dir })
@@ -167,7 +168,7 @@ test('normalizeDefinition: manifest note symbol mapping npmDependencies(parse = 
   )
 })
 
-test('plugin between dependency: manifest declaration merge enter define;package.json top-level dependencies do not mistakenly read', { timeout: 60_000 }, async () => {
+test('inter-plugin dependencies: manifest declarations merge into definition; top-level package.json dependencies are ignored', { timeout: 60_000 }, async () => {
   const dir = makePluginDir()
   writeJson(join(dir, 'package.json'), {
     name: 'chart-plugin-pkg',
@@ -175,10 +176,10 @@ test('plugin between dependency: manifest declaration merge enter define;package
     helm: { dependencies: ['builtin:profile', 'another-plugin'] },
   })
   const normalized = await importNormalized(dir)
-  // npm semantics top-level dependencies never enter plugin dependency;helm.dependencies enter.
+  // npm top-level dependencies must never enter plugin dependencies; helm.dependencies does.
   assert.deepEqual(normalized.dependencies, ['builtin:profile', 'another-plugin'])
 
-  // plugin.json dependencies same parse, and and code declaration merge dedupe.
+  // plugin.json dependencies parses identically and deduplicates when merged with code declarations.
   writeJson(join(dir, 'plugin.json'), {
     id: 'chart-plugin',
     main: 'index.ts',
@@ -191,7 +192,7 @@ test('plugin between dependency: manifest declaration merge enter define;package
   const merged = normalizeDefinition({ ...raw2, dependencies: ['dep-a', 'code-dep'] }, dir)
   assert.deepEqual(merged.dependencies, ['dep-a', 'code-dep', 'dep-b', 'builtin:profile', 'another-plugin'])
 
-  // illegal plugin ID(such as npm version note symbol) in manifest read where explicit reject, not silently ignore.
+  // Invalid plugin ID (e.g. npm version specifiers) rejects cleanly on manifest read instead of ignoring silently.
   writeJson(join(dir, 'plugin.json'), {
     id: 'chart-plugin',
     main: 'index.ts',
@@ -209,11 +210,11 @@ test('assertExternalDefinition: display-copy name follows the LocalizedText rule
   // collide), so shape validation is asserted directly without fixture files.
   const base = { id: 'chart-plugin', definePlugin: () => {} };
 
-  // optional: omitting name keeps the minimal definition valid (same right as builtin plugins)
+  // Optional: omitting name keeps the minimal definition valid (same right as builtin plugins)
   const unnamed = assertExternalDefinition(base, '/ws/chart-plugin')
   assert.equal('name' in unnamed, false)
 
-  // valid display copy passes through raw: plain string and supported-locale map
+  // Valid display copy passes through raw: plain string and supported-locale map
   assert.deepEqual(
     assertExternalDefinition({ ...base, name: 'Chart' }, '/ws/chart-plugin').name,
     'Chart',
@@ -223,7 +224,7 @@ test('assertExternalDefinition: display-copy name follows the LocalizedText rule
     { en: 'Chart', 'zh-CN': '图表' },
   )
 
-  // invalid display copy rejected at the import boundary with the shared rule
+  // Invalid display copy rejected at the import boundary with the shared rule
   for (const value of ['', '   ', 42, true, null, [], {}, { fr: 'x' }, { 'zh-cn': 'x' }, { en: 1 }, { en: '' }, { en: 'Hi', 'zh-CN': ' ' }]) {
     assert.throws(
       () => assertExternalDefinition({ ...base, name: value }, '/ws/chart-plugin'),
@@ -237,10 +238,10 @@ test('assertExternalDefinition: display-copy name follows the LocalizedText rule
 })
 
 // ---------------------------------------------------------------------------
-// real compile chain
+// Real compile pipeline
 // ---------------------------------------------------------------------------
 
-test('compile chain: declaration note symbol from plugin directory node_modules parse enter bundle; not declaration reject; not installed can diagnose', { timeout: 60_000 }, async () => {
+test('compile pipeline: bundles declared specifiers from plugin node_modules; rejects undeclared imports; diagnoses uninstalled', { timeout: 60_000 }, async () => {
   const dir = makePluginDir({ clientDeps: ['fake-chart-lib'] })
   const normalized = await importNormalized(dir)
   const npmRoots = clientNpmRootsOf(normalized.npmDependencies)
@@ -257,14 +258,14 @@ test('compile chain: declaration note symbol from plugin directory node_modules 
   assert.ok(compiled.code.includes('fake-chart:'))
   assert.ok(compiled.exports.includes('ChartPanel'))
 
-  // not declaration bare dependency (remove roots) explicit reject.
+  // Undeclared bare dependency (roots omitted) rejects explicitly.
   await assert.rejects(
     compilePluginClientModule('chart-plugin', normalized.clientRoot!, 'index.tsx', join(workDir, 'cache2')),
     (err: unknown) =>
       err instanceof HelmError && err.code === 'client_compile_failed' && err.message.includes('reject bare dependency'),
   )
 
-  // already declaration but not installed: error explicit points to cannot parse/not installed, do not mistakenly lead is not declaration.
+  // Declared yet uninstalled: diagnostic points clearly to resolution/install failure rather than misreporting as undeclared.
   const noLibDir = makePluginDir({ name: 'chart-plugin-missing-lib', clientDeps: ['fake-chart-lib'], installLib: false })
   const noLibNormalized = await importNormalized(noLibDir)
   await assert.rejects(
@@ -283,7 +284,7 @@ test('compile chain: declaration note symbol from plugin directory node_modules 
   )
 })
 
-test('disk cache across memory proxy boundary re- use, and frontend dependency declaration change make old bundle expires', { timeout: 60_000 }, async () => {
+test('disk cache reuses across memory isolation boundary and invalidates stale bundles when client deps change', { timeout: 60_000 }, async () => {
   const dir = makePluginDir({ clientDeps: ['fake-chart-lib'] })
   const normalized = await importNormalized(dir)
   const roots = clientNpmRootsOf(normalized.npmDependencies)
@@ -319,13 +320,13 @@ test('disk cache across memory proxy boundary re- use, and frontend dependency d
       err instanceof HelmError &&
       err.code === 'client_compile_failed' &&
       err.message.includes('reject bare dependency'),
-    'undo clientDependencies declaration must not back put old disk bundle',
+    'removing clientDependencies declaration must not fall back to stale disk cache bundle',
   )
 })
 
-test('doctor all chain and produce the same compile opening path: dependency ready ok, missing when client check structure failed', { timeout: 60_000 }, async () => {
+test('doctor uses production compiler path end-to-end: passes when ready, fails structurally on client check when missing', { timeout: 60_000 }, async () => {
   const okDir = makePluginDir({ name: 'chart-plugin-ok', clientDeps: ['fake-chart-lib'] })
-  await importNormalized(okDir) // warm up module cache (doctor use new proxy boundary import, mutual does not affect)
+  await importNormalized(okDir) // warm module cache (doctor uses isolated loader, mutually independent)
   const report = await doctorPluginDir(okDir, { buildProvider: createPluginBuildProvider() })
   assert.equal(report.ok, true, JSON.stringify(report.checks, null, 2))
   assert.equal(report.pluginId, 'chart-plugin')
@@ -339,7 +340,7 @@ test('doctor all chain and produce the same compile opening path: dependency rea
 })
 
 // ---------------------------------------------------------------------------
-// managed install: frontend dependency patch install
+// Managed install: installing declared frontend deps
 // ---------------------------------------------------------------------------
 
 interface NpmCall {
@@ -348,7 +349,7 @@ interface NpmCall {
   cwd: string
 }
 
-test('managed install patch install manifest frontend dependency:--no-save, version take already declaration range; without declaration when along use original command', { timeout: 60_000 }, async (t) => {
+test('managed install installs declared frontend deps with --no-save using package.json ranges; preserves default cmd otherwise', { timeout: 60_000 }, async (t) => {
   const calls: NpmCall[] = []
   const runner: PackageRunner = async (cmd, args, opts) => {
     calls.push({ cmd, args, cwd: opts.cwd })
@@ -398,13 +399,13 @@ test('managed install patch install manifest frontend dependency:--no-save, vers
   const result = await manager.install(srcDir)
   assert.equal(result.record.pluginId, 'managed-client-dep')
   const installCall = calls.find((c) => c.args[0] === 'install')
-  assert.ok(installCall, 'should has npm install invoke')
-  assert.ok(installCall.args.includes('--no-save'), 'frontend dependency patch install must not change write package.json')
-  assert.ok(installCall.args.includes('client-chart@^4.2.0'), 'version take package.json already declaration range')
-  assert.ok(installCall.args.includes('client-extra'), 'sub- path note symbol by package name patch install, does not sub- path when npm package name')
+  assert.ok(installCall, 'should invoke npm install')
+  assert.ok(installCall.args.includes('--no-save'), 'frontend dependency install must not mutate package.json')
+  assert.ok(installCall.args.includes('client-chart@^4.2.0'), 'version range prefers declaration from package.json')
+  assert.ok(installCall.args.includes('client-extra'), 'subpath specifier installs by package name rather than subpath string')
 })
 
-test('without frontend dependency declaration when install command keep original (--omit=dev, without --no-save/note symbol)', { timeout: 60_000 }, async (t) => {
+test('without frontend dependency declaration, install keeps original command (--omit=dev, no --no-save/specifiers)', { timeout: 60_000 }, async (t) => {
   const calls: NpmCall[] = []
   const runner: PackageRunner = async (cmd, args, opts) => {
     calls.push({ cmd, args, cwd: opts.cwd })

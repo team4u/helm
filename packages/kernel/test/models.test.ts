@@ -1,14 +1,14 @@
 /**
- * model access test: local HTTP fake OpenAI/Anthropic compatibility service catch real pi-ai SDK
- * out request (explicit is not outside network model), verify:
- * - baseURL / path / bearer / x-api-key / model id group install correct;
- * - credential inject key takes precedence at environment variable, environment variable is legal fall back;
- * - missing key explicit unavailable (checkAuth undefined / streaming error), without fallback false answer;
- * - checkAuth is SDK real semantics (AuthCheck | undefined), does not Boolean(source) conjecture;
- * - listModelCatalog do not swallow read/protocol error (without credentials unavailable is legal state, error must throw).
+ * Model integration tests: local fake HTTP OpenAI/Anthropic-compatible servers intercept real pi-ai SDK
+ * outbound requests (explicitly avoiding external network models), verifying:
+ * - baseURL / path / bearer / x-api-key / model ID assembly is correct;
+ * - credential-injected keys override env vars while env vars remain valid fallbacks;
+ * - missing keys are explicitly unavailable (checkAuth undefined / stream error) with no fake fallback answer;
+ * - checkAuth reflects real SDK semantics (AuthCheck | undefined), never guessing with Boolean(source);
+ * - listModelCatalog never swallows read/protocol errors (missing credentials is a valid state; real errors throw).
  *
- * credentials all use explicit fixture, do not read real environment variable; related env in beforeEach settings,
- * afterEach restore delete.
+ * Credentials always use explicit fixtures without reading real env vars; relevant env vars are cleared
+ * in beforeEach and restored in after.
  */
 
 import assert from 'node:assert/strict'
@@ -38,10 +38,10 @@ import { createFileModelsStore } from '../src/runtime/models-store.js'
 import { HelmError } from '@helm/protocol'
 import { useTempDir } from './helpers.js'
 
-/** single catch to request. */
+/** Single captured request. */
 interface CapturedRequest {
   method: string
-  /** complete path (contains query). */
+  /** Full path including query string. */
   path: string
   headers: Record<string, string | string[] | undefined>
   body: unknown
@@ -50,7 +50,7 @@ interface CapturedRequest {
 const OPENAI_FIXTURE_KEY = 'fixture-openai-key-000'
 const ANTHROPIC_FIXTURE_KEY = 'fixture-anthropic-key-000'
 
-/** through use SSE / JSON fake service: record request, by protocol back put legal response. */
+/** Generic SSE / JSON fake server: records requests and responds per protocol. */
 class FakeGateway {
   readonly requests: CapturedRequest[] = []
   private readonly server: Server
@@ -74,7 +74,7 @@ class FakeGateway {
     else this.replyAnthropic(res)
   }
 
-  /** OpenAI chat.completions streaming response: two content incremental + finish + usage. */
+  /** OpenAI chat.completions streaming response: two text deltas + stop + usage. */
   private replyOpenAi(res: ServerResponse): void {
     res.writeHead(200, { 'content-type': 'text/event-stream' })
     const chunks = [
@@ -88,7 +88,7 @@ class FakeGateway {
     res.end()
   }
 
-  /** Anthropic messages SSE:message_start → content_block_start → delta → stop → message_delta/stop. */
+  /** Anthropic messages SSE: message_start -> content_block_start -> delta -> stop -> message_delta/stop. */
   private replyAnthropic(res: ServerResponse): void {
     res.writeHead(200, { 'content-type': 'text/event-stream' })
     const events = [
@@ -106,7 +106,7 @@ class FakeGateway {
   }
 
   get url(): string {
-    assert.ok(this.baseUrl !== '', 'fake gateway not start')
+    assert.ok(this.baseUrl !== '', 'fake gateway not started')
     return this.baseUrl
   }
 
@@ -124,7 +124,7 @@ class FakeGateway {
 
   last(): CapturedRequest {
     const req = this.requests[this.requests.length - 1]
-    assert.ok(req, 'fake gateway not received request')
+    assert.ok(req, 'fake gateway received no request')
     return req
   }
 
@@ -188,7 +188,7 @@ function anthropicCompatConfig(baseUrl: string): ProviderConfig {
   }
 }
 
-/** collect streaming event to done/error. */
+/** Collects stream events until done or error. */
 async function drainStream(stream: AsyncIterable<unknown>): Promise<{ done: boolean; error: boolean; events: unknown[] }> {
   const events: unknown[] = []
   let done = false
@@ -203,29 +203,29 @@ async function drainStream(stream: AsyncIterable<unknown>): Promise<{ done: bool
 }
 
 // ---------------------------------------------------------------------------
-// compatibility gateway: real SDK request group install (local fake HTTP, explicit is not outside network model)
+// Compatible gateways: real SDK request assembly (local fake HTTP, explicitly not external models)
 // ---------------------------------------------------------------------------
 
-describe('compatibility gateway (openai protocol)', { timeout: 60_000 }, () => {
-  test('static model window explicit mark record unknown (helmContextWindowKnown via setProvider/getModel keep)', { timeout: 60_000 }, () => {
+describe('compatible gateway (openai protocol)', { timeout: 60_000 }, () => {
+  test('static model window is explicitly marked unknown (helmContextWindowKnown preserved across setProvider/getModel)', { timeout: 60_000 }, () => {
     const models = buildModels({
       providers: [openaiCompatConfig('http://127.0.0.1:9/v1')],
       apiKeys: () => ({}),
     })
     const model = models.getModel('gw-openai', 'gw-openai-model')
-    assert.ok(model, 'compat model should register to directory')
-    // request contract default still in (send request need to), but must not when act real known window.
+    assert.ok(model, 'compat model should be registered in catalog')
+    // Request schema default stays present (needed to send requests), yet is not treated as a real known window.
     assert.equal(model.contextWindow, 128_000)
-    assert.equal((model as typeof model & HelmModelSourceMeta).helmContextWindowKnown, false, 'compat static model must carry unknown mark record')
-    assert.equal(knownContextWindowOf(model), undefined, 'known window parse must omit static default')
-    // inside placement provider model default treated as known: window is policy expand data.
+    assert.equal((model as typeof model & HelmModelSourceMeta).helmContextWindowKnown, false, 'compat static model must carry unknown marker')
+    assert.equal(knownContextWindowOf(model), undefined, 'known-window extraction must omit static default')
+    // Built-in provider models are treated as known: windows come from curated data.
     const builtin = models.getModels().find((entry) => entry.contextWindow > 0)
-    assert.ok(builtin, 'inside placement provider directory should store in carries window model')
-    assert.equal(knownContextWindowOf(builtin), builtin.contextWindow, 'inside placement model window such as known')
+    assert.ok(builtin, 'built-in provider catalog should contain models with contextWindow')
+    assert.equal(knownContextWindowOf(builtin), builtin.contextWindow, 'built-in model window should be recognized as known')
     assert.equal(knownContextWindowOf(undefined), undefined)
   })
 
-  test('listModelCatalog only throw shadow real known window: static default/non- correct/non- finite one rule omit', { timeout: 60_000 }, async () => {
+  test('listModelCatalog projects only real known windows: omits static default / non-positive / non-finite', { timeout: 60_000 }, async () => {
     const models = createModels()
     const base = {
       name: 'w',
@@ -237,8 +237,8 @@ describe('compatibility gateway (openai protocol)', { timeout: 60_000 }, () => {
       reasoning: false,
       maxTokens: 4_096,
     }
-    // form align Magpie directory artifact (toPiModel): known window without mark record, unknown carry
-    // helmContextWindowKnown:false + keep guard default 128k.
+    // Format matches Magpie catalog output (toPiModel): known window has no marker; unknown carries
+    // helmContextWindowKnown: false + defensive 128k default.
     const list = [
       { ...base, id: 'known', contextWindow: 400_000 },
       { ...base, id: 'static-default', contextWindow: 128_000, helmContextWindowKnown: false },
@@ -257,27 +257,27 @@ describe('compatibility gateway (openai protocol)', { timeout: 60_000 }, () => {
 
     const catalog = await listModelCatalog(models)
     const byId = new Map(catalog.models.map((entry) => [entry.modelId, entry]))
-    assert.equal(byId.get('known')!.contextWindow, 400_000, 'real known window such as throw shadow')
-    assert.equal('contextWindow' in (byId.get('static-default') ?? {}), false, 'static default window must omit')
-    assert.equal('contextWindow' in (byId.get('infinite') ?? {}), false, 'non- finite window must omit')
-    assert.equal('contextWindow' in (byId.get('zero') ?? {}), false, 'non- correct window must omit')
-    assert.equal(knownContextWindowOf(list[2] as never), undefined, 'Infinity must not pass-through')
+    assert.equal(byId.get('known')!.contextWindow, 400_000, 'real known window should be projected as-is')
+    assert.equal('contextWindow' in (byId.get('static-default') ?? {}), false, 'static default window must be omitted')
+    assert.equal('contextWindow' in (byId.get('infinite') ?? {}), false, 'non-finite window must be omitted')
+    assert.equal('contextWindow' in (byId.get('zero') ?? {}), false, 'non-positive window must be omitted')
+    assert.equal(knownContextWindowOf(list[2] as never), undefined, 'Infinity must not pass through')
   })
 
-  test('streamSimple group install baseURL/path/bearer/model id and receives real streaming answer', { timeout: 60_000 }, async () => {
+  test('streamSimple assembles baseURL/path/bearer/modelId and receives live streaming response', { timeout: 60_000 }, async () => {
     const models = buildModels({
       providers: [openaiCompatConfig(`${openaiGateway.url}/v1`)],
       apiKeys: () => ({ 'gw-openai': 'fixture-gw-key-111' }),
     })
     const model = models.getModel('gw-openai', 'gw-openai-model')
-    assert.ok(model, 'compat model should register to directory')
+    assert.ok(model, 'compat model should be registered in catalog')
     assert.equal(model.provider, 'gw-openai')
     assert.equal(model.baseUrl, `${openaiGateway.url}/v1`)
 
     const result = await drainStream(
       models.streamSimple(model, { messages: [{ role: 'user', content: 'hi', timestamp: Date.now() }] }),
     )
-    assert.equal(result.error, false, 'fake gateway back put legal stream, must not fails')
+    assert.equal(result.error, false, 'fake gateway returns a valid stream and must not fail')
     assert.equal(result.done, true)
 
     const req = openaiGateway.last()
@@ -287,7 +287,7 @@ describe('compatibility gateway (openai protocol)', { timeout: 60_000 }, () => {
     assert.equal((req.body as { model?: string }).model, 'gw-openai-model')
   })
 
-  test('checkAuth and getAuth reverse reflect inject credentials (SDK real semantics)', { timeout: 60_000 }, async () => {
+  test('checkAuth and getAuth reflect injected credentials (real SDK semantics)', { timeout: 60_000 }, async () => {
     const models = buildModels({
       providers: [openaiCompatConfig(`${openaiGateway.url}/v1`)],
       apiKeys: () => ({ 'gw-openai': 'fixture-gw-key-111' }),
@@ -296,7 +296,7 @@ describe('compatibility gateway (openai protocol)', { timeout: 60_000 }, () => {
     assert.ok(auth)
     assert.equal(auth.auth.apiKey, 'fixture-gw-key-111')
     const check = await models.checkAuth('gw-openai')
-    assert.ok(check, 'already inject key gateway checkAuth should has AuthCheck')
+    assert.ok(check, 'gateway with injected key should return AuthCheck')
     assert.equal(check.type, 'api_key')
 
     const bare = buildModels({
@@ -304,13 +304,13 @@ describe('compatibility gateway (openai protocol)', { timeout: 60_000 }, () => {
       apiKeys: () => ({}),
     })
     const bareAuth = await bare.getAuth('gw-openai')
-    assert.equal(bareAuth, undefined, 'without credentials is legal not config state (undefined)')
+    assert.equal(bareAuth, undefined, 'missing credentials is a valid unconfigured state (undefined)')
     assert.equal(await bare.checkAuth('gw-openai'), undefined)
   })
 })
 
-describe('compatibility gateway (anthropic protocol)', { timeout: 60_000 }, () => {
-  test('streamSimple group install /v1/messages path and x-api-key head', { timeout: 60_000 }, async () => {
+describe('compatible gateway (anthropic protocol)', { timeout: 60_000 }, () => {
+  test('streamSimple assembles /v1/messages path and x-api-key header', { timeout: 60_000 }, async () => {
     const models = buildModels({
       providers: [anthropicCompatConfig(anthropicGateway.url)],
       apiKeys: () => ({ 'gw-anthropic': 'fixture-gw-key-222' }),
@@ -329,17 +329,17 @@ describe('compatibility gateway (anthropic protocol)', { timeout: 60_000 }, () =
     assert.equal(req.path.split('?')[0], '/v1/messages')
     assert.equal(anthropicGateway.header(req, 'x-api-key'), 'fixture-gw-key-222')
     assert.equal((req.body as { model?: string }).model, 'gw-anthropic-model')
-    // max_tokens from compat default (explicit mark record keep guard config, non- probe value)
+    // max_tokens comes from compat defaults (explicitly marked defensive config, not fabricated)
     assert.equal(typeof (req.body as { max_tokens?: number }).max_tokens, 'number')
   })
 })
 
 // ---------------------------------------------------------------------------
-// official provider:SDK checkAuth semantics + credential takes precedence at env
+// Official providers: SDK checkAuth semantics + credentials override env vars
 // ---------------------------------------------------------------------------
 
-describe('PI all amount provider', { timeout: 60_000 }, () => {
-  test('directly register all inside placement provider, keep original generate model metadata and zero model provider', { timeout: 60_000 }, () => {
+describe('PI full provider suite', { timeout: 60_000 }, () => {
+  test('registers all built-in providers cleanly, preserving native metadata and zero-model providers', { timeout: 60_000 }, () => {
     const models = buildModels({ providers: [], apiKeys: () => ({}) })
     const native = builtinProviders()
     assert.deepEqual(models.getProviders().map((provider) => provider.id), native.map((provider) => provider.id))
@@ -350,12 +350,12 @@ describe('PI all amount provider', { timeout: 60_000 }, () => {
     assert.equal(summaries.length, native.length)
     assert.ok(summaries.some((provider) => provider.id === 'typesafe' && provider.modelCount === 0))
     assert.deepEqual(summaries.find((provider) => provider.id === 'openai-codex')?.authMethods.map((method) => method.type), ['oauth'])
-    // inside placement summary basis four fixed key;baseUrl is legal public field (deepseek etc. many count gateway all has);
-    // dynamic only truly implement refreshModels provider (radius) carry.
+    // Built-in summary has four base keys; baseUrl is a valid public field (shared by many gateways like deepseek);
+    // dynamic is set only for providers actually implementing refreshModels (radius).
     const radius = summaries.find((provider) => provider.id === 'radius')
     assert.ok(radius)
     assert.equal(radius.dynamic, true)
-    assert.equal(radius.baseUrl, undefined, 'radius without fixed gateway baseUrl, must not fabricate')
+    assert.equal(radius.baseUrl, undefined, 'radius has no fixed gateway baseUrl and must not fabricate one')
     assert.ok(
       summaries
         .filter((provider) => provider.id !== 'radius')
@@ -366,14 +366,14 @@ describe('PI all amount provider', { timeout: 60_000 }, () => {
     assert.equal('dynamic' in deepseek, false)
   })
 
-  test('non- OpenAI/Anthropic provider original generate key inject and do not fabricate OAuth-only  API Key', { timeout: 60_000 }, async () => {
+  test('injects keys for non-OpenAI/Anthropic native providers without inventing API Keys for OAuth-only ones', { timeout: 60_000 }, async () => {
     const models = buildModels({ providers: [], apiKeys: () => ({ deepseek: 'fixture-deepseek', 'openai-codex': 'fixture-not-oauth' }) })
     assert.equal((await models.getAuth('deepseek'))?.auth.apiKey, 'fixture-deepseek')
     assert.equal(models.getProvider('openai-codex')?.auth.apiKey, undefined)
     assert.ok(models.getProvider('openai-codex')?.auth.oauth)
   })
 
-  test('Cloudflare original generate config validate and recognize verify head convert cannot by through use Bearer override', { timeout: 60_000 }, async () => {
+  test('preserves Cloudflare native config validation and auth header conversion without raw Bearer override', { timeout: 60_000 }, async () => {
     const models = buildModels({ providers: [], apiKeys: () => ({ 'cloudflare-ai-gateway': 'fixture-cloudflare' }) })
     const apiKey = models.getProvider('cloudflare-ai-gateway')?.auth.apiKey
     assert.ok(apiKey)
@@ -387,7 +387,7 @@ describe('PI all amount provider', { timeout: 60_000 }, () => {
     assert.equal(auth?.env?.['CLOUDFLARE_ACCOUNT_ID'], 'fixture-account')
   })
 
-  test('self define gateway keep explicit override and deactivate semantics', { timeout: 60_000 }, () => {
+  test('custom gateways preserve explicit override and disablement semantics', { timeout: 60_000 }, () => {
     const override = { ...openaiCompatConfig('http://127.0.0.1/v1'), id: 'deepseek' }
     const enabled = buildModels({ providers: [override], apiKeys: () => ({}) })
     assert.deepEqual(enabled.getModels('deepseek').map((model) => model.id), ['gw-openai-model'])
@@ -395,7 +395,7 @@ describe('PI all amount provider', { timeout: 60_000 }, () => {
     assert.deepEqual(disabled.getModels('deepseek'), builtinProviders().find((provider) => provider.id === 'deepseek')!.getModels())
   })
 
-  test('extraProviders register runtime provider and without losing directory summary field', { timeout: 60_000 }, () => {
+  test('extraProviders registers runtime providers without dropping catalog summary fields', { timeout: 60_000 }, () => {
     const faux = fauxProvider({ provider: 'plugin-fx', models: [{ id: 'fx-model' }] })
     const models = buildModels({ providers: [], apiKeys: () => ({}), extraProviders: [faux.provider] })
     assert.ok(models.getProvider('plugin-fx'))
@@ -404,30 +404,30 @@ describe('PI all amount provider', { timeout: 60_000 }, () => {
     const fx = summaries.find((summary) => summary.id === 'plugin-fx')
     assert.ok(fx)
     assert.equal(fx.modelCount, 1)
-    // faux without refreshModels: must not fabricate dynamic mark record.
+    // faux lacks refreshModels: must not fabricate dynamic marker.
     assert.equal(fx.dynamic, undefined)
   })
 
-  test('listModelProviders attach carries dynamic/baseUrl/pluginId(by providerOwners)', { timeout: 60_000 }, () => {
+  test('listModelProviders attaches dynamic/baseUrl/pluginId (via providerOwners)', { timeout: 60_000 }, () => {
     const faux = fauxProvider({ provider: 'plugin-owned', models: [{ id: 'owned-model' }] })
     const models = buildModels({ providers: [], apiKeys: () => ({}), extraProviders: [faux.provider] })
     const owners = new Map([['plugin-owned', 'builtin:demo']])
     const owned = listModelProviders(models, owners).find((summary) => summary.id === 'plugin-owned')
     assert.equal(owned?.pluginId, 'builtin:demo')
-    // the same set do not pass owners: without pluginId field (do not fabricate ownership).
+    // Same collection without owners: pluginId is omitted (ownership is never fabricated).
     const anon = listModelProviders(models).find((summary) => summary.id === 'plugin-owned')
     assert.equal(anon?.pluginId, undefined)
-    // inside placement motion state provider (radius) mark record dynamic; without owners when do not carries pluginId, do not fabricate baseUrl.
+    // Built-in dynamic provider (radius) carries dynamic flag; omits pluginId without owners and avoids fabricating baseUrl.
     const radius = listModelProviders(models).find((summary) => summary.id === 'radius')
-    assert.ok(radius, 'inside placement radius provider should in directory in')
+    assert.ok(radius, 'built-in radius provider should appear in catalog')
     assert.equal(radius.dynamic, true)
     assert.equal(radius.baseUrl, undefined)
     assert.equal(radius.pluginId, undefined)
   })
 })
 
-describe('file edition motion state directory cache (models-store.json)', { timeout: 60_000 }, () => {
-  test('ENOENT return empty;write/update/delete persist and concurrency update do not lose write', { timeout: 60_000 }, async (t) => {
+describe('file-backed dynamic catalog cache (models-store.json)', { timeout: 60_000 }, () => {
+  test('ENOENT returns undefined; write/update/delete persist and concurrent updates never lose writes', { timeout: 60_000 }, async (t) => {
     const dataDir = useTempDir(t, 'helm-models-store-')
     const store = createFileModelsStore(dataDir)
     assert.equal(await store.read('p1'), undefined)
@@ -437,7 +437,7 @@ describe('file edition motion state directory cache (models-store.json)', { time
     assert.deepEqual(await store.read('p1'), { models: [], checkedAt: 111 })
     assert.deepEqual(await store.read('p2'), { models: [], checkedAt: 222, etag: '"v1"' })
 
-    // update:undefined do not change write; object write.
+    // update: undefined keeps existing entry; object updates it.
     await store.update('p1', async () => undefined)
     assert.deepEqual(await store.read('p1'), { models: [], checkedAt: 111 })
     await store.update('p1', async (current) => ({ ...current!, checkedAt: 333 }))
@@ -445,7 +445,7 @@ describe('file edition motion state directory cache (models-store.json)', { time
     await store.delete('p2')
     assert.equal(await store.read('p2'), undefined)
 
-    // concurrency update: two different provider also read change write, lock inside serial do not lose each other write.
+    // Concurrent updates: two different providers read-modify-write concurrently; lock serializes writes safely.
     await Promise.all([
       store.update('a', async () => ({ models: [], checkedAt: 1 })),
       store.update('b', async () => ({ models: [], checkedAt: 2 })),
@@ -453,7 +453,7 @@ describe('file edition motion state directory cache (models-store.json)', { time
     assert.equal((await store.read('a'))?.checkedAt, 1)
     assert.equal((await store.read('b'))?.checkedAt, 2)
 
-    // is 0600 and top-level is object (Windows without POSIX mode, skip pattern validate).
+    // Permissions are 0600 and top-level is an object (Windows lacks POSIX mode bits, skip check there).
     const raw = JSON.parse(await readFile(join(dataDir, 'models-store.json'), 'utf8')) as Record<string, unknown>
     assert.ok(typeof raw['p1'] === 'object')
     if (process.platform !== 'win32') {
@@ -463,7 +463,7 @@ describe('file edition motion state directory cache (models-store.json)', { time
     }
   })
 
-  test('corrupt file explicit throw models_store_corrupted, never static default when empty directory', { timeout: 60_000 }, async (t) => {
+  test('corrupt file explicitly throws models_store_corrupted rather than silently acting empty', { timeout: 60_000 }, async (t) => {
     const dataDir = useTempDir(t, 'helm-models-store-corrupt-')
     const path = join(dataDir, 'models-store.json')
     await writeFile(path, '{invalid-json')
@@ -488,17 +488,17 @@ describe('file edition motion state directory cache (models-store.json)', { time
 })
 
 describe('official provider auth', { timeout: 60_000 }, () => {
-  test('without credentials without environment variable:checkAuth undefined(legal unavailable, without fallback)', { timeout: 60_000 }, async () => {
+  test('no credentials and no env vars: checkAuth returns undefined (validly unavailable, no fallback)', { timeout: 60_000 }, async () => {
     const models = buildModels({ providers: [], apiKeys: () => ({}) })
     assert.equal(await models.checkAuth('openai'), undefined)
     assert.equal(await models.checkAuth('anthropic'), undefined)
     const catalog = await listModelCatalog(models)
     const official = catalog.models.filter((e: ModelCatalogEntry) => e.provider === 'openai' || e.provider === 'anthropic')
-    assert.ok(official.length > 0, 'official directory model still column out (contains unavailable items)')
+    assert.ok(official.length > 0, 'official catalog models are still listed (including unavailable entries)')
     assert.ok(official.every((e: ModelCatalogEntry) => !e.available))
   })
 
-  test('environment variable fall back: official provider original generate semantics', { timeout: 60_000 }, async () => {
+  test('env var fallback: official provider native semantics', { timeout: 60_000 }, async () => {
     process.env['OPENAI_API_KEY'] = OPENAI_FIXTURE_KEY
     const models = buildModels({ providers: [], apiKeys: () => ({}) })
     const auth = await models.getAuth('openai')
@@ -507,7 +507,7 @@ describe('official provider auth', { timeout: 60_000 }, () => {
     assert.equal(auth.source, 'OPENAI_API_KEY')
   })
 
-  test('credential inject key takes precedence at environment variable', { timeout: 60_000 }, async () => {
+  test('injected credential key overrides env var', { timeout: 60_000 }, async () => {
     process.env['OPENAI_API_KEY'] = 'env-should-lose'
     const models = buildModels({ providers: [], apiKeys: () => ({ openai: OPENAI_FIXTURE_KEY }) })
     const auth = await models.getAuth('openai')
@@ -516,38 +516,38 @@ describe('official provider auth', { timeout: 60_000 }, () => {
     assert.notEqual(auth.auth.apiKey, 'env-should-lose')
   })
 
-  test('inject key after oauth etc. other auth policy keep', { timeout: 60_000 }, async () => {
+  test('oauth and other auth strategies remain intact after key injection', { timeout: 60_000 }, async () => {
     const models = buildModels({ providers: [], apiKeys: () => ({ anthropic: ANTHROPIC_FIXTURE_KEY }) })
     const provider = models.getProvider('anthropic')
-    assert.ok(provider, 'anthropic provider should register')
-    assert.ok(provider.auth.oauth, 'official oauth policy must keep (do not because inject apiKey while lose)')
+    assert.ok(provider, 'anthropic provider should be registered')
+    assert.ok(provider.auth.oauth, 'official oauth strategy must be preserved (never lost when injecting apiKey)')
     const auth = await models.getAuth('anthropic')
     assert.ok(auth)
     assert.equal(auth.auth.apiKey, ANTHROPIC_FIXTURE_KEY)
   })
 
-  test('without credentials request model: stream with explicit error end, without fallback false answer', { timeout: 60_000 }, async () => {
+  test('requesting model without credentials terminates stream with explicit error, never fake answer', { timeout: 60_000 }, async () => {
     const models = buildModels({ providers: [], apiKeys: () => ({}) })
     const model = models.getModel('openai', 'gpt-5.2')
-    assert.ok(model, 'official directory in model should can parse')
+    assert.ok(model, 'model in official catalog should resolve')
     const result = await drainStream(
       models.streamSimple(model, { messages: [{ role: 'user', content: 'hi', timestamp: Date.now() }] }),
     )
-    assert.equal(result.done, false, 'without credentials never can succeeded answer')
-    assert.equal(result.error, true, 'must with explicit streaming error end')
+    assert.equal(result.done, false, 'request without credentials must never succeed')
+    assert.equal(result.error, true, 'must terminate with explicit stream error')
     const errorEvent = result.events.find((e) => (e as { type?: string }).type === 'error') as
       | { error?: { errorMessage?: string } }
       | undefined
-    assert.ok(errorEvent?.error?.errorMessage, 'error event should carries diagnose information')
+    assert.ok(errorEvent?.error?.errorMessage, 'error event should carry diagnostic details')
   })
 })
 
 // ---------------------------------------------------------------------------
-// model directory and error semantics
+// Model catalog and error semantics
 // ---------------------------------------------------------------------------
 
 describe('listModelCatalog error semantics', { timeout: 60_000 }, () => {
-  test('not config credentials gateway model available=false(legal state, do not throws)', { timeout: 60_000 }, async () => {
+  test('unconfigured gateway model reports available=false (valid state, does not throw)', { timeout: 60_000 }, async () => {
     const models = buildModels({
       providers: [openaiCompatConfig(`${openaiGateway.url}/v1`)],
       apiKeys: () => ({}),
@@ -559,15 +559,15 @@ describe('listModelCatalog error semantics', { timeout: 60_000 }, () => {
     assert.equal(entry.available, false)
   })
 
-  test('checkAuth throw read/protocol error must to upload broadcast, not silently available=false', { timeout: 60_000 }, async () => {
+  test('read/protocol error thrown by checkAuth must propagate upward instead of silently reporting available=false', { timeout: 60_000 }, async () => {
     const models = buildModels({
       providers: [openaiCompatConfig(`${openaiGateway.url}/v1`)],
       apiKeys: () => ({}),
     })
-    // directly inject a checkAuth throws provider verify pass broadcast semantics (protocol layer contract).
+    // Directly inject a provider whose checkAuth throws to verify propagation semantics (protocol layer contract).
     const provider = models.getProvider('gw-openai')
     assert.ok(provider)
-    assert.ok(provider.auth.apiKey, 'compat provider must has apiKey auth')
+    assert.ok(provider.auth.apiKey, 'compat provider must have apiKey auth')
     const brokenApiKey: ApiKeyAuth = {
       ...provider.auth.apiKey,
       name: 'broken',
@@ -588,16 +588,16 @@ describe('listModelCatalog error semantics', { timeout: 60_000 }, () => {
 })
 
 // ---------------------------------------------------------------------------
-// model reference parse
+// Model ref parsing
 // ---------------------------------------------------------------------------
 
-describe('model reference', { timeout: 60_000 }, () => {
-  test('parseModelRef split provider/model', { timeout: 60_000 }, () => {
+describe('model references', { timeout: 60_000 }, () => {
+  test('parseModelRef splits provider/model', { timeout: 60_000 }, () => {
     assert.deepEqual(parseModelRef('openai/gpt-5.2'), { provider: 'openai', modelId: 'gpt-5.2' })
     assert.deepEqual(parseModelRef('gw-x/model-with/slash'), { provider: 'gw-x', modelId: 'model-with/slash' })
   })
 
-  test('illegal reference and missing config explicit errors', { timeout: 60_000 }, () => {
+  test('invalid references and missing config error explicitly', { timeout: 60_000 }, () => {
     assert.throws(() => parseModelRef('noslash'), HelmError)
     assert.throws(() => parseModelRef('/leading'), HelmError)
     assert.throws(() => parseModelRef('trailing/'), HelmError)

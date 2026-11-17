@@ -1,11 +1,11 @@
 /**
- * RuntimeHostBackend:PluginHost host adapt construct work vendor (from KernelRuntime split out).
+ * RuntimeHostBackend: host adapter factory for `PluginHost` (extracted from `KernelRuntime`).
  *
- * responsibility:
- * -  KernelRuntime provide each items capability (profiles, skills, secrets, nodeIpc, conversations, asks, actions etc.)
- *   wrap is PluginHost which must strong type PluginHostBackend interface object;
- * - construct PluginSessionDocStore conversation shard durable layer;
- * - unify boundary error specification (such as normalizeProfileBoundaryError,FileNotFoundError -> 404 not_found).
+ * Responsibilities:
+ * - Wrap `KernelRuntime` capabilities (`profiles`, `skills`, `secrets`, `nodeIpc`, `conversations`,
+ *   `asks`, `actions`, etc.) into the strongly-typed `PluginHostBackend` interface required by `PluginHost`;
+ * - Construct the `PluginSessionDocStore` per-conversation durable persistence layer;
+ * - Normalize boundary errors consistently (e.g., `normalizeProfileBoundaryError`, `FileNotFoundError -> 404 not_found`).
  */
 
 import { HelmError } from '@helm/protocol'
@@ -20,26 +20,26 @@ import type { PluginHostBackend, PluginSessionDocStore } from '../plugins/index.
 import type { HelmStore } from './store.js'
 import type { KernelRuntime } from './runtime.js'
 
-/** profiles.get/directory boundary archive one: illegal id -> 400 validation_error; the rest error original on throw. */
+/** Boundary normalization for `profiles.get/directory`: invalid id -> `400 validation_error`; rethrows all other errors as-is. */
 export function normalizeProfileBoundaryError(id: string, err: unknown): unknown {
   try {
     assertProfileId(id)
     return err
   } catch {
-    return new HelmError('validation_error', `Profile id illegal:${String(id)}`, 400, { profileId: id })
+    return new HelmError('validation_error', `Invalid Profile ID: ${String(id)}`, 400, { profileId: id })
   }
 }
 
 /**
- * enable/deactivate after take plugin manifest: real lifecycle already in PluginHost complete, this in only do things back read;
- * operation succeeded but manifest missing belongs to host state inconsistent, such as errors do not virtual construct.
+ * Look up the plugin manifest after enable/disable: the real lifecycle step already completed inside `PluginHost`,
+ * so this only reads back the result; a missing manifest indicates inconsistent host state and fails loudly without fabricating one.
  */
 function requirePluginSummary(runtime: KernelRuntime, pluginId: string) {
   const summary = runtime.plugins.list().find((p) => p.id === pluginId)
   if (!summary) {
     throw new HelmError(
       'plugin_enable_failed',
-      `plugin ${pluginId} lifecycle operation after not in host manifest in discover the plugin (internal state inconsistent)`,
+      `Plugin '${pluginId}' not found in host manifest after lifecycle operation (inconsistent internal state)`,
       500,
       { pluginId },
     )
@@ -48,7 +48,7 @@ function requirePluginSummary(runtime: KernelRuntime, pluginId: string) {
 }
 
 /**
- * construct PluginHost which must host backend interface (PluginHostBackend).
+ * Construct the host backend interface required by `PluginHost` (`PluginHostBackend`).
  */
 export function createPluginHostBackend(runtime: KernelRuntime): PluginHostBackend {
   return {
@@ -64,7 +64,7 @@ export function createPluginHostBackend(runtime: KernelRuntime): PluginHostBacke
           return await runtime.profiles.getSystem(id)
         } catch (err) {
           if (err instanceof FileNotFoundError) {
-            throw new HelmError('not_found', `Profile '${id}'  SYSTEM.md missing`, 404, { profileId: id })
+            throw new HelmError('not_found', `SYSTEM.md not found for Profile '${id}'`, 404, { profileId: id })
           }
           throw err
         }
@@ -89,10 +89,10 @@ export function createPluginHostBackend(runtime: KernelRuntime): PluginHostBacke
     nodeIpc: {
       isOnline: (nodeId) => runtime.envFabric.isOnline(nodeId),
       getNodeHubUrl: (nodeId) => runtime.envFabric.getNodeHubUrl(nodeId),
-      // can message node platform (NodeRegistry register on report;local → process.platform):
-      // plugin by target node platform do cwd specification use (remote not registered / not on report = undefined,
-      // consumer do not guess do not change write). unify away EnvFabric.nodePlatformOf unique only read port,
-      // do not in this duplicate platform fact find logic.
+      // Authoritative node platform (reported on NodeRegistry registration; local -> process.platform):
+      // used by plugins to normalize cwd per target node platform (undefined when remote is unregistered/unreported;
+      // consumers must neither guess nor rewrite). Routed through the sole EnvFabric.nodePlatformOf read-only port
+      // rather than duplicating platform lookup logic here.
       nodePlatform: (nodeId) => runtime.envFabric.nodePlatformOf(nodeId),
       call: (nodeId, input, signal) => runtime.envFabric.ipcCall(nodeId, input, signal),
       subscribe: (nodeId, input, onLine, onClosed, signal) =>
@@ -101,9 +101,9 @@ export function createPluginHostBackend(runtime: KernelRuntime): PluginHostBacke
     nodeFetch: (nodeId) => runtime.envFabric.nodeFetch(nodeId),
     openTunnel: ((nodeId: string, target: { host?: string; port: number }, signal?: AbortSignal) =>
       runtime.envFabric.openTunnel(nodeId, target, signal)) as HelmHostOpenTunnelPort,
-    // host plugin governance port: directly delegate PluginHost since has public method (and HTTP manage side same chain:
-    // per-plugin lifecycle queue, in-flight task trace,locked/in-flight protect all re- use,
-    // does not introduce second set package manage).enable/disable after return most new manifest.
+    // Host plugin governance ports: delegate directly to PluginHost's public methods (sharing the same chain
+    // as HTTP management: per-plugin lifecycle queue, active-task tracking, locked/in-use protection, avoiding a
+    // second package management implementation). Returns the latest manifest after enable/disable.
     plugins: {
       doctorPlugin: (target) => runtime.plugins.doctorExternalPlugin(target),
       installPlugin: (source, options) => runtime.plugins.installPluginPackage(source, options),
@@ -173,7 +173,7 @@ export function createPluginHostBackend(runtime: KernelRuntime): PluginHostBacke
 }
 
 /**
- * construct global durable document store port (PluginHost docs and kernel metadata shared use).
+ * Construct the global durable document store port (shared by `PluginHost` docs and kernel metadata).
  */
 export function createGlobalDocumentStore(store: HelmStore): {
   get<T>(key: string, initial: T): T
@@ -198,7 +198,7 @@ export function createGlobalDocumentStore(store: HelmStore): {
 }
 
 /**
- * construct PluginHost which must conversation shard durable layer (PluginSessionDocStore).
+ * Construct the per-conversation durable storage layer required by `PluginHost` (`PluginSessionDocStore`).
  */
 export function createPluginSessionDocStore(store: HelmStore): PluginSessionDocStore {
   return {

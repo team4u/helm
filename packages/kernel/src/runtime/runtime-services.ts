@@ -1,10 +1,10 @@
 /**
- * RuntimeServices:KernelRuntime service dependency install match work vendor (from KernelRuntime split out).
+ * RuntimeServices: service dependency assembly factory for `KernelRuntime` (extracted from `KernelRuntime`).
  *
- * responsibility:
- * - concentrate install match and connect kernel internal each items sub- service;
- * - resolve service between mutual each other dependency and closed package connect line (toolDeps, tracker, conversations, hookBridge etc.);
- * - guarantee single to dependency and clear lifecycle, avoid in KernelRuntime construct in heap build 300+ row connect line code.
+ * Responsibilities:
+ * - Centrally instantiate and wire internal kernel sub-services;
+ * - Resolve mutual dependencies and closure wiring (`toolDeps`, `tracker`, `conversations`, `hookBridge`, etc.);
+ * - Maintain clear unidirectional ownership and lifecycles instead of piling 300+ lines of wiring in `KernelRuntime`'s constructor.
  */
 
 import type {
@@ -53,7 +53,7 @@ import type { KernelRuntime } from './runtime.js'
 import type { BootstrappedKernelContext } from './runtime-bootstrap.js'
 
 export interface RuntimeServicesInit extends BootstrappedKernelContext {
-  /** Hub platform fact inject (test use; default process.platform). */
+  /** Injected Hub platform fact (for tests; defaults to `process.platform`). */
   hubPlatform?: () => string | undefined
   defaultModel?: string
   cwd: string
@@ -61,9 +61,9 @@ export interface RuntimeServicesInit extends BootstrappedKernelContext {
   seedKeyCache: Record<string, string>
   autoResume: boolean
   externalModels?: unknown
-  /** together skill scan machine level sharing source (default defaultExternalSkillRoots()). */
+  /** Machine-level shared skill roots scanned together (defaults to `defaultExternalSkillRoots()`). */
   externalSkillRoots?: readonly string[]
-  /** plugin build port (KernelBootOptions.buildProvider pass-through;hub inject by default implement). */
+  /** Plugin build port (`KernelBootOptions.buildProvider` passthrough; Hub injects default implementation). */
   buildProvider?: PluginBuildProvider
   nodeUpgradeTimeoutMs: number
 }
@@ -112,7 +112,7 @@ export function assembleRuntimeServices(
   },
 ): AssembledRuntimeServices {
   const profilesSvc = new ProfileService(init.dataDir)
-  // produce kernel machine level sharing source add scan; explicit pass empty array can fully isolated (test).
+  // Scan machine-level shared skill roots alongside workspace skills; pass an empty array to isolate fully in tests.
   const skillsSvc = new SkillService(init.dataDir, {
     externalRoots: init.externalSkillRoots ?? defaultExternalSkillRoots(),
   })
@@ -163,15 +163,15 @@ export function assembleRuntimeServices(
     } else if (event.type === 'conversation.deleted' && 'conversationId' in event) {
       sessionDocStreams.closeForConversation(event.conversationId)
     } else if (event.type === 'models.changed' && 'payload' in event) {
-      // directory refresh/set rebuild after model window may change (unknown→known/count value change/provider disappear):
-      // set to force complete already observe/already cache conversation context use amount.tracker group install complete before startup phase
-      // event without from append complete, static default skip (at startup cache this is empty, first time wave take i.e. by new directory compute).
+      // Model windows may change after catalog refresh or rebuild (unknown -> known / value updated / provider gone):
+      // force-recompute cached context usage on already-observed conversations. Startup events emitted before
+      // tracker assembly are intentionally ignored (caches are empty at startup and compute lazily from the new catalog).
       const providers = (event as ModelsChangedEvent).payload.providers
       tracker?.onModelsChanged(Array.isArray(providers) ? providers : [])
     }
   })
 
-  // ---- model set register table ----
+  // ---- Model Registry ----
   const modelsRegistry = new ModelRegistry(
     {
       dataDir: init.dataDir,
@@ -195,7 +195,7 @@ export function assembleRuntimeServices(
   )
   Object.assign(modelsRegistry.apiKeyCache, init.seedKeyCache)
 
-  // ---- across platform node bottom seat (EnvFabric)----
+  // ---- Cross-platform node substrate (EnvFabric) ----
   const envFabric = createEnvFabric({
     hubPlatform: init.hubPlatform,
     authenticate: tokenAuthenticator((nodeId) => nodes?.nodeDigestOf(nodeId)),
@@ -204,7 +204,7 @@ export function assembleRuntimeServices(
       buildManagedEnv(toolDeps, cwd, conversationId, nodeId),
   })
 
-  // ---- tool dependency side ----
+  // ---- Tool dependency bundle ----
   const toolDeps: HelmToolDeps = {
     dataDir: init.dataDir,
     defaultCwd: init.cwd,
@@ -235,7 +235,7 @@ export function assembleRuntimeServices(
     events,
   })
 
-  // ---- conversation ownership right manage ----
+  // ---- Conversation ownership management ----
   const ownership = new RuntimeOwnershipManager({
     store: options.store,
     documentStore: createGlobalDocumentStore(options.store),
@@ -245,14 +245,14 @@ export function assembleRuntimeServices(
     },
   })
 
-  // ---- append trace ----
+  // ---- Conversation tracking ----
   tracker = new ConversationTracker({
     harness: init.harness,
     store: options.store,
     redactError: (text) => options.stashService.redact(text),
-    // turn compute unread policy: background derive sub-conversation (helm/bot ownership and has parent chain) do not placement unread.
+    // Turn unread-count policy: background spawned sub-conversations (helm/bot-owned with a parent chain) are not marked unread.
     ownershipOf: (id) => ownership.getOwnership(id),
-    // context use amount: window by when before Models set parse (unknown do not fabricate).
+    // Context usage: window resolved from live `Models` registry (never fabricated when unknown).
     models: () => modelsRegistry.models,
     isClosed: () => runtime.isClosing,
     events: {
@@ -284,7 +284,7 @@ export function assembleRuntimeServices(
     },
   })
 
-  // ---- async approval service ----
+  // ---- Async approval service ----
   asks = new AskService({
     store: options.store,
     stash: options.stashService,
@@ -347,7 +347,7 @@ export function assembleRuntimeServices(
     trustedPlatformOf: trustedPlatformFromEnvFabric(envFabric),
   })
 
-  // ---- original generate subagent derive ----
+  // ---- Native subagent spawning ----
   const agentSpawn = new RuntimeAgentSpawn({
     store: options.store,
     toolDeps,
@@ -364,7 +364,7 @@ export function assembleRuntimeServices(
     markConversationOwnership: (id, owner: ConversationOwnership) => ownership.markOwnership(id, owner),
   })
 
-  // ---- trigger dispatch ----
+  // ---- Trigger dispatch ----
   const triggers = new RuntimeTriggerDispatcher({
     store: options.store,
     hookBridge,
@@ -374,7 +374,7 @@ export function assembleRuntimeServices(
     submitInput: (id, text, opts) => options.submitInput(id, text, opts),
   })
 
-  // ---- tool install match ----
+  // ---- Tool installation ----
   const toolRegistry = new RuntimeToolRegistry({
     registry: init.registry,
     toolDeps,
@@ -386,13 +386,13 @@ export function assembleRuntimeServices(
     getConversation: (id) => runtime.getConversation(id),
   })
 
-  // ---- asset hot reload coordinate tune ----
+  // ---- Asset hot-reload coordinator ----
   const assetReloader = new AssetReloader({
     dataDir: init.dataDir,
     externalModels: init.externalModels !== undefined,
     reloadModels: () => runtime.reloadModels(),
     reloadPluginConfig: async () => {
-      // external manually work change write/clean up config.json when sync expires AuthService etc. memory snapshot, again reload plugin config mirror.
+      // Invalidate in-memory snapshots (e.g. AuthService) when `config.json` is edited/cleared externally, then reload plugin config mirror.
       await configSvc.invalidateCache()
       await pluginConfig.load()
     },

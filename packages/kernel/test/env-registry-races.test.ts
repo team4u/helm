@@ -6,7 +6,7 @@ import { BACKGROUND_CONTEXT, withAbortSignal } from '@earendil-works/chord/conte
 import { createEnvFabric } from '../src/env/fabric.js'
 import { NodeRegistry, type HubConnectionLocal } from '../src/env/registry.js'
 
-// only isolated register table state machine; actual WS/birpc link by env-fabric and env-app two group override.
+// Isolated registry state machine tests; actual WS/birpc wiring covered by env-fabric and env-app suites.
 class RegistrySocket extends EventEmitter {
   OPEN = 1
   CLOSED = 3
@@ -14,7 +14,7 @@ class RegistrySocket extends EventEmitter {
   close() { this.readyState = 3; this.emit('close') }
 }
 
-test('local machine Scoped env will not again inherit host or one by one invoke fabricate HELM_TOKEN', { timeout: 60_000 }, async () => {
+test('local ScopedEnv never inherits host or per-call forged HELM_TOKEN', { timeout: 60_000 }, async () => {
   const previous = process.env.HELM_TOKEN
   process.env.HELM_TOKEN = 'host-private-credential'
   const fabric = createEnvFabric({ envOptions: () => ({ HELM_CONVERSATION_ID: '8' }) })
@@ -33,13 +33,12 @@ test('local machine Scoped env will not again inherit host or one by one invoke 
   }
 })
 
-test('without composer local machine Scoped env strip except host all managed HELM_* variable (fail-closed)', { timeout: 60_000 }, async () => {
+test('local ScopedEnv without composer strips all host-managed HELM_* variables (fail-closed)', { timeout: 60_000 }, async () => {
   const saved: Record<string, string | undefined> = {}
-  // first staged and empty host since has all HELM_* variable: this test in Helm hosting host environment run
-  // when, host bash etc. managed tool day however inject HELM_NODE_INSTANCE_ID /
-  // HELM_NODE_CONTROL_ENDPOINT etc. node control variable - - kernel composeExecutionEnv only
-  // strip except itself managed eight meta group, node control variable belong node guard semantics, legal pass-through, will let under way
-  // /^helm_/i probe needle host leftover mistakenly judge is kernel strip except failed. test semantics only for under way inject.
+  // Save and clear all pre-existing host HELM_* vars first: when running under a Helm-hosted bash session,
+  // external host wrappers inject node control vars like HELM_NODE_INSTANCE_ID / HELM_NODE_CONTROL_ENDPOINT.
+  // composeExecutionEnv intentionally strips only its 8 self-managed keys while letting daemon control vars
+  // pass through, which would otherwise cause /^helm_/i assertions below to misreport leftovers.
   for (const key of Object.keys(process.env)) {
     if (/^helm_/i.test(key)) {
       saved[key] = process.env[key]
@@ -63,7 +62,7 @@ test('without composer local machine Scoped env strip except host all managed HE
   }
   const fabric = createEnvFabric({})
   try {
-    // without envOptions(without conversation effect domain): host inherit must not carry any managed HELM_* value.
+    // Without envOptions (no conversation scope): inherited host env must carry zero managed HELM_* keys.
     const env = fabric.envForTarget({ nodeId: 'local', cwd: process.cwd() })
     let text = ''
     const result = await env.exec(
@@ -72,7 +71,7 @@ test('without composer local machine Scoped env strip except host all managed HE
       BACKGROUND_CONTEXT,
     )
     assert.equal(result.ok, true)
-    assert.deepEqual(JSON.parse(text), [], 'host managed HELM_* variable (contains large small write change body) must all strip except')
+    assert.deepEqual(JSON.parse(text), [], 'all host-managed HELM_* variables (including case variants) must be stripped')
   } finally {
     for (const [key, value] of Object.entries(saved)) {
       if (value === undefined) delete process.env[key]
@@ -82,7 +81,7 @@ test('without composer local machine Scoped env strip except host all managed HE
   }
 })
 
-test('composer provide managed variable still takes effect (bind set key do not by host strip except mistakenly damage)', { timeout: 60_000 }, async () => {
+test('composer-supplied managed variables still take effect (bound keys unaffected by host stripping)', { timeout: 60_000 }, async () => {
   const fabric = createEnvFabric({
     envOptions: ({ conversationId, cwd }) => ({
       HELM_CONVERSATION_ID: String(conversationId ?? 0),
@@ -105,7 +104,7 @@ test('composer provide managed variable still takes effect (bind set key do not 
   }
 })
 
-test('new connect top replace old after connect event routing bind set new publish proxy', { timeout: 60_000 }, async () => {
+test('newer connection supersedes old connection without routing stale callbacks through old binding', { timeout: 60_000 }, async () => {
   const registry = new NodeRegistry({ authenticate: () => true })
   const sockets = [new RegistrySocket(), new RegistrySocket()]
   const bindings: HubConnectionLocal[] = []
@@ -126,7 +125,7 @@ test('new connect top replace old after connect event routing bind set new publi
   } finally { await registry.close() }
 })
 
-test('cancelled offline wait for and already close register table will not hang caller', { timeout: 60_000 }, async () => {
+test('aborted offline wait and closed registry never hang callers', { timeout: 60_000 }, async () => {
   const registry = new NodeRegistry({ authenticate: () => false })
   const cancel = new AbortController()
   cancel.abort()

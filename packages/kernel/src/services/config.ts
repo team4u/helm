@@ -1,7 +1,8 @@
 /**
- * config.json config service: by real file path sharing process inside serial read write,
- * guard against multiple module (contains each new out instance) concurrency override each other key, or same process read write collide on rename.
- * secret content (password hash of outside secret plaintext) must not write this file, by credentials.json bear load.
+ * `config.json` service: serializes in-process reads/writes by canonical real file path,
+ * preventing multiple modules (including freshly instantiated `ConfigService` objects) from
+ * overwriting each other's keys or colliding between concurrent reads and renames.
+ * Secrets (other than password hashes) must never be written here; they belong in `credentials.json`.
  */
 import { realpath } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -15,14 +16,15 @@ type Json = Record<string, unknown>
 type InvalidationListener = (canonicalPath: string) => void
 
 /**
- * by archive one real path sharing write proxy count and expires listen:
- * each time updateBy write succeeded or invalidateCache when pass increase, supply AuthService etc. on layer cache
- * with zero system invoke decide snapshot valid, and in lock inside atomic match for guard against concurrency dirty back fill.
+ * Shared write-generation counters and invalidation listeners keyed by canonical path:
+ * incremented on every successful `updateBy` write or `invalidateCache`, allowing upstream caches
+ * (like `AuthService`) to validate snapshots with zero syscalls and match generations inside the
+ * lock to prevent concurrent dirty backfills.
  */
 const configGenerations = new Map<string, number>()
 const invalidationListeners = new Set<InvalidationListener>()
 
-/** register config expires listen (module level register, supply AuthService clean up snapshot, avoid per-instance leak leak). */
+/** Register config invalidation listener (module-level registry so `AuthService` can clear snapshots without per-instance leaks). */
 export function onConfigInvalidated(listener: InvalidationListener): () => void {
   invalidationListeners.add(listener)
   return () => {
@@ -37,7 +39,7 @@ function bumpGeneration(canonicalPath: string): number {
     try {
       listener(canonicalPath)
     } catch {
-      /* cache expires notify do not block assert main write path */
+      /* cache invalidation notifications must not break the primary write path */
     }
   }
   return next
@@ -46,7 +48,7 @@ function bumpGeneration(canonicalPath: string): number {
 export class ConfigService {
   private readonly dataDir: string
   private readonly path: string
-  /** first time succeeded parse after canonical path cache, avoid hot path each time tune realpath in Windows on open directory handle. */
+  /** Canonical path cached after first resolution so hot paths don't open Windows directory handles on every `realpath`. */
   private canonicalPathCache: string | undefined
 
   constructor(dataDir: string) {
@@ -54,7 +56,7 @@ export class ConfigService {
     this.path = join(dataDir, 'config.json')
   }
 
-  /** get when before dataDir for should config.json real path; directory still missing return undefined. */
+  /** Resolve real path to `config.json` under `dataDir`; returns undefined if `dataDir` does not exist yet. */
   async getCanonicalPath(): Promise<string | undefined> {
     if (this.canonicalPathCache !== undefined) return this.canonicalPathCache
     const realDir = await realpath(this.dataDir).catch(() => undefined)
@@ -63,7 +65,7 @@ export class ConfigService {
     return this.canonicalPathCache
   }
 
-  /** in-memory read designate canonical path most new known proxy count (zero system invoke). */
+  /** Read the latest known write generation in memory for a canonical path (zero syscalls). */
   getGenerationSync(canonicalPath: string): number {
     return configGenerations.get(canonicalPath) ?? 0
   }
@@ -72,20 +74,20 @@ export class ConfigService {
     const value = await readJsonFileOptional(this.path)
     if (value === undefined) return {}
     if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-      throw new Error(`config.json structure illegal (should be object): ${this.path}`)
+      throw new Error(`invalid config.json structure (expected object): ${this.path}`)
     }
     return value as Json
   }
 
   /**
-   * read when before config (without file return empty object; corrupt JSON explicit throws, not silently reset).
-   * accept and updateBy the same process inside file lock, guard against same process inside read handle collide on write rename.
+   * Read current config (returns `{}` if missing; corrupt JSON throws explicitly rather than resetting silently).
+   * Shares the in-process file lock with `updateBy` so read handles don't collide with atomic renames.
    */
   get(): Promise<Json> {
     return withFileLock(this.path, () => this.readUnlocked())
   }
 
-  /** lock inside atomic match for read config and write proxy count (supply on layer snapshot cache guard against concurrency dirty back fill). */
+  /** Atomically read config paired with its write generation inside the lock (for upstream cache backfill guards). */
   getWithGeneration(): Promise<{
     config: Json
     generation: number
@@ -100,7 +102,7 @@ export class ConfigService {
     })
   }
 
-  /** external manually change write/delete config.json after expires on layer derive cache (enter the same file lock guarantee and read atomic sort). */
+  /** Invalidate upstream derived caches after external edits/deletes of `config.json` (enters the same file lock to serialize with reads). */
   invalidateCache(): Promise<void> {
     return withFileLock(this.path, async () => {
       const prev = this.canonicalPathCache
@@ -112,12 +114,12 @@ export class ConfigService {
   }
 
   /**
-   * serial atomic update: object patch in most new content basis on shallow merge, keep other key;
-   * pass function then etc. price updateBy(lock inside read change write call back).
-   * lock with config.json real path is key, across instance sharing;update all process (read→change→write)
-   * all in lock inside, eliminate concurrency read to the same old config after mutual each other override.
-   * object and function stream is must: function by when object expand without can enumeration property, will static default discard
-   * all call back change (honest discipline - - explicit reject while is not static default lose write).
+   * Serialized atomic update: object patches shallow-merge onto the latest content while keeping other keys;
+   * function arguments delegate to `updateBy` (in-lock read-modify-write callback).
+   * Locking by `config.json` canonical path across instances places the whole `read -> modify -> write` inside
+   * one critical section, preventing concurrent stale-snapshot overwrites.
+   * Dispatching objects vs functions explicitly is mandatory: spreading a function as `{ ...fn }` has no
+   * enumerable properties and would silently drop all callback changes.
    */
   update(patch: Json | ((current: Json) => Json)): Promise<Json> {
     return typeof patch === 'function'
@@ -126,9 +128,10 @@ export class ConfigService {
   }
 
   /**
-   * call back form read change write:mutate in lock inside based on most new disk state sync execute, read write same lock without between gap.
-   * across instance concurrency write no longer may by caller lock outside old snapshot override - - caller forever see fewer than
-   * stale current.mutate must sync: return value directly, async side effect do not in guarantee scope.
+   * Callback-style read-modify-write: `mutate` runs synchronously inside the lock against the freshest disk
+   * state with zero gap between read and write, preventing stale snapshots outside the lock from overwriting
+   * concurrent updates—callers never observe stale `current`. `mutate` must be synchronous and return the
+   * next value directly (async side effects are not covered by the lock).
    */
   updateBy(mutate: (current: Json) => Json): Promise<Json> {
     return withFileLock(this.path, async () => {

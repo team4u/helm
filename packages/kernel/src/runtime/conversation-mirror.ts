@@ -1,45 +1,45 @@
 /**
- * single conversation memory mirror (ConversationMirror):ConversationTracker all by conversation
- * lifecycle run state aggregate.
+ * Per-conversation in-memory mirror (ConversationMirror): aggregates all per-conversation
+ * lifecycle runtime state inside ConversationTracker.
  *
- * Why aggregate: this before 30+  Map<number,...> field each is administration,stopObserving must manually work
- * one by one map delete about 40 row, leak delete i.e. leak leak (reverse re- create delete conversation process follow time unbounded accumulated leftover).
- * aggregate after stopObserving once delete i.e. whole reclaim; field semantics and migration before one by one for should.
+ * Why aggregate: previously 30+ Map<number, ...> fields were managed separately, forcing stopObserving
+ * to manually delete from ~40 maps—any missed deletion caused leaks across repeated create/delete cycles.
+ * With aggregation, stopObserving reclaims the entire conversation in a single delete; field semantics remain 1:1.
  *
- * lifecycle: observe establish (observe) or first time write when create;observer.end only clean detach
- * (the rest mirror keep, supply heavy observe and summary derive);stopObserving whole delete.
- * exception (does not enter mirror, still archive tracker top-level):
- * - settledRuns: across conversation dedupe set (`${conversationId}:${taskId}` prefix key global unique);
- * - notifiedCompactionFailures: do not follow stopObserving clear (same runtime inside heavy observe
- *   must not again report the same compress failed);
- * - contextUsage cache/refresh chain: independent lifecycle (in-flight refresh can across exceeds stop observe), see
- *   context-usage-refresh.ts.
+ * Lifecycle: created on observe or first write; observer.end clears only detach (retaining the rest of the mirror
+ * for re-observation and summary derivation); stopObserving deletes the entire mirror.
+ * Exceptions (outside mirror, kept at tracker top-level):
+ * - settledRuns: cross-conversation deduplication set (`${conversationId}:${taskId}` prefixed global key);
+ * - notifiedCompactionFailures: persists across stopObserving (re-observing within the same runtime
+ *   must never re-report the same compaction failure);
+ * - contextUsage cache/refresh chain: independent lifecycle (in-flight refreshes can outlive stopObserving),
+ *   see context-usage-refresh.ts.
  */
 
 import type { ConversationInput, ConversationLive, InputOrigin, WhenBusy } from '@helm/protocol'
 import type { LiveCompactionFailureShape, LiveCompactionShape } from './context-usage.js'
 
-/** SDK pi.live document structure sub- collection (tracker observe shape). */
+/** Subset of SDK pi.live document structure (observed shape used by tracker). */
 export interface LiveStateShape {
   run?: { taskId: number; inputs: number[]; turns?: number; first?: number }
   generation?: { attempt?: unknown; message?: unknown; retry?: unknown; deferred?: unknown }
   tools?: Array<{ callId: string; name: string; status: string; arguments?: unknown; output?: string }>
   nestedTools?: Array<{ callId: string; name: string; status: string; arguments?: unknown; output?: string }>
   runFailure?: { taskId: number; inputs: number[]; reason: string; detail?: string }
-  /** in progress compress task (taskId order;SDK CompactionStatus structure sub- collection). */
+  /** Active compaction tasks (ordered by taskId; subset of SDK CompactionStatus). */
   compactions?: LiveCompactionShape[]
-  /** most near once compress failed (SDK CompactionFailure structure sub- collection). */
+  /** Most recent compaction failure (subset of SDK CompactionFailure). */
   compactionFailure?: LiveCompactionFailureShape
 }
 
-/** pi.inbox document structure sub- collection (queued commit:submissionId -> entry payload). */
+/** Subset of pi.inbox document structure (queued submissions: submissionId -> entry payload). */
 export interface InboxItemShape {
   id: number
   mode: 'steer' | 'followUp' | 'write'
   entry?: { kind?: string; data?: unknown }
 }
 
-/** helm.input entry / inbox item metadata payload shape. */
+/** Payload shape for helm.input entries / inbox item metadata. */
 export interface HelmInputMeta {
   id?: string
   text?: string
@@ -50,60 +50,60 @@ export interface HelmInputMeta {
   attachments?: unknown
 }
 
-/** single conversation aggregate mirror: field and migration before same name Map item one one for should. */
+/** Per-conversation aggregate mirror: fields correspond 1:1 with the prior per-tracker Maps. */
 export interface ConversationMirror {
-  /** SDK observer return detach(observe store continue phase;observer.end / stopObserving clear). */
+  /** Detach handle returned by SDK observer (populated while actively observing; cleared by observer.end / stopObserving). */
   detach: (() => void) | undefined
-  /** when before pi.live mirror (most near once advance value;adopt/adoptInitial archive one is object). */
+  /** Current pi.live mirror (latest pushed snapshot; initialized to an object on adopt/adoptInitial). */
   live: LiveStateShape | undefined
-  /** when before pi.inbox queue up items mirror (queuedInputs derive and real-time push use). */
+  /** Current pi.inbox queued items mirror (used to derive queuedInputs and push live updates). */
   inbox: ReadonlyArray<InboxItemShape> | undefined
-  /** requestId(= input.id)-> input metadata (unique append trace identity; commit register and entry/inbox
-   * observe rebuild by requestId idempotent merge is unique record). */
+  /** requestId (= input.id) -> input metadata (unique tracking identity; submission registration and entry/inbox
+   * reconstruction merge idempotently into a single record keyed by requestId). */
   trackedInputs: Map<string, ConversationInput>
-  /** submissionId -> requestId:SDK interface related index (live.run.inputs /
-   * runFailure.inputs / withdraw all with submissionId express, via this mapping back append trace identity).
+  /** submissionId -> requestId: SDK boundary correlation index (live.run.inputs / runFailure.inputs / withdrawal
+   * all use submissionId, which maps back to tracking identity here).
    *
-   * write source:bindSubmission(submit return),adoptInputsFromInbox(inbox items
-   * id i.e. submissionId), restart restore submission precise query; compute/withdraw back when clean up. */
+   * Writers: bindSubmission (on submit), adoptInputsFromInbox (inbox item id is submissionId), restart recovery
+   * submission query; cleared on settlement or withdrawal. */
   submissionIndex: Map<number, string>
-  /** input rebuild under boundary entry id(single tune does not fall back: new run take run.first to on push,run end
-   * do not clear - - window inside already compute helm.input no longer by under one snapshot re-). */
+  /** Lower-bound entry ID for input reconstruction (monotonically non-decreasing: new runs advance to run.first
+   * and run end leaves it untouched so settled helm.input entries in the window never resurrect on the next snapshot). */
   runFirstEntry: number | undefined
-  /** this turn already consume requestId collection (run store continue during cumulative, new taskId reset). */
+  /** Set of requestIds consumed during this turn (accumulated across the active run; reset on a new taskId). */
   consumedInputs: Set<string> | undefined
-  /** when before run  taskId(many tool round do not change; change only then reset consume collection). */
+  /** taskId of the current active run (constant across multi-round tool calls; consumed set resets only when changed). */
   runTaskId: number | undefined
-  /** already compute runKey insert order (capacity eliminate use, and global settledRuns sync maintain). */
+  /** Insertion order of settled runKeys (for bounded eviction, synchronized with global settledRuns). */
   settledRunOrder: string[]
-  /** most near a already compute run  taskId(explicit abort guard against heavy). */
+  /** taskId of the most recently settled run (prevents double reporting on explicit abort). */
   lastSettledRun: number | undefined
-  /** in-flight turn_settled call back counter (waitForIdle by conversation wait for). */
+  /** Count of in-flight turn_settled callbacks (awaited per conversation by waitForIdle). */
   settledInflight: number
-  /** call back chain first error (counter reset to zero after new chain clear;waitForIdle replay throw). */
+  /** First error captured in the callback chain (cleared once counter returns to 0 and restarts; rethrown by waitForIdle). */
   settledError: unknown
-  /** in-flight turn_settled call back chain wait for (counter reset to zero when all wake). */
+  /** Waiters on in-flight turn_settled callbacks (woken when counter drops to 0). */
   settledWaiters: Array<() => void>
-  /** already conversation.entry most large entry id(observe window inside single tune). */
+  /** Highest entry ID already emitted via conversation.entry (monotonic within observe window). */
   lastEmittedEntry: number
-  /** most near once snapshot scan to most large entry id(used to decide pi.compaction is otherwise new written to the database,
-   * and onEntryCommitted sink is otherwise hang connect without closure). */
+  /** Highest entry ID seen in the latest snapshot scan (used to detect newly persisted pi.compaction entries even
+   * when no onEntryCommitted sink is attached). */
   lastSeenEntryId: number
-  /** await live snapshot (node stream window inside most new value; terminal state when force conflict refresh). */
+  /** Pending throttled live snapshot (latest snapshot inside throttle window; flushed forcefully on settlement). */
   pendingLive: ConversationLive | undefined
-  /** node stream conflict refresh timer(stopObserving/close must clean up, guard against after deletion ghost event). */
+  /** Throttled live flush timer (must be cleared on stopObserving/close to prevent post-deletion ghost events). */
   liveTimer: ReturnType<typeof setTimeout> | undefined
-  /** on time live content refer grain (identical snapshot does not resend frame). */
+  /** Content fingerprint of last emitted live frame (suppresses identical frames). */
   lastLiveKey: string | undefined
-  /** on time already queuedInputs refer grain (queue/out queue 0ms conflict refresh decide; not register treated as '[]'). */
+  /** Content fingerprint of last emitted queuedInputs (drives 0ms queue/dequeue flushes; unset counts as '[]'). */
   lastQueuedLiveKey: string | undefined
-  /** most near once already push summary semantics refer grain (status|doing|pendingAsk; identical do not heavy). */
+  /** Semantic fingerprint of last emitted summary (status|doing|pendingAsk; suppresses duplicates). */
   lastSummaryKey: string | undefined
-  /** each time observe independent token; stop observe i.e. follow mirror delete, late to async result must not re- state. */
+  /** Unique token per observe session; deleted along with mirror on stopObserving so stale async results cannot re-populate. */
   observeGeneration: symbol | undefined
-  /** most new assistant text cache (getLastAssistantText data source). */
+  /** Cache of latest assistant text (data source for getLastAssistantText). */
   lastAssistant: { entryId: number; text: string } | undefined
-  /** await answer Ask counter (blocked state derive and CAS watermark line). */
+  /** Count of pending AskDocs (drives blocked status and CAS watermarks). */
   pendingAskCount: number
 }
 
@@ -135,7 +135,7 @@ export function createConversationMirror(): ConversationMirror {
   }
 }
 
-/** from helm.input entry / inbox payload rebuild ConversationInput(default field do not fabricate). */
+/** Reconstruct a ConversationInput from a helm.input entry / inbox payload without fabricating missing fields. */
 export function inputFromMeta(meta: HelmInputMeta): ConversationInput {
   return {
     id: meta.id!,
@@ -143,8 +143,8 @@ export function inputFromMeta(meta: HelmInputMeta): ConversationInput {
     origin: meta.origin ?? 'human',
     ...(typeof meta.whenBusy === 'string' ? { whenBusy: meta.whenBusy } : {}),
     createdAt: meta.createdAt ?? Date.now(),
-    // meta from entry.data rebuild throughout through back turn_settled payload(boundary already validate
-    // is ordinary object; non- object shape do not fabricate, directly discard the field).
+    // Reconstruct meta from entry.data for downstream turn_settled payloads (already validated at boundary
+    // to be a plain object; drop non-object shapes rather than fabricating).
     ...(isPlainRecord(meta.meta) ? { meta: meta.meta } : {}),
     ...(Array.isArray(meta.attachments)
       ? { attachments: meta.attachments as ConversationInput['attachments'] }
@@ -152,7 +152,7 @@ export function inputFromMeta(meta: HelmInputMeta): ConversationInput {
   }
 }
 
-/** merge two same input.id metadata: rebuild value takes precedence, memory in more complete field without losing. */
+/** Merge two metadata records for the same input.id: rebuilt values win, while richer in-memory fields are preserved. */
 export function mergeInputMeta(existing: ConversationInput, rebuilt: ConversationInput): ConversationInput {
   return {
     ...rebuilt,
@@ -166,7 +166,7 @@ export function mergeInputMeta(existing: ConversationInput, rebuilt: Conversatio
   }
 }
 
-/** ordinary object decide (null and non- object do not compute; class instance do not compute). */
+/** Plain-object check (rejects null, primitives, and class instances). */
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   if (value === null || typeof value !== 'object') return false
   const proto = Object.getPrototypeOf(value)

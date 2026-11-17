@@ -1,41 +1,45 @@
 /**
- * target node file mutual exclusion queue (align pi-durable  withFileMutationQueue).
+ * Target-node file mutation mutex queue (aligned with `pi-durable`'s `withFileMutationQueue`).
  *
- * is what need to: kernel write/edit and plugin self define file read change write in the same Hub process inside concurrency
- * when (the same turn, many conversation, background service), mutual each other read the same old content after each write back will lose update.
- * with file system id + canonical path is key process level queue let all caller strictly queue up.
+ * Why needed: when kernel `write`/`edit` tools and plugin custom read-modify-write handlers execute
+ * concurrently in the same Hub process (same turn, multiple conversations, background services),
+ * reading the same stale content and writing back concurrently would lose updates. A per-process
+ * queue keyed by `filesystemId + canonicalPath` strictly serializes all callers.
  *
- * and pi-durable closure system (semantics align, implement independent):
- * - pi-durable  tools/write,tools/edit internal use the same algorithm
- *   withFileMutationQueue serial, but the function not from package exports expose (deep import
- *   violate reverse wrap boundary), and helm  write/edit is kernel self carries tool, do not via SDK tool;
- * - therefore this module in helm process inside provide the same semantics queue, and kernel write/edit and
- *   plugin API(EnvFabric.withFileMutationQueue) all connect to this a implement on.
+ * Relationship to `pi-durable` (aligned semantics, independent implementation):
+ * - `pi-durable`'s `tools/write` and `tools/edit` serialize via its internal `withFileMutationQueue`,
+ *   which is not exported from package entrypoints (deep imports violate package boundaries), and
+ *   helm's `write`/`edit` are kernel-owned tools rather than SDK tools;
+ * - This module provides the identical queue semantics inside the helm process so both kernel
+ *   `write`/`edit` and the plugin API (`EnvFabric.withFileMutationQueue`) share one implementation.
  *
- * lock contract:
- * - key = `${file system id}\u0000${canonical path}`;local bottom seat id constant is 'node:local'
- *   (Hub local machine file system), remote bottom seat id is 'remote:<nodeId>'(each node one stage file
- *   system) - - different node same shape path day however different key, mutual non-blocking;
- * - canonical:realpath parse symlink alias (different write method points to the same file sharing one lock);
- *   new file (still missing) take most near store in ancestor canonical + remaining segment concatenate, guarantee
- *   create it writeand after editsame key; whole chain all missing when retreat is
- *   term method absolute path (process inside still mutual exclusion; across process without lock promise, see under);
- * - only lock fn execute window (read-change-write), do not lock without closure file, non-blocking read operation;
- * - queue item by chain tail compute self clean up: by cancel queue up immediately release execute right, but its Map occupy
- *   keep to before order compute after only then disappear - - never mention before delete still in run header lock (otherwise after continue new task
- *   will and hold lock concurrency); long run process without leak leak;
- * - queue up in by cancel: and before order task competition wait for,signal first to immediately reject (do not etc. before order, do not execute
- *   fn),abort listener regardless of remove to all clean up;
- * - cannot heavy: the same async chain (AsyncLocalStorage pass broadcast) inside for the same key embed set queue immediately
- *   explicit errors `file_mutation_queue_reentrant`, never static default hang die.fn inside directly invoke underlying
- *   writeFile(no longer time queue) legal; bypass this process async chain start embed set (such as independent HTTP
- *   request call back bypass back) cannot detect, still by ordinary queue up semantics wait for.
+ * Lock contract:
+ * - Key = `${fsId}\u0000${canonicalPath}`; local backend is always `'node:local'` (Hub local FS)
+ *   and remote backends are `'remote:<nodeId>'` (each node has its own FS), so identical paths on
+ *   different nodes never block each other;
+ * - Canonicalization: `realpath` resolves symlinks (different aliases to the same file share one lock);
+ *   new files (not yet existing) use the nearest existing ancestor's canonical path joined with the
+ *   remaining segments, ensuring creation (`write`) and subsequent `edit` share one key; if the entire
+ *   chain is absent, falls back to lexical absolute path (still mutually exclusive in-process; no
+ *   cross-process lock guarantee, see below);
+ * - Only holds the queue over `fn` (the read-modify-write window); never holds locks across unrelated
+ *   files or blocks read-only operations;
+ * - Self-cleaning tail promises: cancelled queued tasks release execution immediately, while their Map
+ *   slot stays until predecessors settle—never deleting the slot prematurely while the head still holds
+ *   the lock (otherwise a new task could run concurrently with the lock holder); zero leak over long runs;
+ * - Cancellation while queued: races against `previous` so an aborted `signal` rejects immediately
+ *   without waiting for predecessors or running `fn`, and cleans up abort listeners either way;
+ * - Non-reentrant: re-entering the queue for the same key within the same async chain (tracked via
+ *   `AsyncLocalStorage`) fails immediately with `file_mutation_queue_reentrant` instead of deadlocking
+ *   silently. Calling low-level `writeFile` directly inside `fn` (without re-queuing) is legal;
+ *   nested calls across separate async chains (e.g. a separate HTTP callback) cannot be detected and
+ *   serialize normally.
  *
- * honest boundary (does not promise):
- * - is not for bash / other process lock - -shell and external tool still may concurrency change file;
- * - is not across process/across Hub distributed style lock: the same remote node such as has second Hub process access,
- *   two Hub each queue mutual invisible. when before deploy model a node only connect a Hub;
- * - can message plugin still can directly node:fs / bash bypass this queue (without sandbox promise).
+ * Honest boundaries (not guaranteed):
+ * - Does not lock bash or other OS processes—shell and external tools can still race on files;
+ * - Not a distributed lock across processes/Hubs: if two Hub processes connect to the same remote node,
+ *   their queues are invisible to each other (the current deployment model assumes one Hub per node);
+ * - Trusted plugins can still bypass this queue via `node:fs` or `bash` directly (no sandbox promise).
  */
 
 import { BACKGROUND_CONTEXT, withAbortSignal, type Context } from '@earendil-works/chord/context'
@@ -44,35 +48,35 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { realpath } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 
-/** each file chain tail (Promise<void>: chain on before order task all compute i.e. resolve, never reject). */
+/** Each file's queue tail (Promise<void>: resolves once all preceding tasks settle; never rejects). */
 const queues = new Map<string, Promise<void>>()
 
-/** internal/test queue notify listener (never enter env/index public exports). */
+/** Internal/test queue-enqueue notification listeners (never exported from `env/index`). */
 const enqueueListeners = new Set<(event: { key: string; waiting: boolean }) => void>()
 
-/** when before async chain hold has lock key collection (embed set heavy detect). */
+/** Set of lock keys held by the current async chain (used for nested reentrancy detection). */
 const activeKeys = new AsyncLocalStorage<Set<string>>()
 
-/** env failed to invoke on throw (Result model archive one is exception, error such as pass broadcast do not swallow). */
+/** Rethrow env Result errors as exceptions so callers propagate failures rather than swallowing them. */
 async function unwrapOrThrow<T>(result: { ok: true; value: T } | { ok: false; error: FileError }): Promise<T> {
   if (result.ok) return result.value
   throw result.error
 }
 
 /**
- * canonical path: file missing when takecanonical parent directory + filename one by one level on trace
- * (symlink directory under new file and create it write / after continue edit same key).ENOTDIR
- * (path in a certain segment is file while non- directory,pi-durable and node side local-env mapping
- * not_directory) and ENOENT same by missing on trace: and localCanonical and kernel
- * tool probe chain consistent, otherwise the same `/already exists file/x` path will in two entry compute out different key
- *(local direct connect on trace,env entry throws), double lock and errors fork all by this while come.
+ * Canonical path resolution: if the target does not exist, walk up to the canonical parent directory
+ * and append the basename so new file creation (`write`) and subsequent `edit`s under symlinked dirs
+ * share one key. Both `ENOTDIR` (an intermediate path segment is a file rather than a directory, mapped
+ * to `not_directory` by `pi-durable` and node local-env) and `ENOENT` walk upward just like `localCanonical`
+ * and kernel tool probe chains—otherwise `/existing-file/x` would yield divergent results across entrypoints
+ * (local walks up while env throws), causing split locks and inconsistent errors.
  */
 async function canonicalPath(env: ExecutionEnv, absolutePath: string, context: Context): Promise<string> {
   const direct = await env.canonicalPath(absolutePath, context)
   if (direct.ok) return direct.value
   if (direct.error.code === 'not_supported') return absolutePath
   if (direct.error.code !== 'not_found' && direct.error.code !== 'not_directory') throw direct.error
-  // environment by isolate symbol split path: name may contains other file system isolate symbol character.
+  // Join/split via env so segment separators match the target filesystem.
   const parent = await unwrapOrThrow(await env.joinPath([absolutePath, '..'], context))
   if (parent === absolutePath || !absolutePath.startsWith(parent)) return absolutePath
   const name = absolutePath.slice(parent.length + (/[/\\]$/.test(parent) ? 0 : 1))
@@ -81,16 +85,16 @@ async function canonicalPath(env: ExecutionEnv, absolutePath: string, context: C
   return unwrapOrThrow(await env.joinPath([parentCanonical, name], context))
 }
 
-/** queue key: file system id + canonical path. */
+/** Queue key: filesystem id + canonical path. */
 async function mutationKey(env: ExecutionEnv, path: string, context: Context): Promise<string> {
   const absolute = await unwrapOrThrow(await env.absolutePath(path, context))
   return `${env.id}\u0000${await canonicalPath(env, absolute, context)}`
 }
 
 /**
- * local canonical: and canonicalPath same semantics, directly use node:fs realpath.
- * only ENOENT / ENOTDIR(path component missing) by missing on trace concatenate;EACCES / EIO etc.
- * such as on throw (swallow will real fault disguise into missing, violate reverse honest discipline).
+ * Local canonicalization: matches `canonicalPath` semantics using `node:fs` `realpath`.
+ * Walks upward only on `ENOENT` / `ENOTDIR` (missing path component); real I/O errors (`EACCES`, `EIO`,
+ * etc.) are rethrown so real faults are never masked as missing paths.
  */
 async function localCanonical(absolutePath: string): Promise<string> {
   try {
@@ -99,24 +103,24 @@ async function localCanonical(absolutePath: string): Promise<string> {
     const code = (error as { code?: string }).code
     if (code !== 'ENOENT' && code !== 'ENOTDIR') throw error
     const parent = dirname(absolutePath)
-    // terminate: parent i.e. itself (realpath('/') failed illness state file system), never again recursion.
+    // Termination condition: parent equals self (pathological filesystem where `realpath('/')` fails); stop recursing.
     if (parent === absolutePath) return absolutePath
     return join(await localCanonical(parent), basename(absolutePath))
   }
 }
 
-/** heavy detect: same key already by when before async chain hold has when immediately explicit errors (never static default hang die). */
+/** Reentrancy check: fail immediately with a clear error if the current async chain already holds this key (never hang silently). */
 function assertNotReentrant(key: string): void {
   if (activeKeys.getStore()?.has(key)) {
     const canonical = key.split('\u0000')[1] ?? key
     throw new Error(
-      `file_mutation_queue_reentrant: path ${canonical} mutual exclusion queue cannot heavy - -fn inside must not again for the same file queue` +
-        '(common into because: hold lock window inside invoke same will for the file queue write/edit; please in lock outside start, or change is in fn inside directly underlying write)',
+      `file_mutation_queue_reentrant: mutation queue for path ${canonical} is non-reentrant—fn must not re-queue the same file ` +
+        '(common cause: calling write/edit tools on the same file inside a held lock; acquire outside the lock or write directly inside fn)',
     )
   }
 }
 
-/** in hold has keyasync context in execute fn(supply embed set invoke heavy detect). */
+/** Execute `fn` within an async context recording `key` as held (for nested reentrancy detection). */
 async function runWithKey<T>(key: string, fn: () => Promise<T>): Promise<T> {
   const store = new Set(activeKeys.getStore())
   store.add(key)
@@ -124,12 +128,13 @@ async function runWithKey<T>(key: string, fn: () => Promise<T>): Promise<T> {
 }
 
 /**
- * sharing scheduling core (env / local two entry unique implement, eliminate duplicate):
- * - occupy after and before order task competition signal: queue up in by cancel immediately reject (do not etc. before order, do not execute
- *   fn),abort listener regardless of remove to all clean up; before order first compute then enter execute window, window inside
- *   cancel hand over by fn itself signal semantics;
- * - finally without condition release this (done),Map item delete only in chain tail itself compute after - -
- *   by cancel queue up occupy follow before order compute self however disappear, never mention before delete still in run header lock.
+ * Shared scheduling core (single implementation for both `env` and `local` entrypoints):
+ * - Races predecessor completion against `signal`: aborts while queued reject immediately without waiting
+ *   for predecessors or running `fn`, and always clean up the abort listener; once predecessors finish and
+ *   execution enters `fn`, cancellation follows `fn`'s own signal semantics;
+ * - Unconditionally releases its slot (`done`) in `finally`, while the Map entry is removed only after
+ *   the chain tail settles—cancelled entries wait for predecessors before disappearing so the active lock
+ *   holder's Map entry is never evicted early.
  */
 async function runQueued<T>(
   key: string,
@@ -148,7 +153,7 @@ async function runQueued<T>(
   for (const listener of [...enqueueListeners]) {
     listener({ key, waiting })
   }
-  // chain tail compute (before order complete + this release) after only then allows delete Map item.
+  // Delete Map entry only after the chain tail settles (predecessors + this release).
   void tail.then(() => {
     if (queues.get(key) === tail) queues.delete(key)
   })
@@ -176,8 +181,8 @@ async function runQueued<T>(
 }
 
 /**
- * the same file (canonical) change strictly serial; queue up in cancel immediately reject (see runQueued).
- * concurrency same file invoke bykey parse complete order queue up (and pi-durable consistent).
+ * Strictly serialize mutations to the same canonical file; cancellations while queued reject immediately (see `runQueued`).
+ * Concurrent calls targeting the same file queue in order of key resolution completion (matching `pi-durable`).
  */
 export async function envWithFileMutationQueue<T>(
   env: ExecutionEnv,
@@ -191,8 +196,8 @@ export async function envWithFileMutationQueue<T>(
 }
 
 /**
- * local Hub disk file mutual exclusion queue (and via ExecutionEnv  local bottom seat same key empty between:
- * key prefix same is 'node:local',canonical algorithm consistent, therefore two kinds of entry mutual exclusion).
+ * Local Hub disk file mutation queue (shares key namespace `'node:local'` and canonicalization rules
+ * with `ExecutionEnv`'s local backend, so both entrypoints serialize against each other).
  */
 export async function localWithFileMutationQueue<T>(
   absolutePath: string,
@@ -204,12 +209,12 @@ export async function localWithFileMutationQueue<T>(
   return runQueued(key, previous, fn, signal)
 }
 
-/** queue inside now store item count (diagnose/test inside omit; does not enter env/index public exports). */
+/** Current queue size (diagnostics/testing only; not exported from `env/index`). */
 export function fileMutationQueueSize(): number {
   return queues.size
 }
 
-/** subscribe queue queue event (diagnose/test inside omit; does not enter env/index public exports): task complete canonical parse and hang queues after sync trigger. */
+/** Subscribe to queue enqueue events (diagnostics/testing only; not exported from `env/index`): fires synchronously right after key resolution and queue insertion. */
 export function onFileMutationEnqueue(listener: (event: { key: string; waiting: boolean }) => void): () => void {
   enqueueListeners.add(listener)
   return () => {

@@ -1,8 +1,8 @@
 /**
- * model directory domain routing:/api/models(default/filter/refresh/providers/list),
- * /api/providers(PUT complete array or { providers } package wrap),/api/credentials
- * (only id/configured key, absolute without plaintext).providers/credentials change after hot reload
- * model manifest (only persist do not reload equals hot config invalid).
+ * Model catalog domain routes: /api/models (default/filter/refresh/providers/list),
+ * /api/providers (PUT full array or `{ providers }` wrapper), /api/credentials
+ * (only id/configured key, never plaintext). Hot-reloads the model catalog after
+ * providers/credentials changes (persisting without reloading leaves hot config stale).
  */
 import type { JsonSchema, ProviderConfig } from '@helm/protocol'
 import { HelmError } from '@helm/protocol'
@@ -15,7 +15,7 @@ import { methodNotAllowed, readOptionalJsonBody, type RouteContext } from './rou
 // /api/models
 // ---------------------------------------------------------------------------
 
-// at least provide model or thinkingLevel(anyOf required); empty string model = clear.
+// At least one of model or thinkingLevel is required (anyOf); empty string model clears override.
 const MODELS_DEFAULT_BODY_SCHEMA: JsonSchema = {
   type: 'object',
   properties: {
@@ -36,8 +36,8 @@ const MODELS_FILTER_BODY_SCHEMA: JsonSchema = {
   additionalProperties: false,
 }
 
-// note:provider/providers non-empty is === '' semantics (whitespace string history let through),
-// do not add \S pattern, avoid tight behavior.
+// Note: provider/providers non-emptiness uses `=== ''` semantics (historically allows whitespace strings);
+// do not add a `\S` pattern to avoid tightening behavior.
 const MODELS_REFRESH_BODY_SCHEMA: JsonSchema = {
   type: 'object',
   properties: {
@@ -62,7 +62,7 @@ export async function handleModelsDomain(
   }
   if (second === 'default' && third === undefined && method === 'PUT') {
     if (kernel.setDefaultModel === undefined) {
-      throw new HelmError('not_implemented', 'when before runtime not provide by default model settings', 501)
+      throw new HelmError('not_implemented', 'current runtime does not support setting the default model', 501)
     }
     const raw = await readOptionalJsonBody(ctx.request)
     assertBodySchema(MODELS_DEFAULT_BODY_SCHEMA, raw ?? {}, 'models default body')
@@ -76,9 +76,9 @@ export async function handleModelsDomain(
   }
   if (second === 'filter' && third === undefined && method === 'PUT') {
     if (kernel.setDisabledModels === undefined) {
-      throw new HelmError('not_implemented', 'when before runtime not provide model disable collection settings', 501)
+      throw new HelmError('not_implemented', 'current runtime does not support configuring disabled models', 501)
     }
-    // empty body / {} all must validate:{ provider?: string; disabledModels: string[] }.
+    // Both empty body and {} validate against `{ provider?: string; disabledModels: string[] }`.
     const raw = await readOptionalJsonBody(ctx.request)
     assertBodySchema(MODELS_FILTER_BODY_SCHEMA, raw ?? {}, 'models filter body')
     const body = (raw ?? {}) as Record<string, unknown>
@@ -89,11 +89,11 @@ export async function handleModelsDomain(
     return jsonOk(redactor, { ok: true, catalog })
   }
   if (second === 'refresh' && third === undefined && method === 'POST') {
-    // empty body / {} all legal (refresh all);provider single choose,providers many choose,force optional.
+    // Empty body and {} are valid (refresh all); provider (single), providers (list), and force are optional.
     const raw = await readOptionalJsonBody(ctx.request)
     const options = parseModelsRefreshBody(raw)
     if (kernel.refreshModels === undefined) {
-      throw new HelmError('not_implemented', 'when before runtime not provide motion state model directory refresh', 501)
+      throw new HelmError('not_implemented', 'current runtime does not support refreshing dynamic model catalogs', 501)
     }
     const result = await kernel.refreshModels(options)
     return jsonOk(redactor, result)
@@ -104,11 +104,10 @@ export async function handleModelsDomain(
   if (second === undefined && method === 'GET') {
     return jsonOk(redactor, await kernel.listModels())
   }
-  return errorResponse(redactor, 404, 'not_found', 'routing missing')
+  return errorResponse(redactor, 404, 'not_found', 'route not found')
 }
 
-/** POST /api/models/refresh body shape already by schema guarantee; this where only do across field merge
- * (provider single choose + providers many choose concatenate is the same targets list). */
+/** Body shape for POST /api/models/refresh is enforced by schema; merge single `provider` and list `providers` into one target list here. */
 function parseModelsRefreshBody(raw: unknown): { providers?: string[]; force?: boolean } {
   assertBodySchema(MODELS_REFRESH_BODY_SCHEMA, raw ?? {}, 'models refresh body')
   const body = (raw ?? {}) as Record<string, unknown>
@@ -133,12 +132,12 @@ export async function handleProvidersDomain(
 ): Promise<Response> {
   const { method, segments } = ctx
   if (segments[1] !== undefined) {
-    return errorResponse(redactor, 404, 'not_found', 'routing missing')
+    return errorResponse(redactor, 404, 'not_found', 'route not found')
   }
   if (method === 'GET') return jsonOk(redactor, await kernel.providers.list())
   if (method === 'PUT') {
-    // CLI convention send complete original array;Web end history form { providers: [...] } same
-    // accept. two kinds of body all via the same schema one by one items strictly validate, do not because package wrap form put wide any field rule.
+    // CLI sends a raw full array; Web historically sends `{ providers: [...] }`.
+    // Both forms go through the same strict per-item schema validation without relaxing field rules.
     const value = await readJsonValue(ctx.request)
     const providers = parseProvidersBodyValue(value)
     const saved = await kernel.providers.save(providers)
@@ -148,11 +147,11 @@ export async function handleProvidersDomain(
   return methodNotAllowed(redactor, method)
 }
 
-/** providers PUT body: complete array (CLI convention) or { providers } package wrap (Web form). */
+/** providers PUT body: full array (CLI convention) or `{ providers }` wrapper (Web form). */
 function parseProvidersBodyValue(value: unknown): ProviderConfig[] {
   if (Array.isArray(value)) return parseProvidersBody({ providers: value })
   if (value !== null && typeof value === 'object') return parseProvidersBody(value as Record<string, unknown>)
-  throw new ValidationError('body must be ProviderConfig complete array or { providers: [...] }')
+  throw new ValidationError('body must be a ProviderConfig array or { providers: [...] }')
 }
 
 // ---------------------------------------------------------------------------
@@ -183,14 +182,14 @@ export async function handleCredentialsDomain(
     await reloadModels(kernel)
     return jsonOk(redactor, { ok: true })
   }
-  return errorResponse(redactor, 404, 'not_found', 'routing missing')
+  return errorResponse(redactor, 404, 'not_found', 'route not found')
 }
 
 // ---------------------------------------------------------------------------
-// auxiliary
+// Helpers
 // ---------------------------------------------------------------------------
 
-/** providers/credentials change after hot reload model manifest; not provide port runtime skip. */
+/** Hot-reload model catalog after providers/credentials change; skipped if runtime omits the port. */
 async function reloadModels(kernel: KernelRuntimeLike): Promise<void> {
   await kernel.reloadModels?.()
 }

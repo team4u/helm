@@ -1,34 +1,28 @@
 /**
- * conversation context use amount compute (pure function; align pi agent 1.5.2 real source code semantics).
+ * Conversation context usage estimation (pure functions; aligned with pi-agent 1.5.2 source semantics).
  *
- * fact based on (@earendil-works/pi-coding-agent 1.5.2 measured source code):
- * - `dist/core/agent-session.js`  `getContextUsage`: valid assistant usage
- *   (stopReason non- aborted/error and context tokens > 0) at most near once compress after
- *   only then can message; compress after still without still in projection in valid assistant when tokens unknown
- *   (null);
- * - `dist/core/compaction/compaction.js`  `estimateProjectedContextTokens`:
- *   finally once usage if at most near once context invalidation(compaction /
- *   context_edit) before one rule expires, retreat is all amount estimate compute - - first use pi-ai public
- *   `getCurrentSystemMessage(messages)` collapse when before takes effect system(content append,
- *   sections by name patch,tools replay), estimate compute it once, again one by one estimate compute non- system
- *   message (does not repeat count by update old system);
- * - same file `estimateTokens`:chars/4 keep guard estimate compute (diagram piece by 4800 character,system 
- *   content + sections + toolsAdded merge count total character after Math.ceil(/4)).
+ * Verified against @earendil-works/pi-coding-agent 1.5.2 source:
+ * - `dist/core/agent-session.js` `getContextUsage`: valid assistant usage (stopReason not aborted/error and context
+ *   tokens > 0) is trusted only after the latest compaction; if no valid assistant remains in projection afterwards, tokens is unknown (null);
+ * - `dist/core/compaction/compaction.js` `estimateProjectedContextTokens`:
+ *   if the latest usage predates the latest context invalidation (compaction / context_edit), discard it and fall back
+ *   to full estimation—first collapsing current effective system message via pi-ai `getCurrentSystemMessage(messages)`
+ *   (content append, section patching, tools replay) and estimating it once, then estimating non-system messages
+ *   individually (without double-counting updated old system messages);
+ * - Same file `estimateTokens`: conservative chars/4 estimate (images count as 4800 chars; system sums content +
+ *   sections + toolsAdded chars before `Math.ceil(chars / 4)`).
  *
- * is what local extract while do not re- use now into export:pi CLI  `estimateTokens` not from any public
- * package export (only CLI dist internal module), away private sub- path or introduce the whole CLI package all violate reverse package
- * boundary;pi-ai public `estimateMessageTokens` is CHARS_PER_TOKEN=3.5 another
- * set algorithm (system count method also different), do not smoke fill same source. this where by Pi source code one by one row extract is small pure
- * function and note out where;`calculateContextTokens` and `getCurrentSystemMessage`
- * still re- use pi-ai public export (and Pi the same source public style).
+ * Why extracted locally instead of re-exporting: pi CLI's `estimateTokens` is an internal dist module without a public
+ * export—importing private subpaths or pulling the whole CLI package would break package boundaries; pi-ai's public
+ * `estimateMessageTokens` uses CHARS_PER_TOKEN=3.5 with different system accounting, so it cannot impersonate the same source.
+ * Extracted line-by-line with provenance comments; `calculateContextTokens` and `getCurrentSystemMessage` still reuse pi-ai exports.
  *
- * helm semantics mapping (pi branch item -> pi-durable ContextView):
- * - compaction / context edit all is context invalidation: before is head mark record
- *   (pi.compaction / pi.reset), after is carry `edits` item (such as helm.rewind
- *    omit/replace); anchor only later thanhead boundary and most new edits non-empty item id 
- *   relatively large only then can message (generalize decide entry.edits, do not hard encode helm.rewind policy);
- * - contributions already by edits should use (omit item contribution is empty array),post-compaction
- *   valid assistant decide day however only see still in projection in message.
+ * Helm semantic mapping (pi branch entries -> pi-durable ContextView):
+ * - Both compaction and context edits are context invalidations: the former is a head marker (pi.compaction / pi.reset),
+ *   and the latter is an entry with non-empty `edits` (e.g., helm.rewind omit/replace); anchors are trusted only when strictly newer
+ *   than the max of head boundary and latest non-empty edits entry ID (generalized on entry.edits without hardcoding helm.rewind);
+ * - contributions already reflect applied edits (omitted entries contribute []), so checking post-compaction valid assistants
+ *   naturally inspects only messages still present in projection.
  */
 
 import type { ContextView } from '@earendil-works/pi-durable'
@@ -36,22 +30,22 @@ import { getCurrentSystemMessage, type Message } from '@earendil-works/pi-ai'
 import { calculateContextTokens } from '@earendil-works/pi-ai/utils/estimate'
 import type { ConversationContextUsage } from '@helm/protocol'
 
-/** valid assistant usage message shape (pi getAssistantUsage decide structure sub- collection). */
+/** Valid assistant usage message shape (subset of pi getAssistantUsage predicate). */
 type MeasuredAssistant = {
   role: 'assistant'
   usage: Parameters<typeof calculateContextTokens>[0]
 }
 
-/** estimate compute result;tokens is null means real context unknown (compress after still without valid usage). */
+/** Usage estimation result; tokens=null means true context size is unknown (post-compaction with no measured usage yet). */
 export interface ContextUsageEstimate {
   tokens: number | null
 }
 
-/** pi agent compaction.js `ESTIMATED_IMAGE_CHARS`: diagram piece by 4800 character count. */
+/** `ESTIMATED_IMAGE_CHARS` from pi-agent compaction.js: images count as 4800 characters. */
 const ESTIMATED_IMAGE_CHARS = 4800
 
-/** pi agent compaction.js `estimateTextAndImageContentChars` same style:
- * string by length; chunk array cumulative text chunk character and diagram piece fixed character (empty text chunk skip). */
+/** Matches `estimateTextAndImageContentChars` from pi-agent compaction.js:
+ * string by length; block arrays sum text block lengths (skipping empty) and fixed cost per image. */
 function textAndImageContentChars(content: unknown): number {
   if (typeof content === 'string') return content.length
   if (!Array.isArray(content)) return 0
@@ -69,12 +63,11 @@ function textAndImageContentChars(content: unknown): number {
 }
 
 /**
- * message tokens keep guard estimate compute (chars/4), one by one row align pi agent compaction.js 
- * `estimateTokens`; override helm context support four Message role
- * (system / user / assistant / toolResult), unknown role count 0:
- * - system:content + sections value + toolsAdded  JSON serialization merge total character;
- * - user / toolResult:text and diagram piece content character (diagram piece by 4800);
- * - assistant:text / thinking chunk character + toolCall  name and parameter JSON character.
+ * Conservative message token estimate (chars/4), matching pi-agent compaction.js `estimateTokens`;
+ * covers all four Message roles in Helm context (system / user / assistant / toolResult), returning 0 for unknown roles:
+ * - system: content + section values + JSON-serialized toolsAdded char lengths;
+ * - user / toolResult: text and image char lengths (images count as 4800);
+ * - assistant: text / thinking block char lengths + toolCall name and JSON arguments char lengths.
  */
 export function estimateTokens(message: Message): number {
   let chars = 0
@@ -111,10 +104,9 @@ export function estimateTokens(message: Message): number {
   return 0
 }
 
-/** pi agent compaction.js `getAssistantUsage` same style decide:role is assistant,
- * stopReason non- aborted/error,usage shape can compute and context tokens > 0(pi-durable
- *  contributions already remove aborted/error/deferred message, this where by the same rule guard against defend
- * very rule source, derive render data do not because other corrupt item interrupt refresh). */
+/** Aligned with pi-agent compaction.js `getAssistantUsage`: role is assistant, stopReason not aborted/error,
+ * countable usage with context tokens > 0 (pi-durable contributions already filter aborted/error/deferred messages,
+ * and checking here defends against unusual sources so derived UI stats never break refreshes on corrupted entries). */
 function isValidMeasuredAssistant(message: unknown): message is MeasuredAssistant {
   if (message === null || typeof message !== 'object') return false
   const m = message as { role?: unknown; usage?: unknown; stopReason?: unknown }
@@ -124,26 +116,24 @@ function isValidMeasuredAssistant(message: unknown): message is MeasuredAssistan
 }
 
 /**
- * align pi agent `getContextUsage` context estimate compute.
+ * Context usage estimator aligned with pi-agent `getContextUsage`.
  *
- * - expires boundary:head mark record (compaction/reset) and most new carry non-empty `edits` item
- *   take relatively large; anchor scan skip boundary and more early item (compress keep prefix and by rewind override
- *   zone between inside old usage all cannot message,pi semantics: most new invalidation before usage one rule expires);
- * - compress after unknown:head is pi.compaction and head after no any still in projection
- *   in valid assistant(contains by after continue edit omit case) when tokens=null- - summary
- *   character estimate compute do not smoke fill real context, until under once LLM response on report usage;pi.reset is
- *   all new context, all amount estimate compute (0) i.e. real value, do not is null;
- * - measured anchor: boundary after most near a valid assistant(contributions inside finally a);
- *   anchor must in eventually view.messages in can locate (guard against defend: locate failed by without anchor handle,
- *   never usage and all amount estimate compute each other add build into duplicate count amount);tokens = anchor usage context
- *   tokens + its after message one by one chars/4 estimate compute;
- * - all amount estimate compute:`getCurrentSystemMessage` collapse when before takes effect system estimate compute once +
- *   each non- system message one by one estimate compute (pi same style, does not repeat count by update old system).
+ * - Invalidation boundary: max of head marker (compaction/reset) and latest entry with non-empty `edits`;
+ *   anchor scan skips the boundary and earlier entries (compaction kept prefix and rewound intervals contain stale usage
+ *   that cannot be trusted; pi semantics invalidate all usage prior to the latest invalidation);
+ * - Unknown post-compaction: when head is pi.compaction and no valid assistant remains in projection afterwards
+ *   (including omitted by subsequent edits), return tokens=null—compaction summary chars must not masquerade as true
+ *   context size until the next LLM response reports usage; pi.reset yields a fresh context so full estimate (0) is accurate, not null;
+ * - Measured anchor: newest valid assistant after the boundary (last inside contributions); must locate in final
+ *   view.messages (defensive fallback to full estimate on miss rather than double-counting usage + full estimate);
+ *   tokens = anchor context tokens + chars/4 estimates for each subsequent message;
+ * - Full estimate: `getCurrentSystemMessage` collapses effective system once + individual estimates for non-system
+ *   messages (matches pi, avoiding double-counting replaced system messages).
  */
 export function estimateContextUsage(view: ContextView): ContextUsageEstimate {
   const head = view.head
   const headBoundary = head?.id ?? Number.NEGATIVE_INFINITY
-  // most new edits non-empty item (generalize decide: any carry context override item all is invalidation).
+  // Latest entry with non-empty edits (generalized: any context-rewriting entry acts as an invalidation).
   let latestEditBoundary = Number.NEGATIVE_INFINITY
   for (const entry of view.entries) {
     if (entry.edits !== undefined && entry.edits.length > 0 && entry.id > latestEditBoundary) {
@@ -152,15 +142,14 @@ export function estimateContextUsage(view: ContextView): ContextUsageEstimate {
   }
   const trustBoundary = Math.max(headBoundary, latestEditBoundary)
 
-  // tail to scan: anchor = boundary after most near a valid assistant; also decide head after
-  // is otherwise store in any still in projection in valid assistant(compress after unknown decide use,
-  // do not subject to edit boundary affect - - by edit expires and from not store in is two back matter).
+  // Reverse scan: anchor = latest valid assistant after boundary; simultaneously check if any valid assistant remains
+  // in projection after head (used for post-compaction unknown check regardless of edit boundary—invalidated vs absent are distinct).
   let postHeadValidAssistant = false
   let anchor: MeasuredAssistant | undefined
   for (let index = view.entries.length - 1; index >= 0; index -= 1) {
     const entry = view.entries[index]!
-    // head mark record itself and its before old item (contains compress keep prefix) all cannot message;entries is not
-    // rise order (head mark record reside first, keep item id more small), only can one by one skip cannot mention before break.
+    // Skip head marker itself and earlier entries (including kept prefix before compaction); view.entries is NOT strictly
+    // ordered by id (head marker precedes kept older entries), so continue instead of breaking early.
     if (entry.id <= headBoundary) continue
     let entryAnchor: MeasuredAssistant | undefined
     for (const message of view.contributions[index]!) {
@@ -176,8 +165,8 @@ export function estimateContextUsage(view: ContextView): ContextUsageEstimate {
 
   if (head?.kind === 'pi.compaction' && !postHeadValidAssistant) return { tokens: null }
 
-  // anchor object from contributions, and messages same source same reference (lastIndexOf by identity
-  // hit); locate failed (-1) by without anchor away all amount estimate compute, never duplicate count amount.
+  // Anchor originates from contributions and shares object identity with view.messages (hit via lastIndexOf);
+  // if not found (-1), fall back to full estimation rather than double-counting.
   const anchorIndex = anchor === undefined ? -1 : view.messages.lastIndexOf(anchor as Message)
   if (anchor !== undefined && anchorIndex >= 0) {
     let tokens = calculateContextTokens(anchor.usage)
@@ -194,28 +183,28 @@ export function estimateContextUsage(view: ContextView): ContextUsageEstimate {
   return { tokens }
 }
 
-/** pi.live compaction state structure sub- collection (tracker mirror pass-through use; field by real SDK shape). */
+/** Subset of pi.live compaction state (passthrough shape observed by tracker; matches SDK shape). */
 export interface LiveCompactionShape {
   taskId: number
   trigger: string
   blocking: boolean
 }
 
-/** pi.live compactionFailure structure sub- collection. */
+/** Subset of pi.live compactionFailure structure. */
 export interface LiveCompactionFailureShape {
   taskId: number
   trigger: string
   error: string
 }
 
-/** pi.live compress related field structure sub- collection (compactionLiveKeyOf refer grain than for use). */
+/** Subset of pi.live compaction fields (for compactionLiveKeyOf comparison). */
 export interface LiveCompactionStateShape {
   compactions?: LiveCompactionShape[]
   compactionFailure?: LiveCompactionFailureShape
 }
 
-/** pi.live compress state refer grain (only memory than for use, do not for outside publish):compactions 
- * (taskId,trigger,blocking) sequence + compactionFailure  (taskId,trigger,error). */
+/** Fingerprint of pi.live compaction state (for in-memory comparison only, never published):
+ * compactions (taskId, trigger, blocking) list + compactionFailure (taskId, trigger, error). */
 export function compactionLiveKeyOf(live: LiveCompactionStateShape | undefined): string {
   if (live === undefined) return ''
   return JSON.stringify([
@@ -226,32 +215,32 @@ export function compactionLiveKeyOf(live: LiveCompactionStateShape | undefined):
   ])
 }
 
-/** pi.live compactions non-empty i.e. compress in progress (only read render streamline in...; many items task
- * take any a in-flight all is true, do not fabricate trigger detail). */
+/** Non-empty pi.live compactions means compaction is running (UI shows compacting indicator;
+ * multiple concurrent tasks reduce to true without fabricating trigger specifics). */
 export function compactingOf(compactions: readonly LiveCompactionShape[] | undefined): boolean | undefined {
   return compactions !== undefined && compactions.length > 0 ? true : undefined
 }
 
 const COMPACTION_TRIGGER_LABEL: Record<string, string> = {
-  manual: 'manually',
+  manual: 'manual',
   threshold: 'threshold',
   overflow: 'overflow',
 }
 
-/** compress failed notify body text (trigger semantics + redaction error summary, truncate 400 character).
- * compress failed must not static default: by tracker via notification event explicit on report once. */
+/** Compaction failure notification body (trigger context + redacted error summary, capped at 400 chars).
+ * Compaction failures must never be swallowed silently: tracker emits one explicit notification event. */
 export function compactionFailureNoticeOf(
   failure: LiveCompactionFailureShape,
   redact: (text: string) => string,
 ): string {
   const trigger = COMPACTION_TRIGGER_LABEL[failure.trigger] ?? failure.trigger
   const error = redact(failure.error ?? '').trim().slice(0, 400)
-  return error === '' ? `${trigger} trigger context streamline failed (without error detail)` : `${trigger} trigger context streamline failed:${error}`
+  return error === '' ? `${trigger}-triggered context compaction failed (no error details)` : `${trigger}-triggered context compaction failed: ${error}`
 }
 
 /**
- * group install complete contextUsage(can missing field all omit, do not fabricate).
- * contextWindow by caller by model parse result to out (unknown pass undefined).
+ * Assemble complete contextUsage (omit optional fields when absent, never fabricate).
+ * Caller passes resolved contextWindow from model lookup (undefined when unknown).
  */
 export function assembleContextUsage(parts: {
   estimate: ContextUsageEstimate
@@ -266,7 +255,7 @@ export function assembleContextUsage(parts: {
 }
 
 /**
- * contextUsage semantics refer grain (publish dedupe): any one bear load field change only then publish conversation.upsert.
+ * Semantic contextUsage fingerprint (publish dedupe): emits conversation.upsert only when any payload field changes.
  */
 export function contextUsageKeyOf(usage: ConversationContextUsage | undefined): string {
   if (usage === undefined) return ''

@@ -1,13 +1,13 @@
 /**
- * node health snapshot (NodeHealthSnapshot) kernel support test:
- * 1. sanitizeNodeHealth boundary validate: required field illegal whole discard, optional disk field
- *    illegal separate ignore, not validate dirty field (redundant key) never pass-through.
- * 2. NodeRegistry.register / noteHeartbeat / /ws/node real link:
- *    register carry legal/illegal health filter and save; heartbeat incidentally new snapshot real-time refresh;
- *    non- this connect fabricate heartbeat cannot tamper other node health.
- * 3. GET /api/nodes:local node and online BYOM node all contains complete health snapshot
- *    (uptimeSec/loadAvg/memFreeBytes/memTotalBytes/diskFreeBytes/diskTotalBytes),
- *    and host real os metric consistent; node offline after online:false leaves no residue expired health.
+ * Kernel support tests for node health snapshots (NodeHealthSnapshot):
+ * 1. sanitizeNodeHealth boundary validation: invalid required fields drop the entire payload,
+ *    invalid optional disk fields are omitted individually, unvalidated extra fields never pass through.
+ * 2. NodeRegistry.register / noteHeartbeat / /ws/node real transport:
+ *    registration filters and saves health; heartbeats refresh the snapshot in real time;
+ *    forged heartbeats from other connections cannot tamper with another node's health.
+ * 3. GET /api/nodes: both the local node and online BYOM nodes include complete health snapshots
+ *    (uptimeSec/loadAvg/memFreeBytes/memTotalBytes/diskFreeBytes/diskTotalBytes) consistent with host OS
+ *    metrics; once a node goes offline (online: false), stale health is cleared.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -24,10 +24,10 @@ import { startHub } from '../src/http/index.js'
 import { cleanupDir, makeFauxModels, makeTempDir, sleep as delay } from './helpers.js'
 
 // ---------------------------------------------------------------------------
-// test base seat
+// Test harness
 // ---------------------------------------------------------------------------
 
-/** extreme simple EventEmitter(avoid and ws WebSocket construct difference; same event listen/trigger semantics). */
+/** Minimal EventEmitter (avoids constructor differences from ws WebSocket; identical on/once/emit semantics). */
 class EventEmitterShim {
   readonly #listeners = new Map<string, Set<() => void>>()
   on(event: string, listener: () => void): void {
@@ -50,7 +50,7 @@ class EventEmitterShim {
   }
 }
 
-/** can control when order register table layer socket replace body (same env-registry-races.test.ts pattern). */
+/** Controllable socket stub at the registry layer (same pattern as env-registry-races.test.ts). */
 class RegistrySocket extends EventEmitterShim {
   OPEN = 1
   CLOSED = 3
@@ -91,7 +91,7 @@ async function registerFake(
   return { socket, accepted: result.accepted }
 }
 
-/** real /ws/node gateway + original WS client (manually register/heartbeat, can control when order). */
+/** Real /ws/node gateway + raw WS client (manual register/heartbeat with controllable timing). */
 async function startGatewayHub(): Promise<{
   url: string
   registry: NodeRegistry
@@ -115,7 +115,7 @@ async function startGatewayHub(): Promise<{
   }
 }
 
-/** original WS node client (birpc:register + heartbeat incidentally health). */
+/** Raw WS node client (birpc: register + heartbeat with optional health payload). */
 async function connectNode(
   url: string,
   nodeId: string,
@@ -152,7 +152,7 @@ async function connectNode(
           try {
             cb(JSON.parse(text) as never)
           } catch {
-            /* non- JSON frame ignore */
+            /* ignore non-JSON frames */
           }
         })
       },
@@ -176,18 +176,18 @@ async function connectNode(
       try {
         rpc.$close()
       } catch {
-        /* already closure */
+        /* already closed */
       }
       try {
         ws.close()
       } catch {
-        /* already closure */
+        /* already closed */
       }
     },
   }
 }
 
-/** complete Hub(KernelRuntime + startHub, contains /api/nodes and /ws/node gateway). */
+/** Full Hub (KernelRuntime + startHub, including /api/nodes and /ws/node gateway). */
 async function openHubApp(dir: string): Promise<{
   kernel: KernelRuntime
   hub: Awaited<ReturnType<typeof startHub>>
@@ -229,15 +229,15 @@ async function listNodesViaApi(hubUrl: string, token: string): Promise<Array<Rec
 }
 
 function assertCompleteHealth(health: unknown): void {
-  assert.ok(health !== null && typeof health === 'object', `health must be an object:${JSON.stringify(health)}`)
+  assert.ok(health !== null && typeof health === 'object', `health must be an object: ${JSON.stringify(health)}`)
   const h = health as Record<string, unknown>
-  assert.ok(Number.isFinite(h['collectedAt']), 'collectedAt must be finite count')
+  assert.ok(Number.isFinite(h['collectedAt']), 'collectedAt must be a finite number')
   assert.ok(typeof h['uptimeSec'] === 'number' && Number.isFinite(h['uptimeSec']) && h['uptimeSec'] >= 0)
   assert.ok(
     Array.isArray(h['loadAvg']) &&
       h['loadAvg'].length === 3 &&
       h['loadAvg'].every((v) => typeof v === 'number' && Number.isFinite(v)),
-    `loadAvg must be length 3 finite count meta group:${JSON.stringify(h['loadAvg'])}`,
+    `loadAvg must be a 3-element tuple of finite numbers: ${JSON.stringify(h['loadAvg'])}`,
   )
   assert.ok(typeof h['memFreeBytes'] === 'number' && Number.isFinite(h['memFreeBytes']) && h['memFreeBytes'] >= 0)
   assert.ok(typeof h['memTotalBytes'] === 'number' && Number.isFinite(h['memTotalBytes']) && h['memTotalBytes'] >= 0)
@@ -252,10 +252,10 @@ test('setup: create temporary directory', { timeout: 60_000 }, async () => {
 })
 
 // ---------------------------------------------------------------------------
-// 1. sanitizeNodeHealth boundary validate
+// 1. sanitizeNodeHealth boundary validation
 // ---------------------------------------------------------------------------
 
-test('sanitizeNodeHealth: legal payload all amount keep, unknown dirty field remove', { timeout: 60_000 }, () => {
+test('sanitizeNodeHealth: preserves all valid fields and strips unknown extra fields', { timeout: 60_000 }, () => {
   const raw = {
     ...validHealth(),
     extraField: 'dirty',
@@ -270,10 +270,10 @@ test('sanitizeNodeHealth: legal payload all amount keep, unknown dirty field rem
     diskFreeBytes: 2048,
     diskTotalBytes: 8192,
   })
-  assert.equal(clean !== undefined && 'extraField' in clean, false, 'not validate dirty field never pass-through')
+  assert.equal(clean !== undefined && 'extraField' in clean, false, 'unvalidated extra fields must never pass through')
 })
 
-test('sanitizeNodeHealth: required field any one illegal whole discard (undefined, never throw exception)', { timeout: 60_000 }, () => {
+test('sanitizeNodeHealth: invalid required field discards entire payload (returns undefined, never throws)', { timeout: 60_000 }, () => {
   const bad: unknown[] = [
     undefined,
     null,
@@ -281,35 +281,35 @@ test('sanitizeNodeHealth: required field any one illegal whole discard (undefine
     42,
     [],
     {},
-    // collectedAt illegal
+    // invalid collectedAt
     { ...validHealth(), collectedAt: -1 },
     { ...validHealth(), collectedAt: Number.NaN },
     { ...validHealth(), collectedAt: Number.POSITIVE_INFINITY },
     { ...validHealth(), collectedAt: '123' },
-    // uptimeSec illegal
+    // invalid uptimeSec
     { ...validHealth(), uptimeSec: -5 },
     { ...validHealth(), uptimeSec: Number.NaN },
-    // loadAvg illegal (length / type)
+    // invalid loadAvg (length / element type)
     { ...validHealth(), loadAvg: [0.1, 0.2] },
     { ...validHealth(), loadAvg: [0.1, 0.2, 0.3, 0.4] },
     { ...validHealth(), loadAvg: [0.1, 'x', 0.3] },
     { ...validHealth(), loadAvg: [0.1, Number.NaN, 0.3] },
     { ...validHealth(), loadAvg: 'not-array' },
-    // memFreeBytes / memTotalBytes illegal
+    // invalid memFreeBytes / memTotalBytes
     { ...validHealth(), memFreeBytes: -1 },
     { ...validHealth(), memFreeBytes: Number.NaN },
     { ...validHealth(), memTotalBytes: -1 },
     { ...validHealth(), memTotalBytes: Number.POSITIVE_INFINITY },
   ]
   for (const payload of bad) {
-    assert.equal(sanitizeNodeHealth(payload), undefined, `illegal payload must return undefined:${JSON.stringify(payload)}`)
+    assert.equal(sanitizeNodeHealth(payload), undefined, `invalid payload must return undefined: ${JSON.stringify(payload)}`)
   }
 })
 
-test('sanitizeNodeHealth: optional disk field illegal only ignore the field, the rest keep', { timeout: 60_000 }, () => {
+test('sanitizeNodeHealth: invalid optional disk fields are omitted individually without dropping valid fields', { timeout: 60_000 }, () => {
   const noDisk = sanitizeNodeHealth({ ...validHealth(), diskFreeBytes: undefined })
   assert.ok(noDisk !== undefined)
-  assert.equal('diskFreeBytes' in noDisk, false, 'diskFreeBytes default when must not appear the key')
+  assert.equal('diskFreeBytes' in noDisk, false, 'missing diskFreeBytes must not leave an empty property key')
   assert.equal(noDisk.diskTotalBytes, 8192)
 
   const badDisk = sanitizeNodeHealth({
@@ -318,16 +318,16 @@ test('sanitizeNodeHealth: optional disk field illegal only ignore the field, the
     diskTotalBytes: 'lots',
   })
   assert.ok(badDisk !== undefined)
-  assert.equal('diskFreeBytes' in badDisk, false, 'illegal diskFreeBytes ignore')
-  assert.equal('diskTotalBytes' in badDisk, false, 'illegal diskTotalBytes ignore')
-  assert.equal(badDisk.memTotalBytes, 4096, 'the rest field do not subject to affect')
+  assert.equal('diskFreeBytes' in badDisk, false, 'invalid diskFreeBytes should be omitted')
+  assert.equal('diskTotalBytes' in badDisk, false, 'invalid diskTotalBytes should be omitted')
+  assert.equal(badDisk.memTotalBytes, 4096, 'remaining valid fields stay intact')
 })
 
 // ---------------------------------------------------------------------------
-// 2. register table:register filter save + noteHeartbeat refresh + fabricate heartbeat guard against tamper
+// 2. Registry: filter health on register + refresh via noteHeartbeat + tamper guard
 // ---------------------------------------------------------------------------
 
-test('register: legal health save, illegal health filter, default produces no health key', { timeout: 60_000 }, async () => {
+test('register: stores valid health, filters invalid health, omits health key when missing', { timeout: 60_000 }, async () => {
   const registry = new NodeRegistry({ authenticate: () => true })
   try {
     const good = validHealth()
@@ -340,18 +340,18 @@ test('register: legal health save, illegal health filter, default produces no he
       loadAvg: [1, 2],
       memTotalBytes: -1,
     })
-    assert.equal(bad.accepted, true, 'illegal health does not affect register itself (boundary filter, do not reject connect)')
-    assert.equal(registry.get('node-bad')?.health, undefined, 'illegal health must not save')
+    assert.equal(bad.accepted, true, 'invalid health must not fail registration itself (filtered at boundary, connection stays open)')
+    assert.equal(registry.get('node-bad')?.health, undefined, 'invalid health must not be stored')
 
     const none = await registerFake(registry, 'node-none')
     assert.equal(none.accepted, true)
-    assert.equal('health' in (registry.get('node-none') ?? {}), false, 'not on report health when produces no empty key')
+    assert.equal('health' in (registry.get('node-none') ?? {}), false, 'omitted health must not leave an empty key')
   } finally {
     await registry.close()
   }
 })
 
-test('noteHeartbeat: new snapshot real-time refresh; without payload only refresh lastSeenAt; illegal payload does not override', { timeout: 60_000 }, async () => {
+test('noteHeartbeat: updates snapshot in real time; payloadless heartbeat updates lastSeenAt only; invalid payload does not overwrite', { timeout: 60_000 }, async () => {
   const registry = new NodeRegistry({ authenticate: () => true })
   try {
     const first = validHealth()
@@ -363,28 +363,28 @@ test('noteHeartbeat: new snapshot real-time refresh; without payload only refres
     const second = { ...validHealth(), uptimeSec: 999_999, collectedAt: Date.now() }
     assert.equal(registry.noteHeartbeat('hb-node', socket as unknown as import('ws').WebSocket, { health: second }), true)
     const refreshed = registry.get('hb-node')!.health!
-    assert.equal(refreshed.uptimeSec, 999_999, 'heartbeat snapshot must override old value')
+    assert.equal(refreshed.uptimeSec, 999_999, 'heartbeat snapshot must replace stale value')
     assert.ok(refreshed.collectedAt >= first.collectedAt)
 
-    // without payload heartbeat: only refresh lastSeenAt,health keep do not change.
+    // Payloadless heartbeat: updates lastSeenAt only, leaving health intact.
     const keep = registry.get('hb-node')!.health
     assert.equal(registry.noteHeartbeat('hb-node', socket as unknown as import('ws').WebSocket), true)
     assert.deepEqual(registry.get('hb-node')!.health, keep)
 
-    // illegal payload: does not override since has legal snapshot.
+    // Invalid payload: must not overwrite existing valid snapshot.
     assert.equal(
       registry.noteHeartbeat('hb-node', socket as unknown as import('ws').WebSocket, {
         health: { ...validHealth(), memFreeBytes: Number.NaN } as never,
       }),
       true,
     )
-    assert.deepEqual(registry.get('hb-node')!.health, keep, 'illegal snapshot must not override legal value')
+    assert.deepEqual(registry.get('hb-node')!.health, keep, 'invalid snapshot must not overwrite valid value')
   } finally {
     await registry.close()
   }
 })
 
-test('noteHeartbeat: non- this connect fabricate heartbeat cannot tamper other node health(return false)', { timeout: 60_000 }, async () => {
+test('noteHeartbeat: forged heartbeat from non-owning socket cannot tamper with another node (returns false)', { timeout: 60_000 }, async () => {
   const registry = new NodeRegistry({ authenticate: () => true })
   try {
     const victim = validHealth()
@@ -392,21 +392,21 @@ test('noteHeartbeat: non- this connect fabricate heartbeat cannot tamper other n
     const b = await registerFake(registry, 'attacker-node')
     const stranger = new RegistrySocket()
 
-    // B connect fabricate A node heartbeat: must by refuse.
+    // Socket B forging heartbeat for node A: must be rejected.
     assert.equal(
       registry.noteHeartbeat('victim-node', b.socket as unknown as import('ws').WebSocket, {
         health: { ...validHealth(), uptimeSec: 666 },
       }),
       false,
     )
-    assert.deepEqual(registry.get('victim-node')?.health, victim, 'fabricate heartbeat must not tamper victim health')
+    assert.deepEqual(registry.get('victim-node')?.health, victim, 'forged heartbeat must not tamper with victim health')
 
-    // not registered connect fabricate: same by refuse.
+    // Unregistered socket forging heartbeat: also rejected.
     assert.equal(
       registry.noteHeartbeat('victim-node', stranger as unknown as import('ws').WebSocket, { health: validHealth() }),
       false,
     )
-    // missing node: refuse.
+    // Missing nodeId: rejected.
     assert.equal(
       registry.noteHeartbeat('ghost', a.socket as unknown as import('ws').WebSocket, { health: validHealth() }),
       false,
@@ -418,34 +418,34 @@ test('noteHeartbeat: non- this connect fabricate heartbeat cannot tamper other n
 })
 
 // ---------------------------------------------------------------------------
-// 3. real /ws/node gateway link: register and heartbeat incidentally health
+// 3. Real /ws/node gateway pipeline: register and heartbeat carrying health
 // ---------------------------------------------------------------------------
 
-test('/ws/node:register and heartbeat carry health snapshot real-time write connect', { timeout: 60_000 }, async () => {
+test('/ws/node: register and heartbeat health snapshots persist on active connection', { timeout: 60_000 }, async () => {
   const hub = await startGatewayHub()
   try {
     const node = await connectNode(hub.url, 'ws-health-node')
     const registered = await node.register({ ...validHealth(), uptimeSec: 100 }).catch((error: unknown) => {
-      throw new Error(`register failed to invoke:${String(error instanceof Error ? error.stack : error)}`)
+      throw new Error(`register invocation failed: ${String(error instanceof Error ? error.stack : error)}`)
     })
-    assert.equal(registered.ok, true, `register by refuse:${JSON.stringify(registered)}`)
+    assert.equal(registered.ok, true, `registration rejected: ${JSON.stringify(registered)}`)
     assert.deepEqual(hub.registry.get('ws-health-node')?.health?.uptimeSec, 100)
     assertCompleteHealth(hub.registry.get('ws-health-node')?.health)
 
-    // heartbeat incidentally new snapshot: real-time override.
+    // Heartbeat with new snapshot: updates in real time.
     assert.equal(await node.heartbeat({ health: { ...validHealth(), uptimeSec: 200 } }), true)
     assert.equal(hub.registry.get('ws-health-node')?.health?.uptimeSec, 200)
 
-    // without second parameter old style heartbeat still compatibility (only refresh lastSeenAt).
+    // Legacy 1-arg heartbeat still compatible (updates lastSeenAt only).
     assert.equal(await node.heartbeat(), true)
     assert.equal(hub.registry.get('ws-health-node')?.health?.uptimeSec, 200)
 
-    // heartbeat carry illegal snapshot: does not override since has value.
+    // Heartbeat with invalid snapshot: preserves existing valid value.
     assert.equal(
       await node.heartbeat({ health: { ...validHealth(), loadAvg: [9] } as never }),
       true,
     )
-    assert.equal(hub.registry.get('ws-health-node')?.health?.uptimeSec, 200, 'illegal snapshot does not override')
+    assert.equal(hub.registry.get('ws-health-node')?.health?.uptimeSec, 200, 'invalid snapshot must not overwrite')
     node.close()
   } finally {
     await hub.close()
@@ -453,14 +453,14 @@ test('/ws/node:register and heartbeat carry health snapshot real-time write conn
 })
 
 // ---------------------------------------------------------------------------
-// 4. GET /api/nodes:local and online BYOM node complete health; offline leaves no residue
+// 4. GET /api/nodes: complete health for local and online BYOM; offline leaves no stale health
 // ---------------------------------------------------------------------------
 
-test('GET /api/nodes:local and online BYOM all contains complete real health; offline leaves no residue expired health', { timeout: 60_000 }, async () => {
+test('GET /api/nodes: local and online BYOM carry real complete health; offline retains no stale health', { timeout: 60_000 }, async () => {
   const dir = await mkdtemp(join(rootDir, 'api-'))
   const app = await openHubApp(dir)
   try {
-    // local: and host real os metric consistent.
+    // local: matches real host OS metrics.
     const initial = await listNodesViaApi(app.hub.url, app.token)
     assert.equal(initial.length, 1)
     assert.equal(initial[0]!['id'], 'local')
@@ -468,7 +468,7 @@ test('GET /api/nodes:local and online BYOM all contains complete real health; of
     assertCompleteHealth(localHealth)
     assert.ok(
       Math.abs((localHealth['uptimeSec'] as number) - os.uptime()) < 60,
-      `local uptimeSec should connect near host os.uptime():${String(localHealth['uptimeSec'])}`,
+      `local uptimeSec should stay close to host os.uptime(): ${String(localHealth['uptimeSec'])}`,
     )
     assert.ok(
       Math.abs((localHealth['memTotalBytes'] as number) - os.totalmem()) < 1024 * 1024,
@@ -476,7 +476,7 @@ test('GET /api/nodes:local and online BYOM all contains complete real health; of
     )
     assert.deepEqual(localHealth['loadAvg'], os.loadavg(), 'local loadAvg should equal host os.loadavg()')
 
-    // sign + register real WS node (register incidentally complete health).
+    // Issue token + register real WS node (with complete health on register).
     const issue = await fetch(`${app.hub.url}/api/nodes/issue`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${app.token}` },
@@ -493,26 +493,26 @@ test('GET /api/nodes:local and online BYOM all contains complete real health; of
     const byom = withByom.find((n) => n['id'] === 'health-byom')!
     assert.equal(byom['online'], true)
     assertCompleteHealth(byom['health'])
-    assert.equal((byom['health'] as { uptimeSec: number }).uptimeSec, 1234, 'register snapshot original pass-through')
+    assert.equal((byom['health'] as { uptimeSec: number }).uptimeSec, 1234, 'register snapshot passes through verbatim')
 
-    // heartbeat incidentally new snapshot -> API real-time visible.
+    // Heartbeat with updated snapshot -> immediately visible via API.
     assert.equal(await node.heartbeat({ health: { ...validHealth(), uptimeSec: 4321 } }), true)
     const refreshed = (await listNodesViaApi(app.hub.url, app.token)).find((n) => n['id'] === 'health-byom')!
-    assert.equal((refreshed['health'] as { uptimeSec: number }).uptimeSec, 4321, 'heartbeat snapshot via API real-time visible')
+    assert.equal((refreshed['health'] as { uptimeSec: number }).uptimeSec, 4321, 'heartbeat snapshot is immediately visible via API')
 
-    // disconnect -> offline leaves no residue expired health.
+    // Disconnect -> offline node retains no stale health.
     node.close()
     await delay(300)
     const offline = (await listNodesViaApi(app.hub.url, app.token)).find((n) => n['id'] === 'health-byom')!
     assert.equal(offline['online'], false)
-    assert.equal(offline['health'], undefined, 'offline after must not leftover expired health')
+    assert.equal(offline['health'], undefined, 'offline node must not retain stale health')
   } finally {
     await app.close().catch(() => undefined)
     await cleanupDir(dir).catch(() => undefined)
   }
 })
 
-/** use real sign token connect (connectNode  token fixed is <nodeId>:secret, only gateway replace body use). */
+/** Connects using an issued token (connectNode fixes token to <nodeId>:secret for stub-gateway use only). */
 async function connectNodeWithToken(
   url: string,
   nodeId: string,
@@ -550,7 +550,7 @@ async function connectNodeWithToken(
           try {
             cb(JSON.parse(text) as never)
           } catch {
-            /* non- JSON frame ignore */
+            /* ignore non-JSON frames */
           }
         })
       },
@@ -574,12 +574,12 @@ async function connectNodeWithToken(
       try {
         rpc.$close()
       } catch {
-        /* already closure */
+        /* already closed */
       }
       try {
         ws.close()
       } catch {
-        /* already closure */
+        /* already closed */
       }
     },
   }

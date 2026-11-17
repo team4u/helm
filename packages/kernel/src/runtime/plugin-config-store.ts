@@ -1,17 +1,17 @@
 /**
- * HelmPluginConfigStore:PluginHost config persist bridge (runtime dedicated belong helper).
+ * `HelmPluginConfigStore`: persistent configuration bridge for `PluginHost` (dedicated runtime helper).
  *
- * - non- secret field → config.json `plugins.<pluginId>`(ConfigService atomic write,
- *   only update this plugin key, keep other plugin and other top-level key);
- * - secret field (schema `secret: true`)→ credentials.json `pluginSecrets`
- *   (CredentialService, constant 0600, never config.json);
- * - plugin start stop state → config.json `pluginEnabled` mapping (and `plugins` config,
- *   credentials fully separate; missing means from not persisted, hand over by PluginHost back to declaration value);
- * - `get` sync return two side merge valid config (load when warm up memory mirror, write path sync dimension hold);
- * - `set` by schema complete validate (unknown field / type / required), only persist user explicit
- *   override value (do not solid schema.default), value null means reset back by default (delete disk key);
- * - credentials or config file corrupt when `load()` explicit on throw (open failed), never catch swallow wrong after
- *   pretend read write succeeded (honest discipline).
+ * - Non-secret fields -> `config.json` `plugins.<pluginId>` (`ConfigService` atomic write,
+ *   updating only this plugin's key while preserving other plugins and top-level keys);
+ * - Secret fields (schema `secret: true`) -> `credentials.json` `pluginSecrets`
+ *   (`CredentialService`, always `0600`, never written to `config.json`);
+ * - Plugin enable/disable state -> `config.json` `pluginEnabled` map (kept separate from `plugins` config
+ *   and credentials; missing means never persisted, so `PluginHost` falls back to manifest declaration);
+ * - `get` synchronously returns merged effective config (in-memory mirror warmed on `load()`, kept in sync on writes);
+ * - `set` validates thoroughly against schema (unknown fields / types / required), persisting only explicit
+ *   user overrides (never materializing `schema.default`), with `null` resetting to default (deletes key on disk);
+ * - On corrupted credentials or config file, `load()` propagates the error explicitly (fails startup) rather than
+ *   swallowing errors and pretending reads/writes succeeded (honesty discipline).
  */
 
 import {
@@ -33,22 +33,22 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 }
 
 function invalid(pluginId: string, message: string): HelmError {
-  return new HelmError('validation_error', `plugin ${pluginId} config validation failed:${message}`, 400, {
+  return new HelmError('validation_error', `Plugin '${pluginId}' config validation failed: ${message}`, 400, {
     pluginId,
   })
 }
 
-/** write when embed set field corrupt: original reject, never static default use {} rebuild (will swallow since has data). */
+/** Corrupted nested field encountered during write: reject cleanly instead of overwriting existing data with `{}`. */
 function corrupt(field: string, detail: string): HelmError {
-  return new HelmError('config_corrupt', `config.json ${field} field structure illegal (${detail}), reject write`, 500)
+  return new HelmError('config_corrupt', `config.json field '${field}' has invalid structure (${detail}); write rejected`, 500)
 }
 
 interface Mirror {
-  /** config.json plugins.<id> non- secret valid config. */
+  /** Effective non-secret config under `config.json` `plugins.<id>`. */
   plain: Map<string, Record<string, unknown>>
-  /** credentials.json pluginSecrets.<id>. */
+  /** `credentials.json` `pluginSecrets.<id>`. */
   secrets: Map<string, Record<string, string>>
-  /** config.json pluginEnabled mapping (boolean; missing items = from not persisted). */
+  /** `config.json` `pluginEnabled` map (booleans; missing entries = never persisted). */
   enabled: Map<string, boolean>
 }
 
@@ -56,7 +56,7 @@ export class HelmPluginConfigStore implements PluginConfigStore {
   private readonly configService: ConfigService
   private readonly credentialService: CredentialService
   private readonly mirror: Mirror = { plain: new Map(), secrets: new Map(), enabled: new Map() }
-  /** write path serial (process inside); file layer another has ConfigService/CredentialService each lock. */
+  /** In-process write serialization; file-level locking is also enforced individually by ConfigService/CredentialService. */
   private writeChain: Promise<unknown> = Promise.resolve()
 
   constructor(options: { config: ConfigService; credentials: CredentialService }) {
@@ -65,15 +65,15 @@ export class HelmPluginConfigStore implements PluginConfigStore {
   }
 
   /**
-   * start warm up: read config.json and credentials.json establish sync mirror.
-   * any one file structure corrupt (FileParseError) explicit on throw.
+   * Startup warmup: read `config.json` and `credentials.json` to populate the synchronous mirror.
+   * Any structural corruption (`FileParseError`) propagates explicitly.
    */
   async load(): Promise<void> {
     const cfg = await this.configService.get()
     const plugins = cfg['plugins']
     if (plugins !== undefined) {
       if (!isPlainObject(plugins)) {
-        throw new HelmError('config_corrupt', 'config.json plugins field structure illegal (should be object)', 500)
+        throw new HelmError('config_corrupt', 'config.json field "plugins" has invalid structure (expected object)', 500)
       }
       for (const [id, value] of Object.entries(plugins)) {
         if (isPlainObject(value)) this.mirror.plain.set(id, { ...value })
@@ -84,7 +84,7 @@ export class HelmPluginConfigStore implements PluginConfigStore {
       if (!isPlainObject(pluginEnabled)) {
         throw new HelmError(
           'config_corrupt',
-          'config.json pluginEnabled field structure illegal (should be pluginId → boolean object)',
+          'config.json field "pluginEnabled" has invalid structure (expected pluginId -> boolean object)',
           500,
         )
       }
@@ -92,7 +92,7 @@ export class HelmPluginConfigStore implements PluginConfigStore {
         if (typeof value !== 'boolean') {
           throw new HelmError(
             'config_corrupt',
-            `config.json pluginEnabled.${id} must be boolean value (actual:${typeof value})`,
+            `config.json pluginEnabled.${id} must be a boolean (got ${typeof value})`,
             500,
           )
         }
@@ -105,7 +105,7 @@ export class HelmPluginConfigStore implements PluginConfigStore {
     }
   }
 
-  /** merge valid config: non- secret(config.json)+ secret(credentials.json override same name segment). */
+  /** Merged effective config: non-secret (`config.json`) + secrets (`credentials.json`, overriding same-named fields). */
   get(pluginId: string): Record<string, unknown> {
     return { ...(this.mirror.plain.get(pluginId) ?? {}), ...(this.mirror.secrets.get(pluginId) ?? {}) }
   }
@@ -125,22 +125,22 @@ export class HelmPluginConfigStore implements PluginConfigStore {
     value: Record<string, unknown>,
     schema: Record<string, PluginConfigFieldSchema>,
   ): Promise<void> {
-    if (!isPlainObject(value)) throw invalid(pluginId, 'config value must be object')
+    if (!isPlainObject(value)) throw invalid(pluginId, 'config value must be an object')
 
     const existingPlain = this.mirror.plain.get(pluginId) ?? {}
     const existingSecrets = this.mirror.secrets.get(pluginId) ?? {}
-    /** this time after write eventually store state (required validate based on merge after fact). */
+    /** Final post-write state (required-field check evaluates merged final state). */
     const nextPlain: Record<string, unknown> = { ...existingPlain }
     const nextSecrets: Record<string, string> = { ...existingSecrets }
-    /** await from disk delete key (null reset), by secret ownership bucket. */
+    /** Keys to delete from disk (`null` resets), bucketed by secret flag. */
     const removePlain: string[] = []
     const removeSecrets: string[] = []
 
     for (const [key, fieldValue] of Object.entries(value)) {
       const field = schema[key]
-      if (field === undefined) throw invalid(pluginId, `unknown config field ${key}(not in configSchema declaration)`)
+      if (field === undefined) throw invalid(pluginId, `unknown config field '${key}' (not declared in configSchema)`)
       if (fieldValue === null) {
-        // null = clear explicit config (reset back default; by read side together into, disk only delete do not write).
+        // `null` clears explicit config (resets to default; merged at read time, simply deleted on disk).
         if (field.secret === true) {
           delete nextSecrets[key]
           removeSecrets.push(key)
@@ -152,41 +152,41 @@ export class HelmPluginConfigStore implements PluginConfigStore {
       }
       const expected = TYPE_OF[field.type]
       if (field.secret === true) {
-        if (typeof fieldValue !== 'string') throw invalid(pluginId, `field ${key} is secret, must be string`)
+        if (typeof fieldValue !== 'string') throw invalid(pluginId, `field '${key}' is secret and must be a string`)
         nextSecrets[key] = fieldValue
       } else if (typeof fieldValue !== expected) {
-        throw invalid(pluginId, `field ${key} type should be ${expected}`)
+        throw invalid(pluginId, `field '${key}' must be of type ${expected}`)
       } else {
         if (typeof fieldValue === 'number') {
-          if (!Number.isFinite(fieldValue)) throw invalid(pluginId, `field ${key} must be finite count value`)
-          if (field.integer === true && !Number.isInteger(fieldValue)) throw invalid(pluginId, `field ${key} must be integer`)
-          if (field.minimum !== undefined && fieldValue < field.minimum) throw invalid(pluginId, `field ${key} cannot less than ${field.minimum}`)
-          if (field.maximum !== undefined && fieldValue > field.maximum) throw invalid(pluginId, `field ${key} cannot greater than ${field.maximum}`)
+          if (!Number.isFinite(fieldValue)) throw invalid(pluginId, `field '${key}' must be a finite number`)
+          if (field.integer === true && !Number.isInteger(fieldValue)) throw invalid(pluginId, `field '${key}' must be an integer`)
+          if (field.minimum !== undefined && fieldValue < field.minimum) throw invalid(pluginId, `field '${key}' must be >= ${field.minimum}`)
+          if (field.maximum !== undefined && fieldValue > field.maximum) throw invalid(pluginId, `field '${key}' must be <= ${field.maximum}`)
         }
         nextPlain[key] = fieldValue
       }
     }
 
-    // required validate: merge this time modify after eventually store must contains required and without default field
-    //(default field can default, by read side together into fall back). no longer field.default solid to disk.
+    // Required-field check: final merged state must contain all required fields without defaults
+    // (fields with defaults can be omitted and fall back at read time; defaults are never persisted to disk).
     for (const [key, field] of Object.entries(schema)) {
       if (field.required !== true || field.default !== undefined) continue
       const stored = field.secret === true ? nextSecrets[key] : nextPlain[key]
       const empty = field.secret === true
         ? typeof stored !== 'string' || stored.length === 0
         : stored === undefined || stored === null || stored === ''
-      if (empty) throw invalid(pluginId, `missing required field ${key}`)
+      if (empty) throw invalid(pluginId, `missing required field '${key}'`)
     }
 
-    // first persist again update mirror (failed do not pollute memory perspective, error explicit on throw).
-    // read change write all process in ConfigService the same file lock inside with call back complete: only motion this plugin
-    // embed set key, lock outside without old snapshot, between gap other module write will not by override.
+    // Persist first, then update mirror (failures propagate cleanly without polluting the in-memory view).
+    // Read-modify-write executes inside ConfigService's file lock callback so only this plugin's nested key
+    // is touched, avoiding stale snapshots outside the lock and concurrent overwrites from other modules.
     const plainTouched = Object.keys(nextPlain).length > 0 || removePlain.length > 0
     if (plainTouched) {
       await this.configService.updateBy((current) => {
         const plugins = current['plugins']
         if (plugins !== undefined && !isPlainObject(plugins)) {
-          throw corrupt('plugins', `should be object, actual:${typeof plugins}`)
+          throw corrupt('plugins', `expected object, got ${typeof plugins}`)
         }
         const merged = isPlainObject(plugins) ? plugins : {}
         const bucket = { ...(isPlainObject(merged[pluginId]) ? (merged[pluginId] as Record<string, unknown>) : {}), ...nextPlain }
@@ -207,7 +207,7 @@ export class HelmPluginConfigStore implements PluginConfigStore {
       await this.credentialService.deletePluginSecret(pluginId, key)
     }
 
-    // sync memory mirror (and disk consistent: write merge + null delete; empty bucket clean up).
+    // Sync in-memory mirror to match disk (write merges + null deletes; empty buckets removed).
     if (plainTouched) {
       if (Object.keys(nextPlain).length === 0) this.mirror.plain.delete(pluginId)
       else this.mirror.plain.set(pluginId, { ...nextPlain })
@@ -216,21 +216,21 @@ export class HelmPluginConfigStore implements PluginConfigStore {
     else this.mirror.secrets.set(pluginId, { ...nextSecrets })
   }
 
-  /** plugin start stop state read (sync cache;undefined = from not persisted). */
+  /** Read plugin enabled state (synchronous cache; `undefined` = never persisted). */
   getEnabled(pluginId: string): boolean | undefined {
     return this.mirror.enabled.get(pluginId)
   }
 
   /**
-   * persist plugin start stop state: write config.json pluginEnabled.<pluginId>(only update this key,
-   * keep other plugin start stop and all since has key), after success sync mirror. write failed explicit throw, mirror
-   * do not change (under time getEnabled still return old value, and disk consistent).
+   * Persist plugin enabled state: writes `config.json` `pluginEnabled.<pluginId>` (updates only this key,
+   * preserving other plugins and all existing keys) and updates the mirror upon success. Failures propagate
+   * without mutating the mirror (so subsequent `getEnabled` stays consistent with disk).
    */
   async setEnabled(pluginId: string, enabled: boolean): Promise<void> {
     if (typeof enabled !== 'boolean') {
       throw new HelmError(
         'validation_error',
-        `plugin ${pluginId} start stop state must be boolean value (actual:${typeof enabled})`,
+        `Plugin '${pluginId}' enabled state must be a boolean (got ${typeof enabled})`,
         400,
         { pluginId },
       )
@@ -241,18 +241,17 @@ export class HelmPluginConfigStore implements PluginConfigStore {
   }
 
   private async applyEnabled(pluginId: string, enabled: boolean): Promise<void> {
-    // lock inside read change write: based on most new disk state only update pluginEnabled.<pluginId>, between gap
-    // other module write (auth/model/other plugin) will not by lock outside old snapshot override; corrupt explicit
-    // config_corrupt, never use {} rebuild.
+    // Locked read-modify-write: updates only pluginEnabled.<pluginId> on the latest disk state so concurrent
+    // writes from other modules are not clobbered; corruption fails with config_corrupt rather than rebuilding `{}`.
     await this.configService.updateBy((current) => {
       const existing = current['pluginEnabled']
       if (existing !== undefined && !isPlainObject(existing)) {
-        throw corrupt('pluginEnabled', `should be pluginId → boolean object, actual:${typeof existing}`)
+        throw corrupt('pluginEnabled', `expected pluginId -> boolean object, got ${typeof existing}`)
       }
       if (isPlainObject(existing)) {
         for (const [id, value] of Object.entries(existing)) {
           if (typeof value !== 'boolean') {
-            throw corrupt('pluginEnabled', `${id} must be boolean value (actual:${typeof value})`)
+            throw corrupt('pluginEnabled', `'${id}' must be a boolean (got ${typeof value})`)
           }
         }
       }

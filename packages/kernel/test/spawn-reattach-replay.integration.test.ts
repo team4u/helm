@@ -1,15 +1,15 @@
 /**
- * PluginToolSpec.replay 与 spawnAgent(requestId + reattach.conversationId) 跨重启恢复集成测试。
+ * Cross-restart recovery integration tests for PluginToolSpec.replay and spawnAgent(requestId + reattach.conversationId).
  *
- * 覆盖：
- * 1. reattach 边界强校验与并发保护（与 resume/fork 互斥 400、非法 conversationId 400、
- *    缺少/跨父归属 404 且绝不新建会话、缺失 requestId 400、仅 executionId 400 unsupported_runtime、
- *    并发重挂 409 subagent_in_use 与 activeSpawnExecutions 占位清理）；
- * 2. PluginToolSpec.replay: 'safe' 在 runtime.close() 与 SIGKILL 崩溃中断后自动重放完成回合，
- *    而 replay: 'unsafe' / 缺省工具在 SIGKILL 后绝不重放并收敛为 interrupted 错误结果；
- * 3. spawnAgent 携带 requestId + reattach.conversationId（普通文本+gate、schema+gate 重启后调用工具、
- *    崩溃前已提交 register_structured_output 回填免重追问、:schema-heal 回合崩溃重挂去重）
- *    在 runtime.close() 与 SIGKILL 下原位续跑结算、零重复用户消息。
+ * Covers:
+ * 1. Strong reattach boundary validation and concurrency guards (mutual exclusion with resume/fork 400, invalid conversationId 400,
+ *    missing/wrong-parent 404 without creating a new conversation, missing requestId 400, executionId-only 400 unsupported_runtime,
+ *    concurrent reattach 409 subagent_in_use and activeSpawnExecutions slot cleanup);
+ * 2. PluginToolSpec.replay: 'safe' automatically replays to finish the turn after runtime.close() and SIGKILL crashes,
+ *    while replay: 'unsafe' / default tools never replay after SIGKILL and converge to an interrupted error result;
+ * 3. spawnAgent with requestId + reattach.conversationId (plain text + gate, schema + gate calling tool after restart,
+ *    pre-crash committed register_structured_output backfill avoiding re-prompt, :schema-heal turn crash reattach dedup)
+ *    resumes and settles in-place across runtime.close() and SIGKILL with zero duplicate user messages.
  */
 
 import assert from 'node:assert/strict'
@@ -102,7 +102,7 @@ async function runSeederUntilSigkill(
         }
         reject(
           new Error(
-            `seeder 异常退出 (code=${code}, signal=${signal}, killedByParent=${killedByParent}): ${stdout}${stderr}`.slice(0, 2000),
+            `seeder exited unexpectedly (code=${code}, signal=${signal}, killedByParent=${killedByParent}): ${stdout}${stderr}`.slice(0, 2000),
           ),
         )
       })
@@ -111,7 +111,7 @@ async function runSeederUntilSigkill(
     await Promise.race([
       exited,
       delay(25_000, undefined, { ref: false }).then(() => {
-        throw new Error(`seeder 25s 未进入就绪状态: ${stdout}${stderr}`.slice(0, 2000))
+        throw new Error(`seeder did not reach ready state within 25s: ${stdout}${stderr}`.slice(0, 2000))
       }),
     ])
   } finally {
@@ -120,7 +120,7 @@ async function runSeederUntilSigkill(
         if (process.platform !== 'win32') process.kill(-child.pid, 'SIGKILL')
         else child.kill('SIGKILL')
       } catch {
-        // 进程组已整体退出
+        // Process group already exited
       }
     }
     child.stdout?.destroy()
@@ -128,7 +128,7 @@ async function runSeederUntilSigkill(
   }
 }
 
-test('spawnAgent reattach 边界强校验：互斥、非法 ID、父归属不符与并发占锁', { timeout: 60_000 }, async (t) => {
+test('spawnAgent reattach strong boundary validation: mutual exclusion, invalid ID, wrong parent, and concurrent lock', { timeout: 60_000 }, async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'helm-reattach-boundary-'))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
 
@@ -141,12 +141,12 @@ test('spawnAgent reattach 边界强校验：互斥、非法 ID、父归属不符
   })
   t.after(() => runtime.close().catch(() => {}))
 
-  // 先派生一个真实子会话
-  faux.setResponses([fauxAssistantMessage('初始子会话完成')])
+  // First spawn a real child conversation
+  faux.setResponses([fauxAssistantMessage('initial child done')])
   let childId = 0
   await runtime.spawnAgent({
     parentConversationId: 1,
-    prompt: '初始派生',
+    prompt: 'initial spawn',
     requestId: 'req-init',
     onResolved: (info) => {
       childId = info.conversationId ?? 0
@@ -156,12 +156,12 @@ test('spawnAgent reattach 边界强校验：互斥、非法 ID、父归属不符
   const convCountBefore = runtime.listConversations().length
   const callsBefore = faux.state.callCount
 
-  // 1) reattach 与 resume / fork 互斥（400 validation_error）
+  // 1) reattach mutually exclusive with resume / fork (400 validation_error)
   await assert.rejects(
     () =>
       runtime.spawnAgent({
         parentConversationId: 1,
-        prompt: '冲突',
+        prompt: 'conflict',
         requestId: 'req-conflict-1',
         resume: String(childId),
         reattach: { conversationId: childId },
@@ -172,7 +172,7 @@ test('spawnAgent reattach 边界强校验：互斥、非法 ID、父归属不符
     () =>
       runtime.spawnAgent({
         parentConversationId: 1,
-        prompt: '冲突',
+        prompt: 'conflict',
         requestId: 'req-conflict-2',
         fork: true,
         reattach: { conversationId: childId },
@@ -180,13 +180,13 @@ test('spawnAgent reattach 边界强校验：互斥、非法 ID、父归属不符
     (err: unknown) => err instanceof HelmError && err.code === 'validation_error' && err.status === 400,
   )
 
-  // 2) 非法 reattach 形状 / 非正安全整数 conversationId / 空 requestId
+  // 2) Invalid reattach shapes / non-positive or non-safe-integer conversationId / missing requestId
   for (const badConvId of [0, -5, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
     await assert.rejects(
       () =>
         runtime.spawnAgent({
           parentConversationId: 1,
-          prompt: '非法',
+          prompt: 'invalid',
           requestId: 'req-bad-id',
           reattach: { conversationId: badConvId },
         }),
@@ -197,7 +197,7 @@ test('spawnAgent reattach 边界强校验：互斥、非法 ID、父归属不符
     () =>
       runtime.spawnAgent({
         parentConversationId: 1,
-        prompt: '空对象',
+        prompt: 'empty object',
         requestId: 'req-empty',
         reattach: {},
       }),
@@ -207,7 +207,7 @@ test('spawnAgent reattach 边界强校验：互斥、非法 ID、父归属不符
     () =>
       runtime.spawnAgent({
         parentConversationId: 1,
-        prompt: '相对路径',
+        prompt: 'relative path',
         requestId: 'req-rel-cwd',
         reattach: { conversationId: childId, effectiveCwd: 'relative/path' },
       }),
@@ -217,13 +217,13 @@ test('spawnAgent reattach 边界强校验：互斥、非法 ID、父归属不符
     () =>
       runtime.spawnAgent({
         parentConversationId: 1,
-        prompt: '缺少 requestId',
+        prompt: 'missing requestId',
         reattach: { conversationId: childId },
       }),
     (err: unknown) => err instanceof HelmError && err.code === 'validation_error' && err.status === 400,
   )
 
-  // 3) 会话不存在、根会话无父链、跨父归属不符（404 not_found，绝不新建会话假冒重挂）
+  // 3) Missing conversation, root without parent chain, wrong parent ownership (404 not_found, never create fake child)
   for (const [parentId, targetId] of [
     [1, 999999],
     [1, 1],
@@ -233,7 +233,7 @@ test('spawnAgent reattach 边界强校验：互斥、非法 ID、父归属不符
       () =>
         runtime.spawnAgent({
           parentConversationId: parentId,
-          prompt: '越权重挂',
+          prompt: 'unauthorized reattach',
           requestId: 'req-wrong-owner',
           reattach: { conversationId: targetId },
         }),
@@ -241,22 +241,22 @@ test('spawnAgent reattach 边界强校验：互斥、非法 ID、父归属不符
     )
   }
 
-  // 4) 仅 executionId 到达原生执行行（无外部运行时插件接管）：显式 unsupported_runtime
+  // 4) executionId-only reaching native runner (no external runtime plugin claimed it): explicit unsupported_runtime
   await assert.rejects(
     () =>
       runtime.spawnAgent({
         parentConversationId: 1,
-        prompt: '外部重挂',
+        prompt: 'external reattach',
         requestId: 'req-exec-only',
         reattach: { executionId: 'pane-1' },
       }),
     (err: unknown) => err instanceof HelmError && err.code === 'unsupported_runtime' && err.status === 400,
   )
 
-  assert.equal(runtime.listConversations().length, convCountBefore, '拒绝路径绝不得新建会话')
-  assert.equal(faux.state.callCount, callsBefore, '拒绝路径绝不得触发模型请求')
+  assert.equal(runtime.listConversations().length, convCountBefore, 'rejected paths must never create conversations')
+  assert.equal(faux.state.callCount, callsBefore, 'rejected paths must never trigger model calls')
 
-  // 5) 并发重挂占锁（activeSpawnExecutions + claimSpawnConversation）：409 subagent_in_use
+  // 5) Concurrent reattach lock (activeSpawnExecutions + claimSpawnConversation): 409 subagent_in_use
   const childWorkDir = join(dir, 'slow-child')
   mkdirSync(childWorkDir, { recursive: true })
   let releaseTool!: () => void
@@ -269,11 +269,11 @@ test('spawnAgent reattach 边界强校验：互斥、非法 ID、父归属不符
   })
   await runtime.plugins.register({
     id: 'test:reattach-lock',
-    name: '并发重挂锁测试插件',
+    name: 'Concurrent reattach lock test plugin',
     definePlugin(ctx) {
       ctx.tool({
         name: 'hold_tool',
-        description: '阻塞等待释放',
+        description: 'blocks waiting for release',
         inputSchema: { type: 'object', properties: {} },
         execute: async () => {
           enteredTool()
@@ -284,16 +284,16 @@ test('spawnAgent reattach 边界强校验：互斥、非法 ID、父归属不符
     },
   })
 
-  // 先建立一次运行中子会话，在工具阻塞期间由另一侧发起并发重挂（不通过同一 spawn 调用本身）
-  // 场景 A：通过 runtime.close() 中断后重挂，再由第二个并发重挂检测 409 冲突
+  // Launch an in-flight child conversation; while blocked in tool, attempt concurrent reattach from outside
+  // Scenario A: also covers activeSpawnExecutions visibility and cleanup after completion
   faux.setResponses([
     fauxAssistantMessage([fauxToolCall('hold_tool', {}, { id: 'hold-1' })], { stopReason: 'toolUse' }),
-    fauxAssistantMessage('慢子会话完成'),
+    fauxAssistantMessage('slow child done'),
   ])
   let slowChildId = 0
   const firstRun = runtime.spawnAgent({
     parentConversationId: 1,
-    prompt: '执行阻塞工具',
+    prompt: 'run blocking tool',
     requestId: 'req-concurrent',
     cwd: childWorkDir,
     onResolved: (info) => {
@@ -303,29 +303,29 @@ test('spawnAgent reattach 边界强校验：互斥、非法 ID、父归属不符
   await waitTool
   assert.ok(
     runtime.agentSpawn.listActiveSpawnExecutions().some((info) => info.conversationId === slowChildId),
-    '在途 spawn 必须在 activeSpawnExecutions 可见',
+    'in-flight spawn must appear in activeSpawnExecutions',
   )
   await assert.rejects(
     () =>
       runtime.spawnAgent({
         parentConversationId: 1,
-        prompt: '并发重挂',
+        prompt: 'concurrent reattach',
         requestId: 'req-concurrent',
         reattach: { conversationId: slowChildId },
       }),
     (err: unknown) => err instanceof HelmError && err.code === 'subagent_in_use' && err.status === 409,
   )
   releaseTool()
-  assert.equal(await firstRun, '慢子会话完成')
+  assert.equal(await firstRun, 'slow child done')
   assert.equal(
     runtime.agentSpawn.listActiveSpawnExecutions().some((info) => info.conversationId === slowChildId),
     false,
-    '完成后 activeSpawnExecutions 必须释放',
+    'activeSpawnExecutions entry must be released after completion',
   )
 })
 
-test('PluginToolSpec.replay: safe 在 runtime.close() 与 SIGKILL 下自动重放；unsafe 绝不重放', { timeout: 60_000 }, async (t) => {
-  // ---- A) runtime.close() 优雅中断期间重放 replay: 'safe' 插件工具 ----
+test('PluginToolSpec.replay: safe replays across runtime.close() and SIGKILL; unsafe never replays', { timeout: 60_000 }, async (t) => {
+  // ---- A) Replay replay: 'safe' plugin tool after graceful runtime.close() ----
   const closeDir = mkdtempSync(join(tmpdir(), 'helm-plugin-replay-close-'))
   t.after(() => rmSync(closeDir, { recursive: true, force: true }))
 
@@ -349,11 +349,11 @@ test('PluginToolSpec.replay: safe 在 runtime.close() 与 SIGKILL 下自动重�
   })
   await r1.plugins.register({
     id: 'test:replay-close',
-    name: '可重放插件工具',
+    name: 'Replayable plugin tool',
     definePlugin(ctx) {
       ctx.tool({
         name: 'safe_lookup',
-        description: '可重放只读插件工具',
+        description: 'replayable read-only plugin tool',
         inputSchema: { type: 'object', properties: { key: { type: 'string' } }, required: ['key'] },
         replay: 'safe',
         execute: async (input: { key: string }) => {
@@ -372,7 +372,7 @@ test('PluginToolSpec.replay: safe 在 runtime.close() 与 SIGKILL 下自动重�
       stopReason: 'toolUse',
     }),
   ])
-  void r1.submitInput(1, '调用插件安全工具').catch(() => {})
+  void r1.submitInput(1, 'invoke safe plugin tool').catch(() => {})
   await waitEnteredSafe
   const closing = r1.close()
   await delay(60)
@@ -386,7 +386,7 @@ test('PluginToolSpec.replay: safe 在 runtime.close() 与 SIGKILL 下自动重�
   f2.setResponses([
     (ctx) => {
       capturedCtx = ctx
-      return fauxAssistantMessage('插件安全工具重放成功')
+      return fauxAssistantMessage('safe plugin tool replayed cleanly')
     },
   ])
   const r2 = await KernelRuntime.open({
@@ -399,11 +399,11 @@ test('PluginToolSpec.replay: safe 在 runtime.close() 与 SIGKILL 下自动重�
   t.after(() => r2.close().catch(() => {}))
   await r2.plugins.register({
     id: 'test:replay-close',
-    name: '可重放插件工具',
+    name: 'Replayable plugin tool',
     definePlugin(ctx) {
       ctx.tool({
         name: 'safe_lookup',
-        description: '可重放只读插件工具',
+        description: 'replayable read-only plugin tool',
         inputSchema: { type: 'object', properties: { key: { type: 'string' } }, required: ['key'] },
         replay: 'safe',
         execute: async (input: { key: string }) => {
@@ -416,14 +416,14 @@ test('PluginToolSpec.replay: safe 在 runtime.close() 与 SIGKILL 下自动重�
   await r2.start()
   await r2.waitForIdle(1)
   assert.equal(replayCalls, 1)
-  assert.equal(await r2.getLastAssistantText(1), '插件安全工具重放成功')
+  assert.equal(await r2.getLastAssistantText(1), 'safe plugin tool replayed cleanly')
   const closeResults = collectToolResultTexts(capturedCtx)
   assert.ok(
     closeResults.some((tr) => !tr.isError && tr.text.includes('SAFE_REPLAYED:alpha')),
-    `close() 后 replay:'safe' 插件工具必须重放返回真实结果（实际：${JSON.stringify(closeResults)}）`,
+    `replay:'safe' plugin tool must replay and return real result after close() (actual: ${JSON.stringify(closeResults)})`,
   )
 
-  // ---- B) SIGKILL 真实进程崩溃：safe 插件工具自动重放，unsafe 插件工具绝不重放 ----
+  // ---- B) Real SIGKILL crash: safe plugin tool auto-replays, unsafe never replays ----
   const killDir = mkdtempSync(join(tmpdir(), 'helm-plugin-replay-sigkill-'))
   const seedDir = mkdtempSync(join(tmpdir(), 'helm-plugin-replay-seed-'))
   t.after(() => {
@@ -458,11 +458,11 @@ faux.setResponses([
 const runtime = await KernelRuntime.open({ dataDir, cwd: dataDir, model: 'faux/faux-1', models, autoResume: false })
 await runtime.plugins.register({
   id: 'test:replay-sigkill',
-  name: 'SIGKILL 插件重放验证',
+  name: 'SIGKILL plugin replay check',
   definePlugin(ctx) {
     ctx.tool({
       name: 'plugin_safe',
-      description: '可重放插件工具',
+      description: 'replayable plugin tool',
       inputSchema: { type: 'object', properties: { item: { type: 'string' } }, required: ['item'] },
       replay: 'safe',
       execute: async (input) => {
@@ -473,7 +473,7 @@ await runtime.plugins.register({
     })
     ctx.tool({
       name: 'plugin_unsafe',
-      description: '非幂等插件工具',
+      description: 'non-idempotent plugin tool',
       inputSchema: { type: 'object', properties: { item: { type: 'string' } }, required: ['item'] },
       replay: 'unsafe',
       execute: async (input) => {
@@ -485,7 +485,7 @@ await runtime.plugins.register({
   },
 })
 await runtime.start()
-void runtime.submitInput(1, '并行运行 safe 与 unsafe 插件工具').catch(() => {})
+void runtime.submitInput(1, 'run safe and unsafe plugin tools in parallel').catch(() => {})
 const { existsSync } = await import('node:fs')
 const deadline = Date.now() + 15000
 while (
@@ -507,7 +507,7 @@ await new Promise(() => {})
   kf.setResponses([
     (ctx) => {
       sigkillCtx = ctx
-      return fauxAssistantMessage('SIGKILL 插件工具重放边界验证完成')
+      return fauxAssistantMessage('SIGKILL plugin tool replay boundary verified')
     },
   ])
   const recovered = await KernelRuntime.open({
@@ -520,11 +520,11 @@ await new Promise(() => {})
   try {
     await recovered.plugins.register({
       id: 'test:replay-sigkill',
-      name: 'SIGKILL 插件重放验证',
+      name: 'SIGKILL plugin replay check',
       definePlugin(ctx) {
         ctx.tool({
           name: 'plugin_safe',
-          description: '可重放插件工具',
+          description: 'replayable plugin tool',
           inputSchema: { type: 'object', properties: { item: { type: 'string' } }, required: ['item'] },
           replay: 'safe',
           execute: async (input: { item: string }) => {
@@ -535,7 +535,7 @@ await new Promise(() => {})
         })
         ctx.tool({
           name: 'plugin_unsafe',
-          description: '非幂等插件工具',
+          description: 'non-idempotent plugin tool',
           inputSchema: { type: 'object', properties: { item: { type: 'string' } }, required: ['item'] },
           replay: 'unsafe',
           execute: async (input: { item: string }) => {
@@ -548,9 +548,9 @@ await new Promise(() => {})
     })
     await recovered.start()
     await recovered.waitForIdle(1)
-    assert.equal(readFileSync(safeMarker, 'utf8'), 'ss', 'replay: safe 在 SIGKILL 后必须重放一次')
-    assert.equal(readFileSync(unsafeMarker, 'utf8'), 'u', 'replay: unsafe 在 SIGKILL 后绝不能重放')
-    assert.equal(await recovered.getLastAssistantText(1), 'SIGKILL 插件工具重放边界验证完成')
+    assert.equal(readFileSync(safeMarker, 'utf8'), 'ss', 'replay: safe must replay once after SIGKILL')
+    assert.equal(readFileSync(unsafeMarker, 'utf8'), 'u', 'replay: unsafe must never replay after SIGKILL')
+    assert.equal(await recovered.getLastAssistantText(1), 'SIGKILL plugin tool replay boundary verified')
     const results = collectToolResultTexts(sigkillCtx)
     assert.ok(results.some((tr) => !tr.isError && tr.text.includes('SIGKILL_SAFE_OK:k1')))
     assert.ok(results.some((tr) => tr.isError && /interrupted/i.test(tr.text)))
@@ -559,7 +559,7 @@ await new Promise(() => {})
   }
 })
 
-test('spawnAgent(requestId + reattach.conversationId) 跨 runtime.close() 原位续跑（纯文本/schema/pre-crash 回填/heal）且零重复用户消息', { timeout: 60_000 }, async (t) => {
+test('spawnAgent(requestId + reattach.conversationId) resumes in-place across runtime.close() (plain text / schema / pre-crash backfill / heal) with zero duplicate user messages', { timeout: 60_000 }, async (t) => {
   const schema = {
     type: 'object',
     properties: {
@@ -570,7 +570,7 @@ test('spawnAgent(requestId + reattach.conversationId) 跨 runtime.close() 原位
     additionalProperties: false,
   } as Record<string, unknown>
 
-  // ---- 场景 1：带 schema + gate，在插件 safe 工具执行期 close()，重启后调用 register_structured_output 并过 gate ----
+  // ---- Scenario 1: with schema + gate, close() while safe plugin tool runs, call register_structured_output and pass gate after restart ----
   const dir1 = mkdtempSync(join(tmpdir(), 'helm-reattach-close-schema-'))
   t.after(() => rmSync(dir1, { recursive: true, force: true }))
   const childDir1 = join(dir1, 'work-1')
@@ -595,11 +595,11 @@ test('spawnAgent(requestId + reattach.conversationId) 跨 runtime.close() 原位
   })
   await r1a.plugins.register({
     id: 'test:pause-helper',
-    name: '暂停工具',
+    name: 'Pause tool',
     definePlugin(ctx) {
       ctx.tool({
         name: 'safe_pause',
-        description: '可重放暂停工具',
+        description: 'replayable pause tool',
         inputSchema: { type: 'object', properties: {} },
         replay: 'safe',
         execute: async () => {
@@ -619,7 +619,7 @@ test('spawnAgent(requestId + reattach.conversationId) 跨 runtime.close() 原位
   const spawn1a = r1a
     .spawnAgent({
       parentConversationId: 1,
-      prompt: '产出结构化状态',
+      prompt: 'produce structured status',
       requestId: 'req-close-schema-1',
       cwd: childDir1,
       schema,
@@ -637,13 +637,13 @@ test('spawnAgent(requestId + reattach.conversationId) 跨 runtime.close() 原位
   await close1a
   await spawn1a
 
-  // 重启（模拟 pluginHost.start() 先于 harness.resume()）：预挂 reattach 后再 start()
+  // Restart (simulates pluginHost.start() ahead of harness.resume()): attach reattach before start()
   const { models: m1b, faux: f1b } = createFaux()
   f1b.setResponses([
     fauxAssistantMessage([fauxToolCall('register_structured_output', { output: { status: 'resumed', count: 7 } })], {
       stopReason: 'toolUse',
     }),
-    fauxAssistantMessage('已完成结构化提交'),
+    fauxAssistantMessage('structured submission completed'),
   ])
   const r1b = await KernelRuntime.open({
     dataDir: dir1,
@@ -655,11 +655,11 @@ test('spawnAgent(requestId + reattach.conversationId) 跨 runtime.close() 原位
   t.after(() => r1b.close().catch(() => {}))
   await r1b.plugins.register({
     id: 'test:pause-helper',
-    name: '暂停工具',
+    name: 'Pause tool',
     definePlugin(ctx) {
       ctx.tool({
         name: 'safe_pause',
-        description: '可重放暂停工具',
+        description: 'replayable pause tool',
         inputSchema: { type: 'object', properties: {} },
         replay: 'safe',
         execute: async () => 'resumed_tool_ok',
@@ -670,7 +670,7 @@ test('spawnAgent(requestId + reattach.conversationId) 跨 runtime.close() 原位
   let gate1b: AgentGateResult | undefined
   const reattachPromise1b = r1b.spawnAgent({
     parentConversationId: 1,
-    prompt: '产出结构化状态',
+    prompt: 'produce structured status',
     requestId: 'req-close-schema-1',
     schema,
     gate: 'test -f gate-ok.txt',
@@ -688,10 +688,10 @@ test('spawnAgent(requestId + reattach.conversationId) 跨 runtime.close() 原位
   assert.equal(resolved1b?.conversationId, childId1)
   assert.equal(resolved1b?.effectiveCwd, childDir1)
   assert.equal(gate1b?.ok, true)
-  assert.equal(await countUserEntries(r1b, childId1), 1, '重挂不得重复写入用户消息')
-  assert.equal(r1b.listConversations().length, 2, '重挂不得新建额外子会话')
+  assert.equal(await countUserEntries(r1b, childId1), 1, 'reattach must not write duplicate user message')
+  assert.equal(r1b.listConversations().length, 2, 'reattach must not create an extra child conversation')
 
-  // ---- 场景 2：崩溃前 register_structured_output 已成功落库，重启后模型仅输出收尾文本，回填 accepted 免追问 ----
+  // ---- Scenario 2: register_structured_output already committed before crash; post-restart emits plain text only, accepted backfill skips follow-up prompt ----
   const dir2 = mkdtempSync(join(tmpdir(), 'helm-reattach-close-prefilled-'))
   t.after(() => rmSync(dir2, { recursive: true, force: true }))
   let enteredSecondTool!: () => void
@@ -713,11 +713,11 @@ test('spawnAgent(requestId + reattach.conversationId) 跨 runtime.close() 原位
   })
   await r2a.plugins.register({
     id: 'test:prefill-pause',
-    name: '结构化后暂停',
+    name: 'Post-structured pause',
     definePlugin(ctx) {
       ctx.tool({
         name: 'after_structured_pause',
-        description: '占位等待关停',
+        description: 'holds until shutdown',
         inputSchema: { type: 'object', properties: {} },
         replay: 'safe',
         execute: async () => {
@@ -741,7 +741,7 @@ test('spawnAgent(requestId + reattach.conversationId) 跨 runtime.close() 原位
   const spawn2a = r2a
     .spawnAgent({
       parentConversationId: 1,
-      prompt: '先提交结构化输出再继续',
+      prompt: 'submit structured output first then continue',
       requestId: 'req-prefilled-1',
       schema,
       onResolved: (info) => {
@@ -757,7 +757,7 @@ test('spawnAgent(requestId + reattach.conversationId) 跨 runtime.close() 原位
   await spawn2a
 
   const { models: m2b, faux: f2b } = createFaux()
-  f2b.setResponses([fauxAssistantMessage('收尾纯文本（不重复调用 register_structured_output）')])
+  f2b.setResponses([fauxAssistantMessage('closing plain text without re-calling register_structured_output')])
   const r2b = await KernelRuntime.open({
     dataDir: dir2,
     cwd: dir2,
@@ -768,11 +768,11 @@ test('spawnAgent(requestId + reattach.conversationId) 跨 runtime.close() 原位
   t.after(() => r2b.close().catch(() => {}))
   await r2b.plugins.register({
     id: 'test:prefill-pause',
-    name: '结构化后暂停',
+    name: 'Post-structured pause',
     definePlugin(ctx) {
       ctx.tool({
         name: 'after_structured_pause',
-        description: '占位等待关停',
+        description: 'holds until shutdown',
         inputSchema: { type: 'object', properties: {} },
         replay: 'safe',
         execute: async () => 'done_after_restart',
@@ -782,16 +782,16 @@ test('spawnAgent(requestId + reattach.conversationId) 跨 runtime.close() 原位
   await r2b.start()
   const result2b = await r2b.spawnAgent({
     parentConversationId: 1,
-    prompt: '先提交结构化输出再继续',
+    prompt: 'submit structured output first then continue',
     requestId: 'req-prefilled-1',
     schema,
     reattach: { conversationId: childId2 },
   })
   assert.deepEqual(result2b, { status: 'pre-crash', count: 9 })
-  assert.equal(f2b.state.callCount, 1, '已回填 accepted 后绝不发 :schema-heal 二次追问')
+  assert.equal(f2b.state.callCount, 1, 'accepted backfill must skip sending a second :schema-heal follow-up')
   assert.equal(await countUserEntries(r2b, childId2), 1)
 
-  // ---- 场景 3：在 :schema-heal 追问回合中断，重挂后幂等去重 :schema-heal（零重复追问） ----
+  // ---- Scenario 3: interrupted during :schema-heal follow-up turn; reattach deduplicates :schema-heal idempotently (zero duplicate prompt) ----
   const dir3 = mkdtempSync(join(tmpdir(), 'helm-reattach-close-heal-'))
   t.after(() => rmSync(dir3, { recursive: true, force: true }))
   let enteredHealTool!: () => void
@@ -813,11 +813,11 @@ test('spawnAgent(requestId + reattach.conversationId) 跨 runtime.close() 原位
   })
   await r3a.plugins.register({
     id: 'test:heal-pause',
-    name: '追问期暂停',
+    name: 'Pause during heal',
     definePlugin(ctx) {
       ctx.tool({
         name: 'heal_pause',
-        description: '追问期阻塞工具',
+        description: 'blocking tool during heal turn',
         inputSchema: { type: 'object', properties: {} },
         replay: 'safe',
         execute: async () => {
@@ -832,13 +832,13 @@ test('spawnAgent(requestId + reattach.conversationId) 跨 runtime.close() 原位
 
   let childId3 = 0
   f3a.setResponses([
-    fauxAssistantMessage('首轮忘记调用结构化工具'),
+    fauxAssistantMessage('forgot structured tool on first turn'),
     fauxAssistantMessage([fauxToolCall('heal_pause', {}, { id: 'hp1' })], { stopReason: 'toolUse' }),
   ])
   const spawn3a = r3a
     .spawnAgent({
       parentConversationId: 1,
-      prompt: '请输出结构化 JSON',
+      prompt: 'output structured JSON',
       requestId: 'req-heal-close',
       schema,
       onResolved: (info) => {
@@ -858,7 +858,7 @@ test('spawnAgent(requestId + reattach.conversationId) 跨 runtime.close() 原位
     fauxAssistantMessage([fauxToolCall('register_structured_output', { output: { status: 'healed', count: 2 } })], {
       stopReason: 'toolUse',
     }),
-    fauxAssistantMessage('追问后完成'),
+    fauxAssistantMessage('done after heal'),
   ])
   const r3b = await KernelRuntime.open({
     dataDir: dir3,
@@ -870,11 +870,11 @@ test('spawnAgent(requestId + reattach.conversationId) 跨 runtime.close() 原位
   t.after(() => r3b.close().catch(() => {}))
   await r3b.plugins.register({
     id: 'test:heal-pause',
-    name: '追问期暂停',
+    name: 'Pause during heal',
     definePlugin(ctx) {
       ctx.tool({
         name: 'heal_pause',
-        description: '追问期阻塞工具',
+        description: 'blocking tool during heal turn',
         inputSchema: { type: 'object', properties: {} },
         replay: 'safe',
         execute: async () => 'heal_pause_ok',
@@ -884,15 +884,15 @@ test('spawnAgent(requestId + reattach.conversationId) 跨 runtime.close() 原位
   await r3b.start()
   const result3b = await r3b.spawnAgent({
     parentConversationId: 1,
-    prompt: '请输出结构化 JSON',
+    prompt: 'output structured JSON',
     requestId: 'req-heal-close',
     schema,
     reattach: { conversationId: childId3 },
   })
   assert.deepEqual(result3b, { status: 'healed', count: 2 })
-  assert.equal(await countUserEntries(r3b, childId3), 2, '首轮与 :schema-heal 各恰一条 pi.user（零重复）')
+  assert.equal(await countUserEntries(r3b, childId3), 2, 'exactly one pi.user for initial turn and one for :schema-heal (zero duplicates)')
 
-  // ---- 场景 4：纯文本回合在 close() 前已写完（lastAssistant 内存缓存未建），重挂直接取回文本并跑过 gate ----
+  // ---- Scenario 4: plain-text turn already persisted before close() (in-memory lastAssistant unpopulated); reattach reads text directly and runs gate ----
   const dir4 = mkdtempSync(join(tmpdir(), 'helm-reattach-close-plain-'))
   t.after(() => rmSync(dir4, { recursive: true, force: true }))
   writeFileSync(join(dir4, 'plain-gate.txt'), 'pass\n', 'utf8')
@@ -908,7 +908,7 @@ test('spawnAgent(requestId + reattach.conversationId) 跨 runtime.close() 原位
   let childId4 = 0
   const plainFirst = await r4a.spawnAgent({
     parentConversationId: 1,
-    prompt: '纯文本任务',
+    prompt: 'plain text task',
     requestId: 'req-plain-done',
     cwd: dir4,
     onResolved: (info) => {
@@ -930,7 +930,7 @@ test('spawnAgent(requestId + reattach.conversationId) 跨 runtime.close() 原位
   let plainGate: AgentGateResult | undefined
   const reattachedPlain = await r4b.spawnAgent({
     parentConversationId: 1,
-    prompt: '纯文本任务',
+    prompt: 'plain text task',
     requestId: 'req-plain-done',
     gate: 'test -f plain-gate.txt',
     reattach: { conversationId: childId4 },
@@ -940,11 +940,11 @@ test('spawnAgent(requestId + reattach.conversationId) 跨 runtime.close() 原位
   })
   assert.equal(reattachedPlain, 'PRE_RESTART_PLAIN_TEXT')
   assert.equal(plainGate?.ok, true)
-  assert.equal(f4b.state.callCount, 0, '崩溃前已完成的提交重挂不得重发模型请求')
+  assert.equal(f4b.state.callCount, 0, 'reattach after pre-crash settled submission must not re-send model request')
   assert.equal(await countUserEntries(r4b, childId4), 1)
 })
 
-test('spawnAgent(requestId + reattach.conversationId) 跨 SIGKILL 原位恢复（含已落库 schema 回填、gate 验收、零重复消息）', { timeout: 60_000 }, async (t) => {
+test('spawnAgent(requestId + reattach.conversationId) recovers in-place across SIGKILL (committed schema backfill, gate verification, zero duplicate messages)', { timeout: 60_000 }, async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'helm-reattach-sigkill-'))
   const seedDir = mkdtempSync(join(tmpdir(), 'helm-reattach-sigkill-seed-'))
   t.after(() => {
@@ -990,7 +990,7 @@ faux.setResponses([
 const runtime = await KernelRuntime.open({ dataDir, cwd: dataDir, model: 'faux/faux-1', models, autoResume: true })
 void runtime.spawnAgent({
   parentConversationId: 1,
-  prompt: '先提交结构化结果再运行命令',
+  prompt: 'submit structured result then run command',
   requestId: 'req-sigkill-reattach',
   cwd: childDir,
   schema: ${JSON.stringify(schema)},
@@ -1023,7 +1023,7 @@ await new Promise(() => {})
     (ctx) => {
       const results = collectToolResultTexts(ctx)
       seenInterruptedBash = results.some((r) => r.isError && /interrupted/i.test(r.text))
-      return fauxAssistantMessage('SIGKILL 后收尾完成')
+      return fauxAssistantMessage('finished wrapping up after SIGKILL')
     },
   ])
   const recovered = await KernelRuntime.open({
@@ -1038,7 +1038,7 @@ await new Promise(() => {})
     let gateInfo: AgentGateResult | undefined
     const reattachPromise = recovered.spawnAgent({
       parentConversationId: 1,
-      prompt: '先提交结构化结果再运行命令',
+      prompt: 'submit structured result then run command',
       requestId: 'req-sigkill-reattach',
       schema,
       gate: 'test -f gate_ready.txt',
@@ -1053,19 +1053,19 @@ await new Promise(() => {})
     await recovered.start()
     const outcome = await reattachPromise
     assert.deepEqual(outcome, { ok: true, stage: 'before-sigkill' })
-    assert.equal(seenInterruptedBash, true, 'SIGKILL 后 bash 必须以 interrupted 交给模型自愈')
-    assert.equal(readFileSync(join(childWorkDir, 'bash_runs.txt'), 'utf8'), 'x', '非安全 bash 绝不重放')
+    assert.equal(seenInterruptedBash, true, 'after SIGKILL, bash must surface as interrupted for model recovery')
+    assert.equal(readFileSync(join(childWorkDir, 'bash_runs.txt'), 'utf8'), 'x', 'unsafe bash must never replay')
     assert.equal(reattachedInfo?.conversationId, childId)
     assert.equal(reattachedInfo?.effectiveCwd, childWorkDir)
     assert.equal(gateInfo?.ok, true)
-    assert.equal(f2.state.callCount, 1, '已回填崩溃前 register_structured_output，不得重复追问')
-    assert.equal(await countUserEntries(recovered, childId), 1, 'SIGKILL 重挂后必须保持零重复用户消息')
+    assert.equal(f2.state.callCount, 1, 'pre-crash register_structured_output backfilled; must not re-prompt')
+    assert.equal(await countUserEntries(recovered, childId), 1, 'SIGKILL reattach must preserve zero duplicate user messages')
     assert.equal(recovered.listConversations().length, 2)
   } finally {
     await recovered.close()
   }
 
-  // ---- B) SIGKILL 中断在调用 register_structured_output 之前，重启后首次调用工具通过 schema + gate ----
+  // ---- B) SIGKILL before calling register_structured_output; calls tool on first post-restart turn and passes schema + gate ----
   const dirPost = mkdtempSync(join(tmpdir(), 'helm-reattach-sigkill-post-'))
   const seedDirPost = mkdtempSync(join(tmpdir(), 'helm-reattach-sigkill-post-seed-'))
   t.after(() => {
@@ -1099,7 +1099,7 @@ faux.setResponses([
 const runtime = await KernelRuntime.open({ dataDir, cwd: dataDir, model: 'faux/faux-1', models, autoResume: true })
 void runtime.spawnAgent({
   parentConversationId: 1,
-  prompt: '先检查环境再提交结构化输出',
+  prompt: 'inspect environment then submit structured output',
   requestId: 'req-sigkill-post-tool',
   cwd: childDir,
   schema: ${JSON.stringify(schema)},
@@ -1131,7 +1131,7 @@ await new Promise(() => {})
       [fauxToolCall('register_structured_output', { output: { ok: true, stage: 'after-sigkill' } })],
       { stopReason: 'toolUse' },
     ),
-    fauxAssistantMessage('SIGKILL 后首次调用结构化工具完成'),
+    fauxAssistantMessage('completed structured tool call after SIGKILL'),
   ])
   const recoveredPost = await KernelRuntime.open({
     dataDir: dirPost,
@@ -1144,7 +1144,7 @@ await new Promise(() => {})
     let postGate: AgentGateResult | undefined
     const postPromise = recoveredPost.spawnAgent({
       parentConversationId: 1,
-      prompt: '先检查环境再提交结构化输出',
+      prompt: 'inspect environment then submit structured output',
       requestId: 'req-sigkill-post-tool',
       schema,
       gate: 'test -f post-gate.txt',

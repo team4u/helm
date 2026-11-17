@@ -1,40 +1,40 @@
 /**
- * spawn target parse unique right threat chain (kernel inside pure function; original generate execute row and
- * ctx.host.resolveSpawnTarget shared use, plugin must not self row duplicate rule).
+ * Single authoritative resolution chain for spawn targets (pure internal kernel helper; shared by native
+ * execution and `ctx.host.resolveSpawnTarget` so plugins never duplicate resolution rules).
  *
- * on demand seek value is moment intent form while non- entry pre- archive one:agent_spawn around chain can via
- * next(finalRequest) change write request, entry snapshot will expired;resume semantics dependency
- * request.cwd === undefined(explicit inherit chain fall back), pre- fill i.e. break
- * (complete argument verify see protocol/plugin.ts  resolveSpawnTarget port note release).
+ * Must be resolved lazily at actual invocation time rather than pre-normalized up front: `agent_spawn`
+ * around hooks can rewrite the request via `next(finalRequest)`, invalidating any pre-input snapshot;
+ * resume semantics also rely on `request.cwd === undefined` (explicit inheritance fallback) which pre-filling
+ * would break (see `resolveSpawnTarget` docstring in `protocol/plugin.ts` for full contract).
  *
- * semantics:
- * - ordinary or across role fork:
- *   - node chain: explicit profile.nodeId > parent conversation bind set node > 'local';
- *   - cwd chain:request.cwd > profile.cwd > parent conversation cwd > host default directory;
- * - same role fork(forkSameProfile=true):
- *   - node chain: parent conversation bind set node > profile.nodeId > 'local';
- *   - cwd chain:request.cwd > parent conversation cwd > profile.cwd > host default directory;
- * - cwd by target node platform unify consolidate (normalizeSessionCwd:win32 target on cannot mapping
- *    POSIX cwd explicit reject; remote platform without can message information when pass-through), by caller inject
- *   normalize closed package (carry its trustedPlatform fact source).
+ * Semantics:
+ * - Normal or cross-profile fork:
+ *   - node chain: explicit `profile.nodeId` > parent conversation bound node > `'local'`;
+ *   - cwd chain: `request.cwd` > `profile.cwd` > parent conversation `cwd` > host default directory;
+ * - Same-profile fork (`forkSameProfile=true`):
+ *   - node chain: parent conversation bound node > `profile.nodeId` > `'local'`;
+ *   - cwd chain: `request.cwd` > parent conversation `cwd` > `profile.cwd` > host default directory;
+ * - `cwd` is normalized consistently per target node platform (`normalizeSessionCwd`: unmappable POSIX
+ *   `cwd` on win32 targets is explicitly rejected; passed through when remote platform is unknown), via a
+ *   caller-supplied `normalize` closure (carrying its `trustedPlatform` fact source).
  */
 
 export interface SpawnTargetChainInput {
-  /** Profile explicit declaration target node (default inherit parent conversation). */
+  /** Target node explicitly declared by Profile (defaults to inheriting parent conversation). */
   profileNodeId?: string
-  /** parent conversation bind set node mirror. */
+  /** Parent conversation's bound node snapshot. */
   parentNodeId?: string
-  /** request explicit cwd(takes precedence at Profile/parent conversation cwd). */
+  /** Explicit cwd from request (takes precedence over Profile/parent conversation cwd). */
   requestCwd?: string
-  /** Profile explicit cwd. */
+  /** Explicit cwd from Profile. */
   profileCwd?: string
-  /** parent conversation cwd mirror. */
+  /** Parent conversation's cwd snapshot. */
   parentCwd?: string
-  /** host default cwd(cwd chain tail). */
+  /** Host default cwd (tail of the cwd fallback chain). */
   defaultCwd: string
-  /** is otherwise is same Profile fork (true when parent conversation nodeId/cwd takes precedence at Profile default). */
+  /** Whether this is a same-Profile fork (if true, parent conversation nodeId/cwd take precedence over Profile defaults). */
   forkSameProfile?: boolean
-  /** platform consolidate closed package:normalize(rawCwd, nodeId) -> specification cwd(illegal i.e. throw). */
+  /** Platform normalization closure: `normalize(rawCwd, nodeId) -> normalizedCwd` (throws if invalid). */
   normalize: (cwd: string, nodeId: string) => string
 }
 
@@ -43,7 +43,7 @@ export interface SpawnTargetChain {
   sourceCwd: string
 }
 
-/** node chain pure parse (herdr etc. external runtime and kernel same source consume tail segment semantics). */
+/** Pure node-chain resolution (shared by external runtimes such as Herdr and kernel for identical fallback semantics). */
 export function resolveSpawnTargetNodeId(
   profileNodeId: string | undefined,
   parentNodeId: string | undefined,
@@ -54,7 +54,7 @@ export function resolveSpawnTargetNodeId(
     : (profileNodeId ?? parentNodeId ?? 'local')
 }
 
-/** complete chain parse: node + platform consolidate after source cwd. */
+/** Full chain resolution: node + platform-normalized source cwd. */
 export function resolveSpawnTargetChain(input: SpawnTargetChainInput): SpawnTargetChain {
   const nodeId = resolveSpawnTargetNodeId(input.profileNodeId, input.parentNodeId, input.forkSameProfile)
   const rawCwd =

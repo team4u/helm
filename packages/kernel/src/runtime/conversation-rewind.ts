@@ -1,11 +1,12 @@
 /**
- * conversation history heavy write, fall back heavy (rewind) and checkpoint restore engine.
+ * Conversation history rewrite, rewind, and checkpoint restoration engine.
  *
- * responsibility:
- * - original ground override heavy target validate and guard against concurrency mutual exclusion;
- * - original ground override heavy atomic transaction (commit internal validate idle, scan tail part, compute omit, commit new input, write helm.rewind truncate mark record);
- * - transaction after precise allow FTS index clean up,lastAssistant cache expires and tracker register;
- * - all amount rewind override zone between scan aggregate (provide to detail situation throw shadow and FTS rebuild).
+ * Responsibilities:
+ * - Validate in-place overwrite & resend targets and guard against concurrent edits;
+ * - Execute atomic rewrite transactions (verify idle inside tx, scan tail, compute omissions, commit new input,
+ *   append helm.rewind truncation marker);
+ * - Clean up exact overwritten FTS entries, invalidate lastAssistant cache, and register with tracker post-tx;
+ * - Scan and aggregate all rewind intervals (consumed by detail projection and FTS rebuilds).
  */
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { copyJson } from '@earendil-works/chord/json'
@@ -51,7 +52,7 @@ export class ConversationRewind {
 
   async withHistoryEdit<T>(id: number, operation: () => Promise<T>): Promise<T> {
     if (this.historyEditsInFlight.has(id)) {
-      throw new HelmError('conversation_busy', `conversation ${id} is now update history message, retry later`, 409)
+      throw new HelmError('conversation_busy', `conversation ${id} is currently updating message history; retry later`, 409)
     }
     this.historyEditsInFlight.add(id)
     try {
@@ -61,7 +62,7 @@ export class ConversationRewind {
     }
   }
 
-  /** original ground override target before commit boundary validate (store in / leap context inside / not by override / person class input). */
+  /** Pre-commit boundary validation for in-place overwrite targets (exists / within active context / not overwritten / human input). */
   async validateReplaceTarget(
     conversation: NonNullable<Awaited<ReturnType<Harness['conversation']>>>,
     id: number,
@@ -71,12 +72,12 @@ export class ConversationRewind {
     if (typeof raw !== 'number' || !Number.isSafeInteger(raw) || raw <= 0) {
       throw new HelmError(
         'validation_error',
-        `replaceFromEntryId must be security positive integer (receives ${String(raw)})`,
+        `replaceFromEntryId must be a positive safe integer (received ${String(raw)})`,
         400,
         { conversationId: id, replaceFromEntryId: raw },
       )
     }
-    // item store in precise validate (min=max=entryId take 1 ; missing 404).
+    // Exact entry existence check (min=max=entryId limit 1).
     const entryId = asEntryId(raw)
     const page = await conversation.entries(
       { minEntryId: entryId, maxEntryId: entryId, order: 'ascending' },
@@ -85,18 +86,18 @@ export class ConversationRewind {
       BACKGROUND_CONTEXT,
     )
     if (page.items.length === 0 || Number(page.items[0]!.id) !== raw) {
-      throw new HelmError('not_found', `item ${raw} in conversation ${id} in missing`, 404, {
+      throw new HelmError('not_found', `entry ${raw} does not exist in conversation ${id}`, 404, {
         conversationId: id,
         entryId: raw,
       })
     }
-    // edit target limit set person class input:agent/trigger inject,assistant/control item cannot edit.
+    // Edit targets are restricted to human inputs: agent/trigger injections and assistant/control entries cannot be edited.
     assertEditableHumanInput(page.items[0]!, id, raw)
     const preCtx = await conversation.context(BACKGROUND_CONTEXT)
     if (!preCtx.entries.some((e) => Number(e.id) === raw)) {
       throw new HelmError(
         'entry_before_context_head',
-        `item ${raw} at most near once reset or compress before, cannot original ground override, use fork (fork)`,
+        `entry ${raw} precedes the latest reset or compaction and cannot be overwritten in place; use fork instead`,
         409,
         { conversationId: id, entryId: raw },
       )
@@ -106,7 +107,7 @@ export class ConversationRewind {
       return interval !== undefined && raw >= interval.from && raw <= interval.through
     })
     if (rewound) {
-      throw new HelmError('entry_already_rewound', `item ${raw} already by this before heavy override`, 409, {
+      throw new HelmError('entry_already_rewound', `entry ${raw} has already been overwritten`, 409, {
         conversationId: id,
         entryId: raw,
       })
@@ -114,7 +115,7 @@ export class ConversationRewind {
     return raw
   }
 
-  /** stale edit guard: hook suspended during target may by concurrency change write (leave context / already by override). */
+  /** Stale-edit guard: target may have changed concurrently while hooks suspended (left context / already overwritten). */
   async assertTargetStillCurrent(
     conversation: NonNullable<Awaited<ReturnType<Harness['conversation']>>>,
     id: number,
@@ -122,17 +123,17 @@ export class ConversationRewind {
   ): Promise<void> {
     const current = await conversation.context(BACKGROUND_CONTEXT)
     if (!current.entries.some((entry) => Number(entry.id) === targetId)) {
-      throw new HelmError('entry_before_context_head', 'edit target already leave when before context, please re- choose message', 409)
+      throw new HelmError('entry_before_context_head', 'edit target is no longer in current context; please re-select message', 409)
     }
     if (current.entries.some((entry) => {
       const cut = rewindIntervalOf(entry)
       return cut !== undefined && targetId >= cut.from && targetId <= cut.through
     })) {
-      throw new HelmError('entry_already_rewound', `item ${targetId} already by this before heavy override`, 409)
+      throw new HelmError('entry_already_rewound', `entry ${targetId} has already been overwritten`, 409)
     }
   }
 
-  /** scan conversation all amount raw entries, aggregate all rewind override zone between (detail situation throw shadow use). */
+  /** Scan all raw entries in a conversation to aggregate rewind-covered intervals (used by detail projection). */
   async collectRewindIntervals(
     conversation: NonNullable<Awaited<ReturnType<Harness['conversation']>>>,
   ): Promise<RewindInterval[]> {
@@ -152,18 +153,17 @@ export class ConversationRewind {
   }
 
   /**
-   * original ground override heavy atomic commit (submitInput replaceFromEntryId path):
-   * 1. async prepare:abort in-flight turn (SDK abort also withdraw back other queued inputs,
-   *    is this time explicit semantics) and wait for idle, suspended Ask one by one deregister single superseded(error such as
-   *    on throw, never swallow wrong fake succeeded);
-   * 2. single SDK commit inside complete all core verify and write (see rewriteTransaction);
-   * 3. transaction after clean up: precise delete by override purpose FTS key and wait for (error pass broadcast),
-   *    expires override zone between lastAssistant cache, push enter stateChangeSeq.
+   * Atomic commit for in-place overwrite & resend (submitInput replaceFromEntryId path):
+   * 1. Async preparation: abort active turn (SDK abort also clears other queued inputs, which is explicit here)
+   *    and wait for idle; supersede pending asks one-by-one (errors propagate honestly rather than faking success);
+   * 2. Perform all verification and writes inside a single SDK commit (see rewriteTransaction);
+   * 3. Post-transaction cleanup: delete exact overwritten FTS keys and await flush/error broadcast, invalidate
+   *    lastAssistant cache within covered range, and advance stateChangeSeq.
    *
-   * zone between contract:helm.rewind.data declaration closed zone between [fromEntryId, throughEntryId],
-   * throughEntryId is this transaction before tail part (PRE_TRANSACTION_TAIL_ID); new input item
-   * ID must however more large, never will by self household zone between mistakenly delete. since has rewind mark record and baseline
-   * pi.system keep (do not omit);model messages by omit by SDK original generate edits negative duty.
+   * Interval contract: helm.rewind.data declares a closed interval [fromEntryId, throughEntryId], where throughEntryId
+   * is the tail before this transaction (PRE_TRANSACTION_TAIL_ID); the new input gets a strictly larger ID and is never
+   * accidentally touched by its own interval. Existing rewind markers and the baseline pi.system are kept (not omitted);
+   * model message omission relies on SDK-native `edits`.
    */
   async rewriteConversationFrom(
     id: number,
@@ -171,7 +171,7 @@ export class ConversationRewind {
     replaceFromEntryId: number,
     newInput: RewindNewInput,
   ): Promise<{ submissionId: string }> {
-    // async prepare phase (transaction outside): user already authorization history edit abort when before turn or in progress streamline task.
+    // Async preparation outside transaction: abort current turn or active compaction per user's authorized history edit.
     const hadLiveRun = this.host.tracker.hasLiveWork(id)
     if (hadLiveRun || this.host.tracker.isCompacting(id)) {
       await this.host.abortConversation(id)
@@ -180,13 +180,13 @@ export class ConversationRewind {
         await this.host.tracker.waitTurnSettled(id)
       }
     }
-    // suspended Ask deregister single is superseded: by override turn approval card no longer valid;
-    // cancel failed such as on throw (honest discipline: never .catch swallow wrong).
+    // Supersede pending asks: approval cards for overwritten turns are no longer valid;
+    // cancellation failures must rethrow honestly (never swallow via .catch).
     await this.host.cancelPendingAsksForRewrite(id)
 
     const createdAt = Date.now()
-    // coveredRange from transaction inside return: transaction outside precise clean up FTS old key and expires zone between
-    // lastAssistant cache (never trigger touch new input/new answer key).
+    // Return covered range from inside transaction so post-tx cleanup removes only old FTS keys and stale
+    // lastAssistant caches without touching the newly submitted input/response.
     const { submissionId, covered, ftsKeys } = await conversation.commit(
       (tx) => this.rewriteTransaction(conversation, tx, id, replaceFromEntryId, createdAt, newInput),
       BACKGROUND_CONTEXT,
@@ -197,9 +197,8 @@ export class ConversationRewind {
   }
 
   /**
-   * rewind transaction body (commit call back inside; forbidden conversation.context()/harness read etc.
-   * will deadlock interface). phase split: verify idle -> collect tail part -> compute omit manifest ->
-   * commit new input -> append rewind mark record.
+   * Rewind transaction body (runs inside commit callback—never invoke conversation.context() / harness reads that deadlock).
+   * Phases: verify idle -> collect tail -> compute omissions -> submit new input -> append rewind marker.
    */
   private async rewriteTransaction(
     conversation: NonNullable<Awaited<ReturnType<Harness['conversation']>>>,
@@ -209,35 +208,35 @@ export class ConversationRewind {
     createdAt: number,
     newInput: RewindNewInput,
   ): Promise<{ submissionId: SubmissionId; covered: { from: number; through: number }; ftsKeys: string[] }> {
-    // - - transaction inside re- verify (all tx reads, first at any table write) - -
+    // -- Re-verify inside transaction (pure tx reads before any writes) --
     const { tailId, headLowerBound } = await this.assertRewriteIdle(tx, id, replaceFromEntryId)
     const tailEntries = await this.scanTailEntries(tx, id, replaceFromEntryId)
     const target = tailEntries.find((e) => Number(e.id) === replaceFromEntryId)
     if (target === undefined) {
-      throw new HelmError('not_found', `item ${replaceFromEntryId} in conversation ${id} in missing`, 404, {
+      throw new HelmError('not_found', `entry ${replaceFromEntryId} does not exist in conversation ${id}`, 404, {
         conversationId: id,
         entryId: replaceFromEntryId,
       })
     }
     assertEditableHumanInput(target, id, replaceFromEntryId)
-    // since has rewind zone between heavy core (async prepare during may has concurrency write).
+    // Re-check existing rewind intervals (concurrent writes might have arrived during async preparation).
     const rewound = tailEntries.some((e) => {
       const interval = rewindIntervalOf(e)
       return interval !== undefined && replaceFromEntryId >= interval.from && replaceFromEntryId <= interval.through
     })
     if (rewound) {
-      throw new HelmError('entry_already_rewound', `item ${replaceFromEntryId} already by this before heavy override`, 409, {
+      throw new HelmError('entry_already_rewound', `entry ${replaceFromEntryId} has already been overwritten`, 409, {
         conversationId: id,
         entryId: replaceFromEntryId,
       })
     }
     const baselineSystemNumericId = await this.findBaselineSystemId(tx, id, headLowerBound)
     const { omittedEntryIds, omittedInputIds, ftsKeys } = this.collectRewindOmissions(tailEntries, baselineSystemNumericId)
-    // commit new input (whenBusy 'reject': any concurrency enter in this explicit failed, never queue up).
-    // submit(tx, draft) must first at this transaction first table write.
+    // Submit replacement input (whenBusy='reject': any concurrent submission fails explicitly instead of queuing).
+    // Note: submit(tx, draft) must precede the first tx write.
     const submissionId = await this.submitRewoundInput(conversation, tx, newInput)
-    // rewind truncate mark record: closed zone between [replaceFromEntryId, tailId], new input item ID
-    // already by on way submit allocate (must however > tailId), will not by self household edits mistakenly delete.
+    // Append rewind truncation marker covering [replaceFromEntryId, tailId]; the new input entry ID allocated above
+    // is strictly > tailId and will never be omitted by its own edits.
     const edits = omittedEntryIds.map((target2) => ({ target: asEntryId(target2), action: 'omit' as const }))
     await tx.appendEntry(asConversationId(id), {
       kind: 'helm.rewind',
@@ -260,7 +259,7 @@ export class ConversationRewind {
     }
   }
 
-  /** transaction inside idle verify: leap run / compress / queue up / target out of bounds (contains context head). */
+  /** Verify idle state inside transaction: no active run / compaction / inbox queue / out-of-range target (incl. context head). */
   private async assertRewriteIdle(
     tx: Tx,
     id: number,
@@ -271,7 +270,7 @@ export class ConversationRewind {
     if (live.run !== undefined) {
       throw new HelmError(
         'conversation_busy',
-        `conversation ${id} store in leap turn, reject original ground override heavy (do not queue up)`,
+        `conversation ${id} has an active turn; refusing in-place overwrite & resend (no queuing)`,
         409,
         { conversationId: id, replaceFromEntryId },
       )
@@ -279,7 +278,7 @@ export class ConversationRewind {
     if ((live.compactions?.length ?? 0) > 0) {
       throw new HelmError(
         'conversation_busy',
-        `conversation ${id} store in in progress compress task, reject original ground override heavy`,
+        `conversation ${id} has a compaction in progress; refusing in-place overwrite & resend`,
         409,
         { conversationId: id, replaceFromEntryId },
       )
@@ -288,7 +287,7 @@ export class ConversationRewind {
     if (inbox.items.length > 0) {
       throw new HelmError(
         'conversation_busy',
-        `conversation ${id} store in ${inbox.items.length} items queue up commit, reject original ground override heavy (do not queue up)`,
+        `conversation ${id} has ${inbox.items.length} queued submission(s); refusing in-place overwrite & resend (no queuing)`,
         409,
         { conversationId: id, replaceFromEntryId },
       )
@@ -296,14 +295,14 @@ export class ConversationRewind {
     const headMarker = await tx.latestHeadMarker(convId)
     const latestIdRaw = await tx.latestEntryId(convId)
     if (latestIdRaw === undefined) {
-      throw new HelmError('not_found', `item ${replaceFromEntryId} in conversation ${id} in missing`, 404, {
+      throw new HelmError('not_found', `entry ${replaceFromEntryId} does not exist in conversation ${id}`, 404, {
         conversationId: id,
         entryId: replaceFromEntryId,
       })
     }
     const tailId = Number(latestIdRaw)
     if (replaceFromEntryId > tailId) {
-      throw new HelmError('not_found', `item ${replaceFromEntryId} in conversation ${id} in missing`, 404, {
+      throw new HelmError('not_found', `entry ${replaceFromEntryId} does not exist in conversation ${id}`, 404, {
         conversationId: id,
         entryId: replaceFromEntryId,
       })
@@ -312,7 +311,7 @@ export class ConversationRewind {
     if (replaceFromEntryId < headLowerBound) {
       throw new HelmError(
         'entry_before_context_head',
-        `item ${replaceFromEntryId} at most near once reset or compress before, cannot original ground override, use fork (fork)`,
+        `entry ${replaceFromEntryId} precedes the latest reset or compaction and cannot be overwritten in place; use fork instead`,
         409,
         { conversationId: id, entryId: replaceFromEntryId },
       )
@@ -320,7 +319,7 @@ export class ConversationRewind {
     return { tailId, headLowerBound }
   }
 
-  /** collect target and after raw entries(fork visible scope; page scan, without deep embed set). */
+  /** Collect raw entries from target through tail (flat paged scan, shallow nesting). */
   private async scanTailEntries(
     tx: Tx,
     id: number,
@@ -347,7 +346,7 @@ export class ConversationRewind {
     return tailEntries
   }
 
-  /** baseline pi.system locate:head mark record after first (keep messages[0] system prompt). */
+  /** Locate baseline pi.system: the first one after head marker (keeps messages[0] system prompt intact). */
   private async findBaselineSystemId(
     tx: Tx,
     id: number,
@@ -374,7 +373,7 @@ export class ConversationRewind {
     return baselineSystemNumericId
   }
 
-  /** omit manifest and precise FTS key collect (override zone between;baseline system and rewind mark record keep). */
+  /** Collect omission list and exact FTS keys across overwritten interval (baseline system and rewind markers stay). */
   private collectRewindOmissions(
     tailEntries: ReadonlyArray<EntryRecord>,
     baselineSystemNumericId: number | undefined,
@@ -384,9 +383,8 @@ export class ConversationRewind {
     const ftsKeys: string[] = []
     for (const e of tailEntries) {
       const numericId = Number(e.id)
-      // override zone between inside all old purpose precise FTS key (contains by keep baseline system and
-      // rewind mark record itself - - they this then without index text, delete do not delete all does not affect, but unify collect
-      // avoid tailEntries and clean up manifest two set logic).
+      // Collect exact FTS keys across the overwritten interval (including retained baseline system and rewind marker
+      // entries—they contain no indexed text anyway, and uniform collection avoids parallel lists).
       ftsKeys.push(`entry:${String(e.id)}`)
       if (e.kind === 'helm.input') {
         const inputId = (e.data as { id?: unknown } | undefined)?.id
@@ -395,8 +393,7 @@ export class ConversationRewind {
           omittedInputIds.push(inputId)
         }
       }
-      // edit target itself must omit(closed zone between contains from boundary); since has rewind mark record and
-      // baseline pi.system keep.
+      // Target entry itself must be omitted (inclusive [from, through] interval); keep existing rewind markers and baseline pi.system.
       if (e.kind === 'helm.rewind') continue
       if (numericId === baselineSystemNumericId) continue
       omittedEntryIds.push(numericId)
@@ -404,7 +401,7 @@ export class ConversationRewind {
     return { omittedEntryIds, omittedInputIds, ftsKeys }
   }
 
-  /** rewind new input commit (whenBusy 'reject';helm.input entry all amount redaction after written to the database). */
+  /** Submit replacement input inside rewind transaction (whenBusy='reject'; helm.input entry persisted fully redacted). */
   private async submitRewoundInput(
     conversation: NonNullable<Awaited<ReturnType<Harness['conversation']>>>,
     tx: Tx,
@@ -436,10 +433,10 @@ export class ConversationRewind {
     return conversation.submit(tx, inputDraft)
   }
 
-  /** transaction after tracker register (bindSubmission register related index, observe path already by requestId first row register). */
+  /** Register with tracker after transaction (bindSubmission wires correlation index; observe path idempotently merges by requestId). */
   private registerRewoundInput(id: number, finalInput: ConversationInput, submissionId: SubmissionId): void {
-    // transaction already written to the database: register tracker(commit observe path may already by requestId first row register,
-    // registerInput idempotent merge is unique record, failed then drop undo, never under orphan child register).
+    // Transaction already persisted to DB: register with tracker (commit observer may have merged by requestId first;
+    // registerInput idempotently merges into a single record, dropping on bind error to leave zero orphaned state).
     this.host.tracker.registerInput(id, finalInput)
     try {
       this.host.tracker.bindSubmission(id, finalInput.id, submissionId)
@@ -449,13 +446,12 @@ export class ConversationRewind {
     }
   }
 
-  /** transaction outside clean up:FTS precise old key delete + lastAssistant cache expires + stateChangeSeq push enter. */
+  /** Post-transaction cleanup: delete exact stale FTS keys, invalidate lastAssistant cache, and advance stateChangeSeq. */
   private cleanupRewindSideEffects(id: number, covered: { from: number; through: number }, ftsKeys: string[]): void {
-    // transaction outside clean up: only delete transaction kernel precise old FTS key (entry:<id> / input:<requestId>),
-    // observer new input/new answer index do not subject to affect (encounter helm.rewind stop back scan, old answer do not re- burn);
-    // error by tail chain unify conflict refresh pass broadcast (flushPublic / search read path such as throw).
-    // expires override zone between lastAssistant cache: new answer on failure
-    // getLastAssistantText must not return already by override old answer proposal.
+    // Delete only exact stale FTS keys from the overwritten interval (entry:<id> / input:<requestId>) so observer
+    // indices for new inputs/answers remain untouched (reverse scan stops at helm.rewind to never re-burn old answers);
+    // errors propagate through the tail queue (flushPublic / search read paths).
+    // Invalidate lastAssistant cache only within the overwritten interval so failed resends never return stale answers.
     this.host.store.removeFtsEntries(id, ftsKeys)
     this.host.tracker.invalidateLastAssistantWithin(id, covered.from, covered.through)
     const meta = this.host.store.getConv(id)

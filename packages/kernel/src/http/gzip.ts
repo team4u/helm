@@ -1,22 +1,22 @@
 /**
- * out station response gzip(Hub handler layer unify exit).
+ * Outbound response gzip compression (unified exit in the Hub handler layer).
  *
- * policy:
- * - only compress application/json response (SSE text/event-stream,NDJSON stream, two enter system
- *   artifact and static assets all do not in this layer; static assets by static.ts by extension self row compress);
- * - client Accept-Encoding contains gzip(q>0) only then compress;HEAD, without body, already carries
- *   content-encoding response one rule original return;
- * - threshold or fewer (GZIP_MIN_BYTES) or compress without benefit (>= original text) do not compress;
- * - compress after rebuild response: clear old content-length again write compress after byte count,Node adapt layer
- *   original pass-through;Vary merge since has value (such as CORS write Origin) and Accept-Encoding;
- * - compress failed fall back identity(the same byte, client can accept, non- content fall back).
+ * Policy:
+ * - Only compress application/json responses (SSE text/event-stream, NDJSON streams, binary artifacts,
+ *   and static assets are excluded here; static assets are compressed on demand by static.ts);
+ * - Compress only when the client Accept-Encoding includes gzip (q>0); HEAD requests, bodyless responses,
+ *   and responses that already carry content-encoding are returned verbatim;
+ * - Skip compression at or below GZIP_MIN_BYTES or when compressed output is not smaller than raw bytes;
+ * - Rebuild the Response after compression: replace content-length with the compressed byte count so the
+ *   Node adapter passes it through verbatim; merge Vary with existing values (e.g. Origin from CORS) and Accept-Encoding;
+ * - On compression failure, fall back to identity (identical bytes, always accepted by clients; no content fallback).
  */
 import { gzipSync } from 'node:zlib'
 
-/** JSON response compress threshold (byte): low at this value compress benefit do not arrive CPU and TLS fixed overhead. */
+/** JSON response compression threshold (bytes): below this, compression gains do not outweigh CPU and TLS framing overhead. */
 export const GZIP_MIN_BYTES = 1024
 
-/** parse Accept-Encoding is otherwise accept gzip(contains x-gzip alias;q=0 treated as reject). */
+/** Parse Accept-Encoding to determine whether gzip is accepted (including x-gzip alias; q=0 means rejected). */
 export function acceptsGzip(request: Request): boolean {
   const header = request.headers.get('accept-encoding')
   if (header === null) return false
@@ -34,7 +34,7 @@ export function acceptsGzip(request: Request): boolean {
   return false
 }
 
-/** Headers on merge Vary and Accept-Encoding(keep since has item such as Origin, does not repeat). */
+/** Merge Accept-Encoding into the Vary header (preserving existing values such as Origin without duplicating). */
 export function mergeVaryAcceptEncoding(headers: Headers): void {
   const existing = headers.get('vary')
   if (existing === null) {
@@ -51,23 +51,21 @@ export function mergeVaryAcceptEncoding(headers: Headers): void {
 }
 
 /**
- * condition compress JSON response (hub.ts in withCors after invoke, guarantee Vary merge see obtain to
- * CORS write Origin).
+ * Conditionally gzip-compress JSON responses (called after withCors in hub.ts so Vary merging sees
+ * any Origin header added by CORS).
  *
- * cache semantics: all can compress application/json response (regardless of this time is otherwise actual compress:
- * HEAD / client do not accept gzip / low at threshold / without compress benefit) unify merge
- * `Vary: Accept-Encoding`- - the same URL store in two kinds of encode means, missing Vary 
- * identity response may by proxy cache across encode re- use.
+ * Cache semantics: every compressible application/json response (even when sent uncompressed due to HEAD,
+ * client not accepting gzip, below threshold, or no size savings) gets `Vary: Accept-Encoding` merged—the same
+ * URL has two representations, and omitting Vary would allow proxies to reuse an identity response across encodings.
  *
- * body security: size probe and compress one rule read `response.clone()`, original response body never
- * consume; only compress on success only then with compress byte rebuild Response(clear old content-length after
- * write compress after length).
+ * Body safety: size probing and compression always read `response.clone()`, leaving the original body intact;
+ * only when compression succeeds and shrinks the payload is the Response rebuilt with compressed bytes.
  */
 export async function gzipJsonResponse(request: Request, response: Response): Promise<Response> {
   if (response.headers.has('content-encoding')) return response
   const contentType = (response.headers.get('content-type') ?? '').toLowerCase()
   if (!contentType.startsWith('application/json')) return response
-  // unify Vary(directly change write original response head,body not motion; and withCors the same manually method)
+  // Always merge Vary (mutates original response headers directly without touching body, matching withCors)
   mergeVaryAcceptEncoding(response.headers)
   if (request.method === 'HEAD') return response
   if (response.body === null) return response
@@ -78,8 +76,8 @@ export async function gzipJsonResponse(request: Request, response: Response): Pr
   try {
     compressed = gzipSync(raw)
   } catch {
-    // zlib for legal buffer zone will not failed; in case failed,identity encode for client always can accept
-    //(the same byte, non- content fall back).
+    // zlib will not fail for valid buffers; if it ever does, identity encoding is always acceptable to clients
+    // (identical bytes, not a content fallback).
     return response
   }
   if (compressed.byteLength >= raw.byteLength) return response
@@ -88,7 +86,7 @@ export async function gzipJsonResponse(request: Request, response: Response): Pr
   headers.set('content-length', String(compressed.byteLength))
   headers.set('content-encoding', 'gzip')
   mergeVaryAcceptEncoding(headers)
-  // new Uint8Array(...) archive one BodyInit type (and static.ts the same opening path).
+  // Wrap in `new Uint8Array(...)` to normalize BodyInit typing (matches static.ts).
   return new Response(new Uint8Array(compressed), {
     status: response.status,
     statusText: response.statusText,

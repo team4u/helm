@@ -1,4 +1,4 @@
-/** node gateway: each connect only a birpc instance, control side and environment RPC shared use it. */
+/** Node gateway: one birpc instance per connection, shared by control plane and env RPC. */
 import type { Server as HttpServer, IncomingMessage } from 'node:http'
 import type { Duplex } from 'node:stream'
 import { WebSocketServer, type WebSocket } from 'ws'
@@ -19,8 +19,8 @@ export function attachNodeWsGateway(server: HttpServer, options: NodeWsGatewayOp
     registry,
     path = '/ws/node',
     registerTimeoutMs = 10_000,
-    // single time send/dispatch error not silently (honest discipline): by default console.error server side
-    // log; only when connect already non- OPEN(failed to send leads to disconnect) when only then terminate connect.
+    // Never swallow single-send/dispatch errors silently (honest discipline): defaults to console.error;
+    // only terminates the connection when the socket is already non-OPEN (send failure caused by disconnect).
     log = (message: string) => console.error(`[helm] node gateway: ${message}`),
   } = options
   const wss = new WebSocketServer({ noServer: true })
@@ -73,10 +73,10 @@ export function attachNodeWsGateway(server: HttpServer, options: NodeWsGatewayOp
           void dispatch(data)
         })
       },
-      // only in connect already non- OPEN(failed to send leads to disconnect) when terminate connect: single time message send error
-      //(such as temporary back press) do not directly pinch assert health connect, hand over by after continue send or close event handle.
+      // Only terminate when socket is already non-OPEN (send failure from disconnect): do not kill a healthy
+      // connection on a transient single send error (e.g. temporary backpressure); let subsequent sends or close events handle it.
       onGeneralError: (error, type) => {
-        log(`node RPC transfer failed (${type}):${error instanceof Error ? error.message : String(error)}`)
+        log(`node RPC transport error (${type}): ${error instanceof Error ? error.message : String(error)}`)
         if (ws.readyState !== ws.OPEN) ws.terminate()
         return true
       },

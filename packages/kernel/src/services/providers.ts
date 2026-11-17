@@ -1,8 +1,8 @@
 /**
- * ProviderService: manage providers.json(self define model gateway manifest).
- * iron rule: this file never contains secret key field;API Key one rule via CredentialService store
- * credentials.json. structure validate in boundary complete, secret key field explicit strip/reject.
- * ProviderConfig shape with @helm/protocol is allow.
+ * ProviderService: manages providers.json (custom model gateway manifest).
+ * Iron rule: this file must never contain secret fields; API keys are stored exclusively in
+ * credentials.json via CredentialService. Structural validation happens at the boundary, and secret fields are explicitly stripped/rejected.
+ * ProviderConfig shape conforms to @helm/protocol.
  */
 import type { ProviderConfig } from '@helm/protocol'
 
@@ -16,26 +16,26 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-/** provider id boundary validate: character parent number open head, guard against path symbol across directory. */
+/** Provider ID boundary validation: must start with an alphanumeric character to prevent path traversal across directories. */
 export function assertProviderId(id: string): void {
   if (typeof id !== 'string' || !ID_PATTERN.test(id)) {
     throw new Error(`illegal provider id: ${id}`)
   }
 }
 
-/** boundary validate single provider config; appear secret key field directly reject (guard against secret key mix JSON). */
+/** Validate a single provider config at the boundary; immediately reject any secret fields (prevents secrets leaking into JSON). */
 export function validateProviderConfig(input: unknown): ProviderConfig {
-  if (!isPlainObject(input)) throw new Error('provider config must be object')
+  if (!isPlainObject(input)) throw new Error('provider config must be an object')
   for (const banned of ['apiKey', 'api_key', 'secret', 'token', 'password', 'credential']) {
     if (input[banned] !== undefined) {
       throw new Error(
-        `provider config forbidden contains secret key field '${banned}'(secret key please store credentials.json)`,
+        `provider config must not contain secret field '${banned}' (store secrets in credentials.json)`,
       )
     }
   }
   const rawId = input['id']
   if (typeof rawId !== 'string') {
-    throw new Error(`provider id must be string: ${String(rawId)}`)
+    throw new Error(`provider id must be a string: ${String(rawId)}`)
   }
   assertProviderId(rawId)
   const id: string = rawId
@@ -45,7 +45,7 @@ export function validateProviderConfig(input: unknown): ProviderConfig {
   }
   const baseUrl = input['baseUrl']
   if (typeof baseUrl !== 'string' || !/^https?:\/\/.+/.test(baseUrl)) {
-    throw new Error(`provider '${id}' baseUrl must be http(s) URL`)
+    throw new Error(`provider '${id}' baseUrl must be an http(s) URL`)
   }
   const baseUrlStr: string = baseUrl
   const models = input['models']
@@ -54,16 +54,16 @@ export function validateProviderConfig(input: unknown): ProviderConfig {
     models.length === 0 ||
     models.some((m) => typeof m !== 'string' || m === '')
   ) {
-    throw new Error(`provider '${id}' models must be non-empty string array`)
+    throw new Error(`provider '${id}' models must be a non-empty string array`)
   }
   const modelIds = models as string[]
   const enabled = input['enabled']
   if (typeof enabled !== 'boolean') {
-    throw new Error(`provider '${id}' enabled must be boolean value`)
+    throw new Error(`provider '${id}' enabled must be a boolean`)
   }
   const label = input['label']
   if (label !== undefined && (typeof label !== 'string' || label === '')) {
-    throw new Error(`provider '${id}' label must be non-empty string`)
+    throw new Error(`provider '${id}' label must be a non-empty string`)
   }
   const config: ProviderConfig = { id, protocol, baseUrl: baseUrlStr, models: [...modelIds], enabled }
   if (typeof label === 'string') config.label = label
@@ -72,10 +72,10 @@ export function validateProviderConfig(input: unknown): ProviderConfig {
 
 function normalize(raw: unknown): ProviderConfig[] {
   if (raw === undefined) return []
-  if (!isPlainObject(raw)) throw new Error('providers.json structure illegal (should be object)')
+  if (!isPlainObject(raw)) throw new Error('providers.json structure is invalid (expected an object)')
   const list = raw['providers']
   if (list === undefined) return []
-  if (!Array.isArray(list)) throw new Error('providers.json providers field must be array')
+  if (!Array.isArray(list)) throw new Error('providers.json providers field must be an array')
   return list.map((item) => validateProviderConfig(item))
 }
 
@@ -96,13 +96,13 @@ export class ProviderService {
     return (await this.list()).find((p) => p.id === id)
   }
 
-  /** all amount save (HTTP proxy pre- set save(array) all amount semantics: one by one items validate after whole). */
+  /** Full save (matches HTTP PUT save(array) semantics: validate every item before writing atomically). */
   async save(providers: ProviderConfig[]): Promise<ProviderConfig[]> {
-    if (!Array.isArray(providers)) throw new Error('providers must be array')
+    if (!Array.isArray(providers)) throw new Error('providers must be an array')
     const validated = providers.map((p) => validateProviderConfig(p))
     const ids = new Set<string>()
     for (const p of validated) {
-      if (ids.has(p.id)) throw new Error(`provider id duplicate: ${p.id}`)
+      if (ids.has(p.id)) throw new Error(`duplicate provider id: ${p.id}`)
       ids.add(p.id)
     }
     await this.enqueue(async () => {
@@ -111,14 +111,14 @@ export class ProviderService {
     return validated
   }
 
-  /** delete single provider; missing when throws (not silently succeeded). */
+  /** Delete a single provider; throws if not found (never succeeds silently). */
   async delete(id: string): Promise<void> {
     assertProviderId(id)
     await this.enqueue(async () => {
       const current = normalize(await readJsonFileOptional(this.path))
       const next = current.filter((p) => p.id !== id)
       if (next.length === current.length) {
-        throw new Error(`provider missing: ${id}`)
+        throw new Error(`provider not found: ${id}`)
       }
       await atomicWriteJson(this.path, { providers: next })
     })

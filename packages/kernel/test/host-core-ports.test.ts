@@ -1,13 +1,14 @@
 /**
- * microkernel host public mechanism dedicated items test (core commit scope):
- * - epoch guard:wrapHostApi sub- port (profiles/skills/secrets/nodeIpc/executionEnv proxy)
- *   in deactivate/restart use cycle after old handle expires (409), new cycle handle available;
- * - nodeIpc.subscribe race: release first at subscribe establish complete when late to subscribe immediately cut (without leaking),
- *   establish error in return Promise(do not void swallow);
- * - onUpdate:partial forwarding to subject to control output(redaction), compute after late to partial static default discard;
- * - prompt throw shoot:promptSnippet/promptGuidelines only activate tool enter sections, strip after
- *   do not phantom segment;promptGuidelines array one by one items expand.
- * runner: tsx --test; each items explicit timeout: 60_000 guard against deadlock.
+ * Focused tests for microkernel host public mechanisms (core commit scope):
+ * - epoch guard: wrapHostApi sub-ports (profiles/skills/secrets/nodeIpc/executionEnv proxies)
+ *   invalidate stale handles (409) after disable/restart while fresh cycle handles work;
+ * - nodeIpc.subscribe race: release before subscribe finishes aborts/stops cleanly on arrival
+ *   without leaking, and setup failures return via the Promise (never swallowed by void);
+ * - onUpdate: forwards partials via bounded output (redacted), silently drops late partials
+ *   after settle;
+ * - prompt projection: only active tools enter prompt.tools.* sections without ghost residues;
+ *   promptGuidelines arrays expand line by line.
+ * Runner: tsx --test; every test specifies timeout: 60_000 against deadlocks.
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -29,7 +30,7 @@ import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js
 import { KernelRuntime } from '../src/runtime/index.js'
 
 // ---------------------------------------------------------------------------
-// base create
+// Fixture setup
 // ---------------------------------------------------------------------------
 
 function makeConversation(id: number) {
@@ -41,7 +42,7 @@ interface NodeIpcCalls {
   stopCalls: number
 }
 
-/** openTunnel stub: subject to control latency after deliver subject to control Duplex; record invoke and destroy supply assertion. */
+/** Stub for openTunnel: delivers a controllable Duplex after delay; logs calls and failures. */
 interface OpenTunnelStub {
   calls: Array<{ nodeId: string; target: { host?: string; port: number }; signal: AbortSignal | undefined }>
   delayMs: number
@@ -51,9 +52,9 @@ interface OpenTunnelStub {
 
 function makeBackend(over: {
   nodeIpcCalls?: NodeIpcCalls
-  /** subscribe establish before latency (by default 10ms, simulated slow establish). */
+  /** Pre-connect delay before subscribe resolves (default 10ms, simulates slow setup). */
   subscribeDelayMs?: number
-  /** openTunnel stub (provide i.e. connect line ctx.host.openTunnel). */
+  /** openTunnel stub (wires ctx.host.openTunnel when supplied). */
   openTunnel?: OpenTunnelStub
   nodeFetch?: (nodeId: string) => typeof fetch
 }): PluginHostBackend {
@@ -73,7 +74,7 @@ function makeBackend(over: {
       readFile: async () => '',
       directory: async (id) => {
         if (!/^[a-z0-9][a-z0-9-]*$/.test(id)) {
-          throw new HelmError('validation_error', `Skill id illegal:${id}`, 400, { skillId: id })
+          throw new HelmError('validation_error', `invalid skill id: ${id}`, 400, { skillId: id })
         }
         return `/data/skills/${id}`
       },
@@ -94,11 +95,11 @@ function makeBackend(over: {
         new Promise<() => void>((resolve) => {
           calls.subscribeStarted.push({ nodeId, signal: signal! })
           setTimeout(() => {
-            // simulated subscribe establish succeeded: return stop function.
+            // Simulates subscribe establishment: returns stop callback.
             resolve(() => {
               calls.stopCalls += 1
             })
-            // establish after push one row event, verify channel.
+            // Emits one event line after setup to exercise the channel.
             onLine(`event:${nodeId}`)
           }, over.subscribeDelayMs ?? 10)
         }),
@@ -145,7 +146,7 @@ function makeBackend(over: {
             stub.calls.push({ nodeId, target, signal })
             return new Promise<PassThrough>((resolve, reject) => {
               const timer = setTimeout(() => {
-                // pre- placement failed queue:FIFO consume (once push for under once create connect takes effect).
+                // Pre-seeded failure queue: FIFO consumed per attempt (next connect starts fresh).
                 const failure = stub.failures.shift()
                 if (failure !== undefined) { reject(failure); return }
                 const duplex = new PassThrough()
@@ -156,7 +157,7 @@ function makeBackend(over: {
                 'abort',
                 () => {
                   clearTimeout(timer)
-                  reject(new HelmError('aborted', 'tunnel establish cancelled', 499))
+                  reject(new HelmError('aborted', 'tunnel establishment aborted', 499))
                 },
                 { once: true },
               )
@@ -169,10 +170,10 @@ function makeBackend(over: {
 
 let dataDir: string
 
-test('host public mechanism dedicated items', { timeout: 60_000 }, async (t) => {
+test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
   dataDir = useTempDir(t, 'helm-host-core-')
 
-  await t.test('epoch guard: deactivate after old handle host invoke one rule 409 plugin_context_expired', async () => {
+  await t.test('epoch guard: post-disable calls on stale host handle reject 409 plugin_context_expired', async () => {
     const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: makeBackend({}), docs: new MemoryDocStore() })
     let captured: Parameters<NonNullable<Parameters<typeof host.register>[0]['definePlugin']>>[0]['host'] | undefined
     const def: PluginDefinition = {
@@ -183,10 +184,10 @@ test('host public mechanism dedicated items', { timeout: 60_000 }, async (t) => 
     }
     await host.register(def, { enabled: true })
     assert.ok(captured)
-    // enable cycle inside available.
+    // Works during active cycle.
     assert.equal(await captured!.profiles.get('assistant') !== undefined, true)
     await host.disable('p:epoch')
-    // guard sync throw: unify archive one is rejection after assertion (one by one await, type align).
+    // Wrap sync throws uniformly as async rejections so assertions share one path.
     const expired: Array<() => unknown> = [
       () => captured!.profiles.list(),
       () => captured!.skills.list(),
@@ -202,27 +203,27 @@ test('host public mechanism dedicated items', { timeout: 60_000 }, async (t) => 
     ]
     for (const call of expired) {
       await assert.rejects(async () => call(), (err: unknown) => {
-        assert.ok(err instanceof HelmError, `expectation HelmError, actual:${String(err)}`)
+        assert.ok(err instanceof HelmError, `expected HelmError, got ${String(err)}`)
         assert.equal(err.code, 'plugin_context_expired')
         return true
       })
     }
-    // restart use after:definePlugin re- execute,captured already points to new cycle handle (available),
-    // old handle do not re- store in - - on side loop already verify old handle all Chen 409. this in only verify new handle restore available.
+    // After re-enable: definePlugin reruns so captured holds a fresh cycle handle; the stale loop above
+    // already verified old handles return 409 -- here we verify the fresh handle becomes usable again.
     await host.enable('p:epoch')
     await assert.doesNotReject(captured!.profiles.get('assistant'))
     await host.unregister('p:epoch').catch(() => {})
   })
 
-  await t.test('withFileLock: queue inside obtain lock invoke fn before again verify cycle (deactivate after old closed package do not write)', { timeout: 60_000 }, async () => {
-    // scenario: lock competition + host force dispose(liveTasks preflight only intercept disable,dispose
-    // directly split except cycle): queue up old cycle fn obtain lock when cycle already expires, must 409 reject write.
+  await t.test('withFileLock: re-checks epoch after acquiring lock inside queue before invoking fn', { timeout: 60_000 }, async () => {
+    // Scenario: lock contention + forced host dispose (liveTasks preflight only blocks disable;
+    // dispose immediately expires the epoch): queued fn from old epoch rejects 409 on lock acquisition.
     let releaseFirst: (() => void) | undefined
     const gate = new Promise<void>((resolve) => { releaseFirst = resolve })
     const backend = makeBackend({})
     backend.withFileLock = async <T,>(path: string, fn: () => Promise<T>) => {
       if (path === '/tmp/hold') {
-        await gate // first hold lock do not release, after continue queue up wait for
+        await gate // first holder pauses before releasing so second queues behind it
         return fn()
       }
       return fn()
@@ -245,8 +246,8 @@ test('host public mechanism dedicated items', { timeout: 60_000 }, async (t) => 
     }
     await host.register(def, { enabled: true })
     await new Promise((r) => setTimeout(r, 30))
-    assert.ok(second, 'second lock request should already queue')
-    // force split except cycle (do not deactivate preflight); then release hold lock -> queue up fn enter when already expires.
+    assert.ok(second, 'second lock request should be queued')
+    // Force dispose expires epoch without disable preflight; then release holder so queued fn wakes expired.
     void host.dispose()
     await new Promise((r) => setTimeout(r, 5))
     releaseFirst!()
@@ -256,20 +257,20 @@ test('host public mechanism dedicated items', { timeout: 60_000 }, async (t) => 
     )
   })
 
-  await t.test('nodeIpc.subscribe race: release first at establish complete when late to subscribe immediately cut', { timeout: 60_000 }, async () => {
+  await t.test('nodeIpc.subscribe race: release before setup finishes aborts/stops late-arriving subscriptions', { timeout: 60_000 }, async () => {
     const calls: NodeIpcCalls = { subscribeStarted: [], stopCalls: 0 }
     const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: makeBackend({ nodeIpcCalls: calls, subscribeDelayMs: 30 }), docs: new MemoryDocStore() })
     let release: (() => void) | undefined
     const def: PluginDefinition = {
       id: 'p:ipc',
       definePlugin(ctx) {
-        // register after immediately subscribe and in deactivate when release (acquire wrap).
+        // Subscribe right on register so disable triggers cleanup before/during setup.
         void ctx.host.nodeIpc.subscribe('remote-1', { line: '{"method":"subscribe"}' }, () => {}, () => {})
           .then((stop) => { release = stop })
           .catch(() => {})
       },
     }
-    // manually get release: directly away service.start path too heavy, use register phase subscribe.
+    // Alternatively obtain release cleanly inside service.start.
     const defSubscribe: PluginDefinition = {
       id: 'p:ipc2',
       definePlugin(ctx) {
@@ -284,17 +285,17 @@ test('host public mechanism dedicated items', { timeout: 60_000 }, async (t) => 
       },
     }
     await host.register(defSubscribe, { enabled: true })
-    assert.ok(release, 'service.start after completion should has unsubscribe handle')
-    // deactivate:acquire release (abort + stop cut).
+    assert.ok(release, 'service.start should yield an unsubscribe handle')
+    // Disabling triggers release wrapper (abort + stop).
     await host.disable('p:ipc2')
-    // etc. late to establish chain compute.
+    // Wait for delayed setup path to settle.
     await new Promise((r) => setTimeout(r, 80))
-    assert.equal(calls.stopCalls >= 1, true, 'deactivate should trigger backend stop(directly or late to cut)')
+    assert.equal(calls.stopCalls >= 1, true, 'disable should invoke backend stop immediately or on late completion')
     await host.unregister('p:ipc2').catch(() => {})
     void def
   })
 
-  await t.test('openTunnel lifecycle trace: activity Duplex during deactivate by refuse, close after can deactivate; failed without leaking counter', { timeout: 60_000 }, async () => {
+  await t.test('openTunnel lifecycle tracking: active Duplex blocks disable, closing unblocks, failures never leak count', { timeout: 60_000 }, async () => {
     const stub: OpenTunnelStub = { calls: [], delayMs: 20, duplexes: [], failures: [] }
     const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: makeBackend({ openTunnel: stub }), docs: new MemoryDocStore() })
     let hostApi: Parameters<NonNullable<Parameters<typeof host.register>[0]['definePlugin']>>[0]['host'] | undefined
@@ -307,28 +308,28 @@ test('host public mechanism dedicated items', { timeout: 60_000 }, async (t) => 
     await host.register(def, { enabled: true })
     assert.ok(hostApi)
 
-    // 1) establish in-flight:begin first at create connect, deactivate preflight visible.
+    // 1) Setup in flight: task begins as soon as connection starts, visible to disable preflight.
     const opening = hostApi!.openTunnel('remote-1', { host: 'db.internal', port: 5432 })
-    assert.equal(stub.calls.length, 1, 'backend openTunnel already subject to')
+    assert.equal(stub.calls.length, 1, 'backend openTunnel invoked')
     await assert.rejects(
       host.disable('p:tunnel'),
       (err: unknown) => err instanceof HelmError && err.code === 'plugin_has_live_tasks' && err.status === 409,
     )
     const duplex = await opening
-    // 2) establish after success Duplex store: counter keep (withTask immediately end regression point).
+    // 2) Active Duplex remains open after setup finishes: counter stays held (regression against immediate withTask release).
     await assert.rejects(
       host.disable('p:tunnel'),
       (err: unknown) => err instanceof HelmError && err.code === 'plugin_has_live_tasks',
-      'activity Duplex during deactivate must 409(counter do not because establish complete while reset to zero)',
+      'disable must return 409 while Duplex is active instead of dropping counter on setup resolve',
     )
-    // 3) Duplex close:end exactly once, deactivate restore available.
+    // 3) Duplex closes: task settles once and disable succeeds again.
     duplex.destroy()
     await new Promise((r) => setTimeout(r, 30))
     await host.disable('p:tunnel')
 
-    // 4) failed path (independent cycle, avoid enable swap epoch affect handle):
-    // establish failed immediately end, without leaking counter - - failed after disable no longer 409.
-    stub.failures.push(new HelmError('node_tunnel_connect_failed', 'establish failed', 502))
+    // 4) Failure path (separate plugin to avoid epoch change invalidating handle):
+    // setup failure ends task immediately without leaking count -> disable succeeds cleanly.
+    stub.failures.push(new HelmError('node_tunnel_connect_failed', 'setup failed', 502))
     let hostApi2: typeof hostApi | undefined
     const defFail: PluginDefinition = {
       id: 'p:tunnel2',
@@ -347,7 +348,7 @@ test('host public mechanism dedicated items', { timeout: 60_000 }, async (t) => 
     void host.dispose()
   })
 
-  await t.test('nodeFetch: slow consumer keep back press, cancel after release task, backend sync throws without leaking counter', { timeout: 60_000 }, async () => {
+  await t.test('nodeFetch: preserves slow-consumer backpressure, releases task on cancel, sync throws never leak count', { timeout: 60_000 }, async () => {
     let pulls = 0
     let cancelled = false
     const raw = (() => Promise.resolve(new Response(new ReadableStream<Uint8Array>({
@@ -365,7 +366,7 @@ test('host public mechanism dedicated items', { timeout: 60_000 }, async (t) => 
     try {
       const response = await api.nodeFetch('remote-1')('http://example.test')
       await new Promise<void>((resolve) => setImmediate(resolve))
-      assert.ok(pulls <= 1, `unconsumed when cannot continuous read response (actual pull ${pulls} time)`)
+      assert.ok(pulls <= 1, `must not drain response continuously while unconsumed (pulled ${pulls} times)`)
       await assert.rejects(host.disable('p:fetch-flow'), { code: 'plugin_has_live_tasks' })
       await response.body!.cancel()
       assert.equal(cancelled, true)
@@ -381,14 +382,14 @@ test('host public mechanism dedicated items', { timeout: 60_000 }, async (t) => 
     }
   })
 
-  await t.test('nodeFetch: abandon placement Response(do not consume do not cancel) determinism occupy - -disable continuous 409, explicit cancel after release (without GC fall back)', { timeout: 60_000 }, async () => {
-    // FinalizationRegistry security network already by contract remove: asset ownership fully determine - - plugin gets
-    // Response after must consume or cancel; abandon placement i.e. in-flight task continuous visible (disable/reload
-    // hard block assert cannot force), never dependency GC when machine leak leak mask decorate into can deactivate.
+  await t.test('nodeFetch: abandoned Response stays deterministically busy (disable 409) until explicit cancel (no GC fallback)', { timeout: 60_000 }, async () => {
+    // Contract removes FinalizationRegistry safety net for deterministic resource ownership: plugins receiving
+    // a Response must consume or cancel it; abandoned responses keep in-flight tasks visible (hard blocking
+    // disable/reload) instead of masking leaks behind non-deterministic GC timing.
     const raw = (() => Promise.resolve(new Response(new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(new Uint8Array(32))
-        // forever do not close: simulated SSE long stream (header early already reach do not end task).
+        // Never closes: simulates long SSE stream (headers arriving must not settle task).
       },
       cancel() {},
     }, { highWaterMark: 0 })))) as typeof fetch
@@ -398,15 +399,15 @@ test('host public mechanism dedicated items', { timeout: 60_000 }, async (t) => 
     await host.register({ id: 'p:fetch-abandon', definePlugin(ctx) { api = ctx.host } }, { enabled: true })
     try {
       const response = await api.nodeFetch('remote-1')('http://example.test')
-      assert.equal(response.status, 200, 'header reach i.e. return (without waiting body)')
-      // abandon placement: only inspect status, since do not consume also do not cancel.
+      assert.equal(response.status, 200, 'resolves as soon as headers arrive without waiting for body')
+      // Abandoned: inspect only status without consuming or canceling.
       void response
       await new Promise<void>((resolve) => setImmediate(resolve))
       await assert.rejects(host.disable('p:fetch-abandon'), { code: 'plugin_has_live_tasks' })
       await new Promise<void>((resolve) => setImmediate(resolve))
-      // across multiple event loop round still 409(determinism occupy, non- GC fall back short temporary window).
+      // Still 409 across multiple event-loop turns (deterministic occupancy, not transient GC timing).
       await assert.rejects(host.disable('p:fetch-abandon'), { code: 'plugin_has_live_tasks' })
-      // unique converge path: explicit cancel(drain to EOF same, another has test override).
+      // Only convergence path: explicit cancel (draining to EOF works identically, covered elsewhere).
       await response.body!.cancel()
       await host.disable('p:fetch-abandon')
     } finally {
@@ -414,21 +415,20 @@ test('host public mechanism dedicated items', { timeout: 60_000 }, async (t) => 
     }
   })
 
-  await t.test('nodeFetch host close determinism ownership:local forever do not end body and headers before request in dispose after real cancel and release', { timeout: 60_000 }, async () => {
-    // local path backend return globalThis.fetch:EnvFabric.close split remote tunnel
-    // manage fewer than it, determinism cancel must from each invoke owned cleanup(host dispose trigger
-    // together into AbortController), and normal disable do not abort(409 hard block assert cannot force).
+  await t.test('nodeFetch deterministic host-close ownership: local unending bodies & pre-header requests abort cleanly on dispose', { timeout: 60_000 }, async () => {
+    // Local path delegates to globalThis.fetch outside EnvFabric.close's remote tunnel teardown, so deterministic
+    // cancellation relies on per-call AbortController (host dispose triggers abort while normal disable rejects 409).
     let socketClosed = 0
     let headersSent = 0
     const server = http.createServer((req, res) => {
       headersSent += 1
       if (req.url === '/pending') {
-        // forever do not send response head (headers before suspended).
+        // Never responds with headers (hangs pre-headers).
         return
       }
       res.writeHead(200, { 'content-type': 'text/event-stream' })
       res.write('data: a\n\n')
-      // forever do not end SSE long stream.
+      // Unending SSE stream.
       const timer = setInterval(() => res.write('data: x\n\n'), 50)
       res.on('close', () => { clearInterval(timer); socketClosed += 1 })
     })
@@ -439,48 +439,47 @@ test('host public mechanism dedicated items', { timeout: 60_000 }, async (t) => 
     let api!: HelmHostApi
     await host.register({ id: 'p:fetch-dispose', definePlugin(ctx) { api = ctx.host } }, { enabled: true })
     try {
-      // --- local forever do not end body: abandon placement (do not consume do not cancel),dispose after connect real close ---
+      // --- Unending local body: abandoned (unconsumed/uncanceled); dispose actually closes connection ---
       const response = await api.nodeFetch('local')(`${base}/stream`)
       assert.equal(response.status, 200)
       await new Promise<void>((resolve) => setImmediate(resolve))
-      // normal disable: determinism occupy 409(cannot force), and must not borrow disable abort
-      //(dispose of outside unique can run release path), stream still can read.
+      // Normal disable rejects 409 deterministically and must never abort the active stream (only dispose aborts).
       await assert.rejects(host.disable('p:fetch-dispose'), { code: 'plugin_has_live_tasks' })
       const reader0 = response.body!.getReader()
       const chunk = await reader0.read()
-      assert.ok(!chunk.done, 'disable  409 reject must not abort in-flight stream (do not borrow disable abort)')
+      assert.ok(!chunk.done, '409 disable rejection must not abort in-flight stream')
 
       await host.dispose()
-      // dispose trigger owned cleanup: underlying request real cancel (server side connect close).
+      // Dispose fires cleanup: cancels underlying request (closing server socket).
       for (let i = 0; i < 100 && socketClosed === 0; i += 1) await delay(20)
-      assert.ok(socketClosed >= 1, `host dispose after local in-flight request must real cancel (server side connect close; actual ${socketClosed})`)
+      assert.ok(socketClosed >= 1, `local in-flight request must cancel on host dispose (server sockets closed: ${socketClosed})`)
 
-      // --- headers before suspended request:dispose after fetch promise with cancel error reject ---
+      // --- Pre-header pending request: dispose rejects fetch promise with abort error ---
       const host2 = new PluginHost({ dataDir, host: makeBackend({ nodeFetch: () => globalThis.fetch as typeof fetch }), docs: new MemoryDocStore() })
       let api2!: HelmHostApi
       await host2.register({ id: 'p:fetch-pending', definePlugin(ctx) { api2 = ctx.host } }, { enabled: true })
       const pending = api2.nodeFetch('local')(`${base}/pending`)
-      await delay(50) // request already out, response head not to.
+      await delay(50) // request sent, headers not yet returned
       const disposed = host2.dispose()
       await assert.rejects(() => pending, (error: unknown) => {
-        // owned cleanup with host destroy reason abort;undici original with signal.reason reject
-        //(determinism ownership can observe). also compatibility implement layer with AbortError form on throw.
+        // Cleanup aborts using host disposal reason; undici rejects with signal.reason
+        // (deterministic ownership); compatible layers may rethrow AbortError.
         if (error instanceof HelmError && error.code === 'plugin_host_disposed') return true
         const name = error instanceof Error ? error.name : String(error)
         return name === 'AbortError' || /abort/i.test(String((error as { message?: string }).message ?? name))
       })
       await disposed
-      assert.ok(headersSent >= 2, 'two request all real reach server side')
+      assert.ok(headersSent >= 2, 'both requests reached the server')
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()))
     }
   })
 
-  await t.test('nodeFetch cancel signal override semantics:init.signal override Request.signal, explicit null clear inherit, host close still can cancel', { timeout: 60_000 }, async () => {
-    // standard fetch semantics (AbortSignal.any together into, do not and by override old signal):
+  await t.test('nodeFetch abort signal override semantics: init.signal overrides Request.signal, explicit null clears it, host dispose still aborts', { timeout: 60_000 }, async () => {
+    // Matches standard fetch semantics (only combines with host-owned signal via AbortSignal.any, never with stale overridden Request.signal):
     let socketClosed = 0
     const server = http.createServer((req, res) => {
-      if (req.url === '/pending') return // forever do not response head.
+      if (req.url === '/pending') return // never sends headers
       res.writeHead(200, { 'content-type': 'text/event-stream' })
       res.write('data: a\n\n')
       const timer = setInterval(() => res.write('data: x\n\n'), 50)
@@ -494,19 +493,19 @@ test('host public mechanism dedicated items', { timeout: 60_000 }, async (t) => 
     let api!: HelmHostApi
     await host.register({ id: 'p:fetch-signal', definePlugin(ctx) { api = ctx.host } }, { enabled: true })
     try {
-      // 1) Request original signal already abort, but init override signal not abort: request must normal enter row
-      //(old implement two signal all and together into, will by already abort old signal error cancel).
+      // 1) Request's original signal is aborted, but init supplies an active signal: request must succeed
+      // (naive merging of both signals would wrongly abort via the overridden signal).
       const stale = new AbortController()
       stale.abort()
       const fresh = new AbortController()
       const overridden = await api.nodeFetch('local')(new Request(`${base}/stream`, { signal: stale.signal }), { signal: fresh.signal })
-      assert.equal(overridden.status, 200, 'init.signal override: already abort old Request signal must not cancel request')
+      assert.equal(overridden.status, 200, 'init.signal override prevents aborted Request.signal from canceling request')
       const r1 = overridden.body!.getReader()
       const chunk1 = await r1.read()
-      assert.ok(!chunk1.done && chunk1.value !== undefined, 'override signal not abort when stream normal can read')
+      assert.ok(!chunk1.done && chunk1.value !== undefined, 'stream reads normally when override signal is not aborted')
       await r1.cancel()
 
-      // 2) init override signal abort: real cancel (headers before suspended request with AbortError reject).
+      // 2) Overriding init signal aborts: cancels genuinely (pre-header request rejects with AbortError).
       const caller = new AbortController()
       const pending = api.nodeFetch('local')(`${base}/pending`, { signal: caller.signal })
       await delay(50)
@@ -516,23 +515,23 @@ test('host public mechanism dedicated items', { timeout: 60_000 }, async (t) => 
         return name === 'AbortError' || /abort/i.test(String((error as { message?: string }).message ?? name))
       })
 
-      // 3) init.signal = null clear already abort  Request inherit signal: request normal;
-      // abandon placement body after host dispose still can determinism cancel (connect real close).
+      // 3) init.signal = null clears inherited aborted Request signal: request runs normally,
+      // and abandoned body still cancels deterministically on host dispose.
       const aborted = new AbortController()
       aborted.abort()
       const cleared = await api.nodeFetch('local')(new Request(`${base}/stream`, { signal: aborted.signal }), { signal: null })
-      assert.equal(cleared.status, 200, 'explicit null clear inherit: already abort  Request signal must not cancel request')
-      void cleared // abandon placement (do not consume do not cancel).
+      assert.equal(cleared.status, 200, 'explicit null clears inherited aborted Request signal')
+      void cleared // abandoned (neither consumed nor canceled)
       await new Promise<void>((resolve) => setImmediate(resolve))
       await host.dispose()
       for (let i = 0; i < 100 && socketClosed === 0; i += 1) await delay(20)
-      assert.ok(socketClosed >= 1, `null clear inherit after host dispose still must real cancel in-flight request (actual close ${socketClosed})`)
+      assert.ok(socketClosed >= 1, `host dispose still aborts in-flight requests even after signal:null (closed ${socketClosed})`)
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()))
     }
   })
 
-  await t.test('openTunnel: host dispose destroy activity and establish after late to Duplex', { timeout: 60_000 }, async () => {
+  await t.test('openTunnel: host dispose destroys active and late-arriving Duplexes', { timeout: 60_000 }, async () => {
     for (const delayMs of [0, 20]) {
       const stub: OpenTunnelStub = { calls: [], delayMs, duplexes: [], failures: [] }
       const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: makeBackend({ openTunnel: stub }), docs: new MemoryDocStore() })
@@ -553,9 +552,9 @@ test('host public mechanism dedicated items', { timeout: 60_000 }, async (t) => 
     }
   })
 
-  await t.test('onUpdate:partial all string forwarding output; compute after late to partial static default discard', async () => {
-    // directly verify tool-registry  onUpdate wrap semantics (via pluginToolResult of outside channel).
-    // this in with most small subject to control fake verify:settled before forwarding,settled after discard.
+  await t.test('onUpdate: forwards string partials to output and silently drops late partials after settle', async () => {
+    // Tests tool-registry onUpdate wrapper semantics (outer path to pluginToolResult) with a minimal
+    // controllable stub: forwards before settle, drops silently after settle.
     const chunks: string[] = []
     let settled = false
     const output = (chunk: string): void => {
@@ -575,35 +574,36 @@ test('host public mechanism dedicated items', { timeout: 60_000 }, async (t) => 
     onUpdate({ output: [{ type: 'text', text: 'part-2' }] })
     assert.deepEqual(chunks, ['part-1 ', 'part-2'])
     settled = true
-    onUpdate({ output: 'late' }) // do not throw do not push
+    onUpdate({ output: 'late' }) // neither throws nor pushes
     assert.deepEqual(chunks, ['part-1 ', 'part-2'])
   })
 
-  await t.test('prompt throw shoot: only activate tool enter sections, strip do not phantom;guidelines array expand', () => {
+  await t.test('prompt projection: only active tools populate sections without ghost residues; guidelines array expands', () => {
     const base = [
       { id: 'profile.system', text: 'SYS' },
-      { id: 'prompt.tools.update_memory', text: 'old refer quote (should by override)' },
-      { id: 'prompt.tools.ghost_tool', text: 'phantom segment (tool already strip, should by clear)' },
+      { id: 'prompt.tools.update_memory', text: 'stale snippet (should be overwritten)' },
+      { id: 'prompt.tools.ghost_tool', text: 'ghost section (tool stripped, should be removed)' },
     ]
     const projected = projectToolPromptSections(base, [
-      { name: 'update_memory', promptSnippet: 'use update_memory save memory.' },
-      { name: 'load_skill', promptGuidelines: ['first read SKILL.md', 'references on demand read'] },
+      { name: 'update_memory', promptSnippet: 'use update_memory to save memory.' },
+      { name: 'load_skill', promptGuidelines: ['read SKILL.md first', 'read references on demand'] },
     ])
     const ids = projected.map((s) => s.id)
-    assert.ok(!ids.includes('prompt.tools.ghost_tool'), 'phantom segment must by clear')
+    assert.ok(!ids.includes('prompt.tools.ghost_tool'), 'ghost section must be removed')
     const snippet = projected.find((s) => s.id === 'prompt.tools.update_memory')
-    assert.equal(snippet?.text, 'use update_memory save memory.')
+    assert.equal(snippet?.text, 'use update_memory to save memory.')
     const guidelines = projected.find((s) => s.id === 'prompt.tools.guidelines')
     assert.ok(guidelines)
-    assert.ok(guidelines!.text.includes('- load_skill: first read SKILL.md'))
-    assert.ok(guidelines!.text.includes('- load_skill: references on demand read'))
-    // empty throw shoot: clear all prompt.tools.*(contains guidelines).
+    assert.ok(guidelines!.text.includes('- load_skill: read SKILL.md first'))
+    assert.ok(guidelines!.text.includes('- load_skill: read references on demand'))
+    // Empty projection: removes all prompt.tools.* sections (including guidelines).
     const cleared = projectToolPromptSections(projected, [])
     assert.ok(!cleared.some((s) => s.id.startsWith('prompt.tools.')))
   })
 
-  await t.test('ctx.host.forkConversation: real Runtime forwarding parameter, boundary errors,liveTasks and deactivate block assert', { timeout: 60_000 }, async (sub) => {
-    // 1. liveTasks + epoch guard: in-flight forkConversation during deactivate return 409 plugin_has_live_tasks; after completion deactivate old handle 409 plugin_context_expired.
+  await t.test('ctx.host.forkConversation: forwards args to real Runtime, boundary errors, liveTasks, and disable expiry', { timeout: 60_000 }, async (sub) => {
+    // 1. liveTasks + epoch guard: in-flight forkConversation returns 409 plugin_has_live_tasks on disable;
+    // once done and disabled, stale handle throws 409 plugin_context_expired.
     let resolveFork!: (summary: ReturnType<typeof makeConversation>) => void
     const forkGate = new Promise<ReturnType<typeof makeConversation>>((resolve) => {
       resolveFork = resolve
@@ -637,10 +637,10 @@ test('host public mechanism dedicated items', { timeout: 60_000 }, async (t) => 
       (err: unknown) => err instanceof HelmError && err.status === 409 && err.code === 'plugin_context_expired',
     )
 
-    // 2. real KernelRuntime end-to-end connect line:400/404 validate, normal fork inherit and deactivate expires.
+    // 2. Real KernelRuntime end-to-end wiring: 400/404 validation, normal inheritance on fork, and post-disable expiry.
     const rtDir = useTempDir(sub, 'helm-host-fork-rt-')
     const { models, faux } = makeFauxModels()
-    faux.setResponses([fauxAssistantMessage('already record dark number ALPHA-99')])
+    faux.setResponses([fauxAssistantMessage('recorded passcode ALPHA-99')])
     const runtime = await KernelRuntime.open({
       buildProvider: createPluginBuildProvider(),
       dataDir: rtDir,
@@ -669,7 +669,7 @@ test('host public mechanism dedicated items', { timeout: 60_000 }, async (t) => 
         cwd: rtDir,
         title: 'parent conversation',
       })
-      await runtime.submitInput(parent.id, 'please record dark number ALPHA-99')
+      await runtime.submitInput(parent.id, 'please remember passcode ALPHA-99')
       await runtime.waitForIdle(parent.id)
       const detail = await runtime.getConversationDetail(parent.id)
       const lastEntry = detail.entries.at(-1)
@@ -694,10 +694,10 @@ test('host public mechanism dedicated items', { timeout: 60_000 }, async (t) => 
 
       const forked = await realHost!.forkConversation(parent.id, {
         entryId: lastEntryId,
-        title: 'self define fork title',
+        title: 'custom fork title',
       })
       assert.equal(forked.parentConversationId, parent.id)
-      assert.equal(forked.title, 'self define fork title')
+      assert.equal(forked.title, 'custom fork title')
       assert.equal(forked.profileId, 'reviewer')
       assert.equal(forked.cwd, rtDir)
       assert.equal(forked.model, 'faux/faux-1')

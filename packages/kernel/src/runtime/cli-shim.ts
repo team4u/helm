@@ -1,53 +1,52 @@
 /**
- * helm CLI wrap script generate (pure function;NodeManager.ensureCliBinDir consume, test direct test).
+ * helm CLI wrapper script generation (pure functions consumed by NodeManager.ensureCliBinDir and tested directly).
  *
- * mechanism (this module zero I/O, excludes policy; host platform by caller inject):
- * - POSIX host:helm = original generate `#!/bin/sh` exec direct tune (and history output one by one byte consistent);
+ * Mechanism (zero IO, zero policy; host platform injected by caller):
+ * - POSIX host: `helm` = `#!/bin/sh` exec shim (byte-for-byte identical to existing output);
  * - Windows host:
- *   - helm.cmd:cmd.exe wrapper(% add multiple escaping; and history output one by one byte consistent);
- *   - helm: for WSL / Git Bash(MSYS) etc. POSIX shell caller shim. runtime
- *     only node.exe can execute file path via `wslpath -u`(WSL takes precedence) or
- *     `cygpath -u`(Git Bash / MSYS fall back) rotate cost shell perspective path; entry parameter
- *     still pass Windows path (by node.exe self row parse,POSIX path will by Windows node
- *     mistakenly explain). convert tool missing / failed / output is empty or cannot execute one rule explicit diagnose and with
- *     127 exit - - never fall back Linux node(runtime version and dataDir crack), never
- *     trust convert tool output, never hard encode /mnt/<drive> mount topology.
+ *   - `helm.cmd`: cmd.exe wrapper (doubles `%` escapes; byte-for-byte identical to existing output);
+ *   - `helm`: POSIX shim for WSL / Git Bash (MSYS) callers. Converts ONLY the node.exe executable path at runtime
+ *     via `wslpath -u` (WSL preferred) or `cygpath -u` (Git Bash / MSYS fallback), keeping entry arguments as Windows
+ *     paths (node.exe resolves them directly; POSIX paths would be misinterpreted by Windows Node). Missing/failing
+ *     converters, empty output, or non-executable binaries fail explicitly with diagnostics and exit 127—never falling
+ *     back to a Linux Node binary (which would split runtime versions and dataDir), trusting converter output blindly,
+ *     or hardcoding `/mnt/<drive>` mount layouts.
  */
 
-/** POSIX sh single quotes security package wrap: space / single quotes / backslash / $ etc. all by literal pass. */
+/** POSIX sh single-quote escaping: safely passes spaces, single quotes, backslashes, `$`, etc. literally. */
 export function shQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`
 }
 
-/** CLI wrap script generate plan:node can execute file host path + exec after entry parameter (host path). */
+/** CLI wrapper generation plan: host path to Node executable + host-path entrypoint arguments passed to exec. */
 export interface CliShimPlan {
   readonly execPath: string
   readonly entryArgs: readonly string[]
   /**
-   * extra inject CLI child process environment variable (default do not inject, output and history one by one byte consistent).
-   * unique now store case:Electron host (Hub with ELECTRON_RUN_AS_NODE run) when inject
-   * ELECTRON_RUN_AS_NODE=1, make execPath(Electron two enter system) with Node pattern execute CLI.
+   * Extra environment variables injected into the CLI child process (omitted by default for byte-identical output).
+   * Currently used when running inside Electron (Hub started under ELECTRON_RUN_AS_NODE), setting
+   * ELECTRON_RUN_AS_NODE=1 so execPath runs as Node CLI instead of opening a GUI window.
    */
   readonly env?: Readonly<Record<string, string>>
 }
 
-/** env inject segment (POSIX:`env K=V` pre- at exec; and shQuote combine keep literal pass). */
+/** Env injection prefix (POSIX: `env K=V` before exec, combined with shQuote for literal preservation). */
 function posixEnvPrefix(env: Readonly<Record<string, string>> | undefined): string {
   if (!env || Object.keys(env).length === 0) return ''
   const assignments = Object.entries(env).map(([k, v]) => shQuote(`${k}=${v}`)).join(' ')
   return `env ${assignments} `
 }
 
-/** POSIX host original generate shim(without env when and history output one by one byte consistent). */
+/** POSIX host exec shim (byte-for-byte identical to previous output when env is omitted). */
 export function buildPosixHostShim(plan: CliShimPlan): string {
   return `#!/bin/sh\nexec ${posixEnvPrefix(plan.env)}${[plan.execPath, ...plan.entryArgs].map(shQuote).join(' ')} "$@"\n`
 }
 
-/** Windows host  helm.cmd(cmd.exe wrapper;% add multiple escaping, without env when and history output one by one byte consistent). */
+/** Windows host `helm.cmd` (cmd.exe wrapper with doubled `%`; byte-for-byte identical when env is omitted). */
 export function buildWindowsCmdWrapper(plan: CliShimPlan): string {
   const envLines = Object.entries(plan.env ?? {}).map(([k, v]) => `set "${k}=${v}"`)
-  // setlocal: environment variable only to this time wrapper process inject, after end discard - - never pollute person class cmd.exe
-  // conversation after continue start Electron/Node process (without env when and history output one by one byte consistent, excludes setlocal).
+  // setlocal scopes env vars to this wrapper process so they never pollute subsequent human cmd.exe commands
+  // (omitted when env is empty to keep output byte-for-byte identical).
   const prefix = envLines.length > 0 ? ['setlocal'] : []
   const cmdArgs = [plan.execPath, ...plan.entryArgs]
     .map((value) => `"${value.replaceAll('%', '%%')}"`)
@@ -55,7 +54,7 @@ export function buildWindowsCmdWrapper(plan: CliShimPlan): string {
   return `@echo off\r\n${[...prefix, ...envLines, `${cmdArgs} %*`].join('\r\n')}\r\n`
 }
 
-/** Windows host for POSIX shell(WSL / Git Bash / MSYS) helm shim. */
+/** Windows host POSIX-shell (`helm`) shim for WSL / Git Bash / MSYS. */
 export function buildWindowsPosixShim(plan: CliShimPlan): string {
   const entries =
     plan.entryArgs.length > 0 ? ` ${plan.entryArgs.map(shQuote).join(' ')}` : ''

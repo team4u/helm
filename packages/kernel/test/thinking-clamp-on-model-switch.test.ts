@@ -1,20 +1,20 @@
 /**
- * switch model after think etc. level by target model capability automatically converge (real SQLite + pi-durable + faux request).
+ * Automatic thinking level clamping on model switch based on target model capabilities (real SQLite + pi-durable + faux provider).
  *
- * see pi coding agent  setModel → setThinkingLevel semantics: target model capability unknown when pass-through
- * (do not virtual construct capability), capability known and when before Profile do not by support when by SDK available Profile sequence then near converge.
+ * Mirrors pi coding agent setModel -> setThinkingLevel semantics: passes through when target model capabilities are unknown
+ * (without fabricating capabilities), and clamps down along SDK-supported levels when the target model supports fewer levels.
  *
- * override:
- * - real reasoning model A(thinkingLevelMap declaration support max)→ model B(only support to high):
- *   explicit override max conversation cut to B after summary.thinkingLevel / thinkingLevelOverride /
- *   SDK agent.thinkingLevel three all is high;
- * - explicit max override + Profile model A→B  align:override/effective/SDK all high,
- *   and align persist converge result - - after continue only change title no longer change Profile, cut back A still high;
- * - takes effect Profile (inherit chain, without override) same converge: global/Profile config max to B when is high;
- * - empty string (not config) must not by mistakenly converge is 'off': keep inherit chain semantics;
- * - faux test model (reasoning:false, without thinkingLevelMap, capability unknown) contract do not break:
- *   any inherit Profile original pass-through (and runtime-thinking-config.test.ts baseline consistent);
- * - spawn creates new subagent by target model capability converge effort;resume explicit effort same converge.
+ * Covers:
+ * - Real reasoning model A (thinkingLevelMap declares up to max) -> model B (only up to high):
+ *   conversation with explicit max override switched to B has summary.thinkingLevel / thinkingLevelOverride /
+ *   SDK agent.thinkingLevel all clamped to high;
+ * - Explicit max override + Profile model aligned A -> B: override/effective/SDK all become high,
+ *   and the clamped value persists—later title-only updates keep the level, switching back to A stays high;
+ * - Inherited effective level (no override) clamps too: global/Profile max becomes high on B;
+ * - Empty string (unconfigured) must never be mistakenly clamped to 'off': preserves inheritance chain semantics;
+ * - Faux test model (reasoning: false, no thinkingLevelMap, unknown capability) contract preserved:
+ *   any inherited level passes through verbatim (consistent with runtime-thinking-config.test.ts baseline);
+ * - spawn clamps effort for new subagents by target model capability; resume also clamps explicit effort.
  */
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -41,8 +41,8 @@ after(() => {
 })
 
 /**
- * carries reasoning capability metadata faux gateway:createFauxCore provide stream implement,
- * model define after again patch thinkingLevelMap(faux model define itself do not expose the field).
+ * Faux provider with reasoning capability metadata: createFauxCore supplies the stream implementation,
+ * then patches thinkingLevelMap onto model definitions (faux model definitions do not expose that field directly).
  */
 function reasoningFauxProvider(options: {
   provider: string
@@ -73,10 +73,11 @@ function reasoningFauxProvider(options: {
 
 interface Fixture {
   kernel: KernelRuntime
-  /** capability known gateway A(faux-cap/model-a support max;faux-cap/model-b only to high). */
+  /** Capability-aware provider A (faux-cap-a/model-a supports up to max). */
   capA: ReturnType<typeof reasoningFauxProvider>
+  /** Capability-aware provider B (faux-cap-b/model-b supports up to high). */
   capB: ReturnType<typeof reasoningFauxProvider>
-  /** capability unknown gateway (faux by default:reasoning:false without map, pass-through contract baseline). */
+  /** Unknown-capability baseline provider (faux default: reasoning: false without map, passthrough baseline). */
   legacyFaux: ReturnType<typeof reasoningFauxProvider>
   dir: string
 }
@@ -89,7 +90,7 @@ async function open(dir: string): Promise<Fixture> {
       {
         id: 'model-a',
         reasoning: true,
-        // A explicit declaration support to max(xhigh/max must explicit map only then available).
+        // A explicitly declares support up to max (xhigh/max require explicit mapping to be available).
         thinkingLevelMap: { off: null, minimal: 'minimal', low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max' },
       },
     ],
@@ -100,12 +101,12 @@ async function open(dir: string): Promise<Fixture> {
       {
         id: 'model-b',
         reasoning: true,
-        // B only support to high:xhigh/max is null.
+        // B supports up to high only: xhigh/max are null.
         thinkingLevelMap: { off: null, minimal: 'minimal', low: 'low', medium: 'medium', high: 'high', xhigh: null, max: null },
       },
     ],
   })
-  // capability unknown baseline:faux by default form (reasoning:false, without thinkingLevelMap).
+  // Unknown-capability baseline: default faux shape (reasoning: false, no thinkingLevelMap).
   const legacyFaux = reasoningFauxProvider({
     provider: 'faux-legacy',
     models: [{ id: 'legacy-1', reasoning: false }],
@@ -138,102 +139,102 @@ async function assertThinking(kernel: KernelRuntime, id: number, effective: stri
   const summary = kernel.getConversation(id) as ThinkingSummary
   assert.equal(summary.thinkingLevel, effective)
   assert.equal(summary.thinkingLevelOverride, override)
-  assert.equal((await sdkAgent(kernel, id)).thinkingLevel, effective || 'off', 'real SDK must and mirror consistent')
+  assert.equal((await sdkAgent(kernel, id)).thinkingLevel, effective || 'off', 'real SDK state must match mirror')
 }
 
-it('A(max) cut B(only high):summary,override,SDK agent all converge is high', { timeout: 60_000 }, async (t) => {
+it('switch from A (max) to B (high max): summary, override, and SDK agent all clamp to high', { timeout: 60_000 }, async (t) => {
   const { kernel } = await fixture(t)
   await kernel.setDefaultModel('faux-cap-a/model-a')
   const conv = await kernel.createConversation()
   await kernel.updateConversation(conv.id, { thinkingLevel: 'max' })
   await assertThinking(kernel, conv.id, 'max', 'max')
 
-  // cut to model B:max do not by support → converge to high(by SDK available Profile sequence then near converge).
+  // Switch to model B: max is unsupported -> clamps to high (nearest lower SDK-supported level).
   await kernel.updateConversation(conv.id, { model: 'faux-cap-b/model-b' })
   await assertThinking(kernel, conv.id, 'high', 'high')
 
-  // cut back A: converge after high still is A support Profile, keep do not change (pi setThinkingLevel semantics: persist converge value).
+  // Switch back to A: clamped high is still supported by A, so it stays unchanged (pi setThinkingLevel persists clamped value).
   await kernel.updateConversation(conv.id, { model: 'faux-cap-a/model-a' })
   await assertThinking(kernel, conv.id, 'high', 'high')
 })
 
-it('inherit chain (without override) same converge: global max to B is high, back to A restore max', { timeout: 60_000 }, async (t) => {
+it('inheritance chain (no override) clamps too: global max becomes high on B and restores max on A', { timeout: 60_000 }, async (t) => {
   const { kernel } = await fixture(t)
   await kernel.setDefaultModel('faux-cap-b/model-b', 'max')
   const conv = await kernel.createConversation()
   await assertThinking(kernel, conv.id, 'high', undefined)
 
-  // conversation cut to A: inherit global max re- available.
+  // Conversation switches to A: inherited global max becomes available again.
   await kernel.updateConversation(conv.id, { model: 'faux-cap-a/model-a' })
   await assertThinking(kernel, conv.id, 'max', undefined)
 })
 
-it('Profile Profile follow Profile model align; conversation swap Profile heavy compute and converge', { timeout: 60_000 }, async (t) => {
+it('Profile level aligns with Profile model; changing conversation Profile recomputes and clamps', { timeout: 60_000 }, async (t) => {
   const { kernel } = await fixture(t)
   await kernel.setDefaultModel('faux-cap-a/model-a')
   await kernel.services.profiles.save({
-    id: 'expert', name: 'dedicated household', model: 'faux-cap-a/model-a', thinkingLevel: 'max',
+    id: 'expert', name: 'Expert', model: 'faux-cap-a/model-a', thinkingLevel: 'max',
   })
   const conv = await kernel.createConversation({ profileId: 'expert' })
   await assertThinking(kernel, conv.id, 'max', undefined)
 
-  // Profile model change to B: Profile max follow inherit chain converge is high.
-  await kernel.services.profiles.save({ id: 'expert', name: 'dedicated household', model: 'faux-cap-b/model-b', thinkingLevel: 'max' })
+  // Profile model changes to B: Profile max clamps along inheritance chain to high.
+  await kernel.services.profiles.save({ id: 'expert', name: 'Expert', model: 'faux-cap-b/model-b', thinkingLevel: 'max' })
   await kernel.alignProfileConversations('expert')
   await assertThinking(kernel, conv.id, 'high', undefined)
 
-  // conversation real switch to another Profile(model same is A, Profile high): takes effect Profile follow new inherit chain heavy compute.
-  await kernel.services.profiles.save({ id: 'reviewer', name: 'review review', model: 'faux-cap-a/model-a', thinkingLevel: 'high' })
+  // Conversation switches to another Profile (model is A, level high): effective level recomputes along new inheritance chain.
+  await kernel.services.profiles.save({ id: 'reviewer', name: 'Reviewer', model: 'faux-cap-a/model-a', thinkingLevel: 'high' })
   await kernel.updateConversation(conv.id, { profileId: 'reviewer' })
   await assertThinking(kernel, conv.id, 'high', undefined)
 })
 
-it('explicit max override + Profile model A→B align:override/effective/SDK all high and persist', { timeout: 60_000 }, async (t) => {
+it('explicit max override + Profile model A->B alignment: override/effective/SDK all clamp to high and persist', { timeout: 60_000 }, async (t) => {
   const { kernel } = await fixture(t)
   await kernel.setDefaultModel('faux-cap-a/model-a')
   await kernel.services.profiles.save({
-    id: 'expert', name: 'dedicated household', model: 'faux-cap-a/model-a', thinkingLevel: 'medium',
+    id: 'expert', name: 'Expert', model: 'faux-cap-a/model-a', thinkingLevel: 'medium',
   })
   const conv = await kernel.createConversation({ profileId: 'expert' })
-  // explicit override max:A support when three layer all is max.
+  // Explicit max override: all three layers are max while on A.
   await kernel.updateConversation(conv.id, { thinkingLevel: 'max' })
   await assertThinking(kernel, conv.id, 'max', 'max')
 
-  // Profile model change to B(only support to high) after align: explicit override same converge and persist is high.
-  await kernel.services.profiles.save({ id: 'expert', name: 'dedicated household', model: 'faux-cap-b/model-b', thinkingLevel: 'medium' })
+  // Profile model switches to B (supports up to high) and aligns: explicit override also clamps and persists as high.
+  await kernel.services.profiles.save({ id: 'expert', name: 'Expert', model: 'faux-cap-b/model-b', thinkingLevel: 'medium' })
   await kernel.alignProfileConversations('expert')
   await assertThinking(kernel, conv.id, 'high', 'high')
 
-  // after continue only change title (do not motion model/Profile): Profile do not by any link heavy compute or drift.
-  await kernel.updateConversation(conv.id, { title: 'change title' })
+  // Subsequent title-only update (without touching model/level): level is not recomputed or drifted by any step.
+  await kernel.updateConversation(conv.id, { title: 'Updated title' })
   await assertThinking(kernel, conv.id, 'high', 'high')
 
-  // cut back model A: converge persist high is A support Profile, keep do not change.
+  // Switch back to model A: clamped persisted high is supported by A and remains unchanged.
   await kernel.updateConversation(conv.id, { model: 'faux-cap-a/model-a' })
   await assertThinking(kernel, conv.id, 'high', 'high')
 })
 
-it('empty string (not config) do not by mistakenly converge is off;off semantics keep', { timeout: 60_000 }, async (t) => {
+it('empty string (unconfigured) is not mistakenly clamped to off; off semantics remain intact', { timeout: 60_000 }, async (t) => {
   const { kernel } = await fixture(t)
   await kernel.setDefaultModel('faux-cap-b/model-b')
-  // global not config think Profile: create conversation after is empty string,SDK off.
+  // Global thinking level unconfigured: newly created conversation starts at '', SDK at 'off'.
   const conv = await kernel.createConversation()
   await assertThinking(kernel, conv.id, '', undefined)
 
-  // explicit off override:B  map.off is null(off do not in support list), but SDK off semantics
-  // must not by clamp lift rise to most small available Profile (minimal).
+  // Explicit off override: B's map.off is null (off is not in supported list), but SDK off semantics
+  // must never be clamped up to the lowest supported level (minimal).
   await kernel.updateConversation(conv.id, { thinkingLevel: 'off' })
   await assertThinking(kernel, conv.id, 'off', 'off')
 
-  // clear override back to empty string inherit.
+  // Clearing override returns to empty string inheritance.
   await kernel.updateConversation(conv.id, { thinkingLevel: '' })
   await assertThinking(kernel, conv.id, '', undefined)
 })
 
-it('capability unknown (faux by default form) pass-through do not break since has contract', { timeout: 60_000 }, async (t) => {
+it('unknown capability (default faux shape) passes through without breaking existing contract', { timeout: 60_000 }, async (t) => {
   const { kernel } = await fixture(t)
-  // legacy-1 do not declaration any capability (reasoning:false, without map):max original pass-through,
-  // and runtime-thinking-config.test.ts  faux baseline consistent.
+  // legacy-1 declares no capabilities (reasoning: false, no map): max passes through verbatim,
+  // matching the runtime-thinking-config.test.ts faux baseline.
   await kernel.setDefaultModel('faux-legacy/legacy-1', 'max')
   const conv = await kernel.createConversation()
   await assertThinking(kernel, conv.id, 'max', undefined)
@@ -241,11 +242,11 @@ it('capability unknown (faux by default form) pass-through do not break since ha
   await assertThinking(kernel, conv.id, 'xhigh', 'xhigh')
 })
 
-it('spawn creates new by target model capability converge effort;resume explicit effort same converge', { timeout: 60_000 }, async (t) => {
+it('spawn creates child clamped by target model capability; resume also clamps explicit effort', { timeout: 60_000 }, async (t) => {
   const { kernel, capA, capB } = await fixture(t)
   await kernel.setDefaultModel('faux-cap-a/model-a', 'low')
-  capA.core.setResponses([fauxAssistantMessage('A complete')])
-  capB.core.setResponses([fauxAssistantMessage('B complete')])
+  capA.core.setResponses([fauxAssistantMessage('A done')])
+  capB.core.setResponses([fauxAssistantMessage('B done')])
   let childA = 0
   let childB = 0
   await kernel.spawnAgent({
@@ -257,7 +258,7 @@ it('spawn creates new by target model capability converge effort;resume explicit
   })
   await assertThinking(kernel, childA, 'max', 'max')
 
-  // target model B only support to high: explicit effort max converge is high.
+  // Target model B supports up to high: explicit effort max clamps to high.
   await kernel.spawnAgent({
     parentConversationId: 1,
     prompt: 'task B',
@@ -267,8 +268,8 @@ it('spawn creates new by target model capability converge effort;resume explicit
   })
   await assertThinking(kernel, childB, 'high', 'high')
 
-  // resume: swap model to A after do not carries effort: mirror already converge high keep (A also support high),
-  // does not fall back also do not lift rise.
+  // Resume: switching model to A without specifying effort preserves clamped high in mirror (also supported by A),
+  // neither rolling back nor lifting.
   capA.core.setResponses([fauxAssistantMessage('A resume')])
   await kernel.spawnAgent({
     parentConversationId: 1,

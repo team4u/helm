@@ -1,15 +1,14 @@
 /**
- * EventHub short disconnection resume (?afterSeq+?bootId / ring / resumed control frame) test.
+ * EventHub short-disconnect resume (?afterSeq+?bootId / ring buffer / resumed control frame) tests.
  *
- * override:
- * - same proxy zero event resume (afterSeq == headSeq, contains non-zero initialSeq) and 5 frame patch complete strictly
- *   without duplicate without omission (contains response() establish after, read before publish heavy window frame);
- * - across instance same seq force snapshot(bootId different never resume, even if new instance ring already override);
- * - ring frame count/byte eliminate and single frame over byte pre- compute (empty after cannot across the frame resume, its after can resume);
- * - not come seq fall back snapshot; distortion shape credentials (negative number/decimal/non- number/over long/single credentials) explicit 400;
- * - replay via pull one by one step conflict refresh (replay total amount far over maxPendingBytes also do not mistakenly kill fast consumer),
- *   conflict refresh during slow consumer (do not read + live frame heap accumulate) by pre- compute explicit closure stream;
- * - abort / cancel after without subscribe leak leak;snapshot inject instance bootId.
+ * Covers:
+ * - Zero-event same-process resume (afterSeq == headSeq, including non-zero initialSeq) and gapless 5-frame catch-up
+ *   (including frames published after response() creation before stream reads drain);
+ * - Cross-instance equal seq forces snapshot (different bootId never resumes even if new ring happens to match);
+ * - Ring eviction by count/bytes and oversized single-frame budget (clearing ring prevents skipping missed frames while letting later frames resume);
+ * - Future seq falls back to snapshot; malformed query params return explicit 400;
+ * - Step-by-step pull-based replay backpressure (replays exceeding maxPendingBytes still succeed for active readers, while unread stalled streams close cleanly);
+ * - Abort/cancel cleans up subscriptions with zero leaks; snapshot injects current bootId.
  */
 import { strict as assert } from 'node:assert'
 import { describe, it } from 'node:test'
@@ -35,7 +34,7 @@ function makeHub(opts?: {
   ringMaxFrames?: number
   ringMaxBytes?: number
   keepaliveMs?: number
-  /** override persistSeq(inject throws learn scenario); default record fixture.persisted. */
+  /** Override persistSeq (e.g., inject throw); defaults to appending to fixture.persisted. */
   persistSeq?: (seq: number) => void
 }): HubFixture {
   const persisted: number[] = []
@@ -56,7 +55,7 @@ function eventsUrl(afterSeq: number, bootId: string): string {
   return `http://x/api/events?afterSeq=${afterSeq}&bootId=${encodeURIComponent(bootId)}`
 }
 
-/** parse one segment SSE text is {event, data} list (ignore note release row). */
+/** Parse SSE payload chunks into { event, data } frames (skipping comment keepalive lines). */
 function parseSse(text: string): Array<{ event: string; data: unknown }> {
   const frames: Array<{ event: string; data: unknown }> = []
   for (const block of text.split('\n\n')) {
@@ -72,7 +71,7 @@ function parseSse(text: string): Array<{ event: string; data: unknown }> {
   return frames
 }
 
-/** establish connect and continuous read accumulated frame;abort after stream final,join wrap-up. */
+/** Open SSE stream and accumulate parsed frames; await reading termination on abort(). */
 function connect(hub: EventHub, url: string): {
   response: Response
   frames: Array<{ event: string; data: unknown }>
@@ -115,11 +114,11 @@ function publishNotes(hub: EventHub, count: number, opts?: { bodyLength?: number
 }
 
 // ---------------------------------------------------------------------------
-// same proxy resume: zero event and many frame patch complete
+// Same-process resume: zero-event catch-up and multi-frame replay
 // ---------------------------------------------------------------------------
 
-describe('EventHub resume: same proxy patch', { timeout: 60_000 }, () => {
-  it('zero event resume:afterSeq == headSeq first frame resumed, zero patch after real-time frame per common reach', { timeout: 60_000 }, async () => {
+describe('EventHub resume: same-process catch-up', { timeout: 60_000 }, () => {
+  it('zero-event resume: afterSeq == headSeq starts with resumed frame, followed by normal live frames', { timeout: 60_000 }, async () => {
     const { hub } = makeHub({ bootId: 'b1' })
     const first = connect(hub, 'http://x/api/events')
     await waitFor(() => first.frames.length >= 1)
@@ -136,17 +135,17 @@ describe('EventHub resume: same proxy patch', { timeout: 60_000 }, () => {
         event: 'resumed',
         data: { bootId: 'b1', seq: 0, headSeq: 0, conversationLives: [] } satisfies HelmResumedFrame,
       },
-      'zero patch resume first frame must be resumed {bootId,seq,headSeq,conversationLives}',
+      'zero-catch-up resume must start with resumed {bootId, seq, headSeq, conversationLives}',
     )
-    hub.publish('notification', { level: 'info', title: 'zero patch after real-time' })
+    hub.publish('notification', { level: 'info', title: 'live after zero catch-up' })
     await waitFor(() => resumed.frames.some((f) => f.event === 'notification'))
-    assert.deepEqual((resumed.frames[1]?.data as HelmEventFrame).event, { type: 'notification', level: 'info', title: 'zero patch after real-time' })
+    assert.deepEqual((resumed.frames[1]?.data as HelmEventFrame).event, { type: 'notification', level: 'info', title: 'live after zero catch-up' })
     assert.equal(hub.subscriberCount, 1)
     await resumed.abort()
     assert.equal(hub.subscriberCount, 0)
   })
 
-  it('non-zero initialSeq zero event resume: durable watermark directly from resumed start step', { timeout: 60_000 }, async () => {
+  it('non-zero initialSeq zero-event resume advances directly from resumed watermark', { timeout: 60_000 }, async () => {
     const { hub } = makeHub({ bootId: 'b1', initialSeq: 7 })
     const resumed = connect(hub, eventsUrl(7, 'b1'))
     await waitFor(() => resumed.frames.length >= 1)
@@ -154,11 +153,11 @@ describe('EventHub resume: same proxy patch', { timeout: 60_000 }, () => {
     await resumed.abort()
   })
 
-  it('5 frame patch complete strictly without duplicate without omission; create connect after not read before publish frame (heavy window) connect in replay after', { timeout: 60_000 }, async () => {
+  it('catches up 5 buffered frames without gaps or duplicates, including overlapping live publishes', { timeout: 60_000 }, async () => {
     const { hub } = makeHub({ bootId: 'b1' })
     publishNotes(hub, 5)
     assert.equal(hub.seq, 5)
-    // establish resume response after immediately publish 2 frame: subscribe buffer must first at replay establish (without window lose frame).
+    // Publish 2 live frames right after opening stream response: subscriber queue bridges smoothly past replay.
     const resumed = connect(hub, eventsUrl(0, 'b1'))
     publishNotes(hub, 2, { startTitle: 6 })
     await waitFor(() => resumed.frames.filter((f) => f.event === 'notification').length >= 7)
@@ -166,7 +165,7 @@ describe('EventHub resume: same proxy patch', { timeout: 60_000 }, () => {
 
     assert.deepEqual(resumed.frames[0]?.data, { bootId: 'b1', seq: 0, headSeq: 5, conversationLives: [] })
     const notes = resumed.frames.filter((f) => f.event === 'notification').map((f) => (f.data as HelmEventFrame).seq)
-    assert.deepEqual(notes, [1, 2, 3, 4, 5, 6, 7], 'replay 1..5 after without seam join buffer 6..7, strictly connect continue')
+    assert.deepEqual(notes, [1, 2, 3, 4, 5, 6, 7], 'buffered 6..7 seamlessly join replayed 1..5 in exact sequence')
     const titles = resumed.frames
       .filter((f) => f.event === 'notification')
       .map((f) => ((f.data as HelmEventFrame).event as { title?: string }).title)
@@ -175,36 +174,36 @@ describe('EventHub resume: same proxy patch', { timeout: 60_000 }, () => {
 })
 
 // ---------------------------------------------------------------------------
-// across proxy and cache missing opening: force snapshot
+// Cross-process and missed-gap fallback to snapshot
 // ---------------------------------------------------------------------------
 
-describe('EventHub resume: across proxy and missing opening fall back snapshot', { timeout: 60_000 }, () => {
-  it('across instance same seq:bootId different force snapshot, even if new instance ring already override missing opening', { timeout: 60_000 }, async () => {
+describe('EventHub resume: cross-process and gap snapshot fallback', { timeout: 60_000 }, () => {
+  it('cross-instance equal seq forces snapshot when bootId differs even if new ring covers range', { timeout: 60_000 }, async () => {
     const { hub: hub1 } = makeHub({ bootId: 'b1' })
     publishNotes(hub1, 5)
-    // simulated server side restart: durable seq=5, but instance proxy swap new (ring already has 6,7).
+    // Simulated restart: persisted seq=5, fresh process bootId='b2' (ring contains 6,7).
     const { hub: hub2 } = makeHub({ bootId: 'b2', initialSeq: 5 })
     publishNotes(hub2, 2, { startTitle: 6 })
 
     const resumed = connect(hub2, eventsUrl(5, 'b1'))
     await waitFor(() => resumed.frames.length >= 1)
     await resumed.abort()
-    assert.equal(resumed.frames[0]?.event, 'snapshot', 'across proxy never resume: first frame must be snapshot')
+    assert.equal(resumed.frames[0]?.event, 'snapshot', 'different process must never resume incrementally: emit snapshot')
     const snap = resumed.frames[0]?.data as HelmSnapshot
-    assert.equal(snap.bootId, 'b2', 'snapshot carry new proxy bootId, client based on this change use new credentials')
+    assert.equal(snap.bootId, 'b2', 'snapshot conveys new bootId for client credential update')
     assert.equal(snap.seq, 7)
   })
 
-  it('frame eliminate after exceeds missing opening afterSeq fall back snapshot;ring override inside can resume', { timeout: 60_000 }, async () => {
+  it('evicted frames falling outside ring force snapshot; ranges inside ring resume', { timeout: 60_000 }, async () => {
     const { hub } = makeHub({ bootId: 'b1', ringMaxFrames: 3 })
-    publishNotes(hub, 5) // ring only remain [3,4,5]
-    // afterSeq=1 need to 2..5,2 already by eliminate → snapshot.
+    publishNotes(hub, 5) // ring retains only [3,4,5]
+    // afterSeq=1 needs 2..5, 2 was evicted -> snapshot.
     const missed = connect(hub, eventsUrl(1, 'b1'))
     await waitFor(() => missed.frames.length >= 1)
     await missed.abort()
-    assert.equal(missed.frames[0]?.event, 'snapshot', 'cache missing opening never exceeds missing resume')
+    assert.equal(missed.frames[0]?.event, 'snapshot', 'cache miss must never resume past evicted gap')
 
-    // afterSeq=2 exactly by ring override (must 3..5)→ resumed.
+    // afterSeq=2 is covered by ring (needs 3..5) -> resumed.
     const covered = connect(hub, eventsUrl(2, 'b1'))
     await waitFor(() => covered.frames.filter((f) => f.event === 'notification').length >= 3)
     await covered.abort()
@@ -215,14 +214,14 @@ describe('EventHub resume: across proxy and missing opening fall back snapshot',
     )
   })
 
-  it('byte eliminate:ring byte over limit from head trim, exceeds trim line fall back snapshot', { timeout: 60_000 }, async () => {
-    // single frame about 1KB,ringMaxBytes=1500: at most keep 1 frame.
+  it('byte eviction trims oldest frames from head; gaps fall back to snapshot', { timeout: 60_000 }, async () => {
+    // ~1KB per frame, ringMaxBytes=1500: fits at most 1 frame.
     const { hub } = makeHub({ bootId: 'b1', ringMaxBytes: 1500 })
-    publishNotes(hub, 3, { bodyLength: 950 }) // ring only remain [3]
+    publishNotes(hub, 3, { bodyLength: 950 }) // ring retains only [3]
     const missed = connect(hub, eventsUrl(1, 'b1'))
     await waitFor(() => missed.frames.length >= 1)
     await missed.abort()
-    assert.equal(missed.frames[0]?.event, 'snapshot', 'need to 2..3 but 2 already by byte pre- compute trim')
+    assert.equal(missed.frames[0]?.event, 'snapshot', 'needs 2..3 while 2 was evicted by byte budget')
 
     const covered = connect(hub, eventsUrl(2, 'b1'))
     await waitFor(() => covered.frames.filter((f) => f.event === 'notification').length >= 1)
@@ -233,20 +232,20 @@ describe('EventHub resume: across proxy and missing opening fall back snapshot',
     )
   })
 
-  it('single frame over byte pre- compute: empty ring, cannot across the frame resume; its after frame can resume', { timeout: 60_000 }, async () => {
+  it('single frame exceeding byte budget clears ring (no skip-resume), while subsequent frames resume', { timeout: 60_000 }, async () => {
     const { hub } = makeHub({ bootId: 'b1', ringMaxBytes: 1500 })
-    publishNotes(hub, 2) // small frame (about 120B)
-    hub.publish('notification', { level: 'info', title: 'big', body: 'x'.repeat(2000) }) // seq 3: over pre- compute → ring empty
+    publishNotes(hub, 2) // small frames (~120B each)
+    hub.publish('notification', { level: 'info', title: 'big', body: 'x'.repeat(2000) }) // seq 3 exceeds cap -> clears ring
     publishNotes(hub, 2, { startTitle: 4 }) // ring [4,5]
     assert.equal(hub.seq, 5)
 
-    // afterSeq=2 need to 3..5: large frame already cannot replay → snapshot(never exceeds missing opening false succeeded).
+    // afterSeq=2 needs 3..5: unbuffered large frame 3 prevents catch-up -> snapshot (never falsely skips 3).
     const missed = connect(hub, eventsUrl(2, 'b1'))
     await waitFor(() => missed.frames.length >= 1)
     await missed.abort()
-    assert.equal(missed.frames[0]?.event, 'snapshot', 'single frame over pre- compute after must not across the frame resume')
+    assert.equal(missed.frames[0]?.event, 'snapshot', 'oversized frame must not be skipped on resume')
 
-    // afterSeq=3 only needs to 4..5: still can normal resume (empty do not toxic after continue zone segment).
+    // afterSeq=3 only needs 4..5: resumes cleanly (clearing ring earlier does not poison later range).
     const after = connect(hub, eventsUrl(3, 'b1'))
     await waitFor(() => after.frames.filter((f) => f.event === 'notification').length >= 2)
     await after.abort()
@@ -256,7 +255,7 @@ describe('EventHub resume: across proxy and missing opening fall back snapshot',
     )
   })
 
-  it('not come seq(afterSeq > headSeq) fall back snapshot, do not mistakenly when zero patch', { timeout: 60_000 }, async () => {
+  it('future seq (afterSeq > headSeq) falls back to snapshot instead of assuming zero catch-up', { timeout: 60_000 }, async () => {
     const { hub } = makeHub({ bootId: 'b1' })
     publishNotes(hub, 3)
     const future = connect(hub, eventsUrl(4, 'b1'))
@@ -267,39 +266,39 @@ describe('EventHub resume: across proxy and missing opening fall back snapshot',
 })
 
 // ---------------------------------------------------------------------------
-// distortion shape credentials: explicit 400
+// Malformed resume credentials -> explicit 400
 // ---------------------------------------------------------------------------
 
-describe('EventHub resume: distortion shape credentials explicit 400', { timeout: 60_000 }, () => {
+describe('EventHub resume: malformed credentials return explicit 400', { timeout: 60_000 }, () => {
   const badCases: Array<{ url: string; label: string }> = [
-    { url: 'http://x/api/events?afterSeq=-1&bootId=b1', label: 'negative number' },
+    { url: 'http://x/api/events?afterSeq=-1&bootId=b1', label: 'negative integer' },
     { url: 'http://x/api/events?afterSeq=1.5&bootId=b1', label: 'decimal' },
-    { url: 'http://x/api/events?afterSeq=abc&bootId=b1', label: 'non- number' },
-    { url: 'http://x/api/events?afterSeq=1e3&bootId=b1', label: 'subject learn counter' },
-    { url: 'http://x/api/events?afterSeq=0x1&bootId=b1', label: 'ten six enter system' },
+    { url: 'http://x/api/events?afterSeq=abc&bootId=b1', label: 'non-numeric' },
+    { url: 'http://x/api/events?afterSeq=1e3&bootId=b1', label: 'scientific notation' },
+    { url: 'http://x/api/events?afterSeq=0x1&bootId=b1', label: 'hexadecimal' },
     { url: 'http://x/api/events?afterSeq=&bootId=b1', label: 'empty afterSeq' },
-    { url: 'http://x/api/events?afterSeq=99999999999999999&bootId=b1', label: '17 over long number' },
-    { url: 'http://x/api/events?afterSeq=9999999999999999&bootId=b1', label: 'exceeds security integer' },
+    { url: 'http://x/api/events?afterSeq=99999999999999999&bootId=b1', label: '17-digit overflow' },
+    { url: 'http://x/api/events?afterSeq=9999999999999999&bootId=b1', label: 'exceeds MAX_SAFE_INTEGER' },
     { url: 'http://x/api/events?afterSeq=1&bootId=', label: 'empty bootId' },
-    { url: `http://x/api/events?afterSeq=1&bootId=${'b'.repeat(65)}`, label: 'bootId over 64 character' },
+    { url: `http://x/api/events?afterSeq=1&bootId=${'b'.repeat(65)}`, label: 'bootId > 64 chars' },
     { url: 'http://x/api/events?afterSeq=1&bootId=b1&bootId=b2', label: 'duplicate bootId' },
     { url: 'http://x/api/events?afterSeq=1&afterSeq=2&bootId=b1', label: 'duplicate afterSeq' },
-    { url: 'http://x/api/events?afterSeq=1', label: 'only afterSeq(missing credentials for)' },
-    { url: 'http://x/api/events?bootId=b1', label: 'only bootId(missing credentials for)' },
+    { url: 'http://x/api/events?afterSeq=1', label: 'missing bootId' },
+    { url: 'http://x/api/events?bootId=b1', label: 'missing afterSeq' },
   ]
   for (const { url, label } of badCases) {
     it(`${label} -> 400 invalid_input`, { timeout: 60_000 }, async () => {
       const { hub } = makeHub({ bootId: 'b1' })
       const response = hub.response(new Request(url))
-      assert.equal(response.status, 400, `${label} must explicit 400`)
+      assert.equal(response.status, 400, `${label} must return explicit 400`)
       const body = (await response.json()) as { error?: { code?: string; message?: string } }
       assert.equal(body.error?.code, 'invalid_input')
       assert.ok(typeof body.error?.message === 'string' && body.error.message.length > 0)
-      assert.equal(hub.subscriberCount, 0, '400 path do not establish subscribe')
+      assert.equal(hub.subscriberCount, 0, '400 path must not register subscriber')
     })
   }
 
-  it('unknown but shape legal bootId do not compute distortion shape: fall back snapshot(across proxy semantics)', { timeout: 60_000 }, async () => {
+  it('unknown but well-formed bootId falls back to snapshot (cross-instance semantics)', { timeout: 60_000 }, async () => {
     const { hub } = makeHub({ bootId: 'b1' })
     const t = connect(hub, eventsUrl(0, 'other-boot'))
     assert.equal(t.response.status, 200)
@@ -311,32 +310,31 @@ describe('EventHub resume: distortion shape credentials explicit 400', { timeout
 })
 
 // ---------------------------------------------------------------------------
-// conflict refresh and back press:pull one by one step conflict refresh / slow consumer
+// Backpressure & pull-paced replay
 // ---------------------------------------------------------------------------
 
-describe('EventHub resume: conflict refresh and back press', { timeout: 60_000 }, () => {
-  it('replay total amount far over maxPendingBytes:pull one by one step conflict refresh, fast consumer do not by mistakenly kill', { timeout: 60_000 }, async () => {
-    // replay about 44KB, streaming pre- compute only 4KB:start once queue must collide pre- compute;pull conflict refresh should complete send reach.
+describe('EventHub resume: pull pacing and backpressure', { timeout: 60_000 }, () => {
+  it('total replay exceeding maxPendingBytes delivers reliably to fast consumers via pull pacing', { timeout: 60_000 }, async () => {
+    // ~44KB replay with 4KB buffer limit: bulk-enqueuing up front would trip limit; pull pacing delivers everything.
     const { hub } = makeHub({ bootId: 'b1', maxPendingBytes: 4096, ringMaxBytes: 256 * 1024, keepaliveMs: 0 })
     publishNotes(hub, 40, { bodyLength: 1000 })
     const resumed = connect(hub, eventsUrl(0, 'b1'))
     await waitFor(() => resumed.frames.filter((f) => f.event === 'notification').length >= 40, 10_000)
-    assert.equal(hub.subscriberCount, 1, 'fast consumer replay during keep subscribe')
+    assert.equal(hub.subscriberCount, 1, 'fast consumer stays subscribed throughout large replay')
     const seqs = resumed.frames.filter((f) => f.event === 'notification').map((f) => (f.data as HelmEventFrame).seq)
-    assert.deepEqual(seqs, Array.from({ length: 40 }, (_, i) => i + 1), 'replay by seq strictly connect continue complete')
+    assert.deepEqual(seqs, Array.from({ length: 40 }, (_, i) => i + 1), 'replayed sequences stay strictly contiguous')
     await resumed.abort()
     assert.equal(hub.subscriberCount, 0)
   })
 
-  it('conflict refresh during do not read and live frame heap accumulate over pre- compute: explicit closure stream unsubscribe (without subscribe leak leak)', { timeout: 60_000 }, async () => {
+  it('unreading consumer with live frames overflowing budget during catch-up closes stream cleanly without leaks', { timeout: 60_000 }, async () => {
     const { hub } = makeHub({ bootId: 'b1', maxPendingBytes: 4096, ringMaxBytes: 256 * 1024, keepaliveMs: 0 })
-    publishNotes(hub, 20, { bodyLength: 1000 }) // replay about 22KB resident conflict refresh queue
+    publishNotes(hub, 20, { bodyLength: 1000 }) // ~22KB replay awaiting pull
     const controller = new AbortController()
     const response = hub.response(new Request(eventsUrl(0, 'b1'), { signal: controller.signal }))
-    // fully do not read: conflict refresh queue without person pull; continuous publish live frame, conflict refresh phase new byte over 4KiB pre- compute i.e. closure stream.
+    // Unread stream: replay stalls while live publishes exceed 4KiB limit -> closes stream.
     publishNotes(hub, 30, { bodyLength: 900, startTitle: 21 })
     await waitFor(() => hub.subscriberCount === 0, 5000)
-    // closure stream after can read exhaust already queue byte (only grasp manually frame) and obtain to done; again publish no longer delivery.
     const reader = response.body!.getReader()
     const decoder = new TextDecoder()
     let text = ''
@@ -346,11 +344,11 @@ describe('EventHub resume: conflict refresh and back press', { timeout: 60_000 }
       text += decoder.decode(value, { stream: true })
     }
     assert.match(text, /event: resumed/)
-    assert.ok(!text.includes('n21'), 'closure stream after live frame must not again enter the stream')
+    assert.ok(!text.includes('n21'), 'live frames must not enter closed stream')
     controller.abort()
   })
 
-  it('ReadableStream.cancel same unsubscribe (resumed connect without subscribe leak leak)', { timeout: 60_000 }, async () => {
+  it('ReadableStream.cancel unsubscribes resumed streams with zero leaks', { timeout: 60_000 }, async () => {
     const { hub } = makeHub({ bootId: 'b1' })
     publishNotes(hub, 2)
     const response = hub.response(new Request(eventsUrl(0, 'b1')))
@@ -358,21 +356,21 @@ describe('EventHub resume: conflict refresh and back press', { timeout: 60_000 }
     await reader.read()
     assert.equal(hub.subscriberCount, 1)
     await reader.cancel()
-    assert.equal(hub.subscriberCount, 0, 'cancel after immediately unsubscribe')
+    assert.equal(hub.subscriberCount, 0, 'cancel unsubscribes immediately')
   })
 })
 
 // ---------------------------------------------------------------------------
-// publish persist order and ring zone segment complete (guard against defend invariant)
+// Persistence order & ring contiguity defense-in-depth invariants
 // ---------------------------------------------------------------------------
 
-/** blank box take ring(only test guard against defend invariant use: normal way already cannot produce missing opening). */
+/** White-box ring accessor (testing defensive contiguity checks; normal publish path never creates gaps). */
 function ringOf(hub: EventHub): Array<{ seq: number; chunk: Uint8Array }> {
   return (hub as unknown as { ring: Array<{ seq: number; chunk: Uint8Array }> }).ring
 }
 
-describe('EventHub publish persist order and ring zone segment complete', { timeout: 60_000 }, () => {
-  it('persistSeq throws: do not push enter watermark, do not broadcast, produces no broken ring; under time succeeded seq connect continue can resume', { timeout: 60_000 }, async () => {
+describe('EventHub publish persistence ordering and ring contiguity', { timeout: 60_000 }, () => {
+  it('persistSeq failure leaves seq, subscribers, and ring untouched; next publish resumes cleanly without gaps', { timeout: 60_000 }, async () => {
     const successes: number[] = []
     let failNext = true
     const { hub } = makeHub({
@@ -388,19 +386,18 @@ describe('EventHub publish persist order and ring zone segment complete', { time
     const frames: HelmEventFrame[] = []
     hub.subscribe((frame) => frames.push(frame))
 
-    // first time publish: persist throws → publish sync throw, but watermark/ring/broadcast all must not has half into product.
+    // Failed persist throws synchronously without polluting watermark, ring, or broadcasts.
     assert.throws(() => hub.publish('notification', { level: 'info', title: 'failed frame' }), /disk full/)
-    assert.equal(hub.seq, 0, 'persist failed do not push enter memory watermark (do not bare seq)')
+    assert.equal(hub.seq, 0, 'failed persist must not advance memory seq')
     assert.equal(frames.length, 0, 'failed publish must not broadcast')
 
-    // after continue succeeded publish:seq from 1 connect continue push enter (failed does not occupy seq,ring without missing opening).
+    // Subsequent publishes continue from seq 1 without leaving holes.
     hub.publish('notification', { level: 'info', title: 'ok1' })
     hub.publish('notification', { level: 'info', title: 'ok2' })
     assert.equal(hub.seq, 2)
-    assert.deepEqual(successes, [1, 2], 'succeeded publish persist ordinal connect continue, failed frame does not occupy')
+    assert.deepEqual(successes, [1, 2], 'successful publish seqs remain contiguous')
     assert.deepEqual(frames.map((f) => f.seq), [1, 2])
 
-    // resume from 0: complete replay 1..2(strictly connect continue, without bare seq missing opening).
     const resumed = connect(hub, eventsUrl(0, 'b1'))
     await waitFor(() => resumed.frames.filter((f) => f.event === 'notification').length >= 2)
     await resumed.abort()
@@ -408,44 +405,44 @@ describe('EventHub publish persist order and ring zone segment complete', { time
     assert.deepEqual(
       resumed.frames.filter((f) => f.event === 'notification').map((f) => (f.data as HelmEventFrame).seq),
       [1, 2],
-      'failed publish do not missing opening: replay strictly connect continue',
+      'replay remains strictly contiguous after failed publish',
     )
   })
 
-  it('ring in segment by dig missing opening (simulated zone segment corrupt): must fall back snapshot, must not false resumed promise', { timeout: 60_000 }, async () => {
+  it('middle hole in ring falls back to snapshot rather than falsely promising resume', { timeout: 60_000 }, async () => {
     const { hub } = makeHub({ bootId: 'b1' })
     publishNotes(hub, 4)
-    ringOf(hub).splice(1, 1) // dig middle one frame:ring [1,3,4] no longer connect continue
-    const conn = connect(hub, eventsUrl(1, 'b1')) // need to 2..4:2 missing
+    ringOf(hub).splice(1, 1) // simulate middle corruption: [1,3,4]
+    const conn = connect(hub, eventsUrl(1, 'b1')) // needs 2..4, 2 missing
     await waitFor(() => conn.frames.length >= 1)
     await conn.abort()
-    assert.equal(conn.frames[0]?.event, 'snapshot', 'canResume line connect continue validate must intercept in segment missing opening')
+    assert.equal(conn.frames[0]?.event, 'snapshot', 'canResume contiguity check must reject ring gaps')
   })
 
-  it('ring end frame missing: must fall back snapshot(client will not forever append do not flat headSeq)', { timeout: 60_000 }, async () => {
+  it('missing tail frame in ring falls back to snapshot so client does not stall below headSeq', { timeout: 60_000 }, async () => {
     const { hub } = makeHub({ bootId: 'b1' })
     publishNotes(hub, 3)
-    ringOf(hub).pop() // simulated end frame lose:headSeq=3 but ring only to 2
+    ringOf(hub).pop() // simulate dropped tail: headSeq=3 while ring ends at 2
     const conn = connect(hub, eventsUrl(0, 'b1'))
     await waitFor(() => conn.frames.length >= 1)
     await conn.abort()
-    assert.equal(conn.frames[0]?.event, 'snapshot', 'end frame != headSeq when never resume (guard against replay append do not flat die etc.)')
+    assert.equal(conn.frames[0]?.event, 'snapshot', 'ring tail != headSeq must never resume')
   })
 
-  it('non- connect continue append guard against defend: old zone segment act abandon after from new frame rebuild, do not across missing opening resume', { timeout: 60_000 }, async () => {
+  it('non-contiguous append resets ring cleanly rather than spanning a gap', { timeout: 60_000 }, async () => {
     const { hub } = makeHub({ bootId: 'b1' })
     publishNotes(hub, 2) // ring [1,2]
-    ringOf(hub).pop() // simulated lose tail:ring [1], bare seq 2 do not in ring
-    publishNotes(hub, 1, { startTitle: 3 }) // append seq 3:last=1 non- connect continue → empty rebuild ring [3]
+    ringOf(hub).pop() // simulate lost tail -> [1]
+    publishNotes(hub, 1, { startTitle: 3 }) // append seq 3: last=1 != 2 -> resets ring to [3]
     assert.equal(hub.seq, 3)
 
-    // afterSeq=1 need to 2..3:2 do not in ring → snapshot(do not exceeds missing opening false succeeded).
+    // afterSeq=1 needs 2..3 -> snapshot.
     const missed = connect(hub, eventsUrl(1, 'b1'))
     await waitFor(() => missed.frames.length >= 1)
     await missed.abort()
     assert.equal(missed.frames[0]?.event, 'snapshot')
 
-    // afterSeq=2 only needs to 3: rebuild after zone segment override → normal resume.
+    // afterSeq=2 needs only 3 -> resumes normally from rebuilt ring.
     const covered = connect(hub, eventsUrl(2, 'b1'))
     await waitFor(() => covered.frames.filter((f) => f.event === 'notification').length >= 1)
     await covered.abort()
@@ -462,15 +459,15 @@ describe('EventHub publish persist order and ring zone segment complete', { time
 // ---------------------------------------------------------------------------
 
 describe('EventHub bootId', { timeout: 60_000 }, () => {
-  it('instance random generate: different instance different proxy; snapshot and resumed all carry', { timeout: 60_000 }, () => {
+  it('generates distinct random UUID bootIds per instance and exposes them on snapshots', { timeout: 60_000 }, () => {
     const a = makeHub()
     const b = makeHub()
-    assert.match(a.hub.bootId, /^[0-9a-f-]{36}$/, 'by default bootId is UUID')
-    assert.notEqual(a.hub.bootId, b.hub.bootId, 'different instance different proxy')
+    assert.match(a.hub.bootId, /^[0-9a-f-]{36}$/, 'default bootId must be UUID')
+    assert.notEqual(a.hub.bootId, b.hub.bootId, 'distinct instances must have distinct bootIds')
     assert.equal(a.hub.currentSnapshot().bootId, a.hub.bootId)
   })
 
-  it('not carry credentials ordinary connect do not subject to affect: first frame snapshot(contains bootId)', { timeout: 60_000 }, async () => {
+  it('fresh connections without resume params start normally with snapshot carrying bootId', { timeout: 60_000 }, async () => {
     const { hub } = makeHub({ bootId: 'b1' })
     const plain = connect(hub, 'http://x/api/events')
     await waitFor(() => plain.frames.length >= 1)
@@ -507,7 +504,7 @@ function sampleSummary(id: number, status: ConversationSummary['status']): Conve
 }
 
 describe('EventHub transient conversation.live separation and ring defaults', { timeout: 60_000 }, () => {
-  it('EventHub.publish refuses conversation.live while publishTransientLive bypasses seqValue, persistSeq, and ring eviction', { timeout: 60_000 }, async () => {
+  it('EventHub.publish refuses conversation.live while publishTransientLive bypasses seq, persistSeq, and ring eviction', { timeout: 60_000 }, async () => {
     const { hub, persisted } = makeHub({ bootId: 'b1', ringMaxFrames: 3 })
     try {
       assert.throws(
@@ -520,7 +517,7 @@ describe('EventHub transient conversation.live separation and ring defaults', { 
       assert.equal(hub.seq, 0)
       assert.deepEqual(persisted, [])
 
-      // Publish 2 durable notes (seq 1, 2), then flood 1500 transient live frames, then 1 durable note (seq 3).
+      // Publish 2 durable notes (seq 1, 2), flood 1500 transient live frames, then 1 durable note (seq 3).
       publishNotes(hub, 2)
       for (let i = 0; i < 1500; i++) {
         hub.publishTransientLive({
@@ -530,13 +527,13 @@ describe('EventHub transient conversation.live separation and ring defaults', { 
           updatedAt: 1000 + i,
         })
       }
-      assert.equal(hub.seq, 2, '1500 transient live broadcasts must never advance seqValue')
+      assert.equal(hub.seq, 2, '1500 transient live broadcasts must never advance seq')
       assert.deepEqual(persisted, [1, 2], '1500 transient live broadcasts must never touch persistSeq')
       publishNotes(hub, 1, { startTitle: 3 })
       assert.equal(hub.seq, 3)
       assert.deepEqual(persisted, [1, 2, 3])
 
-      // Replay from afterSeq=0 still hits ring [1,2,3] — 1500 transient frames did not evict any durable ring slot.
+      // Replay from afterSeq=0 still hits ring [1,2,3] — transient frames never evict durable ring slots.
       const resumed = connect(hub, eventsUrl(0, 'b1'))
       try {
         await waitFor(() => resumed.frames.filter((f) => f.event === 'notification').length >= 3)
@@ -608,10 +605,6 @@ describe('EventHub transient conversation.live separation and ring defaults', { 
   it('resumed.conversationLives reconciles active lives across upsert terminal state, queuedInputs, inactive live, and deletion', { timeout: 60_000 }, async () => {
     const { hub } = makeHub({ bootId: 'b1' })
     try {
-      // Conv 1: active text + no queue -> cleared when conversation.upsert becomes idle.
-      // Conv 2: active text + queuedInputs -> terminal upsert preserves queuedInputs-only entry.
-      // Conv 3: active text -> cleared on conversation.deleted.
-      // Conv 4: becomes inactive via empty live broadcast.
       hub.publishTransientLive({ conversationId: 1, text: 'working-1', tools: [], updatedAt: 1001 })
       hub.publishTransientLive({
         conversationId: 2,

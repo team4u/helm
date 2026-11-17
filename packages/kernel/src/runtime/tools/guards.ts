@@ -1,38 +1,36 @@
 /**
- * remote execute pre- guard (unify assist manually):EnvFabric missing (env_fabric_missing) and
- * node offline (node_offline) in runShell and read/write/edit/register_artifact
- * shared 6 where duplicate appear, this where consolidate is two family text proposal + guard function, guarantee never static default fall back
- * localexplicit failed semantics and text proposal single one source.
+ * Pre-flight guards for remote execution (unified helpers): `env_fabric_missing` and `node_offline` were
+ * duplicated across 6 sites in `runShell` and `read`/`write`/`edit`/`register_artifact`. Consolidated here into
+ * two message families + guard helpers so explicit failures (never falling back silently to local) share one source.
  *
- * two family text proposal has intent different (is not omission):
- * - shell family (runShell / bash / runGate): for command execute;
- * - file family (read/write/edit/register_artifact): by operation motion term (read/write/edit)
- *   to out for text proposal, and since has behavior one by one character consistent.
+ * Both message families differ intentionally:
+ * - Shell family (`runShell` / `bash` / `runGate`): command execution wording;
+ * - File family (`read`/`write`/`edit`/`register_artifact`): action-parameterized (`read`/`write`/`edit`)
+ *   preserving exact character-for-character legacy phrasing expectations.
  */
 import type { EnvFabric } from '../../env/index.js'
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env'
 
-/** file tool operation motion term (guard text proposal use, and each tool since has text proposal one by one character align). */
+/** File tool action verb (used in guard messages for consistency across file tools). */
 export type FileOpAction = 'read' | 'write' | 'edit'
 
-/** shell family:EnvFabric missing (cannot establish remote execute). */
+/** Shell family: `EnvFabric` missing (cannot establish remote execution). */
 export function shellEnvFabricMissingText(nodeId: string): string {
-  return `env_fabric_missing: node ${nodeId} is remote but EnvFabric not inject (cannot establish remote execute, never fall back local machine)`
+  return `env_fabric_missing: node '${nodeId}' is remote but EnvFabric is not configured (cannot establish remote execution; refusing to fall back to local)`
 }
 
-/** shell family: node offline or not access. */
+/** Shell family: node offline or unreachable. */
 export function shellNodeOfflineText(nodeId: string): string {
-  return `node_offline: node ${nodeId} offline or not access, cannot in remote execute command (never fall back local machine execute)`
+  return `node_offline: node '${nodeId}' is offline or unreachable; cannot run command remotely (refusing to fall back to local)`
 }
 
 /**
- * runShell remote pre- guard:EnvFabric missing or node known dawn offline when return explicit failed text,
- * via return undefined.
+ * Remote pre-guard for `runShell`: returns an explicit error message if `EnvFabric` is missing or the node is
+ * known offline at invocation time; returns `undefined` to proceed.
  *
- * isOnline only is invoke when known dawn offline fast failed hint; check after to RPC between assert connect
- * behavior by RemoteExecutionEnv unify decide: wait for node reconnect (respect context cancel, see
- * env/remote-env.ts offline resilience semantics). two path semantics has intent different (before known determine
- * offline immediately errors, after in-flight resilience wait for), is not omission.
+ * `isOnline` fails fast only when the node is already known offline; post-check in-flight connection drops during
+ * RPC are governed by `RemoteExecutionEnv` (awaits reconnection while honoring context cancellation — see
+ * `env/remote-env.ts` offline resilience semantics). These two paths intentionally differ.
  */
 export function remoteShellGuardText(envFabric: EnvFabric | undefined, nodeId: string): string | undefined {
   if (envFabric === undefined) return shellEnvFabricMissingText(nodeId)
@@ -40,19 +38,19 @@ export function remoteShellGuardText(envFabric: EnvFabric | undefined, nodeId: s
   return undefined
 }
 
-/** file family:EnvFabric missing (by operation motion term). */
+/** File family: `EnvFabric` missing (parameterized by action verb). */
 export function envFabricMissingFileText(nodeId: string, action: FileOpAction): string {
-  return `env_fabric_missing: node ${nodeId} is remote but EnvFabric not inject (cannot${action}remote file, never fall back local machine)`
+  return `env_fabric_missing: node '${nodeId}' is remote but EnvFabric is not configured (cannot ${action} remote file; refusing to fall back to local)`
 }
 
-/** file family: node offline (by operation motion term). */
+/** File family: node offline (parameterized by action verb). */
 export function nodeOfflineFileText(nodeId: string, action: FileOpAction): string {
-  return `node_offline: node ${nodeId} offline, cannot${action}remote file (never fall back local machine)`
+  return `node_offline: node '${nodeId}' is offline; cannot ${action} remote file (refusing to fall back to local)`
 }
 
 /**
- * file tool remote pre- guard:EnvFabric missing or node offline when return explicit failed text,
- * via return undefined. never fall back local machine read write Hub disk.
+ * Remote pre-guard for file tools: returns an explicit error message when `EnvFabric` is missing or the node is
+ * offline; returns `undefined` to proceed. Never silently falls back to Hub's local disk.
  */
 export function remoteFileGuardText(
   envFabric: EnvFabric | undefined,
@@ -65,9 +63,9 @@ export function remoteFileGuardText(
 }
 
 /**
- * file tool remote guard + bottom seat get (read/write/edit/register_artifact shared use):
- * EnvFabric missing or node offline return explicit failed text, via then return the (nodeId, cwd)
- * target ExecutionEnv. never fall back local machine.
+ * Combined remote guard + substrate lookup (shared by `read`/`write`/`edit`/`register_artifact`):
+ * returns explicit error text if `EnvFabric` is missing or the node is offline, else returns the `(nodeId, base)`
+ * `ExecutionEnv`. Never silently falls back to local.
  */
 export function requireRemoteEnv(
   envFabric: EnvFabric | undefined,

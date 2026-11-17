@@ -1,18 +1,17 @@
 /**
- * kernel local machine file tool (read / write / edit): by conversation (nodeId, cwd) target execute,
- * local and remote branch via file-env.ts unify execute environment adapt converge is single one template
- * (behavior etc. price heavy construct; path and bash same right, do not set cwd sandbox, permission boundary hand over to OS).
+ * Kernel built-in file tools (`read` / `write` / `edit`): target conversation `(nodeId, cwd)`, converging
+ * local and remote branches via `file-env.ts` unified execution adapters into a single template (equivalent
+ * behavior; shares bash permission boundaries without cwd sandboxing, deferring to OS permissions).
  *
- * read: only support ordinary file (directory/special file reject, single file 128KiB cap); structure
- * path back visible real target absolute path (local is term method absolute path, remote is canonical).
+ * `read`: regular files only (directories/special files rejected; 128 KiB single-file cap); structured
+ * `path` echoes resolved real absolute path (lexical absolute locally, canonical remotely).
  *
- * write/edit: write text and precise replace (oldText unique match validate;newText by literal write,
- * do not explain String.replace  $& system replace pattern); target already exists when via canonicalPath/
- * realpath parse to real path again write (symlink alias write to real file, and mutual exclusion queue key align),
- * new file by term method absolute path write; read-change-write window via env/file-mutation-queue and plugin
- * API sharing the same target node canonical path mutual exclusion queue.edit succeeded structure output in lock inside,
- * before based on actually read content compute real row level difference (runtime/tool-edit-diff.ts unique implement,
- * local/remote sharing; conforms to @helm/protocol EDIT_TOOL_RESULT_SCHEMA).
+ * `write`/`edit`: writes text and performs exact replacement (`oldText` must match uniquely; `newText` is
+ * written literally without interpreting `String.replace`'s `$&` tokens). Existing targets resolve via
+ * `canonicalPath`/`realpath` so symlink writes hit real files and align mutex keys; new files write at lexical
+ * absolute paths; read-modify-write windows share per-node canonical path mutexes via `env/file-mutation-queue`
+ * with plugin APIs. On success, `edit` computes real line-level diffs inside the lock prior to writing
+ * (sole implementation in `runtime/tool-edit-diff.ts`; matches `@helm/protocol` `EDIT_TOOL_RESULT_SCHEMA`).
  */
 import type { JsonValue } from '@earendil-works/chord/json'
 import { defineTool, type ToolRegistration } from '@earendil-works/pi-durable'
@@ -32,28 +31,28 @@ import {
 } from './file-env.js'
 
 const readParameters = obj({
-  path: str({ description: 'file path (each other for conversation cwd or absolute path, support ../ across directory)' }),
+  path: str({ description: 'File path (relative to conversation cwd or absolute; supports ../ traversal)' }),
 })
 
 /**
- * read tool: by conversation (nodeId, cwd) target read text file.cwd only act relative path base allow,
- * absolute path and ../ across directory one rule allows (and bash same right); only support ordinary file, keep
- * 128KiB cap; remote via env RPC(canonicalPath first parse symlink, make lstat semantics
- * fileInfo see to real target).
+ * `read` tool: reads text files on conversation `(nodeId, cwd)`. `cwd` is base only for relative paths;
+ * absolute paths and `../` traversals are permitted (matching `bash`). Supports regular files only up to
+ * 128 KiB; resolves symlinks remotely via `canonicalPath` before `fileInfo` (`lstat` semantics).
  */
 export function createReadTool(deps: HelmToolDeps): ToolRegistration<typeof readParameters> {
   return defineTool({
     name: 'read',
-    // pure only read and spill slot by callId determinism naming: interrupt heavy open allows security replay.
+    // Pure read-only with deterministic callId spill slots: safe to replay after interruption.
     replay: 'safe',
     description:
-      'read text file content; path each other for conversation cwd parse, support absolute path and ../ across directory access (and bash same right); only support ordinary file, single file cap 128KiB(over limit please use bash + read_artifact page); conversation bind set remote node when in target node read.',
+      'Read text file content. Paths resolve relative to conversation cwd and support absolute paths and ../ traversal (same as bash); ' +
+      'supports regular files only up to 128 KiB (for larger output, use bash + paginated read_artifact); reads from the target node when bound remotely.',
     parameters: readParameters,
     structuredOutputSchema: {
       type: 'object',
       properties: {
-        path: { type: 'string', description: 'actual read absolute path (remote is canonical parse after; non- original reference)' },
-        nodeId: { type: 'string', description: 'actual read node' },
+        path: { type: 'string', description: 'Actual resolved absolute path read (canonicalized remotely; not raw input)' },
+        nodeId: { type: 'string', description: 'Node where file was read' },
         content: { type: 'string' },
       },
       required: ['path', 'nodeId', 'content'],
@@ -61,19 +60,17 @@ export function createReadTool(deps: HelmToolDeps): ToolRegistration<typeof read
     async execute(args, api, context) {
       const raw = args.path
       const agent = await api.agent(context)
-      // path semantics by conversation cwd target shape (POSIX/Windows) parse, never use Hub host
-      // node:path by default rule parse remote path (Linux Hub on resolve('C:\\x') will obtain to
-      // error result);api.agent and tool sharing the same SDK Context(cancel pass broadcast to remote).
+      // Resolve path using target shape of conversation cwd (POSIX/Windows), never Hub host's default `node:path`
+      // (`resolve('C:\\x')` on Linux Hub produces broken paths); `agent()` and tool share SDK Context for cancellation.
       const sessionId = agent.cwd ?? deps.defaultCwd
       const nodeId = deps.nodeIdOf?.(api.conversationId as number) ?? 'local'
-      // platform aware parse (and bash the same platform source and original language): remote platform unknown when along use by
-      // shape choose rule since has semantics (do not guess platform);win32 target on POSIX view path
-      // first determinism convert is specification Windows path, cannot mapping bare POSIX explicit reject.
+      // Platform-aware resolution (shares exact platform source with bash): preserves existing shape rules when remote
+      // platform is unknown without guessing; deterministically normalizes POSIX views on win32 and rejects unmappable roots.
       const platformInfo = targetPlatformForNode(deps.envFabric, nodeId)
       if (!isAbsoluteTargetPath(sessionId)) {
         return {
           output: [
-            { type: 'text', text: `read_failed: conversation cwd non- absolute path (${sessionId}), reject read` },
+            { type: 'text', text: `read_failed: conversation cwd is not an absolute path (${sessionId}); read rejected` },
           ],
           isError: true,
         }
@@ -88,8 +85,8 @@ export function createReadTool(deps: HelmToolDeps): ToolRegistration<typeof read
       }
       const lexicalAbs = resolvedR.abs
       try {
-        // unify execute environment: remote (guard first row:EnvFabric missing/node offline explicit failed,
-        // never fall back local machine) and local(process inside fs + fd read) the same read template.
+        // Unified execution env: remote (pre-guards fail explicitly on missing EnvFabric/offline, never falling back locally)
+        // and local (`node:fs` + fd verification) share the same read template.
         const envR = readableEnvFor(deps, nodeId, sessionId)
         if ('error' in envR) {
           throwIfToolAborted(context.abortSignal)
@@ -101,7 +98,7 @@ export function createReadTool(deps: HelmToolDeps): ToolRegistration<typeof read
           return { output: [{ type: 'text', text: readR.errorText }], isError: true }
         }
         const content = deps.redact(readR.content)
-        // closure stop/cancel window forbidden in disk write without intent meaning spill artifact file.
+        // Prevent writing meaningless spill artifacts during shutdown/cancellation windows.
         throwIfToolAborted(context.abortSignal)
         const spill = await deps.artifacts.spill(
           api.conversationId as number,
@@ -112,8 +109,8 @@ export function createReadTool(deps: HelmToolDeps): ToolRegistration<typeof read
         return {
           output: [{ type: 'text', text: spill.text }],
           structuredOutput: structured,
-          // details is SDK persist to toolResult message UI channel (structuredOutput do not written to the database,
-          // only supply embed set caller); text channel already carry content, does not repeat store content, avoid double write.
+          // `details` persists to SDK toolResult UI channel (`structuredOutput` is unpersisted for embedded callers);
+          // omit `content` here since text channel already holds it, avoiding double writes.
           details: { path: readR.displayPath, nodeId } as JsonValue,
         }
       } catch (error) {
@@ -128,34 +125,36 @@ export function createReadTool(deps: HelmToolDeps): ToolRegistration<typeof read
 }
 
 const writeParameters = obj({
-  path: str({ description: 'target file path (each other for conversation cwd or absolute path, support ../ across directory; allows create new file or subdirectory)' }),
-  content: str({ description: 'want write UTF-8 text content (whole override)' }),
+  path: str({ description: 'Target file path (relative to conversation cwd or absolute; supports ../ traversal, creates missing files/directories)' }),
+  content: str({ description: 'UTF-8 text content to write (replaces entire file)' }),
   artifact: opt(
     bool({
       description:
-        'is otherwise also register is when before conversation artifact (Web UI visible/can preview/can download, and in output in return [Artifact] id=<id>; in back re- body text in available [filename](artifact:<id>) or ![diagram piece](artifact:<id>) directly render)',
+        'Whether to also register as a conversation artifact (visible/previewable/downloadable in Web UI; outputs [Artifact] id=<id> so replies can link [filename](artifact:<id>) or ![caption](artifact:<id>))',
     }),
   ),
 })
 
-/** write/edit shared use error text proposal (lock inside unique match validate,local/remote sharing). */
-const editTextNotFound = (abs: string): string => `edit_failed: oldText in ${abs} in missing (reject without operation edit)`
+/** Shared `write`/`edit` error/status messages (unique-match validation inside mutex; shared local/remote).
+ * Note: `'node ${nodeId}'` format is preserved for test compatibility (`'node local'`). */
+const editTextNotFound = (abs: string): string => `edit_failed: oldText was not found in ${abs} (edit rejected)`
 const editTextNotUnique = (abs: string, count: number): string =>
-  `edit_failed: oldText in ${abs} in appear ${count} time (must unique match; please expand large context make oldText unique)`
-const editOkText = (abs: string, nodeId: string): string => `edit_ok: ${abs}(node ${nodeId}, already replace 1 where)`
+  `edit_failed: oldText appeared ${count} times in ${abs} (must match uniquely; include more surrounding context)`
+const editOkText = (abs: string, nodeId: string): string => `edit_ok: ${abs} (node ${nodeId}, replaced 1 occurrence)`
 
-/** write tool: by conversation (nodeId, cwd) target write text file (path and bash same right, do not set cwd sandbox). */
+/** `write` tool: writes UTF-8 text files on conversation `(nodeId, cwd)` (shares path/permission boundary with `bash`). */
 export function createWriteTool(deps: HelmToolDeps): ToolRegistration<typeof writeParameters> {
   return defineTool({
     name: 'write',
     description:
-      'write UTF-8 text file (whole override). path each other for conversation cwd parse, support absolute path and ../ across directory access (and bash same right); allows create new file or subdirectory; conversation bind set remote node when in target node write. by default file only write disk (Web UI invisible); if must deliver user in Web preview or download, pass artifact: true sync register is conversation artifact and get artifact ID, in back re- in use [filename](artifact:<id>) or ![title](artifact:<id>) directly render to chat UI.',
+      'Write a UTF-8 text file (overwriting any existing content). Paths resolve relative to conversation cwd and support absolute paths and ../ traversal (same as bash), ' +
+      'creating parent directories automatically; writes on the target node when bound remotely. Files are written to disk only by default (hidden in Web UI); pass artifact: true to also register as a conversation artifact for Web preview/download and reference via [filename](artifact:<id>) or ![title](artifact:<id>).',
     parameters: writeParameters,
     structuredOutputSchema: {
       type: 'object',
       properties: {
-        path: { type: 'string', description: 'actual write absolute path (already exists file is canonical parse after; non- original reference)' },
-        nodeId: { type: 'string', description: 'actual write node' },
+        path: { type: 'string', description: 'Actual resolved absolute path written (canonicalized if pre-existing; not raw input)' },
+        nodeId: { type: 'string', description: 'Node where file was written' },
         bytesWritten: { type: 'number' },
         artifactId: { type: 'string' },
       },
@@ -175,7 +174,7 @@ export function createWriteTool(deps: HelmToolDeps): ToolRegistration<typeof wri
                 output: [
                   {
                     type: 'text' as const,
-                    text: 'write_failed: artifact service not config writeUploaded, cannot register conversation artifact',
+                    text: 'write_failed: artifact service does not support writeUploaded; cannot register conversation artifact',
                   },
                 ],
                 isError: true,
@@ -190,7 +189,7 @@ export function createWriteTool(deps: HelmToolDeps): ToolRegistration<typeof wri
               output: [
                 {
                   type: 'text' as const,
-                  text: `write_ok: ${targetAbs}(node ${nodeId},${bytes} byte)\n[Artifact] id=${meta.id} name=${meta.name}`,
+                  text: `write_ok: ${targetAbs} (node ${nodeId}, ${bytes} bytes)\n[Artifact] id=${meta.id} name=${meta.name}`,
                 },
               ],
               structuredOutput: {
@@ -204,15 +203,15 @@ export function createWriteTool(deps: HelmToolDeps): ToolRegistration<typeof wri
           }
           return {
             output: [
-              { type: 'text' as const, text: `write_ok: ${targetAbs}(node ${nodeId},${bytes} byte)` },
+              { type: 'text' as const, text: `write_ok: ${targetAbs} (node ${nodeId}, ${bytes} bytes)` },
             ],
             structuredOutput: { path: targetAbs, nodeId, bytesWritten: bytes } as JsonValue,
             details: { path: targetAbs, nodeId, bytesWritten: bytes } as JsonValue,
           }
         }
 
-        // unify execute environment: remote (guard first row:EnvFabric missing/node offline explicit failed,
-        // never fall back local machine) and local the same write template.
+        // Unified execution env: remote (explicit failure on missing EnvFabric/offline, never falls back locally)
+        // and local share the exact same write template.
         const envR = writableEnvFor(deps, nodeId, base, 'write')
         if ('error' in envR) {
           return { output: [{ type: 'text', text: envR.error }], isError: true }
@@ -222,9 +221,8 @@ export function createWriteTool(deps: HelmToolDeps): ToolRegistration<typeof wri
           return { output: [{ type: 'text', text: target.message }], isError: true }
         }
         const bytes = Buffer.byteLength(args.content, 'utf8')
-        // mutual exclusion queue: same file read-change-write window and plugin/other tool queue up (see env/file-mutation-queue.ts).
-        // new file parent directory may missing: first ensure directory (recursive);dirname by target
-        // shape rule (win32 backslash isolate symbol).
+        // Mutex queue serializes read-modify-write windows across tools and plugins (see `env/file-mutation-queue.ts`);
+        // creates missing parent directories recursively using target path shape rules (`win32` backslash separators).
         return await envR.env.withMutationQueue(target.abs, async () => {
           await envR.env.ensureDir(dirnameForShape(target.abs), context)
           await envR.env.writeFile(target.abs, args.content, context)
@@ -241,12 +239,12 @@ export function createWriteTool(deps: HelmToolDeps): ToolRegistration<typeof wri
 }
 
 const editParameters = obj({
-  path: str({ description: 'target file path (each other for conversation cwd or absolute path, support ../ across directory)' }),
-  oldText: str({ description: 'want by replace precise text (must in file in exactly appear once)' }),
-  newText: str({ description: 'replace after text' }),
+  path: str({ description: 'Target file path (relative to conversation cwd or absolute; supports ../ traversal)' }),
+  oldText: str({ description: 'Exact text to replace (must occur uniquely once in the file)' }),
+  newText: str({ description: 'Replacement text' }),
 })
 
-/** non- overlap appear time count count (edit unique match validate use). */
+/** Count non-overlapping occurrences (used for `edit` unique-match check). */
 function countOccurrences(haystack: string, needle: string): number {
   if (needle === '') return 0
   let count = 0
@@ -259,21 +257,19 @@ function countOccurrences(haystack: string, needle: string): number {
 }
 
 /**
- * edit tool: precise text replace.oldText must in target file in unique precise match (missing
- * or appear many time all explicit errors, never blurry replace or static default skip);newText by literal replace write
- * (do not explain $& system replace pattern, and precise replace contract and difference render consistent); replace after write back
- * original file; path parse and write same contract (and bash same right, do not set cwd sandbox). succeeded structure
- * output is @helm/protocol EditToolResult, and sync mirror to details(SDK persist
- * to toolResult message UI channel,Web difference render read it;structuredOutput do not written to the database,
- * only supply embed set caller): difference in canonical mutual exclusion lock inside, write before
- * based on actually read content compute (computeEditDiff throws then edit_failed and file not by modify),
- * only in write after success return.
+ * `edit` tool: exact text replacement. `oldText` must match uniquely once in the target file (fails loudly
+ * when missing or ambiguous, never fuzzy-matching or skipping); `newText` is substituted literally (ignoring
+ * `$&` replacement patterns so behavior matches diff calculation). Shares path/permission boundary with `write`
+ * and `bash`. Structured output conforms to `@helm/protocol` `EditToolResult` and mirrors to `details` (persisted
+ * for Web diff rendering while `structuredOutput` feeds embedded callers). Diff runs inside the canonical mutex
+ * lock prior to writing (if `computeEditDiff` throws, returns `edit_failed` without modifying the file).
  */
 export function createEditTool(deps: HelmToolDeps): ToolRegistration<typeof editParameters> {
   return defineTool({
     name: 'edit',
     description:
-      'precise replace file text fragment.oldText must in file in exactly appear once (missing or many time appear all errors); path each other for conversation cwd parse, support absolute path and ../ across directory access (and bash same right); conversation bind set remote node when in target node read and write back.',
+      'Replace an exact text snippet in a file. oldText must occur uniquely once (errors if missing or non-unique); ' +
+      'paths resolve relative to conversation cwd and support absolute paths and ../ traversal (same as bash); reads and writes back on the target node when bound remotely.',
     parameters: editParameters,
     structuredOutputSchema: EDIT_TOOL_RESULT_SCHEMA,
     async execute(args, api, context) {
@@ -283,8 +279,8 @@ export function createEditTool(deps: HelmToolDeps): ToolRegistration<typeof edit
       }
       const { nodeId, base, platform } = target0
       try {
-        // unify execute environment: remote (guard first row:EnvFabric missing/node offline explicit failed,
-        // never fall back local machine) and local the same read-change-write template.
+        // Unified execution env: remote (explicit failure on missing EnvFabric/offline, never falls back locally)
+        // and local share the exact same read-modify-write template.
         const envR = writableEnvFor(deps, nodeId, base, 'edit')
         if ('error' in envR) {
           return { output: [{ type: 'text', text: envR.error }], isError: true }
@@ -293,7 +289,7 @@ export function createEditTool(deps: HelmToolDeps): ToolRegistration<typeof edit
         if (!target.ok) {
           return { output: [{ type: 'text', text: target.message }], isError: true }
         }
-        // mutual exclusion queue: read-change-write whole hold lock (read old content and write back between do not by other change insert).
+        // Mutex queue covers the entire read-modify-write window so concurrent mutations cannot interleave.
         return await envR.env.withMutationQueue(target.abs, async () => {
           const content = await envR.env.readTextFile(target.abs, context)
           const count = countOccurrences(content, args.oldText)
@@ -310,12 +306,12 @@ export function createEditTool(deps: HelmToolDeps): ToolRegistration<typeof edit
             }
           }
           const matchOffset = content.indexOf(args.oldText)
-          // literal replace (do not explain $& system pattern): content and difference compute input strictly same source.
+          // Literal replacement (ignore `$&` replacement patterns): same exact string drives content and diff computation.
           const updated =
             content.slice(0, matchOffset) +
             args.newText +
             content.slice(matchOffset + args.oldText.length)
-          // difference in lock inside, write before based on actually read content compute (pure function; throws then file not by modify).
+          // Compute diff under lock before writing (pure function; throws cleanly without touching disk).
           const diff = computeEditDiff(
             content,
             updated,
@@ -333,8 +329,8 @@ export function createEditTool(deps: HelmToolDeps): ToolRegistration<typeof edit
           return {
             output: [{ type: 'text', text: editOkText(target.abs, nodeId) }],
             structuredOutput: structured,
-            // Web timeline difference render read persist details channel (structuredOutput do not written to the database);
-            // two channel same value, render layer only dependency EDIT_TOOL_RESULT_SCHEMA a contract.
+            // Web timeline diff UI reads persisted `details` (`structuredOutput` isn't persisted); both channels
+            // carry identical values against the single `EDIT_TOOL_RESULT_SCHEMA` contract.
             details: structured,
           }
         }, context)

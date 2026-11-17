@@ -1,14 +1,13 @@
 /**
- * kernel asset reclaim and watchdogTick transform regression.
+ * Kernel resource reclamation and diagnostics.collect (formerly watchdogTick transform) regressions.
  *
- * override:
- * 1. watchdogTick return hook chain transform after eventually payload(plugin can expand fill
- *    WatchdogTickPayload; old implement return initial snapshot, plugin inject field lose);
- * 2. handledToolCalls interrupt leftover clean up:tool_call handled register carries conversation ownership,
- *    conversation turn end (turn_settled)/ abortConversation / deleteConversation
- *    when fall back clean up not by afterTool consume item (block/exception path do not away execute);
- * 3. EnvFabric.evictConversation:deleteConversation after the conversation target cache
- *    (bases) and output sink register by clean up, reverse re- create delete leaves no residue.
+ * Coverage:
+ * 1. diagnostics.collect listeners append facts into the final collection (await semantics);
+ * 2. Orphaned handledToolCalls cleanup: tool_call handled entries track conversation ownership,
+ *    and fallback sweeps clear unconsumed items on turn_settled, abortConversation, and
+ *    deleteConversation (when blocked or error paths prevent afterTool execution);
+ * 3. EnvFabric.evictConversation: deleteConversation evicts cached target instances (bases) and
+ *    output sinks for that conversation cleanly without leaks on repeated create/delete cycles.
  */
 
 import { strict as assert } from 'node:assert'
@@ -30,9 +29,9 @@ function internalsOf(kernel: KernelRuntime): RuntimeInternals {
 }
 
 function fabricBasesOf(fabric: EnvFabric): Map<string, unknown> {
-  // EnvFabric  bases is createEnvFabric closed package inside private; via RemoteExecutionEnv
-  // instance identity + envFor behavior verify (see evictConversation test), no need to directly read.
-  throw new Error('must not directly read bases(closed package private)')
+  // EnvFabric's bases map is closure-private inside createEnvFabric; verified via RemoteExecutionEnv
+  // instance identity and envFor behavior (see evictConversation tests) rather than direct reads.
+  throw new Error('must not read bases directly (closure-private)')
 }
 
 const timeout = { timeout: 60_000 } as const
@@ -59,14 +58,14 @@ async function openRuntime(dir: string): Promise<KernelRuntime & { __faux: FauxH
   return Object.assign(runtime, { __faux: faux })
 }
 
-describe('diagnostics.collect external collect (original watchdogTick transform expand fill same semantics)', { timeout: 60_000 }, () => {
-  it('collect listener append fact appear in eventually collection in (await semantics)', timeout, async () => {
+describe('diagnostics.collect external aggregation (replaces watchdogTick transform expansion)', { timeout: 60_000 }, () => {
+  it('facts appended by collection listeners appear in the final collection (awaited)', timeout, async () => {
     const kernel = await openRuntime(join(root, 'tick-1'))
     try {
       await kernel.plugins.register({
         id: 'test:collector',
         definePlugin(ctx) {
-          // simulated builtin:herdr style external collect: in collection on append probe needle (keep original field).
+          // Simulates builtin:herdr-style external probe collection appended to the shared collector.
           ctx.host.onEvent('diagnostics.collect', (raw) => {
             const collection = raw as { probes: unknown[] }
             collection.probes.push({
@@ -81,17 +80,17 @@ describe('diagnostics.collect external collect (original watchdogTick transform 
           })
         },
       })
-      // event by host emitEvent dispatch (broadcast:false only internal listener).
+      // Event dispatched via host emitEvent (broadcast: false reaches internal listeners only).
       const collected: { probes: unknown[] } = { probes: [] }
       await kernel.emitHostEvent('diagnostics.collect', collected, { broadcast: false })
-      assert.equal(collected.probes.length, 1, 'listener append fact enter collection')
+      assert.equal(collected.probes.length, 1, 'listener-appended facts enter collection')
       assert.equal((collected.probes[0] as { targetId: string }).targetId, 'ext:p1')
     } finally {
       await kernel.close()
     }
   })
 
-  it('without listener when emitHostEvent normal complete (empty collect do not errors)', timeout, async () => {
+  it('emitHostEvent completes cleanly with no listeners (empty collection without error)', timeout, async () => {
     const kernel = await openRuntime(join(root, 'tick-2'))
     try {
       const collected: { probes: unknown[] } = { probes: [] }
@@ -103,14 +102,13 @@ describe('diagnostics.collect external collect (original watchdogTick transform 
   })
 })
 
-describe('handledToolCalls interrupt leftover clean up', { timeout: 60_000 }, () => {
-  it('tool_call handled after turn end (turn_settled) fall back clean leftover', timeout, async () => {
+describe('handledToolCalls orphan cleanup', { timeout: 60_000 }, () => {
+  it('fallback clears unconsumed handled tool_call entries when turn settles (turn_settled)', timeout, async () => {
     const kernel = await openRuntime(join(root, 'handled-1'))
     try {
       const internals = internalsOf(kernel)
-      // register a tool_call hook: for probe tool return handled(do not execute real tool),
-      // and model do not start real tool invoke (faux directly text answer) - -handled item into is
-      // unconsumed leftover, rely turn_settled fall back clean up.
+      // Registers a tool_call hook returning handled for `probe` while the model replies directly
+      // with text (never executing the tool) -- leaving an unconsumed handled entry cleared by turn_settled.
       await kernel.plugins.register({
         id: 'test:handled-residue',
         definePlugin(ctx) {
@@ -118,19 +116,19 @@ describe('handledToolCalls interrupt leftover clean up', { timeout: 60_000 }, ()
             if (call.toolName !== 'probe') return undefined
             return {
               action: 'handled',
-              result: { output: [{ type: 'text', text: 'already take over' }], isError: false },
+              result: { output: [{ type: 'text', text: 'intercepted' }], isError: false },
             }
           })
         },
       })
       const conv = await kernel.createConversation({})
-      kernel.__faux.setResponses([fauxAssistantMessage('directly answer, do not invoke tool')])
-      await kernel.submitInput(conv.id, 'follow convenient question')
+      kernel.__faux.setResponses([fauxAssistantMessage('direct reply without invoking tool')])
+      await kernel.submitInput(conv.id, 'casual prompt')
       await kernel.waitForIdle(conv.id)
-      // turn already end: even if handled from not by execute consume, leftover also must by empty.
+      // Once turn settles, no stale handled entry for this conversation may remain even if execute never ran.
       for (const key of internals.handledToolCalls.keys()) {
         const entry = internals.handledToolCalls.get(key)
-        assert.notEqual(entry?.conversationId, conv.id, 'turn after end the conversation leftover should by clean up')
+        assert.notEqual(entry?.conversationId, conv.id, 'conversation residue must be cleared after turn finishes')
       }
       await kernel.deleteConversation(conv.id)
     } finally {
@@ -138,12 +136,12 @@ describe('handledToolCalls interrupt leftover clean up', { timeout: 60_000 }, ()
     }
   })
 
-  it('abortConversation and deleteConversation fall back clean up the conversation leftover', timeout, async () => {
+  it('abortConversation and deleteConversation fallbacks clean up conversation residue', timeout, async () => {
     const kernel = await openRuntime(join(root, 'handled-2'))
     try {
       const internals = internalsOf(kernel)
       const conv = await kernel.createConversation({})
-      // directly inject leftover (simulated tool_call handled register after model turn by cancel).
+      // Directly seed residue (simulating a handled registration before a model turn cancels).
       internals.handledToolCalls.set('call-residue-1', {
         conversationId: conv.id,
         result: { output: [{ type: 'text', text: 'x' }], isError: false },
@@ -156,9 +154,9 @@ describe('handledToolCalls interrupt leftover clean up', { timeout: 60_000 }, ()
       assert.equal(
         internals.handledToolCalls.has('call-residue-1'),
         false,
-        'abort should clean up the conversation handled leftover',
+        'abort must clean up handled residue for that conversation',
       )
-      assert.equal(internals.handledToolCalls.has('call-other-conv'), true, 'other ownership do not subject to affect')
+      assert.equal(internals.handledToolCalls.has('call-other-conv'), true, 'other owners remain unaffected')
 
       internals.handledToolCalls.set('call-residue-2', {
         conversationId: conv.id,
@@ -168,7 +166,7 @@ describe('handledToolCalls interrupt leftover clean up', { timeout: 60_000 }, ()
       assert.equal(
         internals.handledToolCalls.has('call-residue-2'),
         false,
-        'delete conversation should clean up the conversation handled leftover',
+        'deleting conversation must clean up handled residue for that conversation',
       )
     } finally {
       await kernel.close()
@@ -177,7 +175,7 @@ describe('handledToolCalls interrupt leftover clean up', { timeout: 60_000 }, ()
 })
 
 describe('EnvFabric.evictConversation', { timeout: 60_000 }, () => {
-  it('clean up the conversation target cache instance (envForTarget each time return new instance)', timeout, async () => {
+  it('clears cached target instances for the conversation (envForTarget allocates a fresh instance)', timeout, async () => {
     const fabric = createEnvFabric({
       envOptions: () => ({ HELM_CONVERSATION_ID: '42' }),
     })
@@ -185,23 +183,23 @@ describe('EnvFabric.evictConversation', { timeout: 60_000 }, () => {
       const a = fabric.envForTarget({ conversationId: 42, nodeId: 'local', cwd: root })
       fabric.evictConversation(42)
       const b = fabric.envForTarget({ conversationId: 42, nodeId: 'local', cwd: root })
-      // drive one by one after rebuild: two instance underlying base different (a  base already by clean up out cache).
+      // Rebuilt after eviction: underlying base differs (old base was evicted from cache).
       assert.notEqual((a as unknown as { id: string }).id === (b as unknown as { id: string }).id, false)
-      // does not affect other conversation target (43 not by drive one by one).
+      // Other conversation targets stay intact (43 was not evicted).
       const c1 = fabric.envForTarget({ conversationId: 43, nodeId: 'local', cwd: root })
       fabric.evictConversation(42)
       const c2 = fabric.envForTarget({ conversationId: 43, nodeId: 'local', cwd: root })
       assert.equal(
         (c1 as unknown as { id: string }).id,
         (c2 as unknown as { id: string }).id,
-        'other conversation target do not subject to evictConversation affect',
+        'unrelated conversation targets are unaffected by evictConversation',
       )
     } finally {
       await fabric.dispose()
     }
   })
 
-  it('target cache by conversation precise drive one by one:bases counter shrink, other conversation keep; without conversation target does not enter cache', timeout, async () => {
+  it('evicts target cache strictly by conversation: shrinks bases count while preserving others; un-scoped targets bypass cache', timeout, async () => {
     const fabric = createEnvFabric({})
     try {
       assert.equal(fabric.debugBaseCount(), 0)
@@ -209,21 +207,21 @@ describe('EnvFabric.evictConversation', { timeout: 60_000 }, () => {
       fabric.envForTarget({ conversationId: 7, nodeId: 'offline-node', cwd: '/other' })
       fabric.envForTarget({ conversationId: 8, nodeId: 'offline-node', cwd: '/srv' })
       assert.equal(fabric.debugBaseCount(), 3)
-      // without conversation target is short lifecycle object (envFor / envForTarget without conversationId):
-      // each time all new instance, never enter cache - - reverse re- invoke do not heap accumulate bases.
+      // Un-scoped targets (envFor / envForTarget without conversationId) are short-lived:
+      // every call yields a new uncached instance so repeated calls never accumulate bases.
       fabric.envFor('offline-node', '/srv')
       fabric.envFor('offline-node', '/srv')
       fabric.envForTarget({ nodeId: 'offline-node', cwd: '/srv' })
       fabric.envForTarget({ nodeId: 'local', cwd: root })
-      assert.equal(fabric.debugBaseCount(), 3, 'without conversation target never enter cache')
-      // drive one by one conversation 7: only clean its two target, conversation 8 keep.
+      assert.equal(fabric.debugBaseCount(), 3, 'targets without conversationId never enter cache')
+      // Evicting conversation 7 drops only its two targets while keeping conversation 8.
       fabric.evictConversation(7)
-      assert.equal(fabric.debugBaseCount(), 1, 'conversation 7 two target by clean up')
+      assert.equal(fabric.debugBaseCount(), 1, 'both targets of conversation 7 are cleared')
       fabric.evictConversation(7)
-      assert.equal(fabric.debugBaseCount(), 1, 'idempotent: duplicate drive one by one without extra affect')
+      assert.equal(fabric.debugBaseCount(), 1, 'idempotent: repeated eviction has no extra effect')
       fabric.evictConversation(8)
       assert.equal(fabric.debugBaseCount(), 0)
-      // debugBases and counter same source.
+      // debugBases shares source of truth with debugBaseCount.
       fabric.envForTarget({ conversationId: 9, nodeId: 'n', cwd: '/x' })
       const bases = fabric.debugBases()
       assert.equal(bases.length, 1)
@@ -235,12 +233,12 @@ describe('EnvFabric.evictConversation', { timeout: 60_000 }, () => {
     }
   })
 
-  it('drive one by one do not kill in-flight command:evict after old instance on exec self however complete', timeout, async () => {
+  it('eviction does not kill in-flight commands: exec on evicted instance still finishes normally', timeout, async () => {
     const fabric = createEnvFabric({})
     try {
       const scoped = fabric.envForTarget({ conversationId: 50, nodeId: 'local', cwd: root })
       fabric.evictConversation(50)
-      // old instance reference still store: real exec must self however complete (evict only move cache do not kill process).
+      // Held reference remains valid: real exec finishes normally (eviction only un-caches, never kills processes).
       const result = await scoped.exec('echo alive', undefined, { abortSignal: undefined } as never)
       assert.equal(result.ok, true)
       assert.equal(result.value.exitCode, 0)
@@ -249,16 +247,16 @@ describe('EnvFabric.evictConversation', { timeout: 60_000 }, () => {
     }
   })
 
-  it('deleteConversation via runtime join motion evictConversation(without exception and after continue exec normal)', timeout, async () => {
+  it('deleteConversation triggers evictConversation cleanly via runtime wiring', timeout, async () => {
     void fabricBasesOf
     const kernel = await openRuntime(join(root, 'evict-1'))
     try {
       const conv = await kernel.createConversation({})
-      // trigger once real exec establish conversation target cache (local exec echo).
+      // Execute once to populate conversation target cache (local echo).
       const result = await kernel.execEnv({ command: 'echo evicted', conversationId: conv.id })
       assert.equal(result.ok, true)
       await kernel.deleteConversation(conv.id)
-      // after deletion again for same number conversation target execute: should 404(conversation already delete), while non- internal error.
+      // Running again on the deleted conversation id returns 404 not_found rather than an internal error.
       const again = await kernel
         .execEnv({ command: 'echo again', conversationId: conv.id })
         .then(
@@ -270,40 +268,40 @@ describe('EnvFabric.evictConversation', { timeout: 60_000 }, () => {
       await kernel.close()
     }
   })
-  it('updateConversation change cwd/nodeId when release old target cache (does not affect other conversation)', timeout, async () => {
+  it('updateConversation changing cwd/nodeId releases stale target cache without affecting other conversations', timeout, async () => {
     const kernel = await openRuntime(join(root, 'evict-2'))
     try {
       const conv = await kernel.createConversation({})
       const other = await kernel.createConversation({})
       const fabric = kernel.envFabric as EnvFabric
       const before = fabric.debugBaseCount()
-      // two time real exec establish two conversation target.
+      // Two executions create cached targets for both conversations.
       await kernel.execEnv({ command: 'echo one', conversationId: conv.id })
       await kernel.execEnv({ command: 'echo two', conversationId: other.id })
       assert.equal(fabric.debugBaseCount(), before + 2)
-      // change conv  cwd: old target release,other do not subject to affect.
+      // Updating conv cwd releases its old target while leaving other untouched.
       const newDir = join(root, 'evict-2-new-cwd')
       await kernel.updateConversation(conv.id, { cwd: newDir })
-      assert.equal(fabric.debugBaseCount(), before + 1, 'change conversation old target by release')
+      assert.equal(fabric.debugBaseCount(), before + 1, 'old target for updated conversation is released')
       const bases = fabric.debugBases()
       assert.ok(
         bases.every((b) => b.conversationId !== conv.id),
-        `conversation ${conv.id} old target should all release:${JSON.stringify(bases)}`,
+        `all old targets for conversation ${conv.id} should be released: ${JSON.stringify(bases)}`,
       )
-      // other conversation target still in cache (same instance re- use).
+      // Other conversation's target stays cached for reuse.
       assert.ok(bases.some((b) => b.conversationId === other.id))
-      // only change title does not trigger release.
+      // Updating title alone does not evict cache.
       const count = fabric.debugBaseCount()
       await kernel.updateConversation(other.id, { title: 'only title' })
-      assert.equal(fabric.debugBaseCount(), count, 'non- target change do not release cache')
+      assert.equal(fabric.debugBaseCount(), count, 'non-target updates do not evict cached env targets')
     } finally {
       await kernel.close()
     }
   })
 })
 
-describe('faux tool chain regression (handled consume path still work)', { timeout: 60_000 }, () => {
-  it('tool_call handled after execute layer normal return take over result (do not break happy path)', timeout, async () => {
+describe('faux tool pipeline regression (handled consumption path still works)', { timeout: 60_000 }, () => {
+  it('tool_call handled returns intercepted result at execute layer (happy path intact)', timeout, async () => {
     const kernel = await openRuntime(join(root, 'handled-ok'))
     try {
       await kernel.plugins.register({
@@ -313,7 +311,7 @@ describe('faux tool chain regression (handled consume path still work)', { timeo
             if (call.toolName !== 'bash') return undefined
             return {
               action: 'handled',
-              result: { output: [{ type: 'text', text: 'take over result:echo by intercept' }], isError: false },
+              result: { output: [{ type: 'text', text: 'intercepted result: echo intercepted' }], isError: false },
             }
           })
         },
@@ -325,7 +323,7 @@ describe('faux tool chain regression (handled consume path still work)', { timeo
       await kernel.submitInput(1, 'run echo')
       await kernel.waitForIdle(1)
       assert.equal(await kernel.getLastAssistantText(1), 'complete')
-      // normal consume path:handled item in execute after i.e. when delete.
+      // Normal consumption: handled entry is removed immediately during execute.
       assert.equal(internalsOf(kernel).handledToolCalls.size, 0)
     } finally {
       await kernel.close()

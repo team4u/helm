@@ -1,8 +1,8 @@
 /**
- * hook bridge:SDK GenerationTask/ToolTask hook -> helm 7 class lifecycle hook pipeline.
+ * Hook bridge: maps SDK `GenerationTask` / `ToolTask` hooks to helm's 7 lifecycle hook pipelines.
  *
- * from runtime.ts split out.tool_call/tool_result/before_turn in this connect to PluginHost
- *  runHook;turn_settled honor bottom clean up (handled take over leftover) by host via call back inject.
+ * Extracted from `runtime.ts`. Bridges `tool_call`, `tool_result`, and `before_turn` into `PluginHost.runHook`;
+ * terminal cleanup (`handled` takeover leftovers) for `turn_settled` is injected by the host via callbacks.
  */
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { Message } from '@earendil-works/pi-ai'
@@ -50,7 +50,7 @@ export type HookDecision =
   | { action: 'handled'; result?: unknown }
   | { action: 'block'; reason: string }
 
-/** tool_call handled take over cache item (execute layer wrap consume; ownership conversation used to honor bottom clean up). */
+/** Cached `tool_call` `handled` takeover entry (consumed by execution-layer wrapper; `conversationId` tracks owner for safety cleanup). */
 export interface HandledToolCallEntry {
   conversationId: number | undefined
   result: { output: Array<{ type: 'text'; text: string }>; isError: boolean }
@@ -58,17 +58,17 @@ export interface HandledToolCallEntry {
 
 export interface HookBridgeOptions {
   readonly registry: { install(extension: Extension): void }
-  /** pluginHost hot inject (initialize phase may not yet create). */
+  /** Lazily resolved `PluginHost` (may not exist yet during initialization). */
   readonly pluginHost: () => PluginHost | undefined
   readonly handledToolCalls: Map<string, HandledToolCallEntry>
-  /** tool result out station unify handle (Spill boundary + redaction; host implement). */
+  /** Unified outbound tool-result processor (spill boundary + redaction; host implementation). */
   readonly prepareToolResult: (conversationId: number, result: ToolExecutionResult) => Promise<ToolExecutionResult>
-  /** conversation summary security read (missing/corrupt return undefined -> skip before_turn). */
+  /** Safe conversation summary lookup (returns `undefined` if missing/corrupted -> skips `before_turn`). */
   readonly safeSummary: (conversationId: number) => ConversationSummary | undefined
-  /** when before turn input manifest (before_turn payload use). */
+  /** Current turn's input metadata (`before_turn` payload). */
   readonly currentRunInputs: (conversationId: number) => BeforeTurnHookPayload['inputs']
   readonly redact: (text: string) => string
-  /** tool artifact port (prepareToolResult host implement use). */
+  /** Tool artifact port (used by `prepareToolResult` host implementation). */
   readonly artifacts: {
     spill(conversationId: number, id: string, text: string): Promise<{ artifact?: unknown; text: string }>
   }
@@ -81,14 +81,14 @@ export class HookBridge {
     this.options = options
   }
 
-  /** install SDK hook extend (initialize phase once). */
+  /** Install the SDK hook extension once during initialization. */
   install(): void {
     this.options.registry.install(
       defineExtension({
         name: 'helm-hook-bridge',
         hooks: [
           hook(ToolTask, {
-            /** tool_call:transform change write parameter / block intercept. */
+            /** `tool_call`: transform args or block execution. */
             beforeTool: async (call, api) => {
               const outcome = await this.runHookChain('tool_call', {
                 conversationId: api.conversationId,
@@ -100,8 +100,8 @@ export class HookBridge {
                 return { block: this.options.redact(outcome.reason ?? 'blocked') }
               }
               if (outcome?.action === 'handled') {
-                // take over: result register to execute layer cache (wrapToolCalls wrap consume);
-                // also record ownership conversation, turn terminal state/abort/delete when honor bottom clean up unconsumed leftover.
+                // Takeover: cache result for the execution wrapper (`wrapToolCalls`) and track conversationId
+                // so terminal/abort/delete hooks can clean up any unconsumed leftover entries.
                 this.options.handledToolCalls.set(call.id, {
                   conversationId: api.conversationId,
                   result: toolResultOf(outcome.result),
@@ -115,7 +115,7 @@ export class HookBridge {
               }
               return undefined
             },
-            /** all tool eventually output all in persist before through the same redaction and Spill boundary. */
+            /** All final tool outputs pass through the same redaction and spill boundary before persistence. */
             afterTool: async (call, result, api) => {
               this.options.handledToolCalls.delete(call.id)
               try {
@@ -129,11 +129,11 @@ export class HookBridge {
                 let effective = result
                 if (outcome?.action === 'transform') {
                   const transformed = normalizeToolResult(outcome.value.result)
-                  if (!transformed) throw new HelmError('invalid_hook_result', 'tool_result must return legal tool result', 500)
+                  if (!transformed) throw new HelmError('invalid_hook_result', 'tool_result must return a valid tool result', 500)
                   effective = transformed as ToolExecutionResult
                 } else if (outcome?.action === 'handled') {
                   const handled = normalizeToolResult(outcome.result)
-                  if (!handled) throw new HelmError('invalid_hook_result', 'tool_result take over artifact is not legal tool result', 500)
+                  if (!handled) throw new HelmError('invalid_hook_result', 'tool_result handled payload is not a valid tool result', 500)
                   effective = handled as ToolExecutionResult
                 }
                 return await this.options.prepareToolResult(api.conversationId, effective)
@@ -147,12 +147,11 @@ export class HookBridge {
           }),
           hook(GenerationTask, {
             /**
-             * before_turn bridge:SDK original generate sections(PromptSection) and tools already in
-             * prepare phase parse (request.messages inside contains pi.system segment message),
-             * beforeRequest receives messages is eventually model message (contains system before lead).
-             * this in sections/tools/messages real payload hand over to plugin,transform result
-             * via system message sections / toolsAdded truly change write model request.
-             * hook chain converge after host unify throw shoot prompt.tools.* segment (see transformBeforeTurn).
+             * `before_turn` bridge: SDK native `sections` (`PromptSection`) and tools are already resolved during
+             * prepare (`request.messages` includes the leading `pi.system` message), so `beforeRequest` receives
+             * the final model messages (starting with system). Passes real `sections`/`tools`/`messages` payloads to
+             * plugins, and rewrites the model request via leading system `sections` / `toolsAdded`.
+             * After hooks converge, host projects `prompt.tools.*` sections (see `transformBeforeTurn`).
              */
             beforeRequest: async (request, api) => {
               const conversationId = api.conversationId
@@ -166,7 +165,7 @@ export class HookBridge {
     )
   }
 
-  /** before_turn transform should use (sections / messages / tools three route manually technique). */
+  /** Apply `before_turn` transforms across all three surfaces (`sections` / `messages` / `tools`). */
   private async transformBeforeTurn(
     request: { readonly messages: readonly Message[] },
     summary: ConversationSummary,
@@ -174,8 +173,9 @@ export class HookBridge {
   ): Promise<{ readonly messages: readonly Message[] } | undefined> {
     const host = this.options.pluginHost()
     const runtimeTools = getCurrentTools(request.messages)
-    // scope trim: plugin tool global install (helm-plugins) extend, but scope outside conversation must not
-    // see to declaration- - enter hook chain before by this conversation available spec filter, kernel tool keep.
+    // Scope filtering: plugin tools are registered globally on the harness (`helm-plugins`), so out-of-scope
+    // conversations must not see their declarations — filter to available tools for this conversation before
+    // entering hooks while retaining kernel tools.
     const effectiveTools = host !== undefined ? this.scopeLocalTools(host, summary, runtimeTools) : runtimeTools
     const original = request.messages as unknown as Array<Record<string, unknown>>
     const payload: BeforeTurnHookPayload = {
@@ -190,9 +190,9 @@ export class HookBridge {
       messages: original,
     }
     const outcome = await this.runHookChain('before_turn', payload)
-    // host final scoped throw shoot: regardless of hook is otherwise transform, by eventually active tools unify heavy write
-    // prompt.tools.* segment (only activate tool enter prompt; deactivate/strip tool old segment one and clear,
-    // do not phantom text). throw shoot based on PluginHost when before declaration (contains prompt metadata).
+    // Host final scoped projection: regardless of whether hooks transformed, overwrite `prompt.tools.*`
+    // sections according to final active tools (only active tools enter the prompt; disabled/stripped tools
+    // have their sections cleared immediately, leaving no phantom prompts). Uses live PluginHost declarations.
     const activeTools = this.activeToolPrompts(summary, effectiveTools, outcome)
     const outcomeSections = outcome?.action === 'transform'
       ? outcome.value.sections
@@ -205,21 +205,20 @@ export class HookBridge {
       ? { ...outcome.value, sections: projected }
       : { ...payload, sections: projected }
 
-    // sections change -> change write before lead system message sections(SDK original generate mechanism).
-    // messages change -> whole replace (plugin explicit want seek when). boundary validate:
-    // 1. must be non-empty array and before lead is system message (SDK back put mechanism dependency before lead system);
-    // 2. keep original before lead system  content base bottom (sections/tools declaration can change, person format and
-    //    history body text never can by plugin override - - guard against original ground mutation diff cannot rely and system head corrupt);
-    // 3. original a non- system message after history one rule keep original order (only allows truncate header,
-    //    disallows heavy write/fabricate history).
+    // `sections` changes -> rewrite leading system message sections (SDK native mechanism).
+    // `messages` changes -> full replacement (when explicitly requested by plugin). Boundary checks:
+    // 1. Must be a non-empty array with a leading system message (SDK replay mechanism expects a leading system);
+    // 2. Preserve original base system content (sections/tool declarations may change, but formatting rules and
+    //    history body must never be overwritten by plugins — prevents inplace diff mutation corruption of system header);
+    // 3. Remaining non-system history keeps strict original ordering (prefix trimming only; never fabricate/rewrite history).
     let messages = original
     const sectionsChanged = !sectionsEqual(value.sections, payload.sections)
     const messagesChanged = value.messages !== payload.messages
     if (messagesChanged) messages = assertSafeMessageSurgery(original, value.messages)
     if (sectionsChanged) messages = withSections(messages, value.sections)
 
-    // declaration heavy write baseline is SDK original parse tool collection (contains scope outside plugin tool): as long as eventually collection
-    // and original collection has difference (scope trim or hook strip), all via toolsRemoved/toolsAdded replay.
+    // Tool declaration rewrite baseline is SDK's originally resolved tool set (including out-of-scope plugin tools):
+    // whenever the final set differs from original (due to scope trimming or hook stripping), replay via toolsRemoved/toolsAdded.
     const initialNames = new Set(runtimeTools.map((tool) => tool.name))
     const declared = new Set(value.tools.map((tool) => tool.name))
     if (declared.size !== initialNames.size || [...declared].some((name) => !initialNames.has(name))) {
@@ -230,9 +229,9 @@ export class HookBridge {
   }
 
   /**
-   * plugin tool scope trim: global install plugin tool (helm-plugins) in,scope does not match
-   * when before conversation in enter hook chain before strip declaration(kernel tool and scope inside plugin tool
-   * keep). execute phase assertScopeAllows second validate do not change; this in eliminate is request level leak.
+   * Scope-trim plugin tools: among globally registered plugin tools (`helm-plugins`), strip declarations whose
+   * scope does not match this conversation before entering the hook chain (retaining kernel tools and matching
+   * plugin tools). Runtime `assertScopeAllows` still enforces at execution; this eliminates request-level leaks.
    */
   private scopeLocalTools<T extends { name: string }>(
     host: PluginHost,
@@ -246,10 +245,10 @@ export class HookBridge {
   }
 
   /**
-   * action directory segment render: only when run_action in this request tool and hook eventually tool hand over collection inside
-   * (real can reach) when generate;scope hit and non- exposeAsTool direct throw (direct throw action via each
-   * tool channel declare pass, hook strip after also do not via directory re-). without can reach action return undefined
-   * (prompt.actions old segment follow of clear).
+   * Render `<available_actions>` catalog section: generated only when `run_action` is present in both request tools
+   * and final post-hook tools (actually reachable); includes scope-matched non-`exposeAsTool` actions (`exposeAsTool`
+   * actions are declared directly as tools and do not fall back to the catalog even if stripped). Returns `undefined`
+   * when no actions are reachable (clearing any stale `prompt.actions` section).
    */
   private renderActionDirectory(
     host: PluginHost | undefined,
@@ -278,9 +277,9 @@ export class HookBridge {
   }
 
   /**
-   * eventually active tools prompt metadata collection:PluginHost when before declaration (scope filter)
-   * and hook chain converge after tool manifest take hand over collection - - by plugin strip (such as memory close) tool
-   * do not throw shoot any segment. hook not transform when with SDK parse request tool collection is allow.
+   * Collect prompt metadata for final active tools: intersection of PluginHost's live scoped declarations and the
+   * converged post-hook tool list — tools stripped by plugins (e.g. memory disabled) do not project prompt sections.
+   * When hooks do not transform, all SDK-resolved request tools are permitted.
    */
   private activeToolPrompts(
     summary: ConversationSummary,
@@ -313,7 +312,7 @@ export class HookBridge {
     return out
   }
 
-  /** unify hook pipeline execute; return eventually decide (continue archive one is undefined by caller away by default). */
+  /** Run a unified hook pipeline; converts `continue` into `undefined` so callers apply default behavior. */
   async runHookChain<K extends HookName>(
     name: K,
     payload: HookPayloadMap[K],
@@ -331,8 +330,8 @@ export class HookBridge {
   }
 
   /**
-   * around(continuation) hook execute (only agent_spawn): plugin can via subject to control next
-   * package wrap complete execute (contains after continue pipeline and by default original generate execute row). without plugin when directly defaultRun.
+   * Run an `around` (continuation) hook (`agent_spawn` only): plugins wrap full execution (downstream hooks
+   * and default native execution) by controlling `next`; falls through directly to `defaultRun` when no host.
    */
   runHookAround(
     name: 'agent_spawn',
@@ -345,14 +344,14 @@ export class HookBridge {
   }
 }
 
-/** SDK result out station unify handle: redaction + Spill boundary (artifacts cap truncate to artifact). */
+/** Unified outbound tool-result handling: redaction + spill boundary (truncates oversized payloads to artifacts). */
 export async function prepareToolResultWith(
   artifacts: HookBridgeOptions['artifacts'],
   redact: (text: string) => string,
   conversationId: number,
   result: ToolExecutionResult,
 ): Promise<ToolExecutionResult> {
-  // SDK result optional property can is undefined; first by JSON semantics omit, again one by one string redaction.
+  // SDK result optional properties can be undefined; apply JSON-omission semantics first, then redact every string.
   const safe = redactJsonValue(JSON.parse(JSON.stringify(result)), redact) as ToolExecutionResult
   const output = safe.output ?? []
   const text = output.filter((block) => block.type === 'text').map((block) => block.text).join('\n')

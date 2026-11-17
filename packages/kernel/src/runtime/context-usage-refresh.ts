@@ -1,18 +1,17 @@
 /**
- * conversation level contextUsage sync cache and async refresh chain (self conversations.ts split out).
+ * Per-conversation synchronous contextUsage cache and async refresh chain (extracted from conversations.ts).
  *
- * state two layer:
- * - sync can read cache (cache/keys/entryWatermark/waiters): follow stopObserving clean up
- *   (waiters first resolve again clean, guard against forever long suspended); late to refresh via observe proxy count guard discard;
- * - refresh chain lifecycle (pending/dirty): in-flight refresh can across exceeds stop observe (stopObserving do not clean
- *   pending- -finally fall back clean up, new trigger per common dirty append), therefore does not enter
- *   ConversationMirror(see conversation-mirror.ts exception manifest).
+ * Two-tier state:
+ * - Synchronously readable cache (cache / keys / entryWatermark / waiters): cleaned up on stopObserving
+ *   (waiters resolve first so none hang); stale async refreshes drop via observe generation guard;
+ * - Refresh chain lifecycle (pending / dirty): in-flight refreshes can outlive stopObserving (pending cleans up
+ *   in finally, and re-triggers simply mark dirty), so they live outside ConversationMirror (see exception list in conversation-mirror.ts).
  *
- * frame discipline (migration before semantics original keep):
- * - first time fill static default (snapshot/HTTP read self however visible), unique exception: fill i.e. carry compacting
- *   must publish (otherwise subscribe way forever see fewer than the state);
- * - run leap during only compacting / contextWindow change frame (token instant state etc. compute frame);
- * - publish do not push enter stateChangeSeq(CAS watermark line dedicated belong, derive render data must not pollute).
+ * Frame discipline (preserving original semantics):
+ * - Initial population stays silent (automatically visible on snapshot/HTTP read), except: (1) compacting=true
+ *   on initial hydrate must publish (otherwise subscribers would never see it), or (2) explicit on-demand triggers;
+ * - During active runs, only emit frames on compacting / contextWindow transitions (tokens settle with emitSettled);
+ * - Publishes never advance stateChangeSeq (reserved exclusively for CAS watermarks; derived display metrics must not pollute it).
  */
 
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
@@ -32,55 +31,55 @@ import {
 import { emitDiagnostic, type KernelDiagnosticEmitter } from './diagnostics.js'
 import type { EntryRecordLike } from './entries.js'
 
-/** refresh chain for host (ConversationTracker) most small port. */
+/** Minimal port from refresh chain to host (ConversationTracker). */
 export interface ContextUsageHost {
   readonly harness: Harness
   readonly store: HelmStore
-  /** summary push (conversation.upsert semantics frame). */
+  /** Emit summary change (conversation.upsert semantic frame). */
   onSummaryChanged(summary: ConversationSummary): void
-  /** when before Models set now read (default do not parse:contextWindow omit, never fabricate). */
+  /** Read current Models catalog (returns undefined when unavailable: omits contextWindow without fabricating). */
   modelsOf(): Models | undefined
-  /** observe proxy count now read (late to refresh result discard decide). */
+  /** Read current observe generation (discard guard for late async results). */
   generationOf(conversationId: number): symbol | undefined
-  /** live mirror now read (compress state and run leap decide). */
+  /** Read current live mirror (checks compaction state and active run). */
   liveOf(conversationId: number): LiveStateShape | undefined
-  /** right threat summary now read (publish frame construct; internal back read this module cache, do not shape into scheduling ring). */
+  /** Read authoritative current summary (constructs published frame; reads our cache without creating loops). */
   summaryOf(conversationId: number): ConversationSummary
-  /** host closure stop guard (harness.close first row close after block assert for already close Harness without say refresh). */
+  /** Host shutdown guard (blocks initiating refreshes against a closed Harness after close starts). */
   isClosing?(): boolean
-  /** diagnose channel on report (default away defaultDiagnosticSink). */
+  /** Diagnostic channel reporter (defaults to defaultDiagnosticSink). */
   emitDiagnostic?: KernelDiagnosticEmitter
 }
 
 export class ContextUsageRefresh {
-  /** conversation -> when before cache value (summaryOf sync read;undefined = not yet compute). */
+  /** conversation -> cached usage value (read synchronously by summaryOf; undefined = not yet computed). */
   private readonly cache = new Map<number, ConversationContextUsage>()
-  /** conversation -> most near once already publish refer grain (identical do not heavy conversation.upsert). */
+  /** conversation -> fingerprint of last published usage (prevents duplicate conversation.upsert). */
   private readonly keys = new Map<number, string>()
-  /** conversation -> context trigger already scan to most large entry id(independent push enter: without sink when also can dedupe). */
+  /** conversation -> highest entry ID scanned for context triggers (advances monotonically even without entry sinks). */
   private readonly entryWatermark = new Map<number, number>()
-  /** conversation -> refresh chain settle wait for (ensureContextUsage wake use; stop observe fall back resolve). */
+  /** conversation -> waiters awaiting refresh chain quiescence (woken by ensureContextUsage or stopObserving fallback). */
   private readonly waiters = new Map<number, Array<() => void>>()
-  /** refresh in-flight conversation (guard against duplicate refresh; new trigger placement dirty await heavy run). */
+  /** Conversations with an in-flight refresh (prevents duplicate refreshes; new triggers mark dirty to rerun). */
   private readonly pending = new Set<number>()
-  /** in-flight during receives new trigger signal conversation (after completion heavy run once). */
+  /** Conversations invalidated again while a refresh was in flight (runs once more upon completion). */
   private readonly dirty = new Set<number>()
-  /** conversations whose on-demand readiness (e.g. opening detail or post-turn settle) should publish initial `conversation.upsert`. */
+  /** Conversations whose on-demand readiness (e.g. opening detail or post-turn settle) should publish initial `conversation.upsert`. */
   private readonly notifyInitial = new Set<number>()
 
   constructor(private readonly host: ContextUsageHost) {}
 
-  /** sync read cache (do not scheduling). */
+  /** Synchronously read cached usage without scheduling. */
   peek(conversationId: number): ConversationContextUsage | undefined {
     return this.cache.get(conversationId)
   }
 
-  /** already cache conversation manifest (onModelsChanged set to force complete target of one). */
+  /** List conversation IDs currently cached (target set for onModelsChanged invalidation). */
   cachedConversationIds(): number[] {
     return [...this.cache.keys()]
   }
 
-  /** sync read cache; missing when scheduling once background refresh (dedupe: in-flight placement dirty, already cache do not heavy run). */
+  /** Synchronously read cached usage, scheduling a background refresh on miss (deduplicated via pending/dirty). */
   cachedOrSchedule(conversationId: number): ConversationContextUsage | undefined {
     const cached = this.cache.get(conversationId)
     if (cached !== undefined) return cached
@@ -88,7 +87,7 @@ export class ContextUsageRefresh {
     return undefined
   }
 
-  /** scheduling async context use amount refresh (fire-and-forget;observe call back inside sync invoke cannot await). */
+  /** Schedule an asynchronous context usage refresh (fire-and-forget; safe to invoke inside synchronous observe callbacks). */
   schedule(conversationId: number, options?: { publishWhenReady?: boolean }): void {
     if (this.host.isClosing?.()) return
     if (!this.host.store.getConv(conversationId)) return
@@ -103,11 +102,11 @@ export class ContextUsageRefresh {
     void this.refreshOnce(conversationId)
       .catch((error: unknown) => {
         if (this.host.isClosing?.()) return
-        // refresh failed such as record: cache keep old value (never static default fabricate), do not block assert observe main path.
+        // Log refresh errors honestly without overwriting stale cache or blocking the observe path.
         const event = {
           level: 'error' as const,
           source: 'tracker.context_usage',
-          message: 'context use amount refresh failed',
+          message: 'context usage refresh failed',
           error,
           conversationId,
         }
@@ -119,11 +118,11 @@ export class ContextUsageRefresh {
       })
       .finally(() => {
         this.pending.delete(conversationId)
-        // in-flight during again has real change (new turn compute/compress/rewind): heavy run once force complete.
+        // Re-schedule if another change happened while in flight (new settlement, compaction, or rewind).
         if (this.dirty.delete(conversationId)) {
           this.schedule(conversationId)
         }
-        // wake wait for way (ensureContextUsage): self row re- inspect cache/in-flight state decide return or continue etc..
+        // Wake waiters (ensureContextUsage) to re-check cache and pending state.
         const waiters = this.waiters.get(conversationId)
         if (waiters !== undefined) {
           this.waiters.delete(conversationId)
@@ -132,14 +131,12 @@ export class ContextUsageRefresh {
       })
   }
 
-  /** ensure the conversation contextUsage cache already fill and refresh chain archive silent (first detail situation read etc. sync visible path).
+  /** Ensure contextUsage cache is populated and any refresh chain has settled (used on detail reads, etc.).
    *
-   * - already cache and without in-flight refresh: immediately return (already cache page read zero overhead, does not repeat refresh);
-   * - missing or in-flight: wait for refresh chain settle(many caller merge the same time refresh;dirty heavy run chain
-   *   same wait for to archive silent, avoid cache already set but chain not completely when read to i.e. by force complete old value);
-   * - each round wait for all by real refresh chain settleevent push enter (without polling without sleep); cap
-   *   8 round only guard against defend illness state chain (continuous by proxy count guard discard and do not assert has new trigger).
-   */
+   * - Cached with no in-flight refresh: returns immediately (zero overhead on warm reads);
+   * - Missing or in-flight: waits for the refresh chain to settle (coalesces concurrent callers; also waits through
+   *   dirty reruns so detail reads never observe stale pre-invalidation values);
+   * - Event-driven across settlement waves (zero polling/sleeps), bounded to 8 rounds against pathological churn. */
   async ensure(conversationId: number): Promise<void> {
     if (!this.cache.has(conversationId) && this.host.store.getConv(conversationId) && !this.host.isClosing?.()) {
       this.notifyInitial.add(conversationId)
@@ -151,7 +148,7 @@ export class ContextUsageRefresh {
       if (!this.host.store.getConv(conversationId)) return
       if (!this.pending.has(conversationId)) {
         this.schedule(conversationId)
-        // scheduling by refuse (conversation exactly by delete): no longer wait for, such as return.
+        // Scheduling refused (e.g., conversation deleted): exit immediately instead of waiting.
         if (!this.pending.has(conversationId)) return
       }
       await new Promise<void>((resolve) => {
@@ -162,18 +159,16 @@ export class ContextUsageRefresh {
     }
   }
 
-  /** adoptInitial watermark line align: initial snapshot inside history mark record item (pi.compaction etc.)
-   * does not trigger after continue adopt duplicate refresh (and lastEmittedEntry the same initial value source). */
+  /** Align initial watermark in adoptInitial so historical marker entries (pi.compaction, etc.)
+   * in the first snapshot do not trigger duplicate refreshes on subsequent adopts. */
   advanceWatermarkTo(conversationId: number, value: number): void {
     const current = this.entryWatermark.get(conversationId) ?? 0
     if (value > current) this.entryWatermark.set(conversationId, value)
   }
 
-  /** context boundary scan: only exceeds old watermark line new item in appear pi.compaction /
-   * pi.reset / helm.rewind, or pi.live compress state (compactions/compactionFailure)
-   * refer grain change when only then trigger refresh. history mark record item does not repeat trigger (otherwise streaming during each time snapshot all
-   * heavy scheduling, write put large); watermark line single tune push enter. independent watermark line (and onEntryCommitted without closure):
-   * without entry sink observer same dedupe. */
+  /** Scan context boundaries: trigger refresh only when a new entry beyond the watermark is pi.compaction /
+   * pi.reset / helm.rewind, or when pi.live compaction state (compactions/compactionFailure) changes.
+   * Monotonic watermark prevents re-triggering on streaming snapshots (even when onEntryCommitted is inactive). */
   noteBoundary(
     id: number,
     view: ConversationView,
@@ -191,16 +186,14 @@ export class ContextUsageRefresh {
       if (kind === 'pi.compaction' || kind === 'pi.reset' || kind === 'helm.rewind') boundary = true
     }
     this.entryWatermark.set(id, watermark)
-    // prev constant is object mirror (live archive one is ?? {});live original doc missing when archive one is empty object,
-    // avoid without pi.live doc snapshot first frame because undefined vs {} refer grain difference mistakenly trigger refresh.
+    // prev is always a mirror object ({} fallback on adopt) while raw live defaults to {}, preventing false diffs on initial empty snapshots.
     if (boundary || compactionLiveKeyOf(prev) !== compactionLiveKeyOf(live ?? {})) {
       this.schedule(id)
     }
   }
 
-  /** stopObserving: clean cache/refer grain/dirty mark/watermark line and wake wait for (wake come after self inspect cache/
-   * metadata and exit);pending moment intent keep (in-flight refresh finally fall back clean up, across exceeds stop observe
-   * late to result via proxy count guard discard, does not resurrect). */
+  /** On stopObserving: clear cache/fingerprint/dirty/watermark and wake waiters (so they check missing cache and exit);
+   * intentionally keep pending intact so in-flight refreshes clean up in finally while late results drop via generation guard. */
   clearConversation(conversationId: number): void {
     this.cache.delete(conversationId)
     this.keys.delete(conversationId)
@@ -214,23 +207,23 @@ export class ContextUsageRefresh {
     }
   }
 
-  /** single time refresh: read real ContextView + model window + live compress state, change only then publish. */
+  /** Single refresh: read real ContextView + model context window + live compaction state; publish only if changed. */
   private async refreshOnce(conversationId: number): Promise<void> {
     const meta = this.host.store.getConv(conversationId)
     if (!meta) return
-    // proxy count guard:await before catch; not observe (undefined) same reference and compare - - refresh during concurrency
-    // observe(swap proxy)/stopObserving(delete token) all will change when before value, late to result discard.
+    // Generation guard: captured before await (also catches unobserved = undefined); concurrent re-observe or
+    // stopObserving changes it so stale completions discard cleanly.
     const generation = this.host.generationOf(conversationId)
     const conversation = await this.host.harness.conversation(conversationId as never, BACKGROUND_CONTEXT)
     if (!conversation) return
     const view = await conversation.context(BACKGROUND_CONTEXT)
     if (this.host.generationOf(conversationId) !== generation) return
-    // conversation may in await during by delete: late to result must not re- cache or event.
+    // Conversation may have been deleted while awaiting: never resurrect cache or emit events.
     if (!this.host.store.getConv(conversationId)) return
     this.apply(conversationId, meta, view)
   }
 
-  /** should use refresh result: group install -> refer grain than for -> cache + publish (do not push enter stateChangeSeq). */
+  /** Apply refreshed result: assemble -> compare fingerprint -> cache + publish (never advances stateChangeSeq). */
   private apply(conversationId: number, meta: ConvMeta, view: ContextView): void {
     const live = this.host.liveOf(conversationId)
     const slash = meta.model.indexOf('/')
@@ -239,9 +232,8 @@ export class ContextUsageRefresh {
       slash > 0 && slash < meta.model.length - 1 && models !== undefined
         ? models.getModel(meta.model.slice(0, slash), meta.model.slice(slash + 1))
         : undefined
-    // window source honest: model do not in when before Models set, or window is static keep guard default
-    // (compat gateway / Magpie directory missing upstream window,helmContextWindowKnown === false)
-    // when does not carry contextWindow- - never 128k default smoke fill real window.
+    // Honest window reporting: omit contextWindow when model isn't in Models or only carries an unverified fallback
+    // (e.g. compat gateway / Magpie without upstream window, helmContextWindowKnown === false)—never fake 128k defaults.
     const contextWindow = knownContextWindowOf(model)
     const compacting = compactingOf(live?.compactions)
     const usage = assembleContextUsage({
@@ -253,12 +245,11 @@ export class ContextUsageRefresh {
     const previous = this.cache.get(conversationId)
     const previousKey = this.keys.get(conversationId)
     const shouldPublishInitial = this.notifyInitial.delete(conversationId)
-    // cache first row update:HTTP / SSE snapshot read immediately see to new value (event is otherwise another see under).
+    // Update cache first so immediate HTTP / SSE snapshot reads observe the latest values.
     this.cache.set(conversationId, usage)
     this.keys.set(conversationId, key)
-    // first time fill from startup observe stays silent (avoid startup N-conversation frame noise);
-    // exceptions: (1) compacting=true on initial hydrate, or (2) an explicit on-demand trigger
-    // (detail open / post-turn settle) requested publishing once usage becomes ready.
+    // Initial populate on startup stays silent to avoid N-conversation frame bursts, except when compacting=true on
+    // initial hydrate or when an explicit on-demand trigger (detail open / post-turn settle) requested initial notification.
     if (previousKey === undefined) {
       if (usage.compacting !== undefined || shouldPublishInitial) {
         this.host.onSummaryChanged(this.host.summaryOf(conversationId))
@@ -266,19 +257,16 @@ export class ContextUsageRefresh {
       return
     }
     if (key === previousKey) return
-    // run leap during: only compress real-time state (compacting) and context window (contextWindow)
-    // change only then frame;token change is instant state, etc. this turn compute frame carry (emitSettled additional
-    // cache value), avoid working during duplicate doing semantics frame (frame discipline: do not one by one token 
-    // summary). window change is directory refresh/model switch carries come semantics fact, is not one by one token noise,
-    // must not static default to turn end; same do not push enter stateChangeSeq.
+    // While a run is active, publish only compacting or contextWindow changes; intermediate token updates attach at
+    // turn settlement (emitSettled) instead of spamming summaries per token. Window changes reflect semantic catalog/model
+    // shifts and must emit immediately without advancing stateChangeSeq.
     if (this.host.liveOf(conversationId)?.run !== undefined) {
       const compactionChanged = (previous?.compacting ?? null) !== (usage.compacting ?? null)
       const windowChanged = (previous?.contextWindow ?? null) !== (usage.contextWindow ?? null)
       if (!compactionChanged && !windowChanged) return
     }
-    // publish summary (carry new usage): do not push enter stateChangeSeq- - watermark line dedicated belong state machine/
-    // doing/Ask  CAS semantics, derive render data must not pollute (otherwise pending Ask will by fake
-    // superseded,guarded commit by fake 409). summary semantics refer grain excludes usage, no need to heavy register.
+    // Publish summary with updated usage without advancing stateChangeSeq—stateChangeSeq belongs strictly to state
+    // machine / doing / Ask CAS semantics so display refreshes never trigger spurious 409/superseded conflicts.
     this.host.onSummaryChanged(this.host.summaryOf(conversationId))
   }
 }

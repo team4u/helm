@@ -1,9 +1,10 @@
 /**
- * conversation service:CRUD / detail situation page / input commit (submitInput)/ original ground override heavy
- * (rewrite)/ fork / reset / compact / model inherit chain align / attachment content piece together install.
+ * Conversation service: CRUD / paginated details / input submission (submitInput) / in-place overwrite & resend
+ * (rewrite) / fork / reset / compact / model inheritance alignment / attachment content assembly.
  *
- * from runtime.ts split out (on emperor class most large responsibility cluster). for outside behavior and original KernelRuntime method
- * one by one lead to; internal history heavy write, context operation, attachment parse, detail situation page, role align and input pipeline delegate to dedicated sub- module.
+ * Extracted from runtime.ts (splitting the largest responsibility cluster out of an oversized class). External behavior
+ * matches the original KernelRuntime methods identically; internally delegates history rewrites, context operations,
+ * attachment resolution, detail pagination, profile alignment, and the input pipeline to dedicated submodules.
  */
 import { awaitWithContext, BACKGROUND_CONTEXT, withAbortSignal } from '@earendil-works/chord/context'
 import type { Harness, AgentChange } from '@earendil-works/pi-durable'
@@ -55,62 +56,62 @@ export interface ConversationServiceOptions {
   readonly stash: SecretStash
   readonly dataDir: string
   readonly toolDeps: { defaultCwd: string }
-  /** conversation target change when release old target bottom seat cache (host inject envFabric.evictConversation). */
+  /** Release stale backend cache when conversation target changes (host injects envFabric.evictConversation). */
   readonly evictConversationBase: (conversationId: number) => void
-  /** plugin conversation manage right (delete protect; host inject). */
+  /** Plugin conversation management guard (deletion protection; host-injected). */
   readonly managedConversations: Map<number, Set<string>>
-  /** suspended Ask level join cancel (delete conversation when; host inject asks.cancelByConversation). */
+  /** Cascade-cancel pending asks (on conversation deletion; host injects asks.cancelByConversation). */
   readonly cancelAsksByConversation: (id: number) => Promise<void>
-  /** original ground override heavy before suspended Ask deregister single superseded(host inject asks.listPendingByConversation + cancelAsk). */
+  /** Supersede pending asks before in-place rewrite+resend (host injects asks.listPendingByConversation + cancelAsk). */
   readonly cancelPendingAsksForRewrite: (id: number) => Promise<void>
-  /** handled take over leftover clean up (delete/abort honor bottom). */
+  /** Clean up leftover handled tool calls (backstop on delete/abort). */
   readonly evictHandledToolCalls: (conversationId: number) => void
-  /** ownership mark record (delete honor bottom restore human; host inject). */
+  /** Ownership annotation (restores 'human' as backstop on delete; host-injected). */
   readonly markOwnership: (id: number, owner: 'helm' | 'bot' | 'human') => void
-  /** ownership now read (summary throw shoot use). */
+  /** Current ownership lookup (for summary projection). */
   readonly ownershipOf: (id: number) => 'helm' | 'bot' | 'human'
-  /** input hook pipeline (host HookBridge.runHookChain). */
+  /** Input hook pipeline (host HookBridge.runHookChain). */
   readonly runInputHook: (payload: unknown) => Promise<{ action: string; value?: unknown; reason?: string; result?: unknown } | undefined>
-  /** close guard (isClosed). */
+  /** Shutdown guard (isClosed). */
   readonly isClosed: () => boolean
   /**
-   * start lifecycle fact (KernelRuntime.started only read throw shoot):start() complete i.e.
-   * harness.resume after sync segment placement.abortConversationGuarded use it do fast path
-   * gate - - not at startup only then pay once only read harness.inspect right threat each other re-check (prepare
-   * screen fault window durable mark record;autoResume:false manually after commit not start window by inspect
-   * right threat result away common rule abort), never maintain second mirror state.
+   * Startup lifecycle fact (read-only projection of KernelRuntime.started): set synchronously right after
+   * start() completes harness.resume. abortConversationGuarded uses this as a fast-path gate—only paying for a
+   * read-only harness.inspect authoritative phase re-check before startup completes (covers the prepare barrier window
+   * for persistent markers; manual submissions during autoResume:false pre-startup follow normal abort per authoritative inspect),
+   * never maintaining a second mirror state.
    */
   readonly isStarted: () => boolean
-  /** model parse chain (by default model). */
+  /** Model resolution chain (default model). */
   readonly defaultModel: () => string | undefined
   readonly defaultThinkingLevel: () => string | undefined
-  /** when before Models set (think Profile capability converge use). */
+  /** Current Models collection (used to clamp thinking levels to model capabilities). */
   readonly models: () => Models
   readonly parseModelRefOrThrow: (ref: string) => { provider: string; modelId: string }
-  /** model disable preflight (ModelRegistry.assertModelEnabled; disable model reject choose use and commit). */
+  /** Disabled-model preflight check (ModelRegistry.assertModelEnabled; rejects selection and submission of disabled models). */
   readonly assertModelEnabled: (provider: string, modelId: string) => void
   /**
-   * can message node platform source (EnvFabric.registry on report; default only local can parse).
-   * create/update cwd by target node platform specification use (see runtime/target-cwd.ts).
+   * Trusted node platform source (reported by EnvFabric.registry; defaults to local-only resolution).
+   * Used to normalize create/update cwd against the target node platform (see runtime/target-cwd.ts).
    */
   readonly trustedPlatformOf?: TrustedNodePlatformSource
 }
 
-/** commit input optional parameter (HTTP/CLI/internal same construct). */
+/** Optional parameters for input submission (shared shape across HTTP/CLI/internal). */
 export interface SubmitInputOptions {
   origin?: InputOrigin
   whenBusy?: WhenBusy
-  /** @internal guarded commit can want seek SDK atomic reject idle conversation;HTTP/CLI do not open put. */
+  /** @internal Guarded submissions may ask the SDK to atomically reject idle conversations; never exposed on HTTP/CLI. */
   whenIdle?: 'reject'
   meta?: Record<string, unknown>
   attachments?: string[]
   replaceFromEntryId?: number
-  /** internal complete back report durable idempotent key;HTTP input do not open put this field. */
+  /** Internal durable idempotency key for completion callbacks; never exposed on HTTP input. */
   requestId?: string
   /**
-   * @internal kernel guarded mutation channel (submitInputGuarded inject; host API
-   * and HTTP/CLI all do not expose): in commit point (SDK submit invoke before, finally a await
-   * after) sync re-check ownership and watermark, failed 409/404 and produces no commit side effect.
+   * @internal Kernel guarded mutation channel (injected by submitInputGuarded; never exposed on host API
+   * or HTTP/CLI): synchronously re-checks ownership and watermark at commit point (right before SDK submit after the last await),
+   * failing 409/404 with zero submission side effects.
    */
   mutationGuard?: GuardedMutationExpectation
 }
@@ -135,7 +136,7 @@ export class ConversationService {
   private readonly inputPipeline: ConversationInputPipeline
   private fatalErrorProvider: (() => Error | undefined) | undefined
 
-  /** mount host lead to life store fault read (only write/change new request reject use, does not change normal closure stop semantics). */
+  /** Attach host fatal store error reader (used to reject mutating requests without altering normal shutdown). */
   setFatalErrorProvider(provider: () => Error | undefined): void {
     this.fatalErrorProvider = provider
   }
@@ -201,7 +202,7 @@ export class ConversationService {
       defaultThinkingLevel: this.o.defaultThinkingLevel,
       parseModelRefOrThrow: this.o.parseModelRefOrThrow,
       summaryWithOwnership: (id) => this.summaryWithOwnership(id),
-      // model/Profile align after context window and threshold may change: trigger use amount heavy compute.
+      // Context window and thresholds may change after model/Profile alignment: trigger context usage recalculation.
       scheduleContextUsageRefresh: (id) => this.tracker.scheduleContextUsageRefresh(id),
     })
 
@@ -217,16 +218,16 @@ export class ConversationService {
   }
 
   // ------------------------------------------------------------------
-  // guarded mutation(automatically hard rule kernel execute layer)
+  // Guarded mutations (kernel-enforced automation invariants)
   // ------------------------------------------------------------------
 
-  /** conversation level guarded change serial gate (promise tail chain): the same conversation automatically abort/commit
-   * in re-check + a cannot inverse action critical zone on fully has order, different conversation mutual non-blocking. */
+  /** Per-conversation serial gate for guarded mutations (promise tail chain): ensures re-check + irreversible
+   * action in automated abort/submit runs sequentially per conversation without blocking other conversations. */
   private readonly mutationGates = new Map<number, Promise<unknown>>()
 
   private withMutationGate<T>(id: number, op: () => Promise<T>): Promise<T> {
     const prev = this.mutationGates.get(id) ?? Promise.resolve()
-    // before order failed do not block assert after continue (tail chain absorb error;op each time real execute).
+    // Prior failure must not block subsequent queued operations (tail swallows errors; op runs cleanly each time).
     const run = prev.then(op, op)
     const tail = run.then(
       () => undefined,
@@ -239,10 +240,10 @@ export class ConversationService {
     return run
   }
 
-  /** guard payload boundary validate (sync throw 400):expectedOwnership strictly forbidden 'human'. */
+  /** Boundary validation for guard payload (throws 400 synchronously): expectedOwnership strictly forbids 'human'. */
   private assertGuardShape(guard: GuardedMutationExpectation): void {
     if (typeof guard !== 'object' || guard === null) {
-      throw new HelmError('validation_error', 'guarded mutation need to guard object', 400)
+      throw new HelmError('validation_error', 'guarded mutation requires a guard object', 400)
     }
     if (
       guard.expectedOwnership !== undefined &&
@@ -251,7 +252,7 @@ export class ConversationService {
     ) {
       throw new HelmError(
         'validation_error',
-        `expectedOwnership only allows 'bot' | 'helm'(automatically hard rule strictly forbidden human): receives ${String(guard.expectedOwnership)}`,
+        `expectedOwnership only allows 'bot' | 'helm' (automation invariant forbids human): got ${String(guard.expectedOwnership)}`,
         400,
         { expectedOwnership: guard.expectedOwnership },
       )
@@ -262,7 +263,7 @@ export class ConversationService {
     ) {
       throw new HelmError(
         'validation_error',
-        `expectedStateSeq must be non- negative security integer: receives ${String(guard.expectedStateSeq)}`,
+        `expectedStateSeq must be a non-negative safe integer: got ${String(guard.expectedStateSeq)}`,
         400,
         { expectedStateSeq: guard.expectedStateSeq },
       )
@@ -270,19 +271,17 @@ export class ConversationService {
   }
 
   /**
-   * guard re-check (sync, zero await): conversation store in + ownership (human forever reject)+
-   * optional CAS watermark. caller guarantee this re-check and a cannot inverse action (SDK abort/submit
-   * invoke) between without any event loop let out - - single thread inside markOwnership cannot insert,
-   * this is human hard rule race window truly close point.
+   * Synchronous guard re-check (zero awaits): verifies conversation existence, ownership (always rejects 'human'),
+   * and optional CAS watermark. Callers guarantee zero event-loop yields between this check and the irreversible
+   * SDK abort/submit call—in single-threaded JS, markOwnership cannot interleave, closing the human-ownership race window.
    */
   assertMutationGuard(id: number, guard: GuardedMutationExpectation): void {
-    // getOwnership for missing/already delete (tombstone) conversation explicit not_found- - explicit target
-    // expires directly reject, never by default routing mask.
+    // getOwnership throws explicit not_found for missing or tombstoned conversations—never let default routing mask stale targets.
     const ownedBy = this.o.ownershipOf(id)
     if (ownedBy === 'human' || (guard.expectedOwnership !== undefined && ownedBy !== guard.expectedOwnership)) {
       throw new HelmError(
         'ownership_conflict',
-        `conversation ${id} when before ownership ${ownedBy}${guard.expectedOwnership !== undefined ? `(expectation ${guard.expectedOwnership})` : ''}, reject automatically change (human hard rule)`,
+        `conversation ${id} is currently owned by ${ownedBy}${guard.expectedOwnership !== undefined ? ` (expected ${guard.expectedOwnership})` : ''}; refusing automated mutation (human-ownership invariant)`,
         409,
         {
           conversationId: id,
@@ -294,12 +293,12 @@ export class ConversationService {
     if (guard.expectedStateSeq !== undefined) {
       const meta = this.store.getConv(id)
       if (meta === undefined || this.store.isDeleted(id)) {
-        throw new HelmError('not_found', `conversation missing:${id}`, 404, { conversationId: id })
+        throw new HelmError('not_found', `conversation not found: ${id}`, 404, { conversationId: id })
       }
       if (meta.stateChangeSeq !== guard.expectedStateSeq) {
         throw new HelmError(
           'state_seq_conflict',
-          `conversation ${id} right threat watermark ${meta.stateChangeSeq} and expectation ${guard.expectedStateSeq} inconsistent (probe needle fact expired, must not effect at new turn)`,
+          `conversation ${id} authoritative watermark ${meta.stateChangeSeq} does not match expected ${guard.expectedStateSeq} (stale probe snapshot; must not act on newer turn)`,
           409,
           { conversationId: id, currentSeq: meta.stateChangeSeq, expectedSeq: guard.expectedStateSeq },
         )
@@ -308,25 +307,23 @@ export class ConversationService {
   }
 
   /**
-   * automatically guarded abort: guard re-check and SDK abort invoke (a cannot inverse action) in
-   * the same serial domain inside back rely back execute (zero await interval); re-check failed never start abort.
-   * ordinary abortConversation semantics do not change (person class/CLI path do not bind set automatically guard).
+   * Automated guarded abort: executes guard re-check and irreversible SDK abort back-to-back inside the same
+   * conversation serial domain (zero await gap); if re-check fails, abort never fires.
+   * Normal abortConversation semantics remain unchanged (human/CLI paths do not bind automation guards).
    *
-   * each other self fit should (take proxy old dedicated use prepareInterruptedConversations):
-   * - SDK scheduler running:SDK Conversation.abort + wait for idle (since has semantics,
-   *   hot path zero extra await- - run in cancel must not because each other probe while change slow);
-   * - scheduler paused(service prepare screen fault,resume before): for conversation name under all store
-   *   SDK task one by one commit durable abort mark record (harness.abortTask: do not resume,
-   *   do not etc. compute), each cannot inverse action before sync re-check ownership (human one rule reject) - -
-   *   restore orchestration based on this in scheduler start before durable cancel itself register interrupt sub-conversation.
+   * Phase adaptation (replaces the old dedicated prepareInterruptedConversations helper):
+   * - While SDK scheduler is running: SDK Conversation.abort + wait for idle (preserves existing behavior with
+   *   zero extra awaits on the hot path so live cancellations are never slowed by extra phase probes);
+   * - While scheduler is paused (within service prepare barrier, before resume): commits durable abort markers
+   *   task-by-task under this conversation via harness.abortTask (no resume, no settlement wait), synchronously re-checking
+   *   ownership before each irreversible call (enforcing human-ownership invariant across recovery orchestration).
    */
   async abortConversationGuarded(id: number, guard: GuardedMutationExpectation): Promise<void> {
     this.assertWritable()
     this.assertGuardShape(guard)
     return this.withMutationGate(id, async () => {
-      // restore screen fault path: only when kernel not yet complete start(lifecycle fact, non- mirror state) when
-      // only then pay once only read inspect right threat each other re-check; mark record before one by one task sync re-check (human
-      // hard rule override restore window, optimal at old dedicated use method without guard batch amount cancel).
+      // Recovery barrier path: only pay for a read-only inspect authoritative phase check while kernel is not yet started
+      // (lifecycle fact, not a mirror state); re-check synchronously before marking each task so human ownership holds across recovery.
       if (!this.o.isStarted()) {
         const inspection = await this.harness.inspect(BACKGROUND_CONTEXT)
         if (inspection.scheduling === 'paused') {
@@ -334,22 +331,22 @@ export class ConversationService {
           for (const task of inspection.tasks) {
             if (task.record.conversationId !== (id as never)) continue
             matched = true
-            // and under way abortTask invoke between zero await(single thread inside ownership cannot insert).
+            // Zero awaits between check and subsequent abortTask call (markOwnership cannot interleave on single thread).
             this.assertMutationGuard(id, guard)
             await this.harness.abortTask(task.record.id, BACKGROUND_CONTEXT)
           }
           if (!matched) {
-            // conversation name under without store task also must verify conversation store in + ownership: missing not_found,
-            // human reject, never to human/idle target return succeeded.
+            // Still verify existence + ownership even with zero queued SDK tasks: missing -> not_found, human -> rejected,
+            // never returning false success for human/missing targets.
             this.assertMutationGuard(id, guard)
           }
           return
         }
-        // unexpected running(autoResume:false process first commit after, not yet start): back common rule path.
+        // Unexpectedly running (e.g. post-manual submit during autoResume:false before start): fall through to normal path.
       }
       const conversation = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
-      if (!conversation) throw new HelmError('not_found', `conversation missing:${id}`, 404)
-      // eventually re-check: and under way abort invoke between zero await(on way await window inside ownership translate rotate in this intercept).
+      if (!conversation) throw new HelmError('not_found', `conversation not found: ${id}`, 404)
+      // Final re-check immediately before abort (zero await gap, catching any ownership change during lookup await).
       this.assertMutationGuard(id, guard)
       const wasBusy = this.tracker.hasLiveWork(id)
       await conversation.abort(BACKGROUND_CONTEXT)
@@ -360,9 +357,9 @@ export class ConversationService {
   }
 
   /**
-   * automatically guarded commit: entry sync fast inspect (fail-fast, zero side effect) after away complete input pipeline;
-   * hook/model parse etc. prepare work after completion, in commit point (SDK submit invoke before) atomic re-check
-   * (see ConversationInputPipeline.submitFreshInput). re-check failed produces no commit side effect.
+   * Automated guarded submission: runs synchronous fast check at entry (fail-fast, zero side effects), then traverses
+   * the full input pipeline; after hook/model resolution completes, atomically re-checks right at commit point before
+   * invoking SDK submit (see ConversationInputPipeline.submitFreshInput). Failed checks leave zero side effects.
    */
   async submitInputGuarded(
     id: number,
@@ -373,24 +370,24 @@ export class ConversationService {
     this.assertWritable()
     this.assertGuardShape(guard)
     if (opts?.whenIdle !== undefined && opts.whenIdle !== 'reject') {
-      throw new HelmError('validation_error', 'guarded commit whenIdle only allows reject', 400)
+      throw new HelmError('validation_error', 'guarded submission whenIdle only allows reject', 400)
     }
     if (opts?.replaceFromEntryId !== undefined) {
       throw new HelmError(
         'validation_error',
-        'automatically guarded commit unsupported replaceFromEntryId(automatically do not heavy write history)',
+        'automated guarded submission does not support replaceFromEntryId (automation must not rewrite history)',
         400,
         { conversationId: id, replaceFromEntryId: opts.replaceFromEntryId },
       )
     }
     this.contextOps.assertOpen()
-    // entry fast inspect: any durable side effect (hook observe/title derive/commit) before reject.
+    // Fast pre-check before any durable side effects (hook observations, title derivation, or commit).
     this.assertMutationGuard(id, guard)
     return this.submitInput(id, text, { ...opts, mutationGuard: guard })
   }
 
   // ------------------------------------------------------------------
-  // summary and ownership throw shoot
+  // Summary and ownership projection
   // ------------------------------------------------------------------
 
   summaryWithOwnership(id: number): ConversationSummary {
@@ -422,16 +419,16 @@ export class ConversationService {
   }
 
   // ------------------------------------------------------------------
-  // detail situation page and FTS rebuild (delegate to detailOps)
+  // Detail pagination & FTS rebuild (delegated to detailOps)
   // ------------------------------------------------------------------
 
   async getConversationDetail(id: number, options?: { limit?: number; cursor?: string }): Promise<ConversationDetail> {
-    // contextUsage refresh and timeline page in detailOps inside parallel, two leg after completion heavy take
-    // right threat summary merge (see conversation-detail.ts); any one leg failed whole reject.
+    // contextUsage refresh and timeline pagination run in parallel inside detailOps; once both settle,
+    // re-fetch authoritative summary before merging (see conversation-detail.ts); failure on either leg rejects.
     return this.detailOps.getConversationDetail(id, options)
   }
 
-  /** single timeline item (not truncate, already redaction;rewind visible and detail situation page consistent). */
+  /** Fetch a single timeline entry (untruncated, already redacted; rewind visibility matches detail pagination). */
   async getConversationEntry(id: number, entryId: number): Promise<ConversationEntry> {
     return this.detailOps.getConversationEntry(id, entryId)
   }
@@ -447,7 +444,7 @@ export class ConversationService {
   }
 
   // ------------------------------------------------------------------
-  // Profile / model inherit chain (delegate to profileAlignment)
+  // Profile / model inheritance chain (delegated to profileAlignment)
   // ------------------------------------------------------------------
 
   async readProfile(profileId: string): Promise<Profile | undefined> {
@@ -478,7 +475,7 @@ export class ConversationService {
     const requested = init.profileId ?? 'assistant'
     const found = await this.readProfile(requested)
     if (!found) {
-      throw new HelmError('validation_error', `profile missing:${requested}(first create profiles/${requested})`, 400)
+      throw new HelmError('validation_error', `profile not found: ${requested} (create profiles/${requested} first)`, 400)
     }
     return requested
   }
@@ -499,7 +496,7 @@ export class ConversationService {
       init.nodeId ?? profile?.nodeId ?? parentMeta?.nodeId ?? 'local'
 
     const inheritedCwd = init.cwd ?? profile?.cwd ?? parentMeta?.cwd
-    /** cwd by target node platform unify consolidate (term method specification; zero disk access; broken POSIX cwd do not written to the database). */
+    /** Normalize cwd for the target node platform consistently (zero disk IO; prevents invalid POSIX paths from entering DB). */
     const platformSource = this.o.trustedPlatformOf ?? trustedPlatformFromEnvFabric(undefined)
     const normalizeCwd = (raw: string): string =>
       normalizeSessionCwd(raw, { nodeId, trustedPlatform: platformSource, entry: 'conversation.create' })
@@ -511,7 +508,7 @@ export class ConversationService {
     } else {
       throw new HelmError(
         'validation_error',
-        `conversation bind set remote node ${nodeId} but not provide cwd(Profile.cwd / parent conversation cwd / init.cwd all missing; reject blind run node by default directory)`,
+        `conversation targets remote node ${nodeId} without a cwd (Profile.cwd / parent conversation cwd / init.cwd are all unset; blind execution in node default directory is rejected)`,
         400,
         { nodeId },
       )
@@ -564,7 +561,7 @@ export class ConversationService {
     if (patch.profileId !== undefined) {
       const found = await this.readProfile(patch.profileId)
       if (!found) {
-        throw new HelmError('validation_error', `profile missing:${patch.profileId}`, 400)
+        throw new HelmError('validation_error', `profile not found: ${patch.profileId}`, 400)
       }
     }
     let nextOverride: string | undefined
@@ -583,7 +580,7 @@ export class ConversationService {
       if (level !== '' && !THINKING_LEVELS.has(level)) {
         throw new HelmError(
           'validation_error',
-          `thinkingLevel '${level}' illegal; legal value:${[...THINKING_LEVELS].join(' | ')}`,
+          `invalid thinkingLevel '${level}'; valid values: ${[...THINKING_LEVELS].join(' | ')}`,
           400,
         )
       }
@@ -592,14 +589,14 @@ export class ConversationService {
     const nextProfileId = patch.profileId ?? meta.profileId
     const effectiveModel = await this.resolveEffectiveModel(nextOverride, nextProfileId)
     const effectiveRef = effectiveModel ? this.o.parseModelRefOrThrow(effectiveModel) : undefined
-    // model/Profile change after: explicit think override same by target model capability converge to SDK
-    // available Profile (single one consolidate clampThinkingLevelForModel; capability unknown when pass-through do not break contract).
+    // After model/Profile changes, clamp any explicit thinking override to what the target model supports
+    // (single clampThinkingLevelForModel helper; unknown capabilities pass through to keep the contract intact).
     const clampedOverride = effectiveRef
       ? clampThinkingLevelForModel(this.o.models(), effectiveRef, nextThinkingOverride)
       : nextThinkingOverride
     const nextThinking = await this.resolveEffectiveThinkingLevel(clampedOverride, nextProfileId, effectiveRef)
-    // explicit cwd, or nodeId migration when since has cwd, all by new target node platform unify consolidate,
-    // again enter SDK configure and mirror persist; broken POSIX cwd explicit reject.
+    // Explicit cwd, or existing cwd when migrating nodeId, is normalized for the target node platform before SDK
+    // configure and mirror persistence; invalid POSIX roots are rejected explicitly.
     const nextNodeId = patch.nodeId ?? meta.nodeId
     const cwdToNormalize =
       patch.cwd !== undefined ? patch.cwd : patch.nodeId !== undefined ? meta.cwd : undefined
@@ -617,7 +614,7 @@ export class ConversationService {
       thinkingLevel: (nextThinking as ModelThinkingLevel | undefined) ?? null,
     }
     const conversation = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
-    if (!conversation) throw new HelmError('not_found', `conversation missing:${id}`, 404)
+    if (!conversation) throw new HelmError('not_found', `conversation not found: ${id}`, 404)
     await conversation.configure(configureChange, BACKGROUND_CONTEXT)
     const latest = requireConv(this.store, id)
     const updated: typeof meta = {
@@ -640,7 +637,7 @@ export class ConversationService {
     if (patch.nodeId !== undefined || patch.cwd !== undefined) {
       this.o.evictConversationBase(id)
     }
-    // model/think Profile change after window and threshold may change: trigger context use amount heavy compute (dedupe).
+    // Context window and thresholds may change after model/thinking changes: schedule usage refresh (deduplicated).
     if (patch.model !== undefined || patch.profileId !== undefined || patch.thinkingLevel !== undefined) {
       this.tracker.scheduleContextUsageRefresh(id)
     }
@@ -656,23 +653,23 @@ export class ConversationService {
     if (owners.length > 0) {
       throw new HelmError(
         'conversation_managed_by_plugin',
-        `conversation ${id} correct by plugin manage (${owners.join(', ')}), first release manage right again delete`,
+        `conversation ${id} is currently managed by plugin(s) (${owners.join(', ')}); release management before deleting`,
         409,
         { conversationId: id, owners },
       )
     }
     const conversation = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
     if (conversation) await conversation.abort(BACKGROUND_CONTEXT)
-    // level join cancel wait for real;IO failed must to on reject(block stop after continue delete side effect),
-    // never swallow wrong very succeeded.
+    // Cascade-cancel asks and wait for completion; IO errors must propagate (blocking further deletion side effects)
+    // rather than being swallowed into fake success.
     await this.o.cancelAsksByConversation(id)
     await this.artifactsSvc.deleteConversation(id)
-    // in-memory secret sync reclaim (contains only used to redaction old value): conversation delete i.e. completely release.
+    // Reclaim in-memory secrets synchronously (including old values retained for redaction): deleted conversations free everything.
     this.stash.clear(id)
     this.events.publish('notification', {
       level: 'info',
-      title: 'conversation deleted',
-      body: `conversation ${id} and its artifact/await answer AskDoc/memory secret already clean up`,
+      title: 'Conversation deleted',
+      body: `Cleaned up conversation ${id} and its artifacts, pending AskDocs, and in-memory secrets`,
       conversationId: id,
     })
     this.tracker.stopObserving(id)
@@ -684,7 +681,7 @@ export class ConversationService {
   }
 
   // ------------------------------------------------------------------
-  // artifact authorization and attachment (delegate to attachments)
+  // Artifact authorization and attachments (delegated to attachments)
   // ------------------------------------------------------------------
 
   isArtifactAuthorized(conversationId: number, artifactConversationId: number): boolean {
@@ -729,11 +726,11 @@ export class ConversationService {
     this.contextOps.assertOpen()
     const convMeta = requireConv(this.store, id)
     const conversation = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
-    if (!conversation) throw new HelmError('not_found', `conversation missing:${id}`, 404)
+    if (!conversation) throw new HelmError('not_found', `conversation not found: ${id}`, 404)
 
     if (opts?.requestId !== undefined) {
       if (typeof opts.requestId !== 'string' || opts.requestId.trim() === '') {
-        throw new HelmError('validation_error', 'internal requestId must is non-empty string', 400)
+        throw new HelmError('validation_error', 'internal requestId must be a non-empty string', 400)
       }
       const previous = await this.harness.commit(
         (tx) => tx.submissionByRequest(id as never, opts.requestId!),
@@ -746,12 +743,12 @@ export class ConversationService {
     if (!effectiveModelRef) {
       throw new HelmError(
         'model_not_configured',
-        `conversation ${id}(profile ${convMeta.profileId}) and global all not config model: please in Profile,HELM_MODEL,config.json.model or conversation in config model`,
+        `no model configured for conversation ${id} (profile ${convMeta.profileId}) or globally: configure a model on the Profile, HELM_MODEL, config.json.model, or conversation`,
         503,
         { conversationId: id, profileId: convMeta.profileId },
       )
     }
-    // takes effect model by disable (such as by default model matter after by disable): commit entry reject, never static default fall back other model.
+    // Effective model disabled (e.g., disabled after being configured as default): reject at submission entry rather than silently falling back.
     {
       const effectiveRef = this.o.parseModelRefOrThrow(effectiveModelRef)
       this.o.assertModelEnabled(effectiveRef.provider, effectiveRef.modelId)
@@ -763,8 +760,8 @@ export class ConversationService {
         ? await this.resolveAuthorizedAttachments(id, opts.attachments)
         : undefined
     const prepared = await this.inputPipeline.prepareInput(id, text, opts, initialAttachments)
-    // guarded commit: hook execute after, any durable side effect (handled take over return/title derive/
-    // commit) before re-check; eventually atomic re-check in commit point (submitFreshInput) execute.
+    // Guarded submission: re-check after hooks before any durable side effects (handled return / title derivation /
+    // commit); final atomic re-check executes at commit point inside submitFreshInput.
     if (opts?.mutationGuard !== undefined) {
       this.assertMutationGuard(id, opts.mutationGuard)
     }
@@ -802,15 +799,15 @@ export class ConversationService {
       ...(opts?.mutationGuard !== undefined ? { mutationGuard: opts.mutationGuard } : {}),
     }
     if (opts?.mutationGuard !== undefined) {
-      // guarded commit serial gate: only override commit point re-check + SDK submit invoke critical zone,
-      // input hook in gate outside execute (hook inside again guarded change will not deadlock).
+      // Guarded submission serial gate: wraps only the commit-point re-check + SDK submit critical section;
+      // input hooks execute outside the gate so re-entrant guarded mutations inside hooks will not deadlock.
       return this.withMutationGate(id, () => this.inputPipeline.submitFreshInput(conversation, id, freshSubmission))
     }
     return this.inputPipeline.submitFreshInput(conversation, id, freshSubmission)
   }
 
   // ------------------------------------------------------------------
-  // original ground override heavy delegate (directly invoke/test compatibility)
+  // In-place overwrite & resend delegation (direct calls / test compatibility)
   // ------------------------------------------------------------------
 
   async withHistoryEdit<T>(id: number, operation: () => Promise<T>): Promise<T> {
@@ -838,19 +835,19 @@ export class ConversationService {
     if (submissionId.startsWith('handled:')) {
       throw new HelmError(
         'wait_not_applicable',
-        `commit ${submissionId} by input hook take over, without real turn can wait for`,
+        `submission ${submissionId} was handled by an input hook and has no real turn to wait for`,
         409,
         { conversationId: id, submissionId },
       )
     }
     const numericId = Number(submissionId)
     if (!Number.isInteger(numericId) || numericId <= 0) {
-      throw new HelmError('validation_error', `illegal submissionId:${submissionId}`, 400)
+      throw new HelmError('validation_error', `invalid submissionId: ${submissionId}`, 400)
     }
     requireConv(this.store, id)
     const waitContext = signal === undefined ? BACKGROUND_CONTEXT : withAbortSignal(signal, BACKGROUND_CONTEXT)
     const waitAbortedError = (): HelmError =>
-      new HelmError('aborted', `wait for conversation ${id} commit ${submissionId} result cancelled`, 499, {
+      new HelmError('aborted', `waiting for result of submission ${submissionId} in conversation ${id} was cancelled`, 499, {
         conversationId: id,
         submissionId,
       })
@@ -865,7 +862,7 @@ export class ConversationService {
     }
     const submission = await runWaitOp(() => this.harness.submission(numericId as never, waitContext))
     if (!submission) {
-      throw new HelmError('not_found', `commit missing:${submissionId}`, 404, {
+      throw new HelmError('not_found', `submission not found: ${submissionId}`, 404, {
         conversationId: id,
         submissionId,
       })
@@ -880,7 +877,7 @@ export class ConversationService {
       String(status.id) !== submissionId ||
       status.type !== 'input'
     ) {
-      throw new HelmError('not_found', `commit ${submissionId} do not belongs to conversation ${id}`, 404, {
+      throw new HelmError('not_found', `submission ${submissionId} does not belong to conversation ${id}`, 404, {
         conversationId: id,
         submissionId,
       })
@@ -896,7 +893,7 @@ export class ConversationService {
       const aborted = reason === 'aborted' || reason === 'interrupted' || reason === 'reset'
       throw new HelmError(
         aborted ? 'turn_aborted' : 'turn_failed',
-        `conversation ${id} this round not obtain answer (${reason}${settled.detail !== undefined ? `:${String(settled.detail)}` : ''})`,
+        `conversation ${id} turn produced no answer (${reason}${settled.detail !== undefined ? `: ${String(settled.detail)}` : ''})`,
         aborted ? 499 : 502,
         {
           conversationId: id,
@@ -907,14 +904,14 @@ export class ConversationService {
       )
     }
     if (settled.status !== 'done' || settled.answer === undefined) {
-      throw new HelmError('turn_failed', `commit ${submissionId} compute is non- terminal state ${settled.status}`, 502, {
+      throw new HelmError('turn_failed', `submission ${submissionId} settled in non-terminal state ${settled.status}`, 502, {
         conversationId: id,
         submissionId,
         status: settled.status,
       })
     }
     const conversation = await runWaitOp(() => this.harness.conversation(id as never, waitContext))
-    if (!conversation) throw new HelmError('not_found', `conversation missing:${id}`, 404)
+    if (!conversation) throw new HelmError('not_found', `conversation not found: ${id}`, 404)
     const page = await runWaitOp(() =>
       conversation.entries(
         { minEntryId: settled.answer as never, maxEntryId: settled.answer as never, order: 'ascending' },
@@ -927,7 +924,7 @@ export class ConversationService {
       | { id: number; kind: string; data?: unknown; model?: unknown[] }
       | undefined
     if (raw === undefined || raw.id !== settled.answer) {
-      throw new HelmError('not_found', `answer item missing:${settled.answer}`, 502, {
+      throw new HelmError('not_found', `answer entry missing: ${settled.answer}`, 502, {
         conversationId: id,
         submissionId,
       })
@@ -939,11 +936,11 @@ export class ConversationService {
 
   async withdrawQueuedInput(id: number, opts: { submissionId: number }): Promise<ConversationWithdrawResponse> {
     this.assertWritable()
-    if (this.o.isClosed()) throw new HelmError('runtime_closed', 'kernel is now close, reject withdraw back', 503)
+    if (this.o.isClosed()) throw new HelmError('runtime_closed', 'kernel is closing; rejecting withdrawal', 503)
     requireConv(this.store, id)
     const raw = opts.submissionId
     if (typeof raw !== 'number' || !Number.isSafeInteger(raw) || raw <= 0) {
-      throw new HelmError('validation_error', `submissionId must be security positive integer (receives ${String(raw)})`, 400, {
+      throw new HelmError('validation_error', `submissionId must be a positive safe integer (received ${String(raw)})`, 400, {
         conversationId: id,
         submissionId: raw,
       })
@@ -955,14 +952,14 @@ export class ConversationService {
       String(rec.conversationId) !== String(id) ||
       rec.type !== 'input'
     ) {
-      throw new HelmError('not_found', `commit ${raw} in conversation ${id} in missing`, 404, {
+      throw new HelmError('not_found', `submission ${raw} does not exist in conversation ${id}`, 404, {
         conversationId: id,
         submissionId: raw,
       })
     }
     const outcome = await this.harness.abortSubmission(raw as never, BACKGROUND_CONTEXT, id as never)
     if (outcome === 'not_found') {
-      throw new HelmError('not_found', `commit ${raw} in conversation ${id} in missing`, 404, {
+      throw new HelmError('not_found', `submission ${raw} does not exist in conversation ${id}`, 404, {
         conversationId: id,
         submissionId: raw,
       })
@@ -981,7 +978,7 @@ export class ConversationService {
   async abortConversation(id: number): Promise<void> {
     this.assertWritable()
     const conversation = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
-    if (!conversation) throw new HelmError('not_found', `conversation missing:${id}`, 404)
+    if (!conversation) throw new HelmError('not_found', `conversation not found: ${id}`, 404)
     const wasBusy = this.tracker.hasLiveWork(id)
     await conversation.abort(BACKGROUND_CONTEXT)
     if (wasBusy) this.tracker.settleAborted(id)
@@ -990,7 +987,7 @@ export class ConversationService {
   }
 
   // ------------------------------------------------------------------
-  // reset / compact / fork(delegate to contextOps)
+  // reset / compact / fork (delegated to contextOps)
   // ------------------------------------------------------------------
 
   async resetConversation(id: number, opts?: { handoff?: string }): Promise<ConversationSummary> {
@@ -1017,7 +1014,7 @@ export class ConversationService {
 
   async waitForIdle(id: number): Promise<void> {
     const conversation = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
-    if (!conversation) throw new HelmError('not_found', `conversation missing:${id}`, 404)
+    if (!conversation) throw new HelmError('not_found', `conversation not found: ${id}`, 404)
     await conversation.waitForIdle(BACKGROUND_CONTEXT)
     await this.tracker.waitTurnSettled(id)
   }

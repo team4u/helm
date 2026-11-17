@@ -1,16 +1,16 @@
 /**
- * AuthService: single user scrypt authentication.
- * - setup only first time succeeded (already config i.e. reject),login validate password and sign random token;
- * - token only persist SHA-256 summary, plaintext only in return value in appear once;
- * - createProcessToken sign process inside managed token: only store memory summary (same dataDir 
- *   instance sharing register table),verifyToken identify,dispose i.e. expires, never;
- * - all summary than for use timingSafeEqual, password length >= 8.
- * config.json concurrency update via ConfigService serial, keep other module write key.
+ * AuthService: single-user scrypt authentication.
+ * - `setup` succeeds only once (rejects if already configured); `login` verifies password and issues a random token;
+ * - Persists only SHA-256 token digests; plaintext tokens appear only once in return values;
+ * - `createProcessToken` issues in-process managed tokens: only in-memory digests (shared per `dataDir`),
+ *   recognized by `verifyToken`, immediately invalidated on `dispose`, never written to disk;
+ * - All digest comparisons use `timingSafeEqual`; password length >= 8.
+ * Concurrent `config.json` updates are serialized via `ConfigService` to preserve keys owned by other modules.
  *
- * concurrency mutual exclusion adopt two level lock:setup/login first hold has by dataDir sharing auth operation lock
- * (across AuthService instance mutual exclusion, concurrency setup only a succeeded), lock inside again via
- * ConfigService.update get config.json file lock. lock order constant is auth → config,
- * reverse missing, therefore will not deadlock; if directly re- use config.json lock then will because same lock heavy deadlock.
+ * Concurrency mutex uses a two-level lock: `setup`/`login` acquire a `dataDir`-shared auth operation lock
+ * first (serializing across AuthService instances so concurrent setups succeed only once), then acquire
+ * the `config.json` file lock via `ConfigService.update`. Lock ordering is always `auth -> config`, never
+ * reversed, preventing deadlocks that would happen if `setup`/`login` reused the `config.json` lock directly.
  */
 import {
   randomBytes,
@@ -34,7 +34,7 @@ export const MIN_PASSWORD_LENGTH = 8
 const SCRYPT_KEYLEN = 64
 const TOKEN_BYTES = 32
 
-/** persist form: password salt+hash and token summary table, absolute without plaintext. */
+/** Persisted format: password salt + hash and token digest map, never plaintext. */
 interface AuthPersistedState {
   passwordSalt: string
   passwordHash: string
@@ -48,21 +48,21 @@ interface TokenRecord {
 
 export class AuthAlreadyConfiguredError extends Error {
   constructor() {
-    super('authentication already config, forbidden duplicate setup(such as must reset please manually clean up config.json)')
+    super('authentication is already configured; duplicate setup is forbidden (clean up config.json manually to reset)')
     this.name = 'AuthAlreadyConfiguredError'
   }
 }
 
 export class InvalidCredentialsError extends Error {
   constructor() {
-    super('password error')
+    super('invalid password')
     this.name = 'InvalidCredentialsError'
   }
 }
 
 export class WeakPasswordError extends Error {
   constructor() {
-    super(`password length at least ${MIN_PASSWORD_LENGTH} `)
+    super(`password must be at least ${MIN_PASSWORD_LENGTH} characters`)
     this.name = 'WeakPasswordError'
   }
 }
@@ -90,9 +90,9 @@ function safeEqualHex(a: string, b: string): boolean {
 }
 
 /**
- * process inside managed token register table:dataDir → summary set. only memory (never persist original text or
- * summary); by dataDir sharing make same process inside any instance sign managed token all can by verify way
- * (HTTP hub) identify - - and persist token across instance semantics stay consistent.
+ * Process-wide registry of managed tokens: `dataDir -> digest Set`. In-memory only (never persisted);
+ * sharing by `dataDir` allows tokens issued by any instance in the same process to be recognized by
+ * verifiers (HTTP hub), keeping cross-instance semantics consistent with persisted tokens.
  */
 const processTokenRegistry = new Map<string, Set<string>>()
 
@@ -102,10 +102,10 @@ interface AuthCacheEntry {
 }
 
 /**
- * process inside authentication snapshot cache and in-flight dedupe (key is ConfigService specification config.json path).
- * is what across instance sharing:HTTP middle piece high frequency invoke verifyToken/status, also run phase or test will
- * construct multiple AuthService(dataDir) instance; any one instance/module write or trigger expires when by
- * onConfigInvalidated unify clear, and in back fill when core for generation guard against concurrency old read back fill.
+ * In-process auth snapshot cache and in-flight read deduplication (keyed by canonical `config.json` path).
+ * Shared across instances because HTTP middleware calls `verifyToken`/`status` at high frequency and runtime/tests
+ * instantiate multiple `AuthService(dataDir)` objects; cleared uniformly via `onConfigInvalidated` on writes
+ * or invalidations, with `generation` guarding against stale reads repopulating the cache concurrently.
  */
 const authStateCache = new Map<string, AuthCacheEntry>()
 const inflightAuthReads = new Map<string, Promise<AuthPersistedState | undefined>>()
@@ -119,14 +119,14 @@ function parseAuthState(config: Record<string, unknown>): AuthPersistedState | u
   const raw = config['auth']
   if (raw === undefined) return undefined
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-    throw new Error('config.json in auth field structure illegal')
+    throw new Error('invalid auth field structure in config.json')
   }
   const rec = raw as Record<string, unknown>
   const salt = rec['passwordSalt']
   const hash = rec['passwordHash']
   const tokens = rec['tokens']
   if (typeof salt !== 'string' || typeof hash !== 'string') {
-    throw new Error('config.json in auth field structure illegal (missing salt/hash)')
+    throw new Error('invalid auth field structure in config.json (missing salt/hash)')
   }
   const tokenMap: Record<string, TokenRecord> = {}
   if (tokens !== undefined && typeof tokens === 'object' && tokens !== null) {
@@ -162,9 +162,9 @@ function processTokenDigests(dataDir: string): Set<string> {
 
 export class AuthService {
   private readonly config: ConfigService
-  /** auth operation lock key: by dataDir sharing (the same dataDir all instance mutual exclusion). */
+  /** Auth operation lock key: shared per `dataDir` (mutually exclusive across all instances for the same `dataDir`). */
   private readonly lockPath: string
-  /** process inside managed token register table key(and construct reference same shape). */
+  /** Registry key for in-process managed tokens (matches `dataDir` constructor argument). */
   private readonly dataDir: string
 
   constructor(dataDir: string) {
@@ -193,7 +193,7 @@ export class AuthService {
     const loadPromise = (async () => {
       const { config, generation, canonicalPath } = await this.config.getWithGeneration()
       const state = parseAuthState(config)
-      // only in read during proxy count not push enter when back fill, guard against concurrency write after old read override cache.
+      // Populate cache only if generation did not advance during read (prevents stale reads overwriting concurrent writes).
       if (canonicalPath !== undefined && this.config.getGenerationSync(canonicalPath) === generation) {
         authStateCache.set(canonicalPath, { generation, state })
       }
@@ -213,16 +213,16 @@ export class AuthService {
     await this.config.update({ auth: state })
   }
 
-  /** is otherwise completed initial setup. */
+  /** Whether initial setup has been completed. */
   async status(): Promise<{ configured: boolean }> {
     const state = await this.readStateCached()
     return { configured: state !== undefined }
   }
 
-  /** first time settings manage member password and sign token; already config when explicit reject (not silently change write). */
+  /** Initial admin password setup and token issuance; rejects explicitly if already configured (never overwrites silently). */
   async setup(password: string): Promise<{ token: string }> {
     assertPassword(password)
-    // across instance serial read change write: concurrency setup only a succeeded, the rest explicit reject.
+    // Cross-instance serialized read-modify-write: only one concurrent setup succeeds; others reject explicitly.
     return withFileLock(this.lockPath, async () => {
       const existing = await this.readStateFromDisk()
       if (existing !== undefined) throw new AuthAlreadyConfiguredError()
@@ -238,14 +238,14 @@ export class AuthService {
     })
   }
 
-  /** password login: validate via sign new token(old token keep, support many end online). */
+  /** Password login: issues a new token after verification (retains older tokens for multi-client sessions). */
   async login(password: string): Promise<{ token: string }> {
     assertPassword(password)
     return withFileLock(this.lockPath, async () => {
       const state = await this.readStateFromDisk()
       if (state === undefined) {
-        // structure error code supply HTTP layer classify (for outside still mapping 409 not_setup).
-        throw new HelmError('auth_not_setup', 'not yet complete setup, please first execute initialize', 409)
+        // Structured code lets HTTP layer classify (mapped externally to `409 not_setup`).
+        throw new HelmError('auth_not_setup', 'authentication is not configured yet; run setup first', 409)
       }
       const derived = await hashPassword(
         password,
@@ -265,9 +265,10 @@ export class AuthService {
   }
 
   /**
-   * sign process inside managed token: only store memory summary,verifyToken identify;dispose after immediately
-   * expires (idempotent). do not write config.json/SQLite, also do not want seek first complete setup- - kernel managed
-   * child process authentication independent at password body system. empty string/any anonymous value forever do not by verifyToken let through.
+   * Issue an in-process managed token: stored only as an in-memory digest, recognized by `verifyToken`, and
+   * invalidated immediately upon `dispose` (idempotent). Never writes to `config.json`/SQLite and does not
+   * require prior setup—kernel-managed child-process auth is independent of the user password system.
+   * Empty or anonymous tokens are never accepted by `verifyToken`.
    */
   createProcessToken(): { token: string; dispose(): void } {
     const token = randomBytes(TOKEN_BYTES).toString('hex')
@@ -287,8 +288,8 @@ export class AuthService {
   }
 
   /**
-   * validate token: first inspect process inside managed token(only memory, not setup also available), again than for
-   * persist summary; all constant when compare, missing fake succeeded, anonymous/null value forever do not let through.
+   * Verify a token: checks in-memory process-managed tokens first (works before setup), then persisted digests;
+   * uses constant-time comparison, never fakes success when unconfigured, and never accepts empty/nullish values.
    */
   async verifyToken(token: string): Promise<boolean> {
     if (typeof token !== 'string' || token === '') return false

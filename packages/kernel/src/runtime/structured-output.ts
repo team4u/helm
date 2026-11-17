@@ -1,44 +1,44 @@
 /**
- * original generate subagent structure output (self spawn.ts split out).
+ * Structured output for native subagents (extracted from spawn.ts).
  *
- * - register_structured_output tool:AJV all amount validate (re- use plugins/schema,$async
- *   explicit reject), tool reject error parameter same turn retry; result slot by conversation isolated, via inject
- *   sessions Map(host per-Harness hold has, alternative original module level global WeakMap) motion state locate;
- * - text self-heal extract:extractJsonCandidates / scanBalanced(balance scan all {...}/[...]
- *   literal, contains across row), first fenced json block, after balance scan, again whole text.
+ * - register_structured_output tool: full AJV validation (reuses plugins/schema; rejects $async explicitly);
+ *   tool-level rejection lets the model retry in the same turn; result slots are isolated per conversation via
+ *   an injected sessions Map (owned per Harness by the host instead of a module-global WeakMap);
+ * - Text fallback extraction: extractJsonCandidates / scanBalanced (scans all balanced {...}/[...] literals,
+ *   including multiline): fenced json blocks first, then balanced scan, then whole-text parse.
  */
 
 import { defineExtension, defineTool, type Extension, type ToolRegistration } from '@earendil-works/pi-durable'
 import { HelmError } from '@helm/protocol'
 import { validateOrThrow } from '../plugins/schema.js'
 
-/** original generate subagent structure output extension call (supply install and fork strip shared use). */
+/** Extension name for native subagent structured output (shared by installation and fork stripping). */
 export const STRUCTURED_OUTPUT_EXTENSION_NAME = 'helm-structured-output'
 
-/** single conversation structure output task slot:schema + already accept result (undefined = not yet accept). */
+/** Single-conversation structured output task slot: schema + accepted result (undefined = not yet accepted). */
 export interface StructuredOutputSession {
   schema: Record<string, unknown>
   accepted: unknown | undefined
 }
 
 /**
- * construct helm-structured-output extend (tool define can re- use; same name heavy install is original ground replace).
- * result slot by inject sessions Map locate (per-request instance, by conversationId isolated).
+ * Build the helm-structured-output extension (reusable tool definition; re-registering the same name replaces in place).
+ * Result slots are looked up in the injected sessions Map (per-runtime instance, isolated by conversationId).
  */
 export function buildStructuredOutputExtension(sessions: Map<number, StructuredOutputSession>): Extension {
   const tool: ToolRegistration = defineTool({
     name: 'register_structured_output',
     description:
-      'commit eventually structure result.output must satisfy task to set JSON Schema; validation failed will receives error and by want seek retry.',
+      'Submit the final structured result. output must satisfy the task JSON Schema; validation errors are returned so you can fix and retry.',
     parameters: {
       type: 'object',
       properties: {
         output: {
-          description: 'satisfy task JSON Schema structure result (any JSON value, contains null)',
+          description: 'Structured result satisfying the task JSON Schema (any JSON value, including null)',
         },
       },
       required: ['output'],
-      // output value shape by task Schema all amount validate, this in do not restrict its internal structure.
+      // output value shape is fully validated by the task Schema; do not constrain its internal fields here.
       additionalProperties: false,
     },
     structuredOutputSchema: {
@@ -49,7 +49,7 @@ export function buildStructuredOutputExtension(sessions: Map<number, StructuredO
     async execute(args, api) {
       const session = sessions.get(api.conversationId as number)
       if (session === undefined) {
-        return { output: [{ type: 'text', text: 'when before conversation no in-flight structure output task.' }], isError: true }
+        return { output: [{ type: 'text', text: 'No active structured output task in the current conversation.' }], isError: true }
       }
       const payload = (args as { output?: unknown }).output
       const result = validateStructuredOutputPayload(payload, session.schema)
@@ -59,7 +59,7 @@ export function buildStructuredOutputExtension(sessions: Map<number, StructuredO
             {
               type: 'text',
               text:
-                `structure output validation failed, please fix correct after re- invoke register_structured_output:\n${result.errors}` +
+                `Structured output validation failed; fix the errors and call register_structured_output again:\n${result.errors}` +
                 `\n\nSchema: ${JSON.stringify(session.schema)}`,
             },
           ],
@@ -68,7 +68,7 @@ export function buildStructuredOutputExtension(sessions: Map<number, StructuredO
       }
       session.accepted = result.value
       return {
-        output: [{ type: 'text', text: 'structure output already accept.' }],
+        output: [{ type: 'text', text: 'Structured output accepted.' }],
         structuredOutput: { accepted: true },
       }
     },
@@ -76,25 +76,25 @@ export function buildStructuredOutputExtension(sessions: Map<number, StructuredO
   return defineExtension({ name: STRUCTURED_OUTPUT_EXTENSION_NAME, tools: [tool] }) as Extension
 }
 
-/** declaration boundary i.e. reject $async:AJV async validate return Promise, sync boolean decide will
- *  Promise when truthy let through illegal data (honest hard rule). */
+/** Reject $async at the declaration boundary: AJV async validation returns a Promise, and a truthy boolean check
+ * would silently let invalid data pass (honesty invariant). */
 export function assertSchemaNotAsync(schema: Record<string, unknown>): void {
   if ((schema as { $async?: unknown }).$async !== undefined) {
     throw new HelmError(
       'invalid_plugin_schema',
-      `schema contains $async: original generate subagent sync validate boundary unsupported async Schema`,
+      'schema contains $async: native subagent synchronous validation boundary does not support async Schemas',
       400,
     )
   }
 }
 
-/** AJV all amount validate (re- use plugins/schema;$async in compile time already reject). */
+/** Full AJV validation (reuses plugins/schema; $async is already rejected at compile time). */
 export function validateAgainstSchema(
   value: unknown,
   schema: Record<string, unknown>,
 ): { ok: true; value: unknown } | { ok: false; errors: string } {
   try {
-    validateOrThrow(schema, value, 'structure output validation failed', 'schema_validation_failed', 502)
+    validateOrThrow(schema, value, 'structured output validation failed', 'schema_validation_failed', 502)
     return { ok: true, value }
   } catch (error) {
     if (error instanceof HelmError && error.code === 'schema_validation_failed') {
@@ -104,7 +104,7 @@ export function validateAgainstSchema(
   }
 }
 
-/** from text extract choose and do all amount Schema validate; support any legal JSON top-level (null/bool/number/string/across row). */
+/** Extract JSON candidates from text and validate against full Schema; supports any valid JSON top-level value (null/bool/number/string/multiline). */
 export function parseSchemaCandidate(
   text: string,
   schema: Record<string, unknown>,
@@ -126,22 +126,22 @@ function extractJsonCandidates(text: string): unknown[] {
       out.push(value)
     }
   }
-  // 1) fenced json block(takes precedence: explicit intent mark record).
+  // 1) Fenced json blocks (highest priority: explicit intent markers).
   const fenced = /```(?:json)?\s*([\s\S]*?)```/g
   for (const match of text.matchAll(fenced)) {
     const parsed = safeParse(match[1] ?? '')
     if (parsed !== undefined) push(parsed)
   }
-  // 2) balance scan extract all {...} / [...] literal (contains across row; after appear takes precedence,unshift keep order reverse order).
+  // 2) Balanced scan for all {...} / [...] literals (handles multiline; later occurrences take precedence when reversed).
   const bracketed = scanBalanced(text)
   for (const candidate of bracketed) push(candidate)
-  // 3) whole text is legal JSON(null/true/42/"text" etc. mark amount top-level).
+  // 3) Whole text as valid JSON (handles scalar top-levels like null/true/42/"text").
   const whole = safeParse(text)
   if (whole !== undefined) push(whole)
   return out
 }
 
-/** scan text in all balance {...}/[...] fragment, return by appear order parse result. */
+/** Scan text for all balanced {...}/[...] fragments, returning parsed values in order of appearance. */
 function scanBalanced(text: string): unknown[] {
   const results: unknown[] = []
   const stack: Array<{ start: number; ch: string }> = []
@@ -168,12 +168,12 @@ function scanBalanced(text: string): unknown[] {
       if ((ch === '}' && open.ch === '{') || (ch === ']' && open.ch === '[')) {
         stack.pop()
         if (stack.length === 0) {
-          // top-level closed together: the whole fragment is choose (embed set sub- object by outside layer override, does not repeat extract).
+          // Top-level pair closed: whole fragment is a candidate (nested sub-objects stay inside outer object without duplication).
           const parsed = safeParse(text.slice(open.start, i + 1))
           if (parsed !== undefined) results.push(parsed)
         }
       } else {
-        // do not balance (such as "}" appear but stack top is "["): discard when before fragment, guard against extract leftover missing JSON.
+        // Mismatched brackets (e.g., '}' when stack top is '['): discard current fragment to avoid extracting corrupt JSON.
         stack.length = 0
       }
     }
@@ -280,8 +280,8 @@ export function extractAcceptedStructuredOutputFromEntries(
 }
 
 /**
- * compatibility entry: complete AJV validate (plugins/schema re- use;$async explicit reject).
- * keep export supply since has consumer; behavior etc. price validateOrThrow  boolean wrap.
+ * Compatibility entrypoint: full AJV validation (reuses plugins/schema; rejects $async explicitly).
+ * Preserved for existing consumers; equivalent to wrapping validateOrThrow in a boolean result.
  */
 export function validateJsonSchema(
   value: unknown,

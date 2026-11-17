@@ -1,9 +1,10 @@
 /**
- * single one state.sqlite:pi-durable original generate table (pi_ prefix)+ helm self has table + FTS5 derive index.
- * all SQL one rule via the same NodeSqliteDatabase adapter queue up execute (transaction during adapter will
- * queue up other operation, bypass facade bare invoke may and pi transaction mutual each other rollback) - - never another open connect.
- * persist PRAGMA via adapter in open when explicit settings:journal_mode=WAL,
- * synchronous=NORMAL,busy_timeout=5000ms,wal_autocheckpoint=1000 page.
+ * Single unified `state.sqlite`: pi-durable generated tables (`pi_` prefix) + helm-owned tables + FTS5 derived index.
+ * All SQL goes through the same `NodeSqliteDatabase` adapter serialized queue (during transactions the adapter
+ * queues other operations; raw calls bypassing this facade can conflict with pi transactions or roll back each
+ * other) — never open a second connection.
+ * Persistence PRAGMAs are configured explicitly when opening via the adapter: `journal_mode=WAL`,
+ * `synchronous=NORMAL`, `busy_timeout=5000ms`, `wal_autocheckpoint=1000` pages.
  */
 
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
@@ -16,9 +17,9 @@ import { join } from 'node:path'
 
 export interface HelmDatabase {
   storage: SqliteStorageT
-  /** helm self has table read write, same queue up in the same connect on. */
+  /** Read/write access for helm-owned tables, serialized on the same database connection. */
   db: NodeSqliteDatabase
-  /** idempotent close: duplicate invoke (such as harness.close already closure storage after) do not throws. */
+  /** Idempotent close: repeated calls (e.g. after `harness.close` closes storage) will not throw. */
   close(): Promise<void>
 }
 
@@ -96,8 +97,8 @@ CREATE TABLE IF NOT EXISTS helm_tombstones (
 `
 
 /**
- * FTS5 table separate create:tokenize config in schema version of outside, rebuild entry see HelmStore.rebuildFts.
- * body store redaction after pure text (secret value forever do not store).
+ * Separate FTS5 table creation: tokenizer config is outside schema versioning; see `HelmStore.rebuildFts` for rebuilds.
+ * The `body` column stores redacted plain text (secret values are never persisted).
  */
 const FTS_SCHEMA = `
 CREATE VIRTUAL TABLE IF NOT EXISTS helm_conversation_fts USING fts5(
@@ -109,16 +110,16 @@ CREATE VIRTUAL TABLE IF NOT EXISTS helm_conversation_fts USING fts5(
 `
 
 /**
- * open (or create) unique state.sqlite;pi table and helm table sharing the same connect and transaction queue.
- * adapter by openNodeSqliteDatabase build (single connect,WAL,synchronous=NORMAL,
- * busy_timeout=5s; do not connect trigger bare node:sqlite handle).
+ * Open (or create) the single `state.sqlite`; pi tables and helm tables share one connection and transaction queue.
+ * The adapter is built by `openNodeSqliteDatabase` (single connection, WAL, `synchronous=NORMAL`,
+ * `busy_timeout=5s`; do not touch raw `node:sqlite` handles directly).
  */
 export async function openHelmDatabase(dataDir: string): Promise<HelmDatabase> {
   const statePath = join(dataDir, 'state.sqlite')
   const db = await openNodeSqliteDatabase(statePath)
-  // proxy view:pi-durable SqliteStorage and HelmStore sharing the same thing connect and serial
-  // transaction queue, therefore harness.close() -> storage.close() when must not mention before disconnect thing db
-  // (by teardownKernelRuntime tail database.close() unique close).
+  // Proxy view: pi-durable `SqliteStorage` and `HelmStore` share the underlying connection and serialized
+  // transaction queue, so `harness.close() -> storage.close()` must not disconnect the underlying `db` prematurely
+  // (closed solely by `teardownKernelRuntime` via trailing `database.close()`).
   const storageDb: SqliteDatabase = {
     exec: (sql) => db.exec(sql),
     run: (sql, ...params) => db.run(sql, ...params),
@@ -131,7 +132,7 @@ export async function openHelmDatabase(dataDir: string): Promise<HelmDatabase> {
   let storage: SqliteStorageT
   try {
     storage = await SqliteStorage.open(storageDb, { prefix: 'pi_' })
-    // helm table DDL also away adapter(queue up, avoid and pi migration competition). development phase directly adopt new schema.
+    // Run helm table DDL through the adapter queue as well to avoid racing pi initialization. Use latest schema directly during dev.
     await db.exec(HELM_SCHEMA)
     await db.exec(FTS_SCHEMA)
   } catch (error) {
@@ -143,9 +144,8 @@ export async function openHelmDatabase(dataDir: string): Promise<HelmDatabase> {
     storage,
     db,
     async close() {
-      // idempotent:harness.close() may already close storage(storageDb.close is no-op,
-      // thing db by this where unique close); keep storage.close() fall back ensure separate open
-      // HelmDatabase test path same seal opening storage.
+      // Idempotent: `harness.close()` may already close `storage` (`storageDb.close` is a no-op;
+      // the underlying `db` is closed only here). Keep `storage.close()` fallback for test paths opening `HelmDatabase` standalone.
       if (closed) return
       closed = true
       await storage.close(BACKGROUND_CONTEXT)

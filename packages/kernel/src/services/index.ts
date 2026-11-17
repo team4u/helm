@@ -1,6 +1,6 @@
 /**
- * @helm/kernel service layer unify exit: file asset, authentication, secret, credentials and artifact.
- * consumer (PluginHost / HTTP / CLI) one rule from this in import, do not deep sub- module path.
+ * @helm/kernel service layer unified exports: file assets, authentication, secrets, credentials, and artifacts.
+ * Consumers (PluginHost / HTTP / CLI) must import from here instead of deep submodule paths.
  */
 export {
   HELM_DATA_DIR_ENV,
@@ -96,5 +96,5 @@ export {
   type RegisterOptions,
   type SpillResult,
 } from './artifacts.js'
-// two enter system artifact read away ArtifactService.readBuffer(HTTP layer transfer original byte use),
-// and readContent same source same validate (resolveStoredPath guard against fake metadata any read).
+// Binary artifact reads go through ArtifactService.readBuffer (used by the HTTP layer to transfer raw bytes),
+// sharing the same source and validation as readContent (resolveStoredPath prevents arbitrary reads via forged metadata).

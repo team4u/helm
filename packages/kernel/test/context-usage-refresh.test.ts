@@ -1,39 +1,39 @@
 /**
- * ConversationTracker context use amount refresh determinism single test (fake harness, real tracker):
+ * Deterministic unit tests for ConversationTracker contextUsage refresh (fake harness, real tracker):
  *
- * 1. boundary watermark line: initial snapshot inside history mark record (pi.compaction etc.) and connect continue ordinary observe update
- *    do not heavy scheduling refresh (without write put large); only exceeds old watermark line new mark record item exactly trigger once;
- * 2. ensureContextUsage: many caller merge the same time in-flight refresh; already cache zero refresh;
- * 3. proxy count guard (contains undefined catch): not observe conversation refresh in concurrency observe swap proxy after
- *    late to result discard, do not back write old value;
- * 4. stopObserving / metadata after deletion late to refresh does not resurrect cache, do not ghost event;
- * 5. first time fill carry compacting when must publish upsert(otherwise subscribe way forever see fewer than);
- *    without compress state first time fill keep static default;
- * 6. window source honest:helmContextWindowKnown === false static default window must not
- *    as known window carry (contextWindow omit);
- * 7. compress failed notify: new compactionFailure exactly once redaction error notification,
- *    the same taskId duplicate snapshot does not repeat notify, new taskId again report;
- * 8. models.changed set to force complete (onModelsChanged): unknown→known/known→remove window
- *    change via since has refresh chain append complete,usage-only update can reach summary and do not push enter
- *    stateChangeSeq;providers set to and same value duplicate event dedupe; in-flight placement dirty force complete;
- * 9. leap run during window change still publish (not silently to turn end), identical window does not resend frame.
+ * 1. Boundary watermark: historical markers in initial snapshot (e.g., pi.compaction) and subsequent ordinary
+ *    observations never re-schedule refreshes (avoiding read/write amplification); only new marker entries above the
+ *    prior watermark trigger a single refresh;
+ * 2. ensureContextUsage: concurrent callers coalesce onto a single in-flight refresh; cached values skip refresh;
+ * 3. Epoch generation guard (including undefined transitions): when an unobserved conversation refresh races with
+ *    concurrent observe(), stale late results are discarded without poisoning cache;
+ * 4. stopObserving / post-deletion late refreshes never resurrect caches or emit ghost events;
+ * 5. Initial populate carrying compacting=true must publish upsert (so subscribers never remain blind);
+ *    without active compaction, initial populate stays silent;
+ * 6. Honest window provenance: default fallback windows with helmContextWindowKnown === false are omitted
+ *    rather than reported as known;
+ * 7. Compaction failure notification: each new compactionFailure emits one redacted error notification,
+ *    repeated snapshots for the same taskId do not re-notify, and new taskIds report again;
+ * 8. Registry-wide invalidation (onModelsChanged): unknown->known / known->removed window transitions update
+ *    existing refresh chains, reach summaries via usage-only updates without advancing stateChangeSeq, filter out
+ *    unrelated providers, deduplicate unchanged frames, and mark dirty during in-flight updates;
+ * 9. Window transitions during active runs still publish immediately rather than waiting until turn end; unchanged
+ *    windows do not re-emit frames.
  *
- * determinism: refresh scheduling and harness.conversation invoke all in sync segment occur (assertion i.e. when can
- * see); async push enter all via manually release deferred / ensureContextUsage settle event,
- * independent of sleep or count when.
+ * Determinism: scheduling and harness.conversation() invocations occur synchronously; async propagation uses
+ * manually resolved deferreds or ensureContextUsage settlement without relying on sleeps or wall-clock timers.
  */
 import { strict as assert } from 'node:assert'
 import { describe, it } from 'node:test'
 import type { ContextView, ConversationView, Harness, Observation, Observer } from '@earendil-works/pi-durable'
 import { createModels } from '@earendil-works/pi-ai/models'
-import type { Models, Provider } from '@earendil-works/pi-ai'
-import type { UserMessage } from '@earendil-works/pi-ai'
+import type { Models, Provider, UserMessage } from '@earendil-works/pi-ai'
 import type { ConversationSummary } from '@helm/protocol'
 import { ConversationTracker, type TrackerEvents } from '../src/runtime/conversations.js'
 import type { ConvMeta, HelmStore } from '../src/runtime/store.js'
 
 // ---------------------------------------------------------------------------
-// construct tool
+// Test builders
 // ---------------------------------------------------------------------------
 
 interface EntrySpec {
@@ -52,7 +52,7 @@ function userContent(chars: number): UserMessage {
   return { role: 'user', content: 'a'.repeat(chars), timestamp: 1 }
 }
 
-/** refresh read to ContextView(tokens by message estimate compute length zone). */
+/** Construct a ContextView whose token estimate matches character count. */
 function usageView(chars: number): ContextView {
   return {
     head: undefined,
@@ -63,16 +63,14 @@ function usageView(chars: number): ContextView {
 }
 
 function tokensOf(chars: number): number {
-  // fixed expectation (pi agent chars/4):usageView user message is 'a'.repeat(chars),
-  // do not mirror by test implement.
+  // Pinned expectation (pi-agent chars/4): usageView contains 'a'.repeat(chars).
   return Math.ceil(chars / 4)
 }
 
-/** refresh result queue items: i.e. when view or manually release deferred. */
 type ContextResult = { view: ContextView } | { deferred: Promise<ContextView> }
 
 class FakeHarness {
-  /** refreshContextUsageOnce start time count (sync segment pass increase; assertion i.e. when visible). */
+  /** Number of refreshContextUsageOnce invocations (increments synchronously before awaiting context()). */
   contextCalls = 0
   private readonly queue: ContextResult[] = []
   private observer: Observer<ConversationView> | undefined
@@ -92,7 +90,7 @@ class FakeHarness {
     return { resolve }
   }
 
-  /** simulated SDK snapshot push enter (sync invoke tracker adopt path). */
+  /** Simulate SDK snapshot push (synchronously invokes tracker adopt path). */
   advance(view: ConversationView): void {
     this.observer?.advance({ kind: 'value', value: view } as never, undefined as never)
   }
@@ -168,7 +166,7 @@ function eventsOf(): TrackerEvents & {
   }
 }
 
-/** known/unknown window double model most small Models set (window source honest use). */
+/** Minimal dual-model catalog with known vs unknown context windows. */
 function modelsWithFaux(): Models {
   const models = createModels()
   const known = {
@@ -201,7 +199,7 @@ function trackerEnv(options?: {
   initialEntries?: EntrySpec[]
   initialLive?: Record<string, unknown>
   redactError?: (text: string) => string
-  /** directory set now read (default fixed faux double model); simulated directory refresh = re- assignment return value. */
+  /** Dynamic catalog reader (defaults to faux dual-model catalog); swap return value to simulate reload. */
   models?: () => Models
 }): {
   harness: FakeHarness
@@ -226,7 +224,7 @@ function trackerEnv(options?: {
   return { harness, store, events, tracker }
 }
 
-/** arrange empty micro task chain (manually release deferred after wait for refresh chain converge). */
+/** Drain pending microtasks/macrotasks after resolving deferred refreshes. */
 async function flush(): Promise<void> {
   for (let i = 0; i < 4; i += 1) {
     await new Promise<void>((resolve) => setImmediate(resolve))
@@ -234,11 +232,11 @@ async function flush(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// 1. boundary watermark line (observe refresh write put large)
+// 1. Boundary watermark (avoid redundant observation refreshes)
 // ---------------------------------------------------------------------------
 
-describe('context use amount refresh: boundary watermark line', { timeout: 60_000 }, () => {
-  it('history mark record does not trigger; ordinary update do not heavy scheduling; new mark record exactly trigger once', { timeout: 60_000 }, async () => {
+describe('context usage refresh: boundary watermark', { timeout: 60_000 }, () => {
+  it('ignores historical markers, skips ordinary updates, and triggers once per new marker', { timeout: 60_000 }, async () => {
     const env = trackerEnv({
       initialEntries: [
         { id: 5, kind: 'pi.user' },
@@ -247,9 +245,9 @@ describe('context use amount refresh: boundary watermark line', { timeout: 60_00
     })
     await env.tracker.observe(1)
     await env.tracker.ensureContextUsage(1)
-    assert.equal(env.harness.contextCalls, 1, 'initial hang connect (idle conversation) exactly once refresh')
+    assert.equal(env.harness.contextCalls, 1, 'initial attach (idle conversation) refreshes once')
 
-    // connect continue ordinary observe update: history contains pi.compaction but low at watermark line, must not heavy scheduling.
+    // Subsequent ordinary observations contain historical pi.compaction below watermark: must not re-schedule.
     env.harness.advance(
       viewOf({
         entries: [
@@ -259,7 +257,7 @@ describe('context use amount refresh: boundary watermark line', { timeout: 60_00
         ],
       }),
     )
-    assert.equal(env.harness.contextCalls, 1, 'ordinary new item must not trigger refresh')
+    assert.equal(env.harness.contextCalls, 1, 'ordinary new entry must not trigger refresh')
     env.harness.advance(
       viewOf({
         entries: [
@@ -270,9 +268,9 @@ describe('context use amount refresh: boundary watermark line', { timeout: 60_00
         ],
       }),
     )
-    assert.equal(env.harness.contextCalls, 1, 'duplicate snapshot (contains history mark record) must not trigger refresh')
+    assert.equal(env.harness.contextCalls, 1, 'repeated snapshot with historical markers must not trigger refresh')
 
-    // new boundary item (id exceeds old watermark line): exactly trigger once.
+    // New boundary entry (id above prior watermark): triggers exactly once.
     env.harness.advance(
       viewOf({
         entries: [
@@ -284,9 +282,9 @@ describe('context use amount refresh: boundary watermark line', { timeout: 60_00
         ],
       }),
     )
-    assert.equal(env.harness.contextCalls, 2, 'new mark record item exactly trigger once refresh')
+    assert.equal(env.harness.contextCalls, 2, 'new marker entry triggers exactly one refresh')
 
-    // watermark line already push enter: the same mark record duplicate appear no longer trigger.
+    // Watermark advanced: repeated snapshot containing the same marker does not re-trigger.
     env.harness.advance(
       viewOf({
         entries: [
@@ -296,65 +294,65 @@ describe('context use amount refresh: boundary watermark line', { timeout: 60_00
         ],
       }),
     )
-    assert.equal(env.harness.contextCalls, 2, 'already scan mark record must not duplicate trigger')
+    assert.equal(env.harness.contextCalls, 2, 'already-scanned marker must not trigger again')
   })
 })
 
 // ---------------------------------------------------------------------------
-// 2. ensureContextUsage: merge and zero refresh
+// 2. ensureContextUsage: coalescing & cache hit
 // ---------------------------------------------------------------------------
 
-describe('context use amount refresh:ensureContextUsage', { timeout: 60_000 }, () => {
-  it('concurrency invoke merge the same time refresh; already cache direct through zero refresh', { timeout: 60_000 }, async () => {
+describe('context usage refresh: ensureContextUsage', { timeout: 60_000 }, () => {
+  it('concurrent calls share a single refresh; cached hits do zero refreshes', { timeout: 60_000 }, async () => {
     const env = trackerEnv({})
     await env.tracker.observe(1)
     const first = env.tracker.ensureContextUsage(1)
     const second = env.tracker.ensureContextUsage(1)
     await first
     await second
-    assert.equal(env.harness.contextCalls, 1, 'concurrency ensure merge is once refresh')
+    assert.equal(env.harness.contextCalls, 1, 'concurrent ensure calls coalesce into one refresh')
     const usage = env.tracker.summaryOf(1).contextUsage
-    assert.ok(usage, 'wait for after cache already fill')
+    assert.ok(usage, 'cache is populated after awaiting ensureContextUsage')
 
     await env.tracker.ensureContextUsage(1)
-    assert.equal(env.harness.contextCalls, 1, 'already cache when ensure no longer refresh')
+    assert.equal(env.harness.contextCalls, 1, 'cached ensure call performs no additional refresh')
   })
 })
 
 // ---------------------------------------------------------------------------
-// 3. proxy count guard (undefined catch same reference and compare)
+// 3. Epoch guard (including undefined initial epoch transitions)
 // ---------------------------------------------------------------------------
 
-describe('context use amount refresh: proxy count guard', { timeout: 60_000 }, () => {
-  it('not observe conversation refresh encounter concurrency observe: late to old value discard, only new refresh takes effect', { timeout: 60_000 }, async () => {
+describe('context usage refresh: epoch generation guard', { timeout: 60_000 }, () => {
+  it('unobserved refresh racing with concurrent observe: drops stale late value and uses fresh refresh', { timeout: 60_000 }, async () => {
     const env = trackerEnv({})
-    // R1: not observe (generation === undefined) when by summaryOf cache missing path trigger.
+    // R1: unobserved (generation === undefined) triggered via cache-miss read in summaryOf.
     const gate = env.harness.pushDeferred()
     env.harness.pushView(usageView(800))
     env.tracker.summaryOf(1)
-    assert.equal(env.harness.contextCalls, 1, 'cache missing read trigger once refresh')
+    assert.equal(env.harness.contextCalls, 1, 'cache miss read triggers initial refresh')
 
-    // concurrency observe: swap proxy + adoptInitial scheduling (R1 in-flight → dirty, do not immediately start).
+    // Concurrent observe: advances generation + adoptInitial schedules dirty follow-up (R1 in flight, doesn't spawn yet).
     const observed = env.tracker.observe(1)
-    assert.equal(env.harness.contextCalls, 1, 'in-flight refresh during new trigger only placement dirty')
+    assert.equal(env.harness.contextCalls, 1, 'new trigger during in-flight refresh only sets dirty flag')
     await observed
 
-    gate.resolve(usageView(120)) // R1 late to old value
+    gate.resolve(usageView(120)) // R1 arrives late with stale value
     await env.tracker.ensureContextUsage(1)
-    assert.equal(env.harness.contextCalls, 2, 'R1 by discard after only heavy run once')
+    assert.equal(env.harness.contextCalls, 2, 're-runs once after R1 discarded')
 
     const usage = env.tracker.summaryOf(1).contextUsage
     assert.ok(usage)
-    assert.equal(usage.tokens, tokensOf(800), 'late to old value must not back write cache')
+    assert.equal(usage.tokens, tokensOf(800), 'stale late result must never overwrite cache')
   })
 })
 
 // ---------------------------------------------------------------------------
-// 4. stop observe / after deletion late to refresh
+// 4. stopObserving / late refresh after deletion
 // ---------------------------------------------------------------------------
 
-describe('context use amount refresh: stop observe and delete guard', { timeout: 60_000 }, () => {
-  it('stopObserving after late to refresh does not resurrect cache, do not event', { timeout: 60_000 }, async () => {
+describe('context usage refresh: stopObserving and deletion guards', { timeout: 60_000 }, () => {
+  it('late refresh after stopObserving never resurrects cache or emits events', { timeout: 60_000 }, async () => {
     const env = trackerEnv({})
     await env.tracker.observe(1)
     await env.tracker.ensureContextUsage(1)
@@ -363,20 +361,20 @@ describe('context use amount refresh: stop observe and delete guard', { timeout:
     const gate = env.harness.pushDeferred()
     env.harness.pushView(usageView(200))
     env.tracker.scheduleContextUsageRefresh(1)
-    assert.equal(env.harness.contextCalls, 2, 'new refresh already start (gated)')
+    assert.equal(env.harness.contextCalls, 2, 'new refresh started (gated)')
 
     env.tracker.stopObserving(1)
     gate.resolve(usageView(60))
     await flush()
-    assert.equal(env.events.summaries.length, 0, 'stop observe after late discard must not publish any ghost event')
+    assert.equal(env.events.summaries.length, 0, 'late result discarded after stopObserving emits zero ghost events')
 
-    // if late to refresh re- cache,ensure direct through zero refresh; correct behavior is need to all new refresh.
+    // If late refresh had resurrected cache, ensure would hit cache with 0 refreshes; must instead run a fresh refresh.
     await env.tracker.ensureContextUsage(1)
-    assert.equal(env.harness.contextCalls, 3, 'late to result by discard,ensure must all new refresh')
+    assert.equal(env.harness.contextCalls, 3, 'ensure triggers fresh refresh after stale discard')
     assert.equal(env.events.summaries.length, 1, 'explicit on-demand ensure after cache clear publishes fresh usage once ready')
   })
 
-  it('refresh during metadata by delete: late to result do not back write cache', { timeout: 60_000 }, async () => {
+  it('late result when metadata deleted during refresh never writes back to cache', { timeout: 60_000 }, async () => {
     const env = trackerEnv({})
     await env.tracker.observe(1)
     await env.tracker.ensureContextUsage(1)
@@ -388,35 +386,35 @@ describe('context use amount refresh: stop observe and delete guard', { timeout:
     gate.resolve(usageView(90))
     await flush()
 
-    // deleted:ensure immediately return and no longer scheduling.
+    // Already deleted: ensure returns immediately without scheduling.
     await env.tracker.ensureContextUsage(1)
-    assert.equal(env.harness.contextCalls, 2, 'after deletion must not again start refresh')
+    assert.equal(env.harness.contextCalls, 2, 'must not start new refresh after deletion')
     assert.equal(env.events.summaries.length, 0)
   })
 })
 
 // ---------------------------------------------------------------------------
-// 5. first time fill event discipline
+// 5. Initial populate event discipline
 // ---------------------------------------------------------------------------
 
-describe('context use amount refresh: first time fill publish rule', { timeout: 60_000 }, () => {
-  it('first time fill carry compacting when must publish upsert(subscribe way without after continue semantics frame visible)', { timeout: 60_000 }, async () => {
+describe('context usage refresh: initial populate publishing rules', { timeout: 60_000 }, () => {
+  it('publishes upsert when initial populate carries compacting=true (otherwise subscribers miss it)', { timeout: 60_000 }, async () => {
     const env = trackerEnv({
       initialLive: { compactions: [{ taskId: 9, trigger: 'manual', blocking: false }] },
     })
     await env.tracker.observe(1)
     await env.tracker.ensureContextUsage(1)
-    assert.equal(env.events.summaries.length, 1, 'first time fill carry compress state must publish')
+    assert.equal(env.events.summaries.length, 1, 'initial populate with compacting state must publish')
     const usage = env.events.summaries[0]!.contextUsage
-    assert.equal(usage?.compacting, true, 'publish frame must carry compacting boolean')
+    assert.equal(usage?.compacting, true, 'published frame must carry compacting boolean')
   })
 
-  it('without compress state first time startup fill keep static default (frame discipline do not change)', { timeout: 60_000 }, async () => {
+  it('stays silent on startup initial populate when not compacting (unchanged frame discipline)', { timeout: 60_000 }, async () => {
     const env = trackerEnv({})
     await env.tracker.observe(1)
     await flush()
     assert.equal(env.events.summaries.length, 0)
-    assert.ok(env.tracker.summaryOf(1).contextUsage, 'static default fill via read path still visible')
+    assert.ok(env.tracker.summaryOf(1).contextUsage, 'quietly populated usage remains visible on read path')
   })
 
   it('on-demand ensureContextUsage or publishWhenReady publishes upsert when uncached usage becomes ready, without duplicating cached calls', { timeout: 60_000 }, async () => {
@@ -438,59 +436,59 @@ describe('context use amount refresh: first time fill publish rule', { timeout: 
 })
 
 // ---------------------------------------------------------------------------
-// 6. window source honest (helmContextWindowKnown)
+// 6. Honest window provenance (helmContextWindowKnown)
 // ---------------------------------------------------------------------------
 
-describe('context use amount refresh: window source honest', { timeout: 60_000 }, () => {
-  it('known window model carry contextWindow; static default mark record model omit', { timeout: 60_000 }, async () => {
+describe('context usage refresh: honest window provenance', { timeout: 60_000 }, () => {
+  it('known-window models carry contextWindow; default-placeholder models omit it', { timeout: 60_000 }, async () => {
     const known = trackerEnv({ model: 'faux/m-known' })
     await known.tracker.observe(1)
     await known.tracker.ensureContextUsage(1)
     const knownUsage = known.tracker.summaryOf(1).contextUsage!
     assert.ok(knownUsage)
-    assert.equal(knownUsage.contextWindow, 200_000, 'policy expand window such as carry')
+    assert.equal(knownUsage.contextWindow, 200_000, 'real model window is carried verbatim')
 
     const unknown = trackerEnv({ model: 'faux/m-unknown' })
     await unknown.tracker.observe(1)
     await unknown.tracker.ensureContextUsage(1)
     const unknownUsage = unknown.tracker.summaryOf(1).contextUsage!
     assert.ok(unknownUsage)
-    assert.ok(unknownUsage.tokens !== null && unknownUsage.tokens > 0, 'use amount estimate compute still provide')
-    assert.equal(unknownUsage.contextWindow, undefined, 'static default window must not show is known')
+    assert.ok(unknownUsage.tokens !== null && unknownUsage.tokens > 0, 'token usage estimate is still provided')
+    assert.equal(unknownUsage.contextWindow, undefined, 'default placeholder window must not masquerade as known')
   })
 })
 
 // ---------------------------------------------------------------------------
-// 7. compress failed notify (redaction + dedupe)
+// 7. Compaction failure notification (redaction + dedupe)
 // ---------------------------------------------------------------------------
 
-describe('context use amount refresh: compress failed notify', { timeout: 60_000 }, () => {
-  it('new compactionFailure exactly once redaction error notification; the same taskId duplicate snapshot does not repeat; new taskId again report', { timeout: 60_000 }, async () => {
+describe('context usage refresh: compaction failure notification', { timeout: 60_000 }, () => {
+  it('new compactionFailure emits one redacted notification; same taskId repeats skip; new taskId notifies again', { timeout: 60_000 }, async () => {
     const failure = { taskId: 5, trigger: 'manual', error: 'sk-abc gateway 500' }
     const env = trackerEnv({
       initialLive: { compactionFailure: failure },
       redactError: (t) => t.replace('sk-abc', '***'),
     })
     await env.tracker.observe(1)
-    assert.equal(env.events.notifications.length, 1, 'initial snapshot failed must on report (not silently)')
+    assert.equal(env.events.notifications.length, 1, 'initial snapshot failure must report loudly')
     const notice = env.events.notifications[0]!
     assert.equal(notice.level, 'error')
-    assert.equal(notice.title, 'context streamline failed')
+    assert.equal(notice.title, 'Context compaction failed')
     assert.equal(notice.conversationId, 1)
-    assert.match(notice.body ?? '', /\*\*\* gateway 500/, 'error summary must via inject redact redaction')
-    assert.ok(!(notice.body ?? '').includes('sk-abc'), 'secret must not back visible')
+    assert.match(notice.body ?? '', /\*\*\* gateway 500/, 'error summary must pass through redact callback')
+    assert.ok(!(notice.body ?? '').includes('sk-abc'), 'secret must never echo back')
 
-    // the same failed duplicate appear in after continue snapshot: must not duplicate notify.
+    // Same failure recurring in subsequent snapshots: must not duplicate notification.
     env.harness.advance(viewOf({ live: { compactionFailure: failure } }))
     env.harness.advance(viewOf({ live: { compactionFailure: failure, run: { taskId: 3, inputs: [] } } }))
-    assert.equal(env.events.notifications.length, 1, 'the same taskId must not duplicate notify')
+    assert.equal(env.events.notifications.length, 1, 'same taskId must not re-notify')
 
-    // new failed (new taskId): again report once.
+    // New failure (new taskId): reports once again.
     env.harness.advance(viewOf({ live: { compactionFailure: { taskId: 6, trigger: 'threshold', error: 'again' } } }))
     assert.equal(env.events.notifications.length, 2)
     assert.match(env.events.notifications[1]!.body ?? '', /threshold/)
 
-    // without failed snapshot: do not; failed clear after again appear the same taskId also do not heavy report (same runtime dedupe).
+    // Transient empty snapshot followed by identical taskId still suppressed (same-runtime dedupe).
     env.harness.advance(viewOf({ live: {} }))
     env.harness.advance(viewOf({ live: { compactionFailure: { taskId: 6, trigger: 'threshold', error: 'again' } } }))
     assert.equal(env.events.notifications.length, 2)
@@ -498,11 +496,10 @@ describe('context use amount refresh: compress failed notify', { timeout: 60_000
 })
 
 // ---------------------------------------------------------------------------
-// 8. models.changed set to force complete (onModelsChanged)
+// 8. models.changed full completion (onModelsChanged)
 // ---------------------------------------------------------------------------
 
-/** single model faux directory collection:known carry real window; unknown use static default mark record;
- * served=false simulated provider no longer supply should model (getModel life do not in). */
+/** Single-model faux catalog: known carries real window; unknown marks helmContextWindowKnown=false; served=false simulates removed model. */
 function modelsWithWindowState(window: number, known: boolean, served: boolean): Models {
   const models = createModels()
   const base = {
@@ -532,46 +529,46 @@ function modelsWithWindowState(window: number, known: boolean, served: boolean):
   return models
 }
 
-describe('context use amount refresh:models.changed set to force complete', { timeout: 60_000 }, () => {
-  it('unknown→known:idle conversation do not new input also append complete window,summary can reach and do not push enter stateChangeSeq', { timeout: 60_000 }, async () => {
+describe('context usage refresh: models.changed window backfill', { timeout: 60_000 }, () => {
+  it('unknown->known: backfills window on idle conversation, delivers summary, and leaves stateChangeSeq untouched', { timeout: 60_000 }, async () => {
     let models = modelsWithWindowState(0, false, true)
     const env = trackerEnv({ model: 'faux/m-1', models: () => models })
     await env.tracker.observe(1)
     await env.tracker.ensureContextUsage(1)
-    assert.equal(env.tracker.summaryOf(1).contextUsage?.contextWindow, undefined, 'initial directory without window')
+    assert.equal(env.tracker.summaryOf(1).contextUsage?.contextWindow, undefined, 'initial catalog lacks window')
     const seqBefore = env.store.convs.get(1)!.stateChangeSeq
     env.events.summaries.length = 0
 
     models = modelsWithWindowState(400_000, true, true)
     env.tracker.onModelsChanged([])
     await env.tracker.ensureContextUsage(1)
-    assert.equal(env.tracker.summaryOf(1).contextUsage?.contextWindow, 400_000, 'directory refresh after window append complete')
-    assert.equal(env.events.summaries.length, 1, 'use amount change must publish summary(can reach SSE)')
-    assert.equal(env.store.convs.get(1)!.stateChangeSeq, seqBefore, 'usage-only must not push enter stateChangeSeq')
+    assert.equal(env.tracker.summaryOf(1).contextUsage?.contextWindow, 400_000, 'window backfilled after catalog refresh')
+    assert.equal(env.events.summaries.length, 1, 'usage change publishes summary for SSE')
+    assert.equal(env.store.convs.get(1)!.stateChangeSeq, seqBefore, 'usage-only update must not advance stateChangeSeq')
   })
 
-  it('providers set to: non- target provider does not refresh; same value duplicate event does not resend frame', { timeout: 60_000 }, async () => {
+  it('provider filtering: unrelated providers skip refresh; identical-value duplicate events do not re-emit frames', { timeout: 60_000 }, async () => {
     let models = modelsWithWindowState(0, false, true)
     const env = trackerEnv({ model: 'faux/m-1', models: () => models })
     await env.tracker.observe(1)
     await env.tracker.ensureContextUsage(1)
     const calls = env.harness.contextCalls
     env.tracker.onModelsChanged(['other'])
-    assert.equal(env.harness.contextCalls, calls, 'non- target provider must not trigger refresh')
+    assert.equal(env.harness.contextCalls, calls, 'unrelated provider must not trigger refresh')
 
     models = modelsWithWindowState(300_000, true, true)
     env.tracker.onModelsChanged(['faux'])
     await env.tracker.ensureContextUsage(1)
-    assert.equal(env.tracker.summaryOf(1).contextUsage?.contextWindow, 300_000, 'set to hit after append complete')
+    assert.equal(env.tracker.summaryOf(1).contextUsage?.contextWindow, 300_000, 'matching provider triggers backfill')
     const published = env.events.summaries.length
 
     env.tracker.onModelsChanged([])
     env.tracker.onModelsChanged([])
     await env.tracker.ensureContextUsage(1)
-    assert.equal(env.events.summaries.length, published, 'same value duplicate event via refer grain dedupe does not resend frame')
+    assert.equal(env.events.summaries.length, published, 'identical values deduplicate via fingerprint without re-emitting')
   })
 
-  it('known→provider no longer supply should: window restore unknown concurrency publish', { timeout: 60_000 }, async () => {
+  it('known->removed from provider: window reverts to unknown and publishes', { timeout: 60_000 }, async () => {
     let models = modelsWithWindowState(400_000, true, true)
     const env = trackerEnv({ model: 'faux/m-1', models: () => models })
     await env.tracker.observe(1)
@@ -581,11 +578,11 @@ describe('context use amount refresh:models.changed set to force complete', { ti
     models = modelsWithWindowState(0, false, false)
     env.tracker.onModelsChanged([])
     await env.tracker.ensureContextUsage(1)
-    assert.equal(env.tracker.summaryOf(1).contextUsage?.contextWindow, undefined, 'model do not in set: window restore unknown')
-    assert.ok(env.events.summaries.length >= 1, 'restore unknown also want can reach summary')
+    assert.equal(env.tracker.summaryOf(1).contextUsage?.contextWindow, undefined, 'removed model reverts window to unknown')
+    assert.ok(env.events.summaries.length >= 1, 'reverting to unknown also reaches summary')
   })
 
-  it('refresh in-flight during second event placement dirty force complete: do not and start new refresh, eventually take most new window', { timeout: 60_000 }, async () => {
+  it('second models.changed during in-flight refresh marks dirty rather than spawning concurrent refresh, ending with latest window', { timeout: 60_000 }, async () => {
     let models = modelsWithWindowState(0, false, true)
     const env = trackerEnv({ model: 'faux/m-1', models: () => models })
     await env.tracker.observe(1)
@@ -597,14 +594,14 @@ describe('context use amount refresh:models.changed set to force complete', { ti
     const inFlight = env.harness.contextCalls
     models = modelsWithWindowState(999_000, true, true)
     env.tracker.onModelsChanged([])
-    assert.equal(env.harness.contextCalls, inFlight, 'in-flight during second event must not and start new refresh')
+    assert.equal(env.harness.contextCalls, inFlight, 'second event during in-flight must not spawn parallel refresh')
 
     gate.resolve(usageView(100))
     await env.tracker.ensureContextUsage(1)
-    assert.equal(env.tracker.summaryOf(1).contextUsage?.contextWindow, 999_000, 'dirty force complete after take most new window')
+    assert.equal(env.tracker.summaryOf(1).contextUsage?.contextWindow, 999_000, 'dirty backfill ends with latest window')
   })
 
-  it('not observe but has cache conversation same append complete (stopObserving after directory refresh still update cache)', { timeout: 60_000 }, async () => {
+  it('unobserved cached conversation still updates on catalog refresh (even after stopObserving)', { timeout: 60_000 }, async () => {
     let models = modelsWithWindowState(0, false, true)
     const env = trackerEnv({ model: 'faux/m-1', models: () => models })
     await env.tracker.observe(1)
@@ -614,16 +611,16 @@ describe('context use amount refresh:models.changed set to force complete', { ti
     models = modelsWithWindowState(400_000, true, true)
     env.tracker.onModelsChanged([])
     await env.tracker.ensureContextUsage(1)
-    assert.equal(env.tracker.summaryOf(1).contextUsage?.contextWindow, 400_000, 'cache conversation do not observe also append complete')
+    assert.equal(env.tracker.summaryOf(1).contextUsage?.contextWindow, 400_000, 'cached conversation updates even without observer')
   })
 })
 
 // ---------------------------------------------------------------------------
-// 9. leap run during window change publish
+// 9. Window change publishing during active run
 // ---------------------------------------------------------------------------
 
-describe('context use amount refresh: leap run during window change', { timeout: 60_000 }, () => {
-  it('window change still publish (not silently to turn end); identical window duplicate event does not resend frame', { timeout: 60_000 }, async () => {
+describe('context usage refresh: window changes during active run', { timeout: 60_000 }, () => {
+  it('publishes immediately on window change rather than waiting for turn end; skips duplicate frames on unchanged window', { timeout: 60_000 }, async () => {
     let models = modelsWithWindowState(0, false, true)
     const env = trackerEnv({
       model: 'faux/m-1',
@@ -632,18 +629,18 @@ describe('context use amount refresh: leap run during window change', { timeout:
     })
     await env.tracker.observe(1)
     await flush()
-    assert.equal(env.events.summaries.length, 0, 'first time fill without compacting keep static default')
+    assert.equal(env.events.summaries.length, 0, 'initial populate without compacting stays silent')
     const seqBefore = env.store.convs.get(1)!.stateChangeSeq
 
     models = modelsWithWindowState(400_000, true, true)
     env.tracker.onModelsChanged([])
     await env.tracker.ensureContextUsage(1)
     assert.equal(env.tracker.summaryOf(1).contextUsage?.contextWindow, 400_000)
-    assert.equal(env.events.summaries.length, 1, 'active run during window change must publish')
-    assert.equal(env.store.convs.get(1)!.stateChangeSeq, seqBefore, 'do not push enter stateChangeSeq')
+    assert.equal(env.events.summaries.length, 1, 'window change during active run must publish')
+    assert.equal(env.store.convs.get(1)!.stateChangeSeq, seqBefore, 'must not advance stateChangeSeq')
 
     env.tracker.onModelsChanged([])
     await env.tracker.ensureContextUsage(1)
-    assert.equal(env.events.summaries.length, 1, 'identical window duplicate event must not duplicate frame')
+    assert.equal(env.events.summaries.length, 1, 'duplicate events with unchanged window must not re-emit')
   })
 })

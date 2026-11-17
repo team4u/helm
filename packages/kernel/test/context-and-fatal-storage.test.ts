@@ -1,6 +1,6 @@
 /**
- * Chord Context pass-through,HTTP ?wait=1 assert connect consolidate,harness.closed / HelmStore lead to life fault closed ring and
- * DiagnosticSink concentrate redaction on report test.
+ * Chord Context propagation, HTTP ?wait=1 disconnect abort wiring, harness.closed / HelmStore fatal
+ * storage circuit breaker, and DiagnosticSink centralized redaction & reporting tests.
  */
 
 import {
@@ -83,8 +83,8 @@ async function makeToolDeps(dir: string): Promise<HelmToolDeps> {
   }
 }
 
-describe('tool layer Chord Context pass-through and structuredOutputSchema clean up', { timeout: 60_000 }, () => {
-  it('read / write / edit / bash and resolveToolTarget pass-through when before execute context to api.agent', { timeout: 60_000 }, async () => {
+describe('tool layer Chord Context passthrough and structuredOutputSchema coverage', { timeout: 60_000 }, () => {
+  it('read / write / edit / bash and resolveToolTarget pass current execution context through to api.agent', { timeout: 60_000 }, async () => {
     const dir = join(root, 'tools-ctx')
     const deps = await makeToolDeps(dir)
     const samplePath = join(dir, 'sample.txt')
@@ -148,8 +148,8 @@ describe('tool layer Chord Context pass-through and structuredOutputSchema clean
   })
 })
 
-describe('waitForInput and HTTP ?wait=1 AbortSignal pass-through', { timeout: 60_000 }, () => {
-  it('waitForInput in signal abort when immediately solve except suspended and throw aborted, and do not cancel background durable turn', { timeout: 60_000 }, async () => {
+describe('waitForInput and HTTP ?wait=1 AbortSignal passthrough', { timeout: 60_000 }, () => {
+  it('waitForInput unblocks immediately with aborted error when signal aborts, without cancelling background durable turn', { timeout: 60_000 }, async () => {
     const dir = join(root, 'wait-abort-direct')
     const kernel = await openTestRuntime(dir)
     try {
@@ -166,7 +166,7 @@ describe('waitForInput and HTTP ?wait=1 AbortSignal pass-through', { timeout: 60
         async () => {
           turnStarted()
           await turnGate
-          return fauxAssistantMessage('background turn continue complete')
+          return fauxAssistantMessage('background turn completed')
         },
       ])
 
@@ -181,24 +181,24 @@ describe('waitForInput and HTTP ?wait=1 AbortSignal pass-through', { timeout: 60
         () => waitPromise,
         (err: unknown) => err instanceof HelmError && err.code === 'aborted' && err.status === 499,
       )
-      assert.ok(Date.now() - t0 < 2_000, 'abort waitForInput must immediately solve except suspended')
+      assert.ok(Date.now() - t0 < 2_000, 'aborting waitForInput must unblock immediately')
 
-      // pre- abort signal directly fast failed
+      // Pre-aborted signal fails fast immediately
       await assert.rejects(
         () => kernel.waitForInput(1, submissionId, controller.signal),
         (err: unknown) => err instanceof HelmError && err.code === 'aborted' && err.status === 499,
       )
 
-      // release latch: background durable turn not by cancel, continue complete and can re- wait for gets complete result
+      // Release latch: background durable turn was not cancelled, finishes cleanly, and re-awaiting receives full result
       releaseTurn()
       const finalResult = await kernel.waitForInput(1, submissionId)
-      assert.equal(finalResult.text, 'background turn continue complete')
+      assert.equal(finalResult.text, 'background turn completed')
     } finally {
       await kernel.close()
     }
   })
 
-  it('POST /api/conversations/:id/input?wait=1 client assert connect immediately solve except server side wait for and background turn continue complete', { timeout: 60_000 }, async () => {
+  it('POST /api/conversations/:id/input?wait=1 client disconnect immediately unblocks server wait while background turn completes', { timeout: 60_000 }, async () => {
     const dir = join(root, 'wait-abort-http')
     const kernel = await openTestRuntime(dir)
     const hub = await startHub({ kernel, port: 0 })
@@ -213,7 +213,7 @@ describe('waitForInput and HTTP ?wait=1 AbortSignal pass-through', { timeout: 60
         turnStarted = resolve
       })
 
-      // observe server side waitForInput what when enter and what when because client assert connect solve except suspended (do not change write real behavior)
+      // Observe when server waitForInput enters and unblocks on client disconnect (without altering real behavior)
       let waitEntered!: () => void
       const waitEnteredGate = new Promise<void>((resolve) => {
         waitEntered = resolve
@@ -237,12 +237,12 @@ describe('waitForInput and HTTP ?wait=1 AbortSignal pass-through', { timeout: 60
         async () => {
           turnStarted()
           await turnGate
-          return fauxAssistantMessage('HTTPassert connect after background turn complete')
+          return fauxAssistantMessage('background turn completed after HTTP disconnect')
         },
       ])
 
       const url = new URL(`${hub.url}/api/conversations/1/input?wait=1`)
-      const body = JSON.stringify({ text: 'trigger wait for after assert connect' })
+      const body = JSON.stringify({ text: 'trigger wait then disconnect' })
 
       const req = http.request(
         {
@@ -257,35 +257,35 @@ describe('waitForInput and HTTP ?wait=1 AbortSignal pass-through', { timeout: 60
           },
         },
         (res) => {
-          assert.fail(`client not assert connect before must not receives HTTP response (status=${res.statusCode})`)
+          assert.fail(`must not receive HTTP response before client disconnect (status=${res.statusCode})`)
         },
       )
       req.on('error', () => {
-        // client actively destroy produce ECONNRESET ignore
+        // Ignore ECONNRESET triggered by deliberate client destroy
       })
       req.write(body)
       req.end()
 
       await Promise.all([startedGate, waitEnteredGate])
-      assert.equal(waitSettledAt, undefined, 'assert connect before server side waitForInput should where at suspended state')
+      assert.equal(waitSettledAt, undefined, 'server waitForInput should remain suspended prior to disconnect')
 
       req.destroy()
       for (let i = 0; i < 40 && waitSettledAt === undefined; i += 1) {
         await new Promise((r) => setTimeout(r, 15))
       }
-      assert.ok(waitSettledAt !== undefined, 'client assert connect must immediately solve except server side waitForInput suspended')
+      assert.ok(waitSettledAt !== undefined, 'client disconnect must unblock server waitForInput immediately')
       assert.ok(
         waitError instanceof HelmError && waitError.code === 'aborted' && waitError.status === 499,
-        `server side should throw aborted 499(got ${String(waitError)})`,
+        `server side should reject with aborted 499 (got ${String(waitError)})`,
       )
 
-      // now background turn still not let through; let through after verify durable turn not by cancel, normal written to the database complete
+      // Release background turn; verify durable turn continued and persisted cleanly
       releaseTurn()
       await kernel.waitForIdle(1)
       const detail = await kernel.getConversationDetail(1)
       const lastEntry = detail.entries.find((e) => e.kind === 'pi.assistant')
-      assert.ok(lastEntry, 'client assert connect must not cancel background durable turn')
-      assert.equal(await kernel.getLastAssistantText(1), 'HTTPassert connect after background turn complete')
+      assert.ok(lastEntry, 'client disconnect must not cancel background durable turn')
+      assert.equal(await kernel.getLastAssistantText(1), 'background turn completed after HTTP disconnect')
     } finally {
       await hub.close()
       await kernel.close()
@@ -293,8 +293,8 @@ describe('waitForInput and HTTP ?wait=1 AbortSignal pass-through', { timeout: 60
   })
 })
 
-describe('harness.closed,HelmStore lead to life store fault closed ring and DiagnosticSink', { timeout: 60_000 }, () => {
-  it('normal close() does not trigger fatalError also produces no fault diagnose event', { timeout: 60_000 }, async () => {
+describe('harness.closed, HelmStore fatal storage circuit breaker, and DiagnosticSink', { timeout: 60_000 }, () => {
+  it('normal close() does not set fatalError or emit fault diagnostics', { timeout: 60_000 }, async () => {
     const dir = join(root, 'normal-close')
     const diagnostics: KernelDiagnosticEvent[] = []
     const kernel = await openTestRuntime(dir, { onDiagnostic: (e) => diagnostics.push(e) })
@@ -309,7 +309,7 @@ describe('harness.closed,HelmStore lead to life store fault closed ring and Diag
     assert.equal(notifications.length, 0)
   })
 
-  it('harness.closed with failed end when record fatalError, redaction on report diagnose, publish error notify and reject after continue write request', { timeout: 60_000 }, async () => {
+  it('harness.closed ending in failure records fatalError, reports redacted diagnostics, publishes error notification, and rejects subsequent writes', { timeout: 60_000 }, async () => {
     const dir = join(root, 'harness-failed')
     const diagnostics: KernelDiagnosticEvent[] = []
     const kernel = await openTestRuntime(dir, { onDiagnostic: (e) => diagnostics.push(e) })
@@ -321,7 +321,7 @@ describe('harness.closed,HelmStore lead to life store fault closed ring and Diag
     const secret = 'sk-harness-secret-leak-999'
     kernel.stash.addRedaction(secret)
 
-    // only break Harness underlying storage.commit(HelmStore keep can write with verify EventHub real-time notify broadcast)
+    // Break only Harness underlying storage.commit (leave HelmStore writable to test live EventHub notification)
     const internals = kernel as unknown as {
       database: { storage: { commit: (...args: unknown[]) => Promise<unknown> } }
     }
@@ -331,29 +331,29 @@ describe('harness.closed,HelmStore lead to life store fault closed ring and Diag
 
     try {
       await assert.rejects(() => kernel.createConversation({}))
-      // wait for harness.closed micro task/closure stop chain compute
+      // Wait for harness.closed microtask/shutdown pipeline to settle
       for (let i = 0; i < 40 && kernel.fatalError === undefined; i += 1) {
         await new Promise((r) => setTimeout(r, 15))
       }
 
-      assert.ok(kernel.fatalError instanceof HelmError, 'should record only read fatalError')
-      assert.ok(!kernel.fatalError.message.includes(secret), 'fatalError must redaction')
+      assert.ok(kernel.fatalError instanceof HelmError, 'should record readonly fatalError')
+      assert.ok(!kernel.fatalError.message.includes(secret), 'fatalError must be redacted')
       assert.ok(kernel.fatalError.message.includes('[REDACTED]'))
 
       const harnessDiag = diagnostics.find((d) => d.source === 'harness')
-      assert.ok(harnessDiag, 'should to diagnose channel on report harness fault')
+      assert.ok(harnessDiag, 'should emit harness fault on diagnostic channel')
       assert.equal(harnessDiag.level, 'error')
       assert.ok(!harnessDiag.message.includes(secret))
-      assert.ok(!(harnessDiag.error ?? '').includes(secret), 'diagnose error must redaction')
+      assert.ok(!(harnessDiag.error ?? '').includes(secret), 'diagnostic error must be redacted')
 
-      assert.ok(notifications.length >= 1, 'harness fault should via EventHub publish error notify')
+      assert.ok(notifications.length >= 1, 'harness fault should publish error notification via EventHub')
       const lastNote = notifications.at(-1)!.event as { type: 'notification'; level: string; body?: string }
       assert.equal(lastNote.level, 'error')
-      assert.ok(!(lastNote.body ?? '').includes(secret), 'notify event body must redaction')
+      assert.ok(!(lastNote.body ?? '').includes(secret), 'notification body must be redacted')
 
-      // write/change new request must explicit reject while non- pretend store
+      // Subsequent write/mutation requests must reject explicitly rather than pretending health
       await assert.rejects(
-        () => kernel.submitInput(1, 'write request should by reject'),
+        () => kernel.submitInput(1, 'write request should reject'),
         (err: unknown) => err === kernel.fatalError,
       )
       await assert.rejects(
@@ -361,7 +361,7 @@ describe('harness.closed,HelmStore lead to life store fault closed ring and Diag
         (err: unknown) => err === kernel.fatalError,
       )
       await assert.rejects(
-        () => kernel.updateConversation(1, { title: 'must not succeeded' }),
+        () => kernel.updateConversation(1, { title: 'must fail' }),
         (err: unknown) => err === kernel.fatalError,
       )
       await assert.rejects(
@@ -373,7 +373,7 @@ describe('harness.closed,HelmStore lead to life store fault closed ring and Diag
     }
   })
 
-  it('HelmStore instance level onError in many KernelRuntime instance between fully isolated and trigger diagnose and internal notify', { timeout: 60_000 }, async () => {
+  it('HelmStore instance-scoped onError isolates multiple KernelRuntime instances and routes diagnostics and internal notifications', { timeout: 60_000 }, async () => {
     const dirA = join(root, 'multi-a')
     const dirB = join(root, 'multi-b')
     const diagA: KernelDiagnosticEvent[] = []
@@ -393,7 +393,7 @@ describe('harness.closed,HelmStore lead to life store fault closed ring and Diag
       hostNotesB.push(p)
     })
 
-    // only to kernelA inject HelmStore SQL failed to write
+    // Inject SQL write failure strictly into kernelA's HelmStore
     const internalsA = kernelA as unknown as {
       database: { db: { run: (sql: string, ...params: unknown[]) => Promise<unknown> } }
     }
@@ -413,26 +413,26 @@ describe('harness.closed,HelmStore lead to life store fault closed ring and Diag
       )
 
       assert.ok(kernelA.fatalError instanceof HelmError, 'kernelA should record fatalError')
-      assert.ok(!kernelA.fatalError.message.includes(secretA), 'fatalError must redaction')
-      assert.equal(kernelB.fatalError, undefined, 'kernelB must not subject to kernelA affect')
+      assert.ok(!kernelA.fatalError.message.includes(secretA), 'fatalError must be redacted')
+      assert.equal(kernelB.fatalError, undefined, 'kernelB must stay isolated from kernelA faults')
 
       const storeDiagA = diagA.find((d) => d.source === 'store')
-      assert.ok(storeDiagA, 'diagA should receives store diagnose event')
-      assert.ok(!(storeDiagA.error ?? '').includes(secretA), 'diagA error must redaction')
-      assert.equal(diagB.length, 0, 'diagB must not receives kernelA fault')
+      assert.ok(storeDiagA, 'diagA should receive store diagnostic event')
+      assert.ok(!(storeDiagA.error ?? '').includes(secretA), 'diagA error must be redacted')
+      assert.equal(diagB.length, 0, 'diagB must receive zero events from kernelA fault')
 
-      // internal host notify fall back still trigger reach kernelA, does not affect kernelB
+      // Internal host notification fallback delivers to kernelA without spilling to kernelB
       await new Promise((r) => setTimeout(r, 20))
-      assert.ok(hostNotesA.length >= 1, 'kernelA internal listener should receives fault notify')
-      assert.equal(hostNotesB.length, 0, 'kernelB must not receives fault notify')
+      assert.ok(hostNotesA.length >= 1, 'kernelA internal listener should receive fault notification')
+      assert.equal(hostNotesB.length, 0, 'kernelB must receive zero fault notifications')
 
-      // kernelA after continue write/change new request by reject;kernelB normal work
+      // kernelA rejects subsequent writes while kernelB keeps working cleanly
       await assert.rejects(
-        () => kernelA.submitInput(1, 'failed after commit'),
+        () => kernelA.submitInput(1, 'should fail after breaker trip'),
         (err: unknown) => err === kernelA.fatalError,
       )
-      const convB = await kernelB.createConversation({ title: 'B normal' })
-      assert.equal(convB.title, 'B normal')
+      const convB = await kernelB.createConversation({ title: 'B healthy' })
+      assert.equal(convB.title, 'B healthy')
     } finally {
       await assert.rejects(
         () => kernelA.close(),
@@ -442,7 +442,7 @@ describe('harness.closed,HelmStore lead to life store fault closed ring and Diag
     }
   })
 
-  it('DiagnosticSink automatically redaction, isolated throw exception sink, and security format without prototype error object', { timeout: 60_000 }, async () => {
+  it('DiagnosticSink auto-redacts, isolates throwing sinks, and safely formats null-prototype error objects', { timeout: 60_000 }, async () => {
     const captured: KernelDiagnosticEvent[] = []
     const stash = new SecretStash()
     stash.addRedaction('super-secret-value')
@@ -457,13 +457,13 @@ describe('harness.closed,HelmStore lead to life store fault closed ring and Diag
     emit({
       level: 'warn',
       source: 'unit.test',
-      message: 'contains super-secret-value alert',
+      message: 'alert with super-secret-value',
       error: new Error('boom super-secret-value'),
       conversationId: 42,
     })
     emit({
       source: 'unit.nullproto',
-      message: 'without prototype error',
+      message: 'null-prototype error',
       error: nullProto,
     })
 
@@ -474,7 +474,7 @@ describe('harness.closed,HelmStore lead to life store fault closed ring and Diag
     assert.ok(!(captured[0]!.error ?? '').includes('super-secret-value'))
     assert.equal(captured[1]!.error, '[unprintable error]')
 
-    // throwing sink must not reverse devour caller
+    // Throwing sinks must not throw back to callers
     const throwingEmit = createDiagnosticEmitter({
       sink: () => {
         throw new Error('sink crashed')
@@ -484,7 +484,7 @@ describe('harness.closed,HelmStore lead to life store fault closed ring and Diag
       throwingEmit({ source: 'unit.throw', message: 'should not propagate' }),
     )
 
-    // independent HelmStore pass onDiagnostic when do not hit global state, by instance away diagnose channel
+    // Standalone HelmStore with onDiagnostic routes through per-instance sink without hitting globals
     const db = await openHelmDatabase(join(root, 'standalone-store'))
     const storeEvents: KernelDiagnosticEvent[] = []
     const store = new HelmStore(db, {
@@ -509,7 +509,7 @@ describe('harness.closed,HelmStore lead to life store fault closed ring and Diag
     await db.close()
   })
 
-  it('KernelRuntime internal async/listen/teardown error unify gather until onDiagnostic', { timeout: 60_000 }, async () => {
+  it('KernelRuntime internal async/listener/teardown errors funnel centrally into onDiagnostic', { timeout: 60_000 }, async () => {
     const dir = join(root, 'runtime-diag')
     const diagnostics: KernelDiagnosticEvent[] = []
     const kernel = await openTestRuntime(dir, { onDiagnostic: (e) => diagnostics.push(e) })
@@ -524,8 +524,8 @@ describe('harness.closed,HelmStore lead to life store fault closed ring and Diag
     await new Promise((r) => setTimeout(r, 15))
 
     const listenerDiag = diagnostics.find((d) => d.source === 'runtime.events')
-    assert.ok(listenerDiag, 'internal event listener exception should enter onDiagnostic')
-    assert.ok(!(listenerDiag.error ?? '').includes(secret), 'internal listener error must redaction')
+    assert.ok(listenerDiag, 'internal event listener fault should report via onDiagnostic')
+    assert.ok(!(listenerDiag.error ?? '').includes(secret), 'internal listener error must be redacted')
 
     await kernel.close()
   })

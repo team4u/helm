@@ -1,8 +1,8 @@
 /**
- * by execId dispatch node side streaming output event (WS+birpc call back another end).
+ * Dispatches node-side streaming output events by `execId` (WS + birpc callback from the node).
  *
- * each RemoteExecutionEnv.exec in start RPC before register handler; node call back
- * onEnvExecOutput when by execId hit dispatch,exec after end unsubscribe.
+ * Each `RemoteExecutionEnv.exec` registers a handler before starting the RPC; when the node calls
+ * `onEnvExecOutput`, the event is routed by `execId` and unsubscribed once `exec` finishes.
  */
 
 import type { EnvExecOutputEvent } from '@helm/protocol'
@@ -10,7 +10,7 @@ import type { EnvExecOutputEvent } from '@helm/protocol'
 export class ExecOutputHub {
   #handlers = new Map<string, (event: EnvExecOutputEvent) => void>()
 
-  /** node streaming call back entry (hang to birpc connect onEnvExecOutput on). */
+  /** Node streaming callback entry point (wired to birpc `onEnvExecOutput`). */
   readonly onEnvExecOutput = (event: EnvExecOutputEvent): void => {
     if (event === null || typeof event !== 'object') return
     const handler = this.#handlers.get(event.execId)
@@ -18,7 +18,7 @@ export class ExecOutputHub {
       try {
         handler(event)
       } catch {
-        // single handler fault does not affect other dispatch.
+        // A single handler failure must not disrupt dispatching to others.
       }
     }
   }

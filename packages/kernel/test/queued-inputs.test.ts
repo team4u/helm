@@ -1,12 +1,11 @@
 /**
- * queuedInputs(steer / followUp await takes effect pill) real link test.
+ * End-to-end tests for `queuedInputs` (steer / followUp pending-input pills).
  *
- * override:
- * 1. pure function layer:deriveConversationLive from pi.inbox queue up items derive queuedInputs
- *    (steer takes precedence sort, illegal items skip,origin/createdAt/attachments boundary).
- * 2. real SDK layer: conversation working during commit steer and followUp,conversation.live
- *    event carry queuedInputs(steer in before followUp in after); queue up items consume
- *    entries after from queuedInputs remove.
+ * Covers:
+ * 1. Pure function layer: `deriveConversationLive` derives `queuedInputs` from `pi.inbox` queued items
+ *    (steer sorted first, invalid entries skipped, `origin`/`createdAt`/`attachments` edge cases).
+ * 2. Real SDK layer: submitting steer and followUp while conversation runs causes `conversation.live`
+ *    events to carry `queuedInputs` (steer before followUp), and removes them once consumed.
  */
 import { strict as assert } from 'node:assert'
 import { after, before, describe, it } from 'node:test'
@@ -24,7 +23,7 @@ import { HelmStore, type ConvMeta } from '../src/runtime/store.js'
 import { KernelRuntime } from '../src/runtime/index.js'
 import { cleanupDir, makeFauxModels, makeTempDir, waitFor } from './helpers.js'
 
-/** snapshot in designate conversation real-time view (queuedInputs fact source). */
+/** Returns the live state view for the target conversation from snapshot (`queuedInputs` truth source). */
 function findLive(kernel: KernelRuntime, conversationId: number): ConversationLive | undefined {
   return (kernel.events.currentSnapshot().conversationLives ?? []).find(
     (l) => l.conversationId === conversationId,
@@ -51,14 +50,14 @@ function convMeta(id: number): ConvMeta {
 }
 
 // ---------------------------------------------------------------------------
-// 1. pure function:deriveConversationLive queuedInputs derive
+// 1. Pure function: deriveConversationLive queuedInputs projection
 // ---------------------------------------------------------------------------
 
 describe('deriveConversationLive queuedInputs', { timeout: 60_000 }, () => {
-  it('steer arrange in followUp before (same mode keep original order), field mapping complete', { timeout: 60_000 }, () => {
+  it('places steer ahead of followUp while preserving within-mode order and field mappings', { timeout: 60_000 }, () => {
     const inbox: InboxItemLike[] = [
-      { id: 11, mode: 'followUp', entry: { kind: 'helm.input', data: { id: 'fu-1', text: 'second queue up', origin: 'human', createdAt: 200 } } },
-      { id: 12, mode: 'steer', entry: { kind: 'helm.input', data: { id: 'st-1', text: 'insert speech quote lead', origin: 'agent', createdAt: 100 } } },
+      { id: 11, mode: 'followUp', entry: { kind: 'helm.input', data: { id: 'fu-1', text: 'queued follow-up', origin: 'human', createdAt: 200 } } },
+      { id: 12, mode: 'steer', entry: { kind: 'helm.input', data: { id: 'st-1', text: 'steer instruction', origin: 'agent', createdAt: 100 } } },
       { id: 13, mode: 'steer', entry: { kind: 'helm.input', data: { id: 'st-2', text: 'second steer', origin: 'trigger', createdAt: 150 } } },
     ]
     const live = deriveConversationLive(7, undefined, 999, inbox)
@@ -74,23 +73,23 @@ describe('deriveConversationLive queuedInputs', { timeout: 60_000 }, () => {
     assert.equal(third!.createdAt, 200)
   })
 
-  it('illegal items skip:write pattern, non- helm.input, missing id/text all produces no queuedInput', { timeout: 60_000 }, () => {
+  it('skips invalid items: write mode, non-helm.input, or missing id/text produce no queuedInput', { timeout: 60_000 }, () => {
     const inbox: InboxItemLike[] = [
       { id: 1, mode: 'write', entry: { kind: 'helm.note', data: { id: 'w', text: 'write' } } },
-      { id: 2, mode: 'steer', entry: { kind: 'pi.user', data: { id: 'x', text: 'non- helm.input' } } },
+      { id: 2, mode: 'steer', entry: { kind: 'pi.user', data: { id: 'x', text: 'non-helm.input' } } },
       { id: 3, mode: 'followUp', entry: { kind: 'helm.input', data: { text: 'missing id' } } },
       { id: 4, mode: 'followUp', entry: { kind: 'helm.input', data: { id: 'no-text' } } },
-      { id: 5, mode: 'steer', entry: { kind: 'helm.input', data: { id: 'ok-1', text: 'legal items' } } },
+      { id: 5, mode: 'steer', entry: { kind: 'helm.input', data: { id: 'ok-1', text: 'valid item' } } },
     ]
     const live = deriveConversationLive(1, undefined, 50, inbox)
     assert.deepEqual(live.queuedInputs?.map((q) => q.id), ['ok-1'])
-    // origin illegal fall back human;createdAt illegal take updatedAt.
+    // Invalid origin falls back to human; invalid createdAt falls back to updatedAt.
     const q = live.queuedInputs![0]!
     assert.equal(q.origin, 'human')
     assert.equal(q.createdAt, 50)
   })
 
-  it('attachments non-empty array keep, empty array omit; without queue up items when queuedInputs omit', { timeout: 60_000 }, () => {
+  it('keeps non-empty attachments, omits empty attachments, and omits queuedInputs when empty', { timeout: 60_000 }, () => {
     const withAttachments = deriveConversationLive(1, undefined, 10, [
       {
         id: 9,
@@ -99,7 +98,7 @@ describe('deriveConversationLive queuedInputs', { timeout: 60_000 }, () => {
           kind: 'helm.input',
           data: {
             id: 'q-1',
-            text: 'carries attachment',
+            text: 'with attachment',
             attachments: [{ id: 'art_1', name: 'a.png', mimeType: 'image/png', size: 5 }],
           },
         },
@@ -116,10 +115,10 @@ describe('deriveConversationLive queuedInputs', { timeout: 60_000 }, () => {
 })
 
 // ---------------------------------------------------------------------------
-// 2. real SDK:working during steer / followUp queue and consume
+// 2. Real SDK: queuing and consuming steer / followUp during a live run
 // ---------------------------------------------------------------------------
 
-describe('ConversationTracker queuedInputs real-time event', { timeout: 60_000 }, () => {
+describe('ConversationTracker queuedInputs real-time events', { timeout: 60_000 }, () => {
   let root = ''
 
   before(async () => {
@@ -167,7 +166,7 @@ describe('ConversationTracker queuedInputs real-time event', { timeout: 60_000 }
       lives,
       faux,
       close: async () => {
-        // first stop observe (clean live node stream timer), again closure SDK and database, guard against timer leak leak.
+        // Stop observers first (canceling live stream timers) before closing SDK and database to avoid timer leaks.
         for (const id of [...trackedIds]) tracker.stopObserving(id)
         await harness.close(BACKGROUND_CONTEXT)
         const err = await store.close()
@@ -178,7 +177,7 @@ describe('ConversationTracker queuedInputs real-time event', { timeout: 60_000 }
   }
   const trackedIds = new Set<number>()
 
-  it('working during commit steer and followUp:live carry queuedInputs(steer in before), consume after remove', { timeout: 60_000 }, async () => {
+  it('queued steer and followUp while running appear in live (steer first) and disappear once consumed', { timeout: 60_000 }, async () => {
     const { tracker, harness, store, lives, faux, close } = await openTracker()
     try {
       const conv = await harness.createConversation(
@@ -187,33 +186,33 @@ describe('ConversationTracker queuedInputs real-time event', { timeout: 60_000 }
       )
       const id = conv.id as number
       trackedIds.add(id)
-      // tracker dependency store meta derive summary (emitRunSummary/summaryOf):
-      // observe before first register conversation mirror, otherwise getConv miss leads to summary path skip.
+      // Tracker relies on store meta for summaries (emitRunSummary/summaryOf):
+      // upsert conversation metadata before observe so getConv does not miss and skip summaries.
       store.upsertConv(convMeta(id))
       await tracker.observe(id)
 
-      // one round run(long text streaming, guarantee commit queue up items when run still in enter row).
-      faux.setResponses([fauxAssistantMessage('one round answer')])
+      // Turn 1 runs while queued inputs are submitted (ensures the run stays active during submissions).
+      faux.setResponses([fauxAssistantMessage('first turn answer')])
       await conv.submit(
         {
           type: 'input',
-          content: 'one round issue',
-          entry: { kind: 'helm.input', data: { id: 'base-1', text: 'one round issue', origin: 'human', createdAt: 1 } },
+          content: 'first turn question',
+          entry: { kind: 'helm.input', data: { id: 'base-1', text: 'first turn question', origin: 'human', createdAt: 1 } },
           requestId: 'base-1',
         },
         BACKGROUND_CONTEXT,
       )
 
-      // etc. run start (live one frame reach; observe push in micro task/timer after async reach).
+      // Wait for run start (initial live frame arrives; observe notification arrives async via microtask/timer).
       await waitFor(() => lives.length >= 1 || tracker.hasLiveWork(id), 5_000)
 
-      // working in commit followUp(first queue) and steer(after queue but priority high).
+      // Submit followUp first and steer second while active (steer still sorts ahead).
       await conv.submit(
         {
           type: 'input',
-          content: 'queue up after continue input',
+          content: 'queued follow-up input',
           whenBusy: 'followUp',
-          entry: { kind: 'helm.input', data: { id: 'q-fu', text: 'queue up after continue input', origin: 'human', createdAt: 2 } },
+          entry: { kind: 'helm.input', data: { id: 'q-fu', text: 'queued follow-up input', origin: 'human', createdAt: 2 } },
           requestId: 'q-fu',
         },
         BACKGROUND_CONTEXT,
@@ -221,23 +220,22 @@ describe('ConversationTracker queuedInputs real-time event', { timeout: 60_000 }
       await conv.submit(
         {
           type: 'input',
-          content: 'insert speech quote lead patch fill',
+          content: 'steer supplement input',
           whenBusy: 'steer',
-          entry: { kind: 'helm.input', data: { id: 'q-st', text: 'insert speech quote lead patch fill', origin: 'human', createdAt: 3 } },
+          entry: { kind: 'helm.input', data: { id: 'q-st', text: 'steer supplement input', origin: 'human', createdAt: 3 } },
           requestId: 'q-st',
         },
         BACKGROUND_CONTEXT,
       )
 
-      // queuedInputs reach:steer in before,followUp in after (queue 0ms conflict refresh path).
+      // queuedInputs arrive with steer first and followUp second (covers 0ms inbox coalesced refresh).
       await waitFor(() => lives.some((l) => (l.queuedInputs?.length ?? 0) >= 2), 5_000)
       const queuedFrame = lives.findLast((l) => (l.queuedInputs?.length ?? 0) >= 2)!
       assert.deepEqual(queuedFrame.queuedInputs!.map((q) => q.id), ['q-st', 'q-fu'])
       assert.deepEqual(queuedFrame.queuedInputs!.map((q) => q.mode), ['steer', 'followUp'])
 
-      // one round after end followUp consume: new run  helm.input entry written to the database,
-      // queuedInputs remove (wait for finally one frame no longer carry this two queue up items).
-      faux.appendResponses([fauxAssistantMessage('second round answer')])
+      // After turn 1 finishes and followUp drains: new run writes helm.input entry and removes both items from queuedInputs.
+      faux.appendResponses([fauxAssistantMessage('second turn answer')])
       await conv.waitForIdle(BACKGROUND_CONTEXT)
       await waitFor(
         () => {
@@ -247,8 +245,8 @@ describe('ConversationTracker queuedInputs real-time event', { timeout: 60_000 }
         5_000,
       )
       const tail = lives[lives.length - 1]!
-      assert.equal((tail.queuedInputs ?? []).some((q) => q.id === 'q-st'), false, 'steer consume after from queuedInputs remove')
-      assert.equal((tail.queuedInputs ?? []).some((q) => q.id === 'q-fu'), false, 'followUp consume after from queuedInputs remove')
+      assert.equal((tail.queuedInputs ?? []).some((q) => q.id === 'q-st'), false, 'steer must be removed from queuedInputs once consumed')
+      assert.equal((tail.queuedInputs ?? []).some((q) => q.id === 'q-fu'), false, 'followUp must be removed from queuedInputs once consumed')
     } finally {
       await close()
     }
@@ -256,7 +254,7 @@ describe('ConversationTracker queuedInputs real-time event', { timeout: 60_000 }
 })
 
 // ---------------------------------------------------------------------------
-// 3. real KernelRuntime:SSE snapshot restore queuedInputs(faux Promise gate control when)
+// 3. Real KernelRuntime: SSE snapshot recovery of queuedInputs (faux Promise gate)
 // ---------------------------------------------------------------------------
 
 describe('KernelRuntime snapshot conversationLives', { timeout: 60_000 }, () => {
@@ -270,7 +268,7 @@ describe('KernelRuntime snapshot conversationLives', { timeout: 60_000 }, () => 
     await cleanupDir(root)
   })
 
-  it('run in progress followUp/steer queue after, reconnect snapshot carry queuedInputs(no need to again commit or again token)', { timeout: 60_000 }, async () => {
+  it('queues followUp/steer mid-run so reconnect snapshots preserve queuedInputs without waiting for tokens', { timeout: 60_000 }, async () => {
     const dir = join(root, 'snap1')
     const { models, faux } = makeFauxModels()
     let entered!: () => void
@@ -286,15 +284,14 @@ describe('KernelRuntime snapshot conversationLives', { timeout: 60_000 }, () => 
     })
     try {
       const conv = await kernel.createConversation({ title: 'snapshot restore' })
-      const submit1 = kernel.submitInput(conv.id, 'one round issue')
+      const submit1 = kernel.submitInput(conv.id, 'first turn question')
       await started
-      // run already in-flight (model request by gate suspended): commit steer and followUp queue.
+      // Run is in-flight (model request paused on gate): enqueue both steer and followUp.
       await Promise.all([
-        kernel.submitInput(conv.id, 'queue up after continue input', { whenBusy: 'followUp' }),
-        kernel.submitInput(conv.id, 'insert speech quote lead patch fill', { whenBusy: 'steer' }),
+        kernel.submitInput(conv.id, 'queued follow-up input', { whenBusy: 'followUp' }),
+        kernel.submitInput(conv.id, 'steer supplement input', { whenBusy: 'steer' }),
       ])
-      // queue fact written to the database after take snapshot: reconnect scenario under client rely on this one frame restore pill,
-      // does not need again commit input or wait for under a model token.
+      // Once persisted, snapshot immediately exposes queued facts so reconnecting clients restore pills without waiting for new tokens.
       await waitFor(() => {
         const snap = kernel.events.currentSnapshot()
         const live = (snap.conversationLives ?? []).find((l) => l.conversationId === conv.id)
@@ -302,22 +299,22 @@ describe('KernelRuntime snapshot conversationLives', { timeout: 60_000 }, () => 
       }, 5_000)
       const snap = kernel.events.currentSnapshot()
       const live = (snap.conversationLives ?? []).find((l) => l.conversationId === conv.id)
-      assert.ok(live, 'snapshot should contain the conversation real-time view')
-      // requestId by kernel random generate (cannot pre- know), by text+mode assertion two queue up fact.
+      assert.ok(live, 'snapshot must include live view for the conversation')
+      // requestId is randomly generated by kernel, so assert queued inputs by text + mode.
       const queued = live!.queuedInputs!
       assert.equal(queued.length, 2)
       const byText = new Map(queued.map((q) => [q.text, q]))
-      assert.equal(byText.get('insert speech quote lead patch fill')?.mode, 'steer')
-      assert.equal(byText.get('queue up after continue input')?.mode, 'followUp')
+      assert.equal(byText.get('steer supplement input')?.mode, 'steer')
+      assert.equal(byText.get('queued follow-up input')?.mode, 'followUp')
       for (const q of queued) {
-        assert.equal(typeof q.id === 'string' && q.id !== '', true, 'queued id non-empty')
-        assert.equal(typeof q.submissionId === 'string' && q.submissionId !== '', true, 'queued submissionId non-empty')
+        assert.equal(typeof q.id === 'string' && q.id !== '', true, 'queued id must be non-empty')
+        assert.equal(typeof q.submissionId === 'string' && q.submissionId !== '', true, 'queued submissionId must be non-empty')
         assert.equal(q.origin, 'human')
       }
-      // release gate:run complete, after continue followUp consume, queue eventually empty.
-      answer(fauxAssistantMessage('one round answer'))
+      // Release gate: run completes, followUp drains, and queued list empties.
+      answer(fauxAssistantMessage('first turn answer'))
       await submit1
-      faux.appendResponses([fauxAssistantMessage('second round answer')])
+      faux.appendResponses([fauxAssistantMessage('second turn answer')])
       await kernel.waitForIdle(conv.id)
       await waitFor(() => {
         const tail = (kernel.events.currentSnapshot().conversationLives ?? []).find((l) => l.conversationId === conv.id)
@@ -328,7 +325,7 @@ describe('KernelRuntime snapshot conversationLives', { timeout: 60_000 }, () => 
     }
   })
 
-  it('busy in omit whenBusy by default steer; explicit followUp still queue up;reject report 409 conversation_busy', { timeout: 60_000 }, async () => {
+  it('omitted whenBusy defaults to steer while busy; explicit followUp queues and reject returns 409 conversation_busy', { timeout: 60_000 }, async () => {
     const dir = join(root, 'default-steer')
     const { models, faux } = makeFauxModels()
     let entered!: () => void
@@ -343,63 +340,62 @@ describe('KernelRuntime snapshot conversationLives', { timeout: 60_000 }, () => 
       models,
     })
     try {
-      const conv = await kernel.createConversation({ title: 'by default insert speech' })
-      const submit1 = kernel.submitInput(conv.id, 'one round issue')
+      const conv = await kernel.createConversation({ title: 'default steer' })
+      const submit1 = kernel.submitInput(conv.id, 'first turn question')
       await started
-      // run in-flight (model request by gate suspended): omit whenBusy commit - - by valid by default steer queue,
-      // directly with pi.inbox fact assertion (do not based on eventually answer guess).
-      await kernel.submitInput(conv.id, 'omit whenBusy patch fill')
+      // Run in-flight (model paused on gate): submit without whenBusy — assert directly via pi.inbox live state (not final answer guess).
+      await kernel.submitInput(conv.id, 'omitted whenBusy supplement')
       await waitFor(() => {
         const live = findLive(kernel, conv.id)
         return live !== undefined && (live.queuedInputs?.length ?? 0) >= 1
       }, 5_000)
       const omitQueued = findLive(kernel, conv.id)!.queuedInputs!
       assert.equal(omitQueued.length, 1)
-      assert.equal(omitQueued[0]!.mode, 'steer', 'omit whenBusy should by by default steer queue')
-      assert.equal(omitQueued[0]!.text, 'omit whenBusy patch fill')
-      // explicit followUp still queue up (do not because by default change while expires).
-      await kernel.submitInput(conv.id, 'explicit queue up after continue', { whenBusy: 'followUp' })
+      assert.equal(omitQueued[0]!.mode, 'steer', 'omitted whenBusy must queue as default steer')
+      assert.equal(omitQueued[0]!.text, 'omitted whenBusy supplement')
+      // Explicit followUp still queues (default policy change must not disable explicit modes).
+      await kernel.submitInput(conv.id, 'explicit queued follow-up', { whenBusy: 'followUp' })
       await waitFor(() => {
         const live = findLive(kernel, conv.id)
         return live !== undefined && (live.queuedInputs?.length ?? 0) >= 2
       }, 5_000)
       const twoQueued = findLive(kernel, conv.id)!.queuedInputs!
       const byText = new Map(twoQueued.map((q) => [q.text, q]))
-      assert.equal(byText.get('omit whenBusy patch fill')?.mode, 'steer')
-      assert.equal(byText.get('explicit queue up after continue')?.mode, 'followUp')
-      // explicit reject: correct busy when reject (not silently queue).
+      assert.equal(byText.get('omitted whenBusy supplement')?.mode, 'steer')
+      assert.equal(byText.get('explicit queued follow-up')?.mode, 'followUp')
+      // Explicit reject fails 409 instead of silently queuing.
       await assert.rejects(
-        () => kernel.submitInput(conv.id, 'should by reject input', { whenBusy: 'reject' }),
+        () => kernel.submitInput(conv.id, 'input to be rejected', { whenBusy: 'reject' }),
         (err: unknown) => {
           const helmErr = err as { name?: string; code?: string; status?: number }
           return helmErr?.name === 'HelmError' && helmErr?.code === 'conversation_busy' && helmErr?.status === 409
         },
       )
-      // release gate:run complete, queue consume after empty.
-      answer(fauxAssistantMessage('one round answer'))
-      faux.appendResponses([fauxAssistantMessage('after continue answer')])
+      // Release gate: run completes and queued items drain.
+      answer(fauxAssistantMessage('first turn answer'))
+      faux.appendResponses([fauxAssistantMessage('follow-up answer')])
       await submit1
       await kernel.waitForIdle(conv.id)
       await waitFor(() => {
         const live = findLive(kernel, conv.id)
         return live === undefined || (live.queuedInputs?.length ?? 0) === 0
       }, 5_000)
-      // helm.input entry written to the database carry valid whenBusy(omit path solid is steer).
+      // Persisted helm.input entry carries effective whenBusy ('steer' when omitted).
       const detail = await kernel.getConversationDetail(conv.id, { limit: 50 })
       const stored = detail.entries
         .filter((e) => e.kind === 'helm.input')
         .map((e) => (e.data ?? {}) as { text?: string; whenBusy?: string })
-        .find((d) => d.text === 'omit whenBusy patch fill')
-      assert.equal(stored?.whenBusy, 'steer', 'helm.input entry should record valid by default steer')
+        .find((d) => d.text === 'omitted whenBusy supplement')
+      assert.equal(stored?.whenBusy, 'steer', 'persisted helm.input entry must record effective default steer')
     } finally {
       await kernel.close()
     }
   })
 
-  it('idle conversation does not resurrect idle empty live(snapshot excludes without content item)', { timeout: 60_000 }, async () => {
+  it('idle conversations omit empty live states from snapshot conversationLives', { timeout: 60_000 }, async () => {
     const dir = join(root, 'snap2')
     const { models, faux } = makeFauxModels()
-    faux.setResponses([fauxAssistantMessage('only one round')])
+    faux.setResponses([fauxAssistantMessage('single turn')])
     const kernel = await KernelRuntime.open({
       dataDir: dir,
       cwd: dir,
@@ -408,7 +404,7 @@ describe('KernelRuntime snapshot conversationLives', { timeout: 60_000 }, () => 
     })
     try {
       const conv = await kernel.createConversation({ title: 'idle' })
-      await kernel.submitInput(conv.id, 'issue')
+      await kernel.submitInput(conv.id, 'question')
       await kernel.waitForIdle(conv.id)
       const snap = kernel.events.currentSnapshot()
       assert.equal(

@@ -1,6 +1,6 @@
 /**
- * helm kernel service test base seat: delegate `@helm/test-kit` provide directory, wait for,DTO and memory store fixture.
- * keep in-memory module (without `node:fs` / `node:child_process` directly import), ensure pure test can shard run.
+ * Shared test utilities for kernel tests: delegates to `@helm/test-kit` for temp dirs, polling waits, DTO builders, and in-memory stores.
+ * Stays in-memory (avoiding direct `node:fs` / `node:child_process` imports) so pure unit tests remain shardable.
  */
 import assert from 'node:assert/strict'
 import { createModels } from '@earendil-works/pi-ai/models'
@@ -24,12 +24,12 @@ import {
 } from '@helm/test-kit/node'
 import type { PluginConfigStore, PluginDocStore } from '../src/plugins/index.js'
 
-/** each test group independent temporary data directory (real file behavior). */
+/** Creates an isolated temporary data directory for each test suite (for real filesystem tests). */
 export async function makeTempDir(prefix = 'helm-services-test-'): Promise<string> {
   return kitMakeTempDir(prefix)
 }
 
-/** polling wait for condition into establish (support location parameter `(predicate, timeoutMs, intervalMs)` and option object). */
+/** Polls until predicate returns true (accepts positional `(predicate, timeoutMs, intervalMs)` or an options object). */
 export async function waitFor(
   predicate: () => boolean | Promise<boolean>,
   timeoutOrOptions: number | WaitForOptions = {},
@@ -42,7 +42,7 @@ export async function waitFor(
   return kitWaitFor(predicate, options)
 }
 
-/** memory plugin global document store implement, supply plugin/host test sharing. */
+/** In-memory implementation of PluginDocStore shared by plugin and host tests. */
 export class MemoryDocStore implements PluginDocStore {
   readonly store = new Map<string, unknown>()
 
@@ -64,7 +64,7 @@ export class MemoryDocStore implements PluginDocStore {
   async flush(): Promise<void> {}
 }
 
-/** memory plugin config store implement, supply plugin/host test sharing. */
+/** In-memory implementation of PluginConfigStore shared by plugin and host tests. */
 export class MemoryConfigStore implements PluginConfigStore {
   readonly store = new Map<string, Record<string, unknown>>()
 
@@ -77,7 +77,7 @@ export class MemoryConfigStore implements PluginConfigStore {
   }
 }
 
-/** construct already mount fauxProvider  Models instance and its control handle. */
+/** Builds a Models instance with `fauxProvider` already registered and returns both instances. */
 export function makeFauxModels(options?: Parameters<typeof fauxProvider>[0]): {
   models: ReturnType<typeof createModels>
   faux: ReturnType<typeof fauxProvider>

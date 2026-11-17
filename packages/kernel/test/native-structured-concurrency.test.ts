@@ -7,7 +7,7 @@ import { createModels } from '@earendil-works/pi-ai/models'
 import { fauxAssistantMessage, fauxProvider, fauxToolCall, type FauxResponseFactory } from '@earendil-works/pi-ai/providers/faux'
 import { KernelRuntime } from '../src/runtime/index.js'
 
-test('parallel original generate subagent structure output tool by real sub-conversation isolated validate and result slot', { timeout: 60_000 }, async () => {
+test('concurrent native-spawn structured output subagents isolate validation and result slots per conversation', { timeout: 60_000 }, async () => {
   const dir = await mkdtemp(join(tmpdir(), 'helm-structured-concurrent-'))
   const models = createModels()
   const faux = fauxProvider()
@@ -16,9 +16,9 @@ test('parallel original generate subagent structure output tool by real sub-conv
   let release!: () => void
   let rejectBarrier!: (error: Error) => void
   const bothGenerating = new Promise<void>((resolve, reject) => { release = resolve; rejectBarrier = reject })
-  const barrierTimeout = setTimeout(() => rejectBarrier(new Error('two subagent not also enter generate phase')), 5_000)
+  const barrierTimeout = setTimeout(() => rejectBarrier(new Error('both subagents did not enter generation concurrently')), 5_000)
   const response: FauxResponseFactory = async (context) => {
-    if (context.messages.some((message) => message.role === 'toolResult')) return fauxAssistantMessage('committed structure result')
+    if (context.messages.some((message) => message.role === 'toolResult')) return fauxAssistantMessage('committed structured result')
     arrived += 1
     if (arrived === 2) release()
     await bothGenerating
@@ -35,7 +35,7 @@ test('parallel original generate subagent structure output tool by real sub-conv
     ])
     assert.deepEqual(results, [{ tag: 'A' }, { tag: 'B' }])
     assert.equal(arrived, 2)
-    assert.equal(faux.state.callCount, 4, 'each subagent each once commit and once wrap-up, without string conversation build into extra fix turn')
+    assert.equal(faux.state.callCount, 4, 'each subagent submits once and wraps up once without cross-conversation interference or repair turns')
   } finally {
     clearTimeout(barrierTimeout)
     release()

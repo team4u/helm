@@ -1,11 +1,11 @@
 /**
- * process inside by real path sharing file serial.
- * is what do not use instance level queue:AuthService internal,runtime, plugin each new 
- * ConfigService / CredentialService is different instance, instance queue block do not across instance
- * concurrency read the same old file after mutual each other override. with real path is key process level lock only then can let
- * the same dataDir all instance serial read change write.
- * process inside mutual exclusion see withFileLock; across process mutual exclusion see withProcessFileLock.
- * cannot heavy:fn internal must not again for the same path add lock (will deadlock).
+ * In-process file serialization keyed by canonical real path.
+ * Why not per-instance queues: AuthService, runtime, and plugins each instantiate separate
+ * ConfigService / CredentialService objects, and per-instance queues wouldn't stop concurrent
+ * reads of stale files across instances from overwriting each other. Keying a process-wide lock
+ * by canonical real path ensures all instances for the same `dataDir` serialize reads/writes.
+ * See `withFileLock` for in-process mutex; see `withProcessFileLock` for cross-process mutex.
+ * Non-reentrant: `fn` must never acquire the lock for the same path again (deadlock).
  */
 import { realpath, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
@@ -14,7 +14,7 @@ import process from 'node:process'
 
 const locks = new Map<string, Promise<unknown>>()
 
-/** lock key archive one: takes precedence real path (dataDir is symlink when different write method still sharing the same lock). */
+/** Normalize lock key: prefer realpath (so symlinked `dataDir` aliases share the exact same lock). */
 async function lockKey(path: string): Promise<string> {
   const real = await realpath(path).catch(() => undefined)
   if (real !== undefined) return real
@@ -23,14 +23,14 @@ async function lockKey(path: string): Promise<string> {
   return resolve(path)
 }
 
-/** with path is mutual exclusion key serial execute fn; same key all invoke (across instance) strictly by order queue up. */
+/** Execute `fn` serially under a mutex keyed by `path`; concurrent calls across instances queue in order. */
 export async function withFileLock<T>(path: string, fn: () => Promise<T>): Promise<T> {
   const key = await lockKey(path)
   const prev = locks.get(key) ?? Promise.resolve()
   const run = prev.then(fn, fn)
   const tail = run.catch(() => undefined)
   locks.set(key, tail)
-  // tail part compute after clean up, guard against long phase run process Map without boundary increase long.
+  // Clean up Map entry after tail settles to prevent unbounded growth in long-running processes.
   void tail.then(() => {
     if (locks.get(key) === tail) locks.delete(key)
   })
@@ -38,19 +38,19 @@ export async function withFileLock<T>(path: string, fn: () => Promise<T>): Promi
 }
 
 // ---------------------------------------------------------------------------
-// across process file lock: the same file may by multiple Hub/manage process read change write,
-// only process inside serial block do not across process concurrency read the same old file after mutual each other override.
-// lock protocol:
-//   lock file is <target file>.lock,O_EXCL create, content first token segment is holder PID(ten enter system).
-//   only in PID confirm death (ESRCH) when treated as stale break except and retry; do not by store when long strong split
-//   (legal hold lock may only is slow). broken lock content/cannot decide when explicit errors, never guess.
-//   release only delete itself hold has lock file (guard against mistakenly delete other person tight connect create new lock).
-//   cannot heavy: same process inside first via withFileLock serial, again enter this lock.
+// Cross-process file lock: the same file may be read-modify-written by multiple Hub/CLI processes,
+// so in-process serialization alone won't prevent cross-process stale-read overwrites.
+// Lock protocol:
+//   Lock file is `<target>.lock`, created with O_EXCL; first token is holder PID (decimal).
+//   Breaks stale locks and retries only after confirming PID is dead (ESRCH)—never force-breaks
+//   purely on age (valid holders can simply be slow). Corrupt/unparseable lock files fail explicitly.
+//   Only removes its own lock file on release (prevents deleting a lock newly acquired by someone else).
+//   Non-reentrant: same process enters `withFileLock` first before acquiring this lock.
 // ---------------------------------------------------------------------------
 
 const PROCESS_LOCK_WAIT_MS = 10_000
 const PROCESS_LOCK_POLL_MS = 25
-/** lock file just create but content not yet write completely wide limit phase: phase inside empty/half truncate content treated as is now write. */
+/** Grace window right after lock creation before content finishes flushing (empty/partial content treated as in-flight write). */
 const FRESH_LOCK_GRACE_MS = 1_500
 
 interface LockOwner {
@@ -73,8 +73,8 @@ async function isProcessAlive(pid: number): Promise<boolean> {
 }
 
 /**
- * across process arrange other lock under execute fn; lock file is `${path}.lock`.
- * and CLI lock implement protocol compatibility: both sides can mutual each other queue up, mutual exclusion the same target file.
+ * Execute `fn` while holding a cross-process exclusive lock (`${path}.lock`).
+ * Protocol-compatible with the CLI lock implementation so both sides queue and mutually exclude cleanly.
  */
 export async function withProcessFileLock<T>(path: string, fn: () => Promise<T>): Promise<T> {
   const lockFile = `${path}.lock`
@@ -86,32 +86,32 @@ export async function withProcessFileLock<T>(path: string, fn: () => Promise<T>)
       break
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST') {
-        throw new Error(`cannot create lock file (${lockFile}):${err instanceof Error ? err.message : String(err)}`)
+        throw new Error(`failed to create lock file (${lockFile}): ${err instanceof Error ? err.message : String(err)}`)
       }
     }
-    // take lock failed: only in holder PID confirm death when break except stale lock (do not by store when long strong split)
+    // Contention: break stale lock only if holder PID is confirmed dead (never force-break solely by age)
     try {
       const raw = await readFile(lockFile, 'utf8')
       const holder = parseLockOwner(raw)
       if (holder === undefined) {
-        // concurrency process just with open('wx') create lock file but not yet write completely holder record:mtime distance now
-        // < 1500ms treated as is now write, wait for retry while non- mistakenly judge lock corrupt (mistakenly judge will break except health lock);
-        // wide limit phase still cannot parse only then is true corrupt, explicit errors (honest discipline).
+        // Concurrent process may have just created the file via open('wx') before flushing owner record:
+        // within 1500ms of mtime treat as in-flight write and retry rather than misdiagnosing as corrupt
+        // (which would break a live lock); past the grace window it is genuinely corrupt and fails explicitly.
         const stats = await stat(lockFile)
         if (Date.now() - stats.mtimeMs >= FRESH_LOCK_GRACE_MS) {
-          throw new Error(`lock file content corrupt (${lockFile}):${JSON.stringify(raw.slice(0, 120))}`)
+          throw new Error(`corrupt lock file content (${lockFile}): ${JSON.stringify(raw.slice(0, 120))}`)
         }
       } else if (holder.pid !== undefined && !(await isProcessAlive(holder.pid))) {
-        // holder already exit: atomic preempt (unlink and after continue wx create between still has race, failed i.e. retry)
+        // Holder exited: unlink stale lock and retry (another racer may still win the next `wx` attempt)
         await rm(lockFile, { force: true })
         continue
       }
     } catch (err) {
-      // lock just by release when re- contend grab; permission,IO and content corrupt all must explicit failed.
+      // Lock was just released when ENOENT occurs: contend again; permission/IO/corruption errors must fail explicitly.
       if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
     }
     if (Date.now() > deadline) {
-      throw new Error(`file by concurrency write, wait for lock timeout (${lockFile})`)
+      throw new Error(`timed out waiting for concurrent file lock (${lockFile})`)
     }
     await new Promise((resolve) => setTimeout(resolve, PROCESS_LOCK_POLL_MS))
   }
@@ -122,7 +122,7 @@ export async function withProcessFileLock<T>(path: string, fn: () => Promise<T>)
       const raw = await readFile(lockFile, 'utf8')
       if (raw.trim() === owner) await rm(lockFile, { force: true })
     } catch {
-      /* release failed to holder death after stale break except, do not mask business result */
+      /* if release fails, stale lock will be cleaned once holder exits; never mask business result */
     }
   }
 }

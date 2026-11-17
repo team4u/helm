@@ -1,13 +1,14 @@
 /**
- * 原生 subagent 跨重启原位重挂（reattach）校验与会话条目扫描辅助函数。
+ * Validation and entry scanning helpers for in-place cross-restart reattach of native subagents.
  *
- * 职责：
- * - assertSpawnRequestModes：入口与钩子收敛后共用的 mode/requestId/reattach 形状校验
- *   及互斥检查（reattach 与 resume / fork 互斥，reattach.conversationId 必须携带 requestId）；
- * - recoverAcceptedStructuredOutput：从 submission.entry 起扫描已落库的非错误
- *   register_structured_output 调用，跨重启回填 structured.accepted；
- * - readSubmissionAssistantText：从已结算 submission.answer（及 submission 区间）读取
- *   assistant 文本，解决崩溃重启瞬间已完成回合在内存 lastAssistant 缓存缺失的问题。
+ * Responsibilities:
+ * - `assertSpawnRequestModes`: shared shape and mutual-exclusion validation for `mode`/`requestId`/`reattach`
+ *   at both entry and post-hook convergence (`reattach` is mutually exclusive with `resume` and `fork`;
+ *   `reattach.conversationId` requires `requestId`);
+ * - `recoverAcceptedStructuredOutput`: scans persisted non-error `register_structured_output` calls starting
+ *   from `submission.entry` to backfill `structured.accepted` across restarts;
+ * - `readSubmissionAssistantText`: reads assistant text from a settled `submission.answer` (and the submission
+ *   range), addressing missing in-memory `lastAssistant` caches when a crash happens right as a turn completes.
  */
 
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
@@ -19,10 +20,10 @@ import { extractAcceptedStructuredOutputFromEntries } from './structured-output.
 const ENTRY_SCAN_PAGE_SIZE = 256
 
 /**
- * 校验 requestId、reattach、resume 与 fork 的字段形状及互斥约束：
- * - reattach 与 resume / fork 互斥（400 validation_error）；
- * - reattach 必须是含 conversationId 或 executionId 的普通对象；
- * - reattach.conversationId 必须是正安全整数且携带非空 requestId（确保提交去重）。
+ * Validate shapes and mutual-exclusion constraints for `requestId`, `reattach`, `resume`, and `fork`:
+ * - `reattach` is mutually exclusive with `resume` and `fork` (`400 validation_error`);
+ * - `reattach` must be a plain object containing `conversationId` or `executionId`;
+ * - `reattach.conversationId` must be a positive safe integer paired with a non-empty `requestId` (for submission deduplication).
  */
 export function assertSpawnRequestModes(
   request: Pick<AgentSpawnRequest, 'fork' | 'resume' | 'reattach' | 'requestId'>,
@@ -32,7 +33,7 @@ export function assertSpawnRequestModes(
     if (typeof request.requestId !== 'string' || request.requestId.trim() === '') {
       throw new HelmError(
         'validation_error',
-        `requestId 必须是非空字符串（收到 ${String(request.requestId)}）`,
+        `requestId must be a non-empty string (received ${String(request.requestId)})`,
         400,
         { requestId: request.requestId },
       )
@@ -41,17 +42,17 @@ export function assertSpawnRequestModes(
   if (request.reattach === undefined) return
   const raw = request.reattach
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
-    throw new HelmError('validation_error', 'reattach 必须是普通对象', 400)
+    throw new HelmError('validation_error', 'reattach must be a plain object', 400)
   }
   for (const key of Object.keys(raw)) {
     if (key !== 'conversationId' && key !== 'executionId' && key !== 'effectiveCwd') {
-      throw new HelmError('validation_error', `reattach 包含未知字段 "${key}"`, 400, { field: key })
+      throw new HelmError('validation_error', `reattach contains unknown field "${key}"`, 400, { field: key })
     }
   }
   if (request.resume !== undefined) {
     throw new HelmError(
       'validation_error',
-      'reattach 与 resume 互斥：不能同时原位重挂和续接既有子代理',
+      'reattach and resume are mutually exclusive: cannot reattach in-place while resuming an existing subagent',
       400,
       { resume: request.resume },
     )
@@ -59,7 +60,7 @@ export function assertSpawnRequestModes(
   if (request.fork === true) {
     throw new HelmError(
       'validation_error',
-      'reattach 与 fork 互斥：不能同时原位重挂和从父会话分叉',
+      'reattach and fork are mutually exclusive: cannot reattach in-place while forking from parent conversation',
       400,
     )
   }
@@ -67,7 +68,7 @@ export function assertSpawnRequestModes(
     if (typeof raw.conversationId !== 'number' || !Number.isSafeInteger(raw.conversationId) || raw.conversationId <= 0) {
       throw new HelmError(
         'validation_error',
-        `reattach.conversationId 必须是正安全整数（收到 ${String(raw.conversationId)}）`,
+        `reattach.conversationId must be a positive safe integer (received ${String(raw.conversationId)})`,
         400,
         { conversationId: raw.conversationId },
       )
@@ -77,7 +78,7 @@ export function assertSpawnRequestModes(
     if (typeof raw.executionId !== 'string' || raw.executionId.length === 0) {
       throw new HelmError(
         'validation_error',
-        `reattach.executionId 必须是非空字符串（收到 ${String(raw.executionId)}）`,
+        `reattach.executionId must be a non-empty string (received ${String(raw.executionId)})`,
         400,
         { executionId: raw.executionId },
       )
@@ -87,14 +88,14 @@ export function assertSpawnRequestModes(
     if (typeof raw.effectiveCwd !== 'string' || !isAbsoluteAgentPath(raw.effectiveCwd)) {
       throw new HelmError(
         'validation_error',
-        `reattach.effectiveCwd 必须是绝对路径（收到 ${String(raw.effectiveCwd)}）`,
+        `reattach.effectiveCwd must be an absolute path (received ${String(raw.effectiveCwd)})`,
         400,
         { effectiveCwd: raw.effectiveCwd },
       )
     }
   }
   if (raw.conversationId === undefined && raw.executionId === undefined) {
-    throw new HelmError('validation_error', 'reattach 至少需要提供 conversationId 或 executionId', 400)
+    throw new HelmError('validation_error', 'reattach requires at least conversationId or executionId', 400)
   }
 }
 
@@ -125,8 +126,8 @@ async function scanEntryRange(
 }
 
 /**
- * 扫描子会话自本次 submission.entry 起已落库的非错误 register_structured_output
- * 工具调用，若崩溃前已通过 Schema 校验则返回其结构化产物以回填 accepted。
+ * Scan persisted non-error `register_structured_output` tool calls in the child conversation starting from
+ * `submission.entry`; returns the structured artifact to backfill `accepted` if Schema validation passed before crash.
  */
 export async function recoverAcceptedStructuredOutput(
   conversation: Pick<Conversation, 'entries'>,
@@ -150,9 +151,9 @@ function assistantTextFromEntry(entry: EntryRecord | undefined): string {
 }
 
 /**
- * 读取指定 submission 对应的 assistant 文本：优先精确读取 settled.answer 条目，
- * 若该条目无文本块则在 [settled.entry, settled.answer] 区间倒序查找最新非空
- * pi.assistant 文本（遇 reset/rewind 停止）。
+ * Read assistant text for a given submission: prefers `settled.answer` directly, falling back to searching
+ * `[settled.entry, settled.answer]` in reverse order for the latest non-empty `pi.assistant` text
+ * (stopping at `pi.reset` or `helm.rewind`).
  */
 export async function readSubmissionAssistantText(
   conversation: Pick<Conversation, 'entries'>,

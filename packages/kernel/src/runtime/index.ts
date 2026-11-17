@@ -1,5 +1,5 @@
 /**
- * @helm/kernel runtime exit:KernelRuntime and all internal mechanism module.
+ * `@helm/kernel` runtime entry point: `KernelRuntime` and internal mechanism modules.
  */
 
 export { KernelRuntime, type KernelRuntimeOptions } from './runtime.js'

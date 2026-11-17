@@ -1,11 +1,11 @@
 /**
- * conversation artifact authorization and attachment parse/content group install module.
+ * Conversation artifact authorization and attachment resolution / content assembly module.
  *
- * responsibility:
- * - decide conversation for artifact access authorization (this conversation or parent conversation chain, at most 32 layer guard against ring);
- * - parse and validate attachment artifact ID list (store in, authorization, light amount pointer, metadata, disk absolute path);
- * - piece together install model visible attachment prompt chunk [Attached Files](contains pull refer quote);
- * - piece together install carries multimodal diagram piece model visible content (pure text / text chunk + ImageContent base64).
+ * Responsibilities:
+ * - Check conversation access authorization for artifacts (self or ancestor conversation chain, max depth 32 to prevent cycles);
+ * - Resolve and validate attachment artifact IDs (existence, authorization, lightweight ref, metadata, absolute path on disk);
+ * - Assemble model-visible attachment prompt block `[Attached Files]` (with pull instructions);
+ * - Assemble model-visible multimodal content when image attachments are present (plain text / text block + ImageContent base64).
  */
 import { join } from 'node:path'
 import type { ArtifactMetadata, ConversationAttachmentRef } from '@helm/protocol'
@@ -13,7 +13,7 @@ import { HelmError } from '@helm/protocol'
 import { FileNotFoundError, type ArtifactService } from '../services/index.js'
 import type { HelmStore } from './store.js'
 
-/** diagram piece class mime: attachment piece together install multimodal ImageContent decide collection. */
+/** Image MIME types: predicate set for assembling multimodal ImageContent blocks from attachments. */
 export const IMAGE_MIMES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
 
 export interface ConversationAttachmentsHost {
@@ -25,7 +25,7 @@ export interface ConversationAttachmentsHost {
 export class ConversationAttachments {
   constructor(private readonly host: ConversationAttachmentsHost) {}
 
-  /** artifact authorization: when before conversation or its parent chain (sub-conversation can read parent conversation artifact); at most 32 layer guard against ring. */
+  /** Artifact authorization: current conversation or its ancestor chain (children can read parent artifacts); capped at 32 hops to avoid cycles. */
   isArtifactAuthorized(conversationId: number, artifactConversationId: number): boolean {
     if (conversationId === artifactConversationId) return true
     let current: number | undefined = conversationId
@@ -39,10 +39,10 @@ export class ConversationAttachments {
   }
 
   /**
-   * parse and authorization validate attachment artifact ID list:
-   * - artifact must store in (FileNotFoundError -> 404 not_found, attach artifactId);
-   * - artifact conversation must be when before conversation or its parent chain (exceeds right mount 403 artifact_forbidden);
-   * - return light amount pointer (ref)+ complete metadata + absolute path (supply prompt and multimodal piece together install).
+   * Resolve and authorize a list of attachment artifact IDs:
+   * - artifact must exist (FileNotFoundError -> 404 not_found with artifactId);
+   * - artifact's conversation must be this conversation or an ancestor (unauthorized mount -> 403 artifact_forbidden);
+   * - returns lightweight pointer (ref), full metadata, and absolute disk path (for prompt and multimodal assembly).
    */
   async resolveAuthorizedAttachments(
     conversationId: number,
@@ -55,14 +55,14 @@ export class ConversationAttachments {
     for (const artifactId of unique) {
       const metadata = await this.host.artifactsSvc.get(artifactId).catch((error: unknown) => {
         if (error instanceof FileNotFoundError) {
-          throw new HelmError('not_found', `attachment artifact missing:${artifactId}`, 404, { artifactId })
+          throw new HelmError('not_found', `attachment artifact not found: ${artifactId}`, 404, { artifactId })
         }
         throw error
       })
       if (!this.isArtifactAuthorized(conversationId, metadata.conversationId)) {
         throw new HelmError(
           'artifact_forbidden',
-          `artifact ${artifactId} do not belongs to conversation ${conversationId} or its parent conversation chain, reject exceeds right mount`,
+          `artifact ${artifactId} does not belong to conversation ${conversationId} or its ancestor chain; refusing unauthorized attachment`,
           403,
           { conversationId, artifactId, artifactConversationId: metadata.conversationId },
         )
@@ -76,19 +76,19 @@ export class ConversationAttachments {
     return out
   }
 
-  /** single attachment authorization parse (app combine layer/herdr plugin dependency inject use; error semantics same on). */
+  /** Single-attachment resolution and authorization (for hub composition / herdr plugin injection; identical error semantics). */
   async resolveAuthorizedAttachment(
     conversationId: number,
     artifactId: string,
   ): Promise<{ id: string; name: string; mimeType: string; size: number; absPath: string }> {
     const [resolved] = await this.resolveAuthorizedAttachments(conversationId, [artifactId])
     if (resolved === undefined) {
-      throw new HelmError('not_found', `attachment artifact missing:${artifactId}`, 404, { artifactId })
+      throw new HelmError('not_found', `attachment artifact not found: ${artifactId}`, 404, { artifactId })
     }
     return { ...resolved.ref, absPath: resolved.absPath }
   }
 
-  /** [Attached Files] pure text manifest chunk (spawn task prompt use; without body text prefix). */
+  /** Plaintext `[Attached Files]` manifest block (for spawned task prompts, without body text prefix). */
   buildAttachmentBlock(
     resolved: Array<{ ref: ConversationAttachmentRef; absPath: string }>,
   ): string {
@@ -100,10 +100,10 @@ export class ConversationAttachments {
   }
 
   /**
-   * construct carries attachment model visible content:
-   * - [Attached Files] manifest (contains pull refer quote) piece together in body text after;
-   * - store in diagram piece attachment when return multimodal chunk array (text chunk + diagram piece ImageContent base64);
-   * - without diagram piece attachment when return concatenate after pure text.
+   * Build model-visible content with attachments:
+   * - appends the `[Attached Files]` manifest (with pull instructions) after the message body;
+   * - if any image attachments exist, returns a multimodal block array (text block + base64 ImageContent blocks);
+   * - if no image attachments exist, returns the concatenated plain string.
    */
   async buildAttachmentContent(
     effectiveText: string,

@@ -1,7 +1,7 @@
 /**
- * kernel env domain public exports: across platform node connection pool and execute environment orchestration.
- * local constant is process inside NodeExecutionEnv; remote via /ws/node WS+birpc invoke
- * node daemon NodeEnvRpcFunctions, never static default fall back local.
+ * Public exports for the kernel `env` domain: cross-platform node connection pool and execution environment orchestration.
+ * `local` always runs in-process via `NodeExecutionEnv`; remote targets invoke the node daemon's `NodeEnvRpcFunctions`
+ * over `/ws/node` WS+birpc and never fall back silently to local.
  */
 
 export { createEnvFabric } from './fabric.js'

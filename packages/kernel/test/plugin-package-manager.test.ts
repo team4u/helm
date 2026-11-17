@@ -1,20 +1,20 @@
 /**
- * external plugin package manage dedicated items test (parser / managed directory transaction / PluginHost collection into / HTTP).
+ * Dedicated tests for external plugin package management (source parser / managed directory transactions / PluginHost integration / HTTP).
  *
- * combine discipline: independent of real network - -npm/git path via inject fake runner simulated command into failed;
- * local path use real temp directory + real copy.doctor all chain and PluginHost register is real
- * implement (real TS transpile + temporary PluginHost register + client compile).
+ * Isolation discipline: never depends on real network — npm/git paths fail or return fixtures via an
+ * injected fake runner; local paths use real temp directories and real file copies. Doctor checks and
+ * PluginHost registration execute end-to-end (real TS transpilation + temporary PluginHost registration + client compilation).
  *
- * override:
- * - parsePluginSource:npm/git(short write/SCP/https/@ref/#subdir)/local(absolute/each other for)
- *   specification and reject (file://,http://,git+, unknown protocol,builtin:, whitespace, bare name);
- * - path security: install target out of bounds,local self install (managed tree internal),safeName;
- * - staging failed clean up:fake runner failed after .staging no residue, without half artifact;
- * - local install: copy semantics (non- symlink),remove do not delete user source directory;
- * - install/update/remove all chain (real doctor + real PluginHost register);
- * - HTTP routing:install body validate,501 fall back,update/remove end point.
+ * Covers:
+ * - parsePluginSource: normalization and rejection across npm / git (shorthand / SCP / https / @ref / #subdir) / local (absolute / relative)
+ *   sources (`file://`, `http://`, `git+`, unknown schemes, `builtin:`, whitespace, bare names);
+ * - path security: install target escape, local self-install inside managed tree, `safeName`;
+ * - staging cleanup on failure: `.staging` leaves zero residue and no half-written artifacts when the fake runner fails;
+ * - local install: copy semantics (no symlinks), and `remove` leaves the user source directory untouched;
+ * - full install / update / remove pipeline (real doctor + real PluginHost registration);
+ * - HTTP routing: install body validation, 501 fallback, update/remove endpoints.
  *
- * runner: tsx --test; each items explicit timeout: 60_000 guard against deadlock; command add total timeout.
+ * runner: tsx --test; every test has an explicit timeout of 60_000 to guard against deadlocks; commands use overall timeouts.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -29,10 +29,10 @@ import { PluginPackageManagerStore } from '../src/plugins/package-store.js'
 import { ConfigService } from '../src/services/config.js'
 
 // ---------------------------------------------------------------------------
-// parser
+// Source parser
 // ---------------------------------------------------------------------------
 
-test('parsePluginSource:npm specification and reject', { timeout: 60_000 }, () => {
+test('parsePluginSource: npm normalization and rejection', { timeout: 60_000 }, () => {
   const npm = parsePluginSource('npm:helm-plugin-foo@^1.2.0', '/wd')
   assert.equal(npm.kind, 'npm')
   assert.ok(npm.kind === 'npm')
@@ -46,7 +46,7 @@ test('parsePluginSource:npm specification and reject', { timeout: 60_000 }, () =
   }
 })
 
-test('parsePluginSource:git short write / SCP / https and @ref / #subdirectory', { timeout: 60_000 }, () => {
+test('parsePluginSource: git shorthand / SCP / https with @ref / #subdirectory', { timeout: 60_000 }, () => {
   const short = parsePluginSource('git:github.com/user/repo@v1', '/wd')
   assert.ok(short.kind === 'git')
   if (short.kind !== 'git') return
@@ -91,13 +91,13 @@ test('parsePluginSource:git short write / SCP / https and @ref / #subdirectory',
   }
 })
 
-test('parsePluginSource:git repo strictly validate (reject path inject and local relative path)', { timeout: 60_000 }, () => {
-  // legal three form (ssh:// belong unknown transfer protocol, do not let through;SCP override SSH scenario)
+test('parsePluginSource: strict git repo validation (rejects path traversal and local relative paths)', { timeout: 60_000 }, () => {
+  // Three valid forms (ssh:// is rejected as unknown transport; SCP covers SSH cases)
   for (const ok of ['git:https://github.com/user/repo.git', 'git:github.com/user/repo', 'git:git@github.com:user/repo.git']) {
     const parsed = parsePluginSource(ok, '/wd')
     assert.ok(parsed.kind === 'git', `should accept: ${ok}`)
   }
-  // reject:../ out of bounds, backslash,NUL, absolute path, symbol, plaintext http,file:,ssh://, unknown scheme, whitespace, bare local path
+  // Reject: ../ traversal, backslashes, NUL bytes, absolute paths, drive letters, plain http, file:, ssh://, unknown schemes, whitespace, bare local paths
   for (const bad of ['git:../evil', 'git:..\\..\\evil', 'git:repo/../../evil', 'git:/abs/path', 'git:C:\\repo', 'git:\\\\srv\\share', 'git:http://plain.example/r', 'git:file:///tmp/r', 'git:ssh://git@host:22/path', 'git:repo with space', 'git:local-dir', 'git:./relative']) {
     assert.throws(
       () => parsePluginSource(bad, '/wd'),
@@ -107,7 +107,7 @@ test('parsePluginSource:git repo strictly validate (reject path inject and local
   }
 })
 
-test('parsePluginSource:local absolute/relative path parse', { timeout: 60_000 }, () => {
+test('parsePluginSource: resolves absolute and relative local paths', { timeout: 60_000 }, () => {
   const abs = parsePluginSource('/abs/plugins/foo', '/wd')
   assert.ok(abs.kind === 'local')
   if (abs.kind !== 'local') return
@@ -125,17 +125,17 @@ test('parsePluginSource:local absolute/relative path parse', { timeout: 60_000 }
 })
 
 // ---------------------------------------------------------------------------
-// test base create:fake runner + real PluginHost(via host-adapter for interface)
+// Test harness: fake runner + real PluginHost (via host adapter interface)
 // ---------------------------------------------------------------------------
 
-/** most small legal external plugin source (convention entry form). */
+/** Minimal valid external plugin source (conventional entry layout). */
 const PLUGIN_SRC = (id: string, version = '0.1.0') => `export default {
   id: '${id}',
   version: '${version}',
   definePlugin(ctx) {
     ctx.action({
       id: 'ping',
-      description: 'probe needle',
+      description: 'probe',
       inputSchema: { type: 'object', additionalProperties: false },
       outputSchema: { type: 'object', properties: { pong: { type: 'boolean' } }, required: ['pong'], additionalProperties: false },
       handler: () => ({ pong: true }),
@@ -151,13 +151,13 @@ interface TestEnv {
   manager: PluginPackageManager
   hostCalls: string[]
   registered: Map<string, { enabled: boolean }>
-  /** simulated in-flight task: hit id  assertManagedPluginUpdateSafe throw 409. */
+  /** Simulate active tasks: assertManagedPluginUpdateSafe throws 409 for matching IDs. */
   updateBlockedIds: Set<string>
-  /** simulated register failed: hit id  registerManagedPlugin throws. */
+  /** Simulate register failure: registerManagedPlugin throws for matching IDs. */
   registerFailIds: Set<string>
-  /** simulated enable failed: hit id  enableManagedPlugin throws. */
+  /** Simulate enable failure: enableManagedPlugin throws for matching IDs. */
   enableFailIds: Set<string>
-  /** simulated purge failed: hit id  purgePluginPersistentData throws. */
+  /** Simulate purge failure: purgePluginPersistentData throws for matching IDs. */
   purgeFailIds: Set<string>
   close(): void
 }
@@ -178,7 +178,7 @@ function makeEnv(runner?: PackageRunner): TestEnv {
       hostCalls.push(`register:${dir}`)
       const id = readPluginIdFromDir(dir)
       if (registerFailIds.has(id)) {
-        throw new HelmError('plugin_register_failed_simulated', `simulated register failed:${id}`, 500, { pluginId: id })
+        throw new HelmError('plugin_register_failed_simulated', `simulated register failed: ${id}`, 500, { pluginId: id })
       }
       registered.set(id, { enabled: false })
       summaries.set(id, { id, version: readPluginVersionFromDir(dir), enabled: false })
@@ -187,9 +187,9 @@ function makeEnv(runner?: PackageRunner): TestEnv {
     async enableManagedPlugin(pluginId: string) {
       hostCalls.push(`enable:${pluginId}`)
       const entry = registered.get(pluginId)
-      if (!entry) throw new HelmError('unknown_plugin', `not registered plugin:${pluginId}`, 404, { pluginId })
+      if (!entry) throw new HelmError('unknown_plugin', `plugin not registered: ${pluginId}`, 404, { pluginId })
       if (enableFailIds.has(pluginId)) {
-        throw new HelmError('plugin_enable_failed_simulated', `simulated enable failed:${pluginId}`, 500, { pluginId })
+        throw new HelmError('plugin_enable_failed_simulated', `simulated enable failed: ${pluginId}`, 500, { pluginId })
       }
       entry.enabled = true
       summaries.set(pluginId, { ...(summaries.get(pluginId) ?? { id: pluginId }), enabled: true })
@@ -198,17 +198,17 @@ function makeEnv(runner?: PackageRunner): TestEnv {
     async updateManagedPlugin(pluginId: string) {
       hostCalls.push(`update:${pluginId}`)
       const entry = registered.get(pluginId)
-      if (!entry) throw new HelmError('unknown_plugin', `not registered plugin:${pluginId}`, 404, { pluginId })
-      // real adapt via reload heavy read source directory; this in sync mirror is managed directory when before manifest
+      if (!entry) throw new HelmError('unknown_plugin', `plugin not registered: ${pluginId}`, 404, { pluginId })
+      // Real adapter reloads from disk; mirror current manifest from managed directory here
       summaries.set(pluginId, { id: pluginId, version: readPluginVersionFromDir(join(dataDir, 'plugins', pluginId)), enabled: entry.enabled })
       return { summary: toSummary(summaries, pluginId) }
     },
     assertManagedPluginUpdateSafe(pluginId: string) {
       hostCalls.push(`assert-safe:${pluginId}`)
       const entry = registered.get(pluginId)
-      if (!entry) throw new HelmError('unknown_plugin', `not registered plugin:${pluginId}`, 404, { pluginId })
+      if (!entry) throw new HelmError('unknown_plugin', `plugin not registered: ${pluginId}`, 404, { pluginId })
       if (updateBlockedIds.has(pluginId)) {
-        throw new HelmError('plugin_has_live_tasks', `plugin ${pluginId} store in in-flight task, reject update switch`, 409, { pluginId })
+        throw new HelmError('plugin_has_live_tasks', `plugin ${pluginId} has active tasks; update swap rejected`, 409, { pluginId })
       }
     },
     async removeManagedPlugin(pluginId: string) {
@@ -222,7 +222,7 @@ function makeEnv(runner?: PackageRunner): TestEnv {
     async purgePluginPersistentData(pluginId: string) {
       hostCalls.push(`purge:${pluginId}`)
       if (purgeFailIds.has(pluginId)) {
-        throw new HelmError('store_flush_failed_simulated', `simulated purge failed:${pluginId}`, 500, { pluginId })
+        throw new HelmError('store_flush_failed_simulated', `simulated purge failed: ${pluginId}`, 500, { pluginId })
       }
     },
     listSummaries: () => [...summaries.values()].map((s) => toSummary(summaries, s.id)),
@@ -284,7 +284,7 @@ function toSummary(summaries: Map<string, { id: string; version?: string; enable
   }
 }
 
-/** construct local plugin source directory (plugin.json + index.mjs). */
+/** Writes a minimal local plugin source directory (`plugin.json` + `index.mjs`). */
 function writeLocalPlugin(parent: string, id: string, version = '0.1.0'): string {
   const dir = join(parent, id)
   mkdirSync(dir, { recursive: true })
@@ -293,7 +293,7 @@ function writeLocalPlugin(parent: string, id: string, version = '0.1.0'): string
   return dir
 }
 
-/** fake runner:git clone succeeded produce out complete repository (contains .git exclude items verify). */
+/** Fake runner: produces a full cloned repository layout on `git clone` (including `.git` to test exclusion). */
 function gitCloneRunner(repoLayout: (repoDir: string) => void): PackageRunner {
   return async (cmd, args) => {
     if (cmd === 'git' && args[0] === 'clone') {
@@ -316,15 +316,15 @@ const FAIL_RUNNER: PackageRunner = async (_cmd, _args) => ({
 })
 
 // ---------------------------------------------------------------------------
-// local install / remove transaction
+// Local install / remove transactions
 // ---------------------------------------------------------------------------
 
-test('local install: copy enter managed directory (non- symlink), record persist,remove do not delete user source', { timeout: 60_000 }, async () => {
+test('local install copies into managed directory (non-symlink), persists record, and remove keeps user source intact', { timeout: 60_000 }, async () => {
   const env = makeEnv()
   try {
     const userSrcParent = mkdtempSync(join(tmpdir(), 'helm-pkg-usersrc-'))
     const userSrc = writeLocalPlugin(userSrcParent, 'demo-local')
-    writeFileSync(join(userSrc, 'user-notes.md'), 'user self has file')
+    writeFileSync(join(userSrc, 'user-notes.md'), 'user-owned file')
 
     const result = await env.manager.install(userSrc, { enable: true })
     assert.equal(result.record.pluginId, 'demo-local')
@@ -333,34 +333,34 @@ test('local install: copy enter managed directory (non- symlink), record persist
     assert.ok(result.summary.managed, 'summary should carry managed metadata')
     assert.equal(result.summary.managed?.installId, result.record.id)
 
-    // managed directory store in and is real directory (non- symlink)
+    // Managed directory exists as a real copy (non-symlink)
     const managed = join(env.dataDir, 'plugins', 'demo-local')
-    assert.ok(existsSync(managed), 'managed directory should store in')
+    assert.ok(existsSync(managed), 'managed directory should exist')
     assert.ok(existsSync(join(managed, 'index.mjs')))
-    // record persist at config.json
+    // Record persisted to config.json
     const config = JSON.parse(readFileSync(join(env.dataDir, 'config.json'), 'utf8')) as { pluginPackages: Record<string, unknown> }
     assert.ok(config.pluginPackages['demo-local'])
-    // remove: only delete managed copy and record, user source completely well
+    // Remove deletes only the managed copy and record; user source stays intact
     const removed = await env.manager.remove('demo-local')
     assert.equal(removed.pluginId, 'demo-local')
     assert.equal(removed.wasEnabled, true)
-    // unload contains persist document data related clean up: deregister instance after, delete directory before
+    // Removal purges persistent doc data after unregistering instance and before deleting directory
     const removeAt = env.hostCalls.indexOf('remove:demo-local')
     const purgeAt = env.hostCalls.indexOf('purge:demo-local')
-    assert.ok(removeAt >= 0, 'should invoke removeManagedPlugin')
-    assert.ok(purgeAt > removeAt, 'should invoke purgePluginPersistentData and later than instance deregister')
-    assert.ok(!existsSync(managed), 'managed directory should by delete')
-    assert.ok(existsSync(join(userSrc, 'index.mjs')), 'user source directory must completely well')
-    assert.ok(existsSync(join(userSrc, 'user-notes.md')), 'user self has file must completely well')
+    assert.ok(removeAt >= 0, 'should call removeManagedPlugin')
+    assert.ok(purgeAt > removeAt, 'should call purgePluginPersistentData after unregistering instance')
+    assert.ok(!existsSync(managed), 'managed directory should be deleted')
+    assert.ok(existsSync(join(userSrc, 'index.mjs')), 'user source directory must stay intact')
+    assert.ok(existsSync(join(userSrc, 'user-notes.md')), 'user-owned files must stay intact')
     const after = JSON.parse(readFileSync(join(env.dataDir, 'config.json'), 'utf8')) as { pluginPackages?: Record<string, unknown> }
-    assert.equal(after.pluginPackages?.['demo-local'], undefined, 'record should by delete')
+    assert.equal(after.pluginPackages?.['demo-local'], undefined, 'record should be deleted')
     rmSync(userSrcParent, { recursive: true, force: true })
   } finally {
     env.close()
   }
 })
 
-test('staging failed clean up:git clone failed after do not half artifact', { timeout: 60_000 }, async () => {
+test('staging failure cleanup leaves zero artifacts after failed git clone', { timeout: 60_000 }, async () => {
   const env = makeEnv(FAIL_RUNNER)
   try {
     await assert.rejects(
@@ -369,15 +369,15 @@ test('staging failed clean up:git clone failed after do not half artifact', { ti
     )
     const staging = join(env.dataDir, 'plugins', '.staging')
     if (existsSync(staging)) {
-      assert.deepEqual(readdirSync(staging), [], 'staging should no residue')
+      assert.deepEqual(readdirSync(staging), [], 'staging must leave no residue')
     }
-    assert.ok(!existsSync(join(env.dataDir, 'plugins', 'broken-repo')), 'must not has half install directory')
+    assert.ok(!existsSync(join(env.dataDir, 'plugins', 'broken-repo')), 'must not leave partial install directory')
   } finally {
     env.close()
   }
 })
 
-test('doctor failed: corrupt plugin does not enter managed directory,staging clean up', { timeout: 60_000 }, async () => {
+test('doctor failure prevents corrupt plugin from entering managed directory and cleans staging', { timeout: 60_000 }, async () => {
   const env = makeEnv()
   try {
     const badParent = mkdtempSync(join(tmpdir(), 'helm-pkg-bad-'))
@@ -398,7 +398,7 @@ test('doctor failed: corrupt plugin does not enter managed directory,staging cle
   }
 })
 
-test('git install:ref/subdirectory layout,node_modules/.git exclude', { timeout: 60_000 }, async () => {
+test('git install: ref/subdirectory layout excludes node_modules and .git', { timeout: 60_000 }, async () => {
   const env = makeEnv(
     gitCloneRunner((repo) => {
       const sub = join(repo, 'packages', 'inner-plugin')
@@ -421,14 +421,14 @@ test('git install:ref/subdirectory layout,node_modules/.git exclude', { timeout:
     assert.equal(result.record.source.subdirectory, 'packages/inner-plugin')
     const managed = join(env.dataDir, 'plugins', 'git-plugin')
     assert.ok(existsSync(join(managed, 'index.mjs')))
-    assert.ok(!existsSync(join(managed, 'node_modules')), 'node_modules should by exclude')
-    assert.ok(!existsSync(join(managed, '.git')), '.git should by exclude')
+    assert.ok(!existsSync(join(managed, 'node_modules')), 'node_modules should be excluded')
+    assert.ok(!existsSync(join(managed, '.git')), '.git should be excluded')
   } finally {
     env.close()
   }
 })
 
-test('update: without record 404;local source edit after update heavy sync version push enter', { timeout: 60_000 }, async () => {
+test('update returns 404 without record and resyncs updated version from local source', { timeout: 60_000 }, async () => {
   const env = makeEnv()
   try {
     await assert.rejects(
@@ -438,7 +438,7 @@ test('update: without record 404;local source edit after update heavy sync versi
     const userSrc = writeLocalPlugin(env.cwd, 'up-plugin', '1.0.0')
     const installed = await env.manager.install(userSrc)
     assert.equal(installed.record.version, '1.0.0')
-    // user edit source code rise edition
+    // User bumps version in source directory
     writeFileSync(join(userSrc, 'plugin.json'), JSON.stringify({ id: 'up-plugin', version: '2.0.0', main: 'index.mjs' }, null, 2))
     writeFileSync(join(userSrc, 'index.mjs'), PLUGIN_SRC('up-plugin', '2.0.0'))
     const updated = await env.manager.update('up-plugin')
@@ -446,44 +446,44 @@ test('update: without record 404;local source edit after update heavy sync versi
     assert.equal(updated.previousVersion, '1.0.0')
     assert.equal(updated.changed, true)
     const managedManifest = JSON.parse(readFileSync(join(env.dataDir, 'plugins', 'up-plugin', 'plugin.json'), 'utf8')) as { version: string }
-    assert.equal(managedManifest.version, '2.0.0', 'managed directory should heavy sync to new version')
+    assert.equal(managedManifest.version, '2.0.0', 'managed directory should resync to new version')
   } finally {
     env.close()
   }
 })
 
-test('remove:purge failed explicit reject, directory and install record keep can retry', { timeout: 60_000 }, async () => {
+test('remove rejects explicitly when purge fails while keeping directory and record retryable', { timeout: 60_000 }, async () => {
   const env = makeEnv()
   try {
     const src = writeLocalPlugin(env.cwd, 'purge-fail-plugin')
     await env.manager.install(src)
     const managed = join(env.dataDir, 'plugins', 'purge-fail-plugin')
-    assert.ok(existsSync(managed), 'pre-: install directory store in')
+    assert.ok(existsSync(managed), 'precondition: install directory exists')
 
-    // purge failed:remove explicit reject, must not continue delete directory and install record
+    // Purge failure: remove rejects explicitly and leaves managed dir + install record intact
     env.purgeFailIds.add('purge-fail-plugin')
     await assert.rejects(
       env.manager.remove('purge-fail-plugin'),
       (err: unknown) => err instanceof HelmError && err.code === 'store_flush_failed_simulated',
     )
-    assert.ok(existsSync(managed), 'purge on failure managed directory must keep')
-    assert.ok(env.store.getRecord('purge-fail-plugin'), 'purge on failure install record must keep')
-    // instance deregistered: retry when removeManagedPlugin idempotent contain tolerate
-    assert.ok(!env.registered.has('purge-fail-plugin'), 'first time failed deregistered instance')
+    assert.ok(existsSync(managed), 'managed directory must be preserved when purge fails')
+    assert.ok(env.store.getRecord('purge-fail-plugin'), 'install record must be preserved when purge fails')
+    // Instance was unregistered: removeManagedPlugin tolerates idempotent retries
+    assert.ok(!env.registered.has('purge-fail-plugin'), 'first attempt unregistered instance')
 
-    // fault restore after retry:remove complete succeeded
+    // Retry succeeds cleanly once fault clears
     env.purgeFailIds.delete('purge-fail-plugin')
     const removed = await env.manager.remove('purge-fail-plugin')
     assert.equal(removed.pluginId, 'purge-fail-plugin')
-    assert.equal(removed.wasEnabled, false, 'retry when instance deregistered,wasEnabled such as is false')
-    assert.ok(!existsSync(managed), 'retry after success managed directory delete')
-    assert.equal(env.store.getRecord('purge-fail-plugin'), undefined, 'retry after success install record delete')
+    assert.equal(removed.wasEnabled, false, 'wasEnabled is false on retry because instance was already unregistered')
+    assert.ok(!existsSync(managed), 'managed directory deleted after successful retry')
+    assert.equal(env.store.getRecord('purge-fail-plugin'), undefined, 'install record deleted after successful retry')
   } finally {
     env.close()
   }
 })
 
-test('remove:builtin protect and not managed plugin 404', { timeout: 60_000 }, async () => {
+test('remove protects builtins with 403 and rejects unmanaged plugins with 404', { timeout: 60_000 }, async () => {
   const env = makeEnv()
   try {
     await assert.rejects(
@@ -499,7 +499,7 @@ test('remove:builtin protect and not managed plugin 404', { timeout: 60_000 }, a
   }
 })
 
-test('path security:local self install (managed tree internal) reject,install after record installPath in managed tree inside', { timeout: 60_000 }, async () => {
+test('path security rejects local self-install targeting inside the managed tree', { timeout: 60_000 }, async () => {
   const env = makeEnv()
   try {
     const inside = join(env.dataDir, 'plugins', 'inside-plugin')
@@ -515,7 +515,7 @@ test('path security:local self install (managed tree internal) reject,install af
   }
 })
 
-test('update security preflight: in-flight task 409 reject and old directory content do not change', { timeout: 60_000 }, async () => {
+test('update safety preflight rejects 409 on active tasks without modifying existing directory contents', { timeout: 60_000 }, async () => {
   const env = makeEnv()
   try {
     const userSrc = writeLocalPlugin(env.cwd, 'busy-plugin', '1.0.0')
@@ -523,17 +523,17 @@ test('update security preflight: in-flight task 409 reject and old directory con
     assert.equal(installed.record.version, '1.0.0')
     const managed = join(env.dataDir, 'plugins', 'busy-plugin')
     const manifestBefore = readFileSync(join(managed, 'plugin.json'), 'utf8')
-    // source code upgrade + simulated in-flight task:update must in switch before reject, old directory do not motion
+    // Bump source + simulate active tasks: update must reject before swap and leave old directory untouched
     writeFileSync(join(userSrc, 'plugin.json'), JSON.stringify({ id: 'busy-plugin', version: '2.0.0', main: 'index.mjs' }, null, 2))
     env.updateBlockedIds.add('busy-plugin')
     await assert.rejects(
       env.manager.update('busy-plugin'),
       (err: unknown) => err instanceof HelmError && err.status === 409,
     )
-    assert.ok(env.hostCalls.includes('assert-safe:busy-plugin'), 'should invoke security preflight')
-    assert.equal(readFileSync(join(managed, 'plugin.json'), 'utf8'), manifestBefore, 'old directory content must fully do not change')
-    assert.ok(!env.hostCalls.includes('update:busy-plugin'), 'must not enter reload switch')
-    // solve except block after update normal
+    assert.ok(env.hostCalls.includes('assert-safe:busy-plugin'), 'should run safety preflight')
+    assert.equal(readFileSync(join(managed, 'plugin.json'), 'utf8'), manifestBefore, 'old directory contents must remain completely unchanged')
+    assert.ok(!env.hostCalls.includes('update:busy-plugin'), 'must not enter reload swap')
+    // Clearing active tasks allows update to proceed normally
     env.updateBlockedIds.delete('busy-plugin')
     const updated = await env.manager.update('busy-plugin')
     assert.equal(updated.record.version, '2.0.0')
@@ -542,9 +542,9 @@ test('update security preflight: in-flight task 409 reject and old directory con
   }
 })
 
-test('runtime dependency first at doctor: carries package.json  local plugin dependency in staging inside patch install after doctor via', { timeout: 60_000 }, async () => {
+test('runtime dependencies install in staging before doctor passes for local plugins with package.json', { timeout: 60_000 }, async () => {
   const depsInstalled: string[] = []
-  // runner:npm install record cwd and produce out node_modules; the rest command let through
+  // Runner records cwd on npm install and creates node_modules; passes through remaining commands
   const runner: PackageRunner = async (cmd, args, opts) => {
     if (cmd === 'npm' && args[0] === 'install') {
       depsInstalled.push(opts.cwd)
@@ -560,22 +560,22 @@ test('runtime dependency first at doctor: carries package.json  local plugin dep
     mkdirSync(src, { recursive: true })
     writeFileSync(join(src, 'plugin.json'), JSON.stringify({ id: 'deps-plugin', version: '0.1.0', main: 'index.mjs' }))
     writeFileSync(join(src, 'index.mjs'), PLUGIN_SRC('deps-plugin'))
-    // package.json declaration runtime dependency (doctor import entry when need to node_modules store in form)
+    // Declare runtime dependency in package.json (doctor imports entry requiring node_modules to exist)
     writeFileSync(join(src, 'package.json'), JSON.stringify({ name: 'deps-plugin', version: '0.1.0', main: 'index.mjs', dependencies: { leftpad: '^1.0.0' } }))
     const result = await env.manager.install(src)
     assert.equal(result.record.pluginId, 'deps-plugin')
-    // dependency install in staging copy inside (non- user source directory)
-    assert.equal(depsInstalled.length, 1, 'install path should exactly execute once dependency patch install')
-    assert.ok(depsInstalled[0]!.includes('.staging'), 'dependency patch install must occur in staging inside')
-    assert.ok(!existsSync(join(src, 'node_modules')), 'user source directory must not by install dependency')
-    assert.ok(existsSync(join(env.dataDir, 'plugins', 'deps-plugin', 'node_modules')), 'managed directory should carry patch install dependency')
+    // Dependencies are installed inside staging copy rather than user's source directory
+    assert.equal(depsInstalled.length, 1, 'install should execute npm install exactly once')
+    assert.ok(depsInstalled[0]!.includes('.staging'), 'dependency install must happen inside staging')
+    assert.ok(!existsSync(join(src, 'node_modules')), 'user source directory must not have dependencies installed into it')
+    assert.ok(existsSync(join(env.dataDir, 'plugins', 'deps-plugin', 'node_modules')), 'managed directory should contain installed dependencies')
     rmSync(srcParent, { recursive: true, force: true })
   } finally {
     env.close()
   }
 })
 
-test('install transaction: register failed delete new target rollback, do not not registered directory', { timeout: 60_000 }, async () => {
+test('install transaction rolls back and deletes newly copied target directory when registration fails', { timeout: 60_000 }, async () => {
   const env = makeEnv()
   try {
     const src = writeLocalPlugin(env.cwd, 'rollback-plugin')
@@ -585,10 +585,10 @@ test('install transaction: register failed delete new target rollback, do not no
       (err: unknown) => err instanceof HelmError && err.code === 'plugin_package_install_failed',
     )
     const target = join(env.dataDir, 'plugins', 'rollback-plugin')
-    assert.ok(!existsSync(target), 'register failed after new target must by delete')
-    assert.ok(!env.registered.has('rollback-plugin'), 'must not leftover registered instance')
-    assert.equal(env.store.getRecord('rollback-plugin'), undefined, 'must not leftover record')
-    // solve except failed after heavy install succeeded (leftover already consume, do not block)
+    assert.ok(!existsSync(target), 'newly copied target must be deleted after registration fails')
+    assert.ok(!env.registered.has('rollback-plugin'), 'must leave no registered instance')
+    assert.equal(env.store.getRecord('rollback-plugin'), undefined, 'must leave no leftover record')
+    // Re-installing after clearing the fault succeeds (no residue blocks retry)
     env.registerFailIds.delete('rollback-plugin')
     const ok = await env.manager.install(src)
     assert.equal(ok.record.pluginId, 'rollback-plugin')
@@ -597,23 +597,23 @@ test('install transaction: register failed delete new target rollback, do not no
   }
 })
 
-test('install duplicate install protect: already managed record / registered instance / target directory occupy all 409', { timeout: 60_000 }, async () => {
+test('install duplicate guards return 409 for existing managed record, registered instance, or occupied target dir', { timeout: 60_000 }, async () => {
   const env = makeEnv()
   try {
     const src = writeLocalPlugin(env.cwd, 'dup-plugin')
     await env.manager.install(src)
-    // same source duplicate install: already has managed record
+    // Duplicate install from same source: managed record already exists
     await assert.rejects(
       env.manager.install(src),
       (err: unknown) => err instanceof HelmError && err.code === 'plugin_package_already_installed' && err.status === 409,
     )
-    // different source but same id: same reject
+    // Different source with same id: still rejected
     const src2 = writeLocalPlugin(join(env.cwd, 'alt'), 'dup-plugin')
     await assert.rejects(
       env.manager.install(src2),
       (err: unknown) => err instanceof HelmError && err.code === 'plugin_package_already_installed',
     )
-    // target directory occupy: manually work put placement same name directory (without record without register)
+    // Target directory occupied manually (no record and not registered)
     const occupied = join(env.dataDir, 'plugins', 'occupied-plugin')
     mkdirSync(occupied, { recursive: true })
     writeFileSync(join(occupied, 'stale.txt'), 'residue')
@@ -622,30 +622,30 @@ test('install duplicate install protect: already managed record / registered ins
       env.manager.install(src3),
       (err: unknown) => err instanceof HelmError && err.code === 'plugin_package_target_occupied' && err.status === 409,
     )
-    assert.equal(readFileSync(join(occupied, 'stale.txt'), 'utf8'), 'residue', 'occupy directory must not by delete')
+    assert.equal(readFileSync(join(occupied, 'stale.txt'), 'utf8'), 'residue', 'pre-existing directory must not be deleted')
   } finally {
     env.close()
   }
 })
 
-test('install enable failed: plugin keep disabled,enableError fact correct, record can restart load', { timeout: 60_000 }, async () => {
+test('install when enable fails keeps plugin disabled, reports enableError, and persists record for restart', { timeout: 60_000 }, async () => {
   const env = makeEnv()
   try {
     const src = writeLocalPlugin(env.cwd, 'enablefail-plugin')
     env.enableFailIds.add('enablefail-plugin')
     const result = await env.manager.install(src, { enable: true })
-    // install succeeded, enable failed: fact such as
+    // Install succeeded while enable failed: summary reflects truth
     assert.equal(result.record.pluginId, 'enablefail-plugin')
-    assert.equal(result.summary.enabled, false, 'enable failed after plugin must keep disabled')
-    assert.ok(result.enableError, 'enableError must pass-through')
+    assert.equal(result.summary.enabled, false, 'plugin must remain disabled when enable fails')
+    assert.ok(result.enableError, 'enableError must pass through')
     assert.equal(result.enableError.code, 'plugin_enable_failed_simulated')
-    // record persisted (restart can load): creates new store instance from disk restore
+    // Record persisted and reloads across restarts
     const reloaded = new PluginPackageManagerStore(new ConfigService(env.dataDir))
     await reloaded.load()
     const record = reloaded.getRecord('enablefail-plugin')
-    assert.ok(record, 'enable failed does not affect record persist, after restart still can load')
+    assert.ok(record, 'enable failure does not prevent persisting record across restarts')
     assert.equal(record.source.kind, 'local')
-    // solve except after can separate retry: the same plugin duplicate install now 409(update away update)
+    // After clearing fault, reinstall conflicts 409 (use update instead)
     env.enableFailIds.delete('enablefail-plugin')
     await assert.rejects(
       env.manager.install(src),
@@ -657,10 +657,10 @@ test('install enable failed: plugin keep disabled,enableError fact correct, reco
 })
 
 // ---------------------------------------------------------------------------
-// record store: structure corrupt explicit errors, restart restore (managed mapping)
+// Package record store: corrupt state rejected explicitly; restart recovery
 // ---------------------------------------------------------------------------
 
-test('store: corrupt pluginPackages explicit config_corrupt;save along use since has id', { timeout: 60_000 }, async () => {
+test('store: corrupt pluginPackages throws config_corrupt explicitly; update save preserves existing id', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-pkg-store-'))
   try {
     writeFileSync(join(dataDir, 'config.json'), JSON.stringify({ pluginPackages: 'not-an-object' }))
@@ -673,7 +673,7 @@ test('store: corrupt pluginPackages explicit config_corrupt;save along use since
     await store2.load()
     assert.equal(store2.getRecord('p-1')?.id, 'plugpkg-p-1')
     const saved = await store2.save({ pluginId: 'p-1', source: { kind: 'local', raw: '/x', path: '/x' }, installPath: '/data/plugins/p-1', version: '1.1.0', installedAt: 1, updatedAt: 2 })
-    assert.equal(saved.id, 'plugpkg-p-1', 'duplicate install along use since has id')
+    assert.equal(saved.id, 'plugpkg-p-1', 're-save preserves existing record id')
   } finally {
     rmSync(dataDir, { recursive: true, force: true })
   }

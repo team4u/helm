@@ -1,16 +1,16 @@
 /**
- * original generate subagent context fork derive (fork: true) sharing validate, inherit parse and clean anchor compute.
+ * Shared validation, inheritance resolution, and clean-anchor calculation for native subagent context forking (`fork: true`).
  *
- * responsibility:
- * - assertSpawnForkFields / resolveForkMode / resolveInheritedModelAndThinking /
- *   resolveInheritedModelOverride: by runtime-agent-spawn.ts and spawn.ts jointly re- use,
- *   ensure entry validate, hook transform re-check, target inherit and model/think Profile converge keep single one fact source.
- * - selectCleanForkAnchorEntryId: align item inside message by order flat append trace which belong entryIdx,
- *   locate global finally a role === 'assistant' message, check its after continue (contains same item inside) is otherwise store in not
- *   closed together toolCall; if has then truncate to the assistant which in item before, also reject only has system or
- *   empty reset empty shell.
- * - resolveCleanForkAnchor: from Harness read parent conversation real-time ContextView and return security positive integer
- *   item ID; parent conversation missing throw 404 not_found, without can fork history throw 409 fork_empty_history.
+ * Responsibilities:
+ * - `assertSpawnForkFields` / `resolveForkMode` / `resolveInheritedModelAndThinking` /
+ *   `resolveInheritedModelOverride`: reused across `runtime-agent-spawn.ts` and `spawn.ts` so entry
+ *   validation, hook transform re-verification, target inheritance, and model/effort clamping share one source of truth;
+ * - `selectCleanForkAnchorEntryId`: flattens aligned messages per entry in order while tracking each message's
+ *   `entryIdx`, locates the last global `role === 'assistant'` message, verifies whether any subsequent messages
+ *   (including within the same entry) leave unclosed `toolCall`s, truncates before that assistant's entry if so,
+ *   and rejects empty shells containing only system messages or resets;
+ * - `resolveCleanForkAnchor`: reads the parent conversation's live `ContextView` from `Harness` and returns a
+ *   positive safe integer entry ID; throws `404 not_found` if parent missing or `409 fork_empty_history` if no forkable history.
  */
 
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
@@ -47,24 +47,24 @@ export interface ForkModelAndThinkingResult {
   thinkingLevelOverride: string | undefined
 }
 
-/** validate fork field type and fork and resume mutual exclusion constraint. */
+/** Validate `fork` field type and mutual exclusion between `fork` and `resume`. */
 export function assertSpawnForkFields(request: Pick<AgentSpawnRequest, 'fork' | 'resume'>): void {
   if (request.fork !== undefined && typeof request.fork !== 'boolean') {
-    throw new HelmError('validation_error', `fork must is boolean(receives ${typeof request.fork})`, 400, {
+    throw new HelmError('validation_error', `fork must be a boolean (received ${typeof request.fork})`, 400, {
       fork: request.fork,
     })
   }
   if (request.fork === true && request.resume !== undefined) {
     throw new HelmError(
       'validation_error',
-      'fork and resume mutual exclusion: cannot also from parent conversation fork and resume since has sub-conversation',
+      'fork and resume are mutually exclusive: cannot fork from parent conversation while resuming an existing sub-conversation',
       400,
       { resume: request.resume },
     )
   }
 }
 
-/** parse target Profile and is otherwise belong same role fork. */
+/** Resolve target Profile and whether this is a same-profile fork. */
 export function resolveForkMode(
   requestedProfileId: string | undefined,
   isFork: boolean | undefined,
@@ -79,7 +79,7 @@ export function resolveForkMode(
   }
 }
 
-/** compute model, think Profile and need to written to the database thinkingLevelOverride. */
+/** Compute effective model, reasoning effort, and `thinkingLevelOverride` to persist. */
 export function resolveInheritedModelAndThinking(
   input: ForkModelAndThinkingInput,
 ): ForkModelAndThinkingResult {
@@ -122,7 +122,7 @@ export function resolveInheritedModelAndThinking(
   }
 }
 
-/** compute need to written to the database modelOverride(explicit takes precedence, second same role fork inherit parent conversation override). */
+/** Compute `modelOverride` to persist (explicit model takes precedence, then parent override on same-profile fork). */
 export function resolveInheritedModelOverride(
   requestModel: string | undefined,
   forkSameProfile: boolean,
@@ -149,13 +149,13 @@ function collectToolCallIds(content: unknown): Set<string> {
 }
 
 /**
- * from align ContextView in choose clean fork anchor item ID:
- * -  entries[0..len-1] contribution message by order flat and record which belong entryIdx;
- * - found global finally a role === 'assistant' message (under mark lastAssistantFlatIdx, which belong item
- *   lastAssistantEntryIdx), collect its toolCall ID, check flat.slice(lastAssistantFlatIdx + 1)
- *   in is otherwise all already has match role === 'toolResult'(also compatibility across item and same item [assistant, toolResult]);
- * - if store in not closed together toolCall, truncate to lastAssistantEntryIdx; otherwise keep to tail len;
- * - truncate after zone between inside must at least contains a non- system message; return tail purpose security positive integer ID.
+ * Select a clean fork anchor entry ID from an aligned `ContextView`:
+ * - Flatten contributed messages from `entries[0..len-1]` in order and record each message's `entryIdx`;
+ * - Find the final `role === 'assistant'` message globally (`lastAssistantFlatIdx` in `lastAssistantEntryIdx`),
+ *   collect its `toolCall` IDs, and check whether `flat.slice(lastAssistantFlatIdx + 1)` contains matching
+ *   `role === 'toolResult'` entries (handles both cross-entry and same-entry `[assistant, toolResult]`);
+ * - If any `toolCall` is unclosed, cut at `lastAssistantEntryIdx`; otherwise keep up to `len`;
+ * - The remaining slice must contain at least one non-system message; returns the trailing entry's positive safe integer ID.
  */
 export function selectCleanForkAnchorEntryId(view: ForkAnchorContextView): number | undefined {
   const len = Math.min(view.entries.length, view.contributions.length)
@@ -215,8 +215,8 @@ export function selectCleanForkAnchorEntryId(view: ForkAnchorContextView): numbe
 }
 
 /**
- * read parent conversation when before ContextView and parse clean fork anchor item ID.
- * parent conversation missing throw 404 not_found; without completed can fork history throw 409 fork_empty_history.
+ * Read the parent conversation's current `ContextView` and resolve a clean fork anchor entry ID.
+ * Throws `404 not_found` if parent is missing; throws `409 fork_empty_history` if no completed forkable history exists.
  */
 export async function resolveCleanForkAnchor(
   harness: Harness,
@@ -224,7 +224,7 @@ export async function resolveCleanForkAnchor(
 ): Promise<number> {
   const conv = await harness.conversation(parentConversationId as never, BACKGROUND_CONTEXT)
   if (!conv) {
-    throw new HelmError('not_found', `parent conversation missing:${parentConversationId}`, 404, {
+    throw new HelmError('not_found', `Parent conversation not found: ${parentConversationId}`, 404, {
       parentConversationId,
     })
   }
@@ -233,7 +233,7 @@ export async function resolveCleanForkAnchor(
   if (anchorEntryId === undefined) {
     throw new HelmError(
       'fork_empty_history',
-      'parent conversation still without completed can fork context item, cannot execute fork derive',
+      'Parent conversation has no completed forkable context entries yet; cannot fork',
       409,
       { parentConversationId },
     )

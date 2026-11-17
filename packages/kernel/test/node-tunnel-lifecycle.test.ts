@@ -5,7 +5,7 @@ import { once } from 'node:events'
 import { createEnvFabric } from '../src/env/fabric.js'
 import { tunnelFetch } from '../src/env/node-fetch.js'
 
-test('local tunnel:dispose close activity and in-flight connect, closure stop after reject new tunnel', { timeout: 60_000 }, async (t) => {
+test('local tunnel: dispose closes active and in-flight connections and rejects new tunnels once closed', { timeout: 60_000 }, async (t) => {
   const sockets = new Set<net.Socket>()
   const server = net.createServer((socket) => {
     sockets.add(socket)
@@ -34,9 +34,9 @@ test('local tunnel:dispose close activity and in-flight connect, closure stop af
   await rejected
 })
 
-test('TLS grasp manually cancel: destroy underlying tunnel and immediately return aborted', { timeout: 60_000 }, async (t) => {
+test('TLS handshake cancellation destroys underlying tunnel and returns aborted immediately', { timeout: 60_000 }, async (t) => {
   const sockets = new Set<net.Socket>()
-  // accept TCP but do not back re- TLS ClientHello, make grasp manually keep in-flight.
+  // Accept TCP without returning a TLS ServerHello so the handshake stays in-flight.
   const server = net.createServer((socket) => {
     sockets.add(socket)
     socket.on('error', () => undefined)
@@ -56,7 +56,7 @@ test('TLS grasp manually cancel: destroy underlying tunnel and immediately retur
   const response = tunnelFetch(async (target, signal) => {
     const duplex = await fabric.openTunnel('local', target, signal)
     duplex.once('data', () => undefined)
-    // caller gets TCP after, in TLS grasp manually during cancel request.
+    // Abort request during the TLS handshake after acquiring the TCP stream.
     setImmediate(() => controller.abort())
     return duplex
   }, 'local', new Request(`https://127.0.0.1:${port}/`, { signal: controller.signal }))
