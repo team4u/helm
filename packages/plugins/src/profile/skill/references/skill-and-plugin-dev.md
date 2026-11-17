@@ -1,5 +1,37 @@
 # Skill and Plugin Bootstrap Development Reference
 
+## Plugin source and build modes
+
+Do not treat "development" and "build" as plugin enablement states. They describe where plugin code and frontend assets come from; a plugin can be enabled or disabled in either mode.
+
+### Built-in plugins in the Helm repository
+
+- `pnpm dev` launches the Hub from TypeScript sources through `tsx` (`scripts/run-hub.mjs`); workspace mappings resolve `@helm/plugins` to `packages/plugins/src`. Built-in UI clients therefore use their source `client/` directories and the host's runtime compiler.
+- `pnpm build` builds package `dist/` output. The `@helm/plugins` build also copies built-in `client/` assets and precompiles declared UI modules into `packages/plugins/dist/<plugin>/dist-client/`. The built-in asset resolver supports both source and built package locations.
+- This is the repository's built-in plugin pipeline. `helm plugins build` is not the command for building `@helm/plugins` or the Hub.
+
+### External plugins
+
+External plugin backend entries remain plugin source files: TypeScript is transpiled and loaded by the Hub at runtime. `helm plugins build` does **not** compile, package, or deploy that backend code.
+
+The frontend has two modes:
+
+| Mode | Source/artifact | When to use it |
+| :--- | :--- | :--- |
+| Runtime compilation | `clientRoot` source, compiled by the Hub's injected esbuild provider and cached by the host | Normal local development; edit source, run `doctor`, then `reload` the registered plugin as needed |
+| Prebuilt client | Static `dist-client/` bundle with manifest and hashed modules, produced by `helm plugins build` | Prepare a deployable frontend when the target host should not need runtime esbuild or frontend npm dependency installation |
+
+Build and verify a prebuilt frontend locally:
+
+```bash
+helm plugins doctor /absolute/path/to/my-plugin
+helm plugins build /absolute/path/to/my-plugin
+```
+
+By default, `build` writes `<plugin dir>/dist-client/`; `--out <dir>` selects another output location, which must be declared with `clientDist` in the plugin manifest/package Helm metadata if it is not the conventional `dist-client/` directory. The Hub recognizes a valid conventional or declared prebuilt bundle and uses it instead of runtime compilation; it does not silently fall back to `clientRoot` when that prebuilt bundle is selected but invalid or stale. Rebuild after changing frontend source, and run `doctor` against the source before shipping. `build` is local and does not contact or update the Hub.
+
+`doctor` validates source and performs real client compilation; it does not substitute for checking that a separately generated prebuilt directory is current. Keep `clientRoot` as the source of truth and distribute the intended `dist-client/` artifact with the plugin when using prebuilt mode.
+
 ## Bootstrapping skills (~/.helm/skills/<id>/)
 
 Skills are operation manuals the model loads on demand; keep SKILL.md short and put details in references/. All paths below live under the Hub data directory; when HELM_DATA_DIR is configured, use that directory. Bash running on a remote node must not treat the local ~/.helm as the Hub's asset directory.
