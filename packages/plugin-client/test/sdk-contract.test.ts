@@ -524,15 +524,18 @@ test('MarkdownView / CodeBlockView render the host-port injected implementations
   assert.match(html, /data-lang="ts"/)
 })
 
-test('markdownUrlTransform allows artifact: and file: while filtering unsafe protocols', { timeout: 60_000 }, () => {
+test('markdownUrlTransform allows artifact:, file:, and Windows drive paths while filtering unsafe protocols', { timeout: 60_000 }, () => {
   assert.equal(SDK.markdownUrlTransform('artifact:art-1'), 'artifact:art-1')
   assert.equal(SDK.markdownUrlTransform('  file:///repo/README.md#L10  '), 'file:///repo/README.md#L10')
   assert.equal(SDK.markdownUrlTransform('FILE:///C:/repo/a.png'), 'FILE:///C:/repo/a.png')
+  assert.equal(SDK.markdownUrlTransform('C:/repo/src/App.tsx#L10'), 'C:/repo/src/App.tsx#L10')
+  assert.equal(SDK.markdownUrlTransform('d:\\repo\\a.png'), 'd:\\repo\\a.png')
   assert.equal(SDK.markdownUrlTransform('docs/guide.md#L5'), 'docs/guide.md#L5')
   assert.equal(SDK.markdownUrlTransform('https://example.com/a'), 'https://example.com/a')
   assert.equal(SDK.markdownUrlTransform('javascript:alert(1)'), '')
   assert.equal(SDK.markdownUrlTransform('data:text/html,<script>alert(1)</script>'), '')
   assert.equal(SDK.markdownUrlTransform('vbscript:msgbox(1)'), '')
+  assert.equal(SDK.markdownUrlTransform('custom:foo'), '')
 })
 
 // ---------------------------------------------------------------------------

@@ -3,10 +3,14 @@ import test, { describe } from 'node:test'
 import { isDisallowedFileUrl, parseWorkspaceFileRef } from '../src/conversation/workspace-file-url.js'
 
 describe('workspace-file-url: isDisallowedFileUrl', { timeout: 60_000 }, () => {
-  test('recognizes file: scheme case-insensitively with optional whitespace', { timeout: 60_000 }, () => {
+  test('recognizes file: scheme and bare Windows drive/UNC paths case-insensitively', { timeout: 60_000 }, () => {
     assert.equal(isDisallowedFileUrl('file:///etc/passwd'), true)
     assert.equal(isDisallowedFileUrl('  FILE:///C:/secret.txt  '), true)
     assert.equal(isDisallowedFileUrl('file:relative.txt'), true)
+    assert.equal(isDisallowedFileUrl('C:/etc/secret.txt'), true)
+    assert.equal(isDisallowedFileUrl('d:\\repo\\a.ts'), true)
+    assert.equal(isDisallowedFileUrl('\\\\server\\share\\a.ts'), true)
+    assert.equal(isDisallowedFileUrl('/etc/passwd'), false)
     assert.equal(isDisallowedFileUrl('https://example.com/file://foo'), false)
     assert.equal(isDisallowedFileUrl('docs/file.md'), false)
     assert.equal(isDisallowedFileUrl(undefined), false)
@@ -14,13 +18,14 @@ describe('workspace-file-url: isDisallowedFileUrl', { timeout: 60_000 }, () => {
 })
 
 describe('workspace-file-url: parseWorkspaceFileRef', { timeout: 60_000 }, () => {
-  test('parses relative workspace paths and line fragments', { timeout: 60_000 }, () => {
+  test('parses relative workspace paths and line/column fragments', { timeout: 60_000 }, () => {
     assert.deepEqual(parseWorkspaceFileRef('README.md'), { path: 'README.md' })
     assert.deepEqual(parseWorkspaceFileRef('./docs/guide.md'), { path: 'docs/guide.md' })
     assert.deepEqual(parseWorkspaceFileRef('docs/guide.md#install'), { path: 'docs/guide.md' })
     assert.deepEqual(parseWorkspaceFileRef('src/app.ts#L12'), { path: 'src/app.ts', startLine: 12 })
     assert.deepEqual(parseWorkspaceFileRef('src/app.ts#L12-L34'), { path: 'src/app.ts', startLine: 12, endLine: 34 })
     assert.deepEqual(parseWorkspaceFileRef('src/app.ts#l5-10'), { path: 'src/app.ts', startLine: 5, endLine: 10 })
+    assert.deepEqual(parseWorkspaceFileRef('src/app.ts#L12C5-L34C10'), { path: 'src/app.ts', startLine: 12, endLine: 34 })
     assert.deepEqual(parseWorkspaceFileRef('docs/my%20notes.md#L3'), { path: 'docs/my notes.md', startLine: 3 })
   })
 
@@ -65,6 +70,54 @@ describe('workspace-file-url: parseWorkspaceFileRef', { timeout: 60_000 }, () =>
       parseWorkspaceFileRef('file:///D:/Users/Alice/Repo/src/App.tsx', { conversationCwd: 'C:\\Users\\Alice\\Repo' }),
       null,
     )
+  })
+
+  test('narrows bare POSIX and Windows absolute paths strictly inside non-root conversationCwd', { timeout: 60_000 }, () => {
+    assert.deepEqual(
+      parseWorkspaceFileRef('/root/code/helm/packages/plugins/src/profile/skill/SKILL.md', {
+        conversationCwd: '/root/code/helm',
+        workspaceBaseDir: 'packages/plugins',
+      }),
+      { path: 'packages/plugins/src/profile/skill/SKILL.md' },
+    )
+    assert.deepEqual(
+      parseWorkspaceFileRef('/Users/me/My%20Repo/docs/guide.md#L8-L16', {
+        conversationCwd: '/Users/me/My Repo/',
+      }),
+      { path: 'docs/guide.md', startLine: 8, endLine: 16 },
+    )
+    assert.deepEqual(
+      parseWorkspaceFileRef('C:/Users/Alice/Repo/src/App.tsx#L4', {
+        conversationCwd: 'c:\\users\\alice\\repo',
+        workspaceBaseDir: 'src',
+      }),
+      { path: 'src/App.tsx', startLine: 4 },
+    )
+    assert.deepEqual(
+      parseWorkspaceFileRef('/mnt/c/Users/Alice/Repo/README.md', {
+        conversationCwd: 'C:\\Users\\Alice\\Repo',
+      }),
+      { path: 'README.md' },
+    )
+    assert.deepEqual(
+      parseWorkspaceFileRef('/c/Users/Alice/Repo/README.md', {
+        conversationCwd: 'C:\\Users\\Alice\\Repo',
+      }),
+      { path: 'README.md' },
+    )
+
+    // Reject missing cwd, filesystem-root cwd, outside paths, traversal, queries, and cross-shape paths
+    assert.equal(parseWorkspaceFileRef('/repo/a.ts'), null)
+    assert.equal(parseWorkspaceFileRef('/etc/passwd', { conversationCwd: '/' }), null)
+    assert.equal(parseWorkspaceFileRef('C:/secret.txt', { conversationCwd: 'C:\\' }), null)
+    assert.equal(parseWorkspaceFileRef('/repo/../../etc/passwd', { conversationCwd: '/repo' }), null)
+    assert.equal(parseWorkspaceFileRef('/repo/..%2fetc/passwd', { conversationCwd: '/repo' }), null)
+    assert.equal(parseWorkspaceFileRef('/repo-other/a.ts', { conversationCwd: '/repo' }), null)
+    assert.equal(parseWorkspaceFileRef('/repo', { conversationCwd: '/repo' }), null)
+    assert.equal(parseWorkspaceFileRef('/repo/a.ts?raw=1', { conversationCwd: '/repo' }), null)
+    assert.equal(parseWorkspaceFileRef('C:/repo/a.ts', { conversationCwd: '/repo' }), null)
+    assert.equal(parseWorkspaceFileRef('D:/Users/Alice/Repo/a.ts', { conversationCwd: 'C:\\Users\\Alice\\Repo' }), null)
+    assert.equal(parseWorkspaceFileRef('/api/artifacts/1/content', { conversationCwd: 'C:\\Users\\Alice\\Repo' }), null)
   })
 
   test('rejects anchors, protocol-relative, API/root paths, query strings, schemes, and bare web hosts', { timeout: 60_000 }, () => {
