@@ -1,16 +1,20 @@
 /**
- * SSE 短断线续传（?afterSeq+?bootId / resumed 控制帧）客户端回归。
+ * Client-side regressions for SSE short-disconnect resume (?afterSeq+?bootId /
+ * the resumed control frame).
  *
- * 覆盖：
- * - 断线重连携带双凭据，resumed 握手后补发帧逐帧应用，只有实际追平 headSeq
- *   才宣称 live（重放中不显示「新鲜」）；续传期间不清详情/产物缓存（无会话
- *   详情类 GET）；
- * - 握手不匹配（服务端 resumed.bootId 与本地不符）：作废凭据，下次连接强制
- *   全量（无查询参数）；
- * - 快照应用失败：作废凭据，下次连接强制全量（绝不反复携带损坏水位）；
- * - 登出/重新鉴权清空续传凭据：同 Hub 换身份不得沿用旧授权的客户端水位；
- * - plugin.changed（enabled=true 热重载）在实时与续传重放两条路径都使 client
- *   模块缓存失效（不残留旧 UI 代码）。
+ * Coverage:
+ * - Reconnection carries both credentials; after the resumed handshake, replay
+ *   frames apply one by one and only actually reaching headSeq announces live
+ *   (never "fresh" mid-replay); details/artifacts caches are NOT cleared during
+ *   resume (no conversation-detail GETs);
+ * - Handshake mismatch (server resumed.bootId differs from local): credentials
+ *   invalidated; the next connection goes full (no query params);
+ * - Snapshot apply failure: credentials invalidated; the next connection goes
+ *   full (never repeatedly carrying a corrupt watermark);
+ * - Logout/re-auth clears resume credentials: a new identity on the same Hub
+ *   must never reuse the old authorization's client watermark;
+ * - plugin.changed (enabled=true hot reload) invalidates the client module
+ *   cache on both the live and the resume-replay paths (no stale UI code).
  */
 import assert from 'node:assert/strict'
 import { after, before, test } from 'node:test'
@@ -41,12 +45,12 @@ after(() => {
 })
 
 // ---------------------------------------------------------------------------
-// 桩：受控 SSE 流 + fetch 路由
+// Stubs: controlled SSE streams + fetch routing
 // ---------------------------------------------------------------------------
 
 const encoder = new TextEncoder()
 
-/** 受控流：测试命令式 send/end；abort（或消费端 cancel）时立即关流解绑。 */
+/** Controlled stream: tests send/end imperatively; abort (or consumer cancel) closes immediately and unbinds. */
 function controlledStream(signal?: AbortSignal | null): {
   stream: ReadableStream<Uint8Array>
   send: (text: string) => void
@@ -61,7 +65,7 @@ function controlledStream(signal?: AbortSignal | null): {
     try {
       controller?.close()
     } catch {
-      /* 已关/已取消：幂等 */
+      /* already closed/cancelled: idempotent */
     }
   }
   signal?.addEventListener('abort', finish, { once: true })
@@ -135,7 +139,7 @@ interface Harness {
   observed: Observed
   eventsUrls: string[]
   fetchedUrls: string[]
-  /** 登记下一条 /api/events 连接的 SSE 流工厂（连接先到则挂起等待注册，确定性消费）。 */
+  /** Register the SSE stream factory for the next /api/events connection (if the connection arrives first it waits for the registration; deterministic consumption). */
   nextEvents: (factory: StreamFactory) => void
   store: () => HelmStoreValue
   waitFor: (predicate: (observed: Observed) => boolean, ms?: number) => Promise<void>
@@ -154,7 +158,7 @@ async function mountProvider(options?: {
   const observed: Observed = { authenticated: false, sseConnected: false, connectionError: null, conversations: 0 }
   const eventsUrls: string[] = []
   const fetchedUrls: string[] = []
-  // 连接请求先到而工厂未注册时挂起（mount 期间连接即发起，注册顺序与到达顺序解耦）。
+  // If the connection request arrives before the factory is registered, it waits (the connection starts during mount; registration order is decoupled from arrival order).
   const factories: StreamFactory[] = []
   const waiting: Array<{ url: string; signal: AbortSignal | null; resolve: (r: ControlledStream) => void }> = []
   const takeStream = (url: string, signal: AbortSignal | null): Promise<ControlledStream> => {
@@ -213,7 +217,7 @@ async function mountProvider(options?: {
   const waitFor = async (predicate: (observed: Observed) => boolean, ms = 15_000): Promise<void> => {
     const deadline = Date.now() + ms
     while (!predicate(observed)) {
-      if (Date.now() > deadline) throw new Error(`waitFor 超时：${JSON.stringify(observed)} urls=${JSON.stringify(eventsUrls)}`)
+      if (Date.now() > deadline) throw new Error(`waitFor timeout: ${JSON.stringify(observed)} urls=${JSON.stringify(eventsUrls)}`)
       await act(async () => {
         await new Promise((resolve) => setTimeout(resolve, 20))
       })
@@ -225,7 +229,7 @@ async function mountProvider(options?: {
     fetchedUrls,
     nextEvents,
     store: () => {
-      assert.ok(storeRef !== undefined, 'Probe 尚未渲染')
+      assert.ok(storeRef !== undefined, 'the Probe has not rendered yet')
       return storeRef
     },
     waitFor,
@@ -241,7 +245,7 @@ async function mountProvider(options?: {
   }
 }
 
-/** 注册一条「建立即发 snapshot」的连接工厂。 */
+/** Register a connection factory that emits the snapshot immediately on establishment. */
 function snapshotConnection(h: Harness, payload: object): { send: (text: string) => void; end: () => void } {
   let handle: ControlledStream | undefined
   h.nextEvents((_url, signal) => {
@@ -251,26 +255,26 @@ function snapshotConnection(h: Harness, payload: object): { send: (text: string)
     return c
   })
   const demand = (): ControlledStream => {
-    assert.ok(handle !== undefined, 'snapshot 连接尚未建立')
+    assert.ok(handle !== undefined, 'the snapshot connection has not been established')
     return handle
   }
   return { send: (t) => demand().send(t), end: () => demand().end() }
 }
 
 // ---------------------------------------------------------------------------
-// 用例
+// Cases
 // ---------------------------------------------------------------------------
 
-test('断线续传：双凭据握手、补发逐帧应用、追平 headSeq 才 live、无详情 GET', { timeout: 60_000 }, async () => {
+test('disconnect resume: dual-credential handshake, replay applied frame by frame, live only after reaching headSeq, no detail GETs', { timeout: 60_000 }, async () => {
   localStorage.setItem('helm:token', 't1')
   const h = await mountProvider()
   try {
-    // 第一条连接：snapshot（bootId b1，seq 3）后保持。
+    // First connection: snapshot (bootId b1, seq 3), then held.
     const first = snapshotConnection(h, { bootId: 'b1', seq: 3, conversations: [], pendingAsks: [], plugins: [], ui: [] })
     await h.waitFor((o) => o.sseConnected === true)
     assert.equal(h.eventsUrls[0], '/api/events')
 
-    // 断线：服务端关流 → 客户端退避重连（携带双凭据）。
+    // Disconnect: the server closes the stream -> the client reconnects with backoff (carrying both credentials).
     let secondUrl = ''
     let second: ControlledStream | undefined
     h.nextEvents((url, signal) => {
@@ -283,28 +287,28 @@ test('断线续传：双凭据握手、补发逐帧应用、追平 headSeq 才 l
     await h.waitFor((o) => o.sseConnected === false)
     await h.waitFor(() => h.eventsUrls.length >= 2 && second !== undefined)
     assert.ok(second !== undefined)
-    assert.equal(secondUrl, '/api/events?afterSeq=3&bootId=b1', '重连必须携带 afterSeq+bootId 双凭据')
+    assert.equal(secondUrl, '/api/events?afterSeq=3&bootId=b1', 'the reconnect must carry both afterSeq+bootId credentials')
 
-    // resumed 握手：headSeq=8；先补发 3 帧再暂停——重放中不得宣称 live。
+    // resumed handshake: headSeq=8; replay 3 frames first, then pause — no live claim mid-replay.
     second.send(resumedFrame({ bootId: 'b1', seq: 3, headSeq: 8 }))
     second.send(eventFrame(4, { type: 'conversation.upsert', conversation: conv(4, '补发四') }))
     second.send(eventFrame(5, { type: 'conversation.upsert', conversation: conv(5, '补发五') }))
     second.send(eventFrame(6, { type: 'conversation.upsert', conversation: conv(6, '补发六') }))
     await h.waitFor((o) => o.conversations === 3)
-    assert.equal(h.observed.sseConnected, false, '重放未追平 headSeq 之前不得宣称 live')
+    assert.equal(h.observed.sseConnected, false, 'no live claim before the replay reaches headSeq')
 
-    // 追平：帧 7、8 应用后转 live。
+    // Caught up: after frames 7 and 8 apply, it turns live.
     second.send(eventFrame(7, { type: 'conversation.upsert', conversation: conv(7, '补发七') }))
     second.send(eventFrame(8, { type: 'conversation.upsert', conversation: conv(8, '补发八') }))
     await h.waitFor((o) => o.sseConnected === true)
     assert.equal(h.observed.conversations, 5)
 
-    // live 增量照常到达（seq 9）。
+    // Live deltas arrive as usual (seq 9).
     second.send(eventFrame(9, { type: 'conversation.upsert', conversation: conv(9, '实时九') }))
     await h.waitFor((o) => o.conversations === 6)
 
-    // 续传全程不得触发任何会话详情/产物类 GET（快照未失效任何缓存）。
-    assert.ok(!h.fetchedUrls.some((url) => url.includes('/api/conversations/')), `续传不得重拉详情，实际 GET：${JSON.stringify(h.fetchedUrls)}`)
+    // Resume must trigger no conversation-detail/artifact GETs at all (the snapshot invalidated no cache).
+    assert.ok(!h.fetchedUrls.some((url) => url.includes('/api/conversations/')), `resume must not refetch details, actual GETs: ${JSON.stringify(h.fetchedUrls)}`)
     second.end()
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 30)) })
   } finally {
@@ -312,7 +316,7 @@ test('断线续传：双凭据握手、补发逐帧应用、追平 headSeq 才 l
   }
 })
 
-test('握手不匹配：服务端 resumed 与本地凭据不符，作废凭据下次强制全量', { timeout: 60_000 }, async () => {
+test('handshake mismatch: the server resumed frame differs from local credentials; credentials invalidated, next connection forced full', { timeout: 60_000 }, async () => {
   localStorage.setItem('helm:token', 't1')
   const h = await mountProvider()
   try {
@@ -339,11 +343,11 @@ test('握手不匹配：服务端 resumed 与本地凭据不符，作废凭据�
     await h.waitFor(() => h.eventsUrls.length >= 2 && second !== undefined)
     assert.ok(second !== undefined)
     assert.equal(secondUrl, '/api/events?afterSeq=2&bootId=b1')
-    // 异常服务端：resumed 携带另一 bootId（且 headSeq 倒退）——必须判握手失败。
+    // Faulty server: resumed carries a different bootId (and headSeq regressed) — must be judged a handshake failure.
     second.send(resumedFrame({ bootId: 'b2', seq: 2, headSeq: 1 }))
     await h.waitFor(() => h.eventsUrls.length >= 3 && third !== undefined)
     assert.ok(third !== undefined)
-    assert.equal(thirdUrl, '/api/events', '握手失败后凭据已作废：第三次连接必须无查询参数全量')
+    assert.equal(thirdUrl, '/api/events', 'credentials invalidated after the handshake failure: the third connection must go full with no query params')
     third.send(snapshotFrame({ bootId: 'b2', seq: 5, conversations: [conv(1, '全量')], pendingAsks: [], plugins: [], ui: [] }))
     await h.waitFor((o) => o.sseConnected === true && o.conversations === 1)
   } finally {
@@ -351,11 +355,11 @@ test('握手不匹配：服务端 resumed 与本地凭据不符，作废凭据�
   }
 })
 
-test('快照应用失败：作废凭据，下次连接强制全量（不反复携带损坏水位）', { timeout: 60_000 }, async () => {
+test('snapshot apply failure: credentials invalidated, next connection forced full (never repeatedly carrying a corrupt watermark)', { timeout: 60_000 }, async () => {
   localStorage.setItem('helm:token', 't1')
   const h = await mountProvider()
   try {
-    // 非法快照（conversations 非数组）：applySnapshot 必须抛错，凭据不落地。
+    // Illegal snapshot (conversations not an array): applySnapshot must throw and the credentials must not land.
     const first = snapshotConnection(h, { bootId: 'b1', seq: 4, conversations: 'corrupted', pendingAsks: [], plugins: [], ui: [] })
     let secondUrl = ''
     let second: ControlledStream | undefined
@@ -367,7 +371,7 @@ test('快照应用失败：作废凭据，下次连接强制全量（不反复�
     })
     await h.waitFor(() => h.eventsUrls.length >= 2 && second !== undefined)
     assert.ok(second !== undefined)
-    assert.equal(secondUrl, '/api/events', '快照失败后不得携带任何续传凭据')
+    assert.equal(secondUrl, '/api/events', 'no resume credentials carried after the snapshot failure')
     second.send(snapshotFrame({ bootId: 'b1', seq: 4, conversations: [conv(2, '恢复')], pendingAsks: [], plugins: [], ui: [] }))
     await h.waitFor((o) => o.sseConnected === true && o.conversations === 1)
   } finally {
@@ -375,13 +379,13 @@ test('快照应用失败：作废凭据，下次连接强制全量（不反复�
   }
 })
 
-test('登出/重新鉴权清空续传凭据：换身份后不得沿用旧授权水位', { timeout: 60_000 }, async () => {
+test('logout/re-auth clears resume credentials: a new identity must not reuse the old authorization watermark', { timeout: 60_000 }, async () => {
   localStorage.setItem('helm:token', 't1')
   const h = await mountProvider()
   try {
     const first = snapshotConnection(h, { bootId: 'b1', seq: 1, conversations: [], pendingAsks: [], plugins: [], ui: [] })
     await h.waitFor((o) => o.sseConnected === true)
-    // 推进水位到 2（凭据随帧实际应用推进）。
+    // Advance the watermark to 2 (credentials advance as frames actually apply).
     first.send(eventFrame(2, { type: 'notification', level: 'info', title: '推进' }))
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)) })
 
@@ -393,17 +397,17 @@ test('登出/重新鉴权清空续传凭据：换身份后不得沿用旧授权�
       second = c
       return c
     })
-    // 401 路径登出：凭据必须随 logout 一并清空。
+    // Logout via the 401 path: credentials must be cleared together with logout.
     window.dispatchEvent(new Event('helm:unauthorized'))
     await h.waitFor((o) => o.authenticated === false)
-    // 重新鉴权（换身份）后新连接不得带旧凭据。
+    // After re-auth (new identity), the new connection must not carry the old credentials.
     await act(async () => {
       h.store().onAuthenticated('t2')
     })
     await h.waitFor((o) => o.authenticated === true)
     await h.waitFor(() => h.eventsUrls.length >= 2 && second !== undefined)
     assert.ok(second !== undefined)
-    assert.equal(secondUrl, '/api/events', '换身份后必须无查询参数全量（旧授权水位已清空）')
+    assert.equal(secondUrl, '/api/events', 'after switching identity it must go full with no query params (old authorization watermark cleared)')
     second.send(snapshotFrame({ bootId: 'b1', seq: 2, conversations: [], pendingAsks: [], plugins: [], ui: [] }))
     await h.waitFor((o) => o.sseConnected === true)
   } finally {
@@ -411,7 +415,7 @@ test('登出/重新鉴权清空续传凭据：换身份后不得沿用旧授权�
   }
 })
 
-test('plugin.changed 启用态热重载使 client 模块缓存失效（live 与续传重放双路径）', { timeout: 60_000 }, async () => {
+test('plugin.changed enabled-state hot reload invalidates the client module cache (both the live and resume-replay paths)', { timeout: 60_000 }, async () => {
   localStorage.setItem('helm:token', 't1')
   const h = await mountProvider()
   try {
@@ -426,13 +430,13 @@ test('plugin.changed 启用态热重载使 client 模块缓存失效（live 与�
     await h.waitFor((o) => o.sseConnected === true)
     const revision0 = getPluginClientCacheRevision('test:p')
 
-    // live 路径：enabled=true 的 plugin.changed（热重载/升级）也必须失效缓存。
+    // Live path: an enabled=true plugin.changed (hot reload/upgrade) must also invalidate the cache.
     first.send(eventFrame(2, { type: 'plugin.changed', plugin: pluginSummary('test:p'), ui: [] }))
     await h.waitFor(() => getPluginClientCacheRevision('test:p') !== revision0)
     const revision1 = getPluginClientCacheRevision('test:p')
     assert.notEqual(revision1, revision0)
 
-    // 续传重放路径：断线期间的热重载事件经 resumed 补发后同样失效缓存。
+    // Resume-replay path: a hot-reload event from during the disconnect, replayed via resumed, invalidates the cache just the same.
     let secondUrl = ''
     let second: ControlledStream | undefined
     h.nextEvents((url, signal) => {
@@ -457,10 +461,10 @@ test('plugin.changed 启用态热重载使 client 模块缓存失效（live 与�
 })
 
 // ---------------------------------------------------------------------------
-// 协议边界异常：一律作废凭据强制下次全量（不依赖服务端永不发坏数据）
+// Protocol-boundary failures: credentials always invalidated, forcing a full next connection (never relying on the server to never send bad data)
 // ---------------------------------------------------------------------------
 
-/** 断言下一次连接为无凭据全量，并以健康快照恢复 live。 */
+/** Assert the next connection is a credential-free full sync, then restore live with a healthy snapshot. */
 async function expectFullResyncAndRecover(h: Harness): Promise<void> {
   let url = ''
   let handle: ControlledStream | undefined
@@ -472,14 +476,14 @@ async function expectFullResyncAndRecover(h: Harness): Promise<void> {
   })
   await h.waitFor(() => handle !== undefined)
   assert.ok(handle !== undefined)
-  assert.equal(url, '/api/events', '协议失败后凭据已作废：必须无查询参数全量')
+  assert.equal(url, '/api/events', 'credentials invalidated after the protocol failure: must go full with no query params')
   handle.send(snapshotFrame({ bootId: 'b1', seq: 2, conversations: [conv(1, '恢复')], pendingAsks: [], plugins: [], ui: [] }))
   await h.waitFor((o) => o.sseConnected === true && o.conversations === 1)
 }
 
 interface ProtocolFailureScenario {
   name: string
-  /** 驱动至协议错误发生（首帧即坏或 live 后注入坏帧）。 */
+  /** Drive until the protocol error occurs (a bad first frame, or a bad frame injected after live). */
   poison: (h: Harness) => Promise<void>
 }
 
@@ -487,7 +491,7 @@ const goodSnapshot = { bootId: 'b1', seq: 2, conversations: [], pendingAsks: [],
 
 const scenarios: ProtocolFailureScenario[] = [
   {
-    name: '无效 JSON 增量帧',
+    name: 'invalid JSON delta frame',
     async poison(h) {
       const first = snapshotConnection(h, goodSnapshot)
       await h.waitFor((o) => o.sseConnected === true)
@@ -495,7 +499,7 @@ const scenarios: ProtocolFailureScenario[] = [
     },
   },
   {
-    name: 'null 载荷 snapshot 首帧',
+    name: 'null-payload snapshot first frame',
     async poison(h) {
       h.nextEvents((_url, signal) => {
         const c = controlledStream(signal)
@@ -506,7 +510,7 @@ const scenarios: ProtocolFailureScenario[] = [
     },
   },
   {
-    name: 'null 载荷 resumed 控制帧',
+    name: 'null-payload resumed control frame',
     async poison(h) {
       const first = snapshotConnection(h, goodSnapshot)
       await h.waitFor((o) => o.sseConnected === true)
@@ -526,7 +530,7 @@ const scenarios: ProtocolFailureScenario[] = [
     },
   },
   {
-    name: '缺 event 字段的增量帧',
+    name: 'delta frame missing the event field',
     async poison(h) {
       const first = snapshotConnection(h, goodSnapshot)
       await h.waitFor((o) => o.sseConnected === true)
@@ -534,7 +538,7 @@ const scenarios: ProtocolFailureScenario[] = [
     },
   },
   {
-    name: '帧序跳号（缺帧不得静默越过）',
+    name: 'frame sequence gap (missing frames must not be silently skipped)',
     async poison(h) {
       const first = snapshotConnection(h, goodSnapshot)
       await h.waitFor((o) => o.sseConnected === true)
@@ -544,7 +548,7 @@ const scenarios: ProtocolFailureScenario[] = [
 ]
 
 for (const scenario of scenarios) {
-  test(`协议边界异常作废Credentials下次全量：${scenario.name}`, { timeout: 60_000 }, async () => {
+  test(`protocol-boundary failure invalidates credentials for the next full sync: ${scenario.name}`, { timeout: 60_000 }, async () => {
     localStorage.setItem('helm:token', 't1')
     const h = await mountProvider()
     try {

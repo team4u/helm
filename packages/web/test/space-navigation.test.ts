@@ -1,5 +1,5 @@
 /**
- * space-navigation.ts 与 theme-preferences.ts 纯逻辑单元测试（零 React / DOM 依赖）。
+ * Pure-logic unit tests for space-navigation.ts and theme-preferences.ts (zero React / DOM dependencies).
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
@@ -95,7 +95,7 @@ function createMemoryStorage(initial: Record<string, string> = {}): Storage {
 // space-navigation: isSpaceTargetAvailable
 // ---------------------------------------------------------------------------
 
-test('isSpaceTargetAvailable：会话目标按列表存在性判定，系统中心恒可用', { timeout: 60_000 }, () => {
+test('isSpaceTargetAvailable: conversation targets judged by list presence; the system center is always available', { timeout: 60_000 }, () => {
   const input = makeInput({ conversations: [makeConversation({ id: 7 })] })
   assert.equal(isSpaceTargetAvailable({ kind: 'conversation', conversationId: 7 }, input), true)
   assert.equal(isSpaceTargetAvailable({ kind: 'conversation', conversationId: 99 }, input), false)
@@ -111,7 +111,7 @@ test('isSpaceTargetAvailable：会话目标按列表存在性判定，系统中�
   }
 })
 
-test('isSpaceTargetAvailable：agent 在资产未就绪时放行，就绪后校验角色存在性', { timeout: 60_000 }, () => {
+test('isSpaceTargetAvailable: agent passes while assets are not ready; once ready, profile existence is verified', { timeout: 60_000 }, () => {
   const target: ResolvedTarget = { kind: 'agent', profileId: 'coder' }
   assert.equal(isSpaceTargetAvailable(target, makeInput({ assetsLoaded: false, profiles: [] })), true)
   assert.equal(isSpaceTargetAvailable(target, makeInput({ assetsLoaded: true, profiles: [] })), false)
@@ -121,7 +121,7 @@ test('isSpaceTargetAvailable：agent 在资产未就绪时放行，就绪后校�
   )
 })
 
-test('isSpaceTargetAvailable：screen 仅在仍存在对应启用贡献时可用', { timeout: 60_000 }, () => {
+test('isSpaceTargetAvailable: a screen is available only while a matching enabled contribution still exists', { timeout: 60_000 }, () => {
   const grouped = groupUiContributions([
     { pluginId: 'test:ui', surface: 'screen', spec: { id: 'board', label: '看板' } },
   ])
@@ -135,7 +135,7 @@ test('isSpaceTargetAvailable：screen 仅在仍存在对应启用贡献时可用
 // space-navigation: defaultSpaceTarget & resolveSpaceSwitch
 // ---------------------------------------------------------------------------
 
-test('defaultSpaceTarget：settings 返回角色中心；views 取首个可解析为 screen 的排序侧栏项', { timeout: 60_000 }, () => {
+test('defaultSpaceTarget: settings returns the profile center; views takes the first ordered sidebar item resolvable to a screen', { timeout: 60_000 }, () => {
   assert.deepEqual(defaultSpaceTarget('settings', makeInput()), { kind: 'profiles' })
 
   const grouped = groupUiContributions([
@@ -152,7 +152,7 @@ test('defaultSpaceTarget：settings 返回角色中心；views 取首个可解�
   assert.equal(defaultSpaceTarget('views', makeInput()), null)
 })
 
-test('defaultSpaceTarget：conversations 优先最新未归档根会话所属角色，并过滤已停用插件角色', { timeout: 60_000 }, () => {
+test('defaultSpaceTarget: conversations prefers the profile of the latest unarchived root conversation and filters disabled-plugin profiles', { timeout: 60_000 }, () => {
   const profiles = [
     makeProfile('disabled-plugin-bot', { managedByPlugin: 'plugin:off' }),
     makeProfile('system-singleton', { humanSelectable: false }),
@@ -164,11 +164,11 @@ test('defaultSpaceTarget：conversations 优先最新未归档根会话所属角
     { id: 'plugin:on', enabled: true },
   ]
   const conversations = [
-    // 子会话即使 updatedAt 更新也不参与根会话竞争
+    // child conversations never compete as roots even with newer updatedAt
     makeConversation({ id: 10, profileId: 'reviewer', parentConversationId: 1, updatedAt: 999 }),
-    // 已归档根会话同样不参与
+    // archived root conversations likewise do not compete
     makeConversation({ id: 11, profileId: 'reviewer', tags: [ARCHIVED_TAG], updatedAt: 900 }),
-    // 最新有效根会话（updatedAt 并列取 id 较大者）
+    // the latest valid root conversation (updatedAt ties take the larger id)
     makeConversation({ id: 2, profileId: 'assistant', updatedAt: 50 }),
     makeConversation({ id: 5, profileId: 'reviewer', updatedAt: 50 }),
   ]
@@ -178,7 +178,7 @@ test('defaultSpaceTarget：conversations 优先最新未归档根会话所属角
     { kind: 'agent', profileId: 'reviewer' },
   )
 
-  // 最新根会话所属角色已失效且资产已加载：退回到可用角色
+  // the latest root's profile is gone and assets are loaded: fall back to a usable profile
   assert.deepEqual(
     defaultSpaceTarget('conversations', makeInput({
       conversations: [makeConversation({ id: 9, profileId: 'deleted-profile', updatedAt: 100 })],
@@ -189,7 +189,7 @@ test('defaultSpaceTarget：conversations 优先最新未归档根会话所属角
     { kind: 'agent', profileId: 'assistant' },
   )
 
-  // 资产未加载完时信任最新根会话所属角色
+  // while assets are not fully loaded, trust the latest root conversation's profile
   assert.deepEqual(
     defaultSpaceTarget('conversations', makeInput({
       conversations: [makeConversation({ id: 9, profileId: 'loading-profile', updatedAt: 100 })],
@@ -200,13 +200,13 @@ test('defaultSpaceTarget：conversations 优先最新未归档根会话所属角
     { kind: 'agent', profileId: 'loading-profile' },
   )
 
-  // 无有效根会话时：跳过停用插件托管角色，优先 humanSelectable !== false
+  // with no valid root conversation: skip disabled-plugin-managed profiles, preferring humanSelectable !== false
   assert.deepEqual(
     defaultSpaceTarget('conversations', makeInput({ conversations: [], profiles, plugins })),
     { kind: 'agent', profileId: 'assistant' },
   )
 
-  // 仅剩 humanSelectable=false 的可见角色时兜底返回该角色
+  // with only a humanSelectable=false visible profile left, fall back to it
   assert.deepEqual(
     defaultSpaceTarget('conversations', makeInput({
       profiles: [makeProfile('disabled-plugin-bot', { managedByPlugin: 'plugin:off' }), makeProfile('system-singleton', { humanSelectable: false })],
@@ -215,41 +215,41 @@ test('defaultSpaceTarget：conversations 优先最新未归档根会话所属角
     { kind: 'agent', profileId: 'system-singleton' },
   )
 
-  // 无任何可用角色返回 null
+  // no usable profile at all returns null
   assert.equal(defaultSpaceTarget('conversations', makeInput()), null)
 })
 
-test('resolveSpaceSwitch：同空间 no-op；优先可用记忆；失效记忆清理并回退缺省或报错', { timeout: 60_000 }, () => {
+test('resolveSpaceSwitch: same space no-op; valid memory first; stale memory cleared with a default fallback or unavailable', { timeout: 60_000 }, () => {
   const input = makeInput({
     conversations: [makeConversation({ id: 1, profileId: 'assistant', updatedAt: 10 })],
     profiles: [makeProfile('assistant')],
   })
 
-  // 已在目标空间：no-op
+  // already in the target space: no-op
   assert.deepEqual(
     resolveSpaceSwitch('conversations', { kind: 'conversation', conversationId: 1 }, {}, input),
     { kind: 'already-in-space' },
   )
 
-  // 命中有效记忆
+  // a valid memory hits
   assert.deepEqual(
     resolveSpaceSwitch('conversations', { kind: 'profiles' }, { conversations: { kind: 'conversation', conversationId: 1 } }, input),
     { kind: 'navigate', target: { kind: 'conversation', conversationId: 1 }, clearStaleMemory: false },
   )
 
-  // 记忆失效（会话已删除）-> 标记清理记忆并回退空间缺省
+  // stale memory (conversation deleted) -> marked for cleanup, falling back to the space default
   assert.deepEqual(
     resolveSpaceSwitch('conversations', { kind: 'profiles' }, { conversations: { kind: 'conversation', conversationId: 999 } }, input),
     { kind: 'navigate', target: { kind: 'agent', profileId: 'assistant' }, clearStaleMemory: true },
   )
 
-  // views 无记忆且无可用视图 -> unavailable 且无需清记忆
+  // views with no memory and no usable view -> unavailable, nothing to clear
   assert.deepEqual(
     resolveSpaceSwitch('views', { kind: 'profiles' }, {}, input),
     { kind: 'unavailable', clearStaleMemory: false },
   )
 
-  // views 记忆失效且也无可用视图 -> unavailable 且清理失效记忆
+  // views with stale memory and no usable view either -> unavailable and the stale memory is cleared
   assert.deepEqual(
     resolveSpaceSwitch('views', { kind: 'profiles' }, { views: { kind: 'screen', pluginId: 'gone', screenId: 'view' } }, input),
     { kind: 'unavailable', clearStaleMemory: true },
@@ -260,7 +260,7 @@ test('resolveSpaceSwitch：同空间 no-op；优先可用记忆；失效记忆�
 // space-navigation: deletedConversationFallbackTarget & screen params patch
 // ---------------------------------------------------------------------------
 
-test('deletedConversationFallbackTarget：无摘要回角色中心；远端坐标保留，local/空串省略', { timeout: 60_000 }, () => {
+test('deletedConversationFallbackTarget: no summary falls to the profile center; remote coordinates kept, local/empty omitted', { timeout: 60_000 }, () => {
   assert.deepEqual(deletedConversationFallbackTarget(undefined), { kind: 'profiles' })
   assert.deepEqual(
     deletedConversationFallbackTarget({ profileId: 'assistant', nodeId: 'local', cwd: '/tmp' }),
@@ -276,7 +276,7 @@ test('deletedConversationFallbackTarget：无摘要回角色中心；远端坐�
   )
 })
 
-test('partitionScreenParamsPatch 与 applyScreenParamsPatch：过滤非法键/原型键，正确增删并保持空 params 精简', { timeout: 60_000 }, () => {
+test('partitionScreenParamsPatch and applyScreenParamsPatch: illegal/prototype keys filtered; add/delete correct; empty params stay lean', { timeout: 60_000 }, () => {
   const patch = {
     tab: 'logs',
     filter: undefined,
@@ -304,12 +304,12 @@ test('partitionScreenParamsPatch 与 applyScreenParamsPatch：过滤非法键/�
     params: { keep: 'yes', tab: 'logs' },
   })
 
-  // 删空所有参数后不保留 params 字段
+  // after deleting every param, no params field remains
   const emptied = applyScreenParamsPatch(patched, [['keep', undefined], ['tab', undefined]])
   assert.deepEqual(emptied, { kind: 'screen', pluginId: 'p', screenId: 's' })
   assert.equal('params' in emptied, false)
 
-  // 非 screen 目标原样返回
+  // non-screen targets return unchanged
   const convTarget: ResolvedTarget = { kind: 'conversation', conversationId: 1 }
   assert.equal(applyScreenParamsPatch(convTarget, validEntries), convTarget)
 })
@@ -318,7 +318,7 @@ test('partitionScreenParamsPatch 与 applyScreenParamsPatch：过滤非法键/�
 // theme-preferences
 // ---------------------------------------------------------------------------
 
-test('theme-preferences：主题偏好读写、循环切换与系统配色解析', { timeout: 60_000 }, () => {
+test('theme-preferences: preference read/write, cycle toggling and system scheme resolution', { timeout: 60_000 }, () => {
   const storage = createMemoryStorage()
   assert.equal(getStoredPreference(storage), 'system')
 
@@ -348,7 +348,7 @@ test('theme-preferences：主题偏好读写、循环切换与系统配色解析
   assert.equal(resolveTheme('system', 'light'), 'light')
 })
 
-test('theme-preferences：安静通知开关读写与存储异常安全兜底', { timeout: 60_000 }, () => {
+test('theme-preferences: quiet-notify toggle read/write and storage-failure-safe fallbacks', { timeout: 60_000 }, () => {
   const storage = createMemoryStorage()
   assert.equal(getStoredQuietNotify(storage), false)
 
@@ -371,9 +371,9 @@ test('theme-preferences：安静通知开关读写与存储异常安全兜底', 
   assert.doesNotThrow(() => persistQuietNotify(true, brokenStorage))
 })
 
-test('theme-preferences：界面语言偏好读写、浏览器默认解析与初始 locale 解析', { timeout: 60_000 }, () => {
+test('theme-preferences: UI language preference read/write, browser-default resolution and initial locale resolution', { timeout: 60_000 }, () => {
   const storage = createMemoryStorage()
-  // 未存偏好：undefined（调用方回退浏览器默认）
+  // no stored preference: undefined (the caller falls back to the browser default)
   assert.equal(getStoredLocale(storage), undefined)
 
   persistLocale('zh-CN', storage)
@@ -383,7 +383,7 @@ test('theme-preferences：界面语言偏好读写、浏览器默认解析与初
   persistLocale('en', storage)
   assert.equal(getStoredLocale(storage), 'en')
 
-  // 存量值经 normalizeLocaleTag 归一：zh-* -> zh-CN，非法/未支持 -> en
+  // stored values normalize through normalizeLocaleTag: zh-* -> zh-CN, illegal/unsupported -> en
   storage.setItem(LOCALE_STORAGE_KEY, 'zh-TW')
   assert.equal(getStoredLocale(storage), 'zh-CN')
   storage.setItem(LOCALE_STORAGE_KEY, 'fr')
@@ -391,21 +391,21 @@ test('theme-preferences：界面语言偏好读写、浏览器默认解析与初
   storage.setItem(LOCALE_STORAGE_KEY, 'garbage')
   assert.equal(getStoredLocale(storage), 'en')
 
-  // 浏览器语言列表：首个可用 tag 归一（zh-* -> zh-CN，其余 -> en）
+  // browser language list: the first usable tag normalizes (zh-* -> zh-CN, anything else -> en)
   assert.equal(resolveBrowserLocale(['zh-TW', 'en-US']), 'zh-CN')
   assert.equal(resolveBrowserLocale(['zh']), 'zh-CN')
   assert.equal(resolveBrowserLocale(['en-GB', 'zh-CN']), 'en')
   assert.equal(resolveBrowserLocale(['fr-FR']), 'en')
   assert.equal(resolveBrowserLocale([]), 'en')
 
-  // 初始 locale：持久化偏好优先，缺省走浏览器默认
+  // initial locale: the persisted preference wins; the default goes through the browser default
   assert.equal(resolveInitialLocale(storage, ['en-US']), 'en')
   persistLocale('zh-CN', storage)
   assert.equal(resolveInitialLocale(storage, ['en-US']), 'zh-CN')
   assert.equal(resolveInitialLocale(createMemoryStorage(), ['zh-Hant']), 'zh-CN')
   assert.equal(resolveInitialLocale(createMemoryStorage(), ['ja-JP']), 'en')
 
-  // 存储异常安全：读取回退 undefined，写入不抛
+  // storage-failure safety: reads fall back to undefined; writes never throw
   const brokenStorage = {
     getItem() { throw new Error('quota/security error') },
     setItem() { throw new Error('quota/security error') },

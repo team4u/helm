@@ -1,16 +1,25 @@
 /**
- * HelmStoreProvider 前台可见聚焦门控自动清未读集成测试（受控 SSE + fetch 桩，happy-dom）：
- * - 前台可见聚焦（!document.hidden && document.hasFocus()）时：
- *   - snapshot 或 conversation.upsert 收到当前可见（主屏/分屏）会话 unread=true 会发 1 次 PATCH { unread: false }；
- * - 页面隐藏（document.hidden=true）或失焦（document.hasFocus()=false）时：
- *   - 收到当前可见会话 unread=true 不发 PATCH（保留未读）；
- *   - 切换到该会话也不发 PATCH；
- * - 切回前台连续触发 visibilitychange + window.focus：
- *   - 仅单飞发 1 次 PATCH { unread: false }，SSE unread=false 未到达前不重复发；
- *   - 收到 SSE unread=false 或 stateChangeSeq 推进且仍 unread=true 后允许下次清零；
- * - 非当前可见会话不会因切回前台被误标已读；
- * - PATCH 失败清理在途记录允许重试，pushNotice 报「标记已读失败」且不污染 loadErrors['conversation:id']；
- * - logout / snapshot 重置在途与水位状态。
+ * HelmStoreProvider integration tests for foreground-visibility-gated
+ * automatic unread clearing (controlled SSE + fetch stubs, happy-dom):
+ * - Foreground visible and focused (!document.hidden && document.hasFocus()):
+ *   - a snapshot or conversation.upsert with unread=true on a currently
+ *     visible (main/split) conversation sends exactly 1 PATCH { unread: false };
+ * - Page hidden (document.hidden=true) or unfocused (document.hasFocus()=false):
+ *   - receiving unread=true on a currently visible conversation sends no PATCH
+ *     (unread kept);
+ *   - switching to that conversation still sends no PATCH;
+ * - Switching back to the foreground firing visibilitychange + window.focus in
+ *   a burst:
+ *   - single-flight sends exactly 1 PATCH { unread: false }; no repeats before
+ *     the SSE unread=false arrives;
+ *   - after the SSE unread=false (or stateChangeSeq advancing while still
+ *     unread=true) the next clearing is allowed;
+ * - Conversations not currently visible are never mis-marked read by returning
+ *   to the foreground;
+ * - A failed PATCH clears the in-flight record to allow a retry, pushNotice
+ *   reports "Failed to mark as read", and loadErrors['conversation:id'] stays
+ *   unpolluted;
+ * - logout / snapshot reset the in-flight and watermark state.
  */
 import assert from 'node:assert/strict'
 import { after, before, test } from 'node:test'
@@ -56,7 +65,7 @@ function controlledStream(signal?: AbortSignal | null): {
     try {
       controller?.close()
     } catch {
-      /* 幂等关闭 */
+      /* idempotent close */
     }
   }
   signal?.addEventListener('abort', finish, { once: true })
@@ -267,7 +276,7 @@ async function mountProvider(options: MountOptions = {}): Promise<Harness> {
     while (storeRef === undefined || !predicate(storeRef)) {
       if (Date.now() > deadline) {
         throw new Error(
-          `waitFor 超时 sseConnected=${String(storeRef?.sseConnected)} patchCalls=${JSON.stringify(patchCalls)} pending=${pendingPatches.length}`,
+          `waitFor timeout sseConnected=${String(storeRef?.sseConnected)} patchCalls=${JSON.stringify(patchCalls)} pending=${pendingPatches.length}`,
         )
       }
       await act(async () => {
@@ -287,7 +296,7 @@ async function mountProvider(options: MountOptions = {}): Promise<Harness> {
     pendingPatches,
     nextEvents,
     store: () => {
-      assert.ok(storeRef !== undefined, 'Probe 尚未渲染')
+      assert.ok(storeRef !== undefined, 'the Probe has not rendered yet')
       return storeRef
     },
     waitFor,
@@ -331,7 +340,7 @@ function setVisibilityAndFocus(initial: { hidden: boolean; focused: boolean }): 
   }
 }
 
-test('当前可见会话在前台聚焦时收到 unread=true 自动发 1 次 PATCH { unread: false }（覆盖 snapshot 与 upsert）', { timeout: 60_000 }, async () => {
+test('a currently visible conversation receiving unread=true while foreground-focused auto-sends 1 PATCH { unread: false } (snapshot and upsert both covered)', { timeout: 60_000 }, async () => {
   const page = setVisibilityAndFocus({ hidden: false, focused: true })
   const h = await mountProvider({ hash: '#/c/1' })
   let sendSse!: (text: string) => void
@@ -354,7 +363,7 @@ test('当前可见会话在前台聚焦时收到 unread=true 自动发 1 次 PAT
     await h.waitFor((s) => s.sseConnected && h.patchCalls.length === 1)
     assert.deepEqual(h.patchCalls, [{ id: 1, body: { unread: false } }])
 
-    // 模拟内核处理 PATCH 后推送 unread=false，随后新一轮完成再次 unread=true
+    // Simulate the kernel pushing unread=false after handling the PATCH, then a new completed turn flipping unread=true again
     sendSse(eventFrame(2, { type: 'conversation.upsert', conversation: makeConv({ id: 1, unread: false, stateChangeSeq: 3 }) }))
     sendSse(eventFrame(3, { type: 'conversation.upsert', conversation: makeConv({ id: 1, unread: true, stateChangeSeq: 4 }) }))
     await h.waitFor(() => h.patchCalls.length === 2)
@@ -365,7 +374,7 @@ test('当前可见会话在前台聚焦时收到 unread=true 自动发 1 次 PAT
   }
 })
 
-test('页面隐藏（hidden=true）或失焦（hasFocus=false）时收到当前会话 unread=true 不发 PATCH（保留未读）', { timeout: 60_000 }, async () => {
+test('page hidden (hidden=true) or unfocused (hasFocus=false): receiving unread=true on the current conversation sends no PATCH (unread kept)', { timeout: 60_000 }, async () => {
   const page = setVisibilityAndFocus({ hidden: true, focused: true })
   const h = await mountProvider({ hash: '#/c/1' })
   let sendSse!: (text: string) => void
@@ -390,16 +399,16 @@ test('页面隐藏（hidden=true）或失焦（hasFocus=false）时收到当前�
   try {
     await h.waitFor((s) => s.sseConnected && s.conversations.length === 2)
     await h.flush()
-    assert.equal(h.patchCalls.length, 0, 'document.hidden=true 时 snapshot 不得清未读')
+    assert.equal(h.patchCalls.length, 0, 'with document.hidden=true the snapshot must not clear unread')
 
-    // 切到 visible 但失焦状态（hasFocus=false），收到 upsert 与切换分屏目标同样不得清未读
+    // Switch to visible-but-unfocused (hasFocus=false): receiving an upsert and switching the split target likewise must not clear unread
     page.set({ hidden: false, focused: false })
     await act(async () => {
       sendSse(eventFrame(2, { type: 'conversation.upsert', conversation: makeConv({ id: 1, unread: true, stateChangeSeq: 3 }) }))
       h.store().openTarget({ kind: 'conversation', conversationId: 2 }, { split: true })
     })
     await h.flush()
-    assert.equal(h.patchCalls.length, 0, 'document.hasFocus()=false 时不得清未读')
+    assert.equal(h.patchCalls.length, 0, 'with document.hasFocus()=false unread must not be cleared')
     assert.equal(h.store().conversations.find((c) => c.id === 1)?.unread, true)
     assert.equal(h.store().conversations.find((c) => c.id === 2)?.unread, true)
   } finally {
@@ -408,7 +417,7 @@ test('页面隐藏（hidden=true）或失焦（hasFocus=false）时收到当前�
   }
 })
 
-test('切回前台连续触发 visibilitychange + focus 仅单飞发 1 次 PATCH；未收到 unread=false 前不重复发；非可见会话不被误清', { timeout: 60_000 }, async () => {
+test('returning to the foreground fires visibilitychange + focus in a burst yet single-flights 1 PATCH; no repeats before unread=false; invisible conversations never mis-cleared', { timeout: 60_000 }, async () => {
   const page = setVisibilityAndFocus({ hidden: true, focused: false })
   const h = await mountProvider({ hash: '#/c/1', manualPatch: true })
   let sendSse!: (text: string) => void
@@ -422,7 +431,7 @@ test('切回前台连续触发 visibilitychange + focus 仅单飞发 1 次 PATCH
         conversations: [
           makeConv({ id: 1, unread: true, stateChangeSeq: 5 }),
           makeConv({ id: 2, unread: true, stateChangeSeq: 5 }),
-          makeConv({ id: 9, unread: true, stateChangeSeq: 5 }), // 非当前可见会话
+          makeConv({ id: 9, unread: true, stateChangeSeq: 5 }), // not currently visible
         ],
         pendingAsks: [],
         plugins: [],
@@ -439,7 +448,7 @@ test('切回前台连续触发 visibilitychange + focus 仅单飞发 1 次 PATCH
     await h.flush()
     assert.equal(h.patchCalls.length, 0)
 
-    // 切回前台：数毫秒内连续触发 visibilitychange 与 window.focus
+    // Return to the foreground: visibilitychange and window.focus fire in quick succession
     page.set({ hidden: false, focused: true })
     await act(async () => {
       document.dispatchEvent(new Event('visibilitychange'))
@@ -451,17 +460,17 @@ test('切回前台连续触发 visibilitychange + focus 仅单飞发 1 次 PATCH
     assert.deepEqual(
       h.patchCalls.map((c) => c.id).sort((a, b) => a - b),
       [1, 2],
-      '仅主屏 #1 与分屏 #2 各发 1 次，非可见 #9 绝不误清',
+      'exactly 1 PATCH each for main #1 and split #2; the invisible #9 is never mis-cleared',
     )
 
-    // 在途尚未返回时再次 focus：单飞拦截，不重复发
+    // Focusing again while the request is in flight: single-flight intercepts, no duplicate send
     await act(async () => {
       window.dispatchEvent(new Event('focus'))
     })
     await h.flush()
     assert.equal(h.patchCalls.length, 2)
 
-    // PATCH 返回成功，但 SSE conversation.upsert(unread=false) 尚未到达：水位防重拦截
+    // The PATCH returned success but the SSE conversation.upsert(unread=false) has not arrived: the watermark dedup intercepts
     await act(async () => {
       for (const p of h.pendingPatches.splice(0)) p.resolve()
     })
@@ -471,15 +480,15 @@ test('切回前台连续触发 visibilitychange + focus 仅单飞发 1 次 PATCH
       window.dispatchEvent(new Event('focus'))
     })
     await h.flush()
-    assert.equal(h.patchCalls.length, 2, '同一 stateChangeSeq 未收到 unread=false 前不得重复 PATCH')
+    assert.equal(h.patchCalls.length, 2, 'no repeated PATCH for the same stateChangeSeq before unread=false arrives')
 
-    // 若未先经过 unread=false：同/早于 PATCH 确认水位（stateChangeSeq=6）仍拦截；
-    // 超过 PATCH 确认水位的更新（stateChangeSeq=7 且仍 unread=true）允许下一轮清零
+    // Without a prior unread=false: at/earlier than the PATCH ack watermark (stateChangeSeq=6) still intercepts;
+    // an update past the PATCH ack watermark (stateChangeSeq=7 and still unread=true) allows the next clearing
     await act(async () => {
       sendSse(eventFrame(2, { type: 'conversation.upsert', conversation: makeConv({ id: 1, unread: true, stateChangeSeq: 6 }) }))
     })
     await h.flush()
-    assert.equal(h.patchCalls.length, 2, '不超过 PATCH 确认水位 stateChangeSeq=6 不得重复 PATCH')
+    assert.equal(h.patchCalls.length, 2, 'no repeated PATCH when not exceeding the PATCH ack watermark stateChangeSeq=6')
 
     await act(async () => {
       sendSse(eventFrame(3, { type: 'conversation.upsert', conversation: makeConv({ id: 1, unread: true, stateChangeSeq: 7 }) }))
@@ -495,7 +504,7 @@ test('切回前台连续触发 visibilitychange + focus 仅单飞发 1 次 PATCH
   }
 })
 
-test('PATCH 失败清理在途记录并 pushNotice 报「标记已读失败」，不污染 loadErrors，且允许重试', { timeout: 60_000 }, async () => {
+test('a failed PATCH clears the in-flight record and pushNotice reports "Failed to mark as read", polluting no loadErrors, and allows a retry', { timeout: 60_000 }, async () => {
   const page = setVisibilityAndFocus({ hidden: false, focused: true })
   const h = await mountProvider({ hash: '#/c/1', patchStatus: 500 })
   h.nextEvents((_url, signal) => {
@@ -515,9 +524,9 @@ test('PATCH 失败清理在途记录并 pushNotice 报「标记已读失败」�
   try {
     await h.waitFor((s) => s.notices.some((n) => n.title === 'Failed to mark as read'))
     assert.equal(h.patchCalls.length, 1)
-    assert.equal(h.store().loadErrors['conversation:1'], undefined, '不得污染 loadErrors["conversation:1"]')
+    assert.equal(h.store().loadErrors['conversation:1'], undefined, 'loadErrors["conversation:1"] must stay unpolluted')
 
-    // 恢复服务端后重新聚焦，因失败未写入已清零水位且在途已清理，应允许重试成功
+    // After the server recovers, refocusing: the failure wrote no cleared watermark and the in-flight record is gone, so the retry may succeed
     h.setPatchBehavior({ patchStatus: 200 })
     await act(async () => {
       window.dispatchEvent(new Event('focus'))
@@ -529,7 +538,7 @@ test('PATCH 失败清理在途记录并 pushNotice 报「标记已读失败」�
   }
 })
 
-test('logout 与 snapshot 重连清空未读在途/水位状态，登出后切焦点不再发 PATCH', { timeout: 60_000 }, async () => {
+test('logout and snapshot reconnect clear the unread in-flight/watermark state; toggling focus after logout sends no more PATCHes', { timeout: 60_000 }, async () => {
   const page = setVisibilityAndFocus({ hidden: false, focused: true })
   const h = await mountProvider({ hash: '#/c/1', manualPatch: true })
   let stream1!: ControlledStream
@@ -549,7 +558,7 @@ test('logout 与 snapshot 重连清空未读在途/水位状态，登出后切�
   })
   try {
     await h.waitFor(() => h.pendingPatches.length === 1)
-    // 断线重连新 snapshot 到来：旧在途作废、水位重置，新 snapshot 若仍 unread=true 可重新触发 PATCH
+    // A new snapshot arrives after disconnect-reconnect: the old in-flight voids, the watermark resets, and a still-unread=true snapshot may trigger PATCHes again
     h.nextEvents((_url, signal) => {
       const c = controlledStream(signal)
       c.send(
@@ -568,12 +577,12 @@ test('logout 与 snapshot 重连清空未读在途/水位状态，登出后切�
       stream1.end()
     })
     await h.waitFor(() => h.patchCalls.length === 2)
-    // 先结算全部 pending
+    // Settle all pending requests first
     await act(async () => {
       for (const p of h.pendingPatches.splice(0)) p.resolve()
     })
 
-    // 登出后监听解绑、状态清空，切焦点不触发 PATCH
+    // After logout: listeners unbound and state cleared; toggling focus triggers no PATCH
     await act(async () => {
       h.store().logout()
       document.dispatchEvent(new Event('visibilitychange'))
