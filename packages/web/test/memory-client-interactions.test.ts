@@ -86,13 +86,13 @@ async function mount(callAction: ClientContext['callAction']) {
 }
 
 function editor(host: HTMLElement): HTMLTextAreaElement {
-  const textarea = host.querySelector<HTMLTextAreaElement>('textarea[aria-label="长期记忆"]')
+  const textarea = host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Long-term memory"]')
   assert.ok(textarea, host.textContent ?? '应有记忆编辑器')
   return textarea
 }
 function saveButton(host: HTMLElement): HTMLButtonElement {
   const button = [...host.querySelectorAll<HTMLButtonElement>('button')]
-    .find((node) => node.textContent?.includes('保存记忆') || node.textContent?.includes('保存中'))
+    .find((node) => node.textContent?.includes('Save memory') || node.textContent?.includes('Saving…'))
   assert.ok(button)
   return button
 }
@@ -151,9 +151,9 @@ test('A 保存后 get A 在途时切 B：旧内容与 finally 不覆盖 B 的加
     await typeText(ui.host, 'A 修改')
     await save(ui.host)
     await ui.render('b')
-    assert.match(ui.host.textContent!, /加载记忆中/)
+    assert.match(ui.host.textContent!, /Loading memory/)
     await act(async () => { refreshA.resolve(memory('a', 'A 保存结果')) })
-    assert.match(ui.host.textContent!, /加载记忆中/, 'A finally 不得清掉 B busy')
+    assert.match(ui.host.textContent!, /Loading memory/, 'A finally 不得清掉 B busy')
     assert.ok(ui.host.querySelector('textarea') === null)
     await act(async () => { loadB.resolve(memory('b', 'B 结果')) })
     assert.equal(editor(ui.host).value, 'B 结果')
@@ -176,7 +176,7 @@ test('A toggle 中切 B：旧 configure 完成后不再 load A、不作废 B 请
     await act(async () => { ui.host.querySelector<HTMLButtonElement>('[role="switch"]')!.click() })
     await ui.render('b')
     await act(async () => { configureA.resolve({ profileId: 'a', enabled: false }) })
-    assert.match(ui.host.textContent!, /加载记忆中/)
+    assert.match(ui.host.textContent!, /Loading memory/)
     assert.equal(calls.filter((call) => call.action === 'get' && call.profileId === 'a').length, 1)
     await act(async () => { loadB.resolve(memory('b', 'B 原文')) })
     assert.equal(editor(ui.host).value, 'B 原文')
@@ -194,10 +194,10 @@ test('configure 已开启但后续 get 失败时显示未知状态，不沿用�
     return { profileId: 'a', enabled: true }
   })
   try {
-    assert.match(ui.host.textContent!, /已为此角色关闭/)
+    assert.match(ui.host.textContent!, /Long-term memory is disabled for this profile/)
     await act(async () => { ui.host.querySelector<HTMLButtonElement>('[role="switch"]')!.click() })
-    assert.match(ui.host.textContent!, /开启后读取失败|无法读取记忆状态/)
-    assert.doesNotMatch(ui.host.textContent!, /已为此角色关闭/)
+    assert.match(ui.host.textContent!, /开启后读取失败|Cannot read the memory state/)
+    assert.doesNotMatch(ui.host.textContent!, /Long-term memory is disabled for this profile/)
     assert.ok(ui.host.querySelector('[role="switch"]') === null)
   } finally { ui.unmount() }
 })
@@ -288,11 +288,11 @@ test('晚失败与卸载均使旧请求失效，get 失败不显示为已关闭'
     await save(ui.host)
     await ui.render('b')
     await act(async () => { saveA.reject(new Error('A 晚到失败')) })
-    assert.match(ui.host.textContent!, /加载记忆中/)
-    assert.doesNotMatch(ui.host.textContent!, /A 晚到失败|已为此角色关闭/)
+    assert.match(ui.host.textContent!, /Loading memory/)
+    assert.doesNotMatch(ui.host.textContent!, /A 晚到失败|Long-term memory is disabled for this profile/)
     await act(async () => { loadB.reject(new Error('B 加载失败')) })
-    assert.match(ui.host.textContent!, /B 加载失败|无法读取记忆状态/)
-    assert.doesNotMatch(ui.host.textContent!, /已为此角色关闭/)
+    assert.match(ui.host.textContent!, /B 加载失败|Cannot read the memory state/)
+    assert.doesNotMatch(ui.host.textContent!, /Long-term memory is disabled for this profile/)
     assert.ok(ui.host.querySelector('[role="switch"]') === null, '未知状态不可伪装为关闭开关')
   } finally { ui.unmount() }
 
