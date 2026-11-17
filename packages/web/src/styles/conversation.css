@@ -665,25 +665,24 @@ pre {
   overflow-wrap: anywhere;
 }
 
+/* 代码块轻量形态（方案 B）：无阴影，仅细边框 + 圆角；标题栏与代码区同色、
+ * 无独立分隔线；复制按钮常驻标题栏内（非悬浮、不随 hover 隐藏）。 */
 .code-block-wrap {
   margin: 10px 0;
   border: 1px solid var(--code-border);
   border-radius: var(--radius-sm);
   background: var(--code-bg);
-  box-shadow: var(--shadow-sm);
   overflow: hidden;
   isolation: isolate;
 }
 
 .code-block-header {
-  min-height: 32px;
+  min-height: 26px;
   padding: 0 8px 0 12px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  border-bottom: 1px solid var(--code-border);
-  background: var(--code-header-bg);
   font-family: var(--font-mono);
   font-size: 11px;
   font-weight: 500;
@@ -700,8 +699,8 @@ pre {
 
 .code-block-header .btn-ghost {
   flex: 0 0 auto;
-  height: 24px;
-  padding: 0 7px;
+  height: 20px;
+  padding: 0 6px;
   color: var(--fg-muted);
 }
 
@@ -712,7 +711,7 @@ pre {
 
 .code-block-pre {
   margin: 0;
-  padding: 12px 14px;
+  padding: 10px 12px;
   overflow-x: auto;
   background: var(--code-bg);
   color: var(--fg);
@@ -1541,7 +1540,7 @@ pre {
 
 .trace-expanded-body .code-block-wrap .code-block-pre:not(.code-lines-pre),
 .trace-tool-body .code-block-wrap .code-block-pre:not(.code-lines-pre) {
-  padding: 12px 14px;
+  padding: 10px 12px;
   border: none;
   border-radius: 0;
   font-size: 13px;
