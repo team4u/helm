@@ -46,6 +46,11 @@ interface LazyLoadBoundaryProps {
   onRetry: () => void
   onDismiss?: () => void
   overlay?: boolean
+  labels: {
+    title: string
+    retry: string
+    close: string
+  }
 }
 
 interface LazyLoadBoundaryState {
@@ -61,12 +66,13 @@ class LazyLoadBoundary extends Component<LazyLoadBoundaryProps, LazyLoadBoundary
 
   render(): ReactNode {
     if (this.state.error === null) return this.props.children
+    const { labels } = this.props
     return (
       <div className={this.props.overlay ? 'lazy-load-error lazy-load-error-overlay' : 'lazy-load-error'} role="alert">
         <div className="callout callout-warn">
           <HelmIcon name="alert-triangle" size={14} />
           <div className="lazy-load-error-body">
-            <strong>Failed to load view</strong>
+            <strong>{labels.title}</strong>
             <p>{this.state.error}</p>
             <div className="lazy-load-error-actions">
               <button
@@ -77,11 +83,11 @@ class LazyLoadBoundary extends Component<LazyLoadBoundaryProps, LazyLoadBoundary
                   this.props.onRetry()
                 }}
               >
-                Retry
+                {labels.retry}
               </button>
               {this.props.onDismiss !== undefined && (
                 <button type="button" className="btn btn-sm" onClick={this.props.onDismiss}>
-                  Close
+                  {labels.close}
                 </button>
               )}
             </div>
@@ -98,6 +104,7 @@ function lazyWithRetry<P extends object>(
 ): ComponentType<P> {
   let LazyComp = createLazy()
   return function RetryableLazyView(props: P): ReactNode {
+    const { t } = useWebLocale()
     const [attempt, setAttempt] = useState(0)
     const clearPreloadError = useContext(LazyRetryContext)
     const propRecord = props as { onClose?: () => void; onCloseSplit?: () => void }
@@ -105,6 +112,11 @@ function lazyWithRetry<P extends object>(
     return (
       <LazyLoadBoundary
         overlay={options?.overlay === true}
+        labels={{
+          title: t('conv.shell.loadViewFailed'),
+          retry: t('common.retry'),
+          close: t('common.close'),
+        }}
         onRetry={() => {
           LazyComp = createLazy()
           clearPreloadError?.()
@@ -311,9 +323,9 @@ function HelmShellInner() {
               onPointerDownCapture={focusPrimary}
               onFocusCapture={focusPrimary}
             >
-              <Suspense fallback={<div className="screen-loading" role="status">Loading view…</div>}>
+              <Suspense fallback={<div className="screen-loading" role="status">{t('conv.shell.loadingView')}</div>}>
                 {homeLandingPending ? (
-                  <div className="home-landing-skeleton" role="status" aria-label="Loading workspace">
+                  <div className="home-landing-skeleton" role="status" aria-label={t('conv.shell.loadingWorkspace')}>
                     <div className="home-landing-skeleton-bar" />
                     <div className="home-landing-skeleton-body">
                       <div className="home-landing-skeleton-line home-landing-skeleton-line-title" />
@@ -361,7 +373,7 @@ function HelmShellInner() {
                 onPointerDownCapture={focusSplit}
                 onFocusCapture={focusSplit}
               >
-                <Suspense fallback={<div className="screen-loading" role="status">Loading view…</div>}>
+                <Suspense fallback={<div className="screen-loading" role="status">{t('conv.shell.loadingView')}</div>}>
                   {store.splitTarget.kind === 'conversation' ? (
                     <ConversationPane
                       key={`split-conv-${store.splitTarget.conversationId}`}
@@ -404,18 +416,18 @@ function HelmShellInner() {
         </main>
 
         {store.workbenchOpen && (
-          <Suspense fallback={<div className="screen-loading screen-loading-overlay" role="status">Loading workbench…</div>}>
+          <Suspense fallback={<div className="screen-loading screen-loading-overlay" role="status">{t('conv.shell.loadingWorkbench')}</div>}>
             <WorkbenchDrawer conversationId={activeConversationId} />
           </Suspense>
         )}
 
         {store.activeModal?.kind === 'command-palette' && (
-          <Suspense fallback={<div className="screen-loading screen-loading-overlay" role="status">Loading command palette…</div>}>
+          <Suspense fallback={<div className="screen-loading screen-loading-overlay" role="status">{t('conv.shell.loadingCommandPalette')}</div>}>
             <CommandPaletteModal onClose={closeModal} />
           </Suspense>
         )}
         {store.activeModal?.kind === 'artifact-preview' && (
-          <Suspense fallback={<div className="screen-loading screen-loading-overlay" role="status">Loading preview…</div>}>
+          <Suspense fallback={<div className="screen-loading screen-loading-overlay" role="status">{t('conv.shell.loadingPreview')}</div>}>
             <ArtifactPreviewModal
               artifactId={store.activeModal.artifactId}
               conversationId={store.activeModal.conversationId}

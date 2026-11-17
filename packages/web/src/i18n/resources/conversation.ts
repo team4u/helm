@@ -362,4 +362,123 @@ export const conversationMessages = {
     'zh-CN': '提交已进入执行（status={status}）',
   },
   'conv.withdraw.failedTitle': { en: 'Failed to withdraw queued message', 'zh-CN': '撤回排队消息失败' },
+
+  // --- Shell lazy loading fallbacks (App.tsx) -------------------------------------------------------------
+  'conv.shell.loadViewFailed': { en: 'Failed to load view', 'zh-CN': '加载视图失败' },
+  'conv.shell.loadingView': { en: 'Loading view…', 'zh-CN': '正在加载视图…' },
+  'conv.shell.loadingWorkspace': { en: 'Loading workspace', 'zh-CN': '正在加载工作区' },
+  'conv.shell.loadingWorkbench': { en: 'Loading workbench…', 'zh-CN': '正在加载工作台…' },
+  'conv.shell.loadingCommandPalette': { en: 'Loading command palette…', 'zh-CN': '正在加载命令面板…' },
+  'conv.shell.loadingPreview': { en: 'Loading preview…', 'zh-CN': '正在加载预览…' },
+
+  // --- Composer chrome (Composer.tsx) ---------------------------------------------------------------------
+  'conv.composer.abortFailed': { en: 'Failed to abort turn', 'zh-CN': '中止回合失败' },
+  'conv.composer.widgetLabel': { en: 'Widget {id}', 'zh-CN': '组件 {id}' },
+  'conv.composer.pillLabel': { en: 'Pill {id}', 'zh-CN': '胶囊 {id}' },
+  'conv.composer.editingWorking': {
+    en: 'Editing a history message · resending overwrites this message and everything after it, and stops the current execution',
+    'zh-CN': '正在编辑历史消息 · 重新发送将覆盖此条及后续对话，并停止当前执行',
+  },
+  'conv.composer.editingIdle': {
+    en: 'Editing a history message · resending overwrites this message and everything after it (including later human messages)',
+    'zh-CN': '正在编辑历史消息 · 重新发送将覆盖此条及后续对话（含之后的人类消息）',
+  },
+  'conv.composer.cancelEditTitle': { en: 'Cancel editing (Esc)', 'zh-CN': '取消编辑 (Esc)' },
+  'conv.composer.inputAria': { en: 'Type a message', 'zh-CN': '输入消息' },
+  'conv.composer.uploadAttachment': { en: 'Uploaded attachment', 'zh-CN': '上传附件' },
+  'conv.composer.toolsLabel': { en: 'Conversation tools', 'zh-CN': '会话工具' },
+  'conv.composer.panels': { en: 'Conversation panels', 'zh-CN': '会话面板' },
+  'conv.composer.panelsCount': { en: 'Conversation panels ({count})', 'zh-CN': '会话面板 ({count})' },
+  'conv.composer.collapsePanels': { en: 'Collapse {target}', 'zh-CN': '收起{target}' },
+  'conv.composer.viewPanels': { en: 'View {target}', 'zh-CN': '查看{target}' },
+
+  // --- Artifact preview modal -----------------------------------------------------------------------------
+  'conv.artifact.downloadFailed': { en: 'Download failed', 'zh-CN': '下载失败' },
+  'conv.artifact.previewAria': { en: 'Artifact preview: {name}', 'zh-CN': '产物预览：{name}' },
+  'conv.artifact.previewModeAria': { en: 'Preview mode', 'zh-CN': '预览方式' },
+  'conv.artifact.defaultPreview': { en: 'Default preview', 'zh-CN': '默认预览' },
+  'conv.artifact.viewModeAria': { en: 'View mode', 'zh-CN': '视图模式' },
+  'conv.artifact.viewRich': { en: 'Rich text', 'zh-CN': '富文本' },
+  'conv.artifact.viewSource': { en: 'Source', 'zh-CN': '源码' },
+  'conv.artifact.windowModeTitle': { en: 'Switch to window mode', 'zh-CN': '切换为窗口模式' },
+  'conv.artifact.fullscreenTitle': { en: 'Fullscreen preview', 'zh-CN': '全屏预览' },
+  'conv.artifact.windowLabel': { en: 'Window', 'zh-CN': '窗口' },
+  'conv.artifact.copy': { en: 'Copy', 'zh-CN': '复制' },
+  'conv.artifact.closeTitle': { en: 'Close (Esc)', 'zh-CN': '关闭 (Esc)' },
+  'conv.artifact.closeAria': { en: 'Close preview', 'zh-CN': '关闭预览' },
+  'conv.artifact.loading': { en: 'Loading artifact…', 'zh-CN': '正在加载产物…' },
+  'conv.artifact.loadFailed': { en: 'Artifact failed to load: {message}', 'zh-CN': '产物加载失败：{message}' },
+  'conv.artifact.textExceededPlugin': {
+    en: 'Text exceeds the {limit} preview limit; decoding stopped and text is null. Download the file for the full content.',
+    'zh-CN': '文本内容超过 {limit} 预览上限，已停止解码，text 为 null。请下载文件查看完整内容。',
+  },
+  'conv.artifact.switchDefaultTitle': { en: 'Switch back to the host default preview', 'zh-CN': '切回宿主默认预览' },
+  'conv.artifact.noInlinePreview': {
+    en: 'This file type has no inline preview; download it to view.',
+    'zh-CN': '此文件类型暂不支持在线预览，请下载后查看。',
+  },
+  'conv.artifact.textExceededDefault': {
+    en: 'Text exceeds the {limit} preview limit; decoding stopped. Download the file for the full content.',
+    'zh-CN': '文本内容超过 {limit} 预览上限，已停止解码。请下载文件查看完整内容。',
+  },
+  'conv.artifact.readingText': { en: 'Reading text…', 'zh-CN': '正在读取文本…' },
+
+  // --- Workbench drawer & model ---------------------------------------------------------------------------
+  'conv.workbench.artifactsTab': { en: 'Artifacts', 'zh-CN': '产物' },
+  'conv.workbench.kindRegistered': { en: 'Registered artifact', 'zh-CN': '注册产物' },
+  'conv.workbench.kindUpload': { en: 'Uploaded attachment', 'zh-CN': '上传附件' },
+  'conv.workbench.kindSpill': { en: 'Output snapshot', 'zh-CN': '输出快照' },
+  'conv.workbench.formatImage': { en: 'Image', 'zh-CN': '图片' },
+  'conv.workbench.formatText': { en: 'Text', 'zh-CN': '文本' },
+  'conv.workbench.formatFile': { en: 'File', 'zh-CN': '文件' },
+  'conv.workbench.preview': { en: 'Preview', 'zh-CN': '预览' },
+  'conv.workbench.downloadName': { en: 'Download {name}', 'zh-CN': '下载 {name}' },
+  'conv.workbench.downloading': { en: 'Downloading', 'zh-CN': '下载中' },
+  'conv.workbench.downloadFailed': { en: 'Failed to download artifact', 'zh-CN': '下载产物失败' },
+  'conv.workbench.noArtifacts': { en: 'No artifacts in this conversation yet', 'zh-CN': '当前会话暂无产物' },
+  'conv.workbench.registeredSectionAria': { en: 'Registered artifacts', 'zh-CN': '正式产物' },
+  'conv.workbench.deliverablesTitle': { en: 'Uploaded attachments', 'zh-CN': '交付产物' },
+  'conv.workbench.noDeliverables': {
+    en: 'No registered artifacts or uploaded attachments yet',
+    'zh-CN': '暂无注册产物或上传附件',
+  },
+  'conv.workbench.spillTitle': { en: 'Oversized tool output snapshot', 'zh-CN': '超长工具输出快照' },
+  'conv.workbench.clickToExpand': { en: 'Click to expand', 'zh-CN': '点击展开' },
+  'conv.workbench.close': { en: 'Close workbench', 'zh-CN': '关闭工作台' },
+  'conv.workbench.drawerAria': { en: 'Workbench drawer', 'zh-CN': '工作台抽屉' },
+  'conv.workbench.noActiveConversation': { en: 'No active conversation context', 'zh-CN': '无活跃会话上下文' },
+  'conv.workbench.panelLabel': { en: 'Workbench {label}', 'zh-CN': '工作台 {label}' },
+  'conv.workbench.tabUnavailable': {
+    en: 'Workbench tab missing or unavailable for this conversation',
+    'zh-CN': '工作台页签不存在或对当前会话不可用',
+  },
+
+  // --- Conversation row actions menu ----------------------------------------------------------------------
+  'conv.row.archivedBody': {
+    en: 'Conversation #{id} moved to the Archived group in the sidebar',
+    'zh-CN': '会话 #{id} 已移入侧栏「已归档」分组',
+  },
+  'conv.row.restoredBody': {
+    en: 'Conversation #{id} restored to the agent list',
+    'zh-CN': '会话 #{id} 已恢复至智能体列表',
+  },
+  'conv.row.archiveFailed': { en: 'Failed to archive conversation', 'zh-CN': '归档会话失败' },
+  'conv.row.restoreFailed': { en: 'Failed to restore conversation', 'zh-CN': '恢复会话失败' },
+  'conv.row.errorBody': { en: 'Conversation #{id}: {error}', 'zh-CN': '会话 #{id}：{error}' },
+  'conv.row.pluginActions': { en: 'Plugin conversation actions', 'zh-CN': '插件会话操作' },
+  'conv.row.actions': { en: 'Conversation actions', 'zh-CN': '会话操作' },
+  'conv.row.menuAria': { en: 'Conversation #{id} {label}', 'zh-CN': '会话 #{id} {label}' },
+  'conv.row.archiveTitle': {
+    en: 'Archive moves it from the agent list to the Archived group in the sidebar',
+    'zh-CN': '归档后从智能体列表移入侧栏「已归档」分组',
+  },
+  'conv.row.restoreTitle': {
+    en: 'Restore to the original agent conversation list',
+    'zh-CN': '恢复到原智能体的会话列表',
+  },
+
+  // --- Plugin micro action --------------------------------------------------------------------------------
+  'conv.microAction.label': { en: 'Micro action {id}', 'zh-CN': '微操作 {id}' },
+  'conv.microAction.executed': { en: 'Executed: {label}', 'zh-CN': '已执行：{label}' },
+  'conv.microAction.executionFailed': { en: 'Execution failed: {label}', 'zh-CN': '执行失败：{label}' },
 } satisfies MessageTable

@@ -474,3 +474,33 @@ test('深链元数据异步到达：命名元数据后到 → 扩展名命中插
   
   resetPluginClientCache()
 })
+
+test('ArtifactPreviewModal switches UI copy between en and zh-CN', { timeout: 60_000 }, async () => {
+  installObjectUrlShim()
+  const markdown = makeArtifact('art-i18n', new TextEncoder().encode('# Hello\n\nBody'), 'notes.md', 'text/markdown')
+  installArtifactFetch([markdown])
+  const baseStore = buildStore({ artifacts: [markdown] })
+
+  resetBody()
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = mount(host, { ...baseStore, locale: 'zh-CN' }, 'art-i18n', 7)
+  await flush()
+
+  const dialog = document.querySelector('[role="dialog"]')
+  assert.ok(dialog !== null)
+  assert.equal(dialog.getAttribute('aria-label'), '产物预览：notes.md')
+  assert.ok(document.querySelector('button[aria-label="关闭预览"]') !== null, 'close button localized to zh-CN')
+  assert.match(document.body.textContent ?? '', /富文本/)
+  assert.match(document.body.textContent ?? '', /源码/)
+  assert.match(document.body.textContent ?? '', /下载/)
+
+  await rerender(root, { ...baseStore, locale: 'en' }, 'art-i18n', 7)
+  await flush()
+  assert.equal(document.querySelector('[role="dialog"]')?.getAttribute('aria-label'), 'Artifact preview: notes.md')
+  assert.ok(document.querySelector('button[aria-label="Close preview"]') !== null, 'close button localized back to en')
+  assert.match(document.body.textContent ?? '', /Rich text/)
+
+  act(() => { root.unmount() })
+  resetBody()
+})

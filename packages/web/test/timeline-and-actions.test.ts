@@ -822,3 +822,44 @@ test('rewind 覆盖的人类条目不渲染 entry action（不复活已覆盖锚
   assert.doesNotMatch(html, /OLD/)
   assert.match(html, /4:helm\.input:NEW/)
 })
+
+test('ConversationRowActionsMenu and PluginMicroAction localize copy in zh-CN', { timeout: 60_000 }, async () => {
+  const notices: Array<{ level: string; title: string }> = []
+  const storeZh = makeTestStore({
+    locale: 'zh-CN',
+    conversations: [humanConv],
+    invokePluginAction: async () => ({ ok: true }),
+    pushNotice: (n) => notices.push({ level: n.level, title: n.title }),
+  })
+  const rowHtmlZh = renderToString(
+    e(HostStoreProviders, { value: storeZh }, e(ConversationRowActionsMenu, { conversation: humanConv })),
+  )
+  assert.match(rowHtmlZh, /会话操作/)
+
+  const action = {
+    pluginId: 'p',
+    spec: {
+      target: 'conversation:header',
+      id: 'sync',
+      label: { en: 'Sync', 'zh-CN': '同步' },
+      actionId: 'sync_now',
+    } satisfies UiActionSpec,
+  }
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = createRoot(host)
+  try {
+    await act(async () => {
+      root.render(
+        e(HostStoreProviders, { value: storeZh }, e(PluginMicroAction, { action, variant: 'toolbar', conversationId: 10 })),
+      )
+    })
+    const btn = host.querySelector('button') as HTMLButtonElement
+    assert.equal(btn.getAttribute('title'), '同步')
+    await act(async () => { btn.click() })
+    assert.equal(notices[0]?.title, '已执行：同步')
+  } finally {
+    act(() => root.unmount())
+    host.remove()
+  }
+})

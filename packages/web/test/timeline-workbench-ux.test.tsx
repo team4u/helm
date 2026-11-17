@@ -7,11 +7,14 @@ import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { ArtifactMetadata, ConversationSummary, PluginSummary, PluginUiContribution } from '@helm/protocol'
 import { buildTimelineItems, findLatestProcessTurnKey, type TimelineItem } from '../src/conversation/timeline-model.js'
 import {
+  artifactFormatLabel,
+  artifactKindLabel,
   buildWorkbenchFooter,
   buildWorkbenchTabs,
   countDeliverableArtifacts,
   partitionArtifactsByKind,
 } from '../src/conversation/workbench-model.js'
+import { createWebTranslator } from '../src/i18n/catalog.js'
 import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
 import { seedPluginClientModule, resetPluginClientCache } from '../src/lib/plugin-client.js'
 import { resetSessionDocSubscriptions } from '../src/lib/session-docs.js'
@@ -583,4 +586,58 @@ test('workbench-model 与 ArtifactsTab 严格分离正式产物与 spill、去�
 
   // buildTimelineItems 保持向后导出完整性
   assert.deepEqual(buildTimelineItems([]), [])
+})
+
+test('WorkbenchDrawer and workbench-model support en and zh-CN localization', { timeout: 60_000 }, async () => {
+  const zh = createWebTranslator('zh-CN')
+  assert.equal(artifactKindLabel('registered', zh), '注册产物')
+  assert.equal(artifactKindLabel('upload', zh), '上传附件')
+  assert.equal(artifactKindLabel('spill', zh), '输出快照')
+  assert.equal(artifactFormatLabel('image/png', 'diagram.png', zh), '图片')
+  assert.equal(artifactFormatLabel('text/plain', 'notes.txt', zh), '文本')
+  assert.equal(artifactFormatLabel('application/octet-stream', 'data', zh), '文件')
+
+  const zhTabs = buildWorkbenchTabs({
+    groupedUi: groupUiContributions([]),
+    pluginDocs: {},
+    artifactCount: 1,
+    conversationId: 1,
+    locale: 'zh-CN',
+    t: zh,
+  })
+  assert.equal(zhTabs[0]?.label, '产物')
+
+  const conv = makeConversation(1)
+  const registered: ArtifactMetadata = {
+    id: 'art-zh-reg',
+    conversationId: 1,
+    kind: 'registered',
+    name: 'report.md',
+    path: '/tmp/report.md',
+    mimeType: 'text/markdown',
+    size: 512,
+    createdAt: 1_700_000_000_000,
+  }
+  const storeZh = makeTestStore({
+    locale: 'zh-CN',
+    conversations: [conv],
+    workbenchOpen: true,
+    workbenchTab: 'artifacts',
+    conversationArtifacts: { 1: [registered] },
+  })
+  const ui = mountNode()
+  await ui.render(storeZh, e(WorkbenchDrawer, { conversationId: 1, inline: true }))
+  assert.ok(ui.host.querySelector('[aria-label="工作台抽屉"]') !== null)
+  assert.ok(ui.host.querySelector('[aria-label="关闭工作台"]') !== null)
+  assert.ok(ui.host.querySelector('[aria-label="正式产物"]') !== null)
+  assert.match(ui.host.textContent ?? '', /产物1/)
+  assert.match(ui.host.textContent ?? '', /注册产物/)
+  assert.match(ui.host.textContent ?? '', /预览/)
+  assert.match(ui.host.textContent ?? '', /下载/)
+
+  await ui.render({ ...storeZh, locale: 'en' }, e(WorkbenchDrawer, { conversationId: 1, inline: true }))
+  assert.ok(ui.host.querySelector('[aria-label="Workbench drawer"]') !== null)
+  assert.ok(ui.host.querySelector('[aria-label="Close workbench"]') !== null)
+  assert.match(ui.host.textContent ?? '', /Artifacts1/)
+  assert.match(ui.host.textContent ?? '', /Registered artifact/)
 })

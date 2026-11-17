@@ -60,7 +60,7 @@ function buildPreviewerProps(
  */
 export function ArtifactPreviewModal({ artifactId, conversationId, onClose, inline }: ArtifactPreviewModalProps) {
   const store = useHelmStore()
-  const { locale } = useWebLocale()
+  const { locale, t } = useWebLocale()
   const [state, setState] = useState<LoadState>({ phase: 'loading' })
   const [view, setView] = useState<'rich' | 'source'>('rich')
   const [text, setText] = useState<string | null>(null)
@@ -244,7 +244,7 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose, inli
   }
 
   const download = (): void => {
-    void artifactsApi.downloadToBrowser(artifactId, name).catch((error: unknown) => store.pushNotice({ type: 'notification', level: 'error', title: 'Download failed', body: error instanceof Error ? error.message : String(error) }))
+    void artifactsApi.downloadToBrowser(artifactId, name).catch((error: unknown) => store.pushNotice({ type: 'notification', level: 'error', title: t('conv.artifact.downloadFailed'), body: error instanceof Error ? error.message : String(error) }))
   }
 
   return (
@@ -253,7 +253,7 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose, inli
         <DialogOverlay className={`modal-backdrop${isFullscreen ? ' modal-fullscreen-backdrop' : ''}`}>
           <DialogContent
             className={`modal${isFullscreen ? ' modal-fullscreen' : ''}`}
-            aria-label={`Artifact preview: ${name}`}
+            aria-label={t('conv.artifact.previewAria', { name })}
             style={isFullscreen ? undefined : { maxWidth: 'min(1100px, 94vw)', maxHeight: '90vh' }}
           >
             <div className="modal-header artifact-preview-header">
@@ -274,10 +274,10 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose, inli
                 size="sm"
                 value={effectivePreviewer}
                 onChange={(e) => setPreviewer(e.target.value)}
-                aria-label="Preview mode"
+                aria-label={t('conv.artifact.previewModeAria')}
                 className="artifact-previewer-select"
                 options={[
-                  { value: 'default', label: 'Default preview' },
+                  { value: 'default', label: t('conv.artifact.defaultPreview') },
                   ...matchedPreviewers.map((p) => ({
                     value: `${p.pluginId}/${p.spec.id}`,
                     label: resolveLocalizedText(p.spec.label, locale),
@@ -297,10 +297,10 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose, inli
               <SegmentedControl<'rich' | 'source'>
                 value={view}
                 onValueChange={(v) => setView(v)}
-                aria-label="View mode"
+                aria-label={t('conv.artifact.viewModeAria')}
                 items={[
-                  { value: 'rich', label: 'Rich text' },
-                  { value: 'source', label: 'Source' },
+                  { value: 'rich', label: t('conv.artifact.viewRich') },
+                  { value: 'source', label: t('conv.artifact.viewSource') },
                 ]}
               />
             ) : null}
@@ -309,25 +309,25 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose, inli
                 type="button"
                 className="btn btn-sm"
                 onClick={() => setDesktopFullscreen((v) => !v)}
-                title={desktopFullscreen ? 'Switch to window mode' : 'Fullscreen preview'}
+                title={desktopFullscreen ? t('conv.artifact.windowModeTitle') : t('conv.artifact.fullscreenTitle')}
               >
                 <HelmIcon name={desktopFullscreen ? 'minimize-2' : 'maximize-2'} size={12} />
-                {desktopFullscreen ? 'Window' : 'Fullscreen'}
+                {desktopFullscreen ? t('conv.artifact.windowLabel') : t('conv.pane.fullscreen')}
               </button>
             ) : null}
             {markdown && text !== null ? (
-              <CopyButton text={text} label={isMobile ? undefined : 'Copy'} className="btn btn-sm" />
+              <CopyButton text={text} label={isMobile ? undefined : t('conv.artifact.copy')} className="btn btn-sm" />
             ) : null}
-            <button type="button" className="btn btn-sm" onClick={download} title="Download">
+            <button type="button" className="btn btn-sm" onClick={download} title={t('common.download')}>
               <HelmIcon name="download" size={12} />
-              {!isMobile ? 'Download' : null}
+              {!isMobile ? t('common.download') : null}
             </button>
             <DialogClose asChild>
               <button
                 type="button"
                 className="btn btn-ghost btn-icon-sm"
-                title="Close (Esc)"
-                aria-label="Close preview"
+                title={t('conv.artifact.closeTitle')}
+                aria-label={t('conv.artifact.closeAria')}
               >
                 <HelmIcon name="x" size={14} />
               </button>
@@ -338,13 +338,13 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose, inli
           {state.phase === 'loading' ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--fg-muted)', fontSize: 12, padding: 24, justifyContent: 'center' }}>
               <HelmIcon name="loader" size={14} className="spin-slow" />
-              Loading artifact…
+              {t('conv.artifact.loading')}
             </div>
           ) : null}
           {state.phase === 'error' ? (
             <div className="callout callout--error">
               <HelmIcon name="alert-circle" size={13} />
-              <span style={{ wordBreak: 'break-all' }}>Artifact failed to load: {state.message}</span>
+              <span style={{ wordBreak: 'break-all' }}>{t('conv.artifact.loadFailed', { message: state.message })}</span>
             </div>
           ) : null}
           {state.phase === 'loaded' && selected !== undefined ? (
@@ -365,21 +365,21 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose, inli
                       text,
                     ),
                   }}
-                  label={`Preview ${resolveLocalizedText(selected.spec.label, locale)}`}
+                  label={t('conv.attachment.previewName', { name: resolveLocalizedText(selected.spec.label, locale) })}
                 />
               </div>
               {textState === 'exceeded' ? (
-                <div className="callout">Text exceeds the {formatBytes(MAX_PREVIEW_TEXT_BYTES)} preview limit; decoding stopped and text is null. Download the file for the full content.</div>
+                <div className="callout">{t('conv.artifact.textExceededPlugin', { limit: formatBytes(MAX_PREVIEW_TEXT_BYTES) })}</div>
               ) : null}
               <div>
                 <button
                   type="button"
                   className="btn btn-sm"
                   onClick={() => setPreviewer('default')}
-                  title="Switch back to the host default preview"
+                  title={t('conv.artifact.switchDefaultTitle')}
                 >
                   <HelmIcon name="rotate-ccw" size={12} />
-                  Default preview
+                  {t('conv.artifact.defaultPreview')}
                 </button>
               </div>
             </>
@@ -399,10 +399,10 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose, inli
             ) : isPdf ? (
               <iframe src={state.blobUrl} title={name} style={{ width: '100%', height: '64vh', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' }} />
             ) : !isTextLike ? (
-              <div className="callout">This file type has no inline preview; download it to view.</div>
+              <div className="callout">{t('conv.artifact.noInlinePreview')}</div>
             ) : textState === 'exceeded' ? (
               <div className="callout">
-                Text exceeds the {formatBytes(MAX_PREVIEW_TEXT_BYTES)} preview limit; decoding stopped. Download the file for the full content.
+                {t('conv.artifact.textExceededDefault', { limit: formatBytes(MAX_PREVIEW_TEXT_BYTES) })}
               </div>
             ) : markdown && view === 'rich' && text !== null ? (
               <div ref={markdownPreviewRef} className="artifact-markdown-preview">
@@ -410,7 +410,7 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose, inli
               </div>
             ) : (
               <div style={{ overflow: 'auto', minHeight: 200 }}>
-                <CodeBlockView code={text ?? 'Reading text…'} language={language} />
+                <CodeBlockView code={text ?? t('conv.artifact.readingText')} language={language} />
               </div>
             )
           ) : null}
