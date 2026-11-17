@@ -23,6 +23,8 @@ import { HelmError } from '@helm/protocol';
 export interface HelmManifest {
   /** Relative `clientRoot` path declared in manifest (optional). */
   clientRoot?: string;
+  /** Relative `clientDist` prebuilt client directory path declared in manifest (optional). */
+  clientDist?: string;
   /** Managed frontend npm dependency specifiers (bare names or subpaths, deduplicated). */
   clientDependencies?: string[];
   /** Inter-plugin dependency IDs (deduplicated). */
@@ -88,9 +90,16 @@ function normalizeManifestDependencies(dirPath: string, source: string, values: 
 
 /** Reads `clientRoot` from `plugin.json` or `package.json#helm` (`plugin.json` takes precedence). */
 export function readHelmClientRoot(dirPath: string): string | undefined {
-  const manifestClientRoot = readManifestClientRoot(dirPath);
+  const manifestClientRoot = readManifestStringField(dirPath, 'clientRoot');
   if (manifestClientRoot !== undefined) return manifestClientRoot;
   return readHelmField(dirPath)?.clientRoot;
+}
+
+/** Reads `clientDist` from `plugin.json` or `package.json#helm` (`plugin.json` takes precedence). */
+export function readHelmClientDist(dirPath: string): string | undefined {
+  const manifestClientDist = readManifestStringField(dirPath, 'clientDist');
+  if (manifestClientDist !== undefined) return manifestClientDist;
+  return readHelmField(dirPath)?.clientDist;
 }
 
 /** Reads frontend managed npm dependencies from `plugin.json` and `package.json#helm` (merged & deduplicated). */
@@ -150,27 +159,27 @@ export function readManifestOptional(dirPath: string): HelmManifest | undefined 
   };
 }
 
-/** Reads `plugin.json#clientRoot` (returns `undefined` when missing; rejects non-string or empty values). */
-function readManifestClientRoot(dirPath: string): string | undefined {
+/** Reads a non-empty optional string field from `plugin.json` (returns `undefined` when missing; rejects non-string or empty values). */
+function readManifestStringField(dirPath: string, field: 'clientRoot' | 'clientDist'): string | undefined {
   const manifest = readManifestIfPresent(dirPath);
   if (manifest === undefined) return undefined;
-  const clientRoot = manifest['clientRoot'];
-  if (clientRoot === undefined) return undefined;
-  if (typeof clientRoot !== 'string' || clientRoot.length === 0) {
+  const value = manifest[field];
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || value.length === 0) {
     throw new HelmError(
       'plugin_manifest_invalid',
-      `External plugin ${dirPath} plugin.json clientRoot must be a non-empty string`,
+      `External plugin ${dirPath} plugin.json ${field} must be a non-empty string`,
       500,
-      { dirPath, clientRoot: String(clientRoot) },
+      { dirPath, [field]: String(value) },
     );
   }
-  return clientRoot;
+  return value;
 }
 
 /** Reads `package.json#helm` (validates object shape; returns `null` when `package.json` is absent). */
 export function readHelmField(
   dirPath: string,
-): { main?: string; clientRoot?: string; clientDependencies?: string[]; dependencies?: string[] } | null {
+): { main?: string; clientRoot?: string; clientDist?: string; clientDependencies?: string[]; dependencies?: string[] } | null {
   const pkgPath = join(dirPath, 'package.json');
   let raw: string;
   try {
@@ -212,31 +221,21 @@ export function readHelmField(
       { dirPath },
     );
   }
-  const result: { main?: string; clientRoot?: string; clientDependencies?: string[]; dependencies?: string[] } = {};
+  const result: { main?: string; clientRoot?: string; clientDist?: string; clientDependencies?: string[]; dependencies?: string[] } = {};
   const helmObj = helm as Record<string, unknown>;
-  const main = helmObj['main'];
-  if (main !== undefined) {
-    if (typeof main !== 'string' || main.length === 0) {
-      throw new HelmError(
-        'plugin_manifest_invalid',
-        `External plugin ${dirPath} package.json helm.main must be a non-empty string`,
-        500,
-        { dirPath },
-      );
+  for (const field of ['main', 'clientRoot', 'clientDist'] as const) {
+    const val = helmObj[field];
+    if (val !== undefined) {
+      if (typeof val !== 'string' || val.length === 0) {
+        throw new HelmError(
+          'plugin_manifest_invalid',
+          `External plugin ${dirPath} package.json helm.${field} must be a non-empty string`,
+          500,
+          { dirPath },
+        );
+      }
+      result[field] = val;
     }
-    result.main = main;
-  }
-  const clientRoot = helmObj['clientRoot'];
-  if (clientRoot !== undefined) {
-    if (typeof clientRoot !== 'string' || clientRoot.length === 0) {
-      throw new HelmError(
-        'plugin_manifest_invalid',
-        `External plugin ${dirPath} package.json helm.clientRoot must be a non-empty string`,
-        500,
-        { dirPath },
-      );
-    }
-    result.clientRoot = clientRoot;
   }
   const clientDependencies = normalizeClientDependencySpecs(
     dirPath,
@@ -253,6 +252,7 @@ export function readHelmField(
   if (
     result.main === undefined &&
     result.clientRoot === undefined &&
+    result.clientDist === undefined &&
     result.clientDependencies === undefined &&
     result.dependencies === undefined
   ) {

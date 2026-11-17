@@ -32,7 +32,7 @@
  * - Failed / aborted turns (turn_settled outcome): clear the current measurement outright; an unfinished answer must never pose as a normal terminal state; a runtime completed terminal state stays displayed until the next turn's first measurement overwrites it.
  */
 import { COMPOSER_STATUS_SLOT, HelmError, type PluginDefinition } from '@helm/protocol'
-import { resolvePluginClientRoot } from './asset-paths.js'
+import { resolvePluginClientAssets } from './asset-paths.js'
 import {
   CONTEXT_INVALIDATION_ENTRY_KINDS,
   DEFAULT_SLIDING_WINDOW_MS,
@@ -61,7 +61,7 @@ export function createTokenSpeedPlugin(options?: { now?: () => number }): Plugin
     },
     icon: 'gauge',
     version: '0.1.0',
-    clientRoot: resolvePluginClientRoot(TOKEN_SPEED_PLUGIN_ID, 'token-speed', 'token_speed_plugin_client_missing'),
+    ...resolvePluginClientAssets(TOKEN_SPEED_PLUGIN_ID, 'token-speed', 'token_speed_plugin_client_missing'),
     definePlugin(rawCtx) {
       const ctx = rawCtx
       const clock = options?.now ?? Date.now

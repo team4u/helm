@@ -43,11 +43,11 @@ import { isValidSessionName, resolveSocketPath } from './herdr/transport.js'
 import { normalizeStartupTimeoutMs } from './herdr/spawn-rules.js'
 import { assembleHerdrDepsFromHost, nodeChannelFromHost } from './herdr/host-ports.js'
 import { OverviewProjector, type OverviewDoc } from './herdr/overview.js'
-import { resolvePluginClientRoot } from './asset-paths.js'
+import { resolvePluginClientAssets, type PluginClientAssets } from './asset-paths.js'
 
-/** clientRoot resolution converges to the shared asset path (src / dist dual run forms; missing is an explicit error, never silently degraded). */
-function resolveHerdrClientRoot(): string {
-  return resolvePluginClientRoot('builtin:herdr', 'herdr', 'herdr_plugin_client_missing')
+/** client / dist-client asset resolution converges to the shared asset path (src / dist dual tracks; missing is an explicit error, never silently degraded). */
+function resolveHerdrClientAssets(): PluginClientAssets {
+  return resolvePluginClientAssets('builtin:herdr', 'herdr', 'herdr_plugin_client_missing')
 }
 
 /** The 23 Herdr CLI agent.start kinds (full detect::agent_label set); candidates for ProfileRuntimeUiSpec. */
@@ -81,7 +81,7 @@ export function createHerdrPlugin(
     },
     icon: 'terminal',
     version: '0.1.0',
-    clientRoot: resolveHerdrClientRoot(),
+    ...resolveHerdrClientAssets(),
     definePlugin(ctx) {
       // ---- Host port assembly (zero-arg factory: all dependencies come from ctx.host) ----
       // During definePlugin only the host reference is held (disable-time registration/definition collection touches no network);

@@ -128,7 +128,7 @@ export class PluginHost {
 
   constructor(private readonly options: PluginHostOptions) {
     this.configStore = options.config;
-    this.uiRegistry = new UiRegistry(options.buildProvider);
+    this.uiRegistry = new UiRegistry(options.buildProvider, (id) => this.getPluginLifecycle(id));
     this.servicesStarted = options.deferServices !== true;
     for (const name of Object.keys(HOOK_ALLOWED_ACTIONS) as HookName[]) {
       this.pipelines.set(name, new HookPipeline(name));
@@ -342,6 +342,7 @@ export class PluginHost {
       phase: s.phase,
       epoch: s.epoch,
       clientRoot: s.definition.clientRoot,
+      prebuiltClientDir: s.definition.prebuiltClientDir,
       npmDependencies: s.definition.npmDependencies,
     };
   };

@@ -1,36 +1,25 @@
 /**
- * PluginClientCompiler:client.tsx track path host side compiler (@helm/plugin-build, kernel outside implement).
+ * PluginClientCompiler: host-side compiler for the `client.tsx` UI track (`@helm/plugin-build`).
  *
- * this module is PluginBuildProvider.compileClientModule implement body, by produce product composition root (hub)
- * inject kernel PluginHost; kernel itself independent of esbuild(contract see @helm/protocol plugin-build.ts).
+ * Implements `PluginBuildProvider.compileClientModule`, injected into the kernel `PluginHost` by the
+ * product composition root (`@helm/hub`); the kernel itself stays independent of esbuild.
  *
- * responsibility (only do mechanism):
- * - plugin clientRoot inside each other for .ts/.tsx entry compile is browser ESM(esbuild bundle + metafile);
- * - dependency closed package and hash with esbuild metafile actual input is allow (export-from / motion state import /
- *   .js / .json / .css all such as accept; never rely source code regex guess import), cache re- inspect one by one dependency
- *   sha256 than for, source not change directly re- use disk artifact, never duplicate compile;
- * - host sharing dependency (react / react-dom / lucide-react / @helm/plugin-client) via esbuild
- *   virtual module shim handle:shim body inside `module.exports = globalThis.__helm_shared_*`,
- *   named / namespace / default / as-alias / export-from all by esbuild generate legal
- *   ESM bind set (compare regex change write import will produce out `const {useState as s}` this kind of illegal JS),
- *   runtime and host sharing the same instance, never bundle second React;
- * - CSS(v3 start): hand over to esbuild original generate CSS bundling(virtual outfile + write:false, do not
- *   real artifact file), local @import by dependency order original generate merge; merge result with tool name export
- *   `__helmClientCss`(@helm/protocol PLUGIN_CLIENT_CSS_EXPORT) attach in JS artifact tail part,
- *   artifact itself do not inject DOM- - load in import succeeded and cache still valid after only then inject style; without CSS
- *   when do not produce out the export (load by empty handle);
- *   - CSS asset URL only allows data: and http(s)/protocol each other for explicit absolute address (independent of plugin
- *     path base address); local each other for / each other for / fragment URL explicit compile error and create protocol inline data:;
- *   - far process @import explicit reject (do not subject to local dependency validate and cache manage control); local @import enter
- *     dependency hash; decide one rule use esbuild resolver  kind(import-rule / url-token),
- *     never use source code regex guess language method (note release in @import/url() is not import);
- * - containment: entry and each by load local file realpath all must at clientRoot realpath
- *   of inside (symlink escape one by one file intercept); non- sharing bare dependency (npm package) explicit reject - - when before unsupported
- *     npm install, never node_modules or outside file silently hit enter bundle;
- * - artifact:randomUUID temp file + rename atomic change name; same (pluginId, module, root)
- *   concurrency compile merge the same in-flight Promise, failed clear can retry.
- *
- * failed explicit throw HelmError(contains esbuild diagnose), never static default fall back or return empty artifact.
+ * Responsibilities (pure mechanism):
+ * - Compiles relative `.ts`/`.tsx` entrypoints under `clientRoot` into browser ESM (esbuild bundle + metafile);
+ * - Tracks local and controlled-npm closures via esbuild metafile inputs (`export * from`, dynamic imports,
+ *   `.js`, `.json`, `.css`), re-checking per-file sha256 on disk so unchanged sources reuse cached artifacts;
+ * - Virtualizes host-shared dependencies (`react`, `react-dom`, `lucide-react`, `@helm/plugin-client`) via
+ *   `module.exports = globalThis.__helm_shared_*` shims so esbuild emits valid ESM bindings across default,
+ *   named, namespace, aliased, and re-exported forms without bundling a second copy of React;
+ * - Bundles local CSS via esbuild (virtual outfile with `write: false`), exporting merged CSS via the
+ *   reserved export `__helmClientCss` (`PLUGIN_CLIENT_CSS_EXPORT`) without touching the DOM;
+ *   - CSS `url()` allows only `data:`, `http(s)://`, and protocol-relative `//` URLs (local relative,
+ *     root-relative, and fragment URLs are explicitly rejected with a `data:` suggestion);
+ *   - Remote `@import` is explicitly rejected; local `@import` enters the dependency closure and hash;
+ * - Enforces realpath containment on every loaded file inside `clientRoot` or authorized controlled-npm
+ *   package directories, rejecting undeclared bare specifiers explicitly;
+ * - Writes artifacts atomically (`randomUUID` temp file + rename) and deduplicates concurrent compiles
+ *   for the same key. Compilation failures throw explicit `HelmError`s with diagnostics.
  */
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, realpathSync, statSync, readFileSync, writeFileSync, renameSync, existsSync, rmSync } from 'node:fs';
@@ -52,10 +41,8 @@ import {
 } from './client-chunk-graph.js';
 
 /**
- * host and plugin sharing browser end runtime dependency: compile time intercept is virtual shim module (never parse
- * node_modules), runtime via globalThis.__helm_shared_* naming empty between take host the same instance.
- * specific render technique (such as diagram table store) do not this manifest - - plugin self has npm dependency away subject to control parse bundle
- *(see allowedNpmSpecifiers / containmentPlugin  npm branch).
+ * Host-shared browser runtime dependencies: resolved at compile time to virtual shims (never reading
+ * plugin `node_modules`) and backed at runtime by `globalThis.__helm_shared_*`.
  */
 export const CLIENT_SHARED_EXTERNALS = [
   'react',
@@ -66,7 +53,7 @@ export const CLIENT_SHARED_EXTERNALS = [
   '@helm/plugin-client',
 ] as const;
 
-/** sharing note symbol -> host global naming empty between name (host page/test process mount; missing one i.e. runtime explicit errors). */
+/** Mapping from shared specifier to host global property name (mounted by host page or test harness). */
 export const CLIENT_SHARED_GLOBALS: Readonly<Record<string, string>> = Object.freeze({
   react: '__helm_shared_react',
   'react-dom': '__helm_shared_react_dom',
@@ -76,23 +63,28 @@ export const CLIENT_SHARED_GLOBALS: Readonly<Record<string, string>> = Object.fr
   '@helm/plugin-client': '__helm_shared_plugin_client',
 });
 
-/** dependency manifest (deps.json) structure version;v2 is CSS-as-JS old format,v3 start original generate CSS bundling,v4 start contains subject to control npm dependency,v5 start enable esbuild minify and pre- compress,v6 start support code split and async chunk bridge,v7 start sharing chunk register change use esbuild naming empty between bridge (key contains pluginId/moduleRef),v8 start record subject to control npm dependency declaration collection. */
+/**
+ * Dependency manifest (`deps.json`) schema version:
+ * v3: native esbuild CSS bundling; v4: controlled npm dependencies; v5: minify + pre-gzip;
+ * v6: code splitting + async chunk bridge; v7: isolated `__helm_chunk_share` namespace bridge;
+ * v8: controlled npm declaration set recorded in cache credentials.
+ */
 const DEPS_LIST_VERSION = 8;
 
-/** compile artifact (@helm/protocol PluginClientBundle local alias, supply test and tool directly reference). */
+/** Compiled bundle type alias (re-exported for tools and tests). */
 export type ClientCompileResult = PluginClientBundle;
 
 // ---------------------------------------------------------------------------
-// concurrency merge: same key in-flight compile sharing the same Promise; failed i.e. clear can retry
+// Concurrency deduplication: identical in-flight keys share one Promise
 // ---------------------------------------------------------------------------
 
 const inflight = new Map<string, Promise<ClientCompileResult>>();
 
 interface MemoryCompiledEntry {
   result: ClientCompileResult;
-  /** local dependency mtime snapshot (each other for clientRoot absolute path). */
+  /** Local dependency mtime snapshot (keyed by absolute path inside `clientRoot`). */
   localMtimes: Map<string, number>;
-  /** subject to control npm dependency stat refer grain (path -> { mtimeMs, size }): any one change only then do one by one file sha256 re-check. */
+  /** Controlled npm stat fingerprint (`path -> { mtimeMs, size }`): triggers disk sha256 re-check on change. */
   npmStats?: Map<string, { mtimeMs: number; size: number }>;
   root: string;
 }
@@ -104,7 +96,7 @@ export function clearClientCompilerMemoryCache(): void {
 }
 
 /**
- * based on (stagingDir, baseName, contentHash, chunkName) read single chunk content and gzip byte.
+ * Reads a cached async/shared chunk and its optional `.gz` bytes from `stagingDir`.
  */
 export function readCachedChunk(
   stagingDir: string,
@@ -122,7 +114,7 @@ export function readCachedChunk(
       try {
         gzipped = readFileSync(gzPath);
       } catch {
-        /* ignore */
+        /* ignore pre-compressed read failure; caller can compress on demand */
       }
     }
     return { code, gzipped };
@@ -132,11 +124,12 @@ export function readCachedChunk(
 }
 
 /**
- * compile plugin client module (concurrency-safe: same key in-flight compile merge; cache hit when zero compile).
- * @param pluginId plugin ID(cache directory isolated unit)
- * @param clientRoot plugin declaration and already validate absolute source directory
- * @param moduleRef each other for entry (assertModuleRefShape already via)
- * @param cacheDir host dataDir(artifact and dependency manifest <cacheDir>/cache/plugin-staging/<pluginId>/)
+ * Compiles a plugin client module into browser ESM (concurrency-safe and content-hash cached).
+ *
+ * @param pluginId Plugin ID (isolates cache directory under `<cacheDir>/plugin-staging/`)
+ * @param clientRoot Declared and validated absolute source root directory
+ * @param moduleRef Relative entrypoint path inside `clientRoot` (validated by `assertModuleRefShape`)
+ * @param cacheDir Host cache root (`plugin-staging/<pluginId>/` stores bundles and `deps.json`)
  */
 export async function compilePluginClientModule(
   pluginId: string,
@@ -147,7 +140,7 @@ export async function compilePluginClientModule(
 ): Promise<ClientCompileResult> {
   assertModuleRefShape(pluginId, moduleRef);
   const npmKey = npmRootsKey(options?.npmRoots ?? []);
-  const key = `${pluginId}\0${moduleRef}\0${realPathOrThrow(clientRoot, `plugin ${pluginId}  clientRoot cannot access:${clientRoot}`)}\0${npmKey}`;
+  const key = `${pluginId}\0${moduleRef}\0${realPathOrThrow(clientRoot, `plugin ${pluginId} clientRoot cannot be accessed: ${clientRoot}`)}\0${npmKey}`;
   const pending = inflight.get(key);
   if (pending) return pending;
   const run = compileUncached(pluginId, clientRoot, moduleRef, cacheDir, options?.npmRoots ?? []).finally(() => {
@@ -157,30 +150,26 @@ export async function compilePluginClientModule(
   return run;
 }
 
-/** dependency manifest (deps.json) structure: across restarts can re- inspect cache credentials. */
+/** Disk dependency manifest (`deps.json`) used to revalidate cache entries across restarts. */
 interface DepsListFile {
-  version: typeof DEPS_LIST_VERSION
-  module: string
-  /** clientRoot realpath(change/move after old cache directly expires, do not mistakenly use). */
-  root: string
-  contentHash: string
-  /** all local dependency: each other for root path + content sha256(contains entry itself). */
-  dependencies: Array<{ path: string; sha256: string }>
-  /** subject to control npm dependency: parse identifier + absolute path + content sha256(v4 new increase). */
-  npmDependencies?: Array<{ root: string; path: string; sha256: string }>
-  /** subject to control npm dependency declaration (parse + precise note symbol), used to guard against declaration undo after back put old bundle. */
-  npmSpecifiers?: string[]
-  /** entry tool name export (old manifest default when cache hit way take fewer than exports, must exports caller should re- compile or fault tolerance). */
-  exports?: string[]
-  /** async chunk filename manifest (v6 new increase). */
-  chunks?: string[]
+  version: typeof DEPS_LIST_VERSION;
+  module: string;
+  /** Canonical `clientRoot` realpath (invalidates stale cache if moved/re-rooted). */
+  root: string;
+  contentHash: string;
+  /** Local dependencies relative to `root` with content sha256 (includes entry). */
+  dependencies: Array<{ path: string; sha256: string }>;
+  /** Controlled npm dependency files with absolute realpath and content sha256. */
+  npmDependencies?: Array<{ root: string; path: string; sha256: string }>;
+  /** Declared controlled npm specifiers (prevents reusing stale bundles after removing declarations). */
+  npmSpecifiers?: string[];
+  /** Entry named exports (including `__helmClientCss` when CSS was bundled). */
+  exports?: string[];
+  /** Async/shared chunk filenames emitted alongside the entry. */
+  chunks?: string[];
 }
 
-/**
- * subject to control npm dependency declaration:specifiers is allows precise bare note symbol (contains sub- path must one by one items declaration),
- * packageRoot is provide these package parse (usually is built-in plugin host package,node_modules inside).
- * parse artifact by file realpath containment validate after follow local dependency one and enter deps hash and cache re- inspect.
- */
+/** Controlled npm dependency resolution root (`PluginClientNpmRoot` alias). */
 export type ClientNpmRoot = PluginClientNpmRoot;
 
 function npmRootsKey(roots: ReadonlyArray<ClientNpmRoot>): string {
@@ -203,13 +192,12 @@ async function compileUncached(
 ): Promise<ClientCompileResult> {
   const rootReal = realPathOrThrow(
     clientRoot,
-    `plugin ${pluginId}  clientRoot missing or cannot access:${clientRoot}`,
+    `plugin ${pluginId} clientRoot is missing or inaccessible: ${clientRoot}`,
   );
   const entryReal = assertEntryInsideRoot(pluginId, rootReal, moduleRef);
 
-  // 1. process inside memory cache fast path: local dependency by mtime decide; subject to control npm dependency by (mtime, size)
-  //    refer grain decide, any one change only then retreat back one by one file sha256 re-check (disk manifest re- inspect),npm content update after
-  //    never forever long return old bundle.
+  // 1. In-memory fast path: check local file mtimes and controlled-npm (mtime, size) fingerprints;
+  //    any change falls through to full disk sha256 re-verification before recompiling.
   const npmKey = npmRootsKey(npmRoots);
   const memKey = `${pluginId}\0${moduleRef}\0${rootReal}\0${npmKey}`;
   const memEntry = memoryCompiledCache.get(memKey);
@@ -251,14 +239,14 @@ async function compileUncached(
   const baseName = safeFileName(moduleRef);
   const depsListPath = join(stagingDir, `${baseName}.deps.json`);
 
-  // cache re- inspect: manifest legal and each dependency sha256 and disk consistent when re- use artifact, zero compile
+  // 2. Disk cache revalidation: reuse artifact only when manifest and every dependency sha256 match.
   const cached = readCachedResult(stagingDir, depsListPath, rootReal, moduleRef, pluginId, npmRoots);
   if (cached) {
     recordMemoryCache(memKey, rootReal, depsListPath, cached);
     return cached;
   }
 
-  // Pass 1: open start splitting: true memory build
+  // Pass 1: in-memory esbuild with code splitting enabled to inspect module graph and CSS.
   let pass1Result: Awaited<ReturnType<typeof build>>;
   try {
     pass1Result = await build({
@@ -284,7 +272,7 @@ async function compileUncached(
   } catch (err) {
     if (err instanceof HelmError) throw err;
     const message = err instanceof Error ? err.message : String(err);
-    throw new HelmError('client_compile_failed', `plugin ${pluginId} compile ${moduleRef} failed:${message}`, 422, {
+    throw new HelmError('client_compile_failed', `plugin ${pluginId} compile ${moduleRef} failed: ${message}`, 422, {
       pluginId,
       module: moduleRef,
     });
@@ -293,14 +281,14 @@ async function compileUncached(
   const pass1Metafile = pass1Result.metafile;
   const pass1OutputFiles = pass1Result.outputFiles;
   if (!pass1Metafile || !pass1OutputFiles) {
-    throw new HelmError('client_compile_failed', `plugin ${pluginId} Pass 1 memory build not produce out metafile or outputFiles`, 500);
+    throw new HelmError('client_compile_failed', `plugin ${pluginId} Pass 1 build produced no metafile or outputFiles`, 500);
   }
 
-  // validate keep export
+  // Guard the compiler-reserved CSS export name against accidental collision.
   if (Object.values(pass1Metafile.outputs).some((file) => file.exports?.includes(PLUGIN_CLIENT_CSS_EXPORT))) {
     throw new HelmError(
       'client_compile_failed',
-      `plugin ${pluginId} module ${moduleRef} occupy compiler keep export name "${PLUGIN_CLIENT_CSS_EXPORT}", please change name the export`,
+      `plugin ${pluginId} module ${moduleRef} uses reserved compiler export name "${PLUGIN_CLIENT_CSS_EXPORT}"; please rename that export`,
       422,
       { pluginId, module: moduleRef, reservedExport: PLUGIN_CLIENT_CSS_EXPORT },
     );
@@ -326,7 +314,7 @@ async function compileUncached(
 
   const css = cssFiles.join('\n');
 
-  // seek entryBaseName
+  // Locate the entry output basename from Pass 1 metafile.
   const relEntry = relative(rootReal, entryReal);
   let entryBaseName = '';
   for (const [b, meta] of metaByBase) {
@@ -341,7 +329,7 @@ async function compileUncached(
     } else {
       throw new HelmError(
         'client_compile_failed',
-        `plugin ${pluginId} compile ${moduleRef} cannot unique locate entry JS artifact`,
+        `plugin ${pluginId} compile ${moduleRef} could not uniquely locate entry JS output`,
         500,
         { pluginId, module: moduleRef },
       );
@@ -351,14 +339,13 @@ async function compileUncached(
   const dependencies = collectLocalDependencies(pass1Metafile, rootReal);
   const npmDeps = collectNpmDependencies(pass1Metafile, rootReal, npmRoots);
 
-  // entry static closed package and can reach motion state import target: pure function diagram rule plan (see client-chunk-graph.ts)
   const baseClosure = collectStaticImportClosure(metaByBase, entryBaseName);
   const dynamicTargets = collectDynamicImportTargets(metaByBase, baseClosure);
 
   const jsMeta = metaByBase.get(entryBaseName);
   const entryExports = [...(jsMeta?.exports ?? []), ...(css.length > 0 ? [PLUGIN_CLIENT_CSS_EXPORT] : [])];
 
-  // fast path (without code split ordinary plugin)
+  // Fast path (no dynamic imports -> single self-contained entry bundle).
   if (dynamicTargets.size === 0) {
     let mainOutput = '';
     try {
@@ -398,7 +385,7 @@ async function compileUncached(
     } catch (err) {
       if (err instanceof HelmError) throw err;
       const message = err instanceof Error ? err.message : String(err);
-      throw new HelmError('client_compile_failed', `plugin ${pluginId} compile ${moduleRef} converge failed:${message}`, 422, {
+      throw new HelmError('client_compile_failed', `plugin ${pluginId} compile ${moduleRef} convergence failed: ${message}`, 422, {
         pluginId,
         module: moduleRef,
       });
@@ -412,7 +399,9 @@ async function compileUncached(
       const gz = gzipSync(Buffer.from(mainOutput, 'utf8'));
       atomicWriteBuffer(join(stagingDir, `${baseName}.${list.contentHash}.mjs.gz`), gz);
       gzipped = gz;
-    } catch {}
+    } catch {
+      /* on-demand gzip fallback remains available */
+    }
     atomicWrite(depsListPath, `${JSON.stringify(list)}\n`);
     const finalResult: ClientCompileResult = {
       code: mainOutput,
@@ -425,26 +414,21 @@ async function compileUncached(
     return finalResult;
   }
 
-  // package path (dynamicTargets.size > 0): set divide / reference counter / sharing chunk pass closed package /
-  // pre- dependency topology sort is pure function diagram rule plan (see client-chunk-graph.ts, can independent single test)
+  // Split path (dynamicTargets.size > 0): compute shared async chunks and prerequisite topology.
   const { sharedAsyncChunks, chunkDeps } = computeAsyncChunkPlan(metaByBase, baseClosure, dynamicTargets);
 
   const allUnits = new Set<string>([...sharedAsyncChunks, ...dynamicTargets]);
   const list = buildDepsList(rootReal, moduleRef, dependencies, npmDeps, npmRoots, entryExports, Array.from(allUnits));
 
-  // step B(v7): naming empty between bridge register __helm_chunk_share.
-  // for each must register virtual chunk generate `import * as ns from <chunk>` bridge wrap module,
-  // via esbuild generate getter naming empty between object after whole write __helm_chunk_share:
-  // - export manifest from Pass 1 metafile(generate real metadata), contains default / again export /
-  //   string naming export etc. all form, no longer use regex guess generate code;
-  // - `import * as ns` reference all export,Tree-shaking cannot discard any bind set.
-  // key by pluginId \0 moduleRef \0 contentHash \0 chunk isolated: two plugin same source same
-  // hash when mutual do not interference, deactivate a will not delete another sharing table.
+  // Namespace bridge registration into `globalThis.__helm_chunk_share`:
+  // Each shared virtual chunk is wrapped in `import * as ns` so esbuild retains all exports (including
+  // default expressions, re-exports, and string-named exports) without regex code generation, keyed
+  // strictly by `pluginId\0moduleRef\0contentHash\0file` so multiple plugins stay isolated.
   const chunkShareKeyExpr = (file: string): string =>
     JSON.stringify(`${pluginId}\0${moduleRef}\0${list.contentHash}\0${file}`);
   const filesToRegister = new Set<string>([...baseClosure, ...sharedAsyncChunks]);
   filesToRegister.delete(entryBaseName);
-  const chunkNsBridges = new Map<string, string>(); // file -> bridge wrap module virtual filename
+  const chunkNsBridges = new Map<string, string>();
   for (const F of filesToRegister) {
     if (!virtualFiles.has(F)) continue;
     const bridgeName = `__helm_ns__:${F}`;
@@ -456,19 +440,13 @@ async function compileUncached(
     );
   }
 
-  // step D:Pass 2 converge build (main package + sharing chunk naming empty between bridge + async unit)
-  // main package extra pre- baseClosure each file register import (ESM by order evaluate: first dependency, again register, after entry),
-  // main module seek value when baseClosure sharing table i.e. already fill - - async chunk  proxy no need to wait for extra network request.
-  // the same vfs module in main package inside only inline a (register bridge and entry dependency points to the same instance, produces no body accumulate duplicate).
+  // Pass 2 convergence: bundle the main entry (registering `baseClosure` namespaces) and every async unit.
   const baseRegisterFiles = [...baseClosure].filter((f) => f !== entryBaseName && virtualFiles.has(f));
   async function bundleUnit(unitName: string, isMain: boolean): Promise<string> {
-    // main package/async unit directly compile itself; sharing chunk via naming empty between bridge wrap compile (guard against tree-shaking +
-    // write __helm_chunk_share). bridge inside import * as ns reference all export,esbuild will
-    // Pass 1 virtual chunk original inline and generate getter naming empty between object.
     const isNsBridge = !isMain && sharedAsyncChunks.has(unitName);
     let unitCode = virtualFiles.get(isNsBridge ? chunkNsBridges.get(unitName)! : unitName);
     if (unitCode === undefined) {
-      throw new HelmError('client_compile_failed', `find fewer than virtual file ${unitName}`, 500);
+      throw new HelmError('client_compile_failed', `Missing virtual file ${unitName}`, 500);
     }
     if (isMain && baseRegisterFiles.length > 0) {
       const regImports = baseRegisterFiles
@@ -502,12 +480,11 @@ async function compileUncached(
                 return { path: '__HELM_DYN_IMPORT__:' + target, external: true };
               }
               if (args.kind === 'import-statement') {
-                // naming empty between bridge:`__helm_chunk__:<file>` points to by bridge Pass 1 virtual chunk
-                // this body (note prefix decide must in basename before,basename will strip prefix)
+                // Namespace bridge target: resolves directly to the Pass 1 virtual chunk body.
                 if (args.path.startsWith('__helm_chunk__:')) {
                   return { path: basename(args.path.slice('__helm_chunk__:'.length)), namespace: 'vfs' };
                 }
-                // main package pre- register import:`__helm_ns__:<file>` parse to for should register bridge module
+                // Pre-registration bridge imported by the main bundle.
                 if (args.path.startsWith('__helm_ns__:')) {
                   return { path: args.path, namespace: 'vfs' };
                 }
@@ -568,7 +545,7 @@ async function compileUncached(
   } catch (err) {
     if (err instanceof HelmError) throw err;
     const message = err instanceof Error ? err.message : String(err);
-    throw new HelmError('client_compile_failed', `plugin ${pluginId} main package converge failed to compile:${message}`, 422, {
+    throw new HelmError('client_compile_failed', `plugin ${pluginId} main bundle convergence failed for ${moduleRef}: ${message}`, 422, {
       pluginId,
       module: moduleRef,
     });
@@ -582,20 +559,22 @@ async function compileUncached(
         let gzipped: Uint8Array | undefined;
         try {
           gzipped = gzipSync(Buffer.from(code, 'utf8'));
-        } catch {}
+        } catch {
+          /* ignore */
+        }
         chunkOutputs[unitName] = { code, gzipped };
       }),
     );
   } catch (err) {
     if (err instanceof HelmError) throw err;
     const message = err instanceof Error ? err.message : String(err);
-    throw new HelmError('client_compile_failed', `plugin ${pluginId} package converge failed to compile:${message}`, 422, {
+    throw new HelmError('client_compile_failed', `plugin ${pluginId} chunk convergence failed for ${moduleRef}: ${message}`, 422, {
       pluginId,
       module: moduleRef,
     });
   }
 
-  // step E: atomic and memory cache
+  // Persist artifacts atomically and populate in-memory cache.
   mkdirSync(stagingDir, { recursive: true });
   atomicWrite(join(stagingDir, `${baseName}.${list.contentHash}.mjs`), mainJs);
   let gzipped: Uint8Array | undefined;
@@ -603,7 +582,9 @@ async function compileUncached(
     const gz = gzipSync(Buffer.from(mainJs, 'utf8'));
     atomicWriteBuffer(join(stagingDir, `${baseName}.${list.contentHash}.mjs.gz`), gz);
     gzipped = gz;
-  } catch {}
+  } catch {
+    /* ignore */
+  }
 
   for (const [chunkName, chunkData] of Object.entries(chunkOutputs)) {
     atomicWrite(join(stagingDir, `${baseName}.${list.contentHash}.chunk.${chunkName}`), chunkData.code);
@@ -642,16 +623,13 @@ function recordMemoryCache(
         /* ignore */
       }
     }
-    // subject to control npm dependency: record stat refer grain (mtime + size), content update after fast path can can rely expires.
-    // stat refer grain and disk manifest one by one file sha256 re-check jointly construct into two layer guard against line: refer grain change directly expires;
-    // refer grain not change but manifest sha256 inconsistent (extreme scenario) also by disk re- inspect honor bottom.
     const npmStats = new Map<string, { mtimeMs: number; size: number }>();
     for (const dep of list.npmDependencies ?? []) {
       try {
         const st = statSync(dep.path);
         npmStats.set(dep.path, { mtimeMs: st.mtimeMs, size: st.size });
       } catch {
-        /* file disappear: do not record refer grain, disk manifest re- inspect phase will expires heavy compile */
+        /* missing file: omit stat so disk manifest check triggers recompile */
       }
     }
     memoryCompiledCache.set(memKey, {
@@ -666,10 +644,10 @@ function recordMemoryCache(
 }
 
 // ---------------------------------------------------------------------------
-// CSS: serialization is tool name export attach in JS artifact tail part (artifact do not inject DOM, load negative duty inject)
+// CSS: exported via reserved named binding (DOM injection owned by the loader)
 // ---------------------------------------------------------------------------
 
-/** metadata bind set must avoid let artifact in local variable, while non- only avoid let its public export name. */
+/** Picks a non-colliding local identifier before exporting the merged CSS via `__helmClientCss`. */
 function appendCssExport(js: string, css: string): string {
   if (css.length === 0) return js;
   let binding = '__helmCssText';
@@ -678,22 +656,18 @@ function appendCssExport(js: string, css: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// sharing dependency virtual shim: legal ESM/CJS bind set, runtime from host global naming empty between take the same instance
+// Shared host-dependency shims
 // ---------------------------------------------------------------------------
 
 /**
- * esbuild plugin: sharing dependency note symbol parse to 'helm-shared' virtual naming empty between;shim module body
- * only `module.exports = globalThis.__helm_shared_*`.esbuild  CJS-interop layer
- * (__toESM/__copyProps getter) is named(contains as alias)/ namespace / default /
- * export * from all generate legal bind set - - this is do not use source code regex heavy write importkey:
- * regex change write will produce `const { useState as s } = ...`(illegal JS) and leak default+named mixed etc. form.
+ * Resolves host-shared bare specifiers to virtual `helm-shared` modules backed by
+ * `module.exports = globalThis.__helm_shared_*`, delegating CJS/ESM interop to esbuild.
  */
 function sharedShimPlugin(): EsbuildPlugin {
   return {
     name: 'helm-shared-shim',
     setup(b) {
       for (const spec of CLIENT_SHARED_EXTERNALS) {
-        const globalName = CLIENT_SHARED_GLOBALS[spec];
         b.onResolve({ filter: exactLiteralFilter(spec) }, () => ({
           path: spec,
           namespace: 'helm-shared',
@@ -702,7 +676,7 @@ function sharedShimPlugin(): EsbuildPlugin {
       b.onLoad({ filter: /.*/, namespace: 'helm-shared' }, (args) => {
         const globalName = CLIENT_SHARED_GLOBALS[args.path];
         if (globalName === undefined) {
-          return { errors: [{ text: `unknown sharing dependency note symbol:${args.path}` }] };
+          return { errors: [{ text: `unknown shared dependency specifier: ${args.path}` }] };
         }
         return {
           contents: `module.exports = (globalThis.${globalName});`,
@@ -713,19 +687,17 @@ function sharedShimPlugin(): EsbuildPlugin {
   };
 }
 
-/** precise match note symbol literal (do not swallow react-dom / sub- path; sharing sub- path do not in manifest inside will by explicit reject). */
 function exactLiteralFilter(spec: string): RegExp {
   return new RegExp(`^${spec.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`);
 }
 
 // ---------------------------------------------------------------------------
-// containment: local file one by one realpath validate; bare dependency explicit reject
+// Containment & controlled npm dependency resolution
 // ---------------------------------------------------------------------------
 
 /**
- * subject to control npm note symbol parse: hit declaration specifiers when module parse to for should packageRoot 
- * node_modules inside (independent of cwd, do not subject to process chdir affect); return null means not declaration.
- * sub- path note symbol (such as 'pkg/lib/x.js') want seek one by one items explicit declaration, does not prefix through match.
+ * Resolves a declared controlled npm specifier from its authorized `packageRoot/node_modules`.
+ * Subpath specifiers must be declared explicitly; returns `null` when undeclared or unresolvable.
  */
 function resolveNpmSpecifier(
   spec: string,
@@ -735,8 +707,6 @@ function resolveNpmSpecifier(
     if (!root.specifiers.includes(spec)) continue;
     const nmReal = realpathOrNull(join(root.packageRoot, 'node_modules'));
     if (nmReal === null) continue;
-    // packageRoot/node_modules inside package may is pnpm symlink (points to workspace store):
-    // authorization and parse all with package directory realpath is boundary (splitNpmSpecifier strip sub- path).
     const { pkg, sub } = splitNpmSpecifier(spec);
     const pkgReal = realpathOrNull(join(nmReal, pkg));
     if (pkgReal === null) continue;
@@ -747,12 +717,6 @@ function resolveNpmSpecifier(
   return null;
 }
 
-/**
- * parse npm package directory ESM entry (package.json exports[condition] / module / main).
- * only read field and validate target store in; any field illegal all return null(hand over back on layer by not declaration dependency reject),
- * never let esbuild for self define path do directory guess.
- */
-/** spec split is package name + sub- path:@scope/name and name two kinds of form, the rest is sub- path segment. */
 function splitNpmSpecifier(spec: string): { pkg: string; sub: string } {
   const parts = spec.split('/');
   if (spec.startsWith('@')) {
@@ -761,11 +725,6 @@ function splitNpmSpecifier(spec: string): { pkg: string; sub: string } {
   return { pkg: parts[0] ?? spec, sub: parts.slice(1).join('/') };
 }
 
-/**
- * parse npm package (or its sub- path) entry:package.json exports sub- path mapping (import/default)→
- * module/main(only); without exports when sub- path by package inside relative path direct take. any field illegal all return
- * null(by not declaration dependency reject), never let esbuild for self define path do directory guess.
- */
 function resolveNpmPackageEntry(pkgDir: string, spec: string): string | null {
   const pkgJsonPath = join(pkgDir, 'package.json');
   let pkg: Record<string, unknown>;
@@ -781,7 +740,6 @@ function resolveNpmPackageEntry(pkgDir: string, spec: string): string | null {
   if (exp !== null && typeof exp === 'object' && !Array.isArray(exp)) {
     const entry = (exp as Record<string, unknown>)[exportKey];
     if (entry !== null && typeof entry === 'object' && !Array.isArray(entry)) {
-      // condition value may is string ("import": "./x.mjs") or embed set object ({ import: { default } }).
       const readCond = (value: unknown): string | null => {
         if (typeof value === 'string') return value;
         if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
@@ -814,23 +772,13 @@ function resolveNpmPackageEntry(pkgDir: string, spec: string): string | null {
 }
 
 /**
- * esbuild plugin:
- * - bare note symbol: sharing dependency by sharedShimPlugin(first register) handle; subject to control npm note symbol (caller
- *   explicit declaration specifiers + packageRoot) parse enter bundle and one by one file containment; the rest
- *   bare note symbol explicit compile error (never static default parse any node_modules);CSS url()/@import reference
- *   hand over by cssPolicyPlugin handle;
- * - local file onLoad phase realpath containment: exceeds out clientRoot realpath(contains symlink
- *   escape and CSS @import exceeds) i.e. reject - - old implement only check entry, dependency file can outside code carries enter bundle.
+ * Enforces `clientRoot` and controlled-npm realpath containment at resolve and load time.
  */
 function containmentPlugin(
   pluginId: string,
   rootReal: string,
   npmRoots: ReadonlyArray<ClientNpmRoot> = [],
 ): EsbuildPlugin {
-  // npm closed package authorization table: via subject to control parse (declaration note symbol, or already authorization package inside file pass bare note symbol)
-  // parse out package directory realpathset. authorization with package directory is unit - - each other for import and package inside
-  // node_modules pass parse day however in authorization directory inside; parse i.e. authorization, symlink layout
-  //(pnpm .pnpm store) does not affect boundary decide.
   const authorizedNpmDirs = new Set<string>();
   const authorizeNpmPackageDir = (pkgDir: string): string | null => {
     const real = realpathOrNull(pkgDir);
@@ -847,37 +795,25 @@ function containmentPlugin(
   return {
     name: 'helm-containment',
     setup(b) {
-      // each other for import: no need to separate authorization - - package directory authorization model under each other for target day however at already authorization directory inside
-      //(such as mermaid.core.mjs -> ./chunks/*.mjs); hand over back esbuild by default parse.
       b.onResolve({ filter: /^[^./]/ }, (args) => {
-        // symbol / UNC absolute path is not bare note symbol:filter only exclude `.` and `/` open head,
-        // `D:\...`,`\\server\share\...` will enter come (Windows on entry and local dependency
-        // all is this form). hand over back esbuild by default parse.
         if (isAbsoluteTargetPath(args.path)) return null;
-        // CSS language method reference (url() asset / @import) is not npm note symbol: hand over by cssPolicyPlugin
-        // by asset policy handle (data:/https: let through, local each other for explicit reject), never mistakenly report bare dependency
         if (args.kind === 'url-token' || args.kind === 'import-rule') return null;
-        // sharing note symbol by sharedShimPlugin(first register) handle
         if ((CLIENT_SHARED_EXTERNALS as readonly string[]).includes(args.path)) return null;
-        // subject to control npm note symbol: parse enter declaration packageRoot and authorization which in package directory (parse i.e. authorization).
         const npm = resolveNpmSpecifier(args.path, npmRoots);
         if (npm !== null) {
           authorizeNpmPackageDir(npm.pkgDir);
           return { path: npm.path };
         }
-        // already declaration but failed to parse (not installed/entry missing): and not declaration strictly zone, never mistakenly lead troubleshoot direction.
         const declaredRoot = npmRoots.find((r) => r.specifiers.includes(args.path));
         if (declaredRoot !== undefined) {
           return {
             errors: [{
               text:
-                `plugin ${pluginId} declaration frontend dependency "${args.path}" in ${join(declaredRoot.packageRoot, 'node_modules')} inside cannot parse` +
-                '(dependency not installed or package entry missing); please in plugin directory install the dependency after retry (managed install by install/update automatically patch install)',
+                `plugin ${pluginId} cannot parse declared frontend dependency "${args.path}" inside ${join(declaredRoot.packageRoot, 'node_modules')} ` +
+                '(dependency not installed or package entry missing); install this dependency in the plugin directory and retry (managed installs add it automatically during install/update)',
             }],
           };
         }
-        // pass dependency: import way at already authorization package directory inside when, hand over back esbuild original generate parse;
-        // onLoad will by actual file path do authorization and containment validate.
         if (args.importer !== '') {
           const importerReal = realpathOrNull(args.importer);
           if (importerReal !== null && isNpmAuthorized(importerReal)) {
@@ -888,8 +824,8 @@ function containmentPlugin(
         return {
           errors: [{
             text:
-              `plugin ${pluginId} compile reject bare dependency "${args.path}"(by ${importer} introduce):` +
-              `not declaration is subject to control npm dependency;clientRoot inside only allows each other for import, sharing dependency (${CLIENT_SHARED_EXTERNALS.join(', ')}) and declaration npm note symbol`,
+              `plugin ${pluginId} must reject bare dependency "${args.path}" (imported by ${importer}): ` +
+              `undeclared controlled npm dependency; clientRoot only permits relative imports, shared dependencies (${CLIENT_SHARED_EXTERNALS.join(', ')}), and declared npm specifiers`,
           }],
         };
       });
@@ -900,7 +836,7 @@ function containmentPlugin(
         if (candidate === null || isInside(rootReal, candidate) || isNpmAuthorized(candidate)) return null;
         return {
           errors: [{
-            text: `plugin ${pluginId} compile reject out of bounds each other for import (may is ../ exceeds or not declaration npm file):${candidate}`,
+            text: `plugin ${pluginId} rejected out of bounds relative import (escapes root via ../ or points to an undeclared npm file): ${candidate}`,
           }],
         };
       });
@@ -912,8 +848,6 @@ function containmentPlugin(
         const inClientRoot = isInside(rootReal, real);
         const inNpmRoot = isNpmAuthorized(real);
         if (!inClientRoot && !inNpmRoot) {
-          // clientRoot each other for exceeds import already in onResolve phase reject; from already authorization npm
-          // package pass dependency by this call back by node_modules package directory one by one step accept authorization.
           if (real.includes(sep + 'node_modules' + sep)) {
             const pkgDir = findPackageDirOf(real);
             if (pkgDir !== null) {
@@ -923,7 +857,7 @@ function containmentPlugin(
           }
           return {
             errors: [{
-              text: `plugin ${pluginId} compile reject out of bounds file (may is ../ exceeds, symlink escape or not declaration npm parse):${real}`,
+              text: `plugin ${pluginId} rejected out of bounds file (escapes root via ../, symlink escape, or undeclared npm resolution): ${real}`,
             }],
           };
         }
@@ -934,13 +868,9 @@ function containmentPlugin(
 }
 
 // ---------------------------------------------------------------------------
-// CSS asset policy:esbuild resolver kind decide (never use source code regex guess language method)
+// CSS asset policy (driven by esbuild resolver kind)
 // ---------------------------------------------------------------------------
 
-/**
- * allows CSS asset URL: independent of plugin path base address explicit absolute address (data: inline and
- * http(s)/protocol each other for outside chain). empty string (url() without reference) original keep (legal CSS, by browser handle).
- */
 function isAllowedCssAssetUrl(rawUrl: string): boolean {
   const url = rawUrl.trim();
   if (url.length === 0) return true;
@@ -950,7 +880,6 @@ function isAllowedCssAssetUrl(rawUrl: string): boolean {
   return false;
 }
 
-/** file which belong package directory: to on find most near package.json which in directory (npm layout inside must reach). */
 function findPackageDirOf(fileReal: string): string {
   let dir = dirname(fileReal);
   for (;;) {
@@ -961,46 +890,19 @@ function findPackageDirOf(fileReal: string): string {
   }
 }
 
-/**
- * from subject to control package closed package inside import file parse pass bare note symbol: to on find most near node_modules package directory,
- * read package.json entry (and directly declaration the same entry semantics). find fewer than return null(by not declaration reject).
- */
-function resolveTransitiveNpmSpecifier(spec: string, importerReal: string): string | null {
-  const { pkg, sub } = splitNpmSpecifier(spec);
-  let dir = findPackageDirOf(importerReal);
-  for (;;) {
-    const pkgReal = realpathOrNull(join(dir, 'node_modules', pkg));
-    if (pkgReal !== null) {
-      const entry = resolveNpmPackageEntry(pkgReal, sub === '' ? pkg : `${pkg}/${sub}`);
-      if (entry !== null) return entry;
-    }
-    const parent = dirname(dir);
-    if (parent === dir) return null;
-    dir = parent;
-  }
-}
-
-/**
- * esbuild plugin: by resolver kind manage CSS language method reference - -
- * - url-token(url() asset):data: / http(s) / protocol each other for let through (hand over back by default parse,esbuild
- *   original keep); local each other for / each other for / fragment etc. the rest form explicit reject and create protocol inline data:;
- * - import-rule(CSS @import): local each other for by by default parse parse (via onLoad containment
- *   validate realpath exceeds, local @import enter dependency closed package and hash); far process (http(s)/protocol each other for)
- *   explicit reject - - outside chain style do not subject to local dependency validate and cache manage control.
- */
 function cssPolicyPlugin(pluginId: string): EsbuildPlugin {
   return {
     name: 'helm-css-policy',
     setup(b) {
       b.onResolve({ filter: /.*/ }, (args) => {
         if (args.kind === 'url-token') {
-          if (isAllowedCssAssetUrl(args.path)) return null; // hand over back by default parse (esbuild original keep)
+          if (isAllowedCssAssetUrl(args.path)) return null;
           return {
             errors: [{
               text:
-                `plugin ${pluginId} style ${args.importer} reference asset "${args.path}" by reject:` +
-                'local each other for/each other for/fragment URL will each other for host page error base address parse (plugin without static assets end point);' +
-                'use... instead inline data: URL or explicit https:// absolute address',
+                `plugin ${pluginId} stylesheet ${args.importer} asset reference "${args.path}" was rejected: ` +
+                'local relative, root-relative, or fragment URLs resolve against the wrong host page base URL (plugins have no static asset endpoint); ' +
+                'use an inline data: URL or an explicit https:// absolute URL instead',
             }],
           };
         }
@@ -1009,12 +911,12 @@ function cssPolicyPlugin(pluginId: string): EsbuildPlugin {
             return {
               errors: [{
                 text:
-                  `plugin ${pluginId} style ${args.importer} far process @import "${args.path}" by reject:` +
-                  'far process style do not subject to local dependency validate and cache manage control; please style duplicate enter clientRoot after each other for reference',
+                  `plugin ${pluginId} stylesheet ${args.importer} remote @import "${args.path}" was rejected: ` +
+                  'remote stylesheets are outside local dependency validation and cache management; copy the stylesheet into clientRoot and import it relatively',
               }],
             };
           }
-          return null; // local @import: by default parse + onLoad containment(exceeds reject)
+          return null;
         }
         return null;
       });
@@ -1023,16 +925,15 @@ function cssPolicyPlugin(pluginId: string): EsbuildPlugin {
 }
 
 // ---------------------------------------------------------------------------
-// cache re- inspect and dependency manifest
+// Cache revalidation and dependency manifests
 // ---------------------------------------------------------------------------
 
-/** read cache artifact: manifest legal + each dependency sha256 and disk consistent only then re- use; otherwise undefined(heavy compile). */
 function readCachedResult(
   stagingDir: string,
   depsListPath: string,
   rootReal: string,
   moduleRef: string,
-  pluginId: string,
+  _pluginId: string,
   npmRoots: ReadonlyArray<ClientNpmRoot>,
 ): ClientCompileResult | undefined {
   if (!existsSync(depsListPath)) return undefined;
@@ -1040,7 +941,7 @@ function readCachedResult(
   try {
     list = JSON.parse(readFileSync(depsListPath, 'utf8')) as DepsListFile;
   } catch {
-    return undefined; // manifest corrupt: treated as not cache, re- compile
+    return undefined;
   }
   if (
     list.version !== DEPS_LIST_VERSION ||
@@ -1058,12 +959,11 @@ function readCachedResult(
     try {
       source = readFileSync(abs, 'utf8');
     } catch {
-      return undefined; // dependency by delete: expires heavy compile
+      return undefined;
     }
     if (sha256(source) !== dep.sha256) return undefined;
   }
   for (const dep of list.npmDependencies ?? []) {
-    // npm dependency file real path and content change: expires heavy compile; identifier only used to diagnose/hash, do not as local path access.
     let source: string;
     try {
       source = readFileSync(dep.path, 'utf8');
@@ -1083,13 +983,12 @@ function readCachedResult(
       try {
         gzipped = readFileSync(gzPath);
       } catch {
-        /* read pre- compress file failed then empty, by caller on demand generate */
+        /* ignore; caller can gzip on demand */
       }
     }
     const chunks: Record<string, { code: string; gzipped?: Uint8Array }> = {};
     if (Array.isArray(list.chunks) && list.chunks.length > 0) {
-      // main module cache hit do not pre- read all chunk: one by one chunk lazy read (getter first time access only then memory),
-      // ordinary main module request zero extra disk read;chunk missing same lazy decide (missing when machine retreat back undefined).
+      // Lazy getters avoid pre-reading all async chunks on a main-module cache hit.
       for (const chunkName of list.chunks) {
         let cached: { code: string; gzipped?: Uint8Array } | undefined | null = null;
         Object.defineProperty(chunks, chunkName, {
@@ -1107,7 +1006,6 @@ function readCachedResult(
   }
 }
 
-/** from metafile inputs collect rootReal inside all local dependency (contains entry; sort guarantee determinism). */
 function collectLocalDependencies(
   metafile: { inputs: Record<string, unknown> } | undefined,
   rootReal: string,
@@ -1115,7 +1013,6 @@ function collectLocalDependencies(
   if (!metafile) return [];
   const out = new Set<string>();
   for (const inputKey of Object.keys(metafile.inputs)) {
-    // metafile key each other for absWorkingDir(or absolute path); virtual naming empty between input excludes '/' path form
     const abs = isAbsolute(inputKey) ? inputKey : join(rootReal, inputKey);
     const real = realpathOrNull(abs);
     if (real !== null && isInside(rootReal, real)) out.add(real);
@@ -1123,11 +1020,6 @@ function collectLocalDependencies(
   return [...out].sort();
 }
 
-/**
- * from metafile inputs collect subject to control npm dependency file (clientRoot of outside input).
- * compile already succeeded means all exceeds input all via parse phase authorization (bare note symbol all subject to control parse),
- * therefore this where only needs to byclientRoot of outside archive group; file collection change follow hash reverse reflect to cache credentials.
- */
 function collectNpmDependencies(
   metafile: { inputs: Record<string, unknown> } | undefined,
   rootReal: string,
@@ -1143,8 +1035,6 @@ function collectNpmDependencies(
   return files.size === 0 ? [] : [{ root: 'authorized-npm-closure', files: [...files].sort() }];
 }
 
-/** group install dependency manifest: one by one dependency sha256(content seek address, across restarts stable; independent of mtime).
- * npm dependency by (parse realpath, absolute path) reference and hash- - path or content any one change i.e. expires. */
 function buildDepsList(
   rootReal: string,
   moduleRef: string,
@@ -1192,7 +1082,7 @@ function buildDepsList(
 }
 
 // ---------------------------------------------------------------------------
-// and path tool
+// Atomic file writes and path containment helpers
 // ---------------------------------------------------------------------------
 
 const RETRYABLE_RENAME_CODES = new Set(['EPERM', 'EACCES', 'EBUSY']);
@@ -1217,7 +1107,6 @@ function renameWithRetry(tmp: string, targetPath: string): void {
   }
 }
 
-/** temp file (randomUUID)+ rename atomic; failed clean up temp file (can retry). */
 function atomicWriteRaw(targetPath: string, content: string | Buffer | Uint8Array): void {
   mkdirSync(dirname(targetPath), { recursive: true });
   const tmp = `${targetPath}.tmp-${randomUUID()}`;
@@ -1232,17 +1121,17 @@ function atomicWriteRaw(targetPath: string, content: string | Buffer | Uint8Arra
     try {
       rmSync(tmp, { force: true });
     } catch {
-      /* clean up failed do not mask original error */
+      /* ignore cleanup failure so original error propagates */
     }
     throw err;
   }
 }
 
-function atomicWrite(targetPath: string, content: string): void {
+export function atomicWrite(targetPath: string, content: string): void {
   atomicWriteRaw(targetPath, content);
 }
 
-function atomicWriteBuffer(targetPath: string, content: Buffer | Uint8Array): void {
+export function atomicWriteBuffer(targetPath: string, content: Buffer | Uint8Array): void {
   atomicWriteRaw(targetPath, content);
 }
 
@@ -1250,26 +1139,25 @@ function sha256(text: string): string {
   return createHash('sha256').update(text).digest('hex');
 }
 
-function realPathOrThrow(p: string, message: string): string {
+export function realPathOrThrow(p: string, message: string): string {
   try {
     const st = statSync(p);
-    if (!st.isFile() && !st.isDirectory()) throw new Error('not file/dir');
+    if (!st.isFile() && !st.isDirectory()) throw new Error('not a file or directory');
     return realpathSync(p);
   } catch {
     throw new HelmError('client_root_invalid', message, 400, { path: p });
   }
 }
 
-/** entry file containment: missing / non- file / realpath exceeds (symlink escape) explicit reject. */
 function assertEntryInsideRoot(pluginId: string, rootReal: string, moduleRef: string): string {
   const absPath = join(rootReal, moduleRef);
   let real: string;
   try {
     const st = statSync(absPath);
-    if (!st.isFile()) throw new Error('not file');
+    if (!st.isFile()) throw new Error('not a regular file');
     real = realpathSync(absPath);
   } catch {
-    throw new HelmError('client_root_invalid', `plugin ${pluginId}  client module missing:${moduleRef}`, 400, {
+    throw new HelmError('client_root_invalid', `plugin ${pluginId} client module is missing: ${moduleRef}`, 400, {
       pluginId,
       module: moduleRef,
     });
@@ -1277,7 +1165,7 @@ function assertEntryInsideRoot(pluginId: string, rootReal: string, moduleRef: st
   if (!isInside(rootReal, real)) {
     throw new HelmError(
       'client_module_out_of_root',
-      `plugin ${pluginId}  client module exceeds out clientRoot(may is symlink escape):${moduleRef}`,
+      `plugin ${pluginId} client module escapes clientRoot (possible symlink escape): ${moduleRef}`,
       400,
       { pluginId, module: moduleRef },
     );
@@ -1293,20 +1181,19 @@ function realpathOrNull(p: string): string | null {
   }
 }
 
-/** target real path is otherwise at real path inside (same or of subdirectory; symlink already by realpath consume solve). */
-function isInside(rootReal: string, target: string): boolean {
+export function isInside(rootReal: string, target: string): boolean {
   const rel = relative(rootReal, target);
   return rel === '' || (!rel.startsWith(`..${sep}`) && rel !== '..' && !isAbsolute(rel));
 }
 
-/** plugin ID to security directory name (: etc. character mapping is _,hash suffix guarantee different ID do not collision);staging naming contract,node-chunk-bridge same opening path push lead. */
+/** Deterministic filesystem-safe directory name for a plugin ID. */
 export function safeDirName(pluginId: string): string {
   const safe = pluginId.replace(/[^A-Za-z0-9_-]/g, '_');
   const suffix = createHash('sha1').update(pluginId).digest('hex').slice(0, 6);
   return `${safe}-${suffix}`;
 }
 
-/** moduleRef to security filename (/ and special character mapping,hash suffix guarantee unique);staging naming contract,node-chunk-bridge same opening path push lead. */
+/** Deterministic filesystem-safe file prefix for a moduleRef. */
 export function safeFileName(moduleRef: string): string {
   const safe = moduleRef.replace(/[^A-Za-z0-9._-]+/g, '_');
   const suffix = createHash('sha1').update(moduleRef).digest('hex').slice(0, 6);

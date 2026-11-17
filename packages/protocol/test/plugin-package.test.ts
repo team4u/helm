@@ -14,6 +14,12 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
   CORE_CLI_COMMAND_PATHS,
+  HelmError,
+  PREBUILT_CLIENT_MANIFEST_VERSION,
+  assertPrebuiltChunkName,
+  assertPrebuiltClientManifest,
+  assertPrebuiltRelativeFile,
+  prebuiltChunkFileName,
   type PluginInstallResult,
   type PluginPackageRecord,
   type PluginPackageSource,
@@ -94,10 +100,54 @@ test('PluginSummary.managed is an additive optional field (type guards and struc
   assert.equal(legacy.managed, undefined)
 })
 
-test('CORE_CLI_COMMAND_PATHS includes plugins install/update/remove without duplicates', { timeout: 60_000 }, () => {
+test('CORE_CLI_COMMAND_PATHS includes plugins install/update/remove/build without duplicates', { timeout: 60_000 }, () => {
   const paths = [...CORE_CLI_COMMAND_PATHS]
-  for (const cmd of ['plugins install', 'plugins update', 'plugins remove']) {
+  for (const cmd of ['plugins build', 'plugins install', 'plugins update', 'plugins remove']) {
     assert.ok(paths.includes(cmd), `should include ${cmd}`)
   }
   assert.equal(new Set(paths).size, paths.length, 'command paths must not repeat')
+})
+
+test('PrebuiltClientManifest validation and chunk path helpers enforce integrity and path containment', { timeout: 60_000 }, () => {
+  assert.equal(
+    prebuiltChunkFileName('index.tsx-a1b2c3.deadbeef.mjs', 'mermaid.core-123.js'),
+    'index.tsx-a1b2c3.deadbeef.chunk.mermaid.core-123.js',
+  )
+  assert.throws(() => assertPrebuiltChunkName('p', '../escape.js'), (e: unknown) => e instanceof HelmError && e.code === 'invalid_client_module')
+  assert.throws(() => assertPrebuiltRelativeFile('/dist-client', '../secret.mjs', 'entryFile'), (e: unknown) => e instanceof HelmError && e.code === 'prebuilt_client_invalid')
+  assert.throws(() => assertPrebuiltRelativeFile('/dist-client', '/abs.mjs', 'entryFile'), (e: unknown) => e instanceof HelmError && e.code === 'prebuilt_client_invalid')
+  assert.throws(() => assertPrebuiltRelativeFile('/dist-client', 'a\\b.mjs', 'entryFile'), (e: unknown) => e instanceof HelmError && e.code === 'prebuilt_client_invalid')
+
+  const valid = assertPrebuiltClientManifest(
+    {
+      version: PREBUILT_CLIENT_MANIFEST_VERSION,
+      modules: {
+        'index.tsx': {
+          entryFile: 'index.tsx-abc.hash1234.mjs',
+          contentHash: 'hash1234',
+          exports: ['Panel', '__helmClientCss'],
+          chunks: ['chunk-1.js'],
+        },
+      },
+    },
+    '/tmp/dist-client',
+  )
+  assert.equal(valid.version, 1)
+  assert.deepEqual(valid.modules['index.tsx']?.chunks, ['chunk-1.js'])
+
+  // Bad versions / missing fields / escaping paths / duplicate chunks fail explicitly
+  for (const bad of [
+    null,
+    [],
+    { version: 2, modules: {} },
+    { version: 1, modules: null },
+    { version: 1, modules: { '../bad.tsx': { entryFile: 'a.mjs', contentHash: 'abc', exports: [] } } },
+    { version: 1, modules: { 'index.tsx': { entryFile: '../evil.mjs', contentHash: 'abc', exports: [] } } },
+    { version: 1, modules: { 'index.tsx': { entryFile: 'a.mjs', contentHash: '', exports: [] } } },
+    { version: 1, modules: { 'index.tsx': { entryFile: 'a.mjs', contentHash: 'abc', exports: [1] } } },
+    { version: 1, modules: { 'index.tsx': { entryFile: 'a.mjs', contentHash: 'abc', exports: [], chunks: ['a.js', 'a.js'] } } },
+    { version: 1, modules: { 'index.tsx': { entryFile: 'a.mjs', contentHash: 'abc', exports: [], chunks: ['../evil.js'] } } },
+  ]) {
+    assert.throws(() => assertPrebuiltClientManifest(bad, '/tmp/dist-client'), (e: unknown) => e instanceof HelmError)
+  }
 })

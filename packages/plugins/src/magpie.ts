@@ -25,7 +25,7 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { HelmError, type PluginDefinition, type TurnSettledPayload } from '@helm/protocol'
-import { resolvePluginClientRoot } from './asset-paths.js'
+import { resolvePluginClientAssets } from './asset-paths.js'
 import {
   DEFAULT_MAGPIE_ROOT,
   MAGPIE_PLUGIN_ID,
@@ -173,7 +173,7 @@ export function createMagpiePlugin(): PluginDefinition {
     },
     icon: 'globe',
     version: '0.1.0',
-    clientRoot: resolvePluginClientRoot(MAGPIE_PLUGIN_ID, 'magpie', 'magpie_plugin_client_missing'),
+    ...resolvePluginClientAssets(MAGPIE_PLUGIN_ID, 'magpie', 'magpie_plugin_client_missing'),
     definePlugin(rawCtx) {
       const ctx = rawCtx
 

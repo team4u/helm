@@ -20,7 +20,7 @@
  * - a blank MEMORY.md is a legal memory.guide state (no missing warning).
  */
 import { HelmError, PROFILE_DETAIL_SECTION_SLOT, type HelmHostProfilesPort, type PluginActionContext, type PluginDefinition } from '@helm/protocol'
-import { resolvePluginClientRoot } from './asset-paths.js'
+import { resolvePluginClientAssets } from './asset-paths.js'
 import { MEMORY_PLUGIN_ID, MAX_MEMORY_CHARS, MemoryStore } from './memory/store.js'
 
 export { MEMORY_PLUGIN_ID, MAX_MEMORY_CHARS, MEMORY_DEFAULT, MemoryStore } from './memory/store.js'
@@ -82,7 +82,7 @@ export function createMemoryPlugin(): PluginDefinition {
     icon: 'sparkles',
     version: '0.1.0',
     locked: false,
-    clientRoot: resolvePluginClientRoot(MEMORY_PLUGIN_ID, 'memory', 'memory_plugin_client_missing'),
+    ...resolvePluginClientAssets(MEMORY_PLUGIN_ID, 'memory', 'memory_plugin_client_missing'),
     definePlugin(ctx) {
       const { profiles } = ctx.host
       const store = new MemoryStore(ctx.host)

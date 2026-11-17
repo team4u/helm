@@ -28,6 +28,7 @@ import {
   normalizeDefinition,
   resolvePluginEntry,
 } from './external-loader.js';
+import { readPrebuiltClientBundle, readPrebuiltClientManifest } from './ui-registry.js';
 
 /** Ephemeral in-memory doc store used during `doctor` registration checks (touches no durable storage). */
 class DoctorDocStore {
@@ -226,6 +227,33 @@ async function doctorPluginDirInternal(
 
   const clientOk = await withDoctorScratch(async (scratch) =>
     push('client', 'frontend module compilation and export validation', async () => {
+      if (definition!.prebuiltClientDir !== undefined) {
+        const { rootReal, manifest } = readPrebuiltClientManifest(definition!.prebuiltClientDir, definition!.id);
+        for (const moduleRef of Object.keys(manifest.modules)) {
+          readPrebuiltClientBundle(rootReal, moduleRef, undefined, definition!.id);
+        }
+        const seen = new Set<string>();
+        for (const ref of clientRefs) {
+          const key = `${ref.module}#${ref.export}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          const prebuilt = readPrebuiltClientBundle(
+            definition!.prebuiltClientDir,
+            ref.module,
+            undefined,
+            definition!.id,
+          );
+          if (!prebuilt.exports.includes(ref.export)) {
+            throw new HelmError(
+              'invalid_client_export',
+              `Plugin ${definition!.id} client reference ${ref.module}#${ref.export} is dangling: module exports [${prebuilt.exports.join(', ') || 'none'}]`,
+              422,
+              { pluginId: definition!.id, module: ref.module, export: ref.export, exports: prebuilt.exports },
+            );
+          }
+        }
+        return;
+      }
       if (clientRefs.length > 0 && options.buildProvider === undefined) {
         throw new HelmError(
           'unsupported_client_build',

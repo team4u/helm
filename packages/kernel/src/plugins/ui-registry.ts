@@ -16,15 +16,23 @@
  * - Enforce cross-plugin uniqueness invariants at enable commit time (profile.runtime kind and commandPalette slash),
  *   called by PluginHost during enable commit so disabled pre-registrations never occupy global names.
  */
+import { lstatSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { isAbsolute, relative, resolve, sep } from 'node:path';
 import {
   HelmError,
+  PREBUILT_CLIENT_MANIFEST_FILE,
   assertModuleRefShape,
+  assertPrebuiltChunkName,
+  assertPrebuiltClientManifest,
   clientNpmRootsOf,
   parseNonEmptyLocalizedText,
+  prebuiltChunkFileName,
   type PluginBuildProvider,
   type PluginClientBundle,
   type PluginClientNpmRoot,
   type PluginUiContribution,
+  type PrebuiltClientManifest,
+  type PrebuiltClientModuleEntry,
 } from '@helm/protocol';
 import { assertConversationScope, isPlainObject, jsonClone } from './shared.js';
 import {
@@ -37,6 +45,272 @@ import {
 /** Mapping from the three UI action targets to registry surfaces (shared by plugin-context and validation; defined in ui-spec-validators.ts). */
 export { UI_ACTION_SURFACES } from './ui-spec-validators.js';
 
+/** Result of reading and validating a prebuilt `dist-client/manifest.json`. */
+export interface LoadedPrebuiltClientManifest {
+  rootReal: string;
+  manifest: PrebuiltClientManifest;
+}
+
+function resolvePrebuiltFileSafe(
+  rootReal: string,
+  prebuiltDir: string,
+  relPath: string,
+  label: string,
+  pluginId: string,
+): string {
+  const candidate = resolve(rootReal, relPath);
+  let real: string;
+  try {
+    real = realpathSync(candidate);
+  } catch {
+    let isSymlink = false;
+    try {
+      isSymlink = lstatSync(candidate).isSymbolicLink();
+    } catch {
+      // ENOENT
+    }
+    throw new HelmError(
+      'prebuilt_client_invalid',
+      `Prebuilt client ${label} file ${isSymlink ? 'is a dangling symlink' : 'is missing'} for plugin ${pluginId}: ${relPath}`,
+      400,
+      { pluginId, prebuiltDir, relPath },
+    );
+  }
+  const rel = relative(rootReal, real);
+  if (rel === '' || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+    throw new HelmError(
+      'client_module_out_of_root',
+      `Prebuilt client ${label} escapes prebuiltClientDir (${prebuiltDir}): ${relPath}`,
+      400,
+      { pluginId, prebuiltDir, relPath },
+    );
+  }
+  let stat;
+  try {
+    stat = statSync(real);
+  } catch {
+    throw new HelmError(
+      'prebuilt_client_invalid',
+      `Prebuilt client ${label} file cannot be read for plugin ${pluginId}: ${relPath}`,
+      400,
+      { pluginId, prebuiltDir, relPath },
+    );
+  }
+  if (!stat.isFile()) {
+    throw new HelmError(
+      'prebuilt_client_invalid',
+      `Prebuilt client ${label} is not a regular file for plugin ${pluginId}: ${relPath}`,
+      400,
+      { pluginId, prebuiltDir, relPath },
+    );
+  }
+  return real;
+}
+
+function resolveOptionalPrebuiltGzipSafe(
+  rootReal: string,
+  prebuiltDir: string,
+  relPath: string,
+  label: string,
+  pluginId: string,
+): string | undefined {
+  const gzRel = `${relPath}.gz`;
+  const gzCandidate = resolve(rootReal, gzRel);
+  try {
+    lstatSync(gzCandidate);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw new HelmError(
+      'prebuilt_client_invalid',
+      `Prebuilt client ${label}.gz stat failed for plugin ${pluginId}: ${err instanceof Error ? err.message : String(err)}`,
+      400,
+      { pluginId, prebuiltDir, relPath: gzRel },
+    );
+  }
+  return resolvePrebuiltFileSafe(rootReal, prebuiltDir, gzRel, `${label}.gz`, pluginId);
+}
+
+/**
+ * Read and strictly validate `manifest.json` inside a plugin's prebuilt `dist-client` directory.
+ * Rejects missing directories, symlink escapes out of `prebuiltDir`, corrupt JSON, and schema violations.
+ */
+export function readPrebuiltClientManifest(
+  prebuiltDir: string,
+  pluginId = 'prebuilt',
+): LoadedPrebuiltClientManifest {
+  let rootStat;
+  try {
+    rootStat = statSync(prebuiltDir);
+  } catch {
+    throw new HelmError(
+      'prebuilt_client_invalid',
+      `Prebuilt client directory does not exist for plugin ${pluginId}: ${prebuiltDir}`,
+      400,
+      { pluginId, prebuiltDir },
+    );
+  }
+  if (!rootStat.isDirectory()) {
+    throw new HelmError(
+      'prebuilt_client_invalid',
+      `Prebuilt client directory is not a directory for plugin ${pluginId}: ${prebuiltDir}`,
+      400,
+      { pluginId, prebuiltDir },
+    );
+  }
+  const rootReal = realpathSync(prebuiltDir);
+  const manifestReal = resolvePrebuiltFileSafe(
+    rootReal,
+    prebuiltDir,
+    PREBUILT_CLIENT_MANIFEST_FILE,
+    PREBUILT_CLIENT_MANIFEST_FILE,
+    pluginId,
+  );
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(manifestReal, 'utf-8'));
+  } catch (err) {
+    throw new HelmError(
+      'prebuilt_client_invalid',
+      `Prebuilt client manifest JSON parse failed in ${prebuiltDir}: ${err instanceof Error ? err.message : String(err)}`,
+      400,
+      { pluginId, prebuiltDir },
+    );
+  }
+  return { rootReal, manifest: assertPrebuiltClientManifest(raw, prebuiltDir) };
+}
+
+interface VerifiedPrebuiltEntry {
+  entry: PrebuiltClientModuleEntry;
+  entryReal: string;
+  entryGzReal?: string;
+  chunkPaths: Map<string, { real: string; gzReal?: string }>;
+}
+
+function assertPrebuiltEntryIntegrity(
+  rootReal: string,
+  prebuiltDir: string,
+  moduleRef: string,
+  manifest: PrebuiltClientManifest,
+  pluginId: string,
+): VerifiedPrebuiltEntry {
+  const entry = manifest.modules[moduleRef];
+  if (!entry) {
+    throw new HelmError(
+      'prebuilt_client_invalid',
+      `Prebuilt client manifest for plugin ${pluginId} does not contain declared module ${moduleRef}`,
+      404,
+      { pluginId, prebuiltDir, module: moduleRef },
+    );
+  }
+  const entryReal = resolvePrebuiltFileSafe(
+    rootReal,
+    prebuiltDir,
+    entry.entryFile,
+    `entryFile(${moduleRef})`,
+    pluginId,
+  );
+  const entryGzReal = resolveOptionalPrebuiltGzipSafe(
+    rootReal,
+    prebuiltDir,
+    entry.entryFile,
+    `entryFile(${moduleRef})`,
+    pluginId,
+  );
+  const chunkPaths = new Map<string, { real: string; gzReal?: string }>();
+  for (const chunkName of entry.chunks ?? []) {
+    const chunkRel = prebuiltChunkFileName(entry.entryFile, chunkName, pluginId);
+    const real = resolvePrebuiltFileSafe(rootReal, prebuiltDir, chunkRel, `chunk(${chunkName})`, pluginId);
+    const gzReal = resolveOptionalPrebuiltGzipSafe(
+      rootReal,
+      prebuiltDir,
+      chunkRel,
+      `chunk(${chunkName})`,
+      pluginId,
+    );
+    chunkPaths.set(chunkName, { real, gzReal });
+  }
+  return { entry, entryReal, entryGzReal, chunkPaths };
+}
+
+function materializePrebuiltBundle(
+  prebuiltDir: string,
+  moduleRef: string,
+  verified: VerifiedPrebuiltEntry,
+  chunk: string | undefined,
+  pluginId: string,
+): PluginClientBundle {
+  const { entry, entryReal, entryGzReal, chunkPaths } = verified;
+  if (chunk !== undefined) {
+    const target = chunkPaths.get(chunk);
+    if (!target) {
+      throw new HelmError(
+        'client_chunk_not_found',
+        `plugin ${pluginId} module ${moduleRef} did not generate chunk: ${chunk}`,
+        404,
+        { pluginId, prebuiltDir, module: moduleRef, chunk },
+      );
+    }
+    return {
+      code: readFileSync(target.real, 'utf-8'),
+      contentHash: entry.contentHash,
+      gzipped: target.gzReal !== undefined ? readFileSync(target.gzReal) : undefined,
+      exports: [],
+    };
+  }
+  let chunks: Record<string, { code: string; gzipped?: Uint8Array }> | undefined;
+  if (chunkPaths.size > 0) {
+    chunks = {};
+    const chunkCache = new Map<string, { code: string; gzipped?: Uint8Array }>();
+    for (const [chunkName, target] of chunkPaths) {
+      Object.defineProperty(chunks, chunkName, {
+        enumerable: true,
+        configurable: true,
+        get: () => {
+          const cached = chunkCache.get(chunkName);
+          if (cached) return cached;
+          const payload: { code: string; gzipped?: Uint8Array } = {
+            code: readFileSync(target.real, 'utf-8'),
+            ...(target.gzReal !== undefined ? { gzipped: readFileSync(target.gzReal) } : {}),
+          };
+          chunkCache.set(chunkName, payload);
+          return payload;
+        },
+      });
+    }
+  }
+  return {
+    code: readFileSync(entryReal, 'utf-8'),
+    contentHash: entry.contentHash,
+    gzipped: entryGzReal !== undefined ? readFileSync(entryGzReal) : undefined,
+    exports: [...entry.exports],
+    ...(chunks ? { chunks } : {}),
+  };
+}
+
+/**
+ * Pure file reader for prebuilt `dist-client` bundles (zero `esbuild` dependency).
+ * Validates `manifest.json` schema, containment inside `prebuiltDir`, and backing file presence.
+ */
+export function readPrebuiltClientBundle(
+  prebuiltDir: string,
+  moduleRef: string,
+  chunk?: string,
+  pluginId = 'prebuilt',
+): PluginClientBundle {
+  assertModuleRefShape(pluginId, moduleRef);
+  if (chunk !== undefined) {
+    assertPrebuiltChunkName(pluginId, chunk);
+  }
+  const { rootReal, manifest } = readPrebuiltClientManifest(prebuiltDir, pluginId);
+  const verified = assertPrebuiltEntryIntegrity(rootReal, prebuiltDir, moduleRef, manifest, pluginId);
+  return materializePrebuiltBundle(prebuiltDir, moduleRef, verified, chunk, pluginId);
+}
+
+export interface PluginClientAssetsLookup {
+  clientRoot?: string;
+  prebuiltClientDir?: string;
+}
+
 export interface ClientModuleOptions {
   chunk?: string;
   hash?: string;
@@ -46,6 +320,7 @@ export interface ClientModuleOptions {
     phase: string;
     epoch: number;
     clientRoot?: string;
+    prebuiltClientDir?: string;
     npmDependencies?: Readonly<Record<string, string>>;
   } | undefined;
   dataDir: string;
@@ -58,9 +333,18 @@ export class UiRegistry {
   private ui = new Map<string, PluginUiContribution[]>();
   private clientHashes = new Map<string, Map<string, string>>();
 
-  constructor(private readonly buildProvider?: PluginBuildProvider) {}
+  constructor(
+    private readonly buildProvider?: PluginBuildProvider,
+    private readonly getPluginAssets?: (pluginId: string) => PluginClientAssetsLookup | undefined,
+  ) {}
 
-  registerUi(pluginId: string, surface: string, spec: unknown, fnName: string, clientRoot?: string): void {
+  registerUi(
+    pluginId: string,
+    surface: string,
+    spec: unknown,
+    fnName: string,
+    clientAssets?: string | PluginClientAssetsLookup,
+  ): void {
     if (!isPlainObject(spec)) {
       throw new HelmError('invalid_ui_spec', `plugin ${pluginId} ui.${fnName} spec must be a plain object`, 400);
     }
@@ -107,6 +391,16 @@ export class UiRegistry {
       }
     }
 
+    const lifecycleAssets = this.getPluginAssets?.(pluginId);
+    const clientRoot =
+      typeof clientAssets === 'string'
+        ? clientAssets
+        : (clientAssets?.clientRoot ?? lifecycleAssets?.clientRoot);
+    const prebuiltClientDir =
+      typeof clientAssets === 'object' && clientAssets !== null
+        ? (clientAssets.prebuiltClientDir ?? lifecycleAssets?.prebuiltClientDir)
+        : lifecycleAssets?.prebuiltClientDir;
+
     // Two-phase surface validation (see ui-spec-validators.ts): early checks
     // (UI action / commandPalette / profile.runtime / plugin.slot) run before scope
     // and client-ref validation, while late checks run right after in exact original order.
@@ -114,8 +408,8 @@ export class UiRegistry {
       pluginId,
       fnName,
       surface,
-      clientRoot,
-      hasBuildProvider: this.buildProvider !== undefined,
+      clientRoot: clientRoot ?? prebuiltClientDir,
+      hasBuildProvider: this.buildProvider !== undefined || prebuiltClientDir !== undefined,
       siblings: list,
     };
     validateUiSpecEarly(surface, spec, id, ctx);
@@ -123,13 +417,13 @@ export class UiRegistry {
     // Validate scope at registration time so invalid scopes cannot slip into rendering.
     assertConversationScope(pluginId, `Plugin ${pluginId} ui.${fnName}`, spec.scope);
 
-    // Client reference: definition must provide `clientRoot` and a valid relative `.ts/.tsx` module.
+    // Client reference: definition must provide `clientRoot` or `prebuiltClientDir` and a valid relative `.ts/.tsx` module.
     const client = spec.client;
     if (client !== undefined) {
-      if (clientRoot === undefined) {
+      if (clientRoot === undefined && prebuiltClientDir === undefined) {
         throw new HelmError(
           'invalid_ui_spec',
-          `Plugin ${pluginId} ui.${fnName} declared a client reference, but definition did not provide clientRoot`,
+          `Plugin ${pluginId} ui.${fnName} declared a client reference, but definition did not provide clientRoot or prebuiltClientDir`,
           400,
           { pluginId },
         );
@@ -137,7 +431,8 @@ export class UiRegistry {
       if (!isPlainObject(client) || Object.keys(client).some((k) => k !== 'module' && k !== 'export')) {
         throw new HelmError('invalid_ui_spec', `Plugin ${pluginId} ui.${fnName} client may only contain { module, export }`, 400);
       }
-      assertModuleRefShape(pluginId, String(client.module ?? ''));
+      const moduleRef = String(client.module ?? '');
+      assertModuleRefShape(pluginId, moduleRef);
       if (typeof client.export !== 'string' || client.export.length === 0 || !/^[A-Za-z0-9_$]+$/.test(client.export)) {
         throw new HelmError(
           'invalid_ui_spec',
@@ -145,13 +440,26 @@ export class UiRegistry {
           400,
         );
       }
-      // Require build port upfront: fail registration rather than silently discarding client UI.
-      if (this.buildProvider === undefined) {
+      if (prebuiltClientDir !== undefined) {
+        // Prebuilt track: verify manifest integrity, declared module, containment, backing files,
+        // and exported symbol upfront — no buildProvider needed and never falls back to clientRoot.
+        const { rootReal, manifest } = readPrebuiltClientManifest(prebuiltClientDir, pluginId);
+        const { entry } = assertPrebuiltEntryIntegrity(rootReal, prebuiltClientDir, moduleRef, manifest, pluginId);
+        if (!entry.exports.includes(client.export)) {
+          throw new HelmError(
+            'invalid_client_export',
+            `Plugin ${pluginId} ui.${fnName} prebuilt module ${moduleRef} does not export "${client.export}" (exports: ${entry.exports.join(', ') || 'none'})`,
+            422,
+            { pluginId, fnName, module: moduleRef, export: client.export, exports: entry.exports },
+          );
+        }
+      } else if (this.buildProvider === undefined) {
+        // Require build port upfront for source-compiled plugins: fail registration rather than silently discarding client UI.
         throw new HelmError(
           'unsupported_client_build',
           `Plugin ${pluginId} ui.${fnName} declared a client reference, but host has no build port (PluginHostOptions.buildProvider) to compile client modules`,
           501,
-          { pluginId, fnName, module: String(client.module ?? '') },
+          { pluginId, fnName, module: moduleRef },
         );
       }
     }
@@ -329,16 +637,15 @@ export class UiRegistry {
     this.clientHashes.set(pluginId, hashes);
   }
 
-  private async compileModuleChecked(
+  private assertClientLifecyclePhase(
     pluginId: string,
     moduleRef: string,
     options: ClientLifecycleLookup,
     allowedPhases: 'idle-only' | 'defining-or-idle',
-  ): Promise<PluginClientBundle> {
+  ) {
     if (options.isDisposed()) {
       throw new HelmError('plugin_host_disposed', 'PluginHost has already been disposed', 409);
     }
-    assertModuleRefShape(pluginId, moduleRef);
     const info = options.getPluginLifecycle(pluginId);
     const phaseOk =
       info !== undefined &&
@@ -348,6 +655,20 @@ export class UiRegistry {
         pluginId,
         module: moduleRef,
       });
+    }
+    return info;
+  }
+
+  private async compileModuleChecked(
+    pluginId: string,
+    moduleRef: string,
+    options: ClientLifecycleLookup,
+    allowedPhases: 'idle-only' | 'defining-or-idle',
+  ): Promise<PluginClientBundle> {
+    assertModuleRefShape(pluginId, moduleRef);
+    const info = this.assertClientLifecyclePhase(pluginId, moduleRef, options, allowedPhases);
+    if (info.prebuiltClientDir !== undefined) {
+      return readPrebuiltClientBundle(info.prebuiltClientDir, moduleRef, undefined, pluginId);
     }
     const clientRoot = info.clientRoot;
     if (clientRoot === undefined) {
@@ -403,6 +724,32 @@ export class UiRegistry {
     return result;
   }
 
+  private assertClientModuleHashMatches(
+    pluginId: string,
+    moduleRef: string,
+    actualHash: string,
+    requestedHash: string | undefined,
+    chunk: string | undefined,
+  ): void {
+    if (requestedHash === undefined || (requestedHash.length > 0 && requestedHash === actualHash)) {
+      return;
+    }
+    if (chunk !== undefined) {
+      throw new HelmError(
+        'client_chunk_stale',
+        `plugin ${pluginId} requested chunk hash (${requestedHash}) does not match current artifact hash (${actualHash})`,
+        409,
+        { pluginId, module: moduleRef, chunk, hash: requestedHash, currentHash: actualHash },
+      );
+    }
+    throw new HelmError(
+      'client_module_stale',
+      `plugin ${pluginId} requested client module hash (${requestedHash}) does not match current artifact hash (${actualHash})`,
+      409,
+      { pluginId, module: moduleRef, hash: requestedHash, currentHash: actualHash },
+    );
+  }
+
   async getClientModule(
     pluginId: string,
     moduleRef: string,
@@ -426,6 +773,29 @@ export class UiRegistry {
         );
       }
     }
+    const info = this.assertClientLifecyclePhase(pluginId, moduleRef, options, 'idle-only');
+    if (info.prebuiltClientDir !== undefined) {
+      const { rootReal, manifest } = readPrebuiltClientManifest(info.prebuiltClientDir, pluginId);
+      const verified = assertPrebuiltEntryIntegrity(
+        rootReal,
+        info.prebuiltClientDir,
+        moduleRef,
+        manifest,
+        pluginId,
+      );
+      const trackedHashes = this.clientHashes.get(pluginId);
+      if (trackedHashes?.has(moduleRef)) {
+        trackedHashes.set(moduleRef, verified.entry.contentHash);
+      }
+      this.assertClientModuleHashMatches(
+        pluginId,
+        moduleRef,
+        verified.entry.contentHash,
+        options.hash,
+        options.chunk,
+      );
+      return materializePrebuiltBundle(info.prebuiltClientDir, moduleRef, verified, options.chunk, pluginId);
+    }
     const result = await this.compileModuleChecked(pluginId, moduleRef, options, 'idle-only');
     // Keep precompiled hash map aligned when a declared module is recompiled after source edit.
     const trackedHashes = this.clientHashes.get(pluginId);
@@ -433,22 +803,7 @@ export class UiRegistry {
       trackedHashes.set(moduleRef, result.contentHash);
     }
 
-    if (options.hash !== undefined && (options.hash.length === 0 || options.hash !== result.contentHash)) {
-      if (options.chunk !== undefined) {
-        throw new HelmError(
-          'client_chunk_stale',
-          `plugin ${pluginId} requested chunk hash (${options.hash}) does not match current artifact hash (${result.contentHash})`,
-          409,
-          { pluginId, module: moduleRef, chunk: options.chunk, hash: options.hash, currentHash: result.contentHash },
-        );
-      }
-      throw new HelmError(
-        'client_module_stale',
-        `plugin ${pluginId} requested client module hash (${options.hash}) does not match current artifact hash (${result.contentHash})`,
-        409,
-        { pluginId, module: moduleRef, hash: options.hash, currentHash: result.contentHash },
-      );
-    }
+    this.assertClientModuleHashMatches(pluginId, moduleRef, result.contentHash, options.hash, options.chunk);
 
     if (options.chunk !== undefined) {
       const chunkData = result.chunks?.[options.chunk];

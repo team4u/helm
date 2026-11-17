@@ -34,7 +34,7 @@ import {
   type PluginDoctorReport,
   type PluginSummary,
 } from '@helm/protocol'
-import { resolvePluginClientRoot } from './asset-paths.js'
+import { resolvePluginClientAssets } from './asset-paths.js'
 
 export const APPS_PLUGIN_ID = 'builtin:apps'
 export const APPS_SCREEN_ID = 'center'
@@ -266,7 +266,7 @@ export function createAppsPlugin(deps: { hubCwd?: string } = {}): PluginDefiniti
     icon: 'boxes',
     version: '0.1.0',
     locked: false,
-    clientRoot: resolvePluginClientRoot(APPS_PLUGIN_ID, 'apps', 'apps_plugin_client_missing'),
+    ...resolvePluginClientAssets(APPS_PLUGIN_ID, 'apps', 'apps_plugin_client_missing'),
     definePlugin(ctx) {
       const catalog = ctx.doc<AppsCatalogDoc>(CATALOG_DOC, EMPTY_APPS_CATALOG, { public: true })
 

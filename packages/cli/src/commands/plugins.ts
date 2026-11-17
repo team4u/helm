@@ -5,15 +5,20 @@
  * as JSON boolean/number when valid, otherwise string). plugins init scaffolds local
  * plugins using minimal/full/app templates (app artifacts pass helm apps validate directly).
  */
-import type {
-  ActionManifest,
-  PluginDoctorReport,
-  PluginInstallResult,
-  PluginReloadResult,
-  PluginRemoveResult,
-  PluginRescanResult,
-  PluginSummary,
-  PluginUpdateResult,
+import {
+  HelmError,
+  PREBUILT_CLIENT_DIR_NAME,
+  type ActionManifest,
+  type BuildPluginClientBundleDirOptions,
+  type BuildPluginClientBundleDirResult,
+  type PluginClientNpmRoot,
+  type PluginDoctorReport,
+  type PluginInstallResult,
+  type PluginReloadResult,
+  type PluginRemoveResult,
+  type PluginRescanResult,
+  type PluginSummary,
+  type PluginUpdateResult,
 } from '@helm/protocol'
 import { CliError } from '../errors.js'
 import { parseFlags } from '../args.js'
@@ -493,6 +498,26 @@ export function pluginsCommands(): CommandSpec[] {
   })
 
   cmds.push({
+    path: ['plugins', 'build'],
+    description:
+      'Local build: precompile a plugin directory client modules into static dist-client/ artifacts without contacting Hub',
+    flags: [
+      { name: 'dir', type: 'string', help: 'plugin directory path (defaults to current working directory)' },
+      { name: 'out', type: 'string', help: 'output prebuilt directory (defaults to manifest clientDist or <dir>/dist-client)' },
+      {
+        name: 'module',
+        type: 'string',
+        repeated: true,
+        help: 'explicit relative .ts/.tsx entry module(s) inside clientRoot (repeatable; auto-scans clientRoot when omitted)',
+      },
+    ],
+    positional: '[dir]',
+    async run(ctx: CommandContext) {
+      await runPluginsBuild(ctx)
+    },
+  })
+
+  cmds.push({
     path: ['plugins', 'install'],
     description:
       'Install and register an external plugin package from npm/git/local path (POST /api/plugins/install; disabled by default unless --enable). source is resolved on the Hub host; enabled plugins run trusted code in-process with no sandbox',
@@ -762,4 +787,235 @@ async function runPluginsInit(ctx: CommandContext): Promise<void> {
   for (const file of summary.files) ctx.io.out(`  - ${file}\n`)
   ctx.io.out('Next steps:\n')
   for (const step of summary.nextSteps) ctx.io.out(`  ${step}\n`)
+}
+
+// ---------------------------------------------------------------------------
+// plugins build: local prebuilt dist-client generator (no Hub calls)
+// ---------------------------------------------------------------------------
+
+async function readOptionalManifestObject(
+  filePath: string,
+  label: string,
+): Promise<Record<string, unknown> | undefined> {
+  const fsp = await import('node:fs/promises')
+  let text: string
+  try {
+    text = await fsp.readFile(filePath, 'utf8')
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+    throw new CliError(
+      `failed to read ${label} (${filePath}): ${err instanceof Error ? err.message : String(err)}`,
+      'read_failed',
+    )
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch (err) {
+    throw new CliError(
+      `invalid JSON in ${label} (${filePath}): ${err instanceof Error ? err.message : String(err)}`,
+      'invalid_plugin_manifest',
+    )
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new CliError(`${label} (${filePath}) must be a JSON object`, 'invalid_plugin_manifest')
+  }
+  return parsed as Record<string, unknown>
+}
+
+async function assertPathInsidePluginRoot(
+  pluginDir: string,
+  dirReal: string,
+  rawSubpath: string,
+  resolvedPath: string,
+  field: string,
+): Promise<void> {
+  const path = await import('node:path')
+  const fsp = await import('node:fs/promises')
+  const relLexical = path.relative(dirReal, resolvedPath)
+  if (relLexical === '..' || relLexical.startsWith(`..${path.sep}`) || path.isAbsolute(relLexical)) {
+    throw new CliError(
+      `plugin ${pluginDir} ${field} escapes plugin directory: ${rawSubpath}`,
+      'invalid_plugin_definition',
+    )
+  }
+  try {
+    const targetReal = await fsp.realpath(resolvedPath)
+    const relReal = path.relative(dirReal, targetReal)
+    if (relReal === '..' || relReal.startsWith(`..${path.sep}`) || path.isAbsolute(relReal)) {
+      throw new CliError(
+        `plugin ${pluginDir} ${field} symlink escapes plugin directory: ${rawSubpath}`,
+        'invalid_plugin_definition',
+      )
+    }
+  } catch (err) {
+    if (err instanceof CliError) throw err
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      throw new CliError(
+        `failed to resolve ${field} (${resolvedPath}): ${err instanceof Error ? err.message : String(err)}`,
+        'read_failed',
+      )
+    }
+  }
+}
+
+async function runPluginsBuild(ctx: CommandContext): Promise<void> {
+  const parsed = parseFlags(
+    [
+      { name: 'dir', type: 'string' },
+      { name: 'out', type: 'string' },
+      { name: 'module', type: 'string', repeated: true },
+    ],
+    ctx.args,
+  )
+  const path = await import('node:path')
+  const fsp = await import('node:fs/promises')
+
+  const dirFlag = parsed.flags.get('dir')
+  const positionalDir = parsed.positionals[0]
+  if (typeof dirFlag === 'string' && dirFlag.length > 0 && positionalDir !== undefined) {
+    throw new CliError('--dir and positional <dir> are mutually exclusive', 'conflicting_flags')
+  }
+  const usedPositionals = positionalDir !== undefined ? 1 : 0
+  assertNoExtraPositionals(parsed.positionals, usedPositionals)
+
+  const rawDir =
+    typeof dirFlag === 'string' && dirFlag.length > 0
+      ? dirFlag
+      : positionalDir !== undefined
+        ? positionalDir
+        : ctx.cwd
+  const pluginDir = path.resolve(ctx.cwd, rawDir)
+
+  let dirStat
+  try {
+    dirStat = await fsp.stat(pluginDir)
+  } catch (err) {
+    throw new CliError(
+      `plugin directory not accessible (${pluginDir}): ${err instanceof Error ? err.message : String(err)}`,
+      'client_root_invalid',
+    )
+  }
+  if (!dirStat.isDirectory()) {
+    throw new CliError(`plugin target is not a directory: ${pluginDir}`, 'client_root_invalid')
+  }
+  const dirReal = await fsp.realpath(pluginDir)
+
+  const pluginJson = await readOptionalManifestObject(path.join(pluginDir, 'plugin.json'), 'plugin.json')
+  const packageJson = await readOptionalManifestObject(path.join(pluginDir, 'package.json'), 'package.json')
+  const helmFieldRaw = packageJson?.['helm']
+  if (
+    helmFieldRaw !== undefined &&
+    (helmFieldRaw === null || typeof helmFieldRaw !== 'object' || Array.isArray(helmFieldRaw))
+  ) {
+    throw new CliError(`package.json helm field in ${pluginDir} must be an object`, 'invalid_plugin_manifest')
+  }
+  const helmField = helmFieldRaw as Record<string, unknown> | undefined
+
+  const rawId = pluginJson?.['id'] ?? helmField?.['id'] ?? packageJson?.['name']
+  const pluginId = typeof rawId === 'string' && rawId.trim().length > 0 ? rawId.trim() : path.basename(pluginDir)
+
+  const manifestClientRoot =
+    typeof pluginJson?.['clientRoot'] === 'string'
+      ? pluginJson['clientRoot']
+      : typeof helmField?.['clientRoot'] === 'string'
+        ? helmField['clientRoot']
+        : undefined
+  let clientRoot: string
+  if (manifestClientRoot !== undefined && manifestClientRoot.length > 0) {
+    clientRoot = path.resolve(pluginDir, manifestClientRoot)
+    await assertPathInsidePluginRoot(pluginDir, dirReal, manifestClientRoot, clientRoot, 'clientRoot')
+  } else {
+    const defaultClientDir = path.join(pluginDir, 'client')
+    let hasClientDir = false
+    try {
+      hasClientDir = (await fsp.stat(defaultClientDir)).isDirectory()
+    } catch {
+      // ENOENT
+    }
+    clientRoot = hasClientDir ? defaultClientDir : pluginDir
+  }
+
+  const outFlag = parsed.flags.get('out')
+  let outDir: string
+  if (typeof outFlag === 'string' && outFlag.length > 0) {
+    outDir = path.resolve(ctx.cwd, outFlag)
+  } else {
+    const manifestDist =
+      typeof pluginJson?.['clientDist'] === 'string'
+        ? pluginJson['clientDist']
+        : typeof helmField?.['clientDist'] === 'string'
+          ? helmField['clientDist']
+          : undefined
+    if (manifestDist !== undefined && manifestDist.length > 0) {
+      outDir = path.resolve(pluginDir, manifestDist)
+      await assertPathInsidePluginRoot(pluginDir, dirReal, manifestDist, outDir, 'clientDist')
+    } else {
+      outDir = path.join(pluginDir, PREBUILT_CLIENT_DIR_NAME)
+    }
+  }
+
+  const specSet = new Set<string>()
+  for (const list of [pluginJson?.['clientDependencies'], helmField?.['clientDependencies']]) {
+    if (list === undefined) continue
+    if (!Array.isArray(list) || list.some((x) => typeof x !== 'string' || x.trim().length === 0)) {
+      throw new CliError(`clientDependencies in ${pluginDir} must be an array of non-empty strings`, 'invalid_plugin_manifest')
+    }
+    for (const spec of list as string[]) specSet.add(spec.trim())
+  }
+  const npmRoots: PluginClientNpmRoot[] =
+    specSet.size > 0 ? [{ specifiers: [...specSet], packageRoot: pluginDir }] : []
+  const explicitModules = repeatedValues(parsed.flags, 'module')
+
+  // Dynamically load the workspace/runtime build package without creating a static @helm/cli -> @helm/plugin-build dependency edge.
+  const pluginBuildPkg = ['@helm', 'plugin-build'].join('/')
+  let buildMod: {
+    buildPluginClientBundleDir?: (
+      options: BuildPluginClientBundleDirOptions,
+    ) => Promise<BuildPluginClientBundleDirResult>
+  }
+  try {
+    buildMod = (await import(pluginBuildPkg)) as typeof buildMod
+  } catch (err) {
+    throw new CliError(
+      `plugin client compiler unavailable (${pluginBuildPkg} failed to load: ${err instanceof Error ? err.message : String(err)})`,
+      'plugin_build_unavailable',
+    )
+  }
+  if (typeof buildMod.buildPluginClientBundleDir !== 'function') {
+    throw new CliError(
+      `plugin client compiler unavailable (${pluginBuildPkg} does not export buildPluginClientBundleDir)`,
+      'plugin_build_unavailable',
+    )
+  }
+
+  let result: BuildPluginClientBundleDirResult
+  try {
+    result = await buildMod.buildPluginClientBundleDir({
+      pluginId,
+      clientRoot,
+      outDir,
+      ...(explicitModules.length > 0 ? { modules: explicitModules } : {}),
+      ...(npmRoots.length > 0 ? { npmRoots } : {}),
+    })
+  } catch (err) {
+    if (err instanceof HelmError) {
+      throw new CliError(err.message, err.code, 1, err.details)
+    }
+    throw err
+  }
+
+  if (ctx.json) {
+    printResult(ctx, result)
+    return
+  }
+  const moduleKeys = Object.keys(result.manifest.modules).sort()
+  ctx.io.out(
+    `Built ${moduleKeys.length} client module(s) for ${result.pluginId} -> ${result.outDir} (${(result.totalBytes / 1024).toFixed(1)} KiB)\n`,
+  )
+  for (const modRef of moduleKeys) {
+    const entry = result.manifest.modules[modRef]!
+    const chunkSuffix = entry.chunks && entry.chunks.length > 0 ? ` + ${entry.chunks.length} chunk(s)` : ''
+    ctx.io.out(`  - ${modRef} -> ${entry.entryFile} (${entry.contentHash.slice(0, 12)}${chunkSuffix})\n`)
+  }
 }

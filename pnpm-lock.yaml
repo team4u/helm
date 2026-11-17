@@ -423,9 +423,6 @@ importers:
       cron-parser:
         specifier: ^5.10.4
         version: 5.10.4
-      mermaid:
-        specifier: ^12.2.0
-        version: 12.3.0
       typebox:
         specifier: ^1.0.0
         version: 1.4.4
@@ -448,6 +445,9 @@ importers:
       lucide-react:
         specifier: ^1.66.0
         version: 1.70.0(@types/react@19.3.0)(react@19.3.1)
+      mermaid:
+        specifier: ^12.2.0
+        version: 12.3.0
 
   packages/protocol:
     dependencies:
