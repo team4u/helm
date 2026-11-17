@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { HLJSApi } from 'highlight.js'
+import { useWebLocale } from '../i18n/use-web-locale.js'
 
 /** highlight.js/lib/common 模块级缓存：成功后常驻（后续代码块挂载首帧即可同步高亮），失败不缓存可重试。 */
 let commonHighlighter: HLJSApi | null = null
@@ -23,6 +24,7 @@ function loadCommonHighlighter(): Promise<HLJSApi> {
 export function SyntaxCode({ code, language }: { code: string; language: string }) {
   const [highlighter, setHighlighter] = useState<HLJSApi | null>(() => commonHighlighter)
   const [error, setError] = useState(false)
+  const { t } = useWebLocale()
   // 仅负责模块加载：首次就绪前回退纯文本；失败随流式增量（code 变化）重试。
   useEffect(() => {
     if (highlighter !== null) return
@@ -45,7 +47,7 @@ export function SyntaxCode({ code, language }: { code: string; language: string 
     }
   }, [highlighter, language, code])
   return <>
-    {error && <span className="code-highlight-error">Syntax highlighting failed to load; full source shown below.</span>}
+    {error && <span className="code-highlight-error">{t('conv.codeblock.highlightFailed')}</span>}
     <pre className="code-block-pre selectable">
       {html !== null
         ? <code dangerouslySetInnerHTML={{ __html: html }} />

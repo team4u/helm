@@ -11,6 +11,7 @@
  * - 折叠步骤组统计（StepGroupSummary：思考/工具/失败/运行中计数与耗时聚合）。
  */
 
+import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 import type { FoldableStep, ToolResultTruncation, ToolTrace } from './timeline-model.js'
 import { languageFromFilename } from './code-language.js'
 import { buildPendingEditDiff, checkEditToolResult } from './edit-diff-model.js'
@@ -120,10 +121,19 @@ export function inputKvEntries(input: unknown): KvEntry[] {
 // 服务端截断预览文案（纯函数：绝不把预览行数冒充全文总量，总量未知不伪造）
 // ---------------------------------------------------------------------------
 
-/** 服务端截断预览说明：总量仅采用服务端计数（totalLines/totalChars），均缺失时只说明预览性质。 */
-export function truncationPreviewNote(t: ToolResultTruncation): string {
-  const total = t.totalLines !== undefined ? `${t.totalLines} lines in total` : t.totalChars !== undefined ? `${t.totalChars} chars in total` : ''
-  return total === '' ? 'Output too long; the server returned a preview only' : `Output too long; the server returned a preview only (${total})`
+/**
+ * Server-truncation preview note (pure function): never present preview line
+ * counts as the full total; never fabricate totals the server did not report.
+ */
+export function truncationPreviewNote(truncation: ToolResultTruncation, t?: WebMessageTranslator): string {
+  const tt = t ?? englishWebTranslator
+  const total =
+    truncation.totalLines !== undefined
+      ? tt('conv.trunc.linesTotal', { count: truncation.totalLines })
+      : truncation.totalChars !== undefined
+        ? tt('conv.trunc.charsTotal', { count: truncation.totalChars })
+        : ''
+  return total === '' ? tt('conv.trunc.previewOnly') : tt('conv.trunc.previewOnlyWithTotal', { total })
 }
 
 // ---------------------------------------------------------------------------
@@ -215,7 +225,8 @@ export interface ToolRowStats {
   title: string
 }
 
-export function toolRowStats(tool: ToolTrace): ToolRowStats | undefined {
+export function toolRowStats(tool: ToolTrace, t?: WebMessageTranslator): ToolRowStats | undefined {
+  const tt = t ?? englishWebTranslator
   // 插件 tool.view 接管的行由插件自绘，宿主不叠加统计。
   if (tool.toolView !== undefined) return undefined
   if (tool.toolName === 'edit') {
@@ -225,7 +236,7 @@ export function toolRowStats(tool: ToolTrace): ToolRowStats | undefined {
         return {
           addCount: check.value.diff.addedLines,
           removeCount: check.value.diff.removedLines,
-          title: 'Applied diff stats',
+          title: tt('conv.stats.appliedDiff'),
         }
       }
       return undefined
@@ -236,7 +247,7 @@ export function toolRowStats(tool: ToolTrace): ToolRowStats | undefined {
         return {
           addCount: pending.addedLines,
           removeCount: pending.removedLines,
-          title: 'Pending change hunks (not applied yet)',
+          title: tt('conv.stats.pendingHunks'),
         }
       }
     }
@@ -245,7 +256,7 @@ export function toolRowStats(tool: ToolTrace): ToolRowStats | undefined {
   if (tool.toolName === 'write') {
     const content = stringField(asRecord(tool.input), 'content')
     if (content === undefined) return undefined
-    return { text: `${countLines(content)} lines`, title: 'Written lines' }
+    return { text: tt('conv.stats.linesCount', { count: countLines(content) }), title: tt('conv.stats.writtenLines') }
   }
   return undefined
 }

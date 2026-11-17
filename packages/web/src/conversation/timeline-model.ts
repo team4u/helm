@@ -23,6 +23,7 @@ import type {
   ToolViewSpec,
   WhenBusy,
 } from '@helm/protocol/browser'
+import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 
 // ---------------------------------------------------------------------------
 // 渲染项类型
@@ -493,9 +494,12 @@ export function assistantModelShortLabel(identity: AssistantModelIdentity): stri
 }
 
 /** 完整标签：'provider/model'（+ 思考档位），与 conversation.model 同格式。 */
-export function assistantModelFullLabel(identity: AssistantModelIdentity): string {
+export function assistantModelFullLabel(identity: AssistantModelIdentity, t?: WebMessageTranslator): string {
+  const tt = t ?? englishWebTranslator
   const base = `${identity.provider}/${identity.model}`
-  return identity.thinkingLevel !== undefined ? `${base} · thinking ${identity.thinkingLevel}` : base
+  return identity.thinkingLevel !== undefined
+    ? tt('conv.model.thinkingSuffix', { base, level: identity.thinkingLevel })
+    : base
 }
 
 /**

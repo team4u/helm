@@ -13,6 +13,7 @@ import {
   type ToolTrace,
 } from './timeline-model.js'
 import { summarizeStepGroup, toolRowStats } from './tool-body-model.js'
+import { useWebLocale } from '../i18n/use-web-locale.js'
 import { formatDurationMs } from '../lib/format.js'
 
 // ---------------------------------------------------------------------------
@@ -32,22 +33,23 @@ export function TraceRow({
   siblingCalls: ReadonlyArray<import('@helm/protocol/browser').ToolViewSiblingCall>
 }) {
   const [open, setOpen] = useState(defaultOpen)
+  const { t } = useWebLocale()
 
   const rowFailed = Boolean(tool.isError)
   const right =
     tool.status === 'running'
-      ? 'Running'
+      ? t('conv.tool.statusRunning')
       : rowFailed && tool.durationMs === undefined
-        ? 'Failed'
+        ? t('conv.tool.statusFailed')
         : tool.durationMs !== undefined
           ? formatDurationMs(tool.durationMs)
           : tool.status === 'done'
-            ? 'Completed'
+            ? t('conv.tool.statusCompleted')
             : ''
   const rowIcon = toolStatusIcon(tool)
 
   // 单行极简统计（edit +N −N / write 行数）：只报事实，运行态不伪称成功。
-  const stats = useMemo(() => toolRowStats(tool), [tool])
+  const stats = useMemo(() => toolRowStats(tool, t), [tool, t])
 
   // 命中插件 tool.view：replaceRow=true 时插件组件完全替换默认工具行；
   // 未设置时保持外层 trace-row + 下方 trace-toolview 的默认双栏形态。
@@ -67,7 +69,7 @@ export function TraceRow({
             pluginId={toolView.pluginId}
             spec={toolView.spec}
             conversationId={conversationId}
-            label={`Tool view ${tool.toolName}`}
+            label={t('conv.tool.viewLabel', { name: tool.toolName })}
             slotProps={buildToolViewProps(tool, conversationId, siblingCalls)}
           />
         </div>
@@ -117,7 +119,7 @@ export function TraceRow({
                 pluginId={toolView.pluginId}
                 spec={toolView.spec}
                 conversationId={conversationId}
-                label={`Tool view ${tool.toolName}`}
+                label={t('conv.tool.viewLabel', { name: tool.toolName })}
                 slotProps={buildToolViewProps(tool, conversationId, siblingCalls)}
               />
             </div>
@@ -186,6 +188,7 @@ function MultiStepGroup({
   shortcutToggle?: ProcessShortcutCommand
 }) {
   const [userOverride, setUserOverride] = useState<boolean | null>(null)
+  const { t } = useWebLocale()
   const prevActiveRef = useRef(active)
   if (prevActiveRef.current !== active) {
     prevActiveRef.current = active
@@ -210,11 +213,11 @@ function MultiStepGroup({
   const hasOnlyThinking = steps.every((s) => s.kind === 'thinking')
   const summaryTitle = hasOnlyThinking
     ? active
-      ? `Thinking (${steps.length} steps)…`
-      : `Thinking (${steps.length} steps)`
+      ? t('conv.thinking.stepsActive', { count: steps.length })
+      : t('conv.thinking.steps', { count: steps.length })
     : active
-      ? `Thinking and executing (${steps.length} steps)…`
-      : `Thinking and execution (${steps.length} steps)`
+      ? t('conv.thinking.execActive', { count: steps.length })
+      : t('conv.thinking.exec', { count: steps.length })
   const showErrorBadge = !open && summary.errorCount > 0
   const showDuration = !active && summary.totalDurationMs !== undefined
 
@@ -229,13 +232,13 @@ function MultiStepGroup({
           shortcutExpandSeqRef.current = null
           setUserOverride(!open)
         }}
-        title={open ? 'Collapse thinking and execution' : 'Expand thinking and execution'}
+        title={open ? t('conv.thinking.collapseExec') : t('conv.thinking.expandExec')}
       >
         <HelmIcon name={open ? 'chevron-down' : 'chevron-right'} size={12} />
         {active ? <HelmIcon name="loader" size={11} className="spin-slow" /> : null}
         {summaryTitle}
         {showErrorBadge ? (
-          <span className="trace-group-badge trace-group-badge-error">{`${summary.errorCount} failed`}</span>
+          <span className="trace-group-badge trace-group-badge-error">{t('conv.thinking.errorCount', { count: summary.errorCount })}</span>
         ) : null}
         {showDuration ? (
           <span className="trace-group-meta tabular-nums">{formatDurationMs(summary.totalDurationMs)}</span>
@@ -285,6 +288,7 @@ export function ThinkingRow({
   isRootProcessToggle?: boolean
 }) {
   const [userOverride, setUserOverride] = useState<boolean | null>(null)
+  const { t } = useWebLocale()
   const prevActiveRef = useRef(active)
   if (prevActiveRef.current !== active) {
     prevActiveRef.current = active
@@ -307,11 +311,11 @@ export function ThinkingRow({
         aria-expanded={open}
         {...(isRootProcessToggle ? { 'data-process-toggle': 'root' } : {})}
         onClick={() => setUserOverride(!open)}
-        title={open ? 'Collapse thinking' : 'Expand thinking'}
+        title={open ? t('conv.thinking.collapseThinking') : t('conv.thinking.expandThinking')}
       >
         <HelmIcon name={open ? 'chevron-down' : 'chevron-right'} size={12} />
         {active ? <HelmIcon name="loader" size={11} className="spin-slow" /> : null}
-        {active ? 'Thinking…' : 'Thinking'}
+        {active ? t('conv.thinking.activeLabel') : t('conv.thinking.label')}
       </button>
       {open ? (
         <div className="trace-expanded-body selectable thinking-expanded-body">

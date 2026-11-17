@@ -10,6 +10,7 @@ import type { ComponentType } from 'react'
 import type { MarkdownCodeBlockProps } from '@helm/protocol/browser'
 import { CopyButton, createPluginClientContext, HelmIcon, PluginClientContext, usePluginClientHost, ViewBoundary } from '@helm/plugin-client'
 import { useHelmStore } from '../lib/store-context.js'
+import { useWebLocale } from '../i18n/use-web-locale.js'
 import {
   getCachedClientComponent,
   getPluginClientCacheRevision,
@@ -27,6 +28,7 @@ type ClientState =
   | { phase: 'ready'; Component: ComponentType<MarkdownCodeBlockProps> }
 
 function CodeBlockError({ language, code, message, onRetry }: { language: string; code: string; message: string; onRetry: () => void }): ReactNode {
+  const { t } = useWebLocale()
   return (
     <div className="code-block-wrap">
       <div className="code-block-header">
@@ -36,9 +38,9 @@ function CodeBlockError({ language, code, message, onRetry }: { language: string
       <div className="callout callout--error" role="alert">
         <HelmIcon name="alert-triangle" size={13} />
         <div>
-          <strong>Code block extension render failed</strong>
+          <strong>{t('conv.codeblock.renderFailed')}</strong>
           <p className="selectable">{message}</p>
-          <button type="button" className="btn btn-sm" onClick={onRetry}>Retry loading</button>
+          <button type="button" className="btn btn-sm" onClick={onRetry}>{t('conv.codeblock.retryLoading')}</button>
         </div>
       </div>
       <pre className="code-block-pre code-block-pre-flush selectable">
@@ -83,6 +85,7 @@ function PluginCodeBlock(props: {
 }): ReactNode {
   const { pluginId, clientRef, expectedHash, language, code, conversationId } = props
   const port = usePluginClientHost()
+  const { t } = useWebLocale()
   const revision = useSyncExternalStore(
     subscribePluginClientCacheInvalidation,
     () => getPluginClientCacheRevision(pluginId),
@@ -133,7 +136,7 @@ function PluginCodeBlock(props: {
         </div>
         <div className="callout" style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12 }}>
           <HelmIcon name="loader" size={13} className="spin-slow" />
-          <span>Loading {language} renderer...</span>
+          <span>{t('conv.codeblock.loadingRenderer', { language })}</span>
         </div>
       </div>
     )
@@ -155,7 +158,7 @@ function PluginCodeBlock(props: {
   const { Component } = client
   const ctx = createPluginClientContext(port, pluginId, conversationId)
   return (
-    <ViewBoundary label={`${language} render`}>
+    <ViewBoundary label={t('conv.codeblock.viewBoundary', { language })}>
       <PluginClientContext.Provider value={ctx}>
         <Component language={language} code={code} conversationId={conversationId} />
       </PluginClientContext.Provider>

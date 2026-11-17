@@ -174,10 +174,11 @@ test('跨会话隔离：ConversationPane 按会话 key 挂载 Composer，prefill
   assert.doesNotMatch(paneSource, /target === 'string'/)
 })
 
-test('非法历史锚点：显式报错并取消编辑，绝不静默降级为新消息', { timeout: 60_000 }, () => {
+test('Invalid history anchor: explicit error notice and cancelled edit, never a silent degrade into a new message', { timeout: 60_000 }, () => {
   // 非数字 / 非正整数 entryId：推送错误通知并 return，不回填 Composer。
-  assert.match(timelineSource, /Message anchor invalid \(entryId=/)
-  assert.match(timelineSource, /title: 'Cannot edit this message'/)
+  // The notice copy is wired through the i18n catalog (conv.human.cannotEdit*).
+  assert.match(timelineSource, /t\('conv\.human\.cannotEditBody', \{ entryId: item\.entryId \}\)/)
+  assert.match(timelineSource, /title: t\('conv\.human\.cannotEditTitle'\)/)
   // 不再有「锚点非法则省略 entryId 继续回填」的降级路径。
   assert.doesNotMatch(timelineSource, /Number\.isSafeInteger\(numericId\) && numericId > 0 \? \{ entryId: numericId \} : \{\}/)
 })

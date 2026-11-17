@@ -9,6 +9,7 @@ import { StepGroup, TraceRow } from './TimelineRows.js'
 import { ToolActivityProvider } from './ToolActivityProvider.js'
 import { isAssistantTurnBusy, assistantModelFullLabel, assistantModelShortLabel, type AssistantModelIdentity, type AssistantTurn, type ProcessShortcutCommand } from './timeline-model.js'
 import { formatDurationMs, formatFullTimestamp, formatMessageTime } from '../lib/format.js'
+import { useWebLocale } from '../i18n/use-web-locale.js'
 import { Tooltip } from '../ui/Tooltip.js'
 
 // ---------------------------------------------------------------------------
@@ -17,13 +18,14 @@ import { Tooltip } from '../ui/Tooltip.js'
 // ---------------------------------------------------------------------------
 
 export function AssistantModelBoundary({ model }: { model: AssistantModelIdentity }) {
-  const full = assistantModelFullLabel(model)
+  const { t } = useWebLocale()
+  const full = assistantModelFullLabel(model, t)
   return (
     <div
       className="model-boundary"
       role="separator"
-      aria-label={`Effective model switched to ${full}`}
-      title={`Effective model switched: ${full}`}
+      aria-label={t('conv.model.boundarySwitchedTo', { model: full })}
+      title={t('conv.model.boundarySwitched', { model: full })}
     >
       <span className="model-boundary-label">
         <HelmIcon name="cpu" size={11} />
@@ -56,6 +58,7 @@ export function AssistantTurnView(props: AssistantTurnViewProps) {
 
 function AssistantTurnContent({ turn, conversation, siblingCalls, isLatestTurn = false, anchorEntry, processShortcut, onForkFromHere }: AssistantTurnViewProps) {
   const store = useHelmStore()
+  const { t } = useWebLocale()
   const activeToolCallIds = useContext(ToolActivityContext)?.activeToolCallIds
   const [forking, setForking] = useState(false)
   const lastText = useMemo(() => {
@@ -102,17 +105,17 @@ function AssistantTurnContent({ turn, conversation, siblingCalls, isLatestTurn =
   const fullTimestamp = formatFullTimestamp(timeMs)
   let tooltipText = ''
   if (fullTimestamp !== '' && durationText !== '') {
-    tooltipText = `Completed at ${fullTimestamp} · took ${durationText}`
+    tooltipText = t('conv.turn.completedAtTook', { time: fullTimestamp, duration: durationText })
   } else if (fullTimestamp !== '') {
-    tooltipText = `Completed at ${fullTimestamp}`
+    tooltipText = t('conv.turn.completedAt', { time: fullTimestamp })
   } else if (durationText !== '') {
-    tooltipText = `Took ${durationText}`
+    tooltipText = t('conv.turn.took', { duration: durationText })
   }
 
   const showHoverBar = !isBusy && (lastText !== '' || turn.entryIds.length > 0)
   // 实际生成模型标签：仅来自本回合已落库 pi.assistant 的可信身份；busy（live/
   // 在途）回合不展示，避免把待生成内容归到任何模型；缺失则不显示。
-  const modelFull = turn.model !== undefined ? assistantModelFullLabel(turn.model) : ''
+  const modelFull = turn.model !== undefined ? assistantModelFullLabel(turn.model, t) : ''
   const modelShort = turn.model !== undefined ? assistantModelShortLabel(turn.model) : ''
   const showModelTag = !isBusy && modelShort !== ''
 
@@ -152,7 +155,7 @@ function AssistantTurnContent({ turn, conversation, siblingCalls, isLatestTurn =
         )
       })}
       {turn.live ? (
-        <span className="msg-origin-tag msg-live-indicator" aria-label="Generating" role="status">
+        <span className="msg-origin-tag msg-live-indicator" aria-label={t('conv.timeline.generating')} role="status">
           <HelmIcon name="loader" size={12.5} className="spin-slow" />
           <span className="msg-live-dots" aria-hidden="true">
             <span />
@@ -164,8 +167,8 @@ function AssistantTurnContent({ turn, conversation, siblingCalls, isLatestTurn =
       {hasTimeInfo || showHoverBar || showModelTag ? (
         <div className="msg-ai-footer">
           {showModelTag ? (
-            <Tooltip content={`Effective model: ${modelFull}`}>
-              <span className="msg-time-meta" title={`Effective model: ${modelFull}`}>
+            <Tooltip content={t('conv.model.effective', { model: modelFull })}>
+              <span className="msg-time-meta" title={t('conv.model.effective', { model: modelFull })}>
                 <HelmIcon name="cpu" size={11} />
                 <span className="mono">{modelShort}</span>
               </span>
@@ -176,7 +179,7 @@ function AssistantTurnContent({ turn, conversation, siblingCalls, isLatestTurn =
               <span className="msg-time-meta" title={tooltipText}>
                 {displayTime !== '' ? <span>{displayTime}</span> : null}
                 {displayTime !== '' && durationText !== '' ? <span className="msg-time-sep">·</span> : null}
-                {durationText !== '' ? <span>Took {durationText}</span> : null}
+                {durationText !== '' ? <span>{t('conv.turn.took', { duration: durationText })}</span> : null}
               </span>
             </Tooltip>
           ) : null}
@@ -198,7 +201,7 @@ function AssistantTurnContent({ turn, conversation, siblingCalls, isLatestTurn =
               <button
                 type="button"
                 className="btn btn-ghost btn-sm"
-                title="Fork a new conversation from here"
+                title={t('conv.turn.forkFromHere')}
                 disabled={forking || turn.entryIds.length === 0}
                 onClick={() => void forkFromHere()}
               >

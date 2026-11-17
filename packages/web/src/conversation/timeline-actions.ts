@@ -9,6 +9,7 @@
  */
 import { useHelmStore } from '../lib/store-context.js'
 import { useStableCallback } from '../lib/use-stable-callback.js'
+import { useWebLocale } from '../i18n/use-web-locale.js'
 import { conversationsApi } from '../lib/api.js'
 import type { ConversationSummary } from '@helm/protocol/browser'
 import type { EditRequestTarget } from './timeline-model.js'
@@ -25,6 +26,7 @@ export function useTimelineEntryActions(
   onRequestEdit: (target: EditRequestTarget) => void,
 ): TimelineEntryActions {
   const store = useHelmStore()
+  const { t } = useWebLocale()
 
   const forkFromHere = useStableCallback(async (entryId: string): Promise<void> => {
     try {
@@ -33,7 +35,7 @@ export function useTimelineEntryActions(
       store.pushNotice({
         type: 'notification',
         level: 'info',
-        title: 'Forked conversation created',
+        title: t('conv.fork.createdTitle'),
         body: `#${forked.id} ${forked.title}`,
         conversationId: forked.id,
       })
@@ -41,7 +43,7 @@ export function useTimelineEntryActions(
       store.pushNotice({
         type: 'notification',
         level: 'error',
-        title: 'Fork failed',
+        title: t('conv.fork.failedTitle'),
         body: err instanceof Error ? err.message : String(err),
         conversationId: conversation.id,
       })
@@ -59,8 +61,8 @@ export function useTimelineEntryActions(
         store.pushNotice({
           type: 'notification',
           level: 'warning',
-          title: 'Cannot withdraw queued message',
-          body: `Submission entered execution (status=${res.status})`,
+          title: t('conv.withdraw.cannotTitle'),
+          body: t('conv.withdraw.enteredExecutionBody', { status: res.status }),
           conversationId: conversation.id,
         })
       }
@@ -68,7 +70,7 @@ export function useTimelineEntryActions(
       store.pushNotice({
         type: 'notification',
         level: 'error',
-        title: 'Failed to withdraw queued message',
+        title: t('conv.withdraw.failedTitle'),
         body: err instanceof Error ? err.message : String(err),
         conversationId: conversation.id,
       })

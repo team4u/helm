@@ -18,6 +18,7 @@
  */
 
 import type { ConversationEntry, InputOrigin } from '@helm/protocol/browser'
+import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 import {
   parseHelmInputData,
   toolSummaryText,
@@ -170,7 +171,8 @@ function truncateLabel(text: string, maxChars: number): string {
  * 将多行正文浓缩为单行大纲标签（人类输入与助手正文共用）：
  * 取首个非空行并清理标题/引用/列表行首标记与行内格式；若文本为空但有附件，回退为附件数量提示。
  */
-export function summarizeOutlineText(text: string, attachmentCount = 0): string {
+export function summarizeOutlineText(text: string, attachmentCount = 0, t?: WebMessageTranslator): string {
+  const tt = t ?? englishWebTranslator
   const lines = text.split(/\r?\n/)
   for (const rawLine of lines) {
     const cleaned = stripInlineMarkdown(
@@ -184,9 +186,9 @@ export function summarizeOutlineText(text: string, attachmentCount = 0): string 
     }
   }
   if (attachmentCount > 0) {
-    return `[attachment ×${attachmentCount}]`
+    return tt('conv.outline.attachmentLabel', { count: attachmentCount })
   }
-  return '(empty message)'
+  return tt('conv.outline.emptyMessage')
 }
 
 /**
@@ -233,14 +235,14 @@ export function extractMarkdownHeadings(markdown: string): ExtractedHeading[] {
 // 大纲构建
 // ---------------------------------------------------------------------------
 
-function buildHumanNode(item: HumanInputItem, turnIndex: number): OutlineHumanNode {
+function buildHumanNode(item: HumanInputItem, turnIndex: number, tt: WebMessageTranslator): OutlineHumanNode {
   const attachmentCount = item.attachments?.length ?? 0
   return {
     kind: 'human',
     key: `outline:human:${item.key}`,
     entryId: item.entryId,
     turnIndex,
-    label: summarizeOutlineText(item.text, attachmentCount),
+    label: summarizeOutlineText(item.text, attachmentCount, tt),
     fullText: item.text,
     origin: item.origin,
     ...(item.createdAt !== undefined ? { createdAt: item.createdAt } : {}),
@@ -249,7 +251,7 @@ function buildHumanNode(item: HumanInputItem, turnIndex: number): OutlineHumanNo
   }
 }
 
-function buildDividerNode(item: DividerItem): OutlineDividerNode {
+function buildDividerNode(item: DividerItem, tt: WebMessageTranslator): OutlineDividerNode {
   return {
     kind: 'divider',
     key: `outline:divider:${item.key}`,
@@ -257,10 +259,10 @@ function buildDividerNode(item: DividerItem): OutlineDividerNode {
     divider: item.divider,
     label:
       item.divider === 'reset'
-        ? 'Context reset'
+        ? tt('conv.divider.reset')
         : item.pending === true
-          ? 'Compacting context…'
-          : 'Context compacted',
+          ? tt('conv.divider.compacting')
+          : tt('conv.divider.compacted'),
   }
 }
 
@@ -269,10 +271,15 @@ function buildDividerNode(item: DividerItem): OutlineDividerNode {
 // ---------------------------------------------------------------------------
 
 /** 状态节点固定文案（按现有数据能力诚实标注，不伪造详情）。 */
-const ASSISTANT_STATUS_LABEL: Record<OutlineAssistantStatus, string> = {
-  generating: 'Generating…',
-  failed: 'This turn failed',
-  'no-content': 'No content',
+function assistantStatusLabel(status: OutlineAssistantStatus, tt: WebMessageTranslator): string {
+  switch (status) {
+    case 'generating':
+      return tt('conv.outline.assistantGenerating')
+    case 'failed':
+      return tt('conv.turnFailed.label')
+    default:
+      return tt('conv.outline.assistantNoContent')
+  }
 }
 
 /** AssistantTurn 顶层 tool.view 业务卡节点：通用 toolName + 入参摘要（零插件/工具名特判）。 */
@@ -303,12 +310,13 @@ function buildToolCardNode(
  * plugin-card 通用诚实摘要：优先 entry 的 helm.input 数据文本（与人类提问同源归一化），
  * 兜底稳定契约标识（entry kind）；绝不读取插件私有 React 渲染内容。
  */
-export function summarizePluginCardEntry(entry: ConversationEntry): { label: string; searchText: string } {
+export function summarizePluginCardEntry(entry: ConversationEntry, t?: WebMessageTranslator): { label: string; searchText: string } {
+  const tt = t ?? englishWebTranslator
   if (entry.kind === 'helm.input') {
     const data = parseHelmInputData(entry.data)
     if (data !== undefined && data.text.trim() !== '') {
       return {
-        label: summarizeOutlineText(data.text, data.attachments?.length ?? 0),
+        label: summarizeOutlineText(data.text, data.attachments?.length ?? 0, tt),
         searchText: data.text,
       }
     }
@@ -316,8 +324,8 @@ export function summarizePluginCardEntry(entry: ConversationEntry): { label: str
   return { label: entry.kind, searchText: entry.kind }
 }
 
-function buildPluginCardNode(item: PluginCardItem, parentHumanKey: string | undefined): OutlineCardNode {
-  const { label, searchText } = summarizePluginCardEntry(item.entry)
+function buildPluginCardNode(item: PluginCardItem, parentHumanKey: string | undefined, tt: WebMessageTranslator): OutlineCardNode {
+  const { label, searchText } = summarizePluginCardEntry(item.entry, tt)
   return {
     kind: 'card',
     key: `outline:card:${item.key}`,
@@ -343,6 +351,7 @@ function appendAssistantNodes(
   parentHumanKey: string | undefined,
   failed: boolean,
   out: OutlineNode[],
+  tt: WebMessageTranslator,
 ): void {
   const anchorId = turn.entryIds[0] ?? turn.key
   const textSegments: Array<{ kind: 'text'; key: string; text: string }> = []
@@ -387,7 +396,7 @@ function appendAssistantNodes(
           kind: 'assistant',
           key: `outline:assistant:${turn.key}`,
           entryId: anchorId,
-          label: summarizeOutlineText(fullMarkdown),
+          label: summarizeOutlineText(fullMarkdown, 0, tt),
           fullText: fullMarkdown,
           live: turn.live,
           ...(turn.settledAt !== undefined || turn.startedAt !== undefined
@@ -409,7 +418,7 @@ function appendAssistantNodes(
       kind: 'assistant',
       key: `outline:assistant:${turn.key}`,
       entryId: anchorId,
-      label: ASSISTANT_STATUS_LABEL[status],
+      label: assistantStatusLabel(status, tt),
       fullText: '',
       live: turn.live,
       status,
@@ -432,7 +441,9 @@ export interface BuildConversationOutlineOptions {
 export function buildConversationOutline(
   items: ReadonlyArray<TimelineItem>,
   options: BuildConversationOutlineOptions = {},
+  t?: WebMessageTranslator,
 ): OutlineNode[] {
+  const tt = t ?? englishWebTranslator
   const nodes: OutlineNode[] = []
   let humanTurnCount = 0
   let lastHumanKey: string | undefined
@@ -452,22 +463,22 @@ export function buildConversationOutline(
     const item = items[index]!
     if (item.kind === 'human') {
       humanTurnCount += 1
-      const node = buildHumanNode(item, humanTurnCount)
+      const node = buildHumanNode(item, humanTurnCount, tt)
       lastHumanKey = node.key
       nodes.push(node)
       continue
     }
     if (item.kind === 'assistant') {
-      appendAssistantNodes(item, lastHumanKey, index === lastAssistantIndex, nodes)
+      appendAssistantNodes(item, lastHumanKey, index === lastAssistantIndex, nodes, tt)
       continue
     }
     if (item.kind === 'plugin-card') {
-      nodes.push(buildPluginCardNode(item, lastHumanKey))
+      nodes.push(buildPluginCardNode(item, lastHumanKey, tt))
       continue
     }
     if (item.kind === 'divider') {
       lastHumanKey = undefined
-      nodes.push(buildDividerNode(item))
+      nodes.push(buildDividerNode(item, tt))
     }
   }
   return nodes

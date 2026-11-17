@@ -11,6 +11,8 @@ import { artifactsApi } from '../lib/api.js'
 import { HelmIcon, CopyButton } from '@helm/plugin-client'
 import { useHelmStore } from '../lib/store-context.js'
 import { useStableCallback } from '../lib/use-stable-callback.js'
+import { useWebLocale } from '../i18n/use-web-locale.js'
+import type { WebMessageTranslator } from '../i18n/catalog.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
 import { AssistantTurnView, AssistantModelBoundary } from './AssistantTurn.js'
 import {
@@ -84,6 +86,7 @@ function AttachmentImage({ att, conversationId }: { att: ConversationAttachmentR
   const [url, setUrl] = useState<string | null>(null)
   const [failed, setFailed] = useState<string | null>(null)
   const store = useHelmStore()
+  const { t } = useWebLocale()
 
   useEffect(() => {
     let active = true
@@ -104,7 +107,7 @@ function AttachmentImage({ att, conversationId }: { att: ConversationAttachmentR
 
   if (failed !== null) {
     return (
-      <span className="attachment-chip" title={`Image failed to load: ${failed}`}>
+      <span className="attachment-chip" title={t('conv.attachment.imageFailed', { reason: failed ?? '' })}>
         <HelmIcon name="alert-triangle" size={11} />
         {att.name}
       </span>
@@ -122,7 +125,7 @@ function AttachmentImage({ att, conversationId }: { att: ConversationAttachmentR
     <button
       type="button"
       className="attachment-image-thumb"
-      title={`Click to enlarge: ${att.name}`}
+      title={t('conv.attachment.clickToEnlarge', { name: att.name })}
       onClick={() =>
         store.setActiveModal({ kind: 'artifact-preview', artifactId: att.id, conversationId })
       }
@@ -140,6 +143,7 @@ function AttachmentChips({
   conversationId: number
 }) {
   const store = useHelmStore()
+  const { t } = useWebLocale()
   return (
     <span className="msg-attachments-wrap">
       {attachments.map((att) =>
@@ -161,7 +165,7 @@ function AttachmentChips({
             key={att.id}
             type="button"
             className="attachment-chip"
-            title={`Preview ${att.name}`}
+            title={t('conv.attachment.previewName', { name: att.name })}
             onClick={() =>
               store.setActiveModal({ kind: 'artifact-preview', artifactId: att.id, conversationId })
             }
@@ -180,14 +184,20 @@ function AttachmentChips({
 // 人类消息胶囊
 // ---------------------------------------------------------------------------
 
-const ORIGIN_LABEL: Record<string, string> = {
-  agent: 'From agent report',
-  trigger: 'From trigger',
+/** 非人类输入来源徽标（agent 汇报 / 触发器注入）；未知来源原样展示标识。 */
+function originLabel(origin: string, t: WebMessageTranslator): string {
+  if (origin === 'agent') return t('conv.origin.agentReport')
+  if (origin === 'trigger') return t('conv.origin.trigger')
+  return origin
 }
 
-const QUEUED_MODE_LABEL: Record<'steer' | 'followUp', { icon: string; text: string }> = {
-  steer: { icon: 'corner-down-right', text: 'Steer · injected at the next step boundary' },
-  followUp: { icon: 'clock', text: 'Queued · sent after the current turn ends' },
+const QUEUED_MODE_ICON: Record<'steer' | 'followUp', string> = {
+  steer: 'corner-down-right',
+  followUp: 'clock',
+}
+
+function queuedModeText(mode: 'steer' | 'followUp', t: WebMessageTranslator): string {
+  return mode === 'steer' ? t('conv.queued.steer') : t('conv.queued.followUp')
 }
 
 function HumanMessage({
@@ -209,6 +219,7 @@ function HumanMessage({
   onWithdrawQueuedEdit: (subId: string, target: EditRequestTarget) => Promise<void>
 }) {
   const store = useHelmStore()
+  const { t } = useWebLocale()
   const [forking, setForking] = useState(false)
   const [withdrawing, setWithdrawing] = useState(false)
   // 插件微插槽 timeline.entry.action：按当前会话 scope + 真实 entry 的 kind/role 过滤；
@@ -247,8 +258,8 @@ function HumanMessage({
         store.pushNotice({
           type: 'notification',
           level: 'error',
-          title: 'Cannot edit this message',
-          body: `Message anchor invalid (entryId=${item.entryId}); edit cancelled.`,
+          title: t('conv.human.cannotEditTitle'),
+          body: t('conv.human.cannotEditBody', { entryId: item.entryId }),
           conversationId: conversation.id,
         })
         return
@@ -279,13 +290,13 @@ function HumanMessage({
     <div className={`msg-human-row${item.origin !== 'human' ? ' msg-human-row-external' : ''}`} tabIndex={0}>
       {item.queuedMode !== undefined ? (
         <span className="msg-origin-tag" role="status">
-          <HelmIcon name={QUEUED_MODE_LABEL[item.queuedMode].icon} size={11} />
-          {QUEUED_MODE_LABEL[item.queuedMode].text}
+          <HelmIcon name={QUEUED_MODE_ICON[item.queuedMode]} size={11} />
+          {queuedModeText(item.queuedMode, t)}
         </span>
       ) : item.origin !== 'human' ? (
         <span className="msg-origin-tag">
           <HelmIcon name={item.origin === 'trigger' ? 'webhook' : 'bot'} size={11} />
-          {ORIGIN_LABEL[item.origin] ?? item.origin}
+          {originLabel(item.origin, t)}
         </span>
       ) : null}
       <div className={`msg-human-pill selectable${item.queuedMode !== undefined ? ' msg-human-pill-queued' : ''}${queuedCollapse?.collapsed === true ? ' msg-human-pill-collapsible' : ''}`}>
@@ -304,7 +315,7 @@ function HumanMessage({
             onClick={() => setLongOpen((current) => !current)}
           >
             <HelmIcon name={longOpen ? 'chevron-up' : 'chevron-down'} size={11} />
-            <span>{longOpen ? 'Collapse' : `Expand full text (${item.text.length} chars)`}</span>
+            <span>{longOpen ? t('common.collapse') : t('conv.human.expandFullText', { count: item.text.length })}</span>
           </button>
         ) : null}
       </div>
@@ -330,8 +341,8 @@ function HumanMessage({
             <button
               type="button"
               className="btn btn-ghost btn-sm"
-              title={item.queuedMode !== undefined ? 'Withdraw queue and edit' : 'Edit and resend'}
-              aria-label={item.queuedMode !== undefined ? 'Withdraw queue and edit' : 'Edit and resend'}
+              title={item.queuedMode !== undefined ? t('conv.human.withdrawQueueAndEdit') : t('conv.human.editAndResend')}
+              aria-label={item.queuedMode !== undefined ? t('conv.human.withdrawQueueAndEdit') : t('conv.human.editAndResend')}
               disabled={withdrawing}
               onClick={() => void editRequest()}
             >
@@ -342,7 +353,7 @@ function HumanMessage({
             <button
               type="button"
               className="btn btn-ghost btn-sm"
-              title="Fork a new conversation from this message"
+              title={t('conv.human.forkFromMessage')}
               disabled={forking}
               onClick={() => void forkFromHere()}
             >
@@ -351,8 +362,8 @@ function HumanMessage({
           ) : null}
         </span>
         {hasHumanTime ? (
-          <Tooltip content={`Sent at ${humanFullTime}`}>
-            <span className="msg-time-meta" title={`Sent at ${humanFullTime}`}>{humanTime}</span>
+          <Tooltip content={t('conv.human.sentAt', { time: humanFullTime })}>
+            <span className="msg-time-meta" title={t('conv.human.sentAt', { time: humanFullTime })}>{humanTime}</span>
           </Tooltip>
         ) : null}
       </div>
@@ -375,10 +386,11 @@ function escapeAttrSelectorValue(value: string): string {
 // ---------------------------------------------------------------------------
 
 function ContextDivider({ item }: { item: DividerItem }) {
+  const { t } = useWebLocale()
   const [open, setOpen] = useState(false)
   // 可展开文本：reset 的交接摘要与 compaction 的精简摘要（同一展开交互）。
   const expandable = item.divider === 'reset' ? item.handoff : item.summary
-  const expandLabel = item.divider === 'reset' ? 'Handoff summary' : 'Compaction summary'
+  const expandLabel = item.divider === 'reset' ? t('conv.divider.handoffSummary') : t('conv.divider.compactionSummary')
   return (
     <div className="context-divider-wrap">
       <div className="context-divider">
@@ -386,12 +398,12 @@ function ContextDivider({ item }: { item: DividerItem }) {
           {item.pending === true ? (
             <>
               <HelmIcon name="loader" size={11} className="spin-slow" />
-              Compacting context…
+              {t('conv.divider.compacting')}
             </>
           ) : (
             <>
               <HelmIcon name={item.divider === 'reset' ? 'rotate-ccw' : 'archive'} size={11} />
-              {item.divider === 'reset' ? 'Context reset' : 'Context compacted'}
+              {item.divider === 'reset' ? t('conv.divider.reset') : t('conv.divider.compacted')}
             </>
           )}
         </span>
@@ -403,7 +415,7 @@ function ContextDivider({ item }: { item: DividerItem }) {
           onClick={() => setOpen((v) => !v)}
         >
           <HelmIcon name={open ? 'chevron-down' : 'chevron-right'} size={12} />
-          {open ? `Collapse ${expandLabel}` : `Expand ${expandLabel}`}
+          {open ? t('conv.divider.collapse', { label: expandLabel }) : t('conv.divider.expand', { label: expandLabel })}
         </button>
       ) : null}
       {open && expandable !== undefined ? (
@@ -420,6 +432,7 @@ function ContextDivider({ item }: { item: DividerItem }) {
 
 function PluginCard({ item, conversationId }: { item: PluginCardItem; conversationId: number }) {
   const store = useHelmStore()
+  const { t } = useWebLocale()
   const conversation = store.conversations.find((c) => c.id === conversationId)
   // timeline.renderer 自定义条目同样消费 timeline.entry.action：真实 entry kind 匹配；
   // 自定义 kind 无 user/assistant 角色，声明 roles 的动作不命中。
@@ -437,7 +450,7 @@ function PluginCard({ item, conversationId }: { item: PluginCardItem; conversati
         pluginId={item.renderer.pluginId}
         spec={item.renderer.spec}
         conversationId={conversationId}
-        label="Timeline cards"
+        label={t('conv.timeline.cardsLabel')}
         slotProps={{ entry: item.entry, conversationId }}
       />
       {entryActions.length > 0 ? (
@@ -458,23 +471,26 @@ function PluginCard({ item, conversationId }: { item: PluginCardItem; conversati
   )
 }
 
-const RESOLVED_ASK_LABEL: Record<string, string> = {
-  answered: 'Approved',
-  cancelled: 'Cancelled',
-  superseded: 'Handled by terminal (superseded)',
+/** 已决审批行状态徽标；未知状态原样展示服务端标识。 */
+function resolvedAskLabel(status: string, t: WebMessageTranslator): string {
+  if (status === 'answered') return t('conv.ask.approved')
+  if (status === 'cancelled') return t('conv.ask.cancelled')
+  if (status === 'superseded') return t('conv.ask.superseded')
+  return status
 }
 
 function ResolvedAskRow({ ask, status }: { ask: AskSpec; status: 'answered' | 'cancelled' | 'superseded' }) {
+  const { t } = useWebLocale()
   const [open, setOpen] = useState(false)
   return (
     <div className="trace-entry">
       <div className="trace-row" role="button" tabIndex={0} onClick={() => setOpen((v) => !v)}>
         <span className="trace-row-left">
           <HelmIcon name="check-circle" size={12} />
-          <span className="trace-tool-name">Approval</span>
+          <span className="trace-tool-name">{t('conv.ask.rowTitle')}</span>
           <span className="trace-tool-summary">{ask.title}</span>
         </span>
-        <span className="trace-row-right">{RESOLVED_ASK_LABEL[status] ?? status}</span>
+        <span className="trace-row-right">{resolvedAskLabel(status, t)}</span>
       </div>
       {open ? (
         <div className="trace-expanded-body selectable">
@@ -536,24 +552,25 @@ function TurnErrorNotice({
   // 最近一条可编辑的人类输入：复用与 Composer ↑ 相同的安全解析（校验 entryId、
   // 不跨 reset 边界、复用已有 attachments）；无法可靠定位则不提供快捷操作，
   // 绝不误编辑旧消息。
+  const { t } = useWebLocale()
   const editTarget = useMemo(() => lastEditableHumanInput(detailEntries), [detailEntries])
   return (
-    <div className="callout callout--error" role="alert" aria-label="This turn failed">
+    <div className="callout callout--error" role="alert" aria-label={t('conv.turnFailed.label')}>
       <HelmIcon name="alert-triangle" size={12} />
       <span className="callout-text">
-        This turn failed: {conversation.lastError?.trim() || 'The model or service request failed; no reply was produced.'}
+        {t('conv.turnFailed.prefix')}{conversation.lastError?.trim() || t('conv.turnFailed.fallback')}
         {editTarget !== undefined ? (
           <>
             {' '}
             <button
               type="button"
               className="btn btn-ghost btn-sm"
-              title="Edit and resend the latest message"
-              aria-label="Edit and resend the latest message"
+              title={t('conv.turnFailed.editLatest')}
+              aria-label={t('conv.turnFailed.editLatest')}
               onClick={() => onRequestEdit(editTarget)}
             >
               <HelmIcon name="edit" size={12} />
-              Edit and resend
+              {t('conv.human.editAndResend')}
             </button>
           </>
         ) : null}
@@ -582,6 +599,7 @@ export function ConversationTimeline({
   starters,
 }: ConversationTimelineProps) {
   const store = useHelmStore()
+  const { t } = useWebLocale()
   // 行级动作服务（分叉 / 排队撤回转编辑）统一实例化一次，行组件经 props 消费。
   const entryActions = useTimelineEntryActions(conversation, onRequestEdit)
   const [loadingOlder, setLoadingOlder] = useState(false)
@@ -1197,20 +1215,20 @@ export function ConversationTimeline({
         <div className="timeline-center-slot">
           {hasOlderCursor ? (
             <button type="button" className="btn btn-ghost btn-sm timeline-load-older-btn" disabled={loadingOlder} onClick={loadEarlierEntries}>
-              {loadingOlder ? 'Loading history…' : 'Load earlier messages'}
+              {loadingOlder ? t('conv.timeline.loadingHistory') : t('conv.timeline.loadEarlier')}
             </button>
           ) : null}
           {historyError ? <p className="callout callout--error" role="alert">{historyError}</p> : null}
           {loading ? (
             <div className="timeline-loading-state">
               <HelmIcon name="loader" size={14} className="spin-slow" />
-              Loading conversation…
+              {t('conv.timeline.loadingConversation')}
             </div>
           ) : null}
           {showEmptyState ? (
             <div className="timeline-empty-state">
               <HelmIcon name="message-square" size={22} />
-              <span>Describe your goal to the assistant, or pick a conversation on the left to start</span>
+              <span>{t('conv.timeline.empty')}</span>
             </div>
           ) : null}
           {startersVisible ? (
@@ -1304,14 +1322,14 @@ export function ConversationTimeline({
         })}
         {(isWorking && !hasLiveTurn) || (sendingPending && !isWorking) ? (
           <div className="msg-ai-block" role="status" aria-live="polite">
-            <span className="msg-origin-tag msg-live-waiting" aria-label="Generating">
+            <span className="msg-origin-tag msg-live-waiting" aria-label={t('conv.timeline.generating')}>
               <HelmIcon name="loader" size={12.5} className="spin-slow" />
               <span className="msg-live-dots" aria-hidden="true">
                 <span />
                 <span />
                 <span />
               </span>
-              <span className="msg-live-label">Generating</span>
+              <span className="msg-live-label">{t('conv.timeline.generating')}</span>
             </span>
           </div>
         ) : null}
@@ -1328,8 +1346,8 @@ export function ConversationTimeline({
         <button
           type="button"
           className={`timeline-scroll-bottom-btn${hasUnreadScrollUpdates ? ' has-unread' : ''}`}
-          aria-label="Back to bottom"
-          title="Back to bottom"
+          aria-label={t('conv.timeline.backToBottom')}
+          title={t('conv.timeline.backToBottom')}
           onClick={scrollToBottomAndFollow}
         >
           <HelmIcon name="arrow-down" size={16} />
