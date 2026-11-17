@@ -1,3 +1,11 @@
+> **最终落地架构决策（2026-11-17，Option A — KISS 与单一职责解耦）**
+>
+> 按「一个模块只做好一件事」第一性原理评审后，最终实现采用 **Option A 独立插件解耦方案**（现行权威文档见 [`docs/plugins/swarm.md`](../plugins/swarm.md)）：
+> 1. **`builtin:superagent` 保持 100% 零改动**：专注常驻双层中枢路由、RecallGraph 与两层定时看门狗，不混入会话级协同看板职责；
+> 2. **新增默认启用的第 12 个内置插件 `builtin:swarm`**：零全局常驻会话、零后台轮询定时器，协作组按需挂载于目标顶层会话（`swarm-coordinator` / `swarm-worker` / `swarm-worker-archived`），异常自愈与 6 条件 0-Token `[stall]` 归因 100% 由 `turn_settled` 纯事件驱动（谁派生、谁负责）；
+> 3. **通用底座保留复用**：Stage 1A 内核 `forkConversation` 可选 `entryId` 干净锚点与 Stage 1B `builtin:workflow` `ManagedWorktreeHold`（`acquire_worktree / release_worktree_hold`）按原设计落地；`builtin:swarm` 不声明静态 `dependencies: ['builtin:workflow']`，空闲时不阻塞停用 `builtin:workflow`，活跃持锁工作树经 `ManagedWorktreeHold` 自动提供 `409 plugin_in_use` 与 `409 worktree_in_use` 保护；
+> 4. **命名空间映射**：下文初稿中的 `builtin:superagent` 看板能力在现行代码中对应 `builtin:swarm`（CLI `helm swarm *`、受管技能 `swarm-collab`、标签 `swarm-coordinator / swarm-worker`、回执渲染器 `swarm:board-report / swarm:board-wakeup`、系统提示词恒定块 `<active_swarm_group>`、Web 路由 `#/views/builtin:swarm/board`）。
+
 ## 背景
 
 Helm 现有多智能体编排由 `builtin:workflow` 与 `builtin:superagent` 两块内置插件按控制流归属正交分工：
@@ -355,8 +363,8 @@ flowchart TB
 | :--- | :--- | :--- |
 | `@helm/protocol` / `@helm/kernel` / `@helm/cli` | `forkConversation(id, { entryId?, title? })` 支持省略 `entryId` 自动取 `resolveCleanForkAnchor`；同步 HTTP、CLI 与 `helm-cli` 技能 | 显式传入 `entryId` 的既有调用与测试 100% 保持原行为；跨包修改前经 `rg` 全仓核对消费方与测试桩 |
 | `builtin:workflow` | `ManagedWorktreeRecord` 新增可选 `hold`；`isPathInUse` 与 `inUse()` 识别锁；新增隐藏动作 `acquire_worktree` / `release_worktree_hold` | 原生 `subagent` / DSL 工作流无 `hold` 行为不变；持锁工作树未释放前清理返 `409 worktree_in_use` |
-| `builtin:superagent` | 显式声明 `dependencies: ['builtin:workflow']`；新增扁平对等单真源黑板、互斥主控工具集、正交 `wake` 与 `#channel` 寻址、`abort_worker`、两态 `close_group`、恒定 `sections` Cache 修复、哑巴退场单次自愈、失败上板、0-Token 根因 `[stall]`、慢工具感知 Watchdog 及自适应流转看板 | 未建组时单飞派工、L0 `trigger` 路由、`threadKey` 订阅语义不变；因新增 `dependencies: ['builtin:workflow']`，原先单独挂载 `superagentPlugin` 的插件单测环境同步预注册 `workflowPlugin`（与真实 `@helm/hub` 拓扑一致） |
-| `docs/plugins/superagent.md` | 代码合入时同步更新插件现行权威文档 | 保持文档中心与源码契约一致 |
+| `builtin:swarm`（原推演合入 `superagent`，最终 Option A 独立拆分） | 新增默认启用内置插件（不设静态 `dependencies` 锁，持锁期由 `ManagedWorktreeHold` 保护）；落地扁平对等单真源黑板、互斥主控工具集、正交 `wake` 与 `#channel` 寻址、`abort_worker`、两态 `close_group`、恒定 `<active_swarm_group>` Cache 保护、`turn_settled` 哑巴退场单次自愈、失败上板、0-Token 根因 `[stall]` 及自适应流转看板 | `builtin:superagent` 100% 保持原样不变；普通会话未建组时工具集无变化 |
+| `docs/plugins/swarm.md` / `overview.md` / `AGENTS.md` | 新增 `builtin:swarm` 权威文档并同步内置插件清单（11 → 12，默认启用 9 → 10） | 保持文档中心与源码契约一致 |
 
 ---
 

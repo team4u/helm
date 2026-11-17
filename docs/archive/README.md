@@ -51,7 +51,7 @@
 | [20261111-全栈微应用生成与应用中心插件设计文档.md](./20261111-全栈微应用生成与应用中心插件设计文档.md) | 设计 | AI 生成全栈微应用与应用中心的可行性方案推演 |
 | [20261111-ActionDock插件接入与跨节点动作桥接设计文档.md](./20261111-ActionDock插件接入与跨节点动作桥接设计文档.md) | 设计 | `builtin:actiondock` 网关动作、跨节点 `ad` 桥接与受管技能设计；未进入当前内置生态 |
 | [20261115 公网中继穿透插件builtin-relay设计文档.md](./20261115%20公网中继穿透插件builtin-relay设计文档.md) | 设计 | 基于 `alma-relay` 的公网中继穿透与公网访问方案设计；未进入当前内置生态 |
-| [20261117 SuperAgent融合看板协同与对等交接设计文档.md](./20261117%20SuperAgent融合看板协同与对等交接设计文档.md) | 设计 | `builtin:superagent` 显式依赖并复用 `builtin:workflow` Worktree 与子代理底座，内化扁平对等单真源黑板、正交唤醒、防哑巴退场自愈、两态合入收尾与自适应流转看板方案设计（含内核 `forkConversation` 可选干净锚点与 `ManagedWorktreeHold`） |
+| [20261117 SuperAgent融合看板协同与对等交接设计文档.md](./20261117%20SuperAgent融合看板协同与对等交接设计文档.md) | 设计 | 对等协同黑板方案推演与最终架构收敛（Option A）：保持 `builtin:superagent` 单一职责零改动，将扁平对等单真源黑板、正交唤醒、`turn_settled` 纯事件防掉棒自愈、两态合入收尾与自适应流转看板落地为默认启用的独立内置插件 `builtin:swarm`（含内核 `forkConversation` 可选干净锚点与 `builtin:workflow` `ManagedWorktreeHold`） |
 
 ### Web 界面与交互
 

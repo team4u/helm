@@ -1,0 +1,563 @@
+/**
+ * builtin:swarm plugin styles.
+ *
+ * Reuses host design-system primitives (.screen-container, .screen-header,
+ * .screen-section, .kv-grid, .primary-drawer-*, .modal, .callout, .empty-state,
+ * .loading-state, .badge, .btn).
+ * Keeps only Swarm starter preset cards, adaptive orthogonal SVG/pill topology,
+ * #seq handoff cards, 15px human post bar, and 540px member drawer layout.
+ */
+.sw-muted {
+  font-size: 12.5px;
+  color: var(--fg-muted);
+}
+
+/* Compact 1-line timeline receipt pills (swarm:board-report / swarm:board-wakeup) */
+.sw-receipt-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+  font-size: 12px;
+}
+.sw-seq-jump-btn {
+  padding: 1px 6px;
+  font-size: 11.5px;
+}
+.sw-receipt-count {
+  font-size: 11.5px;
+  color: var(--fg-subtle);
+}
+.sw-receipt-headline {
+  color: var(--fg-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 480px;
+}
+.sw-header-board-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Lightweight starter preset modal (480px~560px) */
+.sw-starter-modal {
+  width: min(560px, 94vw);
+  max-width: 560px;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+}
+.sw-starter-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.sw-starter-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.sw-starter-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 20px;
+  overflow-y: auto;
+  max-height: min(72vh, 560px);
+}
+.sw-starter-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--border);
+}
+.sw-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.sw-field-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.sw-preset-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.sw-preset-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 10px;
+  text-align: left;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+  color: var(--fg);
+  cursor: pointer;
+}
+.sw-preset-card:hover:not(:disabled) {
+  border-color: var(--fg-subtle);
+}
+.sw-preset-card.is-selected {
+  border-color: var(--accent, var(--fg));
+  background: var(--bg-elevated);
+}
+.sw-preset-card-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.sw-preset-card-desc {
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--fg-muted);
+}
+.sw-guard-row {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+}
+.sw-guard-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.sw-input,
+.sw-textarea {
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 13px;
+  line-height: 1.45;
+  box-sizing: border-box;
+}
+.sw-textarea-compact {
+  resize: vertical;
+  min-height: 64px;
+}
+
+/* Swarm Board Screen */
+.sw-board-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.sw-board-control-left,
+.sw-board-control-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.sw-channel-tabs-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.sw-headline-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+  font-size: 13px;
+}
+.sw-headline-text {
+  flex: 1;
+  min-width: 160px;
+  color: var(--fg);
+}
+.sw-rescue-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+.sw-rescue-actions,
+.sw-callout-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.sw-board-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 36px 20px;
+}
+.sw-empty-starter-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+
+/* Retained worktrees merge list */
+.sw-retained-wt-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.sw-retained-wt-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  font-size: 12.5px;
+}
+.sw-retained-wt-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* Orthogonal SVG Collaboration Graph */
+.sw-topo-svg-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+  padding: 8px;
+}
+.sw-topo-svg {
+  display: block;
+}
+.sw-topo-arrow-fill {
+  fill: var(--fg-subtle);
+}
+.sw-topo-arrow-fill-active {
+  fill: var(--accent, var(--fg));
+}
+.sw-topo-edge {
+  cursor: pointer;
+}
+.sw-topo-edge-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 14;
+}
+.sw-topo-edge-line {
+  fill: none;
+  stroke: var(--fg-subtle);
+  stroke-width: 1.5;
+}
+.sw-topo-edge.is-selected .sw-topo-edge-line {
+  stroke: var(--accent, var(--fg));
+  stroke-width: 2.25;
+}
+.sw-topo-edge-label {
+  font-size: 11px;
+  fill: var(--fg-muted);
+  font-family: var(--font-mono, monospace);
+}
+.sw-topo-node {
+  cursor: pointer;
+}
+.sw-topo-node-rect {
+  fill: var(--bg-elevated);
+  stroke: var(--border);
+  stroke-width: 1.25;
+}
+.sw-topo-node.is-highlighted .sw-topo-node-rect {
+  stroke: var(--accent, var(--fg));
+  stroke-width: 2;
+}
+.sw-topo-node.is-archived {
+  opacity: 0.65;
+}
+.sw-topo-node-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  fill: var(--fg);
+  font-family: var(--font-mono, monospace);
+}
+.sw-topo-node-sub {
+  font-size: 11px;
+  fill: var(--fg-muted);
+}
+.sw-topo-node-unread {
+  font-size: 11px;
+  font-weight: 600;
+  fill: var(--fg);
+}
+.sw-topo-dot {
+  fill: var(--fg-subtle);
+}
+.sw-topo-dot.dot-working {
+  fill: var(--accent, #3b82f6);
+}
+.sw-topo-dot.dot-done {
+  fill: #22c55e;
+}
+.sw-topo-dot.dot-blocked,
+.sw-topo-dot.dot-missing {
+  fill: #f59e0b;
+}
+.sw-topo-dot.dot-error {
+  fill: #ef4444;
+}
+.sw-topo-empty-note {
+  padding: 4px 8px 2px;
+}
+
+/* Compact horizontal role pill bar (split pane or <= 680px) */
+.sw-role-pill-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.sw-role-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  color: var(--fg);
+  font-size: 12px;
+  cursor: pointer;
+}
+.sw-role-pill.is-highlighted,
+.sw-role-pill.is-selected {
+  border-color: var(--accent, var(--fg));
+}
+.sw-role-pill.is-archived {
+  opacity: 0.65;
+}
+
+/* Handoff stream cards */
+.sw-filter-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.sw-stream-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.sw-post-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+}
+.sw-post-card.is-focused {
+  border-color: var(--accent, var(--fg));
+  box-shadow: 0 0 0 1px var(--accent, var(--fg));
+}
+.sw-post-card.is-passive {
+  background: var(--bg-subtle);
+}
+.sw-post-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+.sw-post-seq {
+  font-weight: 600;
+  color: var(--fg);
+}
+.sw-post-route {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--bg-subtle);
+  font-size: 11.5px;
+}
+.sw-post-time {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--fg-subtle);
+}
+.sw-ref-pill {
+  padding: 0 5px;
+  font-size: 11px;
+}
+.sw-post-wt-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+  font-size: 11.5px;
+}
+.sw-post-body {
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--fg);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.sw-post-footer {
+  display: flex;
+  align-items: center;
+}
+
+/* Bottom human post composer (15px input invariant across desktop/split/mobile) */
+.sw-human-post-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+}
+.sw-human-post-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.sw-post-target-select {
+  min-width: 210px;
+}
+.sw-human-post-input-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+.sw-post-input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 15px;
+  line-height: 1.55;
+  resize: vertical;
+  box-sizing: border-box;
+}
+.sw-post-send-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* Right 540px member detail drawer (520px~560px desktop contract) */
+.sw-member-drawer {
+  width: 540px;
+  max-width: 540px;
+}
+.sw-drawer-actions-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.sw-drawer-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+.sw-model-switch-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.sw-model-custom-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.sw-wt-snapshot-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.sw-code-preview {
+  max-height: 200px;
+  overflow: auto;
+  font-size: 12px;
+}
+.sw-wt-diff-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+.sw-wt-merge-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 680px) {
+  .sw-starter-modal,
+  .sw-member-drawer {
+    width: 100vw;
+    max-width: 100vw;
+    left: 0;
+    right: 0;
+  }
+  .sw-preset-grid {
+    grid-template-columns: 1fr;
+  }
+  .sw-post-input {
+    font-size: 15px;
+    line-height: 1.55;
+  }
+  .sw-input,
+  .sw-textarea {
+    font-size: 14px;
+  }
+}
