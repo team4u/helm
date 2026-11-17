@@ -293,6 +293,7 @@ export interface CollabGroupRuntime {
       refs: number[]
       body: string
       worktreeSnapshot?: WorktreeHandoffSnapshot
+      lastStallWatermarkAfterPost?: string
     },
   ): Promise<BoardPost>
   mutateGroup<T>(

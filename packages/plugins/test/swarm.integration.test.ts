@@ -98,6 +98,35 @@ function captureRequestMeta(messages: readonly Record<string, unknown>[]): {
   }
 }
 
+type FauxStep = NonNullable<Parameters<FauxProviderHandle['setResponses']>[0]>[number]
+type FauxFactoryArgs = Parameters<Extract<FauxStep, (...args: never[]) => unknown>>
+
+function setSwarmRoleResponses(
+  faux: FauxProviderHandle,
+  queues: Record<string, FauxStep[]>,
+  maxCalls = 32,
+): void {
+  const cursors = new Map<string, number>()
+  const dispatch: FauxStep = (async (ctx: FauxFactoryArgs[0], ...rest: [FauxFactoryArgs[1], FauxFactoryArgs[2], FauxFactoryArgs[3]]) => {
+    const groupSec =
+      captureRequestMeta(ctx.messages as unknown as Record<string, unknown>[]).sectionsById['swarm.active_group'] ?? ''
+    const workerMatch = /role="worker" name="([^"]+)"/.exec(groupSec)
+    const roleKey = workerMatch ? workerMatch[1]! : groupSec.includes('role="coordinator"') ? 'coordinator' : 'other'
+    const list = queues[roleKey] ?? queues['*'] ?? []
+    const idx = cursors.get(roleKey) ?? 0
+    cursors.set(roleKey, idx + 1)
+    const step = list[idx]
+    if (step === undefined) {
+      throw new Error(`Unexpected faux request for swarm role "${roleKey}" at index ${idx}`)
+    }
+    if (typeof step === 'function') {
+      return await step(ctx, ...rest)
+    }
+    return step
+  }) as FauxStep
+  faux.setResponses(Array.from({ length: maxCalls }, () => dispatch))
+}
+
 test('swarm-int1: default-enabled zero-resident boot, idle workflow-disable freedom, swarm-collab skill lifecycle, same-turn tool unlock, byte-constant <active_swarm_group>, and inUse guard', { timeout: 60_000 }, async (t) => {
   const env = await openSwarmEnv(useTempDir(t, 'helm-swarm-int-'))
   try {
@@ -204,12 +233,17 @@ test('swarm-int1: default-enabled zero-resident boot, idle workflow-disable free
     )
 
     // 5) Recruit 2 members, mutate group title/objective, archive 1 member -> coordinator <active_swarm_group> stays 100% byte-identical!
-    env.faux.setResponses([
-      fauxAssistantMessage([fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'comment', body: 'w1 booted' })], { stopReason: 'toolUse' }),
-      fauxAssistantMessage('w1 idle'),
-      fauxAssistantMessage([fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'comment', body: 'w2 booted' })], { stopReason: 'toolUse' }),
-      fauxAssistantMessage('w2 idle'),
-    ])
+    setSwarmRoleResponses(env.faux, {
+      alpha: [
+        fauxAssistantMessage([fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'comment', body: 'w1 booted' })], { stopReason: 'toolUse' }),
+        fauxAssistantMessage('w1 idle'),
+      ],
+      beta: [
+        fauxAssistantMessage([fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'comment', body: 'w2 booted' })], { stopReason: 'toolUse' }),
+        fauxAssistantMessage('w2 idle'),
+      ],
+      coordinator: [fauxAssistantMessage('Coordinator noted idle boot comments.')],
+    })
     const w1 = (await kernel.plugins.invokeAction(
       SWARM_PLUGIN_ID,
       'dispatch_worker',
@@ -224,6 +258,8 @@ test('swarm-int1: default-enabled zero-resident boot, idle workflow-disable free
     )) as { workerConversationId: number }
     await kernel.waitForIdle(w1.workerConversationId)
     await kernel.waitForIdle(w2.workerConversationId)
+    await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+    await kernel.waitForIdle(coord.id)
 
     const indexDoc = kernel.plugins.getPublicDoc(SWARM_PLUGIN_ID, 'index').value as SwarmIndexDoc
     assert.equal(indexDoc.workers.length, 2)
@@ -243,13 +279,15 @@ test('swarm-int1: default-enabled zero-resident boot, idle workflow-disable free
     )
 
     let sectionAfterScaling: string | undefined
-    env.faux.setResponses([
-      (ctx) => {
-        sectionAfterScaling = captureRequestMeta(ctx.messages as unknown as Record<string, unknown>[]).sectionsById['swarm.active_group']
-        return fauxAssistantMessage([fauxToolCall('bash', { command: 'echo blocked' })], { stopReason: 'toolUse' })
-      },
-      fauxAssistantMessage('Guard blocked bash as expected.'),
-    ])
+    setSwarmRoleResponses(env.faux, {
+      coordinator: [
+        (ctx) => {
+          sectionAfterScaling = captureRequestMeta(ctx.messages as unknown as Record<string, unknown>[]).sectionsById['swarm.active_group']
+          return fauxAssistantMessage([fauxToolCall('bash', { command: 'echo blocked' })], { stopReason: 'toolUse' })
+        },
+        fauxAssistantMessage('Guard blocked bash as expected.'),
+      ],
+    })
     await kernel.submitInput(coord.id, 'Check prompt cache stability and guard')
     await kernel.waitForIdle(coord.id)
 
@@ -284,12 +322,15 @@ test('swarm-int2: Author(worktree) + Verifier(readonly) handoff, hold blocks wor
     )) as { groupId: string }
 
     // Dispatch verifier (readonly, inherit) first so it is idle when author hands off
-    env.faux.setResponses([
-      fauxAssistantMessage([fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'comment', body: 'verifier standing by' })], {
-        stopReason: 'toolUse',
-      }),
-      fauxAssistantMessage('Standing by for author handoff.'),
-    ])
+    setSwarmRoleResponses(env.faux, {
+      verifier: [
+        fauxAssistantMessage([fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'comment', body: 'verifier standing by' })], {
+          stopReason: 'toolUse',
+        }),
+        fauxAssistantMessage('Standing by for author handoff.'),
+      ],
+      coordinator: [fauxAssistantMessage('Coordinator noted verifier boot stall.')],
+    })
     const verifier = (await kernel.plugins.invokeAction(
       SWARM_PLUGIN_ID,
       'dispatch_worker',
@@ -297,6 +338,8 @@ test('swarm-int2: Author(worktree) + Verifier(readonly) handoff, hold blocks wor
       { conversationId: coord.id },
     )) as { workerConversationId: number }
     await kernel.waitForIdle(verifier.workerConversationId)
+    await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+    await kernel.waitForIdle(coord.id)
 
     const verifierBlockedReasons: string[] = []
     let authorStep = 0
@@ -515,15 +558,18 @@ test('swarm-int3: forkFrom clean anchor, #channel addressing & passive wake=fals
 
     // Dispatch forked worker (forkFrom: 'coordinator' without explicit entryId)
     let forkedSawHistory = false
-    env.faux.setResponses([
-      (ctx) => {
-        forkedSawHistory = JSON.stringify(ctx.messages).includes('v3-hmac')
-        return fauxAssistantMessage([fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'comment', body: 'forked ready' })], {
-          stopReason: 'toolUse',
-        })
-      },
-      fauxAssistantMessage('Forked worker parked.'),
-    ])
+    setSwarmRoleResponses(env.faux, {
+      coder: [
+        (ctx) => {
+          forkedSawHistory = JSON.stringify(ctx.messages).includes('v3-hmac')
+          return fauxAssistantMessage([fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'comment', body: 'forked ready' })], {
+            stopReason: 'toolUse',
+          })
+        },
+        fauxAssistantMessage('Forked worker parked.'),
+      ],
+      coordinator: [fauxAssistantMessage('Coordinator noted forked worker stall.')],
+    })
     const coder = (await kernel.plugins.invokeAction(
       SWARM_PLUGIN_ID,
       'dispatch_worker',
@@ -531,6 +577,8 @@ test('swarm-int3: forkFrom clean anchor, #channel addressing & passive wake=fals
       { conversationId: coord.id },
     )) as { workerConversationId: number }
     await kernel.waitForIdle(coder.workerConversationId)
+    await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+    await kernel.waitForIdle(coord.id)
     assert.equal(forkedSawHistory, true, 'forkFrom="coordinator" must inherit clean parent conversation history')
     assert.deepEqual(kernel.getConversation(coder.workerConversationId).tags, [WORKER_TAG], 'forked worker must have swarm-worker tag only')
 
@@ -562,6 +610,8 @@ test('swarm-int3: forkFrom clean anchor, #channel addressing & passive wake=fals
 
     // Passive comment (wake: false default) MUST NOT wake idle coder
     const beforeCompletionSeq = kernel.getConversation(coder.workerConversationId).completionSeq
+    const statusBeforePassive = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'board_status', { groupId })) as BoardViewDoc
+    const coderBefore = statusBeforePassive.members.find((m) => m.name === 'coder')!
     const commentRes = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'board_post', {
       groupId,
       to: ['coder'],
@@ -569,7 +619,13 @@ test('swarm-int3: forkFrom clean anchor, #channel addressing & passive wake=fals
       body: 'Passive heads-up note #A',
     })) as { post: BoardPost }
     assert.equal(commentRes.post.wake, false)
-    await new Promise((r) => setTimeout(r, 80))
+    await Promise.resolve()
+    assert.equal(kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID), 0, 'passive comment must not schedule any wakeup task')
+    const statusAfterPassive = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'board_status', { groupId })) as BoardViewDoc
+    const coderAfter = statusAfterPassive.members.find((m) => m.name === 'coder')!
+    assert.equal(coderAfter.pendingWakeupSeq, coderBefore.pendingWakeupSeq, 'passive comment must not advance pendingWakeupSeq')
+    assert.equal(coderAfter.liveState, 'idle')
+    await kernel.waitForIdle(coder.workerConversationId)
     assert.equal(
       kernel.getConversation(coder.workerConversationId).completionSeq,
       beforeCompletionSeq,
@@ -579,13 +635,15 @@ test('swarm-int3: forkFrom clean anchor, #channel addressing & passive wake=fals
     // Subsequent wake=true via '#qa' channel sweeps BOTH the passive comment AND the handoff into one wakeup!
     let sweptPrompt = ''
     const slowGate = deferred<void>()
-    env.faux.setResponses([
-      async (ctx) => {
-        sweptPrompt = JSON.stringify(ctx.messages.slice(-2))
-        await slowGate.promise
-        return fauxAssistantMessage('Should be aborted before finishing')
-      },
-    ])
+    setSwarmRoleResponses(env.faux, {
+      coder: [
+        async (ctx) => {
+          sweptPrompt = JSON.stringify(ctx.messages.slice(-2))
+          await slowGate.promise
+          return fauxAssistantMessage('Should be aborted before finishing')
+        },
+      ],
+    })
     await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'board_post', {
       groupId,
       to: ['#qa'],
@@ -642,9 +700,13 @@ test('swarm-int4: failed turn auto [blocker], At-Most-Once Silent-Exit Nudge -> 
   const repoDir = join(root, 'repo')
   gitTemplate.cloneTo(repoDir)
 
-  const makeInstance = async (initialResponses?: Parameters<FauxProviderHandle['setResponses']>[0]) => {
+  const makeInstance = async (configureFaux?: (faux: FauxProviderHandle) => void) => {
     const faux = makeFauxProvider({ models: [{ id: 'faux-1' }, { id: 'faux-2' }] })
-    faux.setResponses(initialResponses ?? [])
+    if (configureFaux !== undefined) {
+      configureFaux(faux)
+    } else {
+      faux.setResponses([])
+    }
     const app = await createHelm({
       buildProvider: createPluginBuildProvider(),
       dataDir,
@@ -665,17 +727,19 @@ test('swarm-int4: failed turn auto [blocker], At-Most-Once Silent-Exit Nudge -> 
 
     // 1) At-Most-Once Silent-Exit Nudge -> 2nd silent exit emits fallback [blocker] (no infinite loop!)
     let silentTurns = 0
-    inst.faux.setResponses([
-      () => {
-        silentTurns += 1
-        return fauxAssistantMessage('First turn: forgot to call board_post.')
-      },
-      () => {
-        silentTurns += 1
-        return fauxAssistantMessage('Second turn after nudge: still forgot to call board_post.')
-      },
-      fauxAssistantMessage('Coordinator noted silent-exit blocker.'),
-    ])
+    setSwarmRoleResponses(inst.faux, {
+      mute: [
+        () => {
+          silentTurns += 1
+          return fauxAssistantMessage('First turn: forgot to call board_post.')
+        },
+        () => {
+          silentTurns += 1
+          return fauxAssistantMessage('Second turn after nudge: still forgot to call board_post.')
+        },
+      ],
+      coordinator: [fauxAssistantMessage('Coordinator noted silent-exit blocker.')],
+    })
 
     const muteWorker = (await inst.app.kernel.plugins.invokeAction(
       SWARM_PLUGIN_ID,
@@ -696,12 +760,14 @@ test('swarm-int4: failed turn auto [blocker], At-Most-Once Silent-Exit Nudge -> 
     assert.equal(silentTurns, 2, 'must nudge at most once (initial turn + 1 nudge turn = 2 turns total)')
 
     // 2) Turn outcome === 'failed' -> auto-posts system [blocker] with model name & redacted error
-    inst.faux.setResponses([
-      () => {
-        throw new Error('upstream 429 quota_exhausted')
-      },
-      fauxAssistantMessage('Coordinator received failure blocker.'),
-    ])
+    setSwarmRoleResponses(inst.faux, {
+      flaky: [
+        () => {
+          throw new Error('upstream 429 quota_exhausted')
+        },
+      ],
+      coordinator: [fauxAssistantMessage('Coordinator received failure blocker.')],
+    })
     const flakyWorker = (await inst.app.kernel.plugins.invokeAction(
       SWARM_PLUGIN_ID,
       'dispatch_worker',
@@ -722,14 +788,16 @@ test('swarm-int4: failed turn auto [blocker], At-Most-Once Silent-Exit Nudge -> 
     await inst.app.kernel.waitForIdle(coord.id)
 
     // 3) 6-condition 0-Token Quiescence Guard: mute posts comment(wake=false) to flaky -> all idle -> auto [stall] citing #seq!
-    inst.faux.setResponses([
-      fauxAssistantMessage(
-        [fauxToolCall('swarm_board_post', { to: ['flaky'], kind: 'comment', wake: false, body: 'Dangling passive output' })],
-        { stopReason: 'toolUse' },
-      ),
-      fauxAssistantMessage('Finished turn after passive comment.'),
-      fauxAssistantMessage('Coordinator received stall diagnosis.'),
-    ])
+    setSwarmRoleResponses(inst.faux, {
+      mute: [
+        fauxAssistantMessage(
+          [fauxToolCall('swarm_board_post', { to: ['flaky'], kind: 'comment', wake: false, body: 'Dangling passive output' })],
+          { stopReason: 'toolUse' },
+        ),
+        fauxAssistantMessage('Finished turn after passive comment.'),
+      ],
+      coordinator: [fauxAssistantMessage('Coordinator received stall diagnosis.')],
+    })
     await inst.app.kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'board_post', {
       groupId,
       to: ['mute'],
@@ -743,6 +811,7 @@ test('swarm-int4: failed turn auto [blocker], At-Most-Once Silent-Exit Nudge -> 
       }
       return read.posts.some((p) => p.from === 'system' && p.kind === 'stall' && p.body.includes('wake=false'))
     })
+    await inst.app.kernel.waitForIdle(muteWorker.workerConversationId)
     await waitFor(() => inst.app.kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
     await inst.app.kernel.waitForIdle(coord.id)
 
@@ -760,18 +829,23 @@ test('swarm-int4: failed turn auto [blocker], At-Most-Once Silent-Exit Nudge -> 
     writeFileSync(actualMetaPath, `${JSON.stringify(persistedMeta, null, 2)}\n`)
 
     let recoveredWakeupDelivered = false
-    inst = await makeInstance([
-      () => {
-        recoveredWakeupDelivered = true
-        return fauxAssistantMessage(
-          [fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'done', body: 'Recovered after restart!' })],
-          { stopReason: 'toolUse' },
-        )
-      },
-      fauxAssistantMessage('Recovered worker settled.'),
-      fauxAssistantMessage('Coordinator received recovered done.'),
-    ])
+    inst = await makeInstance((faux) => {
+      setSwarmRoleResponses(faux, {
+        mute: [
+          () => {
+            recoveredWakeupDelivered = true
+            return fauxAssistantMessage(
+              [fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'done', body: 'Recovered after restart!' })],
+              { stopReason: 'toolUse' },
+            )
+          },
+          fauxAssistantMessage('Recovered worker settled.'),
+        ],
+        coordinator: [fauxAssistantMessage('Coordinator received recovered done.')],
+      })
+    })
     await waitFor(() => recoveredWakeupDelivered, { timeoutMs: 10_000 })
+    await inst.app.kernel.waitForIdle(muteWorker.workerConversationId)
     await waitFor(() => inst.app.kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
     await inst.app.kernel.waitForIdle(coord.id)
   } finally {
