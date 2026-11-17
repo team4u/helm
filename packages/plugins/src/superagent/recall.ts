@@ -12,9 +12,9 @@ import {
   type RecallGraphDoc,
 } from './contracts.js'
 
-export const SETTLED_OUTCOMES = new Set(['completed', 'failed', 'aborted'])
+const SETTLED_OUTCOMES = new Set(['completed', 'failed', 'aborted'])
 
-export const RECALL_ARTIFACT_KEYS = ['id', 'conversationId', 'name', 'path', 'mimeType', 'size', 'createdAt'] as const
+const RECALL_ARTIFACT_KEYS = ['id', 'conversationId', 'name', 'path', 'mimeType', 'size', 'createdAt'] as const
 
 export function assertRecallDoc(value: unknown): void {
   if (!isPlainObject(value) || value.version !== 1 || !Array.isArray(value.nodes)) {

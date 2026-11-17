@@ -50,7 +50,7 @@ export function tunnelRpcFailureOf(errorCode: string): { code: string; status: n
 }
 
 /** Factory for bulk-settlement errors (pending and active differ in wording/context, supplied by caller). */
-export interface TunnelFinalizeErrors {
+interface TunnelFinalizeErrors {
   pending: (nodeId: string, tunnelId: string) => HelmError
   active: (nodeId: string, tunnelId: string) => HelmError
 }

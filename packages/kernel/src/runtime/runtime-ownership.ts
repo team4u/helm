@@ -14,7 +14,7 @@ import type { HelmStore } from './store.js'
 
 export type ConversationOwnership = 'helm' | 'bot' | 'human'
 
-export interface RuntimeOwnershipDeps {
+interface RuntimeOwnershipDeps {
   readonly store: HelmStore
   readonly documentStore: {
     get<T>(key: string, initial: T): T

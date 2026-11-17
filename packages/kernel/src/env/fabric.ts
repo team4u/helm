@@ -69,7 +69,7 @@ export type EnvOptionsComposer = (input: {
   conversationId?: number
 }) => Promise<Record<string, string>> | Record<string, string>
 
-export interface EnvFabricOptions {
+interface EnvFabricOptions {
   /**
    * Hub host platform (defaults to `process.platform`). Only injected by tests or controlled hosts;
    * production never fabricates the local platform, and remote platforms always use values reported at node registration.
@@ -94,7 +94,7 @@ export interface EnvFabricOptions {
 }
 
 /** Read-only diagnostic snapshot for external inspection (`debugBases`; never affects business logic). */
-export interface EnvTargetSnapshot {
+interface EnvTargetSnapshot {
   key: string
   nodeId: string
   cwd: string

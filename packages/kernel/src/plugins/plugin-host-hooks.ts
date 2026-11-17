@@ -12,7 +12,7 @@ import type { HookPipeline, IsolatedHookError } from './hooks.js';
 import type { PluginTaskTracker } from './tracking.js';
 import type { PluginHostBackend, PluginState } from './types.js';
 
-export interface HookDispatchDeps {
+interface HookDispatchDeps {
   plugins: ReadonlyMap<string, PluginState>;
   pipelines: ReadonlyMap<HookName, HookPipeline<HookName>>;
   tracker: PluginTaskTracker;

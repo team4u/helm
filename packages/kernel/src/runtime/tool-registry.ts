@@ -40,7 +40,7 @@ import {
 
 export type PluginHostToolTarget = Pick<PluginHost, 'invokeAction' | 'executeTool' | 'listTools' | 'listActions'>
 
-export interface RuntimeToolRegistryOptions {
+interface RuntimeToolRegistryOptions {
   readonly registry: { install(extension: Extension): void }
   readonly toolDeps: HelmToolDeps
   readonly getPluginHost: () => PluginHostToolTarget | undefined

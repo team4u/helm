@@ -14,7 +14,7 @@ import type { HookBridge } from './hook-bridge.js'
 import { escapeXml, stripEnvelope } from './runtime-helpers.js'
 import type { HelmStore } from './store.js'
 
-export interface RuntimeTriggerDispatcherDeps {
+interface RuntimeTriggerDispatcherDeps {
   readonly store: HelmStore
   readonly hookBridge: HookBridge
   getConversation(id: number): ConversationSummary

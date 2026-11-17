@@ -25,7 +25,7 @@ import { parsePaneRead, type HerdrAgentInfo } from './rpc.js'
 import { redactSchemaText } from './spawn-rules.js'
 
 /** The minimal dependency surface of PaneHandoff on the executor. */
-export interface PaneHandoffPort {
+interface PaneHandoffPort {
   transport: NonNullable<HerdrPluginDependencies['transport']>
   redact(text: string): string
   notify(title: string, body: string, level: 'info' | 'error'): void

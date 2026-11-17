@@ -58,7 +58,7 @@ export interface WorktreeAllocatorDeps {
   ) => Promise<NodePathUsage>
 }
 
-export interface AllocateInput {
+interface AllocateInput {
   nodeId: string
   sourceCwd: string
   parentConversationId: number
@@ -74,7 +74,7 @@ export interface AllocateInput {
   }) => Promise<void>
 }
 
-export interface RegisterExternalInput {
+interface RegisterExternalInput {
   nodeId: string
   path: string
   branch: string

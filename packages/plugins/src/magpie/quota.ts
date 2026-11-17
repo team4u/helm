@@ -4,7 +4,7 @@
  */
 
 /** 单个配额窗口。 */
-export interface QuotaWindow {
+interface QuotaWindow {
   name?: string
   /** 窗口已用百分比 0-100。 */
   used?: number
@@ -41,16 +41,8 @@ export function remainingPercent(window: QuotaWindow): number | undefined {
   return undefined
 }
 
-/** 窗口文本：供应商原始表述优先，否则剩余百分比。 */
-export function windowText(window: QuotaWindow): string {
-  const display = window.display?.trim()
-  if (display) return display
-  const remaining = remainingPercent(window)
-  return remaining === undefined ? '?' : `${Math.round(remaining)}%`
-}
-
 /** 重置时间的人读形式（相对时长）。 */
-export function formatReset(resetsAt: string | undefined, now: number): string | undefined {
+function formatReset(resetsAt: string | undefined, now: number): string | undefined {
   if (!resetsAt) return undefined
   const at = Date.parse(resetsAt)
   if (!Number.isFinite(at)) return undefined
@@ -66,7 +58,7 @@ export function formatReset(resetsAt: string | undefined, now: number): string |
 }
 
 /** 展示行：单个窗口 → status doc 行（remainingPercent -1 表示未知）。 */
-export interface QuotaRow {
+interface QuotaRow {
   provider: string
   account?: string
   remainingPercent: number

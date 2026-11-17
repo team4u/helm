@@ -46,7 +46,7 @@ import {
 export { UI_ACTION_SURFACES } from './ui-spec-validators.js';
 
 /** Result of reading and validating a prebuilt `dist-client/manifest.json`. */
-export interface LoadedPrebuiltClientManifest {
+interface LoadedPrebuiltClientManifest {
   rootReal: string;
   manifest: PrebuiltClientManifest;
 }
@@ -317,12 +317,12 @@ export function verifyPrebuiltClientDir(prebuiltDir: string, pluginId = 'prebuil
   return loaded;
 }
 
-export interface PluginClientAssetsLookup {
+interface PluginClientAssetsLookup {
   clientRoot?: string;
   prebuiltClientDir?: string;
 }
 
-export interface ClientModuleOptions {
+interface ClientModuleOptions {
   chunk?: string;
   hash?: string;
   getPluginLifecycle: (pluginId: string) => {

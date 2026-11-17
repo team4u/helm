@@ -30,7 +30,7 @@ import { parseAgentResult, type HerdrAgentInfo } from './rpc.js'
 import { resolveSpawnRouting, type SpawnRouting } from './spawn-rules.js'
 
 /** ReattachCoordinator 对执行器（executor）的最小依赖面。 */
-export interface ReattachPort {
+interface ReattachPort {
   registry: PaneRegistry
   profiles: HerdrPluginDependencies['profiles']
   transport: NonNullable<HerdrPluginDependencies['transport']>

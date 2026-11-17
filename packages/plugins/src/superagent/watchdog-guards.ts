@@ -26,7 +26,7 @@ import {
 } from './watchdog-core.js'
 
 /** 会话是否属于 watchdog（含同 profile 直聊）。 */
-export function isWatchdogSession(
+function isWatchdogSession(
   runtime: SuperAgentWatchdogRuntime,
   id: number,
   profileId: string | undefined,
@@ -71,7 +71,7 @@ export function assertOwnedTarget(
   }
 }
 
-export interface WatchdogGuardDeps {
+interface WatchdogGuardDeps {
   activity: ConversationActivityTracker
   notify: WatchdogNotify
 }

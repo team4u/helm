@@ -19,7 +19,7 @@ import type { ManagedSubagentRegistry } from './depth.js'
 import type { RunsProjection } from './projection.js'
 import { depthExceededError } from './depth.js'
 
-export interface WorkflowHookDeps {
+interface WorkflowHookDeps {
   registry: ManagedSubagentRegistry
   isolation: WorktreeIsolation
   workflows: WorkflowService

@@ -105,15 +105,10 @@ export function resolveGateway(
 // HTTP 读取
 // ---------------------------------------------------------------------------
 
-export const modelsUrl = (root: string): string => `${root}/v1/models`
-export const quotasUrl = (root: string, kept = false): string =>
+const modelsUrl = (root: string): string => `${root}/v1/models`
+const quotasUrl = (root: string, kept = false): string =>
   `${root}/v1/magpie/quotas${kept ? '?kept=1' : ''}`
-export const traceUrl = (root: string): string => `${root}/v1/magpie/trace`
-
-/** 网络失败统一错误构造（脱敏：只含 URL 与原因，不含 token）。 */
-export function gatewayError(code: string, message: string, status: number, details?: Record<string, unknown>): HelmError {
-  return new HelmError(code, message, status, details)
-}
+const traceUrl = (root: string): string => `${root}/v1/magpie/trace`
 
 /** 从错误文本中剥离已知 token（网关错误页可能回显 Authorization 头或 token 本体）。 */
 function stripTokens(text: string, token: string): string {
@@ -123,7 +118,7 @@ function stripTokens(text: string, token: string): string {
 }
 
 /** GET 网关端点为 JSON；失败 throw（bounded wait，可取消；错误文本脱敏）。 */
-export async function fetchJson(
+async function fetchJson(
   url: string,
   token: string,
   signal: AbortSignal,

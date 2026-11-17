@@ -83,7 +83,7 @@ function parseModelThinkingLevelsConfig(raw: unknown): Record<string, string> {
   return result
 }
 
-export interface ModelRegistryOptions {
+interface ModelRegistryOptions {
   readonly dataDir: string
   readonly providersSvc: ProviderService
   readonly credentialsSvc: CredentialService

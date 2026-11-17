@@ -14,7 +14,7 @@ import type { RouteContext } from './route-context.js'
 import { ValidationError } from './validate.js'
 
 /** Upper bound on `?sub=` tuples per multiplexed SSE connection. */
-export const MAX_SESSION_DOC_MULTIPLEX_SUBS = 64
+const MAX_SESSION_DOC_MULTIPLEX_SUBS = 64
 
 export async function handleSessionDocsDomain(
   ctx: RouteContext,

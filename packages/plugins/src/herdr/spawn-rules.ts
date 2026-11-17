@@ -154,7 +154,7 @@ function parseHerdrPrefix(agentType: string): SpawnRouting {
  * `C:\...` / `C:/...` and UNC `\\server\\share\\...` are absolute; `C:relative`
  * (a drive-relative form without a separator) is rejected.
  */
-export function isAbsolutePath(p: string): boolean {
+function isAbsolutePath(p: string): boolean {
   if (p.startsWith('/')) return true
   if (p.startsWith('\\\\')) return p.length > 2
   return /^[A-Za-z]:[\\/]/.test(p)
@@ -378,7 +378,7 @@ export function buildSpawnPaneEnv(
 }
 
 /** Only an http(s) URL can be a call-home address (file:/unix: etc. are invalid). */
-export function isHttpUrl(url: string): boolean {
+function isHttpUrl(url: string): boolean {
   try {
     const parsed = new URL(url)
     return parsed.protocol === 'http:' || parsed.protocol === 'https:'
@@ -388,11 +388,11 @@ export function isHttpUrl(url: string): boolean {
 }
 
 /** Remotely reachable: explicit http(s) with a non-loopback host. */
-export function isValidRemoteHubUrl(url: string): boolean {
+function isValidRemoteHubUrl(url: string): boolean {
   return isHttpUrl(url) && !isLoopbackUrl(url)
 }
 
-export function isLoopbackUrl(url: string): boolean {
+function isLoopbackUrl(url: string): boolean {
   let parsed: URL
   try {
     parsed = new URL(url)

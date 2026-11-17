@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url'
 import { HelmError, type PluginDefinition } from '@helm/protocol'
 import { resolvePluginClientAssets } from './asset-paths.js'
 
-export const MERMAID_PLUGIN_ID = 'builtin:mermaid'
+const MERMAID_PLUGIN_ID = 'builtin:mermaid'
 
 /** Find the resolution root of the declared dependency by Node's node_modules walk-up rules from the plugin package location. */
 function resolvePluginsPackageRoot(): string {

@@ -22,10 +22,10 @@ import { buildOutputFileName } from './spawn-rules.js'
 import type { SteerPaneInput } from './executor.js'
 
 /** Managed-task lifecycle phases (consistent with the executor's internal registry; only 'task' is steerable). */
-export type SteerPhase = 'startup' | 'task' | 'handoff' | 'gate'
+type SteerPhase = 'startup' | 'task' | 'handoff' | 'gate'
 
 /** The minimal dependency surface of SteerDispatcher on the executor. */
-export interface SteerDispatcherPort {
+interface SteerDispatcherPort {
   registry: PaneRegistry
   transport: NonNullable<HerdrPluginDependencies['transport']>
   redact(text: string): string

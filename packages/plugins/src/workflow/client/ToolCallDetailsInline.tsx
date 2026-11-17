@@ -8,7 +8,7 @@ import { resolveLocalizedText, usePluginContext, usePluginLocale } from '@helm/p
 import { stringifyPretty } from './model-format.ts'
 import { DETAILS_INPUT, DETAILS_OUTPUT, DETAILS_SUMMARY, detailsOpenArtifactLabel } from './copy.ts'
 
-export interface ToolCallDetailsInlineProps {
+interface ToolCallDetailsInlineProps {
   /** Raw input of this tool call. */
   input?: unknown
   /** Raw output text of this tool call. */

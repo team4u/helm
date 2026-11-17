@@ -19,7 +19,7 @@ import {
 import { BINARY_MIME, detectMimeByExtension, isTextMime } from './file-mime.js'
 
 /** Metadata repository contract: implemented by the durable layer (`state.sqlite` artifacts table). */
-export interface ArtifactRepository {
+interface ArtifactRepository {
   get(id: string): ArtifactMetadata | undefined
   list(conversationId: number): ArtifactMetadata[]
   put(metadata: ArtifactMetadata): void
@@ -52,9 +52,9 @@ export class InMemoryArtifactRepository implements ArtifactRepository {
 }
 
 /** Spill threshold: only spills when exceeding 32 KiB (UTF-8 bytes). */
-export const SPILL_THRESHOLD_BYTES = 32 * 1024
+const SPILL_THRESHOLD_BYTES = 32 * 1024
 /** Head preview length: 4 KiB (UTF-8 safe truncation). */
-export const PREVIEW_HEAD_BYTES = 4 * 1024
+const PREVIEW_HEAD_BYTES = 4 * 1024
 /** Uploaded artifact size cap: 15 MiB. */
 export const MAX_ARTIFACT_BYTES = 15 * 1024 * 1024
 /**
@@ -95,13 +95,13 @@ export function sanitizeUploadFilename(raw: string): string {
   return name
 }
 
-export interface RegisterOptions {
+interface RegisterOptions {
   /** Display name; defaults to source filename. */
   name?: string
   mimeType?: string
 }
 
-export interface SpillResult {
+interface SpillResult {
   text: string
   artifact?: ArtifactMetadata
 }
@@ -112,7 +112,7 @@ export interface SpillResult {
  * (reading up to 15 MiB can take a while), preventing orphan files under `artifacts/<deletedConv>/`.
  * Omitted when not needed (tool path runs inside a live turn with a trusted conversation ID).
  */
-export interface WriteUploadedDeps {
+interface WriteUploadedDeps {
   conversationExists(conversationId: number): boolean | Promise<boolean>
 }
 
@@ -121,7 +121,7 @@ function detectMime(name: string): string {
 }
 
 /** UTF-8 safe head truncation: slices by byte budget without splitting multi-byte code points. */
-export function truncateUtf8Safe(text: string, maxBytes: number): string {
+function truncateUtf8Safe(text: string, maxBytes: number): string {
   const buf = Buffer.from(text, 'utf8')
   if (buf.length <= maxBytes) return text
   let end = maxBytes
@@ -130,7 +130,7 @@ export function truncateUtf8Safe(text: string, maxBytes: number): string {
 }
 
 /** UTF-8 safe tail truncation: takes the trailing `maxBytes` bytes (used for tail summaries). */
-export function truncateUtf8Tail(text: string, maxBytes: number): string {
+function truncateUtf8Tail(text: string, maxBytes: number): string {
   const buf = Buffer.from(text, 'utf8')
   if (buf.length <= maxBytes) return text
   let start = buf.length - maxBytes

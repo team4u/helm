@@ -29,15 +29,15 @@ export interface MagpieModelEntry {
 }
 
 /** pi's thinking levels (pi-ai MODEL_THINKING_LEVELS), low to high. */
-export const PI_THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
+const PI_THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
 
 /** The two API paths Magpie forwards natively. */
-export const MAGPIE_PATHS = {
+const MAGPIE_PATHS = {
   responses: '/v1/responses',
   anthropic: '/v1/messages',
 } as const
 
-export type MagpieApi = 'openai-completions' | 'openai-responses' | 'anthropic-messages'
+type MagpieApi = 'openai-completions' | 'openai-responses' | 'anthropic-messages'
 
 /**
  * Decide the request protocol and baseUrl mount point by the model's natively forwarded API:
@@ -95,7 +95,7 @@ export function adaptiveThinking(modelId: string): boolean {
 
 /** Catalog-entry fallback defaults (minimal conservative values for pi-ai Model's required fields; not probed values). */
 export const DEFAULT_CONTEXT_WINDOW = 128_000
-export const DEFAULT_MAX_TOKENS = 16_384
+const DEFAULT_MAX_TOKENS = 16_384
 
 /**
  * The pi models this plugin builds carry magpieOwnedBy (for per-provider quota attribution) and
@@ -150,13 +150,6 @@ export function toPiModels(entries: readonly MagpieModelEntry[], root: string): 
   return entries
     .filter((entry) => typeof entry?.id === 'string' && entry.id.length > 0)
     .map((entry) => toPiModel(entry, root))
-}
-
-/** The magpie provider owning a catalog entry: owned_by first, then the id's provider prefix. */
-export function ownedByOf(entry: MagpieModelEntry): string | undefined {
-  if (entry.owned_by) return entry.owned_by
-  const slash = entry.id.indexOf('/')
-  return slash > 0 ? entry.id.slice(0, slash) : undefined
 }
 
 function positive(value: number | undefined): number | undefined {

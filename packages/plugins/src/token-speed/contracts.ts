@@ -39,7 +39,7 @@ export const CONTEXT_INVALIDATION_ENTRY_KINDS: ReadonlySet<string> = new Set([
 ])
 
 /** Envelope facts extracted by the conversation.entry event guard (validated before per-kind dispatch). */
-export interface ConversationEntryEnvelope {
+interface ConversationEntryEnvelope {
   conversationId: number
   kind: string
 }
@@ -112,7 +112,7 @@ export function contentCharsOfBlocks(content: readonly unknown[]): number {
  * from SDK live.run.taskId, same source as the pi.assistant entry's taskId -- the join key exactly linking
  * streaming snapshots and the final persisted result) -- frames with missing or invalid identity are rejected
  * wholesale, never consumed degraded. */
-export interface TokenSpeedLiveFrame {
+interface TokenSpeedLiveFrame {
   conversationId: number
   generation?: { taskId: number; attempt: number; message?: ConversationLiveMessage }
   hasTools: boolean
@@ -176,7 +176,7 @@ export function asConversationEntryEnvelope(payload: unknown): ConversationEntry
  * - stopReason: required (aborted / error are failed attempts; counts and time voided);
  * - contentChars: the cumulative character count when model[0].content is an array (for backfilling the real
  *   trailing delta after cancelling the trailing partial timer; omitted when absent). */
-export interface AssistantCompletionFacts {
+interface AssistantCompletionFacts {
   conversationId: number
   taskId: number | undefined
   entryId: string | undefined

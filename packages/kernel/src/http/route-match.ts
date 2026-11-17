@@ -43,7 +43,7 @@ export function decodeSegments(pathname: string): string[] {
  * (`PluginHost` rejects malformed encodings), so decode failures here propagate as internal errors rather
  * than being masked as caller request errors.
  */
-export function declaredSegments(declared: string): string[] {
+function declaredSegments(declared: string): string[] {
   return declared
     .split('/')
     .filter((s) => s.length > 0)
@@ -55,7 +55,7 @@ export function declaredSegments(declared: string): string[] {
  * Segment counts must match exactly; `:param` matches any non-empty segment. Request segments are already
  * decoded (so a decoded `/` still counts as a single segment); declared segments use the literal strings registered.
  */
-export function matchFullPath(declared: string, requestSegments: string[]): boolean {
+function matchFullPath(declared: string, requestSegments: string[]): boolean {
   const parts = declaredSegments(declared)
   if (parts.length !== requestSegments.length) return false
   return parts.every(
@@ -63,17 +63,12 @@ export function matchFullPath(declared: string, requestSegments: string[]): bool
   )
 }
 
-/** Plugin-dedicated route prefix segments: `/api/plugins/<encodedId>` (encodedId must still be decoded). */
-export function pluginRoutePrefixSegments(): string[] {
-  return ['api', 'plugins']
-}
-
 /**
  * Find the unique matching route (method + full path) in the plugin route list, or `undefined`.
  * Request segments must have the form `['api', 'plugins', <pluginId>, 'routes', ...rest...]`;
  * `pluginId` is compared using its decoded value.
  */
-export interface RouteCandidate {
+interface RouteCandidate {
   pluginId: string
   method: 'GET' | 'POST' | 'PUT' | 'DELETE'
   path: string

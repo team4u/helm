@@ -26,7 +26,7 @@ import { createDeliveryDispatch } from './triggers/delivery.js'
 import { registerWebhook } from './triggers/webhook.js'
 import { registerCron } from './triggers/cron.js'
 
-export const TRIGGERS_SCREEN_ID = 'manager'
+const TRIGGERS_SCREEN_ID = 'manager'
 export { TRIGGERS_PLUGIN_ID }
 
 export function createTriggersPlugin(): PluginDefinition {

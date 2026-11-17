@@ -33,7 +33,7 @@ import {
   mermaidModalStatus,
 } from './copy.ts'
 
-export interface MermaidPreviewModalProps {
+interface MermaidPreviewModalProps {
   code: string
   /** Already-rendered SVG (reused when the inline block rendered it; otherwise the modal renders on its own). */
   svg?: string | null

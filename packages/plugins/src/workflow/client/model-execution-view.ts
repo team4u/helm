@@ -43,7 +43,7 @@ export function resolveExecutionNodeElapsedMs(
 }
 
 /** Extract a meaningful human-readable node name when available (undefined when only placeholder/id exists). */
-export function readableExecutionNodeName(node: ExecutionNode): string | undefined {
+function readableExecutionNodeName(node: ExecutionNode): string | undefined {
   const label = node.label ?? node.runNode?.label
   if (node.kind === 'conversation') {
     const custom = compactCardTitle(node.summary?.title, node.conversationId ?? 0)

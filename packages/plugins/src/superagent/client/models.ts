@@ -67,7 +67,7 @@ export function parseRouterMode(doc: RouterModeDoc | undefined): boolean | undef
 }
 
 /** Shape of worker-report timeline entry.data.meta (server submitInput meta projection). */
-export interface WorkerReportMeta {
+interface WorkerReportMeta {
   renderer?: string
   workerId?: number
   profileId?: string
@@ -84,7 +84,7 @@ export function workerReportMeta(props: TimelineRendererProps): WorkerReportMeta
 }
 
 /** Shape of a dispatch_worker tool-call input. */
-export interface DispatchToolInput {
+interface DispatchToolInput {
   prompt?: string
   profileId?: string
   title?: string

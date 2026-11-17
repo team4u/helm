@@ -857,10 +857,10 @@ function SlotImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCont
 // Dispatch table
 // ---------------------------------------------------------------------------
 
-export type SpecPrimitiveImpl = (args: { node: NormalizedSpecNode; ctx: SpecRenderContext }) => ReactNode
+type SpecPrimitiveImpl = (args: { node: NormalizedSpecNode; ctx: SpecRenderContext }) => ReactNode
 
 /** Primitive-name contract private to this plugin (migrated out of protocol; registry at the end of this file). */
-export type SpecPrimitiveName =
+type SpecPrimitiveName =
   | 'Stack' | 'Card' | 'Text' | 'Badge' | 'Markdown'
   | 'MetricGrid' | 'MetricCard' | 'KeyValueList' | 'Callout'
   | 'Steps' | 'BarList' | 'Table' | 'Accordion'
@@ -892,7 +892,7 @@ const PRIMITIVES: Record<SpecPrimitiveName, SpecPrimitiveImpl> = {
 }
 
 /** Render one normalized node (unknown components get an explicit notice, never silently swallowed). */
-export function SpecNodeView({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderContext }): ReactNode {
+function SpecNodeView({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderContext }): ReactNode {
   const impl = (PRIMITIVES as Record<string, SpecPrimitiveImpl | undefined>)[node.component]
   if (impl === undefined) {
     return (

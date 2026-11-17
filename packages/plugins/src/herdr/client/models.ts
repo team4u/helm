@@ -37,13 +37,11 @@ export interface OverviewDoc {
 }
 
 /** URL deep-link filter params (sp.node / sp.owner / sp.status). */
-export interface OverviewFilters {
+interface OverviewFilters {
   node: string
   owner: string
   status: string
 }
-
-export const DEFAULT_FILTERS: Readonly<OverviewFilters> = Object.freeze({ node: 'all', owner: 'all', status: 'all' })
 
 /** Parse filters from ScreenProps.params: invalid values fall back to 'all'; no guessing beyond that. */
 export function parseFilters(params: Readonly<Record<string, string>>): OverviewFilters {
@@ -74,7 +72,7 @@ export function filterPanes(panes: OverviewPaneRow[], filters: OverviewFilters):
   })
 }
 
-export interface OverviewStats {
+interface OverviewStats {
   total: number
   working: number
   blocked: number

@@ -43,7 +43,7 @@ function loadActionHelpers(): Promise<HerdrActionHelpers> {
 }
 
 /** The actions' minimal dependency surface on the plugin main (herdr.ts). */
-export interface HerdrActionsDeps {
+interface HerdrActionsDeps {
   /** The registry's current value (undefined when not enabled: list is empty, others report unmanaged/not-connected). */
   registry(): PaneRegistry | undefined
   executor(): HerdrExecutor | undefined

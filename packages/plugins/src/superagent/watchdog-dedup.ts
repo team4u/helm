@@ -20,9 +20,9 @@ import { isPlainObject, parseTargetKey, targetKey, type WatchdogNotify } from '.
 const DEDUP_ACTIONS: ReadonlySet<string> = new Set(['notify', 'wake', 'abort', 'bridge'])
 
 /** 去重动作类别。 */
-export type DedupAction = 'notify' | 'wake' | 'abort' | 'bridge'
+type DedupAction = 'notify' | 'wake' | 'abort' | 'bridge'
 
-export interface DedupMark {
+interface DedupMark {
   /** 触发时的权威水位（外部/缺 seq 目标用 -1 哨兵）。 */
   seq: number
   at: number
@@ -96,7 +96,7 @@ export function collectActiveExternalKeys(probes: WatchdogProbe[]): Set<string> 
   return keys
 }
 
-export interface WatchdogDedupStoreDeps {
+interface WatchdogDedupStoreDeps {
   /** 最近一轮外部探针事实缓存（inspect 只读诊断共用；淘汰时同步收敛）。 */
   externalProbes: Map<string, WatchdogProbe>
   notify: WatchdogNotify

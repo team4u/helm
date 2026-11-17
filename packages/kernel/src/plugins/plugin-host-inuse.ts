@@ -7,7 +7,7 @@ import { collectDependents } from './plugin-host-deps.js';
 import type { UiRegistry } from './ui-registry.js';
 import type { PluginHostBackend, PluginInUseItem, PluginState } from './types.js';
 
-export interface CollectInUseDeps {
+interface CollectInUseDeps {
   plugins: ReadonlyMap<string, PluginState>;
   uiRegistry: UiRegistry;
   host: PluginHostBackend;

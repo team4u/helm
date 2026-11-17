@@ -20,7 +20,7 @@ import type { EnvFabric } from '../env/index.js'
 import type { EventHub } from './events.js'
 import type { NodeManager } from './node-manager.js'
 
-export interface RuntimeNodeOperationsDeps {
+interface RuntimeNodeOperationsDeps {
   readonly nodes: NodeManager
   readonly envFabric: EnvFabric
   readonly events: EventHub

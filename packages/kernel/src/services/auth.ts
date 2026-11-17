@@ -30,7 +30,7 @@ const scrypt = promisify(scryptCallback) as (
   keylen: number,
 ) => Promise<Buffer>
 
-export const MIN_PASSWORD_LENGTH = 8
+const MIN_PASSWORD_LENGTH = 8
 const SCRYPT_KEYLEN = 64
 const TOKEN_BYTES = 32
 

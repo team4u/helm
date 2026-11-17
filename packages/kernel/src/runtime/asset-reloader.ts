@@ -12,7 +12,7 @@
 
 import { AssetWatcher } from '../services/index.js'
 
-export interface AssetReloaderOptions {
+interface AssetReloaderOptions {
   readonly dataDir: string
   /** True when `Models` is externally supplied (tests or external owners); `scheduleReloadModels` becomes a no-op so models are never replaced. */
   readonly externalModels?: boolean

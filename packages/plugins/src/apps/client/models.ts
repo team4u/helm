@@ -37,7 +37,7 @@ export interface AppCatalogDoc {
   apps: Record<string, AppCatalogEntry>
 }
 
-export interface AppScreenRef {
+interface AppScreenRef {
   pluginId: string
   screenId: string
   label: LocalizedText
@@ -59,7 +59,7 @@ export interface AppItem {
  * Both entry points require non-builtin: built-in plugin views never mix
  * into the user app list.
  */
-export function isAppPlugin(
+function isAppPlugin(
   plugin: Pick<PluginSummary, 'id'>,
   screens: Array<{ pluginId: string }> | undefined,
   catalog: AppCatalogDoc | undefined,
@@ -139,7 +139,7 @@ export function formatAppTabParam(tab: AppTabParam): string | undefined {
   return undefined
 }
 
-export interface AppFilterState {
+interface AppFilterState {
   query: string
   tab: AppTabParam
 }
@@ -161,7 +161,7 @@ export function filterAppItems(
   })
 }
 
-export interface AppCenterStats {
+interface AppCenterStats {
   total: number
   ready: number
   stopped: number

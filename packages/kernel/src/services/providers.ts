@@ -17,14 +17,14 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 /** Provider ID boundary validation: must start with an alphanumeric character to prevent path traversal across directories. */
-export function assertProviderId(id: string): void {
+function assertProviderId(id: string): void {
   if (typeof id !== 'string' || !ID_PATTERN.test(id)) {
     throw new Error(`illegal provider id: ${id}`)
   }
 }
 
 /** Validate a single provider config at the boundary; immediately reject any secret fields (prevents secrets leaking into JSON). */
-export function validateProviderConfig(input: unknown): ProviderConfig {
+function validateProviderConfig(input: unknown): ProviderConfig {
   if (!isPlainObject(input)) throw new Error('provider config must be an object')
   for (const banned of ['apiKey', 'api_key', 'secret', 'token', 'password', 'credential']) {
     if (input[banned] !== undefined) {

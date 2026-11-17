@@ -68,7 +68,7 @@ async function loadRaw(path: string): Promise<StoreShape> {
  * File-backed `ModelsStore` (for single Hub process usage; cross-process concurrent writes are outside
  * this contract — the CLI always triggers kernel refresh via HTTP instead of writing this file directly).
  */
-export class FileModelsStore implements ModelsStore {
+class FileModelsStore implements ModelsStore {
   private readonly path: string
 
   constructor(dataDir: string) {

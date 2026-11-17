@@ -36,7 +36,7 @@ export interface WorktreeNodePorts {
 const GIT_TIMEOUT_MS = 120_000
 
 /** `git worktree list --porcelain -z` 的单条权威登记。 */
-export interface WorktreeEntry {
+interface WorktreeEntry {
   path: string
   head: string
   branch?: string
@@ -56,27 +56,27 @@ export interface RepoAuthority {
 }
 
 /** `git status --porcelain=v2 --branch` 解析结果。 */
-export interface SourceWorktreeStatus {
+interface SourceWorktreeStatus {
   oid: string
   branch?: string
   dirty: boolean
 }
 
 export type GitOkResult = { ok: true; output: string; truncated: boolean; lines: string[]; totalNonEmptyLines: number }
-export type GitResult = GitOkResult | { ok: false; output: string; exitCode: number | null; truncated: boolean }
+type GitResult = GitOkResult | { ok: false; output: string; exitCode: number | null; truncated: boolean }
 
-export interface GitCaptureChars {
+interface GitCaptureChars {
   kind: 'chars'
   limit: number
 }
-export interface GitCaptureLines {
+interface GitCaptureLines {
   kind: 'lines'
   maxLines: number
 }
 export type GitCapture = GitCaptureChars | GitCaptureLines
 
 /** 解析 `git worktree list --porcelain -z` 输出（NUL 分隔记录，空 token 分隔条目）。 */
-export function parseWorktreeList(output: string): WorktreeEntry[] {
+function parseWorktreeList(output: string): WorktreeEntry[] {
   const entries: WorktreeEntry[] = []
   let current: WorktreeEntry | undefined
   const flush = (): void => {

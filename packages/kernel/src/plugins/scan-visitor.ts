@@ -101,7 +101,7 @@ async function registerScanFailure(
 }
 
 /** Behavioral policy distinguishing startup scan (`load`) vs incremental `rescan`. */
-export interface ScanVisitPolicy {
+interface ScanVisitPolicy {
   /** Skip immediately when directory name matches an already-registered plugin ID (true for `rescan`). */
   fastSkipDirNameEqualsId: boolean;
   /** Conflict handling after import: `'fail'` throws `plugin_already_registered` (`load`); `'skip'` silently skips (`rescan`). */
@@ -110,7 +110,7 @@ export interface ScanVisitPolicy {
   onSkipped(): void;
 }
 
-export interface ScanVisitParams {
+interface ScanVisitParams {
   dataDir: string;
   plugins: ExternalPluginHost;
   /** Registered plugin IDs seen so far (updated in place as directories succeed or register as failed). */

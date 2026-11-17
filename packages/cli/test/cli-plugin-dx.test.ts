@@ -24,7 +24,7 @@ const DOCTOR_REPORT = {
   checks: [{ id: 'manifest', label: 'x' }],
 }
 
-test('plugins doctor: POST /api/plugins/doctor accepts --dir/--path/positional/id', { timeout: 60_000 }, async (t) => {
+test('plugins doctor: POST /api/plugins/doctor accepts --path/positional/id', { timeout: 60_000 }, async (t) => {
   const dataDir = useTempDir(t, 'helm-cli-dx-')
   const hub = await startMockHub(
     {
@@ -40,11 +40,6 @@ test('plugins doctor: POST /api/plugins/doctor accepts --dir/--path/positional/i
     { autoRegisterCleanup: t },
   )
   const env = makeCliEnv(hub.url, dataDir)
-
-  // --dir (compatibility alias)
-  const r1 = await runCliCaptured(['plugins', 'doctor', '--dir', '/abs/plugin', '--json'], env)
-  assert.equal(r1.code, 0, r1.err)
-  assert.deepEqual(JSON.parse(r1.out), DOCTOR_REPORT)
 
   // --path (canonical option name)
   const r2 = await runCliCaptured(['plugins', 'doctor', '--path', '/abs/plugin', '--json'], env)
@@ -66,19 +61,19 @@ test('plugins doctor: POST /api/plugins/doctor accepts --dir/--path/positional/i
   assert.equal(r5.code, 0, r5.err)
   assert.deepEqual(JSON.parse(r5.out), { ...DOCTOR_REPORT, requestedId: 'my-pl' })
 
-  assert.equal(hub.hits.length, 5)
+  assert.equal(hub.hits.length, 4)
   assert.deepEqual(hub.hits[0]!.body, { path: '/abs/plugin' })
   assert.deepEqual(hub.hits[3]!.body, { id: 'my-pl' })
 
   // Missing target errors explicitly without contacting Hub
   const r6 = await runCliCaptured(['plugins', 'doctor', '--json'], env)
   assert.notEqual(r6.code, 0)
-  assert.equal(hub.hits.length, 5, 'missing argument must not send request')
+  assert.equal(hub.hits.length, 4, 'missing argument must not send request')
 
   // id and path are mutually exclusive
   const r7 = await runCliCaptured(['plugins', 'doctor', 'my-pl', '--path', '/abs/plugin'], env)
   assert.notEqual(r7.code, 0)
-  assert.equal(hub.hits.length, 5)
+  assert.equal(hub.hits.length, 4)
 })
 
 test('plugins doctor: human mode prints check results and exits non-zero on failure', { timeout: 60_000 }, async (t) => {
@@ -97,7 +92,7 @@ test('plugins doctor: human mode prints check results and exits non-zero on fail
     ],
   }
   const hub = await startMockHub({ 'POST /api/plugins/doctor': () => ({ body: failing }) }, { autoRegisterCleanup: t })
-  const r = await runCliCaptured(['plugins', 'doctor', '--dir', '/abs/bad'], makeCliEnv(hub.url, dataDir))
+  const r = await runCliCaptured(['plugins', 'doctor', '--path', '/abs/bad'], makeCliEnv(hub.url, dataDir))
   assert.notEqual(r.code, 0, 'ok=false should exit non-zero')
   assert.ok(r.out.includes('[ok] manifest'))
   assert.ok(r.out.includes('[!!] backend'))

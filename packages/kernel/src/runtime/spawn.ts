@@ -58,7 +58,7 @@ const DEFAULT_SPAWN_PROFILE = 'assistant'
 export const THINKING_LEVELS = new Set(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
 
 /** Maximum character length for normalized child conversation titles on fresh spawn. */
-export const MAX_SPAWN_TITLE_LENGTH = 120
+const MAX_SPAWN_TITLE_LENGTH = 120
 
 /**
  * Boundary validation for optional `AgentSpawnRequest.title`:
@@ -218,12 +218,6 @@ export interface NativeSpawnDeps extends HelmToolDeps {
   resolveForkAnchor?(parentId: number): Promise<number>
 }
 
-export interface SpawnOutcome {
-  kind: 'text'
-  text: string
-  kind2?: never
-}
-
 /**
  * In-flight child conversation spawn mutex (in-process, isolated per `Harness`): sole authoritative lock registry.
  *
@@ -261,7 +255,7 @@ export function claimSpawnConversation(harness: Harness, childId: number): void 
 }
 
 /** Release claim (`finally` path; idempotent). */
-export function releaseSpawnConversation(harness: Harness, childId: number): void {
+function releaseSpawnConversation(harness: Harness, childId: number): void {
   inTurnSet(harness).delete(childId)
 }
 

@@ -361,8 +361,7 @@ export function pluginsCommands(): CommandSpec[] {
     path: ['plugins', 'doctor'],
     description: 'Run static self-check on external plugin source (POST /api/plugins/doctor; loads, registers, and compiles client)',
     flags: [
-      { name: 'path', type: 'string', help: 'absolute path to external plugin source directory (equivalent to --dir; mutually exclusive with --id/<id>)' },
-      { name: 'dir', type: 'string', help: 'compatibility alias for --path' },
+      { name: 'path', type: 'string', help: 'absolute path to external plugin source directory (mutually exclusive with --id/<id>)' },
       { name: 'id', type: 'string', help: 'registered external plugin ID (server resolves its source directory; mutually exclusive with path)' },
     ],
     positional: '[<id> | <dir>]',
@@ -370,13 +369,11 @@ export function pluginsCommands(): CommandSpec[] {
       const parsed = parseFlags(
         [
           { name: 'path', type: 'string' },
-          { name: 'dir', type: 'string' },
           { name: 'id', type: 'string' },
         ],
         ctx.args,
       )
       const pathFlag = parsed.flags.get('path')
-      const dirFlag = parsed.flags.get('dir')
       const idFlag = parsed.flags.get('id')
       const positional = parsed.positionals[0]
       // Infer positional intent: absolute path -> directory target; otherwise -> plugin ID.
@@ -386,11 +383,9 @@ export function pluginsCommands(): CommandSpec[] {
       const pathDir =
         typeof pathFlag === 'string' && pathFlag.length > 0
           ? pathFlag
-          : typeof dirFlag === 'string' && dirFlag.length > 0
-            ? dirFlag
-            : positionalIsPath
-              ? positional
-              : undefined
+          : positionalIsPath
+            ? positional
+            : undefined
       const id =
         typeof idFlag === 'string' && idFlag.length > 0
           ? idFlag
@@ -398,7 +393,7 @@ export function pluginsCommands(): CommandSpec[] {
             ? positional
             : undefined
       if (pathDir === undefined && id === undefined) {
-        throw new CliError('missing target: provide <id>, --path <dir>, or --dir <dir>', 'missing_id')
+        throw new CliError('missing target: provide <id>, --path <dir>, or an absolute-path positional', 'missing_id')
       }
       if (pathDir !== undefined && id !== undefined) {
         throw new CliError('id and directory path cannot both be provided', 'conflicting_flags')

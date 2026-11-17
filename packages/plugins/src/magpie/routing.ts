@@ -22,7 +22,7 @@ export interface GroupListRow {
 }
 
 /** magpie group <id> CLI 的组定义。 */
-export interface GroupInfo {
+interface GroupInfo {
   id?: string
   name?: string
   auto?: boolean
@@ -74,7 +74,7 @@ export interface TraceRoute {
 // eslint-disable-next-line no-control-regex
 const ANSI = /\u001b\[[0-9;]*m/g
 
-export function stripAnsi(text: string): string {
+function stripAnsi(text: string): string {
   return text.replace(ANSI, '')
 }
 
@@ -86,12 +86,12 @@ const GROUP_REF = '(?:group/[a-z0-9][a-z0-9-]*|auto/[^\\s]+)'
 const GROUP_REF_LINE = new RegExp(`^${GROUP_REF}$`)
 
 /** `group/<id>` → `<id>`。 */
-export function shortGroupId(id: string): string {
+function shortGroupId(id: string): string {
   return id.replace(/^group\//, '')
 }
 
 /** 组 id 集合去重键：短 id（group/x 与 x 同键）。 */
-export function groupKey(id: string | undefined): string | undefined {
+function groupKey(id: string | undefined): string | undefined {
   if (!id) return undefined
   const short = shortGroupId(id)
   return short.length > 0 ? short : undefined
@@ -209,7 +209,7 @@ export function parseGroupsList(text: string): GroupListRow[] {
 }
 
 /** `● a/x · b/y` 或 `a/x → b/y` → 成员 id 列表。 */
-export function splitMembers(text: string): string[] {
+function splitMembers(text: string): string[] {
   return text
     .split(/\s+(?:\u00b7|\u2192)\s+/)
     .map((member) =>
@@ -226,7 +226,7 @@ export function splitMembers(text: string): string[] {
 // ---------------------------------------------------------------------------
 
 /** 路由组展示行。 */
-export interface RouteRow {
+interface RouteRow {
   group: string
   strategy?: string
   provider?: string

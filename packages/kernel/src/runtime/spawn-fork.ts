@@ -19,18 +19,18 @@ import type { Harness } from '@earendil-works/pi-durable'
 import { HelmError, type AgentSpawnRequest } from '@helm/protocol'
 import { clampThinkingLevelForModel, parseModelRef, type ModelRefParts } from './models.js'
 
-export interface ForkAnchorContextMessage {
+interface ForkAnchorContextMessage {
   role?: string
   content?: unknown
   toolCallId?: string
 }
 
-export interface ForkAnchorContextView {
+interface ForkAnchorContextView {
   entries: ReadonlyArray<{ id: number | string }>
   contributions: ReadonlyArray<ReadonlyArray<ForkAnchorContextMessage>>
 }
 
-export interface ForkModelAndThinkingInput {
+interface ForkModelAndThinkingInput {
   request: Pick<AgentSpawnRequest, 'fork' | 'model' | 'effort'>
   forkSameProfile: boolean
   profile: { model?: string; thinkingLevel?: string }
@@ -42,7 +42,7 @@ export interface ForkModelAndThinkingInput {
   modelsForClamp?: Models
 }
 
-export interface ForkModelAndThinkingResult {
+interface ForkModelAndThinkingResult {
   resolvedModel: ModelRefParts
   createModelRef: string
   thinkingLevel: string | undefined

@@ -22,7 +22,7 @@
 
 import { HelmError } from '@helm/protocol'
 
-export type AskPhase = 'creating' | 'pending' | 'sent' | 'settled'
+type AskPhase = 'creating' | 'pending' | 'sent' | 'settled'
 
 export interface AskEntry {
   readonly key: string
@@ -42,7 +42,7 @@ export interface AskEntry {
 }
 
 /** Authoritative terminal state change (agent.get or event-driven probing). */
-export interface AuthorityUpdate {
+interface AuthorityUpdate {
   paneId: string
   nodeId?: string
   seq: number
@@ -54,7 +54,7 @@ export interface AuthorityUpdate {
  * - owner: the caller won creation rights (responsible for createAsk and settle);
  * - duplicate: this (pane,seq) is already handled or being handled (no rebuild, no re-send, no new creation).
  */
-export type BeginBlockedResult = { owner: AskEntry } | { duplicate: true }
+type BeginBlockedResult = { owner: AskEntry } | { duplicate: true }
 
 export class AskCoordinator {
   private readonly entries_map = new Map<string, AskEntry>()

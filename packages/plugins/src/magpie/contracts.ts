@@ -52,27 +52,12 @@ export function sameGateway(a: MagpieGatewayRef, b: MagpieGatewayRef): boolean {
   return a.root === b.root && a.token === b.token
 }
 
-/**
- * Zero-arg factory: all dependencies consume the ctx.host public ports (HelmHostApi) directly:
- * - refreshModels({ providers: ['magpie'] }): refresh our own provider through the host's generic
- *   catalog-refresh chain (errors return via result.errors['magpie']; no reject);
- * - Network reads use global fetch; the local magpie CLI goes through the public execFile environment
- *   port (tests substitute PATH fixtures / a mocked global fetch; no production backdoors).
- */
-export interface MagpieRefreshPort {
-  refreshModels(options?: {
-    providers?: string[]
-    allowNetwork?: boolean
-    force?: boolean
-  }): Promise<{ errors: Record<string, string> }>
-}
-
 // ---------------------------------------------------------------------------
 // Public status doc (shared by composer.pill / settings.panel / the helm magpie status CLI)
 // ---------------------------------------------------------------------------
 
 /** One quota display row (one row per window of each subscription/plan/key). remainingPercent -1 means unknown. */
-export interface MagpieStatusQuota {
+interface MagpieStatusQuota {
   provider: string
   account?: string
   remainingPercent: number
@@ -81,7 +66,7 @@ export interface MagpieStatusQuota {
 }
 
 /** One routing group's recent-hit trace row. */
-export interface MagpieStatusRoute {
+interface MagpieStatusRoute {
   group: string
   strategy?: string
   provider?: string

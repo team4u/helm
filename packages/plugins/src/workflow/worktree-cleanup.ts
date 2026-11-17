@@ -65,7 +65,7 @@ function assertWorktreeNotHeld(
   )
 }
 
-export async function assertPathUnusedByProcesses(
+async function assertPathUnusedByProcesses(
   deps: Pick<WorktreeAllocatorDeps, 'inspectPathUsage'>,
   redact: (text: string) => string,
   record: ManagedWorktreeRecord,

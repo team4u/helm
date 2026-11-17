@@ -23,7 +23,7 @@ import { compareStrictSemVer, hubVersion, isStrictSemVer, normalizeExplicitVersi
 /** Background refresh interval for local disk stats (unref timer, never blocks process exit). */
 const LOCAL_DISK_REFRESH_MS = 30_000
 
-export interface NodeManagerOptions {
+interface NodeManagerOptions {
   readonly dataDir: string
   readonly envFabric: EnvFabric
   readonly configSvc: ConfigService

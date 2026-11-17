@@ -21,7 +21,7 @@ const LEASES_DOC_KEY = 'worktree-leases'
 const AGENT_BINDINGS_DOC_KEY = 'worktree-agent-bindings'
 
 /** 持久化文档形状（版本化，损坏显式拒绝）。 */
-export interface WorktreeDoc {
+interface WorktreeDoc {
   version: 1
   records: ManagedWorktreeRecord[]
 }
@@ -122,7 +122,7 @@ export interface WorktreeLeaseRecord {
 }
 
 /** `agentId` 续接绑定记录（同时记录父子会话以便任一方删除时精准裁剪）。 */
-export interface WorktreeAgentBinding {
+interface WorktreeAgentBinding {
   childId: number
   parentConversationId: number
 }
@@ -135,14 +135,14 @@ export interface WorktreeRecordSelector {
   nodeId?: string
 }
 
-export type WorktreeResolveMode = 'inspect' | 'cleanup'
+type WorktreeResolveMode = 'inspect' | 'cleanup'
 
-export interface WorktreeStoreHostPorts {
+interface WorktreeStoreHostPorts {
   getConversation(id: number): { status: string }
   listActiveSpawnExecutions(): AgentExecutionInfo[]
 }
 
-export interface WorktreeStoreDeps {
+interface WorktreeStoreDeps {
   docStore: {
     get<T>(key: string, initial: T): T
     set<T>(key: string, value: T): void

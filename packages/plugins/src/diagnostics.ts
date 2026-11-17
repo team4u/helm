@@ -12,7 +12,7 @@
 export type WatchdogOwnership = 'helm' | 'bot' | 'human'
 
 /** 探针目标类别：conversation = 原生会话；external = 外部运行时目标（如 Herdr 窗格）。 */
-export type WatchdogTargetKind = 'conversation' | 'external'
+type WatchdogTargetKind = 'conversation' | 'external'
 
 /** 单个巡检探针采集到的事实。 */
 export interface WatchdogProbe {
@@ -38,7 +38,7 @@ export interface WatchdogProbe {
 }
 
 /** 原生会话引用（巡检消费的最小字段；完整摘要由采集发起方自读宿主）。 */
-export interface DiagnosticsConversationRef {
+interface DiagnosticsConversationRef {
   id: number
   profileId: string
 }
@@ -66,7 +66,7 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 }
 
 /** 校验单个探针形状；返回错误描述（null = 合法）。与原 hooks.ts watchdog_tick 校验同构。 */
-export function probeViolation(p: unknown): string | null {
+function probeViolation(p: unknown): string | null {
   if (
     !isPlainObject(p) ||
     typeof p['targetId'] !== 'string' ||

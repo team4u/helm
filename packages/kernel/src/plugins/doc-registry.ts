@@ -46,7 +46,7 @@ export interface PluginSessionDocStore {
 }
 
 /** Registered `doc` metadata: handle, visibility, durability, and normalized initial value. */
-export interface DocRegistration {
+interface DocRegistration {
   handle: PluginDocHandle<unknown>;
   isPublic: boolean;
   durable: boolean;
@@ -54,7 +54,7 @@ export interface DocRegistration {
 }
 
 /** Registered `sessionDoc` metadata: handle, visibility, durability, and normalized initial/fallback value. */
-export interface SessionDocRegistration {
+interface SessionDocRegistration {
   handle: PluginSessionDocHandle<unknown>;
   isPublic: boolean;
   durable: boolean;

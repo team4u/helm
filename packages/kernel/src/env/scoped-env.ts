@@ -38,7 +38,7 @@ export interface ScopedExecutionEnv extends ExecutionEnv {
   readonly target: { conversationId?: number; nodeId: string; cwd: string }
 }
 
-export interface ScopedExecutionEnvOptions {
+interface ScopedExecutionEnvOptions {
   /** helm CLI wrapper directory (prepended to PATH for local exec). */
   cliBinDir?: () => string | undefined
 }

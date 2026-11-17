@@ -14,10 +14,10 @@ import { fileURLToPath } from 'node:url'
 import { HelmError, type PluginDefinition } from '@helm/protocol'
 import { resolvePluginClientAssets } from './asset-paths.js'
 
-export const JSON_RENDER_PLUGIN_ID = 'builtin:json-render'
+const JSON_RENDER_PLUGIN_ID = 'builtin:json-render'
 
 /** 本插件自举的受管技能 ID。 */
-export const GENERATIVE_UI_SKILL_ID = 'generative-ui'
+const GENERATIVE_UI_SKILL_ID = 'generative-ui'
 
 function resolveSkillDir(): string {
   const here = dirname(fileURLToPath(import.meta.url))

@@ -38,7 +38,7 @@ export const MAX_MEMORY_CHARS = 64_000
 export const MEMORY_DEFAULT = ['# Memory', '', ''].join('\n')
 
 /** The uniform over-limit rejection error. */
-export function memoryLimitError(
+function memoryLimitError(
   profileId: string,
   wouldBe: number,
   mode: 'append' | 'replace',

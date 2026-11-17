@@ -24,7 +24,7 @@ import type { EnvFabric } from './fabric.js'
 export type { NodeForwardEvent, NodeForwardInput, NodeForwardSession } from '@helm/protocol'
 
 /** Default foreground lease deadline: stops automatically if no event stream attaches after creation (CLI makes a single stream request). */
-export const NODE_FORWARD_LEASE_TIMEOUT_MS = 15_000
+const NODE_FORWARD_LEASE_TIMEOUT_MS = 15_000
 
 /** Validate host: non-empty, no control chars/whitespace, <= 255 characters (hostname or IP literal). */
 function validateHost(raw: unknown, what: string): string {
@@ -51,14 +51,6 @@ function validatePort(raw: unknown, what: string): number {
     throw new HelmError('validation_error', `${what} must be a valid integer port in 1..65535`, 400, { value: raw })
   }
   return raw
-}
-
-export function parseNodeForwardInput(raw: Record<string, unknown>): NodeForwardInput {
-  const listenHost = validateHost(raw['listenHost'], 'listenHost')
-  const listenPort = validatePort(raw['listenPort'], 'listenPort')
-  const targetPort = validatePort(raw['targetPort'], 'targetPort')
-  const targetHost = raw['targetHost'] === undefined ? undefined : validateHost(raw['targetHost'], 'targetHost')
-  return { listenHost, listenPort, ...(targetHost === undefined ? {} : { targetHost }), targetPort }
 }
 
 interface ActiveForward {

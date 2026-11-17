@@ -26,7 +26,7 @@ import {
 import { withFileLock } from './file-lock.js'
 
 export const DEFAULT_PROFILE_ID = 'assistant'
-export const DEFAULT_PROFILE_NAME = 'person assist'
+const DEFAULT_PROFILE_NAME = 'person assist'
 const NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/
 /** Valid thinking level enum values (aligned with pi-ai ModelThinkingLevel; declared independently so schema stays dependency-free). */
 const THINKING_LEVELS = new Set(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
@@ -68,7 +68,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 /** Unicode code-point length (surrogate pairs count as 1, matching visual display width; canonical across contract). */
-export function codePointLength(text: string): number {
+function codePointLength(text: string): number {
   let count = 0
   for (const _ of text) count += 1
   return count
@@ -76,7 +76,7 @@ export function codePointLength(text: string): number {
 
 /** Validate a single starter prompt at the boundary: label is normalized by trimming, prompt preserves original text;
  * unknown fields are rejected (starters are user-editable data; silently dropping fields causes data loss in UI saves). */
-export function validateProfileStarter(item: unknown, at: string): ProfileStarterPrompt {
+function validateProfileStarter(item: unknown, at: string): ProfileStarterPrompt {
   if (!isPlainObject(item)) throw new Error(`${at} must be { label, prompt } object`)
   const label = item['label']
   const prompt = item['prompt']
@@ -261,7 +261,7 @@ function normalizeProfile(value: unknown, id: string): Profile {
 
 /** Binding re-check dependency before deletion: HTTP layer injects conversation query so the service layer closes
  * the race window between route fast-path check, concurrent create/PATCH binding, and disk deletion. */
-export interface ProfileDeleteDeps {
+interface ProfileDeleteDeps {
   isProfileInUse(profileId: string): boolean | Promise<boolean>
 }
 
@@ -391,7 +391,7 @@ export interface BuiltinSkillAsset {
  * Validate a relative path inside a skill bundle: forbids absolute paths, `..` segments, backslashes, control characters, and empty segments.
  * Allows nested relative paths like `SKILL.md` and `references/...`.
  */
-export function assertSafeRelativePath(input: string): string {
+function assertSafeRelativePath(input: string): string {
   if (input.includes('\\')) throw new Error(`illegal path (backslash): ${input}`)
   if (input.includes('\0')) throw new Error('illegal path (contains NUL)')
   if (input === '' || input === '.') throw new Error('path cannot be empty')

@@ -14,7 +14,7 @@
 import { gzipSync } from 'node:zlib'
 
 /** JSON response compression threshold (bytes): below this, compression gains do not outweigh CPU and TLS framing overhead. */
-export const GZIP_MIN_BYTES = 1024
+const GZIP_MIN_BYTES = 1024
 
 /** Parse Accept-Encoding to determine whether gzip is accepted (including x-gzip alias; q=0 means rejected). */
 export function acceptsGzip(request: Request): boolean {
@@ -35,7 +35,7 @@ export function acceptsGzip(request: Request): boolean {
 }
 
 /** Merge Accept-Encoding into the Vary header (preserving existing values such as Origin without duplicating). */
-export function mergeVaryAcceptEncoding(headers: Headers): void {
+function mergeVaryAcceptEncoding(headers: Headers): void {
   const existing = headers.get('vary')
   if (existing === null) {
     headers.set('vary', 'Accept-Encoding')

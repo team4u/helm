@@ -601,7 +601,7 @@ export async function findSourceDirByPluginId(
 }
 
 /** Scan hit: source directory path plus imported definition (for registered plugins, hits ESM cache with old proxy def). */
-export interface PluginSourceLocation {
+interface PluginSourceLocation {
   dir: string;
   definition: PluginDefinition;
 }

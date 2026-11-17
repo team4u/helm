@@ -70,7 +70,7 @@ const COMPRESSIBLE_EXTENSIONS: ReadonlySet<string> = new Set([
 ]);
 
 /** Only these two errnos mean the target does not exist; all others (EACCES/ELOOP/EIO, etc.) are real I/O faults. */
-export function isMissingError(err: unknown): boolean {
+function isMissingError(err: unknown): boolean {
   const code = (err as NodeJS.ErrnoException)?.code;
   return code === 'ENOENT' || code === 'ENOTDIR';
 }

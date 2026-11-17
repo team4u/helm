@@ -19,7 +19,7 @@ import { executionOf } from './tool-result.js'
 export const BACKGROUND_REPORT_RENDERER = 'workflow:background-report'
 
 /** background 缺省判定的权威归属端口（内核 getConversationOwnership）。 */
-export interface BackgroundPolicyDeps {
+interface BackgroundPolicyDeps {
   getConversationOwnership(id: number): 'helm' | 'bot' | 'human'
 }
 

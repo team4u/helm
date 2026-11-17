@@ -87,7 +87,7 @@ export interface WorkflowRunRequest {
 
 export type WorkflowRunStatus = 'running' | 'completed' | 'failed' | 'aborted'
 
-export type WorkflowNodeStatus = 'pending' | 'running' | 'done' | 'failed' | 'skipped'
+type WorkflowNodeStatus = 'pending' | 'running' | 'done' | 'failed' | 'skipped'
 
 /** DAG 单节点状态（agent / action / gate / script 等统一形状）。 */
 export interface WorkflowNodeState {
@@ -197,8 +197,6 @@ export interface WorkflowRunSummary {
   detachedAt?: number
 }
 
-export type WorkflowRunState = WorkflowRunSummary
-
 /**
  * 受管子代理默认派生深度上限：主会话直接派生的一层子代理默认可继续派生
  * 二层（1 → 2），达到上限的会话即编排叶子。派生请求（spawn meta 的
@@ -219,7 +217,7 @@ export const WORKFLOW_RUNS_DOC = 'runs' as const
 /** 全局紧凑角标文档名（仅每会话 count/tone/footerText，不含完整 run 摘要）。 */
 export const WORKFLOW_RUN_BADGES_DOC = 'run-badges' as const
 
-export interface WorkflowConversationBadgeSummary {
+interface WorkflowConversationBadgeSummary {
   count: number
   tone?: 'warn' | 'accent' | 'neutral'
   footerText?: string
@@ -249,15 +247,6 @@ export interface WorktreeCleanupRequest {
   mergedInto?: string
   deleteBranch?: boolean
   force?: boolean
-}
-
-export interface WorktreeCleanupResult {
-  worktreeId: string
-  removed: boolean
-  path: string
-  branch: string
-  nodeId: string
-  branchDeleted: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -329,7 +318,7 @@ export interface ExternalSteerResult {
 export const WORKFLOW_META_NAMESPACE = WORKFLOW_PLUGIN_ID
 
 /** spawn meta 业务形状（meta['builtin:workflow']；派生请求侧）。 */
-export type WorkflowSpawnMeta = {
+type WorkflowSpawnMeta = {
   /** 发起本次派生的 run ID（引擎注入；herdr 双轨保活清理等按此归档）。 */
   runId?: string
   /**
@@ -357,7 +346,7 @@ export type WorktreeExecutionDescriptor = {
 }
 
 /** execution meta 业务形状（meta['builtin:workflow']；onResolved 回传侧）。 */
-export type WorkflowExecutionMeta = {
+type WorkflowExecutionMeta = {
   /** isolation: 'worktree' 兑现后的隔离工作树描述。 */
   worktree?: WorktreeExecutionDescriptor
   /** 外部执行控制动作引用（必须与 executionId + nodeId 同时回传）。 */

@@ -27,7 +27,7 @@ import {
 } from './spawn-rules.js'
 
 /** The minimal dependency surface of ResumeCoordinator on the executor. */
-export interface ResumePort {
+interface ResumePort {
   registry: PaneRegistry
   /** Profile runtime table (for resolveSpawnRouting's dual entries). */
   profiles: HerdrPluginDependencies['profiles']

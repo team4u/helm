@@ -13,13 +13,13 @@ import type { HelmToolDeps } from '../tool-deps.js'
 
 /** Minimal SDK `ToolApi` subset needed by `write`/`edit`/`register_artifact` (satisfied structurally by both
  * test `makeApi` fakes and real SDK APIs; agent and tool share the same SDK `Context` so cancellation propagates). */
-export interface ToolTargetApi {
+interface ToolTargetApi {
   agent(context: Context): Promise<{ cwd?: string }>
   conversationId: number | string
 }
 
 /** Resolved conversation target. */
-export interface ToolTarget {
+interface ToolTarget {
   nodeId: string
   base: string
   platform: TargetPlatform | undefined

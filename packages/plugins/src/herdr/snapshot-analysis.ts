@@ -44,7 +44,7 @@ const BLOCKED_SNAPSHOT_SYSTEM_PROMPT = [
 ].join('\n')
 
 /** Default wait budget: 3 seconds for the whole call (incl. model resolution). */
-export const DEFAULT_SNAPSHOT_ANALYSIS_TIMEOUT_MS = 3_000
+const DEFAULT_SNAPSHOT_ANALYSIS_TIMEOUT_MS = 3_000
 
 /** Output token budget: a single lightweight JSON extraction, avoiding long background thinking. */
 const MAX_OUTPUT_TOKENS = 640
@@ -74,12 +74,12 @@ function shortDiagnostic(error: unknown): string {
 }
 
 /** Analysis result: when analysis is undefined, diagnostic explains the redacted failure reason. */
-export interface SnapshotAnalysisOutcome {
+interface SnapshotAnalysisOutcome {
   analysis: BlockedSnapshotAnalysis | undefined
   diagnostic?: string
 }
 
-export interface BlockedSnapshotAnalyzer {
+interface BlockedSnapshotAnalyzer {
   analyze(input: {
     snapshot: string
     conversationId: number

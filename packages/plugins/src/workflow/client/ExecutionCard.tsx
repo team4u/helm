@@ -17,7 +17,7 @@
  */
 import type { ReactNode } from 'react'
 
-export interface ExecutionCardActivate {
+interface ExecutionCardActivate {
   /** Navigation entry aria-label (e.g. "Open subagent #11 drawer"). */
   label: string
   /** Hover tooltip (multi-line details). */
@@ -25,7 +25,7 @@ export interface ExecutionCardActivate {
   open: () => void
 }
 
-export interface ExecutionCardToggle {
+interface ExecutionCardToggle {
   /** Collapse toggle aria-label (one sentence each for expanded / collapsed). */
   label: string
   expanded: boolean

@@ -42,10 +42,10 @@ import { ConversationContextOps } from './conversation-context-ops.js'
 import { ConversationDetailService } from './conversation-detail.js'
 import { ConversationInputPipeline } from './conversation-input.js'
 import { ConversationProfileService } from './conversation-profile.js'
-import { ConversationRewind, type RewindNewInput } from './conversation-rewind.js'
+import { ConversationRewind } from './conversation-rewind.js'
 import { normalizeSessionCwd, trustedPlatformFromEnvFabric, type TrustedNodePlatformSource } from './target-cwd.js'
 
-export interface ConversationServiceOptions {
+interface ConversationServiceOptions {
   readonly harness: Harness
   readonly storage: { scanConversations(query: never, limit: number, cursor: never, context: unknown): Promise<{ readonly items: ReadonlyArray<{ id: number | string; parent?: { conversationId?: number } }>; next?: unknown }> }
   readonly store: HelmStore
@@ -811,23 +811,6 @@ export class ConversationService {
       return this.withMutationGate(id, () => this.inputPipeline.submitFreshInput(conversation, id, freshSubmission))
     }
     return this.inputPipeline.submitFreshInput(conversation, id, freshSubmission)
-  }
-
-  // ------------------------------------------------------------------
-  // In-place overwrite & resend delegation (direct calls / test compatibility)
-  // ------------------------------------------------------------------
-
-  async withHistoryEdit<T>(id: number, operation: () => Promise<T>): Promise<T> {
-    return this.rewind.withHistoryEdit(id, operation)
-  }
-
-  async rewriteConversationFrom(
-    id: number,
-    conversation: NonNullable<Awaited<ReturnType<Harness['conversation']>>>,
-    replaceFromEntryId: number,
-    newInput: RewindNewInput,
-  ): Promise<{ submissionId: string }> {
-    return this.rewind.rewriteConversationFrom(id, conversation, replaceFromEntryId, newInput)
   }
 
   // ------------------------------------------------------------------

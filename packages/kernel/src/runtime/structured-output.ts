@@ -89,7 +89,7 @@ export function assertSchemaNotAsync(schema: Record<string, unknown>): void {
 }
 
 /** Full AJV validation (reuses plugins/schema; $async is already rejected at compile time). */
-export function validateAgainstSchema(
+function validateAgainstSchema(
   value: unknown,
   schema: Record<string, unknown>,
 ): { ok: true; value: unknown } | { ok: false; errors: string } {
@@ -195,7 +195,7 @@ function safeParse(text: string): unknown | undefined {
  * Validate structured output payload (supporting string-encoded JSON from transport layers),
  * shared by register_structured_output tool and cross-restart entry recovery scan.
  */
-export function validateStructuredOutputPayload(
+function validateStructuredOutputPayload(
   payload: unknown,
   schema: Record<string, unknown>,
 ): { ok: true; value: unknown } | { ok: false; errors: string } {
@@ -213,7 +213,7 @@ export function validateStructuredOutputPayload(
   return direct
 }
 
-export interface StructuredOutputScanEntry {
+interface StructuredOutputScanEntry {
   readonly kind: string
   readonly model?: ReadonlyArray<unknown>
 }

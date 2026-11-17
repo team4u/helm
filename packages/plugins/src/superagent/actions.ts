@@ -16,7 +16,7 @@ import {
 import { searchRecallNodes } from './recall.js'
 import { recentEntrySummaries } from './settlement.js'
 
-export interface DispatchInput {
+interface DispatchInput {
   prompt: string
   profileId?: string
   title?: string
@@ -26,7 +26,7 @@ export interface DispatchInput {
 }
 
 /** 执行会话二次校验：scope 之外再核实际 router 会话（防同 Profile 人类直聊滥用）。 */
-export function assertRouterAuthority(
+function assertRouterAuthority(
   conversationId: number | undefined,
   routerConversationId: number | undefined,
 ): void {
@@ -49,7 +49,7 @@ export function assertThreadKey(key: string): string {
   return trimmed
 }
 
-export function assertWorkerConversationId(value: unknown): number {
+function assertWorkerConversationId(value: unknown): number {
   if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
     throw new HelmError('validation_error', `workerConversationId 必须是正整数（收到：${String(value)}）`, 400, {})
   }
@@ -68,7 +68,7 @@ export function assertProfileId(value: string): string {
 /** Worker 工作目录：显式给出则必须是跨平台绝对路径（POSIX `/`、
  * Windows 盘符 `C:\\...` / `C:/...`、UNC `\\\\server\\share`），
  * 目标节点可能与 Hub 异平台，不得用宿主 node:path 规则判定。 */
-export function assertWorkerCwd(value: string): string {
+function assertWorkerCwd(value: string): string {
   const trimmed = value.trim()
   if (trimmed === '' || !isAbsoluteTargetPath(trimmed)) {
     throw new HelmError(
@@ -83,7 +83,7 @@ export function assertWorkerCwd(value: string): string {
 
 /** Worker 绑定节点：非空、无空白、无路径分隔符（防目录注入）；
  * 存在性由 createConversation 靶点解析链处理，不在此硬编码节点清单。 */
-export function assertWorkerNodeId(value: string): string {
+function assertWorkerNodeId(value: string): string {
   const trimmed = value.trim()
   if (trimmed === '' || trimmed.length > 64 || /\s|[/\\]/.test(trimmed)) {
     throw new HelmError(
@@ -97,16 +97,16 @@ export function assertWorkerNodeId(value: string): string {
 }
 
 /** workerConversationId 共享约束：正整数。 */
-export const workerIdSchema: Record<string, unknown> = { type: 'integer', minimum: 1 }
+const workerIdSchema: Record<string, unknown> = { type: 'integer', minimum: 1 }
 
-export const workerIdInputSchema: Record<string, unknown> = {
+const workerIdInputSchema: Record<string, unknown> = {
   type: 'object',
   properties: { workerConversationId: workerIdSchema },
   required: ['workerConversationId'],
   additionalProperties: false,
 }
 
-export const dispatchInputSchema: Record<string, unknown> = {
+const dispatchInputSchema: Record<string, unknown> = {
   type: 'object',
   properties: {
     prompt: { type: 'string', minLength: 1 },

@@ -16,7 +16,7 @@
 import { normalizeTargetPath, targetPlatformOf, type TargetPlatform } from '@helm/protocol'
 
 /** Minimal platform lookup port (implemented by EnvFabric from Hub/node platform facts; stubbed in tests). */
-export interface NodePlatformSource {
+interface NodePlatformSource {
   /** Reported remote node platform (from NodeRegistry); local does not read this port. */
   nodePlatformOf?(nodeId: string): string | undefined
   /** Hub local platform override for tests; defaults to `process.platform` in production. */
@@ -24,7 +24,7 @@ export interface NodePlatformSource {
 }
 
 /** Platform lookup result: known carries parsed TargetPlatform + raw string; unknown carries explicit reason. */
-export type TargetPlatformInfo =
+type TargetPlatformInfo =
   | { known: true; platform: TargetPlatform; reported: string }
   | { known: false; reason: string }
 
@@ -51,7 +51,7 @@ export function targetPlatformForNode(
 }
 
 /** Platform-aware path normalization result: success yields canonical path; failure preserves original path. */
-export type TargetPathNormalization =
+type TargetPathNormalization =
   | { ok: true; path: string; platform: TargetPlatform | undefined; view: string }
   | { ok: false; code: 'invalid_path'; original: string; reason: string }
 

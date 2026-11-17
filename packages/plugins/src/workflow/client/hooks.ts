@@ -32,18 +32,13 @@ export function useStreamFollow(content: unknown) {
   return { ref, onScroll }
 }
 
-/** Subscribe to the builtin:workflow public runs doc (conversation shard, only the current conversation's run list). */
-export function useWorkflowRunsDoc<T = { runs: WorkflowRunSummary[] }>(docName: string, conversationId: number | undefined): T | undefined {
-  return usePluginSessionDoc<T>(docName, conversationId !== undefined ? { conversationId } : undefined)
-}
-
 /** Shared 1Hz stopwatch (SSR first frame returns undefined; client shares a single module-level ticker across all active cards). */
 export function useElapsedNowMs(active: boolean): number | undefined {
   return useSharedNowMs(active)
 }
 
 /** Workflow library loading state: list action + generation guard (reloads never splice stale responses). */
-export interface WorkflowLibraryState {
+interface WorkflowLibraryState {
   items: SavedWorkflowView[] | undefined
   error: string | undefined
   loading: boolean
@@ -87,7 +82,7 @@ export function useWorkflowLibrary(): WorkflowLibraryState {
   return { items, error, loading, reload }
 }
 
-export interface InspectedRunResultState {
+interface InspectedRunResultState {
   hasResult: boolean
   hasResolvedValue: boolean
   result: unknown

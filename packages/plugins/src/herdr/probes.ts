@@ -20,7 +20,7 @@ import { nodeIdOf, scopeKey, type ManagedPane, type PaneRegistry } from './panes
 import { parseAgentResult } from './rpc.js'
 
 /** The probe collector's minimal dependency surface on the plugin main (herdr.ts). */
-export interface HerdrProbeDeps {
+interface HerdrProbeDeps {
   asks: AskCoordinator
   /** The registry's current value (undefined after disable: collection returns immediately, touching no server). */
   registry(): PaneRegistry | undefined

@@ -21,7 +21,7 @@ import type { HelmStore } from './store.js'
 import type { KernelRuntime } from './runtime.js'
 
 /** Boundary normalization for `profiles.get/directory`: invalid id -> `400 validation_error`; rethrows all other errors as-is. */
-export function normalizeProfileBoundaryError(id: string, err: unknown): unknown {
+function normalizeProfileBoundaryError(id: string, err: unknown): unknown {
   try {
     assertProfileId(id)
     return err

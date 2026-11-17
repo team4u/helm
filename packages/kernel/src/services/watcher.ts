@@ -8,14 +8,14 @@ import { watch } from 'node:fs'
 import type { WatchListener } from 'node:fs'
 import { join, relative, sep } from 'node:path'
 
-export interface AssetWatcherOptions {
+interface AssetWatcherOptions {
   /** Debounce window in milliseconds, defaulting to 150ms. */
   debounceMs?: number
   /** Callback for watcher/polling errors; if omitted, errors are thrown to the process (never silently swallowed). */
   onError?: (err: Error) => void
 }
 
-export const ASSET_WATCHER_DEBOUNCE_MS = 150
+const ASSET_WATCHER_DEBOUNCE_MS = 150
 
 export class AssetWatcher {
   private handle: ReturnType<typeof watch> | undefined
@@ -90,7 +90,7 @@ export class AssetWatcher {
 }
 
 /** Atomic-write temporary filenames have the form `.<uuid>.tmp`. */
-export function isTmpName(filename: string): boolean {
+function isTmpName(filename: string): boolean {
   const base = filename.split(/[\\/]/).pop() ?? ''
   return base.startsWith('.') && base.endsWith('.tmp')
 }

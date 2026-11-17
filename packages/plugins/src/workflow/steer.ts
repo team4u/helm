@@ -31,7 +31,7 @@ import { type ExternalSteerResult, type WorkflowRunSummary } from '../contracts.
 import { isAncestorOrSelf } from '../lineage.js'
 
 /** steer 所需宿主端口（ctx.host 子集；注入确定性 fake 即可全覆盖测试）。 */
-export interface SteerHostPorts {
+interface SteerHostPorts {
   getConversation(id: number): ConversationSummary
   getConversationOwnership(id: number): 'helm' | 'bot' | 'human'
   submitInputGuarded(
@@ -50,18 +50,18 @@ export interface SteerHostPorts {
 }
 
 /** steer 所需运行记录端口（WorkflowService 只读子集）。 */
-export interface SteerRunPorts {
+interface SteerRunPorts {
   getRun(runId: string): WorkflowRunSummary
   isConversationCancelling(conversationId: number): boolean
 }
 
-export interface SteerActionInput {
+interface SteerActionInput {
   runId: string
   text: string
 }
 
 /** steer 动作结果：targetKind 可辨识原生/外部联合（CLI/HTTP/模型同形）。 */
-export type SteerActionOutput =
+type SteerActionOutput =
   | {
       steered: true
       runId: string
@@ -82,7 +82,7 @@ export type SteerActionOutput =
       guardLevel: ExternalSteerResult['guardLevel']
     }
 
-export interface SteerActionContext {
+interface SteerActionContext {
   conversationId?: number
   signal?: AbortSignal
 }

@@ -81,7 +81,6 @@ export const runFailureFallbackLabel = t1((isTrueBackground: boolean) =>
 
 export const TRACE_SUBAGENT_TOOL_NAME = L('Subagent', '子代理')
 export const TRACE_EXTERNAL_TOOL_NAME = L('External agent', '外部代理')
-export const TRACE_SUBAGENT_CALL = L('Subagent call', '子代理调用')
 export const traceSubagentWithId = t1((id: number) => L(`Subagent #${id}`, `子代理 #${id}`))
 export const TRACE_RESUMED_BELOW = L('Resumed below', '已在下文续接')
 export const traceOpenChildLabel = t1((id: number) => L(`Open subagent #${id}`, `打开子会话 #${id}`))
@@ -139,7 +138,6 @@ export const cardOpenChildLabel = t1((id: number) => L(`Open subagent #${id} dra
 export const cardOpenChildTooltip = t0('Click to open the subagent drawer', '点击打开子会话抽屉')
 export const cardSubagentHeading = t1((id: number) => L(`Subagent #${id}`, `子会话 #${id}`))
 export const worktreeBadgeTitle = t1((path: string) => L(`Isolated worktree: ${path}`, `隔离工作树：${path}`))
-export const selfStatusLabel = t1((selfLabel: string) => L(`Self: ${selfLabel}`, `自身${selfLabel}`))
 export const selfAggregateTitle = t2((selfLabel: string, aggregateLabel: string) =>
   L(`Self: ${selfLabel}; subtree aggregate: ${aggregateLabel}`, `自身${selfLabel}，子树聚合：${aggregateLabel}`),
 )
@@ -193,7 +191,6 @@ export const META_KV_CREATED = L('Created', '创建时间')
 export const META_KV_SELF_STATUS = L('Self status', '自身状态')
 export const META_KV_RUN_ID = L('Run ID', '运行 ID')
 export const META_KV_WORKTREE = L('Worktree', '工作树')
-export const META_KV_EXECUTION = L('Execution', '外部执行')
 
 export const SNIPPET_LOAD_FAILED = L('Load failed', '加载失败')
 export const SNIPPET_AWAITING_APPROVAL = L('Awaiting approval', '等待审批')
@@ -263,13 +260,6 @@ export const RUN_CARD_SAVE_FAILED = L('Failed to save workflow', '保存工作�
 export const runCardAriaLabel = t1((name: string) => L(`Workflow: ${name}`, `工作流：${name}`))
 export const RUN_CARD_COLLAPSE_TITLE = L('Collapse workflow card', '收起工作流卡')
 export const RUN_CARD_EXPAND_TITLE = L('Expand workflow card', '展开工作流卡')
-export const runCardSelfTitle = t2((runLabel: string, effectiveLabel: string) =>
-  L(
-    `Run itself ${runLabel}; subtree still has unsettled tasks (${effectiveLabel})`,
-    `run 自身${runLabel}；子树仍有未结算任务（${effectiveLabel}）`,
-  ),
-)
-export const runCardSelfStateTitle = t1((runLabel: string) => L(`Run status: ${runLabel}`, `run 自身状态：${runLabel}`))
 export const RUN_CARD_CACHED_REPLAY = L('Cached replay', 'cached 重放')
 export const runCardReplayBadgeTitle = t1((sourceRunId: string) =>
   L(`Replayed from a journal prefix (source run ${sourceRunId})`, `从 journal 前缀重放恢复（源 run ${sourceRunId}）`),

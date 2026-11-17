@@ -43,7 +43,7 @@ import {
 import type { DispatchTriggerHelper } from './delivery.js'
 
 /** Public webhook request body cap (raw bytes; exceeding gives an explicit 413). */
-export const MAX_WEBHOOK_BODY_BYTES = 256 * 1024
+const MAX_WEBHOOK_BODY_BYTES = 256 * 1024
 
 /**
  * The bound for stop waiting on in-flight public-route requests: slow clients reading the body have no read timeout
@@ -71,7 +71,7 @@ const acceptedResponse = (): Response =>
 
 /** Hex decode + constant-time comparison: both sides are 64-char hex ASCII bytes (length always 64);
  * the regex format check guarantees equal length before timingSafeEqual, leaking no timing through length branches. */
-export function verifySignature(secret: string, body: Uint8Array, header: string): boolean {
+function verifySignature(secret: string, body: Uint8Array, header: string): boolean {
   if (!header.startsWith(SIGNATURE_PREFIX)) return false
   const hex = header.slice(SIGNATURE_PREFIX.length)
   if (!/^[0-9a-f]{64}$/i.test(hex)) return false
@@ -81,14 +81,14 @@ export function verifySignature(secret: string, body: Uint8Array, header: string
   return timingSafeEqual(provided, expected)
 }
 
-export interface RegisterWebhookResult {
+interface RegisterWebhookResult {
   /** Action-handler reuse (the same implementation as ctx.action; consistent across five ends). */
   createWebhook(input: CreateWebhookInput, context: PluginActionContext): Promise<{ webhook: WebhookMeta }>
   listWebhooks(): { webhooks: WebhookMeta[] }
   deleteWebhook(input: { id: string }): Promise<{ deleted: true }>
 }
 
-export interface CreateWebhookInput {
+interface CreateWebhookInput {
   id: string
   description?: string
   secret: string

@@ -7,7 +7,7 @@
  * onDiagnostic to capture and assert events instead of scattering bare console.error calls.
  */
 
-export type KernelDiagnosticLevel = 'error' | 'warn' | 'info'
+type KernelDiagnosticLevel = 'error' | 'warn' | 'info'
 
 export interface KernelDiagnosticEvent {
   readonly level: KernelDiagnosticLevel

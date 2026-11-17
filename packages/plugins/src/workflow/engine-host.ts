@@ -16,7 +16,7 @@ import type { WorkflowServiceHost } from './engine/service.js'
 import type { RunsProjection } from './projection.js'
 
 /** 引擎适配所需宿主端口（全部经 ctx.host 受信通道注入）。 */
-export type EngineHostPorts = Pick<
+type EngineHostPorts = Pick<
   HelmHostApi,
   | 'spawnAgent'
   | 'invokeAction'
@@ -31,7 +31,7 @@ export type EngineHostPorts = Pick<
   | 'isClosing'
 >
 
-export interface WorkflowEngineHostDeps {
+interface WorkflowEngineHostDeps {
   host: EngineHostPorts
   /** runs 投影（emitEvent / onRunSettled / onBackgroundAgentSettled 同步入口）。 */
   projection: RunsProjection

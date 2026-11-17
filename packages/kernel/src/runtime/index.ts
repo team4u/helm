@@ -3,16 +3,15 @@
  */
 
 export { KernelRuntime, type KernelRuntimeOptions } from './runtime.js'
-export { readWorkspaceFile, type ConversationFileContent, type ReadWorkspaceFileDeps } from './workspace-files.js'
+export { readWorkspaceFile, type ConversationFileContent } from './workspace-files.js'
 export {
   isStrictSemVer,
   normalizeExplicitVersion,
   compareStrictSemVer,
   hubVersion,
-  resetHubVersionCacheForTest,
 } from './semver.js'
-export { EventHub, type EventSubscription, type SnapshotProvider } from './events.js'
-export { AskService, type AskSeqResolver, type AskSettled } from './asks.js'
+export { EventHub, type SnapshotProvider } from './events.js'
+export { AskService } from './asks.js'
 export { ConversationTracker, deriveTitle, type TrackerEvents } from './conversations.js'
 export { toConversationEntry, deriveConversationLive, type EntryRecordLike } from './entries.js'
 export { openHelmDatabase, type HelmDatabase } from './sqlite.js'
@@ -24,15 +23,14 @@ export {
   type KernelDiagnosticEmitter,
   type KernelDiagnosticEvent,
   type KernelDiagnosticInput,
-  type KernelDiagnosticLevel,
   type KernelDiagnosticSink,
 } from './diagnostics.js'
-export { HelmStore, convStatusOf, summaryOf, type ConvMeta, type AskRow, type ArtifactRow, type HelmStoreOptions } from './store.js'
+export { HelmStore, convStatusOf, summaryOf, type ConvMeta } from './store.js'
 export { runShell, runGate, createBashTool, createReadTool, createWriteTool, createEditTool, createReadArtifactTool, createRegisterArtifactTool, type ShellRunResult } from './tools.js'
 export { runNativeSpawn, type NativeSpawnDeps } from './spawn.js'
 export { validateJsonSchema } from './structured-output.js'
-export { buildModels, parseModelRef, requireModelRef, listModelCatalog, listModelProviders, type ModelCatalogEntry, type ModelGatewayOptions } from './models.js'
-export { FileModelsStore, createFileModelsStore } from './models-store.js'
+export { buildModels, parseModelRef, requireModelRef, listModelCatalog, listModelProviders, type ModelCatalogEntry } from './models.js'
+export { createFileModelsStore } from './models-store.js'
 export type { HelmToolDeps } from './tool-deps.js'
 export { NodeManager } from './node-manager.js'
 export {
@@ -44,12 +42,12 @@ export {
 } from './cli-shim.js'
 export { ModelRegistry } from './model-registry.js'
 export { HookBridge, prepareToolResultWith } from './hook-bridge.js'
-export { ConversationService, type ConversationServiceOptions, type SubmitInputOptions } from './conversation-service.js'
-export { ConversationRewind, type ConversationRewindHost, type RewindNewInput } from './conversation-rewind.js'
-export { ConversationAttachments, type ConversationAttachmentsHost, IMAGE_MIMES } from './conversation-attachments.js'
-export { ConversationContextOps, type ConversationContextOpsHost } from './conversation-context-ops.js'
-export { ConversationDetailService, type ConversationDetailHost, DETAIL_CURSOR_MAX_LENGTH } from './conversation-detail.js'
-export { ConversationProfileService, type ConversationProfileHost } from './conversation-profile.js'
-export { ConversationInputPipeline, type ConversationInputPipelineHost, type PreparedInputResult } from './conversation-input.js'
-export { buildSpawnHost, toResolvedProfile, type SpawnHost, type SpawnHostSource } from './spawn-host.js'
+export { ConversationService, type SubmitInputOptions } from './conversation-service.js'
+export { ConversationRewind } from './conversation-rewind.js'
+export { ConversationAttachments } from './conversation-attachments.js'
+export { ConversationContextOps } from './conversation-context-ops.js'
+export { ConversationDetailService } from './conversation-detail.js'
+export { ConversationProfileService } from './conversation-profile.js'
+export { ConversationInputPipeline } from './conversation-input.js'
+export { buildSpawnHost } from './spawn-host.js'
 export { createRunActionTool, type KernelToolHost } from './kernel-tools.js'

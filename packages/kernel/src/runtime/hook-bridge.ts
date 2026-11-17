@@ -44,7 +44,7 @@ import {
   withToolDeclarations,
 } from './runtime-helpers.js'
 
-export type HookDecision =
+type HookDecision =
   | { action: 'continue' }
   | { action: 'transform'; value: unknown }
   | { action: 'handled'; result?: unknown }
@@ -56,7 +56,7 @@ export interface HandledToolCallEntry {
   result: { output: Array<{ type: 'text'; text: string }>; isError: boolean }
 }
 
-export interface HookBridgeOptions {
+interface HookBridgeOptions {
   readonly registry: { install(extension: Extension): void }
   /** Lazily resolved `PluginHost` (may not exist yet during initialization). */
   readonly pluginHost: () => PluginHost | undefined

@@ -31,7 +31,7 @@ import {
   tokenSpeedTtftSuffix,
 } from './copy.ts'
 
-export interface SpeedLabel {
+interface SpeedLabel {
   /** Compact read-only text (mono/tabular, e.g. `52.4 tok/s`). */
   text: string
   /** Hover explanation (discloses the accounting basis). */

@@ -23,7 +23,7 @@ const DEFAULT_PORT = 3202
 const DEFAULT_HOSTNAME = '127.0.0.1'
 
 /** Node -> Web Request conversion (including body stream). */
-export function toWebRequest(req: http.IncomingMessage, signal?: AbortSignal): Request {
+function toWebRequest(req: http.IncomingMessage, signal?: AbortSignal): Request {
   const host = req.headers.host ?? 'localhost'
   const url = `http://${host}${req.url ?? '/'}`
   const method = req.method ?? 'GET'
@@ -75,7 +75,7 @@ export async function writeWebResponse(webResponse: Response, res: http.ServerRe
   })
 }
 
-export interface NodeHubHandle extends HubHandle {
+interface NodeHubHandle extends HubHandle {
   /** Actual listening port (kernel-assigned port when `port: 0`). */
   readonly port: number
   readonly server: http.Server

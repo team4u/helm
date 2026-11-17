@@ -20,15 +20,14 @@ export { createTriggersPlugin, TRIGGERS_PLUGIN_ID } from './triggers.js';
 export {
   createAppsPlugin,
   APPS_PLUGIN_ID,
-  APPS_SCREEN_ID,
   APP_BUILDER_SKILL_ID,
   APP_CATEGORIES,
   type AppCategory,
   type AppCatalogEntry,
   type AppsCatalogDoc,
-} from './apps.js';
-export { createJsonRenderPlugin, JSON_RENDER_PLUGIN_ID } from './json-render.js';
-export { createMermaidPlugin, MERMAID_PLUGIN_ID } from './mermaid.js';
+} from './apps.js'
+export { createJsonRenderPlugin } from './json-render.js'
+export { createMermaidPlugin } from './mermaid.js'
 export { createMagpiePlugin, MAGPIE_PLUGIN_ID } from './magpie.js';
 export { MAGPIE_PROVIDER_ID, type MagpiePluginConfig, type MagpieStatusDoc } from './magpie/contracts.js';
 export { createTokenSpeedPlugin, TOKEN_SPEED_PLUGIN_ID } from './token-speed.js';

@@ -30,7 +30,7 @@ export interface NormalizedSpecNode {
 }
 
 /** Normalization result: the tree + whether it degraded (degraded root is an error-notice node). */
-export interface NormalizedSpec {
+interface NormalizedSpec {
   root: NormalizedSpecNode | null
   degraded: boolean
   /** Degradation reason (for host logs; undefined when not degraded). */
@@ -165,13 +165,13 @@ export function normalizeSpec(spec: unknown, locale: HelmLocale = DEFAULT_HELM_L
 }
 
 /** A resolved KeyValueList entry (label is the key name, value already formatted for display). */
-export interface ResolvedKeyValueItem {
+interface ResolvedKeyValueItem {
   label: string
   value: string
 }
 
 /** Whether a string is a binding expression awaiting evaluation (raw unevaluated key/value spelling). */
-export function isBindingExpression(value: unknown): value is string {
+function isBindingExpression(value: unknown): value is string {
   if (typeof value !== 'string') return false
   const trimmed = value.trim()
   return trimmed.startsWith('/$') || trimmed.startsWith('{$')

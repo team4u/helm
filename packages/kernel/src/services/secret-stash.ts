@@ -26,7 +26,7 @@
 import { randomUUID } from 'node:crypto'
 import { HelmError, type SecretLifetime } from '@helm/protocol'
 
-export const REDACTED_PREFIX = '[REDACTED:stash:'
+const REDACTED_PREFIX = '[REDACTED:stash:'
 export const REDACTED_MARKER = '[REDACTED]'
 
 /** TTL cap: 24 hours (safety upper bound to prevent accidental near-permanent TTL values). */
@@ -96,7 +96,7 @@ export function validateSecretLifetime(lifetime: SecretLifetime, context: string
 }
 
 /** Placeholder <-> text conversion helpers (reused by ArtifactService spill redaction). */
-export function makePlaceholder(uuid: string): string {
+function makePlaceholder(uuid: string): string {
   return `${REDACTED_PREFIX}${uuid}]`
 }
 

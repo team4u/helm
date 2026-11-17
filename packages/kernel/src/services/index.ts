@@ -3,8 +3,6 @@
  * Consumers (PluginHost / HTTP / CLI) must import from here instead of deep submodule paths.
  */
 export {
-  HELM_DATA_DIR_ENV,
-  DATA_SUBDIRS,
   resolveDataDir,
   ensureDataDir,
 } from './paths.js'
@@ -27,9 +25,7 @@ export { withFileLock, withProcessFileLock } from './file-lock.js'
 
 export {
   SecretStash,
-  REDACTED_PREFIX,
   isValidEnvName,
-  makePlaceholder,
   parsePlaceholder,
   validateSecretLifetime,
   MAX_SECRET_TTL_MS,
@@ -45,7 +41,6 @@ export {
   validateProfileInput,
   parseSkillFrontmatter,
   assertSkillId,
-  assertSafeRelativePath,
   defaultExternalSkillRoots,
   type Profile,
   type SkillSummary,
@@ -54,9 +49,6 @@ export {
 
 export {
   AssetWatcher,
-  isTmpName,
-  ASSET_WATCHER_DEBOUNCE_MS,
-  type AssetWatcherOptions,
 } from './watcher.js'
 
 export {
@@ -64,21 +56,15 @@ export {
   AuthAlreadyConfiguredError,
   InvalidCredentialsError,
   WeakPasswordError,
-  MIN_PASSWORD_LENGTH,
 } from './auth.js'
 
 export {
   CredentialService,
   credentialsPath,
-  readRawText,
-  type CredentialStore,
-  type StoredCredential,
 } from './credentials.js'
 
 export {
   ProviderService,
-  assertProviderId,
-  validateProviderConfig,
   type ProviderConfig,
 } from './providers.js'
 
@@ -94,14 +80,8 @@ export {
   InMemoryArtifactRepository,
   MAX_ARTIFACT_BYTES,
   sanitizeUploadFilename,
-  SPILL_THRESHOLD_BYTES,
-  PREVIEW_HEAD_BYTES,
-  truncateUtf8Safe,
   type ArtifactKind,
   type ArtifactMetadata,
-  type ArtifactRepository,
-  type RegisterOptions,
-  type SpillResult,
 } from './artifacts.js'
 // Binary artifact reads go through ArtifactService.readBuffer (used by the HTTP layer to transfer raw bytes),
 // sharing the same source and validation as readContent (resolveStoredPath prevents arbitrary reads via forged metadata).

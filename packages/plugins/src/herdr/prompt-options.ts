@@ -26,7 +26,7 @@ export interface BlockedSnapshotAnalysis {
   options: BlockedSnapshotAiOption[]
 }
 
-export interface ExtractedMenuItem {
+interface ExtractedMenuItem {
   /** Menu item display text (after stripping cursor symbols). */
   label: string
   /** The logical key sequence to send for choosing this item (e.g. ['enter'] or ['down', 'enter']). */
@@ -488,7 +488,7 @@ function normalizeAiKey(key: string): string {
  * - named keys normalized lowercase; dedup by key sequence; keep at most 6 items;
  * - return undefined when there are no valid options and no summary (the caller falls back to generic options).
  */
-export function sanitizeBlockedSnapshotAnalysis(raw: unknown): BlockedSnapshotAnalysis | undefined {
+function sanitizeBlockedSnapshotAnalysis(raw: unknown): BlockedSnapshotAnalysis | undefined {
   if (typeof raw !== 'object' || raw === null) return undefined
   const record = raw as { summary?: unknown; options?: unknown }
   const summary =

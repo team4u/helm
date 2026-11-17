@@ -55,7 +55,7 @@ import { isValidEnvName, type SecretStash } from '../services/index.js'
  * every item is a non-empty valid env var name with no duplicates; `undefined` (no grants) is allowed.
  * Invalid shapes fail explicitly.
  */
-export function validateSecretNames(secretNames: string[] | undefined): string[] {
+function validateSecretNames(secretNames: string[] | undefined): string[] {
   if (secretNames === undefined) return []
   if (!Array.isArray(secretNames)) {
     throw new HelmError('validation_error', `secretNames must be a string array (received ${typeof secretNames})`, 400)
@@ -78,7 +78,7 @@ export function validateSecretNames(secretNames: string[] | undefined): string[]
   return [...secretNames]
 }
 
-export interface RuntimeAgentSpawnDeps {
+interface RuntimeAgentSpawnDeps {
   readonly store: HelmStore
   readonly toolDeps: HelmToolDeps
   readonly harness: Harness

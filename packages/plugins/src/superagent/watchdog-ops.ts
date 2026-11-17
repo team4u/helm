@@ -32,7 +32,7 @@ import {
 } from './watchdog-core.js'
 import { isProtectedTarget } from './watchdog-guards.js'
 
-export interface WatchdogOpsDeps {
+interface WatchdogOpsDeps {
   ctx: HelmPluginContext
   runtime: SuperAgentWatchdogRuntime
   dedup: WatchdogDedupStore

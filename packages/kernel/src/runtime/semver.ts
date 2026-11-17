@@ -98,11 +98,6 @@ export function hubVersion(): string {
   return cachedHubVersion
 }
 
-/** Test injection point: reset `hubVersion` cache. */
-export function resetHubVersionCacheForTest(): void {
-  cachedHubVersion = undefined
-}
-
 /** Diagnostic helper: safe JSON serialization (falls back to `String()` for circular or unserializable objects, never throws). */
 export function safeJson(value: unknown): string {
   try {

@@ -10,19 +10,19 @@ import { HelmError } from '@helm/protocol'
 
 export type HerdrAgentStatus = 'idle' | 'working' | 'blocked' | 'done' | 'unknown'
 
-export interface HerdrTabInfo {
+interface HerdrTabInfo {
   tabId: string
   workspaceId: string
 }
 
-export interface HerdrPaneInfo {
+interface HerdrPaneInfo {
   paneId: string
   workspaceId: string
   tabId: string
   cwd?: string
 }
 
-export interface HerdrWorktreeInfo {
+interface HerdrWorktreeInfo {
   path: string
   branch?: string
 }
@@ -48,19 +48,19 @@ export interface HerdrAgentInfo {
   foregroundCwd?: string
 }
 
-export interface TabCreated {
+interface TabCreated {
   tab: HerdrTabInfo
   rootPane: HerdrPaneInfo
 }
 
-export interface WorktreeCreated {
+interface WorktreeCreated {
   workspaceId: string
   tabId: string
   rootPane: HerdrPaneInfo
   worktree: HerdrWorktreeInfo
 }
 
-export interface PaneRead {
+interface PaneRead {
   paneId: string
   text: string
 }
@@ -229,7 +229,7 @@ export function parsePaneRead(result: unknown): PaneRead {
   return { paneId: reqString(read, 'agent.read', 'pane_id'), text }
 }
 
-export function isOkResult(result: unknown): boolean {
+function isOkResult(result: unknown): boolean {
   return isObj(result) && result['type'] === 'ok'
 }
 
@@ -355,10 +355,10 @@ export function assertOkResult(result: unknown, method: string): void {
 export const SEND_KEYS_CAS_CAPABILITY = 'send_keys_expected_state_seq'
 
 /** Server CAS rejection error code (wire error.code; semantics = keys not sent). */
-export const STALE_STATE_ERROR_CODE = 'stale_state'
+const STALE_STATE_ERROR_CODE = 'stale_state'
 
 /** agent.send_keys request (helm-internal camelCase; the wire form is converted by buildSendKeysParams). */
-export interface SendKeysRequest {
+interface SendKeysRequest {
   target: string
   keys: string[]
   /** CAS expected watermark: must equal the authoritative state_change_seq observed by the approval entry. */
@@ -407,7 +407,7 @@ export function buildSendKeysParams(request: SendKeysRequest): Record<string, un
 // ---------------------------------------------------------------
 
 /** Server capability summary parsed from ping -> pong. */
-export interface HerdrServerInfo {
+interface HerdrServerInfo {
   version: string
   protocol: number
   /** Whether agent.send_keys supports expected_state_seq CAS (capabilities strictly advertises true). */

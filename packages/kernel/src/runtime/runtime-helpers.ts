@@ -200,7 +200,7 @@ export function normalizeToolResult(value: unknown): ToolExecutionResultShape | 
   return candidate
 }
 
-export interface ToolExecutionResultShape {
+interface ToolExecutionResultShape {
   output?: Array<{ type: string; text?: string }> | string
   structuredOutput?: JsonValue
   isError?: boolean
@@ -401,7 +401,7 @@ export function withToolDeclarations(
 }
 
 /** List current tool names from replay messages. */
-export function currentToolNames(messages: ReadonlyArray<Record<string, unknown>>): string[] {
+function currentToolNames(messages: ReadonlyArray<Record<string, unknown>>): string[] {
   const names = new Set<string>()
   for (const message of messages) {
     if (message['role'] !== 'system') continue
@@ -664,5 +664,4 @@ export function profileDirectoryHelper(dataDir: string, id: string): string {
   assertProfileIdPublic(id)
   return join(dataDir, 'profiles', id)
 }
-
 

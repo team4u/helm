@@ -58,7 +58,7 @@ import {
 
 export type { LiveStateShape }
 
-export interface TurnSettledListener {
+interface TurnSettledListener {
   (payload: TurnSettledPayload, consumedInputs: ConversationInput[]): Promise<void> | void
 }
 

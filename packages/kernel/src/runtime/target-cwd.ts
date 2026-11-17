@@ -75,7 +75,7 @@ export function resolveTargetPlatform(
 }
 
 /** Parameters for `normalizeSessionCwd`. */
-export interface NormalizeSessionCwdOptions {
+interface NormalizeSessionCwdOptions {
   /** Target compute node (missing / empty string = `'local'`). */
   nodeId?: string
   /** Authoritative platform source (defaults to resolving `local` only). */

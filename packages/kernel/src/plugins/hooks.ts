@@ -40,7 +40,7 @@ export const HOOK_ALLOWED_ACTIONS: Record<HookName, ReadonlySet<string>> = {
   turn_settled: new Set(['continue', 'transform', 'handled']),
 };
 
-export interface RegisteredHook<K extends HookName = HookName> {
+interface RegisteredHook<K extends HookName = HookName> {
   pluginId: string;
   priority: number;
   /** Registration sequence number used as tie-breaker in stable sort. */

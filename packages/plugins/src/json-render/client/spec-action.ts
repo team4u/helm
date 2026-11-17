@@ -38,32 +38,27 @@ import {
   jsonRenderUnknownActionType,
 } from './copy.ts'
 
-export type SpecAction =
-  | { type: 'helm:action'; actionId: string; input?: Record<string, unknown>; pluginId?: string }
-  | { type: 'helm:open'; target: string; split?: boolean }
-  | { type: 'helm:send'; target?: string; text: string; whenBusy?: 'steer' | 'followUp' | 'reject' }
-
-export interface ResolvedSpecAction {
+interface ResolvedSpecAction {
   kind: 'action'
   actionId: string
   pluginId?: string
   input: Record<string, unknown>
 }
 
-export interface ResolvedSpecOpen {
+interface ResolvedSpecOpen {
   kind: 'open'
   target: string
   split: boolean
 }
 
-export interface ResolvedSpecSend {
+interface ResolvedSpecSend {
   kind: 'send'
   conversationId: number
   text: string
   whenBusy?: 'steer' | 'followUp' | 'reject'
 }
 
-export type ResolvedSpecDirective = ResolvedSpecAction | ResolvedSpecOpen | ResolvedSpecSend
+type ResolvedSpecDirective = ResolvedSpecAction | ResolvedSpecOpen | ResolvedSpecSend
 
 /** Safe positive-integer conversation id check (with the 2^53 bound; rejects Infinity/fractions/0/negatives). */
 function safeConversationId(value: unknown): number | null {

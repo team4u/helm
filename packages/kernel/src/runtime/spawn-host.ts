@@ -23,16 +23,16 @@ import type { StructuredOutputSession } from './structured-output.js'
  * See `NativeSpawnDeps` in `spawn.ts` for per-port rationale (single source of truth);
  * this alias exists purely so `runtime.ts` and tests can reference it by an explicit name.
  */
-export type SpawnHost = NativeSpawnDeps
+type SpawnHost = NativeSpawnDeps
 
 /** Authorized attachments (validated for existence and parent-chain ownership; used for prompt assembly). */
-export interface ResolvedAttachmentRef {
+interface ResolvedAttachmentRef {
   ref: ConversationAttachmentRef
   absPath: string
 }
 
 /** Host capability provider used to construct `SpawnHost` (implemented and injected by `KernelRuntime`). */
-export interface SpawnHostSource {
+interface SpawnHostSource {
   readonly toolDeps: HelmToolDeps
   readonly harness: Harness
   readonly tracker: {
@@ -99,14 +99,14 @@ export interface SpawnHostSource {
   resolveForkAnchor?(parentId: number): Promise<number>
 }
 
-export interface SpawnHostOptions {
+interface SpawnHostOptions {
   readonly source: SpawnHostSource
   /** Final request after `agent_spawn` transforms. */
   readonly finalRequest: AgentSpawnRequest
 }
 
 /** Trim `Profile` down to the core fields needed by the spawn closure (`ResolvedProfile`). */
-export function toResolvedProfile(profile: Profile): ResolvedProfile {
+function toResolvedProfile(profile: Profile): ResolvedProfile {
   return {
     ...(profile.model ? { model: profile.model } : {}),
     ...(profile.thinkingLevel ? { thinkingLevel: profile.thinkingLevel } : {}),

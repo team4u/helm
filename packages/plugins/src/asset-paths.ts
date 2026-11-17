@@ -63,20 +63,3 @@ export function resolvePluginClientAssets(
   }
 }
 
-/**
- * 解析内置插件 client 组件目录：优先 <pkg>/src|dist/<pluginDir>/client，缺失时
- * 回退 <pkg>/src/<pluginDir>/client；两处都不存在按调用方给定的错误码显式报错
- * （诊断信息含两个期望路径，绝不静默降级）。
- */
-export function resolvePluginClientRoot(pluginId: string, pluginDir: string, missingErrorCode: string): string {
-  const here = dirname(fileURLToPath(import.meta.url))
-  const local = join(here, pluginDir, 'client')
-  if (existsSync(local)) return local
-  const srcFallback = join(dirname(here), 'src', pluginDir, 'client')
-  if (existsSync(srcFallback)) return srcFallback
-  throw new HelmError(
-    missingErrorCode,
-    `内置插件 ${pluginId} 找不到 client 组件目录（期望 ${local} 或 ${srcFallback}）`,
-    500,
-  )
-}

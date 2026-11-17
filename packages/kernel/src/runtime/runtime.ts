@@ -590,15 +590,6 @@ export class KernelRuntime {
     return this.conversations.resolveAuthorizedAttachment(conversationId, artifactId)
   }
 
-  // ------------------------------------------------------------------
-  // Plugin tool hot installation
-  // ------------------------------------------------------------------
-
-  attachPluginHost(host: PluginHost): void {
-    this.pluginHost = host
-    this.svc.toolRegistry.installPluginTools(host.listTools())
-  }
-
   refreshPluginTools(): void {
     if (this.pluginHost === undefined) return
     this.svc.toolRegistry.installPluginTools(this.pluginHost.listTools())

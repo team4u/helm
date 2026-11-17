@@ -5,7 +5,7 @@
  */
 
 export { createEnvFabric } from './fabric.js'
-export type { EnvFabric, EnvFabricOptions, EnvOptionsComposer } from './fabric.js'
+export type { EnvFabric, EnvOptionsComposer } from './fabric.js'
 export { createScopedExecutionEnv, MANAGED_EXEC_ENV_VARS } from './scoped-env.js'
 export type { EnvTarget, ScopedExecutionEnv } from './scoped-env.js'
 export { envWithFileMutationQueue, localWithFileMutationQueue } from './file-mutation-queue.js'
@@ -18,5 +18,5 @@ export { attachNodeWsGateway } from './ws-gateway.js'
 export type { NodeWsGateway, NodeWsGatewayOptions } from './ws-gateway.js'
 export { attachNodeTunnelGateway } from './ws-tunnel-gateway.js'
 export type { NodeTunnelGateway, NodeTunnelGatewayOptions } from './ws-tunnel-gateway.js'
-export { NodeForwardService, parseNodeForwardInput, NODE_FORWARD_LEASE_TIMEOUT_MS } from './forward.js'
+export { NodeForwardService } from './forward.js'
 export type { NodeForwardInput, NodeForwardSession, NodeForwardEvent } from './forward.js'

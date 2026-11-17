@@ -155,7 +155,7 @@ interface Waiter {
  * `UpgradeWaiterHandle`) live in `tunnel-table.ts` / `upgrade-waiters.ts`. */
 
 /** IPC subscription callback pair. */
-export interface IpcSink {
+interface IpcSink {
   onEvent: (line: string) => void
   onClosed: (error?: string) => void
 }
@@ -617,11 +617,6 @@ export class NodeRegistry {
     }
     // No published connection yet: still bump epoch to invalidate in-flight registrations.
     this.#nodeEpoch.set(nodeId, this.#epochOf(nodeId) + 1)
-  }
-
-  /** Alias for `disconnect` (semantics: revoke identity). */
-  revoke(nodeId: string): void {
-    this.disconnect(nodeId)
   }
 
   #dispatchOutput(nodeId: string, event: EnvExecOutputEvent): void {

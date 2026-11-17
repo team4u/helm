@@ -20,7 +20,7 @@ import { HelmError } from '@helm/protocol';
  * - `clientDependencies`: managed frontend npm specifiers (bare names/subpaths resolved in plugin dir);
  * - `dependencies`: inter-plugin IDs (distinct from npm `dependencies`).
  */
-export interface HelmManifest {
+interface HelmManifest {
   /** Relative `clientRoot` path declared in manifest (optional). */
   clientRoot?: string;
   /** Relative `clientDist` prebuilt client directory path declared in manifest (optional). */

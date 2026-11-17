@@ -81,7 +81,7 @@ export interface SuperAgentIndexDoc {
   workers: SuperAgentWorker[]
 }
 
-export interface ThreadSubscription {
+interface ThreadSubscription {
   threadKey: string
   workerConversationId: number
   createdAt: number
@@ -132,11 +132,6 @@ export interface SuperAgentWatchdogRuntime {
   getWatchdogConversationId(): number | undefined
   track<T>(label: string, task: () => MaybePromise<T>): Promise<T>
 }
-
-export type RegisterSuperAgentWatchdog = (
-  ctx: HelmPluginContext,
-  runtime: SuperAgentWatchdogRuntime,
-) => void
 
 /** 模块间协作协调器契约（解耦 superagent.ts 与 actions/hooks 子模块）。 */
 export interface SuperAgentCoordinator {

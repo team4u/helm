@@ -37,7 +37,7 @@ import {
 import { resolvePluginClientAssets } from './asset-paths.js'
 
 export const APPS_PLUGIN_ID = 'builtin:apps'
-export const APPS_SCREEN_ID = 'center'
+const APPS_SCREEN_ID = 'center'
 export const APP_BUILDER_SKILL_ID = 'app-builder'
 
 // ---------------------------------------------------------------------------
@@ -78,7 +78,7 @@ export interface AppsCatalogDoc {
   apps: Record<string, AppCatalogEntry>
 }
 
-export const EMPTY_APPS_CATALOG: AppsCatalogDoc = { apps: {} }
+const EMPTY_APPS_CATALOG: AppsCatalogDoc = { apps: {} }
 
 const CATALOG_DOC = 'catalog'
 

@@ -17,7 +17,7 @@ import type { PluginInUseItem, PluginState, ServiceEntry } from './types.js';
  * `STOP_WINDOW_HOST_CALLS` (including internal settled continuations) are permitted even though
  * `phase === 'deactivating'`, then closes the window unconditionally on completion/error.
  */
-export async function runControlledStop(
+async function runControlledStop(
   state: PluginState,
   stop: () => MaybePromise<void>,
 ): Promise<void> {

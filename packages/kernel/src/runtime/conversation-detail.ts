@@ -22,9 +22,9 @@ import {
 import type { HelmStore } from './store.js'
 
 /** Maximum encoded pagination cursor length (base64url; rejects oversized cursors to prevent abuse). */
-export const DETAIL_CURSOR_MAX_LENGTH = 2048
+const DETAIL_CURSOR_MAX_LENGTH = 2048
 
-export interface ConversationDetailHost {
+interface ConversationDetailHost {
   readonly harness: Harness
   readonly store: HelmStore
   readonly stash: SecretStash

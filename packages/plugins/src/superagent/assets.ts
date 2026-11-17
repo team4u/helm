@@ -19,7 +19,7 @@ import { fileURLToPath } from 'node:url'
 import { HelmError, type Profile } from '@helm/protocol'
 
 /** 托管本插件自举资产的插件 ID（managedByPlugin 标记值）。 */
-export const SUPERAGENT_MANAGED_BY = 'builtin:superagent'
+const SUPERAGENT_MANAGED_BY = 'builtin:superagent'
 
 /**
  * 技能模板插值引擎（与 profile 插件同语义的私有实现）：{{KEY}} 严格替换；
@@ -49,7 +49,7 @@ export function renderSkillTemplate(
 }
 
 /** 解析 superagent 资产目录（兼容 src 与 dist 运行时）。 */
-export function resolveSuperagentAssetsDir(): string {
+function resolveSuperagentAssetsDir(): string {
   const here = dirname(fileURLToPath(import.meta.url))
   const candidate1 = join(here, 'assets')
   if (existsSync(candidate1)) return candidate1
@@ -71,27 +71,27 @@ const superagentVars = {
   MANAGED_BY: SUPERAGENT_MANAGED_BY,
 }
 
-export const SUPERAGENT_PROFILE_SYSTEM_MD = renderSkillTemplate(
+const SUPERAGENT_PROFILE_SYSTEM_MD = renderSkillTemplate(
   readFileSync(join(assetsDir, 'profiles', 'superagent-system.md'), 'utf-8'),
   superagentVars,
 )
 
-export const WATCHDOG_PROFILE_SYSTEM_MD = renderSkillTemplate(
+const WATCHDOG_PROFILE_SYSTEM_MD = renderSkillTemplate(
   readFileSync(join(assetsDir, 'profiles', 'watchdog-system.md'), 'utf-8'),
   superagentVars,
 )
 
-export const WATCHDOG_PLAYBOOK_SKILL_MD = renderSkillTemplate(
+const WATCHDOG_PLAYBOOK_SKILL_MD = renderSkillTemplate(
   readFileSync(join(assetsDir, 'skill', 'SKILL.md'), 'utf-8'),
   superagentVars,
 )
 
-export const WATCHDOG_PLAYBOOK_HERDR_STALLED_MD = renderSkillTemplate(
+const WATCHDOG_PLAYBOOK_HERDR_STALLED_MD = renderSkillTemplate(
   readFileSync(join(assetsDir, 'skill', 'references', 'herdr-stalled.md'), 'utf-8'),
   superagentVars,
 )
 
-export const WATCHDOG_PLAYBOOK_CI_FAILURE_MD = renderSkillTemplate(
+const WATCHDOG_PLAYBOOK_CI_FAILURE_MD = renderSkillTemplate(
   readFileSync(join(assetsDir, 'skill', 'references', 'ci-failure.md'), 'utf-8'),
   superagentVars,
 )
@@ -122,7 +122,7 @@ export interface AssetHostPorts {
   atomicWriteFile(path: string, content: string): Promise<void>
 }
 
-export interface ProfileAsset {
+interface ProfileAsset {
   id: string
   /** 公开 Profile 形状（ProfileService 保存契约同形）。 */
   profileJson: Profile
@@ -145,7 +145,7 @@ export async function ensureProfileDir(host: AssetHostPorts, asset: ProfileAsset
   }
 }
 
-export interface SuperAgentSkillAsset {
+interface SuperAgentSkillAsset {
   id: string
   skillMd: string
   references: Record<string, string>

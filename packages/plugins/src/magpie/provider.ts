@@ -38,7 +38,7 @@ import { MAGPIE_PROVIDER_ID, MAGPIE_ROOT_ENV, sameGateway, type MagpieGatewayRef
  * 目录变化通知快照：网络刷新的成败结论（含当前生效网关），供插件同步
  * status doc 的 reachable / modelCount / lastError。cache-only 恢复不通知。
  */
-export interface MagpieCatalogChange {
+interface MagpieCatalogChange {
   gateway: MagpieGatewayRef
   ok: boolean
   modelCount: number
@@ -46,7 +46,7 @@ export interface MagpieCatalogChange {
 }
 
 /** 插件对 provider 工厂的需求。 */
-export interface MagpieProviderOptions {
+interface MagpieProviderOptions {
   /** 读取当前生效网关快照（每次 refreshModels / stream 前调用）。 */
   gateway(): MagpieGatewayRef
   fetchImpl: typeof fetch
@@ -59,7 +59,7 @@ export interface MagpieProviderOptions {
 }
 
 /** provider 句柄：注册用的 Provider 与插件侧状态查询。 */
-export interface MagpieProviderHandle {
+interface MagpieProviderHandle {
   provider: Provider
   /** 当前已安装模型（最新目录在前，仅当前 root 名下）。 */
   models(): readonly PiMagpieModel[]

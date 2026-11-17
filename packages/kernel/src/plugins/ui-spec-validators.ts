@@ -44,7 +44,7 @@ export interface UiSpecContext {
   siblings: readonly PluginUiContribution[];
 }
 
-export type UiSpecValidator = (spec: Record<string, unknown>, id: string, ctx: UiSpecContext) => void;
+type UiSpecValidator = (spec: Record<string, unknown>, id: string, ctx: UiSpecContext) => void;
 
 // ---------------------------------------------------------------------------
 // Reusable TypeBox schemas & compiled validator helper

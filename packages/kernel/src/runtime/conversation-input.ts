@@ -29,7 +29,7 @@ import { asConversationId } from './sdk-ids.js'
 import type { SubmitInputOptions } from './conversation-service.js'
 import type { ConvMeta, HelmStore } from './store.js'
 
-export interface ConversationInputPipelineHost {
+interface ConversationInputPipelineHost {
   readonly harness: Harness
   readonly store: HelmStore
   readonly tracker: ConversationTracker
@@ -43,7 +43,7 @@ export interface ConversationInputPipelineHost {
   readonly assertMutationGuard: (id: number, guard: GuardedMutationExpectation) => void
 }
 
-export type PreparedInputResult =
+type PreparedInputResult =
   | { kind: 'handled'; submissionId: string }
   | {
       kind: 'final'

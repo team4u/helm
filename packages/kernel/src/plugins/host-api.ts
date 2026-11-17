@@ -78,7 +78,7 @@ function enqueuePluginConfigWrite(pluginId: string, op: () => Promise<void>): Pr
  * Controlled `ExecutionEnv` proxy: validates epoch on every method call (invalidated on disable/re-enable)
  * and tracks async calls via `PluginTaskTracker`, preserving full `ExecutionEnv` method signatures.
  */
-export function createControlledExecutionEnv(
+function createControlledExecutionEnv(
   state: PluginState,
   epoch: number,
   env: ExecutionEnv,

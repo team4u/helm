@@ -54,7 +54,7 @@ export interface WatchdogAbortInput {
   expectedStateSeq?: number
 }
 
-export interface WatchdogToolsDeps {
+interface WatchdogToolsDeps {
   notify: WatchdogNotify
   /** 最近一轮外部探针事实缓存（watchdog_inspect 只读诊断用；键与去重键同构）。 */
   externalProbes: Map<string, WatchdogProbe>

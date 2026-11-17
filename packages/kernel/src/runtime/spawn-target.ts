@@ -19,7 +19,7 @@
  *   caller-supplied `normalize` closure (carrying its `trustedPlatform` fact source).
  */
 
-export interface SpawnTargetChainInput {
+interface SpawnTargetChainInput {
   /** Target node explicitly declared by Profile (defaults to inheriting parent conversation). */
   profileNodeId?: string
   /** Parent conversation's bound node snapshot. */
@@ -38,7 +38,7 @@ export interface SpawnTargetChainInput {
   normalize: (cwd: string, nodeId: string) => string
 }
 
-export interface SpawnTargetChain {
+interface SpawnTargetChain {
   nodeId: string
   sourceCwd: string
 }

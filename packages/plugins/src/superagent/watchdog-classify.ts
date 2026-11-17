@@ -27,13 +27,13 @@ import {
 } from './watchdog-core.js'
 
 /** 确定性规则表的阈值配置（SuperAgentConfig 子集）。 */
-export interface WatchdogRuleConfig {
+interface WatchdogRuleConfig {
   stalledAfterMs: number
   abortAfterMs: number
   errorThreshold: number
 }
 
-export interface WatchdogClassifierDeps {
+interface WatchdogClassifierDeps {
   runtime: SuperAgentWatchdogRuntime
   dedup: WatchdogDedupStore
   /** 最近一轮外部探针事实缓存（inspect 只读诊断共用；键与去重键同构）。 */

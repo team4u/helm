@@ -30,7 +30,7 @@ import {
 import { asConversationId, asEntryId } from './sdk-ids.js'
 import type { HelmStore } from './store.js'
 
-export interface ConversationRewindHost {
+interface ConversationRewindHost {
   readonly harness: Harness
   readonly store: HelmStore
   readonly tracker: ConversationTracker
@@ -38,7 +38,7 @@ export interface ConversationRewindHost {
   readonly abortConversation: (id: number) => Promise<void>
 }
 
-export interface RewindNewInput {
+interface RewindNewInput {
   finalInput: ConversationInput
   effectiveText: string
   resolvedAttachments?: Array<{ ref: ConversationAttachmentRef; absPath: string }>

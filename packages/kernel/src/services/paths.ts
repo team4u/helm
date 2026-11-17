@@ -6,7 +6,7 @@ import { mkdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 
-export const HELM_DATA_DIR_ENV = 'HELM_DATA_DIR'
+const HELM_DATA_DIR_ENV = 'HELM_DATA_DIR'
 
 export function resolveDataDir(override?: string): string {
   if (override !== undefined) {
@@ -24,7 +24,7 @@ export function resolveDataDir(override?: string): string {
 }
 
 /** Data directory subdirectory layout defined by the design specification. */
-export const DATA_SUBDIRS = [
+const DATA_SUBDIRS = [
   'profiles',
   'skills',
   'workflows',

@@ -26,7 +26,7 @@ import { HelmError, type ExternalTriggerEnvelope, type HelmPluginContext } from 
 // Constants and types
 // ---------------------------------------------------------------------------
 
-export const CRON_DOC_NAME = 'crons'
+const CRON_DOC_NAME = 'crons'
 
 /** Five-field cron; the ID charset is tightened (dots forbidden, avoiding ambiguity with fully-qualified action names). */
 const ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/
@@ -71,7 +71,7 @@ export interface CronDoc {
   jobs: CronJob[]
 }
 
-export interface CronDeps {
+interface CronDeps {
   /** Delivery entry (shared dispatch helper: validates the Profile, resolves/creates the conversation, then enters the trigger pipeline). */
   dispatchTrigger(event: ExternalTriggerEnvelope, targetProfileId?: string): Promise<void>
 }
@@ -82,12 +82,12 @@ export interface CronClock {
   setTimeout(fn: () => void, ms: number): CronTimerHandle
 }
 
-export interface CronTimerHandle {
+interface CronTimerHandle {
   clear(): void
 }
 
 /** Internal handle returned by register (for tests; business code must not rely on it). */
-export interface CronRuntime {
+interface CronRuntime {
   /** Run one scheduling scan of all enabled jobs immediately (without waiting for timers). */
   tickNow(): Promise<void>
   /** Wait for all in-flight ticks to finish (test teardown after driving timers). */
@@ -341,7 +341,7 @@ function parseCronJob(rawJob: unknown, index: number, seen: Set<string>): CronJo
 // ---------------------------------------------------------------------------
 
 /** One job's decision within a tick. */
-export type TickDecision =
+type TickDecision =
   | { action: 'fire'; at: number }
   | { action: 'skip-to-future'; from: number; to: number }
   | { action: 'noop' }

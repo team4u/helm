@@ -19,7 +19,7 @@ import { clampThinkingLevelForModel } from './models.js'
 import type { EventHub } from './events.js'
 import type { HelmStore } from './store.js'
 
-export interface ConversationProfileHost {
+interface ConversationProfileHost {
   readonly harness: Harness
   readonly store: HelmStore
   readonly events: EventHub

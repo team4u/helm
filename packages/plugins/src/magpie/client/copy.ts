@@ -17,8 +17,8 @@ export const MAGPIE_REFRESH: LocalizedText = { en: 'Refresh model catalog', 'zh-
 export const MAGPIE_LOADING: LocalizedText = { en: 'Loading gateway status…', 'zh-CN': '网关状态读取中...' }
 
 /** Boolean yes/no display. */
-export const MAGPIE_YES: LocalizedText = { en: 'Yes', 'zh-CN': '是' }
-export const MAGPIE_NO: LocalizedText = { en: 'No', 'zh-CN': '否' }
+const MAGPIE_YES: LocalizedText = { en: 'Yes', 'zh-CN': '是' }
+const MAGPIE_NO: LocalizedText = { en: 'No', 'zh-CN': '否' }
 
 /** Status overview KV keys. */
 export const MAGPIE_KV_GATEWAY_URL: LocalizedText = { en: 'Gateway URL', 'zh-CN': '网关地址' }

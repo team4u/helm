@@ -133,7 +133,7 @@ interface WindowPane {
 }
 
 /** handle() return: handled means takeover (result is the handoff artifact); continue lets the kernel default through. */
-export type HandleOutcome = { action: 'handled'; result: unknown } | { action: 'continue' }
+type HandleOutcome = { action: 'handled'; result: unknown } | { action: 'continue' }
 
 /**
  * Managed-task lifecycle phases (explicitly tracked): only 'task' (first prompt delivered, awaiting settlement)

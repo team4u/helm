@@ -36,7 +36,7 @@ const fileTooLargeText = (raw: string, size: number): string =>
   'Redirect command output via bash to a file and read it paginated with read_artifact, or slice with head/tail/sed.'
 
 /** Canonical probe result shape (aligned with `ExecutionEnv.canonicalPath` `Result`). */
-export type CanonicalProbeResult =
+type CanonicalProbeResult =
   | { ok: true; value: string }
   | { ok: false; error: { code: string; message: string } }
 
@@ -44,7 +44,7 @@ export type CanonicalProbeResult =
  * Unified writable execution environment for `write`/`edit`: node-agnostic single template.
  * Unwraps `Result` inside and throws on failure; outer template catches and returns redacted `*_failed` text.
  */
-export interface WritableFileEnv {
+interface WritableFileEnv {
   /** Canonical probe: resolves existing files (and symlinks) to their canonical paths (so symlink writes align with
    *  their target in mutex queues); falls back to lexical absolute path when missing. */
   canonicalProbe(path: string, context: Context): Promise<CanonicalProbeResult>
@@ -63,7 +63,7 @@ export interface WritableFileEnv {
  * return tool-level error text, while genuine IO/resolution failures throw (formatted by outer template as `read_failed`).
  * `displayPath`: canonicalized path remotely, lexical absolute path locally (preserved contract).
  */
-export interface ReadableFileEnv {
+interface ReadableFileEnv {
   readText(
     lexicalAbs: string,
     raw: string,

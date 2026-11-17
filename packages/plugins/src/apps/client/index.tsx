@@ -543,7 +543,7 @@ function AppDetailDrawer({
   )
 }
 
-export interface AppCenterScreenProps extends ScreenProps {
+interface AppCenterScreenProps extends ScreenProps {
   inlineDrawer?: boolean
 }
 

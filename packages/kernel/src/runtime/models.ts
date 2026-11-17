@@ -39,7 +39,7 @@ import { HelmError, type ModelCatalog, type ModelCatalogEntry, type ModelProvide
 // Shared catalog entry types re-exported from `@helm/protocol` (preserved here so existing consumer import paths keep working).
 export type { ModelCatalog, ModelCatalogEntry }
 
-export interface ModelGatewayOptions {
+interface ModelGatewayOptions {
   /** Entries from `providers.json`. */
   providers: ProviderConfig[]
   /** `providerId` -> API key (resolved by host credentials). */

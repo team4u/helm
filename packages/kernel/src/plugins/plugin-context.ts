@@ -42,7 +42,7 @@ import type {
   PluginState,
 } from './types.js';
 
-export interface CreatePluginContextOptions {
+interface CreatePluginContextOptions {
   state: PluginState;
   epoch: number;
   pipelines: Map<HookName, HookPipeline<HookName>>;
@@ -62,7 +62,7 @@ export interface CreatePluginContextOptions {
  * only). Pure shape check on the display fields — value semantics stay with
  * PluginConfigStore at write time.
  */
-export function assertConfigSchemaDisplayCopy(
+function assertConfigSchemaDisplayCopy(
   pluginId: string,
   schema: Record<string, PluginConfigFieldSchema>,
 ): void {

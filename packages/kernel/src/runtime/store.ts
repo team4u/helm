@@ -46,7 +46,7 @@ export interface ConvMeta {
   updatedAt: number
 }
 
-export interface AskRow {
+interface AskRow {
   id: string
   conversationId: number
   ownerPluginId?: string
@@ -58,7 +58,7 @@ export interface AskRow {
   settledAt?: number
 }
 
-export interface ArtifactRow {
+interface ArtifactRow {
   id: string
   conversationId: number
   kind: ArtifactKind
@@ -69,22 +69,9 @@ export interface ArtifactRow {
   createdAt: number
 }
 
-export interface PluginDocRow {
-  pluginId: string
-  name: string
-  valueJson: string
-}
-
-export interface PluginSessionDocRow {
-  pluginId: string
-  name: string
-  conversationId: number
-  valueJson: string
-}
-
 type Deferred = () => Promise<void>
 
-export interface HelmStoreOptions {
+interface HelmStoreOptions {
   /** Instance-level persistence failure callback (e.g., `KernelRuntime` fatal storage closure hook); falls back to diagnostic channel. */
   readonly onError?: (error: unknown) => void
   /** Diagnostic channel sink (fallback when `onError` is unset; defaults to `console.error`). */

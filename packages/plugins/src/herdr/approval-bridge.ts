@@ -55,7 +55,7 @@ import {
 } from './rpc.js'
 
 /** The approval bridge's minimal dependency surface on the executor and host. */
-export interface ApprovalBridgePort {
+interface ApprovalBridgePort {
   asks: AskCoordinator
   transport: NonNullable<HerdrPluginDependencies['transport']>
   host: {

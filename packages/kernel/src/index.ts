@@ -13,7 +13,6 @@ export {
 } from './env/index.js';
 export type {
   EnvFabric,
-  EnvFabricOptions,
   EnvOptionsComposer,
   EnvTarget,
   ScopedExecutionEnv,
@@ -27,6 +26,6 @@ export type {
   NodeTunnelGateway,
   NodeTunnelGatewayOptions,
   sanitizeNodeHealth,
-} from './env/index.js';
+} from './env/index.js'
 export * from './plugins/index.js';
 export * from './services/index.js';

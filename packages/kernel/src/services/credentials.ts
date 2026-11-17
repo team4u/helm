@@ -16,7 +16,7 @@ import {
 } from './atomic-file.js'
 import { withFileLock, withProcessFileLock } from './file-lock.js'
 
-export interface StoredCredential {
+interface StoredCredential {
   /** Value after SecretStash redaction or raw secret (model API keys are stored directly without stashing). */
   value: string
   createdAt: string
@@ -28,7 +28,7 @@ export interface StoredCredential {
  * written by the CLI) are preserved verbatim: this service only owns the `providers` and
  * `pluginSecrets` namespaces and must never discard other keys when writing back.
  */
-export interface CredentialStore {
+interface CredentialStore {
   providers: Record<string, StoredCredential>
   pluginSecrets: Record<string, Record<string, string>>
   /** Unknown top-level keys -> raw JSON values (preserved untouched when writing back). */
@@ -251,7 +251,3 @@ export function credentialsPath(dataDir: string): string {
   return join(dataDir, 'credentials.json')
 }
 
-/** Read raw text (used by tests to assert plaintext never appears in other files). */
-export async function readRawText(path: string): Promise<string> {
-  return readTextFile(path)
-}

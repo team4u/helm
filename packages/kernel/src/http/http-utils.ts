@@ -108,7 +108,7 @@ function describeError(error: unknown): string {
 // CORS: unrestricted origin—reflect Origin and allow credentials on requests carrying Origin
 // ---------------------------------------------------------------------------
 
-export function corsHeaders(origin: string | null): Record<string, string> {
+function corsHeaders(origin: string | null): Record<string, string> {
   if (origin === null) return {}
   return {
     'access-control-allow-origin': origin,

@@ -36,12 +36,6 @@ export interface ProfileCatalogEntry {
   cwd?: string
 }
 
-/** 已启用插件集合的最小形状（PluginHost.list() 消费方子集）。 */
-export interface EnabledPluginsLike {
-  id: string
-  enabled: boolean
-}
-
 /** 按 runtime.kind 建立已声明接管的 kind 集合（仅 kind 字符串，不假设插件 id）。 */
 export function activeRuntimeKinds(ui: readonly PluginUiContribution[]): Set<string> {
   const kinds = new Set<string>()

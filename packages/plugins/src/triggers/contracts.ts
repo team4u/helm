@@ -10,7 +10,7 @@
  *   the ctx.host public ports (HelmHostApi) directly; no injected factory parameters.
  */
 import { HelmError } from '@helm/protocol'
-import type { ConversationSummary, ExternalTriggerEnvelope } from '@helm/protocol'
+import type { ConversationSummary } from '@helm/protocol'
 
 export const TRIGGERS_PLUGIN_ID = 'builtin:triggers'
 
@@ -89,8 +89,6 @@ export interface WebhooksDoc {
   webhooks: WebhookMeta[]
 }
 
-export const EMPTY_WEBHOOKS_DOC: WebhooksDoc = { webhooks: [] }
-
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v)
 }
@@ -168,17 +166,6 @@ export function webhookPublicMeta(meta: WebhookMeta): WebhookMeta {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Shared target types of the dispatch helper
-// ---------------------------------------------------------------------------
-
-/** delivery.ts's target-resolution input (shared by cron jobs / webhook metadata). */
-export interface TriggerTarget {
-  targetConversationId?: number
-  targetProfileId?: string
-  threadKey?: string
-}
-
 /** Conversation query port (the minimal face of ctx.host, for tests). */
 export interface ConversationLookup {
   listConversations(filter?: { profileId?: string }): ConversationSummary[]
@@ -190,13 +177,4 @@ export interface ConversationLookup {
  * The host port face consumed by the delivery pure helper (explicit Pick semantics, not a cast bridge):
  * type-checked both by the call site (ctx.host passed inside definePlugin) and by test fixtures.
  */
-export interface DeliveryHost extends ConversationLookup {
-  dispatchTrigger(event: ExternalTriggerEnvelope): Promise<void>
-}
 
-/** Delivery-helper construction input: isClosing is a reader-function wrapper over the host getter. */
-export interface DeliveryOptions {
-  host: DeliveryHost
-  profiles: ProfileLookup
-  isClosing(): boolean
-}

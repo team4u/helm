@@ -37,7 +37,7 @@ type MeasuredAssistant = {
 }
 
 /** Usage estimation result; tokens=null means true context size is unknown (post-compaction with no measured usage yet). */
-export interface ContextUsageEstimate {
+interface ContextUsageEstimate {
   tokens: number | null
 }
 
@@ -198,7 +198,7 @@ export interface LiveCompactionFailureShape {
 }
 
 /** Subset of pi.live compaction fields (for compactionLiveKeyOf comparison). */
-export interface LiveCompactionStateShape {
+interface LiveCompactionStateShape {
   compactions?: LiveCompactionShape[]
   compactionFailure?: LiveCompactionFailureShape
 }

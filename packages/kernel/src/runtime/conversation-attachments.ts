@@ -14,9 +14,9 @@ import { FileNotFoundError, type ArtifactService } from '../services/index.js'
 import type { HelmStore } from './store.js'
 
 /** Image MIME types: predicate set for assembling multimodal ImageContent blocks from attachments. */
-export const IMAGE_MIMES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
+const IMAGE_MIMES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
 
-export interface ConversationAttachmentsHost {
+interface ConversationAttachmentsHost {
   readonly store: HelmStore
   readonly artifactsSvc: ArtifactService
   readonly dataDir: string

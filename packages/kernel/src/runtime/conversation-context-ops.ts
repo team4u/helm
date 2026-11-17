@@ -18,7 +18,7 @@ import { requireConv } from './runtime-helpers.js'
 import { resolveCleanForkAnchor } from './spawn-fork.js'
 import type { HelmStore } from './store.js'
 
-export interface ConversationContextOpsHost {
+interface ConversationContextOpsHost {
   readonly harness: Harness
   readonly store: HelmStore
   readonly tracker: ConversationTracker

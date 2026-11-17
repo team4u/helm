@@ -3,7 +3,7 @@
  * Unbuffered streaming semantics: each frame is encoded and enqueued independently without whole-stream buffering.
  */
 
-export interface SseSink {
+interface SseSink {
   send(event: string, data: unknown): void
   close(): void
 }

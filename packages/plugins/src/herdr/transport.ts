@@ -47,7 +47,7 @@ export { HerdrTransportError } from './transport-shared.js'
  * remote (that would send a Linux Hub's ~/.config path to a Windows target).
  */
 
-export interface HerdrTransportOptions {
+interface HerdrTransportOptions {
   /** Redaction for diagnostics and error messages; defaults to returning as-is. */
   redact?: (text: string) => string
   /** Cross-node channel (injected by EnvFabric or a test fixture). When absent, remote targets fail explicitly; never fall back to local. */
@@ -58,12 +58,12 @@ export interface HerdrTransportOptions {
 
 export const HERDR_CALL_TIMEOUT_MS = 120_000
 /** The server-side startup cap for agent.start (>3000 and <=300000 ms) plus transport headroom. */
-export const HERDR_START_TIMEOUT_CEILING_MS = 300_000
-export const HERDR_START_TIMEOUT_MARGIN_MS = 15_000
+const HERDR_START_TIMEOUT_CEILING_MS = 300_000
+const HERDR_START_TIMEOUT_MARGIN_MS = 15_000
 /** No client deadline for agent.prompt(wait)/agent.wait without an explicit timeout; left to signal/server. */
-export const HERDR_WAIT_METHODS = new Set(['agent.prompt', 'agent.wait', 'pane.wait_for_output', 'events.wait'])
+const HERDR_WAIT_METHODS = new Set(['agent.prompt', 'agent.wait', 'pane.wait_for_output', 'events.wait'])
 /** Per-frame (single JSON line) size cap; the subscription stream is limited per frame, not cumulatively over the connection lifetime. */
-export const MAX_FRAME_BYTES = 32 * 1024 * 1024
+const MAX_FRAME_BYTES = 32 * 1024 * 1024
 const SUBSCRIPTION_METHOD = 'events.subscribe'
 /** Status event types: the official contract requires per-pane filtering by pane_id at subscribe time; no global subscription. */
 const PANE_STATUS_EVENT_TYPE = 'pane.agent_status_changed'

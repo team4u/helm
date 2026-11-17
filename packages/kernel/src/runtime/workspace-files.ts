@@ -27,7 +27,7 @@ export interface ConversationFileContent {
   resolvedPath: string
 }
 
-export interface ReadWorkspaceFileDeps {
+interface ReadWorkspaceFileDeps {
   nodeId: string
   cwd: string
   rawPath: string

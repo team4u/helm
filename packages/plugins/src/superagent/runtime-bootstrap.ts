@@ -92,7 +92,7 @@ export interface SuperAgentRuntimeController {
   runWatchdogToolCall(payload: ToolCallHookPayload): MaybePromise<HookResult<ToolCallHookPayload> | void>
 }
 
-export interface CreateSuperAgentRuntimeOptions {
+interface CreateSuperAgentRuntimeOptions {
   ctx: HelmPluginContext
   docs: SuperAgentDocs
   watchdogDedupDoc: PluginDocHandle<WatchdogDedupDoc>

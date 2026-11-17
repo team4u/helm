@@ -32,9 +32,9 @@ import type { HelmStore } from './store.js'
 import type { SecretStash } from '../services/secret-stash.js'
 
 /** External target seq resolver (e.g., registered by herdr plugin): askId -> target current seq. May be async (real watermark requires remote IO). */
-export type AskSeqResolver = (askId: string) => MaybePromise<number | undefined>
+type AskSeqResolver = (askId: string) => MaybePromise<number | undefined>
 
-export interface AskSettled {
+interface AskSettled {
   askId: string
   status: 'answered' | 'cancelled' | 'superseded'
   answers?: Record<string, string>

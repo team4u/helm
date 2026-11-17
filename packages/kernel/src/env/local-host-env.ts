@@ -20,7 +20,7 @@ import {
 import { NodeExecutionEnv, type NodeWatchOptions } from '@earendil-works/pi-durable/env/node'
 import { resolveHostShellConfig, type ShellProbeIo } from '@helm/env-io'
 
-export interface LocalHostExecutionEnvOptions {
+interface LocalHostExecutionEnvOptions {
   cwd: string
   shellPath?: string
   shellEnv?: NodeJS.ProcessEnv

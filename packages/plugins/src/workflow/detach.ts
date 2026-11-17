@@ -40,15 +40,15 @@ export interface DetachEnginePorts {
   detach(runId: string): Promise<WorkflowRunSummary>
 }
 
-export interface DetachActionInput {
+interface DetachActionInput {
   runId: string
 }
 
-export interface DetachActionContext {
+interface DetachActionContext {
   conversationId?: number
 }
 
-export interface DetachActionOutput {
+interface DetachActionOutput {
   detached: true
   runId: string
   run: WorkflowRunSummary

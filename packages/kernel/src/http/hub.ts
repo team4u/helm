@@ -199,7 +199,7 @@ function bearerToken(request: Request): string | undefined {
 }
 
 /** Check whether the decoded segments match a plugin route declared as public. */
-export function isPublicPluginRoute(kernel: KernelRuntimeLike, method: string, segments: string[]): boolean {
+function isPublicPluginRoute(kernel: KernelRuntimeLike, method: string, segments: string[]): boolean {
   if (segments.length === 0 || segments[0] !== 'api') return false
   let routes
   try {

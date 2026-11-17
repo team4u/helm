@@ -49,7 +49,7 @@ export function recentEntrySummaries(
 }
 
 /** 单条 entry 摘要文本：优先 assistant 文本，否则有界 JSON 概要（不伪造内容）。 */
-export function entryDigestText(entry: { kind: string; data?: unknown; model?: unknown }): string {
+function entryDigestText(entry: { kind: string; data?: unknown; model?: unknown }): string {
   const assistant = lastAssistantText([entry])
   if (assistant !== '') return assistant
   if (entry.data !== undefined) {

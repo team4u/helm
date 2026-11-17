@@ -20,7 +20,7 @@ export function shellEnvFabricMissingText(nodeId: string): string {
 }
 
 /** Shell family: node offline or unreachable. */
-export function shellNodeOfflineText(nodeId: string): string {
+function shellNodeOfflineText(nodeId: string): string {
   return `node_offline: node '${nodeId}' is offline or unreachable; cannot run command remotely (refusing to fall back to local)`
 }
 
@@ -39,12 +39,12 @@ export function remoteShellGuardText(envFabric: EnvFabric | undefined, nodeId: s
 }
 
 /** File family: `EnvFabric` missing (parameterized by action verb). */
-export function envFabricMissingFileText(nodeId: string, action: FileOpAction): string {
+function envFabricMissingFileText(nodeId: string, action: FileOpAction): string {
   return `env_fabric_missing: node '${nodeId}' is remote but EnvFabric is not configured (cannot ${action} remote file; refusing to fall back to local)`
 }
 
 /** File family: node offline (parameterized by action verb). */
-export function nodeOfflineFileText(nodeId: string, action: FileOpAction): string {
+function nodeOfflineFileText(nodeId: string, action: FileOpAction): string {
   return `node_offline: node '${nodeId}' is offline; cannot ${action} remote file (refusing to fall back to local)`
 }
 
@@ -52,7 +52,7 @@ export function nodeOfflineFileText(nodeId: string, action: FileOpAction): strin
  * Remote pre-guard for file tools: returns an explicit error message when `EnvFabric` is missing or the node is
  * offline; returns `undefined` to proceed. Never silently falls back to Hub's local disk.
  */
-export function remoteFileGuardText(
+function remoteFileGuardText(
   envFabric: EnvFabric | undefined,
   nodeId: string,
   action: FileOpAction,

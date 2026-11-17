@@ -60,7 +60,7 @@ export function renderSkillTemplate(
 }
 
 /** 解析 profile skill 资产目录（兼容 src 与 dist 运行时）。 */
-export function resolveProfileSkillDir(): string {
+function resolveProfileSkillDir(): string {
   const here = dirname(fileURLToPath(import.meta.url))
   const candidate1 = join(here, 'skill')
   if (existsSync(candidate1)) return candidate1
@@ -93,7 +93,7 @@ export const HELM_CLI_SKILL_MD = renderSkillTemplate(
   skillVars,
 )
 
-export const HELM_CLI_WORKFLOWS_AND_AGENTS_MD = renderSkillTemplate(
+const HELM_CLI_WORKFLOWS_AND_AGENTS_MD = renderSkillTemplate(
   readFileSync(join(skillDir, 'references', 'workflows-and-agents.md'), 'utf-8'),
   skillVars,
 )
@@ -103,7 +103,7 @@ export const HELM_CLI_SKILL_AND_PLUGIN_DEV_MD = renderSkillTemplate(
   skillVars,
 )
 
-export const HELM_CLI_PLUGIN_CLIENT_CODE_SPLITTING_MD = renderSkillTemplate(
+const HELM_CLI_PLUGIN_CLIENT_CODE_SPLITTING_MD = renderSkillTemplate(
   readFileSync(join(skillDir, 'references', 'plugin-client-code-splitting.md'), 'utf-8'),
   skillVars,
 )

@@ -65,13 +65,13 @@ export interface OverviewDoc {
   asks: Array<{ paneId: string; nodeId: string; seq: number; phase: string }>
 }
 
-export interface OverviewDependencies {
+interface OverviewDependencies {
   redact: (text: string) => string
   notify(title: string, body: string, level: 'info' | 'error'): void
 }
 
 /** Provided by the host: read snapshot (abortable via AbortSignal); boundary validation is the host's job. */
-export type SnapshotFetcher = (target: HerdrTarget, signal: AbortSignal) => Promise<SessionSnapshotData>
+type SnapshotFetcher = (target: HerdrTarget, signal: AbortSignal) => Promise<SessionSnapshotData>
 
 const PENDING_ASK_PHASES = new Set(['pending', 'creating'])
 

@@ -156,7 +156,7 @@ interface Segment {
 }
 
 /** observeFrame 的 generation 输入形状（contracts 守卫产物）。 */
-export interface GenerationFrame {
+interface GenerationFrame {
   taskId: number
   attempt: number
   message?: ConversationLiveMessage

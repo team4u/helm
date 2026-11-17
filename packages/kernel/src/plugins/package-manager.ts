@@ -36,7 +36,7 @@ import type { PluginPackageManagerStore } from './package-store.js';
 // Process runner (injectable for tests without real network access)
 // ---------------------------------------------------------------------------
 
-export interface RunResult {
+interface RunResult {
   code: number
   stdout: string
   stderr: string
@@ -117,7 +117,7 @@ export interface PackageManagerHost {
   listSummaries(): PluginSummary[];
 }
 
-export interface PluginPackageManagerOptions {
+interface PluginPackageManagerOptions {
   dataDir: string
   /** Hub working directory (base directory for resolving relative local paths). */
   cwd: string

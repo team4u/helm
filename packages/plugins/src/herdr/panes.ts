@@ -14,7 +14,7 @@ import { HelmError } from '@helm/protocol'
 import { targetNodeId, type HerdrTarget } from './contracts.js'
 import { OUTPUT_FILE_PATTERN } from './transport-output.js'
 
-export type PaneOutcome = 'running' | 'keepalive' | 'failed' | 'settled'
+type PaneOutcome = 'running' | 'keepalive' | 'failed' | 'settled'
 
 /** Spawn routing snapshot (reused when resume has no agentType; both kind and Profile lookup are non-secret). */
 export interface PaneRouting {

@@ -87,7 +87,7 @@ export function parseQualifiedActionId(qualified: string): { pluginId: string; a
   return { pluginId: qualified.slice(0, dot), actionId: qualified.slice(dot + 1) };
 }
 
-export interface ActionEntry {
+interface ActionEntry {
   pluginId: string;
   id: string;
   description: string;
@@ -104,7 +104,7 @@ export interface ActionEntry {
   handler: (input: never, context: PluginActionContext) => unknown;
 }
 
-export interface ToolEntry {
+interface ToolEntry {
   pluginId: string;
   spec: PluginToolSpec;
 }

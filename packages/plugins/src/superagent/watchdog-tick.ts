@@ -36,7 +36,7 @@ export interface TickOutcome {
   collection: DiagnosticsCollection
 }
 
-export interface WatchdogTickDeps {
+interface WatchdogTickDeps {
   ctx: HelmPluginContext
   activity: ConversationActivityTracker
   /** 采集成功后的规则表评估（原 watchdog_tick 处理器主体）。 */

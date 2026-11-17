@@ -58,12 +58,12 @@ import { byteBoundedWrite, closeControllerQuietly, encodeSseChunk, KEEPALIVE_CHU
  */
 export type SnapshotProvider = () => Omit<HelmSnapshot, 'bootId'>
 
-export interface EventSubscription {
+interface EventSubscription {
   unsubscribe(): void
 }
 
 /** Result of a single publish delivery. */
-export interface EventPublishResult {
+interface EventPublishResult {
   /** Validated and redacted event frame for this publish (already in SSE ring and broadcast). */
   readonly frame: HelmEventFrame
   /** Internal host listener delivery promise/result (once; undefined if not installed). Callers can await
@@ -87,7 +87,7 @@ export type HostDispatchedEvent =
   | { type: 'conversation.live'; live: ConversationLive }
 
 /** Internal host event dispatcher installed by `KernelRuntime`. */
-export type HostEventDispatcher = (event: HostDispatchedEvent) => MaybePromise<void>
+type HostEventDispatcher = (event: HostDispatchedEvent) => MaybePromise<void>
 
 /** Max pending frames buffered between subscription setup and snapshot flush (overflow flags slow client and closes stream to reconnect). */
 const MAX_PENDING_EVENTS = 512
@@ -634,7 +634,7 @@ export class EventHub {
 }
 
 /** Initial frame for a session-doc subscription: {seq, doc}; read atomically via synchronous HTTP provider. */
-export interface SessionDocSnapshot {
+interface SessionDocSnapshot {
   seq: number
   doc: PublicPluginSessionDoc
 }

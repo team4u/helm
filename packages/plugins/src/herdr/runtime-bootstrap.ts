@@ -34,7 +34,7 @@ import { parseAgentResult, parseSessionSnapshot } from './rpc.js'
 import { normalizeStartupTimeoutMs } from './spawn-rules.js'
 import { createHerdrTransport, isValidSessionName, resolveSocketPath } from './transport.js'
 
-export type HerdrTimingOverrides = Pick<
+type HerdrTimingOverrides = Pick<
   HerdrPluginDependencies,
   | 'pollIntervalMs'
   | 'blockedBackoffBaseMs'
@@ -61,7 +61,7 @@ export interface HerdrRuntimeController {
   getTransport(): HerdrTransport
 }
 
-export interface CreateHerdrRuntimeOptions {
+interface CreateHerdrRuntimeOptions {
   ctx: HelmPluginContext
   managedDoc: PluginDocHandle<ManagedDoc>
   overviewDoc: PluginDocHandle<OverviewDoc>

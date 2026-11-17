@@ -98,7 +98,7 @@ function readOwnSegment(target: Record<string, unknown>, seg: string): unknown {
   return Object.prototype.hasOwnProperty.call(target, seg) ? target[seg] : undefined
 }
 
-export function resolvePathInScope(rawExpr: string, scope: EvalScope): unknown {
+function resolvePathInScope(rawExpr: string, scope: EvalScope): unknown {
   const segments = parseExpressionSegments(rawExpr)
   if (segments.length === 0) return undefined
 

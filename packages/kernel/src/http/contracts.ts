@@ -97,7 +97,7 @@ export interface EventHub {
   response(request: Request): Response
 }
 
-export interface PluginRouteInfo {
+interface PluginRouteInfo {
   pluginId: string
   method: 'GET' | 'POST' | 'PUT' | 'DELETE'
   /** Full mount path (e.g. '/api/plugins/<id>/webhook/:t'); enforced to use the plugin's dedicated prefix on registration. */

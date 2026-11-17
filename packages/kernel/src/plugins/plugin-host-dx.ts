@@ -30,7 +30,7 @@ import { assertNoLiveTasks } from './service-coordinator.js';
 import type { PluginTaskTracker } from './tracking.js';
 import type { PluginProviderPort, PluginState } from './types.js';
 
-export interface DxReloadHostPort extends ReloadablePluginHost {
+interface DxReloadHostPort extends ReloadablePluginHost {
   list(): PluginSummary[];
   enable(pluginId: string): Promise<void>;
   reloadExternalPlugin(pluginId: string, options?: { doctor?: boolean }): Promise<PluginReloadResult>;

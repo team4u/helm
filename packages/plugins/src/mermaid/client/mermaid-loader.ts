@@ -9,9 +9,9 @@
  */
 import type { Mermaid } from 'mermaid'
 
-export type MermaidImporter = () => Promise<{ default?: Mermaid } | Mermaid>
+type MermaidImporter = () => Promise<{ default?: Mermaid } | Mermaid>
 
-export interface MermaidLoader {
+interface MermaidLoader {
   load: () => Promise<Mermaid>
   reset: () => void
 }
