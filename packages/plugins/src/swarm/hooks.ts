@@ -1,4 +1,4 @@
-import { type HelmPluginContext } from '@helm/protocol'
+import { escapeXml, type HelmPluginContext } from '@helm/protocol'
 import {
   ACTIVE_SWARM_GROUP_SECTION_ID,
   ARCHIVED_WORKER_TAG,
@@ -11,12 +11,12 @@ import {
   type WorkerAccess,
   type WorkerIsolation,
 } from './contracts.js'
-import { collectMemberLastReplySummary, escapeXmlAttribute } from './settlement.js'
+import { collectMemberLastReplySummary } from './settlement.js'
 
 /** 100% 字节恒定的协作组主控系统提示词段（仅含创建后永不变更的 groupId 与静态协作铁律，零可变成员列表或状态）。 */
 export function activeSwarmGroupCoordinatorSection(groupId: string): string {
   return [
-    `<active_swarm_group id="${escapeXmlAttribute(groupId)}" role="coordinator">`,
+    `<active_swarm_group id="${escapeXml(groupId)}" role="coordinator">`,
     '1. Recruit named peer workers via swarm_dispatch_worker (use isolation="worktree" for parallel writers and access="readonly" for verifiers).',
     '2. Coordinate handoffs via swarm_board_post / swarm_board_read / swarm_board_status using #seq pointers in refs without copy-pasting diffs or long reports.',
     '3. Keep wake=true strictly for the next actor who must act; never close the group while activeWorkingMembers is non-empty.',
@@ -33,7 +33,7 @@ export function activeSwarmGroupWorkerSection(
   isolation: WorkerIsolation,
 ): string {
   return [
-    `<active_swarm_group id="${escapeXmlAttribute(groupId)}" role="worker" name="${escapeXmlAttribute(memberName)}" access="${access}" isolation="${isolation}">`,
+    `<active_swarm_group id="${escapeXml(groupId)}" role="worker" name="${escapeXml(memberName)}" access="${access}" isolation="${isolation}">`,
     '1. Always publish your task outcome via swarm_board_post (handoff / review / done / blocker, citing #seq in refs) before ending an actionable turn; never exit silently.',
     '2. Set wake=true only for the next peer who must act (or coordinator on final done / unresolvable blocker); never post pure acknowledgments.',
     '3. Reference prior board items by #seq instead of copying diffs or full reports.',

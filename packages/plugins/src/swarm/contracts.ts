@@ -1,5 +1,6 @@
 import {
   HelmError,
+  isJsonObject,
   type ConversationScope,
   type ConversationSummary,
   type MaybePromise,
@@ -332,10 +333,6 @@ export interface SwarmCoordinator {
 // 边界守卫与纯校验函数
 // ---------------------------------------------------------------------------
 
-export function isPlainObject(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null && !Array.isArray(v)
-}
-
 export function isPosIntId(v: unknown): v is number {
   return typeof v === 'number' && Number.isInteger(v) && v > 0
 }
@@ -379,9 +376,9 @@ export function resolveSwarmConfig(raw: Record<string, unknown>): SwarmConfig {
 export function asConversationUpsertEvent(
   payload: unknown,
 ): { id: number; status: string; updatedAt: number } | undefined {
-  if (!isPlainObject(payload) || payload['type'] !== 'conversation.upsert') return undefined
+  if (!isJsonObject(payload) || payload['type'] !== 'conversation.upsert') return undefined
   const conversation = payload['conversation']
-  if (!isPlainObject(conversation)) return undefined
+  if (!isJsonObject(conversation)) return undefined
   const id = conversation['id']
   const status = conversation['status']
   const updatedAt = conversation['updatedAt']
@@ -392,7 +389,7 @@ export function asConversationUpsertEvent(
 }
 
 export function asConversationDeletedEvent(payload: unknown): number | undefined {
-  if (!isPlainObject(payload) || payload['type'] !== 'conversation.deleted') return undefined
+  if (!isJsonObject(payload) || payload['type'] !== 'conversation.deleted') return undefined
   const conversationId = payload['conversationId']
   return isPosIntId(conversationId) ? conversationId : undefined
 }
@@ -481,13 +478,13 @@ export function toGroupSummary(record: CollabGroupRecord): CollabGroupSummary {
 export function assertIndexDoc(value: unknown): SwarmIndexDoc {
   const corrupt = (detail: string): HelmError =>
     new HelmError('swarm_doc_corrupt', `插件 doc ${INDEX_DOC_NAME} ${detail}`, 500, { pluginId: SWARM_PLUGIN_ID })
-  if (!isPlainObject(value) || !Array.isArray(value.workers) || !Array.isArray(value.groups)) {
+  if (!isJsonObject(value) || !Array.isArray(value.workers) || !Array.isArray(value.groups)) {
     throw corrupt('结构非法（期望 { workers: [], groups: [] }）')
   }
   const seenWorkerIds = new Set<number>()
   for (const w of value.workers) {
     if (
-      !isPlainObject(w) ||
+      !isJsonObject(w) ||
       !isPosIntId(w.conversationId) ||
       !isPosIntId(w.coordinatorConversationId) ||
       typeof w.profileId !== 'string' ||
@@ -509,7 +506,7 @@ export function assertIndexDoc(value: unknown): SwarmIndexDoc {
   const seenGroupIds = new Set<string>()
   for (const g of value.groups) {
     if (
-      !isPlainObject(g) ||
+      !isJsonObject(g) ||
       typeof g.id !== 'string' ||
       g.id.trim() === '' ||
       typeof g.title !== 'string' ||
@@ -536,7 +533,7 @@ export function assertIndexDoc(value: unknown): SwarmIndexDoc {
 export function assertCollabGroupRecord(value: unknown): CollabGroupRecord {
   const corrupt = (detail: string): HelmError =>
     new HelmError('swarm_doc_corrupt', `协作组 meta.json 损坏：${detail}`, 500, { pluginId: SWARM_PLUGIN_ID })
-  if (!isPlainObject(value)) throw corrupt('顶层必须是对象')
+  if (!isJsonObject(value)) throw corrupt('顶层必须是对象')
   if (typeof value.id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(value.id)) throw corrupt('id 非法')
   if (typeof value.title !== 'string' || value.title.trim() === '') throw corrupt('title 非法')
   if (value.objective !== undefined && typeof value.objective !== 'string') throw corrupt('objective 必须是字符串')
@@ -546,7 +543,7 @@ export function assertCollabGroupRecord(value: unknown): CollabGroupRecord {
   if (!Array.isArray(value.channels) || value.channels.length === 0) throw corrupt('channels 必须是非空数组')
   const seenChannels = new Set<string>()
   for (const ch of value.channels) {
-    if (!isPlainObject(ch) || typeof ch.name !== 'string' || ch.name.trim() === '') throw corrupt('channel.name 非法')
+    if (!isJsonObject(ch) || typeof ch.name !== 'string' || ch.name.trim() === '') throw corrupt('channel.name 非法')
     if (ch.topic !== undefined && typeof ch.topic !== 'string') throw corrupt('channel.topic 非法')
     if (ch.archived !== undefined && typeof ch.archived !== 'boolean') throw corrupt('channel.archived 非法')
     if (seenChannels.has(ch.name)) throw corrupt(`重复频道 '${ch.name}'`)
@@ -558,7 +555,7 @@ export function assertCollabGroupRecord(value: unknown): CollabGroupRecord {
   const seenNames = new Set<string>()
   for (const m of value.members) {
     if (
-      !isPlainObject(m) ||
+      !isJsonObject(m) ||
       typeof m.name !== 'string' ||
       m.name.trim() === '' ||
       !isPosIntId(m.conversationId) ||
@@ -583,12 +580,12 @@ export function assertCollabGroupRecord(value: unknown): CollabGroupRecord {
       !isFiniteTime(m.createdAt) ||
       (m.archivedAt !== undefined && !isFiniteTime(m.archivedAt))
     ) {
-      throw corrupt(`成员记录非法（${String(isPlainObject(m) ? m.name : m)}）`)
+      throw corrupt(`成员记录非法（${String(isJsonObject(m) ? m.name : m)}）`)
     }
     if (m.lastOutboundEdge !== undefined) {
       const edge = m.lastOutboundEdge
       if (
-        !isPlainObject(edge) ||
+        !isJsonObject(edge) ||
         !isPosIntId(edge.seq) ||
         !Array.isArray(edge.to) ||
         !edge.to.every((t) => typeof t === 'string') ||
@@ -614,7 +611,7 @@ export function assertCollabGroupRecord(value: unknown): CollabGroupRecord {
     if (!Array.isArray(value.retainedWorktrees)) throw corrupt('retainedWorktrees 必须是数组')
     for (const rw of value.retainedWorktrees) {
       if (
-        !isPlainObject(rw) ||
+        !isJsonObject(rw) ||
         typeof rw.memberName !== 'string' ||
         typeof rw.worktreeId !== 'string' ||
         typeof rw.branch !== 'string' ||
@@ -635,7 +632,7 @@ export function assertCollabGroupRecord(value: unknown): CollabGroupRecord {
 export function assertBoardPost(value: unknown): BoardPost {
   const corrupt = (detail: string): HelmError =>
     new HelmError('swarm_doc_corrupt', `协作组 board.jsonl 记录损坏：${detail}`, 500, { pluginId: SWARM_PLUGIN_ID })
-  if (!isPlainObject(value)) throw corrupt('记录必须是对象')
+  if (!isJsonObject(value)) throw corrupt('记录必须是对象')
   if (!isPosIntId(value.seq)) throw corrupt('seq 必须是正整数')
   if (typeof value.groupId !== 'string' || value.groupId.trim() === '') throw corrupt('groupId 非法')
   if (typeof value.channel !== 'string' || value.channel.trim() === '') throw corrupt('channel 非法')
@@ -651,7 +648,7 @@ export function assertBoardPost(value: unknown): BoardPost {
   if (value.worktreeSnapshot !== undefined) {
     const snap = value.worktreeSnapshot
     if (
-      !isPlainObject(snap) ||
+      !isJsonObject(snap) ||
       typeof snap.worktreeId !== 'string' ||
       snap.worktreeId === '' ||
       (snap.branch !== undefined && typeof snap.branch !== 'string') ||
