@@ -325,8 +325,13 @@ export interface KernelRuntimeLike {
    * Optional port: HTTP layer skips if unprovided.
    */
   assertModelEnabled?(provider: string, modelId: string): void
-  /** Configure global default model and thinking level (`config.json`); empty string clears. HTTP 501 if unimplemented. */
-  setDefaultModel?(model?: string, thinkingLevel?: string): Promise<void>
+  /** Configure global default model, thinking level, compaction model, and compaction thinking level (`config.json`); empty string clears. HTTP 501 if unimplemented. */
+  setDefaultModel?(
+    model?: string,
+    thinkingLevel?: string,
+    compactionModel?: string,
+    compactionThinkingLevel?: string,
+  ): Promise<void>
   /** Sync bound conversations' models and thinking levels after saving a Profile. */
   alignProfileConversations?(profileId: string): Promise<void>
   listModelProviders(): Promise<ModelProviderSummary[]> | ModelProviderSummary[]

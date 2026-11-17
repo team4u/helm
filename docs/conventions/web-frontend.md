@@ -66,7 +66,7 @@ SDK 不导入 Web store、路由或渲染实现。`HelmStoreProvider` 经 `Plugi
 | 状态徽章与胶囊计数 | 11px |
 | 顶栏与主舞台大标题 | 15px / 16px |
 
-- 会话 Markdown 排版限定在回合容器 `.msg-ai-block` 内（正文 15px / 行高 1.65，标题阶梯按 em 比例）；
+- 会话与产物/工作区 Markdown 预览共用同一套阅读档排版（`.msg-ai-block` 与 `.artifact-markdown-preview` 内的 `.msg-ai-body`：正文 15px / 行高 1.65，标题阶梯按 em 比例）；
 - **提问与输入字号一致**：人类提问胶囊与 Composer 输入框（含待命页）均为 15px / 行高 1.55，桌面、移动与分屏同字号。
 
 ### 移动端（`@media (max-width: 680px)`）

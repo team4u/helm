@@ -304,9 +304,10 @@ export function buildDefaultModelOptions(
   models: ModelDescriptor[],
   currentValue?: string,
   t: WebMessageTranslator = englishWebTranslator,
+  unsetLabel: string = t('models.defaults.optionUnset'),
 ): Array<{ value: string; label: string; meta?: string }> {
   const options: Array<{ value: string; label: string; meta?: string }> = [
-    { value: UNSET_MODEL_VALUE, label: t('models.defaults.optionUnset') },
+    { value: UNSET_MODEL_VALUE, label: unsetLabel },
   ]
 
   for (const m of models) {

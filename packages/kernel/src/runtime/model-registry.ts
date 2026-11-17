@@ -107,12 +107,18 @@ export class ModelRegistry {
   private modelsCurrent: Models
   defaultModel: string | undefined
   defaultThinkingLevel: string | undefined
+  defaultCompactionModel: string | undefined
+  defaultCompactionThinkingLevel: string | undefined
   /** Placeholder used in hook payloads when no model is configured (submissions still reject via `requireModelRef`). */
   modelPlaceholder = 'unconfigured'
   /** Explicitly disabled models (`providerId -> modelId[]`; from `config.json.disabledModels`). */
   private disabledModels: Record<string, string[]> = {}
 
-  constructor(options: ModelRegistryOptions, initialModels: Models, defaults: { model?: string; thinkingLevel?: string }) {
+  constructor(
+    options: ModelRegistryOptions,
+    initialModels: Models,
+    defaults: { model?: string; thinkingLevel?: string; compactionModel?: string; compactionThinkingLevel?: string },
+  ) {
     this.providersSvc = options.providersSvc
     this.credentialsSvc = options.credentialsSvc
     this.configSvc = options.configSvc
@@ -125,6 +131,8 @@ export class ModelRegistry {
     this.alignAllConversations = options.alignAllConversations
     this.modelsCurrent = initialModels
     this.defaultModel = defaults.model
+    this.defaultCompactionModel = defaults.compactionModel
+    this.defaultCompactionThinkingLevel = defaults.compactionThinkingLevel
   }
 
   get models(): Models {
@@ -151,6 +159,8 @@ export class ModelRegistry {
     return listModelCatalog(this.modelsCurrent, {
       model: this.defaultModel,
       thinkingLevel: this.defaultThinkingLevel,
+      compactionModel: this.defaultCompactionModel,
+      compactionThinkingLevel: this.defaultCompactionThinkingLevel,
       disabledModels: this.disabledModels,
     })
   }
@@ -179,6 +189,22 @@ export class ModelRegistry {
         this.defaultThinkingLevel = configuredLevel as string
       }
     }
+    if (this.defaultCompactionModel === undefined) {
+      const configuredCompaction = raw['compactionModel']
+      if (configuredCompaction !== undefined && configuredCompaction !== '') {
+        if (typeof configuredCompaction !== 'string' || !/^[^/\s]+\/[^\s]+$/.test(configuredCompaction)) {
+          throw new HelmError('config_corrupt', 'config.json.compactionModel must be a string in provider/model format', 500)
+        }
+        this.defaultCompactionModel = configuredCompaction
+      }
+    }
+    if (this.defaultCompactionThinkingLevel === undefined) {
+      const configuredCompactionLevel = raw['compactionThinkingLevel'] as string | undefined | null
+      if (configuredCompactionLevel !== undefined && configuredCompactionLevel !== '') {
+        await this.configuredThinkingLevelValidated(configuredCompactionLevel as string)
+        this.defaultCompactionThinkingLevel = configuredCompactionLevel as string
+      }
+    }
     this.disabledModels = parseDisabledModelsConfig(raw['disabledModels'])
     this.modelPlaceholder = this.defaultModel ?? 'unconfigured'
   }
@@ -193,23 +219,32 @@ export class ModelRegistry {
     this.configuredThinkingLevelValidated = validate
   }
 
-  /** Set global default model and reasoning effort (`config.json`): validates, writes atomically, takes effect immediately; empty string deletes key. */
+  /** Set global default model, reasoning effort, compaction model, and compaction reasoning effort (`config.json`). */
   async setDefaultModel(
     model: string | undefined,
     thinkingLevel: string | undefined,
     validateThinkingLevel: (level: string) => void,
+    compactionModel?: string | undefined,
+    compactionThinkingLevel?: string | undefined,
   ): Promise<void> {
     const trimmed = model?.trim()
     if (trimmed !== undefined && trimmed !== '') {
       const ref = this.parseModelRefOrThrow(trimmed)
       this.assertModelEnabled(ref.provider, ref.modelId)
     }
-    let nextLevel: string | undefined
-    if (thinkingLevel !== undefined) {
-      const level = thinkingLevel.trim()
-      if (level !== '') validateThinkingLevel(level)
-      nextLevel = level === '' ? undefined : level
+    const trimmedCompaction = compactionModel?.trim()
+    if (trimmedCompaction !== undefined && trimmedCompaction !== '') {
+      const ref = this.parseModelRefOrThrow(trimmedCompaction)
+      this.assertModelEnabled(ref.provider, ref.modelId)
     }
+    const normalizeLevel = (rawLevel: string | undefined): string | undefined => {
+      if (rawLevel === undefined) return undefined
+      const level = rawLevel.trim()
+      if (level !== '') validateThinkingLevel(level)
+      return level === '' ? undefined : level
+    }
+    const nextLevel = normalizeLevel(thinkingLevel)
+    const nextCompactionLevel = normalizeLevel(compactionThinkingLevel)
     await this.configSvc.updateBy((current) => {
       const next = { ...current }
       if (trimmed === '') delete next.model
@@ -221,13 +256,30 @@ export class ModelRegistry {
       } else {
         next.thinkingLevel = nextLevel
       }
+      if (trimmedCompaction === '') delete next.compactionModel
+      else if (trimmedCompaction !== undefined) next.compactionModel = trimmedCompaction
+      if (compactionThinkingLevel === undefined) {
+        // Leave existing compactionThinkingLevel key untouched when omitted.
+      } else if (nextCompactionLevel === undefined) {
+        delete next.compactionThinkingLevel
+      } else {
+        next.compactionThinkingLevel = nextCompactionLevel
+      }
       return next
     })
     if (trimmed !== undefined) this.defaultModel = trimmed === '' ? undefined : trimmed
     if (thinkingLevel !== undefined) this.defaultThinkingLevel = nextLevel
+    if (trimmedCompaction !== undefined) {
+      this.defaultCompactionModel = trimmedCompaction === '' ? undefined : trimmedCompaction
+    }
+    if (compactionThinkingLevel !== undefined) {
+      this.defaultCompactionThinkingLevel = nextCompactionLevel
+    }
     this.modelPlaceholder = this.defaultModel ?? 'unconfigured'
     // Independent override fields: conversations with a model override still inherit the global reasoning effort.
-    await this.alignAllConversations()
+    if (trimmed !== undefined || thinkingLevel !== undefined) {
+      await this.alignAllConversations()
+    }
   }
 
   /** Validate `'provider/model'` reference (shared by create/update). */

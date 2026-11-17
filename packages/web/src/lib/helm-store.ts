@@ -89,6 +89,7 @@ import {
 } from './types.js'
 import { isSameLocationState, parseLocationHash, type WorkspaceLocationState } from './url-hash-model.js'
 import type { SseCursor } from './use-sse-events.js'
+import { isConversationStatusActive } from './use-unread-sync.js'
 import { resetStandbyDrafts } from '../conversation/standby-model.js'
 import {
   activeTargetForPanel,
@@ -336,6 +337,43 @@ function addChangedStringKeys<V>(
 
 function applyUpdater<T>(prev: T, update: StoreUpdater<T>): T {
   return typeof update === 'function' ? (update as (p: T) => T)(prev) : update
+}
+
+function sameArtifactMetadata(a: ArtifactMetadata, b: ArtifactMetadata): boolean {
+  return (
+    a === b ||
+    (a.id === b.id &&
+      a.conversationId === b.conversationId &&
+      a.kind === b.kind &&
+      a.name === b.name &&
+      a.path === b.path &&
+      a.mimeType === b.mimeType &&
+      a.size === b.size &&
+      a.createdAt === b.createdAt)
+  )
+}
+
+/**
+ * 复用未变更产物的数组与单项引用：内容完全一致时返回原数组以跳过订阅重渲染，
+ * 列表变更时保留未变项原引用，避免预览模态框因元数据引用刷新误重置解码状态。
+ */
+function reconcileArtifactList(
+  prev: ReadonlyArray<ArtifactMetadata> | undefined,
+  next: ArtifactMetadata[],
+): ArtifactMetadata[] {
+  if (prev === undefined) return next
+  const prevById = new Map(prev.map((item) => [item.id, item]))
+  let allSame = prev.length === next.length
+  const merged = next.map((item, index) => {
+    const existing = prevById.get(item.id)
+    if (existing !== undefined && sameArtifactMetadata(existing, item)) {
+      if (allSame && prev[index] !== existing) allSame = false
+      return existing
+    }
+    allSame = false
+    return item
+  })
+  return allSame ? (prev as ArtifactMetadata[]) : merged
 }
 
 function shallowEqualAuth(a: AuthSlice, b: AuthSlice): boolean {
@@ -1409,17 +1447,38 @@ export class HelmExternalStore {
   ): Promise<ArtifactMetadata[] | undefined> => {
     const key = `artifacts:${id}`
     const existing = this.requests.requests.current.get(key)
-    if (existing) return existing as Promise<ArtifactMetadata[] | undefined>
+    if (existing) {
+      const latest = this.summaryById.get(id) ?? this.liveState.conversationDetails[id]
+      const inFlight = this.requests.artifactsInFlight.get(id)
+      const latestActive = latest !== undefined && isConversationStatusActive(latest.status)
+      if (
+        latest !== undefined &&
+        !latestActive &&
+        (inFlight === undefined ||
+          inFlight.active ||
+          inFlight.watermark === undefined ||
+          inFlight.watermark.stateChangeSeq !== latest.stateChangeSeq ||
+          inFlight.watermark.lastEntryId !== latest.lastEntryId)
+      ) {
+        this.requests.dirtyArtifacts.add(id)
+      }
+      return existing as Promise<ArtifactMetadata[] | undefined>
+    }
 
     const silent = opts?.silent === true
     const hasCached = this.artifactsState[id] !== undefined
     const sampledSummary = this.summaryById.get(id)
+    const sampledActive = sampledSummary !== undefined && isConversationStatusActive(sampledSummary.status)
     const sampledWatermark =
-      sampledSummary !== undefined
+      sampledSummary !== undefined && !sampledActive
         ? { stateChangeSeq: sampledSummary.stateChangeSeq, lastEntryId: sampledSummary.lastEntryId }
         : undefined
+    const sessionEpoch = this.requests.session.current
+    const reqEpochBefore = this.requests.requestEpochs.get(key) ?? 0
+    this.requests.artifactsInFlight.set(id, { active: sampledActive, watermark: sampledWatermark })
+    this.requests.dirtyArtifacts.delete(id)
 
-    return this.requests.runControlled({
+    const result = await this.requests.runControlled({
       key,
       onStart: () => {
         if (!silent || !hasCached) this.reportLoad(key)
@@ -1445,21 +1504,37 @@ export class HelmExternalStore {
           delete nextErrors[key]
           this.setLoadErrors(nextErrors, plan, true)
         }
-        this.setConversationArtifacts((prev) => ({ ...prev, [id]: list }), plan, true)
+        const reconciled = reconcileArtifactList(this.artifactsState[id], list)
+        this.setConversationArtifacts(
+          (prev) => (prev[id] === reconciled ? prev : { ...prev, [id]: reconciled }),
+          plan,
+          true,
+        )
         this.emit(plan)
-        const resolvedWatermark =
-          sampledWatermark ??
-          (() => {
-            const latest = this.summaryById.get(id) ?? this.liveState.conversationDetails[id]
-            return latest !== undefined
-              ? { stateChangeSeq: latest.stateChangeSeq, lastEntryId: latest.lastEntryId }
-              : undefined
-          })()
-        if (resolvedWatermark !== undefined) this.requests.artifactsWatermarks.current.set(id, resolvedWatermark)
-        else this.requests.artifactsWatermarks.current.delete(id)
-        return list
+        const latestSummary = this.summaryById.get(id) ?? this.liveState.conversationDetails[id]
+        const latestActive = latestSummary !== undefined && isConversationStatusActive(latestSummary.status)
+        if (!sampledActive && !latestActive && !this.requests.dirtyArtifacts.has(id)) {
+          const resolvedWatermark =
+            sampledWatermark ??
+            (latestSummary !== undefined
+              ? { stateChangeSeq: latestSummary.stateChangeSeq, lastEntryId: latestSummary.lastEntryId }
+              : undefined)
+          if (resolvedWatermark !== undefined) this.requests.artifactsWatermarks.current.set(id, resolvedWatermark)
+          else this.requests.artifactsWatermarks.current.delete(id)
+        } else {
+          this.requests.artifactsWatermarks.current.delete(id)
+        }
+        return reconciled
       },
     })
+
+    if (sessionEpoch === this.requests.session.current && (this.requests.requestEpochs.get(key) ?? 0) === reqEpochBefore + 1) {
+      this.requests.artifactsInFlight.delete(id)
+      if (this.requests.dirtyArtifacts.delete(id)) {
+        return await this.loadConversationArtifacts(id, { silent: true })
+      }
+    }
+    return result
   }
 
   ensurePluginDoc = async (pluginId: string, name: string): Promise<unknown> => {

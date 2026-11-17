@@ -696,13 +696,104 @@ test('ModelCenter SSR: target with tab=defaults inlines the global-default form'
     e(HostStoreProviders, { value: store }, e(ModelCenter, { inlineDrawer: true })),
   )
 
-  // The tab form renders inline; the defaults drawer never opens
+  // The tab form renders inline using shared ModelPickerControl rows; the defaults drawer never opens
   assert.match(html, /Global model rules/)
   assert.match(html, /The inheritance chain for new conversations/)
   assert.match(html, /Save global defaults/)
   assert.match(html, /aria-label="Global default model"/)
+  assert.match(html, /aria-label="Global compaction model"/)
+  assert.match(html, /Not set \(inherits system baseline\)/)
+  assert.match(html, /Not set \(use current conversation model\)/)
+  assert.match(html, /composer-model-button/)
   assert.doesNotMatch(html, /class="[^"]*primary-drawer-content[^"]*"/)
   assert.equal(EMOJI_REGEX.test(html), false)
+})
+
+test('ModelCenter: GlobalDefaultsPanel reuses ModelPickerControl (model · level) and saves compactionModel + compactionThinkingLevel via PUT /api/models/default', { timeout: 60_000 }, async () => {
+  const { act } = await import('react')
+  const { createRoot } = await import('react-dom/client')
+  const store = makeTestStore({
+    primaryTarget: { kind: 'models', tab: 'defaults' },
+    models: [
+      { id: 'anthropic/claude-3-7-sonnet', provider: 'anthropic', modelId: 'claude-3-7-sonnet', available: true, thinkingLevels: ['off', 'low', 'high'] },
+      { id: 'openai/gpt-4o-mini', provider: 'openai', modelId: 'gpt-4o-mini', available: true, thinkingLevels: ['off', 'low', 'medium'] },
+    ],
+  })
+
+  const putBodies: Array<Record<string, unknown>> = []
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = typeof input === 'string' ? input : (input as URL).toString()
+    if (path === '/api/models/providers') return new Response(JSON.stringify([]), { status: 200 })
+    if (path === '/api/models/default' && init?.method === 'PUT') {
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>
+      putBodies.push(body)
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          defaultModel: (body.model as string) ?? '',
+          defaultThinkingLevel: (body.thinkingLevel as string) ?? '',
+          defaultCompactionModel: (body.compactionModel as string) ?? '',
+          defaultCompactionThinkingLevel: (body.compactionThinkingLevel as string) ?? '',
+        }),
+        { status: 200 },
+      )
+    }
+    if (path === '/api/models/default') {
+      return new Response(
+        JSON.stringify({
+          defaultModel: 'anthropic/claude-3-7-sonnet',
+          defaultThinkingLevel: 'high',
+          defaultCompactionModel: 'openai/gpt-4o-mini',
+          defaultCompactionThinkingLevel: 'low',
+        }),
+        { status: 200 },
+      )
+    }
+    return new Response(JSON.stringify({ ok: true }), { status: 200 })
+  }) as typeof fetch
+
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = createRoot(container)
+
+  try {
+    await act(async () => {
+      root.render(e(HostStoreProviders, { value: store }, e(ModelCenter, { inlineDrawer: true })))
+    })
+
+    // Status row and single-row picker buttons show model · thinkingLevel
+    assert.match(container.textContent ?? '', /Compaction:/)
+    assert.match(container.textContent ?? '', /openai\/gpt-4o-mini/)
+    const defaultBtn = container.querySelector('#model-defaults-model') as HTMLButtonElement
+    const compactionBtn = container.querySelector('#model-defaults-compaction-model') as HTMLButtonElement
+    assert.ok(defaultBtn && compactionBtn, 'both rows must reuse ModelPickerControl trigger buttons')
+    assert.match(defaultBtn.textContent ?? '', /claude-3-7-sonnet/)
+    assert.match(defaultBtn.textContent ?? '', /high/)
+    assert.match(compactionBtn.textContent ?? '', /gpt-4o-mini/)
+    assert.match(compactionBtn.textContent ?? '', /low/)
+
+    const saveBtn = Array.from(container.querySelectorAll('button')).find(
+      (btn) => (btn.textContent ?? '').includes('Save global defaults'),
+    )!
+    await act(async () => {
+      saveBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    })
+
+    assert.equal(putBodies.length, 1)
+    assert.deepEqual(putBodies[0], {
+      model: 'anthropic/claude-3-7-sonnet',
+      thinkingLevel: 'high',
+      compactionModel: 'openai/gpt-4o-mini',
+      compactionThinkingLevel: 'low',
+    })
+  } finally {
+    globalThis.fetch = originalFetch
+    await act(async () => {
+      root.unmount()
+    })
+    container.remove()
+  }
 })
 
 test('ModelCenter SSR: backend catalog plugin gateways render as dynamic provider cards and drawer', { timeout: 60_000 }, () => {

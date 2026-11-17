@@ -12,7 +12,7 @@ import {
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import type { ModelsCenterTab } from '../lib/types.js'
 import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
-import { GlobalDefaultsPanel } from './GlobalDefaultsPanel.js'
+import { GlobalDefaultsPanel, type DefaultModelInfo } from './GlobalDefaultsPanel.js'
 import { ModelCard } from './ModelCard.js'
 import { ModelDetailDrawer } from './ModelDetailDrawer.js'
 import {
@@ -74,10 +74,7 @@ export function ModelCenter({
 
   // Dynamic catalog and global default model state
   const [catalog, setCatalog] = useState<ModelProviderSummary[]>([])
-  const [defaultModelInfo, setDefaultModelInfo] = useState<{
-    defaultModel: string
-    defaultThinkingLevel: string
-  } | null>(null)
+  const [defaultModelInfo, setDefaultModelInfo] = useState<DefaultModelInfo | null>(null)
   const [refreshingCatalog, setRefreshingCatalog] = useState(false)
 
   // On mount, fetch the full backend provider catalog and the global default
@@ -339,6 +336,17 @@ export function ModelCenter({
           </span>
         ) : (
           <span>{t('models.defaults.unsetHint')}</span>
+        )}
+        {defaultModelInfo?.defaultCompactionModel && (
+          <span>
+            {t('models.defaults.compactionCurrentPrefix')}{' '}
+            <strong className="mono">{defaultModelInfo.defaultCompactionModel}</strong>
+            {defaultModelInfo.defaultCompactionThinkingLevel &&
+              defaultModelInfo.defaultCompactionThinkingLevel !== 'off' &&
+              t('models.defaults.thinkingLevelSuffix', {
+                level: defaultModelInfo.defaultCompactionThinkingLevel,
+              })}
+          </span>
         )}
         <span className="text-subtle">{t('models.defaults.inheritanceChain')}</span>
       </div>

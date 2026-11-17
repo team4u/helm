@@ -118,6 +118,7 @@ test('禁用模型执行门禁：会话创建/更新/提交、默认模型、Pro
   await env.call('PUT', '/api/models/filter', { provider: 'faux', disabledModels: ['faux-1'] })
   assert.equal((await env.call('POST', `/api/conversations/${conv.id}/input`, { text: 'hello' })).status, 409)
   assert.equal((await env.call('PUT', '/api/models/default', { model: 'faux/faux-1' })).status, 409)
+  assert.equal((await env.call('PUT', '/api/models/default', { compactionModel: 'faux/faux-1' })).status, 409)
 
   await env.call('PUT', '/api/models/filter', { provider: 'faux', disabledModels: ['faux-2'] })
   env.faux.setResponses([fauxAssistantMessage('ok')])

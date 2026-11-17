@@ -143,8 +143,16 @@ test('模型菜单按真实 /api/models 契约组成 provider/model，思考档�
 })
 
 test('模型目录携带全局默认模型', { timeout: 60_000 }, () => {
-  const catalog = normalizeModelCatalogInfo({ models: [], thinkingLevels: {}, defaultModel: 'magpie/group/smart' })
+  const catalog = normalizeModelCatalogInfo({
+    models: [],
+    thinkingLevels: {},
+    defaultModel: 'magpie/group/smart',
+    defaultCompactionModel: 'openai/gpt-4o-mini',
+    defaultCompactionThinkingLevel: 'low',
+  })
   assert.equal(catalog.defaultModel, 'magpie/group/smart')
+  assert.equal(catalog.defaultCompactionModel, 'openai/gpt-4o-mini')
+  assert.equal(catalog.defaultCompactionThinkingLevel, 'low')
 })
 
 test('模型目录窗口字段：真实已知正数透传，未知省略，非法值显式拒绝', { timeout: 60_000 }, () => {

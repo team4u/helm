@@ -116,12 +116,13 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose, inli
   const { text, textState } = useFilePreviewText(loadedBlob, meta, mime)
 
   // 插件命中判定用已加载的真实元数据（名称未知不猜）；加载中/失败不给插件命中。
+  const metaName = meta?.name
   const pluginMatchInput = useMemo(
     () =>
       state.phase === 'loaded'
-        ? { name: meta?.name, mimeType: mime }
+        ? { name: metaName, mimeType: mime }
         : undefined,
-    [state, meta, mime],
+    [state.phase, metaName, mime],
   )
 
   const matchedPreviewers = useMemo(

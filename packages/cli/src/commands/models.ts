@@ -14,6 +14,8 @@ const REFRESH_FLAGS: readonly FlagSpec[] = [
 const DEFAULT_FLAGS: readonly FlagSpec[] = [
   { name: 'set', type: 'string', help: 'set global default model (provider/model; empty string to clear)' },
   { name: 'thinking', type: 'string', help: 'set global default thinking level (off/minimal/low/medium/high/xhigh/max; empty string to clear)' },
+  { name: 'compaction', type: 'string', help: 'set global compaction model (provider/model; empty string to clear)' },
+  { name: 'compaction-thinking', type: 'string', help: 'set global compaction thinking level (off/minimal/low/medium/high/xhigh/max; empty string to clear)' },
 ]
 
 /** Flag specs for models filter (--disable is repeatable; --clear empties the provider's disabled list). */
@@ -37,7 +39,7 @@ export function modelsCommands(): CommandSpec[] {
     },
     {
       path: ['models', 'default'],
-      description: 'View or set global default model and thinking level (GET/PUT /api/models/default)',
+      description: 'View or set global default model, thinking level, and compaction model (GET/PUT /api/models/default)',
       flags: DEFAULT_FLAGS,
       async run(ctx: CommandContext) {
         const parsed = parseFlags(DEFAULT_FLAGS, ctx.args)
@@ -45,14 +47,38 @@ export function modelsCommands(): CommandSpec[] {
         const hub = await ctx.hub()
         const set = parsed.flags.get('set') as string | undefined
         const thinking = parsed.flags.get('thinking') as string | undefined
-        if (set === undefined && thinking === undefined) {
-          printResult(ctx, await hub.get<{ defaultModel: string; defaultThinkingLevel: string }>('/api/models/default'))
+        const compaction = parsed.flags.get('compaction') as string | undefined
+        const compactionThinking = parsed.flags.get('compaction-thinking') as string | undefined
+        if (set === undefined && thinking === undefined && compaction === undefined && compactionThinking === undefined) {
+          printResult(
+            ctx,
+            await hub.get<{
+              defaultModel: string
+              defaultThinkingLevel: string
+              defaultCompactionModel: string
+              defaultCompactionThinkingLevel: string
+            }>('/api/models/default'),
+          )
           return
         }
-        printResult(ctx, await hub.put<{ ok: boolean; defaultModel: string; defaultThinkingLevel: string }>('/api/models/default', {
-          ...(set !== undefined ? { model: set } : {}),
-          ...(thinking !== undefined ? { thinkingLevel: thinking } : {}),
-        }))
+        printResult(
+          ctx,
+          await hub.put<{
+            ok: boolean
+            defaultModel: string
+            defaultThinkingLevel: string
+            defaultCompactionModel: string
+            defaultCompactionThinkingLevel: string
+          }>(
+            '/api/models/default',
+            {
+              ...(set !== undefined ? { model: set } : {}),
+              ...(thinking !== undefined ? { thinkingLevel: thinking } : {}),
+              ...(compaction !== undefined ? { compactionModel: compaction } : {}),
+              ...(compactionThinking !== undefined ? { compactionThinkingLevel: compactionThinking } : {}),
+            },
+          ),
+        )
       },
     },
     {

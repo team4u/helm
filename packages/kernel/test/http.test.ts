@@ -1402,19 +1402,32 @@ test('models/providers returns public provider metadata; mismatched path does no
 })
 
 test('default config partial update supports omitting model field and rejects empty/invalid bodies', { timeout: 60_000 }, async () => {
-  const calls: Array<[string | undefined, string | undefined]> = []
+  const calls: Array<
+    | [string | undefined, string | undefined]
+    | [string | undefined, string | undefined, string | undefined]
+    | [string | undefined, string | undefined, string | undefined, string | undefined]
+  > = []
   const kernel = makeKernel()
-  kernel.setDefaultModel = async (model, level) => { calls.push([model, level]) }
+  kernel.setDefaultModel = async (model, level, compaction, compactionLevel) => {
+    if (compactionLevel !== undefined) calls.push([model, level, compaction, compactionLevel])
+    else if (compaction !== undefined) calls.push([model, level, compaction])
+    else calls.push([model, level])
+  }
   const { handler } = makeHandlers(kernel)
   const levelOnly = await call(handler, 'PUT', '/api/models/default', { body: { thinkingLevel: 'high' } })
   assert.equal(levelOnly.status, 200)
   assert.deepEqual(calls.at(-1), [undefined, 'high'])
   assert.equal((await call(handler, 'PUT', '/api/models/default', { body: { model: '' } })).status, 200)
   assert.deepEqual(calls.at(-1), ['', undefined])
-  for (const body of [{}, { model: null }, { thinkingLevel: 3 }, { other: 'high' }]) {
+  assert.equal(
+    (await call(handler, 'PUT', '/api/models/default', { body: { compactionModel: 'faux/compact', compactionThinkingLevel: 'low' } })).status,
+    200,
+  )
+  assert.deepEqual(calls.at(-1), [undefined, undefined, 'faux/compact', 'low'])
+  for (const body of [{}, { model: null }, { compactionModel: 123 }, { compactionThinkingLevel: false }, { thinkingLevel: 3 }, { other: 'high' }]) {
     assert.equal((await call(handler, 'PUT', '/api/models/default', { body })).status, 400)
   }
-  assert.equal(calls.length, 2)
+  assert.equal(calls.length, 3)
 })
 
 test('models returns catalog object (models array + thinkingLevels)', { timeout: 60_000 }, async () => {

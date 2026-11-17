@@ -87,6 +87,10 @@ export const modelsMessages = {
     en: '(thinking level: {level})',
     'zh-CN': '（思考档位：{level}）',
   },
+  'models.defaults.compactionCurrentPrefix': {
+    en: 'Compaction:',
+    'zh-CN': '压缩模型：',
+  },
   'models.defaults.unsetHint': {
     en: 'No global default model set; conversations without an explicit model cannot reply properly.',
     'zh-CN': '未设置全局默认模型，未单独指定模型的会话将无法正常回复。',
@@ -270,6 +274,16 @@ export const modelsMessages = {
   },
   'models.defaults.levelFollowSdk': { en: 'Follow SDK default', 'zh-CN': '跟随 SDK 缺省' },
   'models.defaults.levelCurrent': { en: '{level} (current)', 'zh-CN': '{level}（当前值）' },
+  'models.defaults.compactionLabel': { en: 'Compaction model', 'zh-CN': '压缩模型' },
+  'models.defaults.compactionAria': { en: 'Global compaction model', 'zh-CN': '全局压缩模型' },
+  'models.defaults.compactionHint': {
+    en: 'Model used for context compaction summaries. If unset, uses the conversation\'s current model.',
+    'zh-CN': '用于上下文压缩摘要的模型；未设置时使用当前会话的模型。',
+  },
+  'models.defaults.compactionOptionUnset': {
+    en: 'Not set (use current conversation model)',
+    'zh-CN': '未设置（使用当前会话模型）',
+  },
   'models.defaults.save': { en: 'Save global defaults', 'zh-CN': '保存全局默认' },
   'models.defaults.reset': { en: 'Reset', 'zh-CN': '重置' },
   'models.defaults.noticeUpdated': {
@@ -277,6 +291,10 @@ export const modelsMessages = {
     'zh-CN': '全局默认模型已更新',
   },
   'models.defaults.noticeSetTo': { en: 'Set to {model}', 'zh-CN': '已设置为 {model}' },
+  'models.defaults.noticeCompactionSetTo': {
+    en: 'Compaction model set to {model}',
+    'zh-CN': '压缩模型已设置为 {model}',
+  },
   'models.defaults.noticeCleared': {
     en: 'Global default model cleared',
     'zh-CN': '已清除全局默认模型',

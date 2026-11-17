@@ -144,8 +144,14 @@ function makeKernel(calls: CallLog = newCallLog()): KernelRuntimeLike {
       calls.setDisabledModels!.push([provider, disabledModels])
       return { models: [], thinkingLevels: {} }
     },
-    setDefaultModel: async (model?: string, thinkingLevel?: string) => {
-      calls.setDefaultModel!.push([model, thinkingLevel])
+    setDefaultModel: async (model?: string, thinkingLevel?: string, compactionModel?: string, compactionThinkingLevel?: string) => {
+      if (compactionThinkingLevel !== undefined) {
+        calls.setDefaultModel!.push([model, thinkingLevel, compactionModel, compactionThinkingLevel])
+      } else if (compactionModel !== undefined) {
+        calls.setDefaultModel!.push([model, thinkingLevel, compactionModel])
+      } else {
+        calls.setDefaultModel!.push([model, thinkingLevel])
+      }
     },
     listModelProviders: async () => [],
     async listNodes() { return [] },
@@ -313,12 +319,15 @@ test('models/default: empty object/empty body/explicit null/wrong type/unknown f
   const clearModel = await call(kernel, 'PUT', '/api/models/default', { model: '' })
   assert.equal(clearModel.status, 200)
   assert.deepEqual(calls.setDefaultModel![1], ['', undefined])
-  for (const bad of [{}, { model: null }, { thinkingLevel: 3 }, { other: 'high' }, '"str"', '[]']) {
+  const compactionOnly = await call(kernel, 'PUT', '/api/models/default', { compactionModel: 'faux/faux-2', compactionThinkingLevel: 'low' })
+  assert.equal(compactionOnly.status, 200)
+  assert.deepEqual(calls.setDefaultModel![2], [undefined, undefined, 'faux/faux-2', 'low'])
+  for (const bad of [{}, { model: null }, { compactionModel: null }, { compactionThinkingLevel: 1 }, { thinkingLevel: 3 }, { other: 'high' }, '"str"', '[]']) {
     await expect400(kernel, 'PUT', '/api/models/default', bad)
   }
   const rawEmpty = await call(kernel, 'PUT', '/api/models/default', undefined)
   assert.equal(rawEmpty.status, 400)
-  assert.equal(calls.setDefaultModel!.length, 2)
+  assert.equal(calls.setDefaultModel!.length, 3)
 })
 
 test('models/filter: disabledModels required string array; unknown field/wrong type return 400', { timeout: 60_000 }, async () => {

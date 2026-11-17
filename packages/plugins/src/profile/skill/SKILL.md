@@ -49,7 +49,7 @@ managedByPlugin: {{MANAGED_BY}}
 - `helm skills list` / `helm skills read <id> [--path references/xxx.md]`. The built-in helm-cli is a system-managed read-only skill, overwritten from built-in sources at startup; to extend it, create your own skill instead of modifying built-in files.
 
 ### Models and gateways
-- `helm models list` / `helm models default [--set <provider/model>] [--thinking <level>]` / `helm models providers` / `helm models refresh [--provider <id>]` / `helm models filter [--provider <id> [--disable <modelId>... | --clear]]` (model disable set: view without arguments; full-replacement semantics).
+- `helm models list` / `helm models default [--set <provider/model>] [--thinking <level>] [--compaction <provider/model>] [--compaction-thinking <level>]` / `helm models providers` / `helm models refresh [--provider <id>]` / `helm models filter [--provider <id> [--disable <modelId>... | --clear]]` (model disable set: view without arguments; full-replacement semantics).
 - `helm providers list` / `helm providers set --input <json>` (replaces the gateway array wholesale; secrets strictly forbidden).
 - `helm credentials list` / `helm credentials set <id> --value <value>` / `helm credentials delete <id>`: server-side credential management.
 

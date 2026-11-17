@@ -20,6 +20,11 @@ export interface ControlledRequestOptions<T> {
   exec: (ctx: ControlledRequestContext) => Promise<T | undefined>
 }
 
+export interface ArtifactsInFlightMeta {
+  active: boolean
+  watermark: ArtifactsSyncWatermark | undefined
+}
+
 export class StoreRequestManager {
   readonly session = { current: 0 }
   readonly requests = { current: new Map<string, Promise<unknown>>() }
@@ -28,6 +33,8 @@ export class StoreRequestManager {
   readonly failedDocs = { current: new Set<string>() }
   readonly pluginEpoch = { current: new Map<string, number>() }
   readonly artifactsWatermarks = { current: new Map<number, ArtifactsSyncWatermark>() }
+  readonly artifactsInFlight = new Map<number, ArtifactsInFlightMeta>()
+  readonly dirtyArtifacts = new Set<number>()
   readonly prevVisibleConversationIds = new Set<number>()
   readonly assetGeneration = { current: 0 }
   assetsController: AbortController | null = null
@@ -43,6 +50,13 @@ export class StoreRequestManager {
 
   abortRequestKey = (key: string): void => {
     this.requestEpochs.set(key, (this.requestEpochs.get(key) ?? 0) + 1)
+    if (key.startsWith('artifacts:')) {
+      const id = Number(key.slice('artifacts:'.length))
+      if (Number.isInteger(id)) {
+        this.artifactsInFlight.delete(id)
+        this.dirtyArtifacts.delete(id)
+      }
+    }
     const ctrl = this.inFlightControllers.get(key)
     if (ctrl !== undefined) {
       this.inFlightControllers.delete(key)
@@ -134,6 +148,8 @@ export class StoreRequestManager {
     this.requests.current.clear()
     this.failedDocs.current.clear()
     this.artifactsWatermarks.current.clear()
+    this.artifactsInFlight.clear()
+    this.dirtyArtifacts.clear()
     this.prevVisibleConversationIds.clear()
     this.assetGeneration.current++
   }
@@ -141,6 +157,8 @@ export class StoreRequestManager {
   dispose(): void {
     this.session.current++
     this.abortAllInFlight()
+    this.artifactsInFlight.clear()
+    this.dirtyArtifacts.clear()
     for (const timer of this.timers) clearTimeout(timer)
     this.timers.clear()
   }
