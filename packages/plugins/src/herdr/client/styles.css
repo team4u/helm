@@ -1,8 +1,8 @@
 /**
- * builtin:herdr 插件自有样式（clientRoot 内本地 CSS）。
+ * builtin:herdr plugin-local styles (local CSS inside the clientRoot).
  *
- * 通用结构一律复用宿主设计系统原语（.helm-table-wrap / .helm-table / .callout /
- * .stack-row / Callout 组件等），此处保留 Herdr 总览视图双端响应式布局与容器断点适配。
+ * Generic structure reuses host design-system primitives (.helm-table-wrap / .helm-table / .callout /
+ * .stack-row / the Callout component, etc.); this file keeps only the Herdr overview dual-endpoint responsive layout and container breakpoint adaptation.
  */
 .herdr-overview {
   width: 100%;
@@ -58,12 +58,12 @@
   min-width: 110px;
 }
 
-/* 筛选下拉宽度契约（宿主 Select 默认 width: 100%，由外层控制宽度） */
+/* Filter dropdown width contract (host Select defaults to width: 100%; the wrapper controls the width) */
 .herdr-filter-select .helm-select-trigger {
   width: 100%;
 }
 
-/* 行计小字 */
+/* Row-count caption */
 .herdr-metric-label {
   margin-left: 4px;
 }
@@ -143,7 +143,7 @@
   flex-wrap: wrap;
 }
 
-/* 窄屏卡片布局：默认隐藏，仅在 <=680px 容器或视口下切换呈现，杜绝横向溢出 */
+/* Narrow-screen card layout: hidden by default, shown only under <=680px container or viewport, eliminating horizontal overflow */
 .herdr-mobile-cards {
   display: none;
   flex-direction: column;
@@ -217,7 +217,7 @@
   border-top: 1px solid var(--border-subtle, var(--border));
 }
 
-/* 待审批列表 */
+/* Pending-approval list */
 .herdr-asks-card {
   margin-top: 12px;
 }
@@ -245,7 +245,7 @@
   font-size: 12px;
 }
 
-/* 终端快照模态：宿主 .modal 默认 680px，桌面放宽到阅读宽度，窄屏自动贴合 */
+/* Terminal snapshot modal: host .modal defaults to 680px; desktop widens to reading width, narrow screens hug the viewport */
 .herdr-snapshot-modal {
   max-width: min(860px, calc(100vw - 24px));
 }

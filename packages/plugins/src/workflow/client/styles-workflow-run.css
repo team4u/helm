@@ -1,9 +1,9 @@
 /**
- * 工作流运行卡样式：头部 / 阶段分组 / 日志行 / 重放表单 / 节点卡族 / 最终产出。
+ * Workflow run-card styles: header / phase groups / log rows / replay form / node-card family / final output.
  *
- * 同优先级的状态规则必须位于基础规则之后，避免状态色被覆盖。
+ * Same-specificity state rules must come after base rules so state colors are not overridden.
  */
-/* 时间线内联工作流卡的紧凑实时节点列表（直接平铺直出子代理与动作胶囊卡） */
+/* Compact live node list of the timeline inline workflow card (subagent and action capsule cards laid out flat) */
 .workflow-node-list {
   display: flex;
   flex-direction: column;
@@ -12,7 +12,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-xs);
   background: var(--bg-subtle);
-  /* 渐进披露：节点列表支持滚动，平铺胶囊卡清晰可见流动数据；滚动到边界须链回时间线（contain 会吞掉悬停整卡时的滚轮） */
+  /* Progressive disclosure: the node list scrolls and flat capsule cards show streaming data clearly; scrolling past the boundary must chain back to the timeline (contain would swallow the wheel while hovering the whole card) */
   max-height: 360px;
   overflow-y: auto;
 }
@@ -49,7 +49,7 @@
 }
 
 /* ==========================================================================
- * 10. 工作流运行卡（聊天流与工作台共用）：阶段分组、节点展开态、日志行、结果预览
+ * 10. Workflow run card (shared by chat stream and workbench): phase groups, node expanded state, log rows, result preview
  * ========================================================================== */
 
 .workflow-run-card {
@@ -59,7 +59,7 @@
   gap: 8px;
 }
 
-/* 运行卡头部（展开按钮 + 标题 + 徽章 + 统计 + 动作）；换行友好 */
+/* Run-card header (expand button + title + badges + stats + actions); wrap-friendly */
 .workflow-run-header {
   flex-wrap: wrap;
 }
@@ -85,7 +85,7 @@
   white-space: nowrap;
 }
 
-/* 已完成 run 重放小表单（源 run 标识 + args 覆盖输入 + 缓存语义说明） */
+/* Completed-run replay mini form (source run identity + args override input + cache semantics note) */
 .workflow-replay-form {
   display: flex;
   flex-direction: column;
@@ -113,7 +113,7 @@
   min-width: 0;
 }
 
-/* 同优先级的状态规则必须位于基础规则之后，避免状态色被覆盖。 */
+/* Same-specificity state rules must come after base rules so state colors are not overridden. */
 .phase-bar {
   display: flex;
   flex-wrap: wrap;
@@ -146,7 +146,7 @@
   background: var(--err-bg);
 }
 
-/* 脚本 log() 路标：紧凑日志流 */
+/* Script log() waypoints: compact log stream */
 .workflow-log-list {
   display: flex;
   flex-direction: column;
@@ -180,7 +180,7 @@
   min-width: 0;
 }
 
-/* 阶段分组小标题栏 */
+/* Phase-group mini header bar */
 .workflow-phase-group {
   display: flex;
   flex-direction: column;
@@ -255,7 +255,7 @@
   color: var(--fg-muted);
 }
 
-/* 无原生子会话节点（action / cached / 外部窗格）的结构化明细 */
+/* Structured details of native-child-less nodes (action / cached / external panes) */
 .workflow-node-detail {
   display: flex;
   flex-direction: column;
@@ -289,7 +289,7 @@
   color: var(--fg-muted);
 }
 
-/* 工作流最终产出预览 */
+/* Workflow final-output preview */
 .workflow-result-box {
   display: flex;
   flex-direction: column;

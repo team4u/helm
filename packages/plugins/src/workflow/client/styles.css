@@ -1,13 +1,13 @@
 /**
- * builtin:workflow 插件自有样式（clientRoot 内本地 CSS）：子代理实时卡
- * 家族（双层胶囊卡 / 头部徽章统计 / 副栏 / 外部执行摘要）。
+ * builtin:workflow plugin-local styles (local CSS inside the clientRoot): subagent live-card
+ * family (two-layer capsule card / header badge stats / sub-rail / external run summary).
  *
- * 文件名被宿主契约测试锁定（packages/web/test/subagent-live-card.test.ts 直读
- * 本文件断言整卡交互与执行树 hover 样式契约）：整卡 hover 与执行树行
- * hover 的交互态规则保留在此；执行树结构样式在 styles-execution-tree.css，
- * 展开态实时流在 styles-subagent-stream.css；运行卡 / 工作树检视 / 工作流库
- * 样式在 styles-workflow-run / styles-worktree-inspect / styles-workflow-library。
- * 以上均由 index.tsx 一并引入，编译器合并为插件样式文本导出。
+ * The file name is locked by host contract tests (packages/web/test/subagent-live-card.test.ts reads
+ * this file directly to assert whole-card interaction and execution-tree hover style contracts): whole-card hover and execution-tree row
+ * hover interaction rules stay here; execution-tree structural styles live in styles-execution-tree.css,
+ * expanded live stream in styles-subagent-stream.css; run card / worktree inspect / workflow library
+ * styles in styles-workflow-run / styles-worktree-inspect / styles-workflow-library.
+ * All are imported together by index.tsx and merged by the compiler into the plugin style-text export.
  */
 .subagent-live-card {
   container: subagent-card / inline-size;
@@ -51,22 +51,22 @@
   flex-wrap: nowrap;
 }
 
-/* 展开态头部才有分隔底线（折叠态由第 2 层副栏收尾） */
+/* Expanded header only gets the divider bottom line (collapsed state ends at the second-layer sub-rail) */
 .subagent-live-card-expanded .subagent-live-header {
   border-bottom: 1px solid var(--border);
 }
 
-/* 等待审批左侧描边强调 */
+/* Awaiting-approval left-border emphasis */
 .subagent-live-card-warn {
   border-left: 3px solid var(--warn);
 }
 
 .subagent-live-card-error {
-  /* 异常态状态徽章（badge-err）与副栏已具备明确视觉提示；卡片容器本身不设置红色边框 */
+  /* Abnormal states already have clear visual cues via the status badge (badge-err) and sub-rail; the card container itself gets no red border */
   border-left: none;
 }
 
-/* 第 1 层触发区：左图标 + 标题 + 徽章 + 统计尾注 */
+/* Layer-1 trigger zone: left icon + title + badges + stats tail */
 .subagent-live-trigger {
   flex: 1;
   min-width: 0;
@@ -82,7 +82,7 @@
   font: inherit;
 }
 
-/* 后台汇报卡：头部触发区兼任折叠开关（整卡不做点击导航，正文可选可点） */
+/* Background report card: the header trigger zone doubles as the collapse toggle (no whole-card click navigation; body text stays selectable and clickable) */
 .subagent-live-toggleable {
   cursor: pointer;
 }
@@ -93,20 +93,20 @@
   border-radius: var(--radius-xs);
 }
 
-/* 后台汇报副栏失败态：错误预览红色直见 */
+/* Background report sub-rail failure state: error preview visible in red */
 .execution-report-subline-error .subagent-live-subline-text {
   color: var(--err);
 }
 
-/* 后台汇报展开区：投递时在途任务快照徽章行 */
+/* Background report expanded area: in-flight task snapshot badge row at delivery time */
 .execution-report-tasks {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
 }
 
-/* 统计尾注（模型 / token 等）：可被窄屏隐藏的可让位信息，右推职责不在
-   此处（避免与耗时位双 auto margin 造成空洞）。 */
+/* Stats tail (model / tokens, etc.): yieldable info that narrow screens may hide; the right-push duty is not here
+   (avoiding a double auto margin with the duration slot creating a hole). */
 .subagent-live-stats {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -119,9 +119,9 @@
   padding-right: 4px;
 }
 
-/* 总耗时独立固定展示位：运行中动态变化、结束定格的唯一耗时出口；右推
-   职责集中于此单一 auto margin，窄屏（<=680px）不随统计尾注隐藏、无
-   max-width 截断，保证任何状态下可见。 */
+/* Total-duration fixed slot: the single duration outlet that ticks while running and freezes on settle; the right-push
+   duty is concentrated in this single auto margin; narrow screens (<=680px) never hide it with the stats tail, and no
+   max-width truncation, keeping it visible in every state. */
 .subagent-live-elapsed {
   margin-left: auto;
   flex-shrink: 0;
@@ -132,7 +132,7 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* 第 2 层动态副栏：折叠态单行展示当前动作 / 思考 / 结论 / 错误 */
+/* Layer-2 dynamic sub-rail: collapsed state shows the current action / thinking / conclusion / error in one row */
 .subagent-live-subline {
   width: 100%;
   background: none;
@@ -205,7 +205,7 @@
   flex-shrink: 0;
 }
 
-/* 有意义用户标题：等宽克制排版，超长省略号截断不撑爆头部 */
+/* Meaningful user title: restrained mono layout, long titles ellipsize instead of blowing up the header */
 .subagent-live-title-text {
   font-size: 11px;
   font-weight: 400;
@@ -228,7 +228,7 @@
   max-width: 40%;
 }
 
-/* 隔离工作树分支徽章：纯文本 + 线性图标，hover 出完整路径 */
+/* Isolated worktree branch badge: plain text + line icon, full path on hover */
 .subagent-worktree-badge {
   display: inline-flex;
   align-items: center;
@@ -295,7 +295,7 @@
 .tool-call-details > summary { cursor: pointer; }
 .tool-call-details .code-block-pre { max-height: 220px; overflow: auto; }
 
-/* 外部运行时（无子会话）后台任务摘要卡 */
+/* External runtime (no child conversation) background task summary card */
 .subagent-external-body {
   gap: 6px;
 }
@@ -310,7 +310,7 @@
   min-width: 0;
 }
 
-/* 后台 run 失败：卡片底部简洁错误行 */
+/* Background run failure: compact error row at the card bottom */
 .subagent-bg-error {
   align-items: center;
   gap: 6px;
@@ -322,9 +322,9 @@
 }
 
 /* ==========================================================================
- * 执行树行交互态（结构样式见 styles-execution-tree.css）：保留在本文件是
- * 宿主契约测试要求——直读 styles.css 断言 hover 强调底色
- * （background: var(--accent-bg)）与外层父卡 hover 的区分契约。
+ * Execution-tree row interaction states (structural styles in styles-execution-tree.css): kept in this file because
+ * host contract tests require it — they read styles.css directly to assert the hover accent background
+ * (background: var(--accent-bg)) and its distinction from the outer parent-card hover contract.
  * ========================================================================== */
 
 .execution-child-clickable {

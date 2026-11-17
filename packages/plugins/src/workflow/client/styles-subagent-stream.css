@@ -1,12 +1,12 @@
 /**
- * builtin:workflow 子代理卡展开态实时流样式（自 styles.css 拆出）：
- * SubagentStream 组件的流容器与 prompt/thinking/tool/text 各类行排版。
- * 由 index.tsx 一并引入，编译器合并为插件样式文本导出。
+ * builtin:workflow subagent-card expanded live-stream styles (split out of styles.css):
+ * stream container of the SubagentStream component and the prompt/thinking/tool/text row layouts.
+ * Imported together by index.tsx and merged by the compiler into the plugin style-text export.
  */
 .subagent-live-stream {
   max-height: 220px;
   overflow-y: auto;
-  /* 不设 overscroll-behavior: contain：滚动到边界须链回会话时间线，否则悬停卡片时滚轮被吞 */
+  /* No overscroll-behavior: contain: scrolling past the boundary must chain back to the conversation timeline, otherwise the wheel is swallowed while hovering the card */
   padding: 8px 10px;
   display: flex;
   flex-direction: column;
@@ -44,9 +44,9 @@
   font-weight: 500;
 }
 
-/* 仅指令（prompt）保持两行紧凑截断；thinking/text 完整换行，由外层
-   .subagent-live-stream max-height 限高与滚动保证尾部可见，
-   不会因行截断永远看不到最新内容。 */
+/* Only prompts keep the two-line compact clamp; thinking/text wrap fully — the outer
+   .subagent-live-stream max-height cap plus scrolling keeps the tail visible,
+   so the latest content is never permanently hidden by row clamping. */
 .subagent-stream-prompt .subagent-stream-body {
   overflow: hidden;
   display: -webkit-box;
@@ -89,7 +89,7 @@
   min-width: 0;
 }
 
-/* 工具结果首行预览：明确标识“预览且可能截断”，不伪装全文。 */
+/* Tool-result first-line preview: clearly marked as a possibly-truncated preview, never posing as the full text. */
 .subagent-stream-tool-preview {
   min-width: 0;
   max-width: 45%;

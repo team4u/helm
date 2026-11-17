@@ -1,10 +1,10 @@
 /**
- * 受管工作树只读改动概览样式：检视区与子代理卡内嵌检视入口。
+ * Managed-worktree read-only change-overview styles: inspect section and the subagent-card embedded inspect entry.
  *
- * 编译器合并为插件样式文本导出，宿主确认加载后注入，停用/卸载时回收。
+ * Merged by the compiler into the plugin style-text export; injected after the host confirms loading, reclaimed on disable/uninstall.
  */
 
-/* 受管工作树只读改动概览（inspect_worktree 结果展示） */
+/* Managed-worktree read-only change overview (inspect_worktree result display) */
 .worktree-inspect {
   display: flex;
   flex-direction: column;
@@ -51,7 +51,7 @@
   color: var(--fg-muted);
 }
 
-/* 独立子代理卡内嵌检视入口：点击不冒泡整卡导航（按钮键盘激活不受影响） */
+/* Standalone subagent-card embedded inspect entry: clicks do not bubble to whole-card navigation (button keyboard activation unaffected) */
 .subagent-inspect-slot {
   display: flex;
   flex-direction: column;

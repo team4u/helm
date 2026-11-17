@@ -1,5 +1,5 @@
-/* builtin:token-speed 输入区状态徽标：只读状态文本（非操作项），
- * 色彩继承宿主状态区变量，不复制通用组件样式。 */
+/* builtin:token-speed composer status badge: read-only status text (not an action item);
+ * colors inherit the host status-area variables, no generic component styles duplicated. */
 .token-speed-status {
   flex-shrink: 0;
   color: var(--fg-muted);

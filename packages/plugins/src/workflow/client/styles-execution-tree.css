@@ -1,10 +1,10 @@
 /**
- * builtin:workflow 统一执行树样式（自 styles.css 拆出）：父卡内下一级
- * 紧凑子项（任意深度经点击打开会话抽屉）。
+ * builtin:workflow unified execution-tree styles (split out of styles.css): the next level inside a parent card,
+ * compact child rows (any depth opens the conversation drawer on click).
  *
- * 注意：.execution-child-clickable 的 hover/active/focus 交互四规则保留在
- * styles.css——宿主契约测试（packages/web/test/subagent-live-card.test.ts）
- * 直读该文件断言子会话行 hover 强调底色契约。
+ * Note: the four hover/active/focus interaction rules of .execution-child-clickable stay in
+ * styles.css — host contract tests (packages/web/test/subagent-live-card.test.ts)
+ * read that file directly to assert the child-conversation row hover accent-background contract.
  */
 .execution-children {
   display: flex;
@@ -77,7 +77,7 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* 紧凑行总耗时：仅真实 run/runNode 边界才渲染（运行中随父级秒表动态变化） */
+/* Compact-row total duration: rendered only at real run/runNode boundaries (ticks with the parent stopwatch while running) */
 .execution-child-elapsed {
   font-family: var(--font-mono);
   font-size: 10.5px;
@@ -90,17 +90,17 @@
   color: var(--warn);
 }
 
-/* 无会话执行行（深层 workflow / external run）的展开指示 */
+/* Expand indicator for conversation-less execution rows (deep workflow / external run) */
 .execution-child-expand {
   color: var(--fg-subtle);
 }
 
-/* 原位展开的深层直系子项：仅小幅追加缩进，视觉嵌套受限不逐级叠加边距 */
+/* In-place expanded deep direct children: only a small extra indent; visual nesting is capped, not stacking per level */
 .execution-children .execution-children {
   margin: 0 0 2px 14px;
 }
 
-/* 前线活动摘要行：与第 2 层副栏同构，tag 强调色 */
+/* Frontline activity summary row: same structure as the layer-2 sub-rail, tag accent color */
 .execution-frontline .subagent-live-subline-tag {
   color: var(--accent);
 }

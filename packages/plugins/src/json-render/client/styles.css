@@ -1,11 +1,11 @@
 /*
- * builtin:json-render 插件样式（编译为保留导出 __helmClientCss，宿主托管注入与回收）。
- * 通用结构一律复用宿主设计系统原语（.callout / .kv-list / .helm-table-wrap /
- * .helm-table / .stack-row 等）与设计令牌；jr-* 仅保留本插件私有的 DSL 布局
- * 与特异性样式（user-select 豁免、卡片节奏、指标卡网格），随插件停用整体回收。
+ * builtin:json-render plugin styles (compiled into the preserved __helmClientCss export; the host manages injection and reclamation).
+ * Generic structure reuses host design-system primitives (.callout / .kv-list / .helm-table-wrap /
+ * .helm-table / .stack-row, etc.) and design tokens; jr-* keeps only this plugin's private DSL layout
+ * and specific styles (user-select exemption, card rhythm, metric-card grid), reclaimed wholesale when the plugin is disabled.
  */
 
-/* DSL Markdown 与表格单元格允许自由选择复制（聊天流全局禁选的豁免点） */
+/* DSL Markdown and table cells allow free selection for copying (exemption from the chat-stream global user-select: none) */
 .jr-markdown {
   user-select: text;
 }
@@ -14,7 +14,7 @@
   user-select: text;
 }
 
-/* 纵向堆叠（横向已复用宿主 .stack-row；宿主无通用纵向原语，属 DSL 私有） */
+/* Vertical stacking (horizontal reuses the host .stack-row; the host has no generic vertical primitive, so this is DSL-private) */
 .jr-stack {
   display: flex;
   flex-direction: column;
@@ -48,7 +48,7 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* 聊天代码块内联卡片容器（沿用宿主代码块外距节奏）。 */
+/* Inline card container inside chat code blocks (follows the host code-block spacing rhythm). */
 .jr-card-wrap {
   margin: 8px 0;
   width: 100%;
@@ -60,7 +60,7 @@
   box-sizing: border-box;
 }
 
-/* 卡片原语：纵向流与组件间距节奏（12px 呼吸间距，消灭 0px 贴边）。 */
+/* Card primitives: vertical flow and component spacing rhythm (12px breathing room, no 0px edge-hugging). */
 .jr-card {
   display: flex;
   flex-direction: column;

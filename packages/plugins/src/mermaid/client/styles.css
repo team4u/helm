@@ -1,6 +1,6 @@
 /*
- * builtin:mermaid 插件样式（编译为保留导出 __helmClientCss，宿主托管注入与回收）。
- * 复用宿主设计令牌与通用模窗类（.modal/.modal-fullscreen 等）；仅 Mermaid 图表专属规则。
+ * builtin:mermaid plugin styles (compiled into the preserved __helmClientCss export; the host manages injection and reclamation).
+ * Reuses host design tokens and generic modal classes (.modal/.modal-fullscreen, etc.); keeps only Mermaid-diagram-specific rules.
  */
 
 .mermaid-body {
@@ -14,10 +14,10 @@
   height: auto;
 }
 
-/* Mermaid 节点文本防截断与外边框保护：
- * 1. svg 与 foreignObject 设为 overflow: visible，避免顶部标题（如 subgraph）及边缘被 viewBox 削去；
- * 2. foreignObject 内层 div 覆盖 Mermaid 内部写死的 120px max-width，保证多行文本利用容器全宽；
- * 3. 标签行高紧凑居中，外层段落 margin 清零，杜绝因行距溢出导致文字被截断。
+/* Mermaid node-text anti-truncation and outer-frame protection:
+ * 1. svg and foreignObject get overflow: visible so top titles (e.g. subgraph captions) and edges are not clipped by the viewBox;
+ * 2. the inner foreignObject div overrides Mermaid's hard-coded 120px max-width so multi-line text uses the full container width;
+ * 3. label line-height is compact and centered with outer paragraph margins zeroed, preventing line-spacing overflow from truncating text.
  */
 .mermaid-body svg,
 .mermaid-svg-layer svg {
@@ -165,7 +165,7 @@
 }
 
 
-/* 预览弹窗响应式（移动端折行；随插件注入） */
+/* Preview modal responsive rules (mobile wrapping; injected with the plugin) */
 .mermaid-modal-header { display: flex; align-items: center; justify-content: space-between; gap: 8px 12px; }
 .mermaid-modal-title { min-width: 0; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mermaid-modal-actions { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }

@@ -1,4 +1,4 @@
-/* builtin:apps 应用中心启动台样式（宿主 CSS 变量自适应暗/亮主题，零 Emoji） */
+/* builtin:apps app-center launcher styles (host CSS variables adapt to dark/light themes, zero Emoji) */
 
 .apps-center {
   display: flex;
@@ -190,7 +190,7 @@
   flex-shrink: 0;
 }
 
-/* 应用详情视图行与动作标签排版（抽屉外壳与头部/底栏复用宿主 .primary-drawer-* 通用规范） */
+/* App detail view rows and action-label layout (drawer shell, header and footer reuse the host .primary-drawer-* conventions) */
 .app-detail-section {
   display: flex;
   flex-direction: column;
@@ -273,7 +273,7 @@
   line-height: 1.5;
 }
 
-/* 窄屏折行：操作按钮不溢出视口 */
+/* Narrow-screen wrapping: action buttons never overflow the viewport */
 @media (max-width: 680px) {
   .apps-center-topbar,
   .apps-center-topbar-actions,

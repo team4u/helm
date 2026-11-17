@@ -1,9 +1,9 @@
 /**
- * 工作流库样式：工作台紧凑运行入口、全屏卡片网格与详情抽屉业务结构。
+ * Workflow library styles: workbench compact run entries, fullscreen card grid and detail-drawer business structure.
  *
- * 编译器合并为插件样式文本导出，宿主确认加载后注入，停用/卸载时回收。
+ * Merged by the compiler into the plugin style-text export; injected after the host confirms loading, reclaimed on disable/uninstall.
  */
-/* 工作流库（已保存定义列表 + 当前会话运行） */
+/* Workflow library (saved definitions list + current conversation runs) */
 .workflow-library {
   display: flex;
   flex-direction: column;
@@ -96,7 +96,7 @@
 }
 
 /* ------------------------------------------------------------------ */
-/* 工作流库全屏视图（screen 扩展点）：卡片网格 + 详情抽屉专属结构       */
+/* Workflow library fullscreen view (screen extension point): card grid + detail-drawer specific structure */
 /* ------------------------------------------------------------------ */
 
 .workflow-lib-screen {
@@ -205,7 +205,7 @@
   white-space: nowrap;
 }
 
-/* 详情抽屉（宿主 primary-drawer 骨架之上的业务结构） */
+/* Detail drawer (business structure on top of the host primary-drawer skeleton) */
 
 .workflow-lib-drawer-section {
   display: flex;

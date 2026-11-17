@@ -1,8 +1,8 @@
 /**
- * builtin:superagent 插件样式。
+ * builtin:superagent plugin styles.
  *
- * 全面复用宿主设计系统原语（.screen-container、.table-wrap、.helm-table、.kv-list、.callout、.loading-state 等）。
- * 仅保留 SuperAgent 巡检特异性小部件与汇报卡片样式。
+ * Fully reuses host design-system primitives (.screen-container, .table-wrap, .helm-table, .kv-list, .callout, .loading-state, etc.).
+ * Keeps only SuperAgent patrol-specific widgets and report-card styles.
  */
 .sa-widget {
   display: flex;
@@ -35,7 +35,7 @@
   word-break: break-word;
 }
 
-/* 汇报时间线卡（巡检专有业务结构） */
+/* Report timeline card (patrol-specific business structure) */
 .sa-report {
   display: flex;
   flex-direction: column;

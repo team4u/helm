@@ -1,5 +1,5 @@
 /**
- * builtin:workflow 底部在途活动托盘（WorkflowActiveTray）与时间线单行轨迹补充样式。
+ * builtin:workflow bottom active tray (WorkflowActiveTray) plus timeline single-row trace supplementary styles.
  */
 .workflow-active-tray {
   border: 1px solid var(--border);
@@ -130,7 +130,7 @@
   flex-shrink: 0;
 }
 
-/* 时间线单行 trace 收口辅助样式（与宿主 .trace-row 26px 同构） */
+/* Timeline single-row trace helper styles (same structure as the host .trace-row 26px) */
 .workflow-trace-badge {
   height: 18px;
   line-height: 16px;

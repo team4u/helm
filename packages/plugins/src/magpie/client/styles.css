@@ -1,6 +1,6 @@
 /**
- * builtin:magpie 插件样式。
+ * builtin:magpie plugin styles.
  *
- * 通用结构一律复用宿主设计系统原语（.screen-container / .helm-table-wrap /
- * .helm-table / .kv-list / .callout / .loading-state 等），本插件无私有通用样式。
+ * Generic structure reuses host design-system primitives (.screen-container / .helm-table-wrap /
+ * .helm-table / .kv-list / .callout / .loading-state, etc.); this plugin ships no private generic styles.
  */
