@@ -164,6 +164,10 @@ export const conversationMessages = {
   // --- Child conversation drawer ---------------------------------------------------
   'conv.drawer.closeChild': { en: 'Close child conversation drawer', 'zh-CN': '关闭子会话抽屉' },
   'conv.drawer.title': { en: 'Child conversation #{id} drawer', 'zh-CN': '子会话 #{id} 抽屉' },
+  'conv.drawer.titleWithName': {
+    en: 'Child conversation #{id} · {title} drawer',
+    'zh-CN': '子会话 #{id} · {title} 抽屉',
+  },
 
   // --- Outline popover ---------------------------------------------------------------
   'conv.outline.trigger': { en: 'Outline', 'zh-CN': '大纲' },
