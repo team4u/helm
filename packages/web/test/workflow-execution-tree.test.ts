@@ -19,7 +19,7 @@ import type { ConversationSummary, PluginClientContext as PluginClientContextTyp
 // 类型引用（test-only）：workflow/herdr 共享契约归属 @helm/plugins（自 @helm/protocol
 // 迁出，见 devDependency）；纯类型零运行时耦合，不放宽生产包边界。
 import type { WorkflowNodeState, WorkflowRunSummary } from '@helm/plugins/contracts'
-import { PluginClientContext } from '@helm/plugin-client'
+import { PluginClientContext, resolveLocalizedText } from '@helm/plugin-client'
 import {
   importWorkflowClientModule,
   importWorkflowModels,
@@ -340,6 +340,10 @@ test('collectExecutionFrontline：深度优先收集子树 working 节点 doing 
   })
   assert.deepEqual(
     m.collectExecutionFrontline(noDoing, 2).map((item) => item.text),
+    ['#21 running'],
+  )
+  assert.deepEqual(
+    m.collectExecutionFrontline(noDoing, 2, 'zh-CN').map((item) => item.text),
     ['#21 执行中'],
   )
 })
@@ -355,8 +359,12 @@ test('collectExecutionApprovals：收集子树 blocked 会话（#id + 用户标�
   const items = m.collectExecutionApprovals(tree, 3)
   assert.deepEqual(
     items.map((item) => item.text),
-    ['#21 确认删除文件', '#22 等待审批'],
+    ['#21 确认删除文件', '#22 awaiting approval'],
     'status=blocked 与 pendingAskCount>0（AskDoc 有单）均计为等待审批',
+  )
+  assert.deepEqual(
+    m.collectExecutionApprovals(tree, 3, 'zh-CN').map((item) => item.text),
+    ['#21 确认删除文件', '#22 等待审批'],
   )
   assert.equal(items[0]!.conversationId, 21)
   assert.equal(m.collectExecutionApprovals(tree, 1).length, 1, 'limit 生效')
@@ -403,8 +411,12 @@ test('collectExecutionFrontline：后序最深活跃优先，父级等待兑底�
   })
   assert.deepEqual(
     m.collectExecutionFrontline(wfFront, 2).map((item) => item.text),
-    ['落盘动作 执行中'],
+    ['落盘动作 running'],
     '唯一前线为最深节点，容器壳不重复占位',
+  )
+  assert.deepEqual(
+    m.collectExecutionFrontline(wfFront, 2, 'zh-CN').map((item) => item.text),
+    ['落盘动作 执行中'],
   )
 })
 
@@ -578,7 +590,8 @@ test('executionNodeTitle：用户标题 > run 节点 label / prompt > 会话与 
     conversations: [summary(1, 'idle'), summary(13, 'done', 1)],
     runs: [],
   })
-  assert.equal(m.executionNodeTitle(plain[0]!), '子会话 #13')
+  assert.equal(m.executionNodeTitle(plain[0]!), 'Subagent #13')
+  assert.equal(m.executionNodeTitle(plain[0]!, 'zh-CN'), '子会话 #13')
 })
 
 // ---------------------------------------------------------------------------
@@ -609,7 +622,7 @@ function makeSpyCtx(): SpyCtx {
     conversationId: 1,
     theme: 'dark',
     locale: 'en' as const,
-    translate: (text) => (typeof text === 'string' ? text : ''),
+    translate: (text) => resolveLocalizedText(text, 'en'),
     drawerCalls,
   }
 }
@@ -653,7 +666,7 @@ test('工作台父卡渲染子树徽章 / 前线摘要 / 下一级紧凑子项�
   const { host, unmount } = await mountClient(spy, e(Panel, { conversation: summary(1, 'working') }))
   try {
     // #11 卡头部：子树计数（后代 #21/#31 共 2 节点、0 完成）+ 后代审批徽章
-    assert.match(host.textContent!, /子树 0\/2/, '应渲染子树完成计数徽章')
+    assert.match(host.textContent!, /Subtree 0\/2/, '应渲染子树完成计数徽章')
     const approvalBadge = host.querySelector('.subagent-live-trigger .badge-warn')
     assert.ok(approvalBadge !== null, '后代审批徽章应渲染')
     assert.match(approvalBadge.getAttribute('title')!, /#21 确认删除文件/, '审批徽章 title 应含后代审批摘要')
@@ -668,9 +681,9 @@ test('工作台父卡渲染子树徽章 / 前线摘要 / 下一级紧凑子项�
     assert.ok(row.classList.contains('execution-child-blocked'))
     assert.match(row.textContent!, /#21/)
     assert.match(row.textContent!, /确认删除文件/)
-    assert.match(row.textContent!, /等待审批/)
+    assert.match(row.textContent!, /Awaiting approval/)
     assert.match(row.textContent!, /0\/2/, '紧凑子项应携带子树完成计数')
-    assert.equal(row.getAttribute('aria-label'), '打开会话 #21 抽屉')
+    assert.equal(row.getAttribute('aria-label'), 'Open conversation #21 drawer')
     // 点击紧凑子项：打开深层会话抽屉，不冒泡触发父卡
     act(() => {
       row.click()
@@ -723,8 +736,8 @@ test('工作流节点卡内深层子代理同样渲染紧凑子项并可打开�
   )
   try {
     // run 头部：深层后代存在时展示子树计数（#11 working + #21 done = 1/2）
-    assert.match(host.textContent!, /节点 0\/1/, 'run 自身节点计数保留')
-    assert.match(host.textContent!, /子树 1\/2/, '深层后代计数以子树徽章展示')
+    assert.match(host.textContent!, /Nodes 0\/1/, 'run 自身节点计数保留')
+    assert.match(host.textContent!, /Subtree 1\/2/, '深层后代计数以子树徽章展示')
     // 节点卡 #11 内渲染 #21 紧凑子项
     const rows = host.querySelectorAll('.execution-child-row')
     assert.equal(rows.length, 1)
@@ -762,7 +775,7 @@ test('无深层后代时紧凑子项与子树徽章不渲染（不造空占位�
   try {
     assert.ok(host.querySelector('.execution-children') === null)
     assert.ok(host.querySelector('.execution-frontline') === null)
-    assert.ok(!/子树 \d/.test(host.textContent!), '无后代不得渲染子树徽章')
+    assert.ok(!/Subtree \d/.test(host.textContent!), '无后代不得渲染子树徽章')
   } finally {
     unmount()
   }
@@ -788,9 +801,9 @@ test('主徽章同源有效状态：父 idle + 后代 blocked/working 不显示�
     const trigger = host.querySelector('.subagent-live-trigger')!
     assert.ok(trigger !== null)
     const badgeTexts = Array.from(trigger.querySelectorAll('.badge')).map((b) => b.textContent ?? '')
-    assert.ok(badgeTexts.includes('等待审批'), `主徽章应为同源有效状态（等待审批），实际：${badgeTexts.join('|')}`)
-    assert.ok(badgeTexts.includes('自身已完成'), '自身终态应另标清楚')
-    assert.ok(!badgeTexts.includes('已完成'), '不得以孤立的「已完成」作为主徽章假完成')
+    assert.ok(badgeTexts.includes('Awaiting approval'), `主徽章应为同源有效状态（Awaiting approval），实际：${badgeTexts.join('|')}`)
+    assert.ok(badgeTexts.includes('Self: Done'), '自身终态应另标清楚')
+    assert.ok(!badgeTexts.includes('Done'), '不得以孤立的「Done」作为主徽章假完成')
     const warnBadge = trigger.querySelector('.badge-warn') as HTMLElement
     assert.match(warnBadge.getAttribute('title') ?? '', /#5 确认删除文件/, '有效状态徽章 title 应含后代审批摘要')
   } finally {
@@ -815,8 +828,8 @@ test('自身 AskDoc 有单即等待审批（pendingAskCount>0，status 仍 worki
   try {
     const trigger = host.querySelector('.subagent-live-trigger')!
     const badgeTexts = Array.from(trigger.querySelectorAll('.badge')).map((b) => b.textContent ?? '')
-    assert.ok(badgeTexts.includes('等待审批'), `AskDoc 有单即等待审批，实际：${badgeTexts.join('|')}`)
-    assert.ok(!badgeTexts.includes('执行中'), '有单不得仍显示执行中')
+    assert.ok(badgeTexts.includes('Awaiting approval'), `AskDoc 有单即等待审批，实际：${badgeTexts.join('|')}`)
+    assert.ok(!badgeTexts.includes('Running'), '有单不得仍显示执行中')
   } finally {
     unmount()
   }
@@ -856,8 +869,8 @@ test('紧凑子项：深层 workflow / external run 行原位展开直系子项�
     assert.ok(dslRow !== undefined && extRow !== undefined)
     for (const row of [dslRow, extRow]) {
       assert.ok(row.querySelector('.execution-child-id') === null, '无会话 run 行不得伪造 #id 前缀')
-      assert.match(row.getAttribute('aria-label') ?? '', /^展开 /, '应提供展开直系子项入口')
-      assert.match(row.textContent ?? '', /执行中/, 'run 真实状态保留')
+      assert.match(row.getAttribute('aria-label') ?? '', /^Expand /, '应提供展开直系子项入口')
+      assert.match(row.textContent ?? '', /Running/, 'run 真实状态保留')
     }
     // 初始不展开：直系子项行不渲染（前线摘要文本可有，行数不变）
     assert.equal(host.querySelectorAll('.execution-child-row').length, 2, '初始仅两个 run 行')
@@ -871,7 +884,7 @@ test('紧凑子项：深层 workflow / external run 行原位展开直系子项�
       Array.from(expandedRows).some((r) => (r.textContent ?? '').includes('落盘动作')),
       '展开后应显示直系子项行',
     )
-    assert.match(dslRow.getAttribute('aria-label') ?? '', /^收起 /, '展开后 aria 切换为收起')
+    assert.match(dslRow.getAttribute('aria-label') ?? '', /^Collapse /, '展开后 aria 切换为收起')
     // 再点收起
     act(() => {
       dslRow.click()

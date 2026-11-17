@@ -12,7 +12,7 @@ import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { ConversationSummary, PluginClientContext as PluginClientContextType } from '@helm/protocol'
-import { PluginClientContext } from '@helm/plugin-client'
+import { PluginClientContext, resolveLocalizedText } from '@helm/plugin-client'
 import {
   importWorkflowClientModule,
   mountSharedPluginNamespaces,
@@ -91,7 +91,7 @@ function makeSpyCtx(): SpyCtx {
     conversationId: 1,
     theme: 'dark',
     locale: 'en' as const,
-    translate: (text) => (typeof text === 'string' ? text : ''),
+    translate: (text) => resolveLocalizedText(text, 'en'),
     drawerCalls,
     screenCalls,
     splitCalls,
@@ -245,8 +245,8 @@ test('历史续接行不展开详情，点击统一打开子会话抽屉', { tim
     assert.ok(row)
     assert.equal(row.tagName, 'BUTTON', '原生 button 支持回车/空格触发')
     assert.equal(row.classList.contains('trace-row-error'), true)
-    assert.match(row.textContent!, /已在下文续接/)
-    assert.match(row.textContent!, /异常/)
+    assert.match(row.textContent!, /Resumed below/)
+    assert.match(row.textContent!, /Error/)
     assert.ok(host.querySelector('details') === null)
     assert.equal(row.getAttribute('aria-expanded'), null, '直连抽屉的行不设展开态')
     await act(async () => { row.click() })
@@ -282,7 +282,7 @@ test('外部子代理在工作台渲染摘要（无原生子会话且不虚构�
   try {
     const row = host.querySelector('button.workflow-trace-row-btn') as HTMLElement | null
     assert.ok(row !== null, '时间线渲染单行轨迹')
-    assert.match(row.textContent ?? '', /外部代理/)
+    assert.match(row.textContent ?? '', /External agent/)
     await act(async () => { row.click() })
     assert.deepEqual(spy.drawerCalls, [], '外部任务不能虚构原生子会话')
     assert.deepEqual(spy.workbenchCalls, ['plugin:builtin:workflow/tasks'], '有关联 run 时点击打开工作台查看详情')
@@ -380,7 +380,7 @@ test('中止 / 清理按钮 stopPropagation：点击按钮不触发整卡打开�
       abortBtn!.click()
     })
     assert.deepEqual(actionCalls.map(([id]) => id), ['abort'], '按钮必须触发 abort 动作')
-    const cleanup = host.querySelector('[aria-label="清理隔离工作树"]') as HTMLElement
+    const cleanup = host.querySelector('[aria-label="Clean up isolated worktree"]') as HTMLElement
     assert.ok(cleanup)
     await act(async () => { cleanup.click() })
     assert.deepEqual(actionCalls, [['abort', { runId: 'wf_bg' }], ['cleanup_worktree', { path: '/wt/x' }]])
@@ -411,8 +411,8 @@ test('详情加载失败可重试；内嵌详情、重试与产物操作的点�
     callDetails: { input: { resume: 11, prompt: '原始续接指令' }, result: '原始结果', artifactRef: 'art_full' },
   }))
   try {
-    assert.match(host.textContent!, /加载失败.*网关超时/)
-    const retry = host.querySelector('[aria-label="重新加载子会话详情"]') as HTMLElement
+    assert.match(host.textContent!, /Load failed.*网关超时/)
+    const retry = host.querySelector('[aria-label="Reload subagent details"]') as HTMLElement
     const details = host.querySelector('details')!
     const summary = details.querySelector('summary')!
     await act(async () => { retry.click(); summary.click() })
@@ -480,7 +480,7 @@ test('前台同步运行卡「转入后台」点击调用 detach 动作（工作
     }),
   )
   try {
-    const detach = [...host.querySelectorAll('button')].find((b) => b.textContent?.includes('转入后台')) as HTMLElement | undefined
+    const detach = [...host.querySelectorAll('button')].find((b) => b.textContent?.includes('Move to background')) as HTMLElement | undefined
     assert.ok(detach, '前台同步工作流卡应渲染转入后台按钮')
     await act(async () => { detach!.click() })
     assert.deepEqual(spy.actionCalls, [{ actionId: 'detach', input: { runId: 'wf_fg_x' } }], '点击必须调用 detach 动作并携带 runId')
@@ -501,7 +501,7 @@ test('前台同步运行卡「转入后台」点击调用 detach 动作（工作
       }),
     )
     try {
-      const btn = [...sub.host.querySelectorAll('button')].find((b) => b.textContent?.includes('转入后台')) as HTMLElement | undefined
+      const btn = [...sub.host.querySelectorAll('button')].find((b) => b.textContent?.includes('Move to background')) as HTMLElement | undefined
       assert.ok(btn, '前台同步子代理卡应渲染转入后台按钮')
       await act(async () => { btn!.click() })
       assert.deepEqual(spy2.actionCalls, [{ actionId: 'detach', input: { runId: 'wf_fg_sub' } }])
@@ -552,9 +552,9 @@ test('后台子代理卡单卡「恢复」：点击派发 run 续接参数、防
     e(Card, { childConversationId: 11, toolStatus: 'error', backgroundRun: failedSubRun }),
   )
   try {
-    const resumeBtn = host.querySelector('button[aria-label="恢复该后台子代理任务"]') as HTMLButtonElement | null
+    const resumeBtn = host.querySelector('button[aria-label="Resume this background subagent task"]') as HTMLButtonElement | null
     assert.ok(resumeBtn !== null, '失败后台子代理卡应渲染恢复按钮')
-    assert.equal(resumeBtn.textContent, '恢复')
+    assert.equal(resumeBtn.textContent, 'Resume')
 
     // 同拍连点只派发一次，按钮进入 disabled 防重。
     await act(async () => {
@@ -575,7 +575,7 @@ test('后台子代理卡单卡「恢复」：点击派发 run 续接参数、防
     })
     assert.equal(resumeBtn.disabled, false)
     assert.equal(spy.notifications.length, 1)
-    assert.match(spy.notifications[0]!.message, /已发起恢复/)
+    assert.match(spy.notifications[0]!.message, /Resume initiated/)
     assert.equal(spy.notifications[0]!.tone, undefined)
 
     // aborted 态同样可恢复，失败响应应 notify(..., 'error')。
@@ -586,7 +586,7 @@ test('后台子代理卡单卡「恢复」：点击派发 run 续接参数、防
         backgroundRun: { ...failedSubRun, status: 'aborted' },
       }),
     )
-    const abortedBtn = host.querySelector('button[aria-label="恢复该后台子代理任务"]') as HTMLButtonElement | null
+    const abortedBtn = host.querySelector('button[aria-label="Resume this background subagent task"]') as HTMLButtonElement | null
     assert.ok(abortedBtn !== null, 'aborted 后台子代理卡同样应渲染恢复按钮')
     await act(async () => {
       abortedBtn.click()
@@ -607,7 +607,7 @@ test('后台子代理卡单卡「恢复」：点击派发 run 续接参数、防
       }),
     )
     assert.ok(
-      host.querySelector('button[aria-label="恢复该后台子代理任务"]') === null,
+      host.querySelector('button[aria-label="Resume this background subagent task"]') === null,
       'resumedByRunId 已接管后必须隐藏单卡恢复按钮',
     )
   } finally {
@@ -643,7 +643,7 @@ test('DSL 工作流卡 resumedByRunId 已接管时隐藏「断点恢复」按钮
   )
   try {
     assert.ok(
-      [...host.querySelectorAll('button')].some((b) => (b.textContent ?? '').includes('断点恢复')),
+      [...host.querySelectorAll('button')].some((b) => (b.textContent ?? '').includes('Resume from checkpoint')),
       '未接管的失败 DSL 工作流应渲染断点恢复按钮',
     )
     await rerender(
@@ -657,7 +657,7 @@ test('DSL 工作流卡 resumedByRunId 已接管时隐藏「断点恢复」按钮
       }),
     )
     assert.ok(
-      ![...host.querySelectorAll('button')].some((b) => (b.textContent ?? '').includes('断点恢复')),
+      ![...host.querySelectorAll('button')].some((b) => (b.textContent ?? '').includes('Resume from checkpoint')),
       'resumedByRunId 已接管后必须隐藏断点恢复按钮',
     )
   } finally {
@@ -747,9 +747,9 @@ test('工作台顶栏「恢复失败 (N)」显隐、防连点、resume_failed �
     e(Panel, { conversation: summary(1, 'idle') }),
   )
   try {
-    const batchBtn = host.querySelector('button[aria-label="恢复失败 (2)"]') as HTMLButtonElement | null
+    const batchBtn = host.querySelector('button[aria-label="Resume failed (2)"]') as HTMLButtonElement | null
     assert.ok(batchBtn !== null, '工作台顶栏应仅计入当前会话可恢复的 2 条失败任务')
-    assert.equal(batchBtn.textContent, '恢复失败 (2)')
+    assert.equal(batchBtn.textContent, 'Resume failed (2)')
 
     // 同步双击只发出一次 resume_failed({ conversationId: 1 })。
     await act(async () => {
@@ -773,7 +773,7 @@ test('工作台顶栏「恢复失败 (N)」显隐、防连点、resume_failed �
     assert.equal(batchBtn.disabled, false)
     assert.equal(spy.notifications.length, 1)
     assert.match(spy.notifications[0]!.message, /2/)
-    assert.match(spy.notifications[0]!.message, /跳过 1/)
+    assert.match(spy.notifications[0]!.message, /skipped 1/)
 
     // 当剩余可恢复失败任务归零后按钮隐藏；非法返回体触发 error 通知。
     setWorkflowClientStub({
@@ -785,7 +785,7 @@ test('工作台顶栏「恢复失败 (N)」显隐、防连点、resume_failed �
     })
     await rerender(e(Panel, { conversation: summary(1, 'idle') }))
     assert.ok(
-      ![...host.querySelectorAll('button')].some((b) => (b.textContent ?? '').includes('恢复失败')),
+      ![...host.querySelectorAll('button')].some((b) => (b.textContent ?? '').includes('Resume failed')),
       '无可恢复失败任务时顶栏恢复失败按钮应隐藏',
     )
 
@@ -796,7 +796,7 @@ test('工作台顶栏「恢复失败 (N)」显隐、防连点、resume_failed �
       conversation: () => ({ summary: undefined, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} }),
     })
     await rerender(e(Panel, { conversation: summary(1, 'idle') }))
-    const oneBtn = host.querySelector('button[aria-label="恢复失败 (1)"]') as HTMLButtonElement | null
+    const oneBtn = host.querySelector('button[aria-label="Resume failed (1)"]') as HTMLButtonElement | null
     assert.ok(oneBtn !== null)
     await act(async () => {
       oneBtn.click()

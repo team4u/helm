@@ -22,7 +22,7 @@ import type { WorkflowRunSummary } from '@helm/plugins/contracts'
 // 先注册 DOM 全局对象再导入 react-dom / @helm/plugin-client（保证 Radix Popover 等 useLayoutEffect 识别 DOM 环境）。
 GlobalRegistrator.register()
 const { createRoot } = await import('react-dom/client')
-const { PluginClientContext } = await import('@helm/plugin-client')
+const { PluginClientContext, resolveLocalizedText } = await import('@helm/plugin-client')
 const {
   importWorkflowClientModule,
   importWorkflowModels,
@@ -117,7 +117,10 @@ test('buildWorkflowEditRequest：含名称与 get/save 能力指引，不伪造 
   assert.match(text, /workflows get/)
   assert.match(text, /workflows save/)
   assert.match(text, /overwrite/)
-  assert.match(text, /发布流程/)
+  assert.match(text, /Current description: 发布流程/)
+  const zh = m.buildWorkflowEditRequest('release', { description: '发布流程' }, 'zh-CN')
+  assert.match(zh, /当前描述：发布流程/)
+  assert.match(zh, /workflows get/)
 })
 
 // ---------------------------------------------------------------------------
@@ -157,7 +160,7 @@ function makeRecordingCtx(actionResults: Record<string, unknown>): RecordingCtx 
     getPluginSessionDoc: async () => undefined,
     theme: 'dark',
     locale: 'en' as const,
-    translate: (text) => (typeof text === 'string' ? text : ''),
+    translate: (text) => resolveLocalizedText(text, 'en'),
     calls,
     notices,
     screenTargets,
@@ -250,10 +253,10 @@ test('工作流库 Screen：卡片网格渲染文件事实与元数据诊断；�
   const props = screenProps()
   const { host, unmount } = await mountClient(ctx, e(Screen, props))
   try {
-    assert.match(host.textContent!, /工作流库/)
+    assert.match(host.textContent!, /Workflow library/)
     assert.equal(host.querySelectorAll('.workflow-lib-card').length, 3)
     assert.match(host.textContent!, /发布流程/)
-    assert.match(host.textContent!, /元数据校验失败/, 'metadataError 条目必须如实展示诊断')
+    assert.match(host.textContent!, /Metadata validation failed/, 'metadataError 条目必须如实展示诊断')
     // 无选中项时不渲染抽屉。
     assert.ok(document.body.querySelector('.workflow-lib-drawer') === null)
 
@@ -282,7 +285,7 @@ test('工作流库搜索词从 URL 参数恢复', { timeout: 60_000 }, async () 
   const props = screenProps({ q: 'audit' })
   const { host, unmount } = await mountClient(ctx, e(Screen, props))
   try {
-    const search = host.querySelector('input[aria-label="搜索工作流"]') as HTMLInputElement
+    const search = host.querySelector('input[aria-label="Search workflows"]') as HTMLInputElement
     assert.equal(search.value, 'audit', '深链 q 参数应恢复搜索框内容')
     assert.equal(host.querySelectorAll('.workflow-lib-card').length, 1, '深链搜索应过滤卡片')
   } finally {
@@ -308,25 +311,25 @@ test('详情抽屉：深链 wf 参数直开；get 只读源码渲染、无编辑
     assert.deepEqual(ctx.calls.find((c) => c.action === 'get')!.input, { name: 'release' })
     assert.match(drawer.textContent!, /export const meta = \{ name: "release"/)
     assert.equal(drawer.querySelectorAll('textarea').length, 0, '抽屉不得提供源码编辑器')
-    assert.match(drawer.textContent!, /不提供源码编辑器/, '必须明示创建与修改由 AI / CLI 完成')
-    assert.match(drawer.textContent!, /让 AI 修改/)
+    assert.match(drawer.textContent!, /does not provide a source editor/, '必须明示创建与修改由 AI / CLI 完成')
+    assert.match(drawer.textContent!, /Let the AI edit/)
 
     // 运行区：无可用会话时禁用运行按钮（不伪造目标）。
-    const runButton = [...drawer.querySelectorAll('button')].find((b) => (b.textContent ?? '').trim() === '运行')
+    const runButton = [...drawer.querySelectorAll('button')].find((b) => (b.textContent ?? '').trim() === 'Run')
     assert.ok(runButton !== null, '抽屉应提供运行按钮')
     assert.equal(runButton!.disabled, true, '未选择目标会话前运行按钮必须禁用')
 
     // 删除两步确认：第一步仅出现确认文案，确认后调用 delete、刷新 list、清理 wf 参数。
     await act(async () => {
-      buttonByText(drawer, '删除').click()
+      buttonByText(drawer, 'Delete').click()
     })
-    assert.match(drawer.textContent!, /确认删除工作流定义 release/)
+    assert.match(drawer.textContent!, /Delete workflow definition release\?/)
     assert.equal(ctx.calls.filter((c) => c.action === 'delete').length, 0, '第一步不得直接删除')
     await act(async () => {
-      buttonByText(drawer, '确认删除').click()
+      buttonByText(drawer, 'Confirm delete').click()
     })
     assert.deepEqual(ctx.calls.find((c) => c.action === 'delete')!.input, { name: 'release' })
-    assert.ok(ctx.notices.some((n) => n.message.includes('已删除工作流定义 release')))
+    assert.ok(ctx.notices.some((n) => n.message.includes('Deleted workflow definition release')))
     assert.equal(ctx.calls.filter((c) => c.action === 'list').length >= 2, true, '删除后重新读取目录')
     assert.ok(props.setParamsCalls.some((p) => p['wf'] === undefined), '删除后清理 wf 深链参数')
     void host
@@ -383,30 +386,30 @@ test('运行卡「保存为工作流」：内联 run 显示并调用 save fromRu
     assert.ok(inlineWrap && savedWrap && subagentWrap, '三个 run 均应在工作台渲染')
 
     // subagent running run 只有中止，无更多操作与保存入口；completed savedRun 有更多操作（重放）但无保存入口。
-    assert.ok(subagentWrap.querySelector('button[aria-label="更多操作"]') === null)
-    const savedMore = savedWrap.querySelector<HTMLButtonElement>('button[aria-label="更多操作"]')
+    assert.ok(subagentWrap.querySelector('button[aria-label="More actions"]') === null)
+    const savedMore = savedWrap.querySelector<HTMLButtonElement>('button[aria-label="More actions"]')
     assert.ok(savedMore)
     act(() => {
       savedMore.click()
     })
-    assert.equal([...savedWrap.querySelectorAll('button')].filter((b) => (b.textContent ?? '').includes('保存为工作流')).length, 0)
+    assert.equal([...savedWrap.querySelectorAll('button')].filter((b) => (b.textContent ?? '').includes('Save as workflow')).length, 0)
     act(() => {
       savedMore.click()
     })
 
     // inline completed run 打开 ··· 更多操作后仅此处提供「保存为工作流」。
-    const inlineMore = inlineWrap.querySelector<HTMLButtonElement>('button[aria-label="更多操作"]')
+    const inlineMore = inlineWrap.querySelector<HTMLButtonElement>('button[aria-label="More actions"]')
     assert.ok(inlineMore)
     act(() => {
       inlineMore.click()
     })
-    const saveButtons = [...host.querySelectorAll('button')].filter((b) => (b.textContent ?? '').includes('保存为工作流'))
+    const saveButtons = [...host.querySelectorAll('button')].filter((b) => (b.textContent ?? '').includes('Save as workflow'))
     assert.equal(saveButtons.length, 1, '只有内联 run 提供保存入口（已保存定义与 subagent 不显示）')
     await act(async () => {
       saveButtons[0]!.click()
     })
     assert.deepEqual(ctx.calls.find((c) => c.action === 'save')!.input, { fromRunId: 'wf_inline' })
-    assert.ok(ctx.notices.some((n) => n.message.includes('已保存为工作流定义 inline-task')), '保存成功通知携带真实名称')
+    assert.ok(ctx.notices.some((n) => n.message.includes('Saved as workflow definition inline-task')), '保存成功通知携带真实名称')
   } finally {
     unmount()
   }

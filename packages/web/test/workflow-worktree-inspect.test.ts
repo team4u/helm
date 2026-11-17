@@ -23,7 +23,7 @@ import type { WorkflowNodeState, WorkflowRunSummary } from '@helm/plugins/contra
 // 先注册 DOM 全局对象再导入 react-dom / @helm/plugin-client（保证 Radix Popover 等 useLayoutEffect 识别 DOM 环境）。
 GlobalRegistrator.register()
 const { createRoot } = await import('react-dom/client')
-const { PluginClientContext } = await import('@helm/plugin-client')
+const { PluginClientContext, resolveLocalizedText } = await import('@helm/plugin-client')
 const {
   importWorkflowClientModule,
   importWorkflowModels,
@@ -191,28 +191,41 @@ test('buildWorktreeSelector：登记 ID 优先；无 ID 时 path+nodeId 消歧',
 })
 
 test('buildWorktreeReviewRequest：含坐标与检视统计；分支不一致显式警示', { timeout: 60_000 }, () => {
-  const text = m.buildWorktreeReviewRequest({
+  const input = {
     path: '/repo/.helm-worktrees/app-ab12cd34',
     branch: 'helm/spawn-ab12cd34',
     nodeId: 'local',
     baseCommit: '5f1e9c0aaa',
     taskLabel: '修复构建',
     inspect: m.parseWorktreeInspectResult(INSPECT_RAW),
-  })
+  }
+  const text = m.buildWorktreeReviewRequest(input)
   assert.match(text, /\/repo\/\.helm-worktrees\/app-ab12cd34/)
-  assert.match(text, /节点 local/)
+  assert.match(text, /\(node local\)/)
   assert.match(text, /helm\/spawn-ab12cd34/)
   assert.match(text, /5f1e9c0aaa\d*/)
-  assert.match(text, /未提交修改：2 个文件/)
-  assert.match(text, /领先基线提交：1 个/)
-  assert.match(text, /只读复核/)
+  assert.match(text, /Uncommitted changes: 2 files/)
+  assert.match(text, /Commits ahead of base: 1/)
+  assert.match(text, /Review read-only first/)
+
+  const zhText = m.buildWorktreeReviewRequest(input, 'zh-CN')
+  assert.match(zhText, /节点 local/)
+  assert.match(zhText, /未提交修改：2 个文件/)
+  assert.match(zhText, /领先基线提交：1 个/)
+  assert.match(zhText, /只读复核/)
 
   const mismatched = m.buildWorktreeReviewRequest({
     path: '/w',
     branch: 'helm/spawn-x',
     inspect: m.parseWorktreeInspectResult({ ...INSPECT_RAW, currentBranch: 'main', branchChanged: true }),
   })
-  assert.match(mismatched, /当前分支 main 与登记分支不一致/)
+  assert.match(mismatched, /currently on branch main, which differs from the registered branch/)
+  const zhMismatched = m.buildWorktreeReviewRequest({
+    path: '/w',
+    branch: 'helm/spawn-x',
+    inspect: m.parseWorktreeInspectResult({ ...INSPECT_RAW, currentBranch: 'main', branchChanged: true }),
+  }, 'zh-CN')
+  assert.match(zhMismatched, /当前分支 main 与登记分支不一致/)
 })
 
 // ---------------------------------------------------------------------------
@@ -248,7 +261,10 @@ test('parseWorkflowArgsInput：空串无 args；合法 JSON 透传；非法 JSON
   assert.deepEqual(m.parseWorkflowArgsInput('"文本"'), { ok: true, args: '文本' })
   const bad = m.parseWorkflowArgsInput('{a:1}')
   assert.equal(bad.ok, false)
-  if (bad.ok === false) assert.match(bad.error, /合法 JSON/)
+  if (bad.ok === false) assert.match(bad.error, /must be valid JSON/)
+  const badZh = m.parseWorkflowArgsInput('{a:1}', 'zh-CN')
+  assert.equal(badZh.ok, false)
+  if (badZh.ok === false) assert.match(badZh.error, /合法 JSON/)
 })
 
 test('canReplayWorkflowRun：非 subagent 的 completed run（含内联）可重放；canResume 仍限失败/中止', { timeout: 60_000 }, () => {
@@ -307,7 +323,7 @@ function makeRecordingCtx(actionResults: Record<string, unknown>): RecordingCtx 
     conversationId: 1,
     theme: 'dark',
     locale: 'en' as const,
-    translate: (text) => (typeof text === 'string' ? text : ''),
+    translate: (text) => resolveLocalizedText(text, 'en'),
     calls,
     submissions,
     notices,
@@ -348,7 +364,7 @@ function buttonByText(host: ParentNode, text: string): HTMLButtonElement {
 }
 
 function openMoreMenu(host: HTMLElement): void {
-  const more = host.querySelector<HTMLButtonElement>('button[aria-label="更多操作"]')
+  const more = host.querySelector<HTMLButtonElement>('button[aria-label="More actions"]')
   assert.ok(more !== null, '工作流卡应存在 ··· 更多操作按钮')
   more.click()
 }
@@ -407,7 +423,7 @@ test('工作台去重工作流库仅留跳转入口；独立工作流库切换�
     assert.ok(wb.host.querySelector('.workflow-library-args') === null)
     assert.equal(ctx.calls.filter((c) => c.action === 'list').length, 0, '工作台挂载不发起多余 list 请求')
     await act(async () => {
-      buttonByText(wb.host, '工作流库').click()
+      buttonByText(wb.host, 'Workflow library').click()
     })
     assert.deepEqual(ctx.screenCalls, ['screen:builtin:workflow/library'])
   } finally {
@@ -427,11 +443,11 @@ test('工作台去重工作流库仅留跳转入口；独立工作流库切换�
     e(LibraryScreen, { pluginId: 'builtin:workflow', screenId: 'library', isSplit: false, params, setParams, inlineDrawer: true }),
   )
   try {
-    assert.match(lib.host.textContent!, /工作流库/)
+    assert.match(lib.host.textContent!, /Workflow library/)
     assert.match(lib.host.textContent!, /release/)
     assert.match(lib.host.textContent!, /发布流程/)
     assert.match(lib.host.textContent!, /audit/)
-    assert.match(lib.host.textContent!, /元数据校验失败/, 'metadataError 条目必须如实展示诊断')
+    assert.match(lib.host.textContent!, /Metadata validation failed/, 'metadataError 条目必须如实展示诊断')
 
     const drawer = lib.host.querySelector('.workflow-lib-drawer') as HTMLElement | null
     assert.ok(drawer !== null, '选中 release 时内联抽屉挂载')
@@ -489,20 +505,22 @@ test('节点卡改动概览：检视渲染与审阅；completed run 提供「重
   )
   try {
     // 已完成 DSL run：经 ··· 更多操作提供「重放」入口，不提供断点恢复。
-    assert.ok(!host.textContent!.includes('断点恢复'), '已完成 run 不得提供断点恢复')
+    assert.ok(!host.textContent!.includes('Resume from checkpoint'), '已完成 run 不得提供断点恢复')
     act(() => {
       openMoreMenu(host)
     })
-    assert.ok(host.textContent!.includes('重放'), '已完成 run 更多操作菜单应提供重放入口')
+    assert.ok(host.textContent!.includes('Replay'), '已完成 run 更多操作菜单应提供重放入口')
     await act(async () => {
-      buttonByText(host, '重放').click()
+      buttonByText(host, 'Replay').click()
     })
     // 表单展示源 run 标识与缓存语义说明；空白 args 不覆盖原 args。
     assert.match(host.textContent!, /wf_done/)
-    assert.match(host.textContent!, /已保存定义 release 按最新文件内容执行/)
-    assert.match(host.textContent!, /缓存仅复用调用载荷完全相同的前缀节点/, '必须如实说明缓存边界，不承诺改参必命中')
+    assert.match(host.textContent!, /saved definition release executes the latest file content/)
+    assert.match(host.textContent!, /The cache only reuses prefix nodes whose call payloads match exactly/, '必须如实说明缓存边界，不承诺改参必命中')
+    const submitReplay = host.querySelector<HTMLButtonElement>('button[aria-label="Start replay"]')
+    assert.ok(submitReplay !== null)
     await act(async () => {
-      buttonByText(host, '发起重放').click()
+      submitReplay!.click()
     })
     const runCalls = ctx.calls.filter((c) => c.action === 'run')
     assert.equal(runCalls.length, 1)
@@ -514,26 +532,26 @@ test('节点卡改动概览：检视渲染与审阅；completed run 提供「重
 
     // 展开改动概览：精确 worktreeId 选择器 + 真实渲染检视数据。
     await act(async () => {
-      buttonByText(host, '改动概览').click()
+      buttonByText(host, 'Change overview').click()
     })
     const inspectCalls = ctx.calls.filter((c) => c.action === 'inspect_worktree')
     assert.equal(inspectCalls.length, 1)
     assert.deepEqual(inspectCalls[0]!.input, { worktreeId: 'local:/repo/.helm-worktrees/app-ab12cd34' })
-    assert.match(host.textContent!, /未提交修改/)
-    assert.match(host.textContent!, /2 个文件/)
-    assert.match(host.textContent!, /领先基线提交/)
+    assert.match(host.textContent!, /Uncommitted changes/)
+    assert.match(host.textContent!, /2 files/)
+    assert.match(host.textContent!, /Commits ahead of base/)
     assert.match(host.textContent!, /\+committed change/, 'diff 预览必须渲染真实检视内容')
-    assert.match(host.textContent!, /Diff 仅包含已跟踪文件；未跟踪文件见状态列表/, '必须明确 diff 不含未跟踪文件')
+    assert.match(host.textContent!, /The diff covers tracked files only; untracked files are in the status list/, '必须明确 diff 不含未跟踪文件')
 
     // Review requests join the parent turn through the default steer policy.
     await act(async () => {
-      buttonByText(host, '让主会话审阅并合入').click()
+      buttonByText(host, 'Ask the main conversation to review and merge').click()
     })
     assert.equal(ctx.submissions.length, 1)
     assert.equal(ctx.submissions[0]!.options?.conversationId, 1)
     assert.equal(ctx.submissions[0]!.options?.whenBusy, 'steer')
     assert.match(ctx.submissions[0]!.text, /\/repo\/\.helm-worktrees\/app-ab12cd34/)
-    assert.match(ctx.submissions[0]!.text, /只读复核/)
+    assert.match(ctx.submissions[0]!.text, /Review read-only first/)
   } finally {
     unmount()
   }
@@ -563,13 +581,13 @@ test('检视失败显式呈现：错误可见且可重试，绝不伪造空统�
     e(Panel, { conversation: workbenchConversation() }),
   )
   try {
-    assert.ok(host.textContent!.includes('断点恢复'), '失败 run 应提供断点恢复')
+    assert.ok(host.textContent!.includes('Resume from checkpoint'), '失败 run 应提供断点恢复')
     await act(async () => {
-      buttonByText(host, '改动概览').click()
+      buttonByText(host, 'Change overview').click()
     })
-    assert.match(host.textContent!, /只读检视失败/)
+    assert.match(host.textContent!, /Read-only inspection failed/)
     assert.match(host.textContent!, /node offline/)
-    assert.ok(host.textContent!.includes('重试'), '错误态必须提供重试入口')
+    assert.ok(host.textContent!.includes('Retry'), '错误态必须提供重试入口')
   } finally {
     unmount()
   }
@@ -599,16 +617,18 @@ test('重放表单：内联 run 可重放且显式 args 覆盖；非法 JSON 不
       openMoreMenu(host)
     })
     await act(async () => {
-      buttonByText(host, '重放').click()
+      buttonByText(host, 'Replay').click()
     })
-    assert.match(host.textContent!, /内联脚本沿用原源码/, '内联 run 重放须说明沿用原源码')
+    assert.match(host.textContent!, /inline script keeps its original source/, '内联 run 重放须说明沿用原源码')
     // 显式 args：严格解析后作为覆盖提交。
     const argsInput = host.querySelector('.workflow-replay-args') as HTMLInputElement
     await act(async () => {
       setControlledValue(argsInput, '{"target":"prod"}')
     })
+    const submitReplay = host.querySelector<HTMLButtonElement>('button[aria-label="Start replay"]')
+    assert.ok(submitReplay !== null)
     await act(async () => {
-      buttonByText(host, '发起重放').click()
+      submitReplay!.click()
     })
     let runCalls = ctx.calls.filter((c) => c.action === 'run')
     assert.equal(runCalls.length, 1)
@@ -623,11 +643,11 @@ test('重放表单：内联 run 可重放且显式 args 覆盖；非法 JSON 不
       setControlledValue(argsInput, '{oops}')
     })
     await act(async () => {
-      buttonByText(host, '发起重放').click()
+      submitReplay!.click()
     })
     runCalls = ctx.calls.filter((c) => c.action === 'run')
     assert.equal(runCalls.length, 1, '非法 args 不得提交重放')
-    assert.match(host.textContent!, /args 需为合法 JSON/)
+    assert.match(host.textContent!, /args must be valid JSON/)
   } finally {
     unmount()
   }
@@ -655,9 +675,9 @@ test('工作台重放双击防重复：在途 ref 拦截，同拍连点只发一
       openMoreMenu(host)
     })
     await act(async () => {
-      buttonByText(host, '重放').click()
+      buttonByText(host, 'Replay').click()
     })
-    const submit = host.querySelector('[aria-label="发起重放"]') as HTMLButtonElement
+    const submit = host.querySelector('[aria-label="Start replay"]') as HTMLButtonElement
     assert.ok(submit !== null)
     // 同拍双击：渲染尚未刷新（busy 状态未落盘）时靠同步 ref 拦截第二次。
     await act(async () => {
@@ -713,7 +733,7 @@ test('独立子代理卡检视：有工作树时提供入口；点击不触发�
 
     // 清理：同样优先登记 ID。
     await act(async () => {
-      buttonByText(host, '清理工作树').click()
+      buttonByText(host, 'Clean up worktree').click()
     })
     assert.deepEqual(ctx.calls.find((c) => c.action === 'cleanup_worktree')!.input, { worktreeId: 'local:/wt/x' })
     assert.deepEqual(ctx.drawerCalls, [], '动作按钮点击不得触发整卡导航')
@@ -766,7 +786,7 @@ test('独立子代理卡检视：无登记 ID 时用 path+子会话节点消歧�
     assert.deepEqual(ctx.calls.find((c) => c.action === 'inspect_worktree')!.input, { path: '/shared/wt', nodeId: 'remote-1' })
     // 审阅请求提交到调用处真实父会话（非子会话）。
     await act(async () => {
-      buttonByText(host, '让主会话审阅并合入').click()
+      buttonByText(host, 'Ask the main conversation to review and merge').click()
     })
     assert.equal(ctx.submissions.length, 1)
     assert.equal(ctx.submissions[0]!.options?.conversationId, 1)

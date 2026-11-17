@@ -26,7 +26,7 @@ import type {
   PluginClientContext as PluginClientContextType,
   TimelineRendererProps,
 } from '@helm/protocol'
-import { PluginClientContext } from '@helm/plugin-client'
+import { PluginClientContext, createLocaleTranslator } from '@helm/plugin-client'
 import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
 import { emptyLiveState } from '../src/lib/live-state.js'
 import { getSessionDocState, subscribeSessionDoc } from '../src/lib/session-docs.js'
@@ -116,6 +116,8 @@ function drawerSpy(): { ctx: PluginClientContextType; calls: number[] } {
     getPluginSessionDoc: async () => undefined,
     conversationId: 1,
     theme: 'dark',
+    locale: 'en' as const,
+    translate: createLocaleTranslator('en'),
   } as unknown as PluginClientContextType
   return { ctx, calls }
 }
@@ -273,15 +275,15 @@ test('card: 默认收起（与宿主 .trace-row 同构单行），完整结果�
   const row = host.querySelector('.trace-row')
   assert.ok(row !== null, '渲染 .trace-row 单行回执')
   assert.equal(row.classList.contains('trace-row-error'), false, '正常完成态不带错误高亮')
-  assert.match(row.querySelector('.trace-tool-name')?.textContent ?? '', /^子代理汇报$/)
-  assert.match(row.querySelector('.trace-row-right')?.textContent ?? '', /已完成/)
+  assert.match(row.querySelector('.trace-tool-name')?.textContent ?? '', /^Subagent report$/)
+  assert.match(row.querySelector('.trace-row-right')?.textContent ?? '', /Completed/)
   assert.equal(row.textContent?.includes('wf_abc123'), false, '收起态不常驻 runId')
   assert.equal(row.querySelector('.trace-tool-summary')?.textContent, '首行结论')
 
   const toggle = host.querySelector<HTMLButtonElement>('button.workflow-trace-toggle')
   assert.ok(toggle, '折叠开关存在（左侧内容触发区兼任）')
   assert.equal(toggle!.getAttribute('aria-expanded'), 'false')
-  assert.equal(toggle!.getAttribute('aria-label'), '展开子代理汇报详情')
+  assert.equal(toggle!.getAttribute('aria-label'), 'Expand Subagent report details')
   const bodyId = toggle!.getAttribute('aria-controls')!
   assert.ok(document.getElementById(bodyId), '收起时 aria-controls 仍指向真实区域')
   const duplicate = await mountCard(entry, ctx)
@@ -303,7 +305,7 @@ test('card: 默认收起（与宿主 .trace-row 同构单行），完整结果�
   assert.ok(expanded !== null, '展开后挂载详情面板')
   assert.equal(expanded.textContent?.includes('wf_abc123'), true, '展开后展示完整 runId')
   assert.equal(expanded.textContent?.includes('详细正文第二段'), true)
-  assert.match(expanded.textContent ?? '', /结果正文/)
+  assert.match(expanded.textContent ?? '', /Result body/)
   assert.ok(document.activeElement === toggle, '展开时折叠控件保留焦点与同一节点')
 
   act(() => toggle!.click())
@@ -332,8 +334,8 @@ test('card: JSON result 缩进代码块；失败默认展开直见错误；工�
   // JSON result：展开渲染缩进代码块。
   const jsonEntry = makeReportEntry({ kind: 'workflow_report', report: { result: { done: true } } })
   const jsonMount = await mountCard(jsonEntry, ctx)
-  assert.match(jsonMount.host.textContent ?? '', /工作流汇报/)
-  clickButton(jsonMount.host, '展开工作流汇报详情')
+  assert.match(jsonMount.host.textContent ?? '', /Workflow report/)
+  clickButton(jsonMount.host, 'Expand Workflow report details')
   const code = jsonMount.host.querySelector('.workflow-report-expanded pre code')
   assert.ok(code, 'JSON result 渲染代码块')
   assert.match(code!.textContent ?? '', /"done": true/)
@@ -345,14 +347,14 @@ test('card: JSON result 缩进代码块；失败默认展开直见错误；工�
     report: { status: 'failed', error: '工具执行失败：退出码 1' },
   })
   const failMount = await mountCard(failEntry, ctx)
-  assert.match(failMount.host.textContent ?? '', /失败/)
+  assert.match(failMount.host.textContent ?? '', /Failed/)
   assert.ok(failMount.host.querySelector('.trace-row.trace-row-error'), '失败态行带 trace-row-error 类')
   const failSummary = failMount.host.querySelector('.trace-tool-summary.workflow-trace-error')
   assert.ok(failSummary, '失败态摘要带 workflow-trace-error 类')
   assert.match(failSummary?.textContent ?? '', /工具执行失败：退出码 1/)
   assert.equal(failMount.host.querySelector('button[aria-expanded]')?.getAttribute('aria-expanded'), 'true', '失败态默认自动展开')
   assert.match(failMount.host.querySelector('.workflow-report-expanded')?.textContent ?? '', /工具执行失败：退出码 1/)
-  clickButton(failMount.host, '收起工作流汇报详情')
+  clickButton(failMount.host, 'Collapse Workflow report details')
   assert.equal(failMount.host.querySelector('button[aria-expanded]')?.getAttribute('aria-expanded'), 'false')
   failMount.unmount()
 
@@ -361,13 +363,13 @@ test('card: JSON result 缩进代码块；失败默认展开直见错误；工�
     report: { status: 'completed', result: 'ok', otherRunningTasks: [{ runId: 'wf_x', name: '并行任务', kind: 'subagent' }] },
   })
   const snapMount = await mountCard(snapEntry, ctx)
-  clickButton(snapMount.host, '展开子代理汇报详情')
-  assert.match(snapMount.host.textContent ?? '', /投递时其余在途任务（快照）/)
+  clickButton(snapMount.host, 'Expand Subagent report details')
+  assert.match(snapMount.host.textContent ?? '', /Other in-flight tasks at delivery \(snapshot\)/)
   const chip = snapMount.host.querySelector('.execution-report-tasks .workflow-report-task-item')
   assert.ok(chip, '在途任务渲染快照徽章')
   assert.match(chip!.textContent ?? '', /并行任务/)
   assert.match(chip!.textContent ?? '', /wf_x/)
-  assert.match(chip!.textContent ?? '', /子代理/)
+  assert.match(chip!.textContent ?? '', /Background subagent/)
   snapMount.unmount()
 })
 
@@ -375,14 +377,14 @@ test('card: execution.conversationId 才给子会话入口（图标动作打开�
   const spy = drawerSpy()
   // 无 execution：不渲染导航按钮。
   const plain = await mountCard(makeReportEntry({ report: { result: 'ok' } }), spy.ctx)
-  assert.ok(plain.host.querySelector('button[aria-label^="打开子会话 #"]') === null)
-  assert.equal(plain.host.textContent?.includes('打开子会话'), false)
+  assert.ok(plain.host.querySelector('button[aria-label^="Open subagent #"]') === null)
+  assert.equal(plain.host.textContent?.includes('Open subagent'), false)
   plain.unmount()
 
   const entry = makeReportEntry({ report: { result: 'ok', execution: { conversationId: 7 } } })
   const { host, unmount } = await mountCard(entry, spy.ctx)
-  assert.match(host.querySelector('.trace-row .trace-tool-name')?.textContent ?? '', /子代理汇报 #7/, '头部显示子会话 ID')
-  const nav = host.querySelector<HTMLButtonElement>('button[aria-label="打开子会话 #7"]')
+  assert.match(host.querySelector('.trace-row .trace-tool-name')?.textContent ?? '', /Subagent report #7/, '头部显示子会话 ID')
+  const nav = host.querySelector<HTMLButtonElement>('button[aria-label="Open subagent #7"]')
   assert.ok(nav, '有真实 execution 时渲染子会话图标入口')
   act(() => nav!.click())
   assert.deepEqual(spy.calls, [7])
@@ -395,16 +397,16 @@ test('card: 损坏数据显式“汇报数据格式异常”并默认展开，�
   const entry = makeReportEntry({ text: '引导语\n{坏 JSON', meta: { backgroundRunId: 'wf_bad', kind: 'subagent_report' } })
   const { host, unmount } = await mountCard(entry, ctx)
   assert.ok(host.querySelector('.trace-row.trace-row-error'), '损坏数据行带错误高亮')
-  assert.match(host.textContent ?? '', /汇报数据格式异常/)
-  assert.equal(host.textContent?.includes('已完成'), false, '损坏数据不得显示成功徽章')
+  assert.match(host.textContent ?? '', /Malformed report/)
+  assert.equal(host.textContent?.includes('Completed'), false, '损坏数据不得显示成功徽章')
   assert.ok(host.querySelector('button[aria-label="Copy"]'), '复制原文入口保留')
   assert.equal(host.querySelector('button[aria-expanded]')?.getAttribute('aria-expanded'), 'true', '损坏报文默认自动展开')
   const expanded = host.querySelector('.workflow-report-expanded')
   assert.ok(expanded, '展开后可见原文')
   assert.match(expanded!.textContent ?? '', /\{坏 JSON/)
-  clickButton(host, '收起后台汇报详情')
+  clickButton(host, 'Collapse Background report details')
   assert.equal(host.querySelector('button[aria-expanded]')?.getAttribute('aria-expanded'), 'false')
-  clickButton(host, '展开后台汇报详情')
+  clickButton(host, 'Expand Background report details')
   assert.match(host.querySelector('.workflow-report-expanded')?.textContent ?? '', /\{坏 JSON/)
   unmount()
 })
