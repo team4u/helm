@@ -5,10 +5,6 @@ dist/
 .DS_Store
 node_modules
 
-# desktop 打包：electron-builder 产物目录与 assemble-hub 组装目录（均为可重建产物）
-packages/desktop/release/
-packages/desktop/hub/
-
 # Build & artifacts
 /build/
 *.tsbuildinfo

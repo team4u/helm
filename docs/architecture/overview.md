@@ -105,7 +105,7 @@ flowchart TD
 | `@helm/node` | `helm-node` | 远端执行、文件系统操作与自升级 |
 | `@helm/cli` | `helm` | 静态核心命令表 + 动作清单动态命令 |
 | `@helm/web` | — | Web 应用（开发端口 3201，代理至 Hub 3202） |
-| `@helm/payload` / `@helm/desktop` | 桌面应用 | 产品资产组装与桌面进程监督 |
+| `@helm/payload` | — | 产品资产组装与 npm Hub payload |
 
 `helm`（控制 CLI）与 `helm-node`（节点守护进程）不得混装在同一包或同一命令中：二者的信任模型与部署位置完全不同。
 

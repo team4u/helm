@@ -192,17 +192,12 @@ export class NodeManager {
     const execPath = override.execPath ?? process.execPath
     const binDir = join(this.dataDir, 'bin')
     const helmPath = join(binDir, 'helm')
-    // Electron host inject:Hub with ELECTRON_RUN_AS_NODE runtime process.execPath is
-    // Electron two enter system, generate CLI wrapper must same carry ELECTRON_RUN_AS_NODE=1,
-    // otherwise wrapper exec out is GUI process while non- Node CLI. only inject this a must want field,
-    // does not Electron environment leak leak to all shell.
-    const env = process.versions.electron ? { ELECTRON_RUN_AS_NODE: '1' } : undefined
     let plan: CliShimPlan
-    // explicit CLI entry (install package payload layout without packages/cli directory, on trace push lead will empty;
-    // by desktop main proxy points to <release>/cli/dist/index.js). only accept single entry file path.
+    // explicit CLI entry (install package payload layout without packages/cli directory, on trace push lead will empty).
+    // only accept single entry file path.
     const explicitEntry = process.env.HELM_CLI_ENTRY
     if (explicitEntry) {
-      plan = { execPath, entryArgs: [explicitEntry], ...(env ? { env } : {}) }
+      plan = { execPath, entryArgs: [explicitEntry] }
     } else {
       // tsx CLI and repository CLI entry: with when before module location push lead (source code run and dist run same construct).
       const kernelDir = dirname(fileURLToPath(import.meta.url))
@@ -217,7 +212,6 @@ export class NodeManager {
         entryArgs: useCompiled
           ? [compiledCli]
           : [join(repoRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs'), sourceCli],
-        ...(env ? { env } : {}),
       }
     }
     const script =

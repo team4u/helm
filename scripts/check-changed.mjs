@@ -15,9 +15,8 @@
  *      package alone; lockfile / root config / test infrastructure (including every .mjs
  *      source under scripts/) changes -> all tiers.
  *   3. Command planning lives in lib/workspace-meta.mjs planCheckCommands: pnpm typecheck
- *      (including protocol/node build) -> (when desktop tests are selected) desktop dist
- *      build -> affected package tests (explicit file list handed to scripts/run-tests.mjs
- *      to reuse its timeouts and process-tree cleanup).
+ *      (including protocol/node build) -> affected package tests (explicit file list
+ *      handed to scripts/run-tests.mjs to reuse its timeouts and process-tree cleanup).
  *
  * Usage (pnpm needs the -- separator; this script accepts a leading literal -- that pnpm
  * passes through verbatim):

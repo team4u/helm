@@ -6,7 +6,7 @@
  * discards prior compiler output and forces a full rebuild (and when .tsbuildinfo is kept,
  * tsc can even misjudge nothing changed and skip re-emitting artifacts); but never cleaning
  * leaves stale outputs behind after package splits or file removals (e.g.
- * kernel/dist/main.js, kernel/dist/builtin-plugins/*), which payload / desktop then sweep
+ * kernel/dist/main.js, kernel/dist/builtin-plugins/*), which payload then sweeps
  * up in whole-directory packaging. This module surgically deletes only artifacts whose
  * source files no longer exist, plus empty directories; passing --force or setting
  * HELM_CLEAN_DIST=1 falls back to a full wipe that also removes the matching

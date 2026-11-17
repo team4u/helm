@@ -110,22 +110,4 @@ export function scanPeerOverrides(rootEntries) {
   return overrides;
 }
 
-/** compatibility assemble-hub since has signature: duplicate package when exclude node_modules symlink purpose filter work vendor. */
-export function packageCopyFilter(srcDir) {
-  return (candidate) => {
-    const rel = path.relative(srcDir, candidate);
-    if (rel === '') return true;
-    const segs = rel.split(path.sep);
-    const nmIdx = segs.indexOf('node_modules');
-    if (nmIdx === -1) return true;
-    if (segs.length === nmIdx + 1) return true; // node_modules directory itself: continue iterate with keep real item
-    const topEntry = path.join(srcDir, ...segs.slice(0, nmIdx + 2));
-    try {
-      return !lstatSync(topEntry).isSymbolicLink();
-    } catch {
-      return false;
-    }
-  };
-}
-
 export { existsSync };

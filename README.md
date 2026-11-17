@@ -86,7 +86,6 @@ Helm 按机制、插件和产品组合分包。`@helm/hub` 是产品组合根：
 | `@helm/node` | 受控节点守护进程，反向连接 Hub | 节点服务（`helm-node`） |
 | `@helm/web` | 响应式 Web 主控台 | Web 界面（Vite SPA） |
 | `@helm/payload` | Hub npm 发布包组装器，组织可发布目录与零依赖启动入口 | npm Hub payload |
-| `@helm/desktop` | Electron 桌面壳，复用 Web 界面并以子进程运行 Hub | 三平台桌面安装包 |
 | `@helm/test-kit` | 测试共享基座（仅限 `devDependencies` 与 `test/`，不进生产依赖） | 测试工具库 |
 
 ## 内置插件生态（11 个）
@@ -194,7 +193,7 @@ pnpm unlink:bins               # 撤销挂载
 pnpm build && pnpm typecheck && pnpm lint && pnpm check:hygiene && pnpm test:all  # 全量验收
 ```
 
-测试分两档：`pnpm test:unit`（protocol / env-io / test-kit / cli / web / plugin-client，纯内存与 happy-dom，不起真实服务）与 `pnpm test:integration`（kernel / plugins / hub / plugin-build / node / payload / desktop，真实进程、SQLite、Git、WS 与构建）；合并前跑 `pnpm test:all`。增量反馈用 `pnpm check:changed`（按变更集选反向闭包受影响包，先 typecheck 再跑测试），配合 `pnpm check:hygiene`（AST 门禁：显式超时、skip 附理由等红线）。参与开发前先阅读 [AGENTS.md](AGENTS.md) 的环境隔离、端口铁律与破坏性变更授权约定。
+测试分两档：`pnpm test:unit`（protocol / env-io / test-kit / cli / web / plugin-client，纯内存与 happy-dom，不起真实服务）与 `pnpm test:integration`（kernel / plugins / hub / plugin-build / node / payload，真实进程、SQLite、Git、WS 与构建）；合并前跑 `pnpm test:all`。增量反馈用 `pnpm check:changed`（按变更集选反向闭包受影响包，先 typecheck 再跑测试），配合 `pnpm check:hygiene`（AST 门禁：显式超时、skip 附理由等红线）。参与开发前先阅读 [AGENTS.md](AGENTS.md) 的环境隔离、端口铁律与破坏性变更授权约定。
 
 ## CLI 核心命令速查
 

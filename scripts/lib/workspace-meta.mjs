@@ -41,7 +41,6 @@ export const PACKAGE_TIERS = {
   hub: 'integration',
   node: 'integration',
   payload: 'integration',
-  desktop: 'integration',
 };
 
 export const TEST_SUFFIXES = ['.test.ts', '.test.tsx'];
@@ -185,11 +184,7 @@ export function testFilesOfPackage(repoRoot, pkgDir) {
  *      hygiene check, before typecheck);
  *   1. any affected package -> pnpm typecheck (builds protocol/node/kernel/plugins/hub
  *      first; a type/runtime prerequisite of the tests);
- *   2. desktop tests selected -> pnpm --filter @helm/desktop run build first (typecheck
- *      does not produce packages/desktop/dist/hub-child.js; on a cold worktree the desktop
- *      tests would fail without it, and a changed hub-child source could be tested against
- *      a stale dist);
- *   3. any test files -> node scripts/run-tests.mjs <files...> (reusing the cross-platform
+ *   2. any test files -> node scripts/run-tests.mjs <files...> (reusing the cross-platform
  *      timeouts and process-tree cleanup).
  * @param {{ affectedDirs: string[], testFiles: string[], pm: { cmd: string, args: string[] }, execPath: string, repoRoot: string }} input
  * @returns {Array<{ cmd: string, args: string[], label: string }>}
@@ -208,13 +203,6 @@ export function planCheckCommands({ affectedDirs, testFiles, pm, execPath, repoR
       cmd: pm.cmd,
       args: [...pm.args, 'typecheck'],
       label: 'pnpm typecheck (includes protocol/node/kernel/plugins/hub build)',
-    });
-  }
-  if (testFiles.some((f) => f.startsWith('packages/desktop/test/'))) {
-    commands.push({
-      cmd: pm.cmd,
-      args: [...pm.args, '--filter', '@helm/desktop', 'run', 'build'],
-      label: 'pnpm --filter @helm/desktop run build (desktop test prerequisite: typecheck emits no dist)',
     });
   }
   if (testFiles.length > 0) {

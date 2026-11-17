@@ -4,8 +4,6 @@
  * Consumers: kernel upgrade boundary validation (runtime/semver.ts, http/node-routes.ts)
  * and the helm-node self-upgrade engine (daemon/upgrader.ts) — each keeps its own error
  * envelope (HelmError / UpgradeRejectedError); parsing and precedence comparison live only here.
- * desktop does not depend on workspace packages and keeps an isomorphic local implementation
- * (runners.ts); this file is the contract of record.
  *
  * Semantics: no v prefix or loose formats accepted; build metadata is grammatically allowed but,
  * per spec, does not participate in precedence comparison; prerelease precedence is

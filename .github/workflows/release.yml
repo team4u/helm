@@ -1,8 +1,6 @@
 # Release pipeline: triggered only by v* tags, responsibility chain —
-#   verify → build (full build and tests on ubuntu) → desktop-package ×3 platforms
-#   → npm-payload (published only once on ubuntu, after all gates pass)
-#   → desktop-release (collects the three platforms' installers, creates a draft Release
-#   and uploads attachments).
+#   verify → build (full build and tests on ubuntu)
+#   → npm-payload (published only once on ubuntu, after all gates pass).
 #
 # npm publishing converges to a single entry point: the sole authority is
 # packages/payload/dist/package.json (a build artifact; default name @team4u/helm-hub,
@@ -16,15 +14,8 @@
 # Honesty constraints:
 #   - Publishing gate = the private / version (locked to the tag) / repository fields of
 #     dist/package.json + the existence of NPM_TOKEN (injected as NODE_AUTH_TOKEN); if
-#     any item is unmet, fail or skip explicitly before publishing; the Release notes
-#     state only actual outcomes and never falsely claim a publish;
-#   - The installer draft must come only after all three platforms' packaging/smoke
-#     succeed (needs chain); the installer directory is packages/desktop/release/
-#     (not tsc's dist/), never publish an empty draft;
-#   - The npm payload is built and published once on ubuntu only; the three platforms'
-#     desktop installers share the same baseline source (each platform runs its own
-#     assemble-hub assembly and consumes no npm artifact), client dependencies are
-#     installed by the desktop's bundled npm, unrelated to this pipeline.
+#     any item is unmet, fail or skip explicitly before publishing;
+#   - The npm payload is built and published once on ubuntu only.
 
 name: Release
 
@@ -144,7 +135,7 @@ jobs:
   # ------------------------------------------------------------------
   npm-payload:
     name: npm payload (conditional publish)
-    needs: [verify, build, desktop-package]
+    needs: [verify, build]
     permissions:
       contents: read
       id-token: write # npm provenance relies on OIDC to attest provenance
@@ -283,145 +274,3 @@ jobs:
           echo "EOF" >> "$GITHUB_OUTPUT"
           echo "published=$published"
           echo "status: $line"
-
-  # ------------------------------------------------------------------
-  # Stage 3B: three-platform desktop packaging and smoke (the same validation set as
-  # desktop-ci.yml, --publish never). Installers and smoke reports are uploaded as
-  # workflow artifacts for desktop-release to collect.
-  # ------------------------------------------------------------------
-  desktop-package:
-    name: package / ${{ matrix.os }}
-    needs: [verify, build]
-    strategy:
-      fail-fast: false
-      matrix:
-        os:
-          - ubuntu-latest
-          - windows-latest
-          - macos-latest
-    runs-on: ${{ matrix.os }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 12.16.1
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24.12.0
-          cache: pnpm
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Install Xvfb and Electron runtime libs (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends xvfb xauth libgbm1 libasound2t64
-
-      - name: Desktop package contract check
-        id: contract
-        shell: bash
-        run: node scripts/desktop-ci-contract.mjs --github-output "$GITHUB_OUTPUT"
-
-      # assemble-hub assembly depends on kernel/web dist artifacts; build the whole repo first.
-      - name: Build packages
-        run: pnpm build
-
-      - name: Build unpacked desktop app (dist:dir)
-        run: pnpm --filter "${{ steps.contract.outputs.desktop_name }}" run dist:dir
-
-      - name: Configure Linux sandbox helper
-        if: runner.os == 'Linux'
-        run: |
-          sudo chown root:root packages/desktop/release/linux-unpacked/chrome-sandbox
-          sudo chmod 4755 packages/desktop/release/linux-unpacked/chrome-sandbox
-
-      - name: Smoke test packaged app under Xvfb (Linux)
-        if: runner.os == 'Linux'
-        run: xvfb-run -a node scripts/desktop-smoke.mjs --packaged
-
-      - name: Smoke test packaged app (Windows / macOS)
-        if: runner.os != 'Linux'
-        run: node scripts/desktop-smoke.mjs --packaged
-
-      - name: Upload smoke report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-smoke-${{ matrix.os }}
-          path: packages/desktop/release/smoke/
-          if-no-files-found: warn
-          retention-days: 7
-
-      - name: Build desktop installers (publish never)
-        run: pnpm --filter "${{ steps.contract.outputs.desktop_name }}" run dist
-
-      - name: Upload desktop installers
-        uses: actions/upload-artifact@v4
-        with:
-          name: installers-${{ matrix.os }}
-          path: |
-            packages/desktop/release/*.exe
-            packages/desktop/release/*.dmg
-            packages/desktop/release/*.zip
-            packages/desktop/release/*.AppImage
-            packages/desktop/release/*.deb
-          if-no-files-found: error
-          retention-days: 7
-
-  # ------------------------------------------------------------------
-  # Stage 4: GitHub Release draft. The needs chain guarantees the draft is created only
-  # after all three platforms' packaging/smoke succeed and the npm publish has a definite
-  # outcome (success or explicit skip); if npm-payload fails, no draft is created.
-  # ------------------------------------------------------------------
-  desktop-release:
-    name: GitHub Release draft
-    needs: [verify, npm-payload, desktop-package]
-    permissions:
-      contents: write # create the draft Release and upload installer attachments
-    runs-on: ubuntu-latest
-    env:
-      NPM_STATUS_LINE: ${{ needs.npm-payload.outputs.status-line }}
-      TAG: ${{ github.ref_name }}
-      REPO: ${{ github.repository }}
-      GH_TOKEN: ${{ github.token }}
-    steps:
-      - name: Download installers
-        uses: actions/download-artifact@v4
-        with:
-          pattern: installers-*
-          merge-multiple: true
-          path: installers
-
-      - name: Create draft release
-        run: |
-          set -eu
-          notes=$(mktemp --suffix=.md)
-          printf '## npm Hub payload\n\n%s\n\n## Desktop installers (Electron)\n\nUploaded after packaging and packaged-app smoke tests passed on all three platforms (Linux / Windows / macOS); see the attachments below (NSIS exe / dmg / zip / AppImage / deb, unsigned). Client dependencies are installed by the desktop-bundled npm.\n' "${NPM_STATUS_LINE:-npm publish outcome unknown (the npm-payload job produced no output); this draft contains no npm publish conclusion.}" > "$notes"
-          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
-            echo "Release already exists; updating the draft notes."
-            gh release edit "$TAG" --repo "$REPO" --draft --notes-file "$notes"
-          else
-            gh release create "$TAG" --repo "$REPO" --draft --generate-notes --notes-file "$notes" --title "$TAG"
-          fi
-
-      # Downloading zero installers is a real failure (the matrix upload step's
-      # if-no-files-found: error already guards once; this is the backstop); fail
-      # explicitly, never publish a draft with empty attachments.
-      - name: Upload desktop installers
-        run: |
-          set -eu
-          shopt -s nullglob
-          files=(installers/*)
-          if [ ${#files[@]} -eq 0 ]; then
-            echo "::error::No installers were downloaded (desktop-package matrix artifacts missing); refusing to publish an empty release."
-            exit 1
-          fi
-          ls -lh "${files[@]}"
-          gh release upload "$TAG" "${files[@]}" --repo "$REPO" --clobber

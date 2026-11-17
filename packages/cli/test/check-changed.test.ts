@@ -174,7 +174,6 @@ const SYNTH_PKGS = [
   { name: '@helm/cli', dir: 'cli', workspaceDeps: ['@helm/protocol'] },
   { name: '@helm/web', dir: 'web', workspaceDeps: ['@helm/protocol'] },
   { name: '@helm/payload', dir: 'payload', workspaceDeps: ['@helm/cli', '@helm/kernel', '@helm/plugins', '@helm/hub', '@helm/web'] },
-  { name: '@helm/desktop', dir: 'desktop', workspaceDeps: [] },
 ]
 
 test('dependency closed package:protocol change expand scatter to all consumer;node change via kernel pass to hub/payload', { timeout: 60_000 }, () => {
@@ -183,9 +182,6 @@ test('dependency closed package:protocol change expand scatter to all consumer;n
 
   const r2 = computeAffectedPackages(['packages/node/src/cli.ts'], SYNTH_PKGS)
   assert.deepEqual([...r2.affected].sort(), ['hub', 'kernel', 'node', 'payload', 'plugins'])
-
-  const r3 = computeAffectedPackages(['packages/desktop/src/main.ts'], SYNTH_PKGS)
-  assert.deepEqual([...r3.affected], ['desktop'])
 })
 
 test('pure test file change only choose this package; package inside non- test file (contains test assist manually) away closed package; level trigger all Profile', { timeout: 60_000 }, () => {
@@ -199,12 +195,12 @@ test('pure test file change only choose this package; package inside non- test f
 
   const t3 = computeAffectedPackages(['pnpm-lock.yaml'], SYNTH_PKGS)
   assert.equal(t3.fullTier, true)
-  assert.equal(t3.affected.size, 9)
+  assert.equal(t3.affected.size, 8)
 
   // single change fast gate itself implement (scripts source code) also trigger all Profile, disallows without check via.
   const t5 = computeAffectedPackages(['scripts/lib/spawn-checked.mjs'], SYNTH_PKGS)
   assert.equal(t5.fullTier, true)
-  assert.equal(t5.affected.size, 9)
+  assert.equal(t5.affected.size, 8)
 
   const t4 = computeAffectedPackages(['docs/foo.md', 'AGENTS.md'], SYNTH_PKGS)
   assert.equal(t4.affected.size, 0)
@@ -241,41 +237,25 @@ test('PACKAGE_TIERS and test-suites.mjs SUITES mirror lock; all warehouse packag
   assert.ok(testFilesOfPackage(repoRoot, 'cli').some((f) => f.endsWith('.test.ts')))
 })
 
-test('planCheckCommands: has test file when pre- check-hygiene;desktop choose in when insert dist build pre-; order fixed; empty choose collection without command', { timeout: 60_000 }, () => {
+test('planCheckCommands: has test file when pre- check-hygiene; order fixed; empty choose collection without command', { timeout: 60_000 }, () => {
   const pm = { cmd: 'node', args: ['/pnpm/bin/pnpm.cjs'] }
-  const withDesktop = planCheckCommands({
-    affectedDirs: ['desktop', 'kernel'],
-    testFiles: ['packages/desktop/test/bootstrap.test.ts', 'packages/kernel/test/http.test.ts'],
+  const withTests = planCheckCommands({
+    affectedDirs: ['kernel'],
+    testFiles: ['packages/kernel/test/http.test.ts'],
     pm,
     execPath: '/node',
     repoRoot: '/repo',
   })
-  assert.equal(withDesktop.length, 4)
-  assert.equal(withDesktop[0]?.cmd, '/node')
-  assert.deepEqual(withDesktop[0]?.args, [
+  assert.equal(withTests.length, 3)
+  assert.equal(withTests[0]?.cmd, '/node')
+  assert.deepEqual(withTests[0]?.args, [
     path.join('/repo', 'scripts', 'check-test-hygiene.mjs'),
     '--files',
-    'packages/desktop/test/bootstrap.test.ts',
     'packages/kernel/test/http.test.ts',
   ])
-  assert.deepEqual(withDesktop[1]?.args, ['/pnpm/bin/pnpm.cjs', 'typecheck'])
-  assert.deepEqual(withDesktop[2]?.args, ['/pnpm/bin/pnpm.cjs', '--filter', '@helm/desktop', 'run', 'build'])
-  assert.match(withDesktop[2]?.label ?? '', /desktop/)
-  assert.equal(withDesktop[3]?.args[0], path.join('/repo', 'scripts', 'run-tests.mjs'))
-  assert.equal(withDesktop[3]?.args.length, 3)
-
-  const withoutDesktop = planCheckCommands({
-    affectedDirs: ['cli'],
-    testFiles: ['packages/cli/test/cli.test.ts'],
-    pm,
-    execPath: '/node',
-    repoRoot: '/repo',
-  })
-  assert.equal(withoutDesktop.length, 3)
-  assert.equal(withoutDesktop[0]?.args[0], path.join('/repo', 'scripts', 'check-test-hygiene.mjs'))
-  assert.deepEqual(withoutDesktop[1]?.args, ['/pnpm/bin/pnpm.cjs', 'typecheck'])
-  assert.equal(withoutDesktop[2]?.args[0], path.join('/repo', 'scripts', 'run-tests.mjs'))
-  assert.ok(withoutDesktop.every((c) => !c.args.includes('@helm/desktop')))
+  assert.deepEqual(withTests[1]?.args, ['/pnpm/bin/pnpm.cjs', 'typecheck'])
+  assert.equal(withTests[2]?.args[0], path.join('/repo', 'scripts', 'run-tests.mjs'))
+  assert.equal(withTests[2]?.args.length, 2)
 
   const none = planCheckCommands({ affectedDirs: [], testFiles: [], pm, execPath: '/node', repoRoot: '/repo' })
   assert.equal(none.length, 0)

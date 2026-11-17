@@ -17,7 +17,6 @@ WORKDIR /app
 # 1. Copy only the workspace dependency manifests to maximize Docker layer caching for pnpm install
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/cli/package.json packages/cli/
-COPY packages/desktop/package.json packages/desktop/
 COPY packages/env-io/package.json packages/env-io/
 COPY packages/hub/package.json packages/hub/
 COPY packages/kernel/package.json packages/kernel/
@@ -29,8 +28,6 @@ COPY packages/plugins/package.json packages/plugins/
 COPY packages/protocol/package.json packages/protocol/
 COPY packages/web/package.json packages/web/
 
-# Skip the desktop Electron binary download (the Hub container needs no desktop shell)
-ENV ELECTRON_SKIP_BINARY_DOWNLOAD=1
 RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store \
     pnpm install --frozen-lockfile
 
