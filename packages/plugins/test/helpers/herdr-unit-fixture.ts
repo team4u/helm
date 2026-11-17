@@ -1,6 +1,5 @@
 /**
- * builtin:herdr 零参插件的单元级受控环境（herdr.test / herdr-plugin-fixes /
- * herdr-attachments 共享）。
+ * builtin:herdr 零参插件的单元级受控环境（herdr*.test.ts 共享）。
  *
  * 生产插件依赖全部来自 ctx.host 公共端口：连接走真实 transport（UDS 行
  * 协议），交接文件读写走真实文件系统。测试仍使用进程内 FakeTransport 形状
@@ -16,12 +15,28 @@
  *   removeLocalOutput 在同一路径真实生效。
  */
 import { connect, createServer, type Server, type Socket } from 'node:net'
-import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
-import { HelmError, type AgentGateResult, type RpcResult } from '@helm/protocol'
+import { setTimeout as delay } from 'node:timers/promises'
+import {
+  HelmError,
+  type AgentGateResult,
+  type AskResult,
+  type ConversationSummary,
+  type HelmHostNodeIpcPort,
+  type MaybePromise,
+  type Profile,
+  type RpcResult,
+} from '@helm/protocol'
+import { createPluginBuildProvider } from '@helm/plugin-build'
+import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
+import { PluginHost, type PluginHostBackend } from '../../../kernel/src/plugins/index.js'
+import type { WorkflowRunSummary } from '../../src/contracts.js'
+import { createHerdrPlugin } from '../../src/herdr.js'
 import type { HerdrEvent, HerdrPluginDependencies, HerdrTarget, HerdrTransport } from '../../src/herdr/contracts.js'
 import { SEND_KEYS_CAS_CAPABILITY } from '../../src/herdr/rpc.js'
+import { MemoryConfigStore, MemoryDocStore, makeConversationSummary } from './plugin-test-env.js'
 
 /**
  * 单元/集成测试用极速时间参数（缩短轮询、退避、md 稳定性复检与 steer 预算，
@@ -103,15 +118,6 @@ export interface ServedTransport {
   close(): Promise<void>
 }
 
-/**
- * 内部 HerdrEvent → 官方 wire 事件帧（{"event","data"}）。
- *
- * 全局 EventEnvelope 名称使用 snake_case（pane_created 等）；专用状态事件
- * pane.agent_status_changed 保留点号。官方 pane.created/updated 的 EventData
- * 携带完整 PaneInfo，但生产消费方只读取 pane 身份后重取快照，故 fixture
- * 只发 pane_id；tab/workspace.closed 走拓扑身份字段——与生产 transport
- * dispatchEventFrame 解析规则逐条对齐。
- */
 function eventWireFrame(event: HerdrEvent): string {
   if (event.type === 'tab.closed') {
     return `${JSON.stringify({ event: 'tab_closed', data: { tab_id: event.tabId, workspace_id: event.workspaceId } })}\n`
@@ -119,7 +125,6 @@ function eventWireFrame(event: HerdrEvent): string {
   if (event.type === 'workspace.closed') {
     return `${JSON.stringify({ event: 'workspace_closed', data: { workspace_id: event.workspaceId } })}\n`
   }
-  // 状态专用事件保留点号（官方契约）；全局 EventEnvelope 使用 snake_case。
   const wireType = event.type === 'pane.agent_status_changed' ? event.type : event.type.replace('.', '_')
   const data: Record<string, unknown> = { pane_id: event.paneId }
   return `${JSON.stringify({ event: wireType, data })}\n`
@@ -132,15 +137,13 @@ function eventWireFrame(event: HerdrEvent): string {
 export async function serveTransport(
   transport: HerdrTransport,
   socketPath: string,
-  targetOf: () => { nodeId?: string } = () => ({}),
+  targetOf: () => HerdrTarget = () => ({}),
 ): Promise<ServedTransport> {
   const sockets = new Set<Socket>()
   const socketsWithReleases: Array<{ socket: Socket; release: () => void }> = []
   const server: Server = createServer({ allowHalfOpen: true }, (socket) => {
     sockets.add(socket)
     socket.once('close', () => sockets.delete(socket))
-    // 客户端结束请求后，异步事件帧可能晚到；测试服务器不得因写入已关闭
-    // 的订阅 socket 产生未处理 EPIPE，生产协议仍由客户端负责取消订阅。
     socket.on('error', () => {})
     const writeFrame = (frame: string): void => {
       if (!socket.destroyed && socket.writable) socket.write(frame, () => {})
@@ -157,9 +160,6 @@ export async function serveTransport(
           const request = JSON.parse(line) as { id: string; method: string; params: Record<string, unknown> }
           try {
             if (request.method === 'events.subscribe') {
-              // 官方订阅请求：params.subscriptions 为过滤数组；逐窗格状态过滤
-              // （pane.agent_status_changed + pane_id）映射为 options.paneIds 传给
-              // 受控 transport，主树动态重建订阅（paneIds 集合变化）可被观测。
               const filters = Array.isArray(request.params['subscriptions']) ? (request.params['subscriptions'] as Array<Record<string, unknown>>) : []
               const paneIds = filters
                 .filter((f) => f['type'] === 'pane.agent_status_changed' && typeof f['pane_id'] === 'string' && f['pane_id'] !== '')
@@ -167,16 +167,9 @@ export async function serveTransport(
               const release = await transport.subscribe(targetOf(), (event) => {
                 writeFrame(eventWireFrame(event))
               }, () => {
-                // 受控 transport 注入流故障：销毁订阅 socket 模拟真实断线，
-                // 客户端 close 路径如实触发其 onError（不静默吞掉注入故障）。
                 socket.destroy()
               }, { paneIds })
               writeFrame(`${JSON.stringify({ id: request.id, result: { type: 'subscription_started' } })}\n`)
-              // 生产 stop() 直接 socket.destroy()（FIN 不保证对端 close 事件同步
-              // 到达）：fixture 在订阅 socket 结束（close 或 error）时同步释放受控
-              // transport 监听，半途失败清理断言才能观测到释放。
-              // 客户端 stop() 只 destroy 本方 socket；fixture server 侧经 close
-              // 事件感知并释放受控 transport 监听（与生产对端释放语义一致）。
               socket.once('end', () => release())
               socket.once('close', () => release())
               socketsWithReleases.push({ socket, release })
@@ -198,7 +191,6 @@ export async function serveTransport(
   return {
     socketPath,
     close: async () => {
-      // close() 销毁全部连接：触发每个订阅 socket 的 close 释放（见上）。
       for (const entry of socketsWithReleases) entry.socket.destroy()
       for (const socket of sockets) socket.destroy()
       await new Promise<void>((resolve) => server.close(() => resolve()))
@@ -215,8 +207,6 @@ export function ensureHelmDir(cwd: string): string {
 
 /**
  * 单次行协议调用（任意节点通用）：写入一行请求，读到首个换行响应即返回。
- * 供 backend.nodeIpc.call 将远端 nodeId 的帧转发到受控 socket（协议与
- * LocalNodeChannel 一致，但不限 'local'）。
  */
 export async function ipcLineCall(
   socketPath: string,
@@ -300,6 +290,10 @@ export const DEFAULT_HERDR_PONG_CAPABILITIES: Record<string, unknown> = {
   [SEND_KEYS_CAS_CAPABILITY]: true,
 }
 
+function isPosixWritablePath(cwd: string): boolean {
+  return cwd.startsWith('/') && !cwd.startsWith('//')
+}
+
 /**
  * 共享受控 `HerdrTransport` 基座：封装 panes/tabs/workspaces 状态、调用记录、
  * 事件订阅分发、CAS 校验、交接文件读写与 Gate stub，供各测试按需扩展 `call()`。
@@ -338,7 +332,7 @@ export abstract class BaseFakeHerdrTransport implements HerdrTransport {
     const paneId = `${workspaceId}:p${n}`
     const tabId = `${workspaceId}:t${n}`
     const paneCwd = (params['cwd'] as string) ?? '/tmp'
-    if (ensureDir) ensureHelmDir(paneCwd)
+    if (ensureDir && isPosixWritablePath(paneCwd)) ensureHelmDir(paneCwd)
     this.panes.set(paneId, {
       paneId,
       tabId,
@@ -361,7 +355,7 @@ export abstract class BaseFakeHerdrTransport implements HerdrTransport {
     const paneId = `${workspaceId}:p1`
     const tabId = `${workspaceId}:t1`
     const path = `${params['cwd']}/.worktrees/wt${n}`
-    if (ensureDir) ensureHelmDir(path)
+    if (ensureDir && isPosixWritablePath(path)) ensureHelmDir(path)
     this.panes.set(paneId, { paneId, tabId, workspaceId, agentStatus: 'idle', seq: 1, cwd: path })
     this.tabs.set(tabId, { closed: false })
     this.workspaces.set(workspaceId, { closed: false })
@@ -478,5 +472,454 @@ export abstract class BaseFakeHerdrTransport implements HerdrTransport {
     pane.seq += 1
     if (pane.launchPending !== undefined) pane.launchPending = false
     this.emit({ type: 'pane.updated', paneId: pane.paneId })
+  }
+}
+
+/**
+ * 标准受控 `HerdrTransport` 实现：统一承载 `herdr.test.ts`、`herdr-send-keys-cas.test.ts`、
+ * `herdr-node-routing.test.ts` 与 `herdr-attachments.test.ts` 所需的全部协议方法。
+ */
+export class StandardFakeHerdrTransport extends BaseFakeHerdrTransport {
+  /** true = start 直接置 idle；false = 模拟真实服务端 unknown + launch_pending 序列。 */
+  startReady = true
+  ensureDirOnCreate = true
+  autoCloseEmptyWorkspace = true
+  afterSendKeys: HerdrPaneStatus = 'working'
+  raceKeysOnSend = false
+  pongVersion = 'test-server'
+  pongResultOverride: unknown = undefined
+  waitAbort: AbortSignal | undefined
+  waitBreaks = 0
+  snapshotText: string | undefined
+
+  async call(target: HerdrTarget, method: string, params: Record<string, unknown>): Promise<unknown> {
+    this.record(target, method, params)
+    const errorFactory = this.errors.get(method)
+    if (errorFactory) throw errorFactory()
+    switch (method) {
+      case 'tab.create':
+        return this.createTabPane(params, this.ensureDirOnCreate)
+      case 'worktree.create':
+        return this.createWorktreePane(params, this.ensureDirOnCreate)
+      case 'tab.close': {
+        const tabId = params['tab_id'] as string
+        const tab = this.tabs.get(tabId)
+        if (!tab) throw new HelmError('tab_not_found', `no tab ${tabId}`, 404)
+        tab.closed = true
+        if (this.autoCloseEmptyWorkspace) {
+          const pane = [...this.panes.values()].find((p) => p.tabId === tabId)
+          if (pane && ![...this.panes.values()].some((p) => p.workspaceId === pane.workspaceId && !this.tabs.get(p.tabId)?.closed)) {
+            const workspace = this.workspaces.get(pane.workspaceId)
+            if (workspace) workspace.closed = true
+          }
+        }
+        return { type: 'ok' }
+      }
+      case 'workspace.close': {
+        const wsId = params['workspace_id'] as string
+        const ws = this.workspaces.get(wsId)
+        if (!ws) throw new HelmError('workspace_not_found', `no workspace ${wsId}`, 404)
+        ws.closed = true
+        return { type: 'ok' }
+      }
+      case 'agent.start': {
+        const pane = this.paneOf(params['pane_id'])
+        pane.name = params['name'] as string
+        if (this.startReady) {
+          pane.agentStatus = 'idle'
+          pane.seq += 1
+          if (pane.launchPending !== undefined) pane.launchPending = false
+        } else {
+          pane.agentStatus = 'unknown'
+          pane.launchPending = true
+        }
+        return { type: 'agent_started', agent: agentInfoOf(pane), argv: [] }
+      }
+      case 'agent.get': {
+        const pane = this.paneOf(params['target'])
+        return { type: 'agent_info', agent: agentInfoOf(pane) }
+      }
+      case 'agent.wait': {
+        const pane = this.paneOf(params['target'])
+        const until = ((params['until'] as string[]) ?? []).map((s) => s as HerdrPaneStatus)
+        const waitSignal = this.waitAbort
+        const timeoutMs = (params['timeout_ms'] as number | undefined) ?? 20_000
+        const deadline = Date.now() + timeoutMs
+        while (Date.now() <= deadline) {
+          if (pane.agentStatus === 'unknown' && pane.launchPending === true) {
+            await delay(15)
+            pane.agentStatus = 'idle'
+            pane.launchPending = false
+          }
+          if (until.length === 0 || until.includes(pane.agentStatus)) {
+            return { type: 'agent_info', agent: agentInfoOf(pane) }
+          }
+          try {
+            await delay(10, undefined, waitSignal !== undefined ? { signal: waitSignal } : {})
+          } catch {
+            this.waitBreaks += 1
+            break
+          }
+        }
+        throw new HelmError('timeout', 'timed out waiting for agent status', 408)
+      }
+      case 'agent.prompt': {
+        const pane = this.paneOf(params['target'])
+        const text = params['text'] as string
+        const script = this.promptStatus
+        pane.agentStatus = Array.isArray(script) ? (script.shift() ?? 'idle') : script
+        pane.seq += 1
+        if (this.onPrompt) this.onPrompt(pane, text)
+        this.emit({ type: 'pane.updated', paneId: pane.paneId })
+        return { type: 'agent_prompted', agent: agentInfoOf(pane) }
+      }
+      case 'agent.read': {
+        const pane = this.paneOf(params['target'])
+        const text = this.snapshotText !== undefined ? this.snapshotText : `tail of ${pane.paneId}: SECRET-VALUE line`
+        return { type: 'pane_read', read: { pane_id: pane.paneId, text } }
+      }
+      case 'ping':
+        if (this.pongResultOverride !== undefined) return this.pongResultOverride
+        return this.handlePing(this.pongVersion)
+      case 'agent.send_keys': {
+        const pane = this.paneOf(params['target'])
+        if (this.raceKeysOnSend) {
+          pane.seq += 1
+          pane.agentStatus = 'working'
+        }
+        this.assertSendKeysCas(pane, params)
+        this.sendKeysLog.push({ paneId: pane.paneId, keys: params['keys'] as string[] })
+        return { type: 'ok' }
+      }
+      case 'agent.focus': {
+        const focused = this.paneOf(params['target'])
+        focused.focused = true
+        return { type: 'agent_info', agent: { ...agentInfoOf(focused), focused: true } }
+      }
+      case 'pane.report_metadata':
+        this.metadataReports.push(params)
+        return { type: 'ok' }
+      case 'session.snapshot':
+        return this.buildSessionSnapshot()
+      default:
+        throw new HelmError('method_not_found', `fake transport 不支持 ${method}`, 400)
+    }
+  }
+
+  consumeKeys(paneId: string, status: HerdrPaneStatus = this.afterSendKeys): void {
+    this.advancePane(paneId, status)
+  }
+}
+
+export function makeHerdrConversation(id: number, over: Partial<ConversationSummary> = {}): ConversationSummary {
+  return makeConversationSummary({ id, cwd: '/tmp/helm-herdr-parent', model: '', ...over })
+}
+
+/**
+ * 统一受控 `PluginHostBackend`：供 `herdr*.test.ts` 复用，消除各测试文件重复手写 150 行桩代码。
+ */
+export class HerdrFakeBackend implements PluginHostBackend {
+  conversations = new Map<number, ConversationSummary>()
+  events: Array<{ type: string; payload: unknown }> = []
+  notifications: Array<{ title: string; body: string; level: string }> = []
+  askSeqResolvers = new Set<(askId: string) => MaybePromise<number | undefined>>()
+  workflowListeners = new Set<(run: WorkflowRunSummary) => void | Promise<void>>()
+  typedListeners = new Map<string, Set<(payload: unknown) => void | Promise<void>>>()
+  spawnEnvLog: Array<{ conversationId: number; cwd: string; nodeId: string }> = []
+  gateLog: Array<{ command: string; cwd?: string; env?: Record<string, string> }> = []
+  profileStore = new Map<string, Profile>()
+  completeTextImpl: ((input: { conversationId: number; systemPrompt: string; text: string }) => Promise<string>) | undefined
+  getArtifactImpl: ((id: string, conversationId: number) => Promise<{ id: string; name: string; mimeType: string; size: number; absPath: string }>) | undefined
+  createdAsks: Array<Record<string, unknown>> = []
+  cancelledAsks: Array<{ id: string; reason?: string }> = []
+  pendingAskResolvers = new Map<string, (r: AskResult) => void>()
+  askCreateError: Error | undefined
+  spawnToken = 'SECRET-TOKEN'
+
+  constructor() {
+    this.conversations.set(1, makeHerdrConversation(1))
+    this.conversations.set(2, makeHerdrConversation(2))
+  }
+
+  dispatchTrigger(): Promise<void> { return Promise.resolve() }
+  submitInput(): Promise<void> { return Promise.resolve() }
+  profiles = {
+    list: async () => [...this.profileStore.values()],
+    get: async (id: string) => this.profileStore.get(id),
+    getSystem: async (id: string) => {
+      throw new HelmError('not_found', `Profile ${id} 无 SYSTEM.md`, 404)
+    },
+    save: async () => { throw new HelmError('unsupported', 'fixture 只读', 501) },
+    directory: async (id: string) => `/tmp/herdr-fixture-profiles/${id}`,
+  }
+  skills = {
+    list: async () => [],
+    readFile: async () => { throw new HelmError('unsupported', '本 fixture 无技能', 501) },
+    directory: async (id: string) => `/tmp/herdr-fixture-skills/${id}`,
+    ensureSkill: async () => { throw new HelmError('unsupported', '本 fixture 无技能', 501) },
+  }
+  secrets = {
+    get: async () => undefined,
+    set: async () => {},
+    delete: async () => {},
+    addRedaction: () => () => {},
+  }
+  setPluginConfig(): Promise<void> { return Promise.resolve() }
+  nodeIpc: HelmHostNodeIpcPort = {
+    isOnline: () => true,
+    getNodeHubUrl: () => undefined,
+    call: async () => { throw new HelmError('unsupported', '本 fixture 无节点 IPC', 501) },
+    subscribe: async () => { throw new HelmError('unsupported', '本 fixture 无节点 IPC', 501) },
+  }
+  redact = (text: string) => text.replaceAll('SECRET-TOKEN', '[REDACTED]').replaceAll('SECRET-VALUE', '[REDACTED]')
+  buildSpawnEnv = (conversationId: number, cwd: string, nodeId: string) => {
+    this.spawnEnvLog.push({ conversationId, cwd, nodeId })
+    return {
+      HELM_ENV: '1',
+      HELM_HUB_URL: 'http://127.0.0.1:3202',
+      HELM_TOKEN: this.spawnToken,
+      HELM_CWD: cwd,
+      HELM_CONVERSATION_ID: String(conversationId),
+    }
+  }
+  async getConversationDetail(): Promise<never> { throw new HelmError('unsupported', '本 fixture 无详情', 501) }
+  async listArtifacts(): Promise<never[]> { return [] }
+  async getArtifact(id: string, conversationId: number): Promise<{ id: string; name: string; mimeType: string; size: number; absPath: string }> {
+    if (this.getArtifactImpl !== undefined) return this.getArtifactImpl(id, conversationId)
+    return undefined as never
+  }
+  async completeText(input: { conversationId: number; systemPrompt: string; text: string }): Promise<string> {
+    if (this.completeTextImpl !== undefined) return this.completeTextImpl(input)
+    throw new HelmError('unsupported', '本 fixture 无模型', 501)
+  }
+  executionEnv = (_nodeId: string, cwd: string) => {
+    if (isPosixWritablePath(cwd)) mkdirSync(cwd, { recursive: true })
+    return new NodeExecutionEnv({ cwd })
+  }
+  withFileLock<T>(_path: string, fn: () => Promise<T>): Promise<T> { return fn() }
+  async atomicWriteFile(): Promise<never> { throw new HelmError('unsupported', '本 fixture 无原子写', 501) }
+  async refreshModels(): Promise<never> { throw new HelmError('unsupported', '本 fixture 无模型刷新', 501) }
+  createConversation(): Promise<ConversationSummary> { return Promise.resolve(makeHerdrConversation(99)) }
+  forkConversation(id: number): Promise<ConversationSummary> { return Promise.resolve(makeHerdrConversation(id + 100)) }
+  listConversations(): ConversationSummary[] { return [...this.conversations.values()] }
+  getConversation(id: number): ConversationSummary {
+    const found = this.conversations.get(id)
+    if (found === undefined) throw new HelmError('not_found', `会话不存在: ${id}`, 404)
+    return found
+  }
+  updateConversation(id: number): Promise<ConversationSummary> { return Promise.resolve(this.getConversation(id)) }
+  manageConversation(): () => void { return () => {} }
+  markConversationOwnership(): void {}
+  async createAsk(spec: { id?: string }): Promise<AskResult> {
+    if (this.askCreateError) throw this.askCreateError
+    const id = spec.id ?? `ask-${this.createdAsks.length + 1}`
+    this.createdAsks.push({ ...spec, id })
+    return new Promise<AskResult>((resolve) => {
+      this.pendingAskResolvers.set(id, resolve)
+    })
+  }
+  answerAsk(id: string, result: AskResult): void {
+    this.pendingAskResolvers.get(id)?.(result)
+    this.pendingAskResolvers.delete(id)
+  }
+  async cancelAsk(id: string, reason?: 'cancelled' | 'superseded'): Promise<void> {
+    this.cancelledAsks.push({ id, reason })
+    this.pendingAskResolvers.get(id)?.({ id, status: reason === 'cancelled' ? 'cancelled' : 'superseded', answers: {} })
+    this.pendingAskResolvers.delete(id)
+  }
+  registerAskSeqResolver(resolver: (askId: string) => MaybePromise<number | undefined>): () => void {
+    this.askSeqResolvers.add(resolver)
+    return () => { this.askSeqResolvers.delete(resolver) }
+  }
+  async abortConversation(): Promise<void> {}
+  getConversationOwnership(): 'helm' | 'bot' | 'human' { return 'human' }
+  isClosing(): boolean { return false }
+  async spawnAgent(): Promise<unknown> { return {} }
+  async runGate(command: string, options?: { cwd?: string; env?: Record<string, string> }): Promise<{ ok: boolean; output: string }> {
+    this.gateLog.push({ command, cwd: options?.cwd, env: options?.env })
+    return { ok: true, output: 'local gate ok' }
+  }
+  async invokeAction(): Promise<unknown> { return {} }
+  prepareAction(): { idempotent: boolean } { return { idempotent: false } }
+  async execEnv(): Promise<import('@helm/protocol').EnvExecResponse> {
+    throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501)
+  }
+  withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') }
+  redactText(text: string): string { return text }
+  async resolveSpawnTarget(): Promise<never> { throw new HelmError('unsupported', '本 fixture 不解析 spawn 靶点', 501) }
+  listActiveSpawnExecutions(): [] { return [] }
+  async inspectNodePathUsage(): Promise<never> { throw new HelmError('unsupported', '本 fixture 不扫描进程占用', 501) }
+  listActions(): [] { return [] }
+  onEvent(type: string, listener: (payload: unknown) => void | Promise<void>): () => void {
+    const set = this.typedListeners.get(type) ?? new Set()
+    set.add(listener)
+    this.typedListeners.set(type, set)
+    if (type === 'workflow.settled') {
+      this.workflowListeners.add(listener as (run: WorkflowRunSummary) => void | Promise<void>)
+    }
+    return () => {
+      set.delete(listener)
+      this.workflowListeners.delete(listener as (run: WorkflowRunSummary) => void | Promise<void>)
+    }
+  }
+  async emitEvent(type: string, payload: unknown): Promise<void> {
+    this.events.push({ type, payload })
+    if (type === 'notification') {
+      const n = payload as { title: string; body: string; level: string }
+      this.notifications.push(n)
+    }
+    for (const listener of [...(this.typedListeners.get(type) ?? [])]) {
+      await listener(payload)
+    }
+  }
+}
+
+export interface HerdrUnitEnvOptions<TTransport extends HerdrTransport = StandardFakeHerdrTransport> {
+  enabled?: boolean
+  docs?: MemoryDocStore
+  dataDir?: string
+  socketPath?: string
+  localTarget?: HerdrTarget
+  transport?: TTransport
+  backend?: HerdrFakeBackend
+  config?: Record<string, unknown>
+  conversationOverrides?: Partial<ConversationSummary>
+  hubUrls?: Record<string, string>
+  timingOverrides?: Parameters<typeof createHerdrPlugin>[0]
+  analyzeBlockedSnapshot?: (input: { snapshot: string; conversationId: number }) => Promise<string>
+}
+
+export interface HerdrUnitEnv<TTransport extends HerdrTransport = StandardFakeHerdrTransport> {
+  host: PluginHost
+  backend: HerdrFakeBackend
+  transport: TTransport
+  docs: MemoryDocStore
+  dataDir: string
+  socketPath: string
+  parentCwd: string
+  profiles: Map<string, Profile>
+  spawnEnvLog: Array<{ conversationId: number; cwd: string; nodeId: string }>
+  gateLog: Array<{ command: string; cwd?: string; env?: Record<string, string> }>
+  close(): Promise<void>
+}
+
+/**
+ * 打开真实 `PluginHost` + UDS `serveTransport` 的单元级 Herdr 测试环境。
+ */
+export async function openHerdrUnitEnv<TTransport extends HerdrTransport = StandardFakeHerdrTransport>(
+  options: HerdrUnitEnvOptions<TTransport> = {},
+): Promise<HerdrUnitEnv<TTransport>> {
+  const dataDir = options.dataDir ?? mkdtempSync(join(tmpdir(), 'helm-herdr-unit-'))
+  const backend = options.backend ?? new HerdrFakeBackend()
+  const parentCwd = options.conversationOverrides?.cwd ?? join(dataDir, 'parent')
+  if (isPosixWritablePath(parentCwd)) ensureHelmDir(parentCwd)
+  const parentConversation = backend.conversations.get(1)
+  if (parentConversation !== undefined) {
+    Object.assign(parentConversation, options.conversationOverrides, { cwd: parentCwd })
+  }
+  const docs = options.docs ?? new MemoryDocStore()
+  const transport = (options.transport ?? new StandardFakeHerdrTransport()) as TTransport
+  if (options.analyzeBlockedSnapshot !== undefined) {
+    const analyze = options.analyzeBlockedSnapshot
+    backend.completeTextImpl = async (input) => analyze({ snapshot: input.text, conversationId: input.conversationId })
+  }
+
+  const socketPath = options.socketPath ?? join(dataDir, 'herdr.sock')
+  const localTarget = options.localTarget ?? {}
+  let routedNodeId: string | undefined
+  const served = await serveTransport(transport, socketPath, () =>
+    routedNodeId !== undefined && routedNodeId !== 'local' ? { nodeId: routedNodeId } : localTarget,
+  )
+  const hubUrls = options.hubUrls
+  backend.nodeIpc = {
+    isOnline: (nodeId: string) => hubUrls === undefined || nodeId === 'local' || nodeId in hubUrls || nodeId === 'remote-node',
+    getNodeHubUrl: (nodeId: string) => hubUrls?.[nodeId],
+    call: async (nodeId, input, signal) => {
+      signal?.throwIfAborted()
+      routedNodeId = nodeId
+      try {
+        return await ipcLineCall(socketPath, input.line, input.timeoutMs, signal)
+      } finally {
+        routedNodeId = undefined
+      }
+    },
+    subscribe: async () => { throw new HelmError('unsupported', '本 fixture 无节点 IPC 订阅', 501) },
+  }
+
+  const host = new PluginHost({
+    buildProvider: createPluginBuildProvider(),
+    dataDir,
+    host: backend,
+    docs,
+    config: new MemoryConfigStore({ ...(options.config ?? {}), socketPath }),
+  })
+  try {
+    await host.register(
+      createHerdrPlugin({
+        ...HERDR_FAST_TEST_TIMINGS,
+        ...options.timingOverrides,
+      }),
+      { enabled: options.enabled ?? true },
+    )
+  } catch (error) {
+    await host.dispose().catch(() => {})
+    await served.close().catch(() => {})
+    rmSync(dataDir, { recursive: true, force: true })
+    throw error
+  }
+
+  return {
+    host,
+    backend,
+    transport,
+    docs,
+    dataDir,
+    socketPath,
+    parentCwd,
+    profiles: backend.profileStore,
+    spawnEnvLog: backend.spawnEnvLog,
+    gateLog: backend.gateLog,
+    async close() {
+      await host.dispose().catch(() => {})
+      await served.close()
+      rmSync(dataDir, { recursive: true, force: true })
+    },
+  }
+}
+
+export function herdrFileNameOf(text: string): string {
+  return text.match(/wf-out-[A-Za-z0-9_.-]+\.(json|md)/)?.[0] ?? ''
+}
+
+export async function spawnHerdrDirect(
+  env: { host: PluginHost },
+  request: Record<string, unknown> = {},
+): Promise<unknown> {
+  const outcome = await env.host.runHook('agent_spawn', {
+    parentConversationId: 1,
+    prompt: 'do the thing',
+    ...request,
+  } as never)
+  if (outcome.action === 'handled') return outcome.result
+  if (outcome.action === 'transform') return { __transformed: outcome.value }
+  return { __notHandled: true }
+}
+
+export function herdrTurnSettledOf(conversationId: number): never {
+  return {
+    conversation: makeHerdrConversation(conversationId),
+    inputs: [],
+    outcome: 'completed',
+    settledAt: Date.now(),
+  } as never
+}
+
+export function scriptHerdrSuccess(
+  env: { transport: Pick<BaseFakeHerdrTransport, 'promptStatus' | 'onPrompt' | 'outputFiles'> },
+  content: string,
+): void {
+  env.transport.promptStatus = 'done'
+  env.transport.onPrompt = (pane, text) => {
+    env.transport.outputFiles.set(`${pane.cwd}/.helm/${herdrFileNameOf(text)}`, content)
   }
 }

@@ -1014,3 +1014,33 @@ test('reattach 冲突/缺失边界与 isClosing === false 停用仍正常关闭�
     'keepalive（已清 outputFileName）窗格重挂显式抛 herdr_reattach_missing',
   )
 })
+
+test('PaneRegistry.prune：结算记录有界回收，running/keepalive 绝不回收', { timeout: 60_000 }, () => {
+  let doc: ManagedDoc = EMPTY_MANAGED_DOC
+  const registry = new PaneRegistry({ get: () => doc, set: (next) => { doc = next } })
+  const paneOf = (paneId: string, outcome: 'settled' | 'failed' | 'running' | 'keepalive', at: number) => ({
+    target: { socketPath: '/tmp/herdr-prune.sock' },
+    paneId,
+    tabId: `t-${paneId}`,
+    effectiveCwd: '/tmp',
+    agentName: 'helm-wf-x',
+    routing: { kind: 'pi' },
+    parentConversationId: 1,
+    outcome,
+    createdAt: at,
+    settledAt: outcome === 'running' || outcome === 'keepalive' ? undefined : at,
+  })
+  registry.add(paneOf('p-run', 'running', 1))
+  registry.add(paneOf('p-keep', 'keepalive', 2))
+  for (let i = 0; i < 4; i += 1) registry.add(paneOf(`p-s-${i}`, 'settled', 10 + i))
+  registry.add(paneOf('p-f-0', 'failed', 5))
+  const removed = registry.prune({ maxSettled: 2, maxFailed: 0 })
+  assert.equal(removed, 3)
+  assert.ok(registry.get(undefined, 'p-run') !== undefined, 'running 绝不回收')
+  assert.ok(registry.get(undefined, 'p-keep') !== undefined, 'keepalive 绝不回收')
+  assert.equal(registry.get(undefined, 'p-s-0'), undefined)
+  assert.equal(registry.get(undefined, 'p-s-1'), undefined)
+  assert.ok(registry.get(undefined, 'p-s-2') !== undefined, '保留最近 settled')
+  assert.ok(registry.get(undefined, 'p-s-3') !== undefined)
+  assert.equal(doc.panes.length, 4, '持久镜像同步收敛')
+})

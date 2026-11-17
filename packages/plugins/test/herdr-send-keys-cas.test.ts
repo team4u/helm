@@ -1,76 +1,77 @@
 /**
- * agent.send_keys 协议级 CAS 契约回归（helm 侧闭环；等待 Herdr 服务端配套）。
- *
- * 背景（服务端源码只读核实，/root/code/herdr，herdr 0.9.5 / protocol 22）：
- * - AgentSendKeysParams 仅 {target, keys}，无 CAS 字段；serde 无
- *   deny_unknown_fields——盲发 expected_state_seq 会被旧服务端静默忽略并照常写键；
- * - ping -> pong(version, protocol, capabilities) 是官方能力通告通道。
- *
- * helm 侧契约（见 rpc.ts 注释）：pong.capabilities.send_keys_expected_state_seq
- * 通告能力；请求携带 wire 字段 expected_state_seq；服务端 seq 不符时回
- * stale_state 且键不发送。
- *
- * 覆盖：
- * - 纯契约：buildSendKeysParams 边界校验与 wire 字段名；parsePong 严格边界
- *  （通告/缺省/坏形状显式违约）；isStaleStateError 判定；
- * - 全链路（真实 PluginHost + 真实 UDS 行协议 fixture）：
- *   a) 服务端通告能力时，审批回答后的 send_keys 请求携带
- *      expected_state_seq === Ask 条目 seq，且 ping 探测恰好一次（按 target 冻结）；
- *   b) 服务端 stale_state 拒绝（模拟人类竞态按键推进 seq）：不重试同一批
- *      keys、不记发送成功、Ask 状态安全收敛（主循环按权威状态继续）；
- *   c) 服务端未通告能力（真实 0.9.5 pong 形状）：显式 herdr_cas_unsupported
- *      失败，绝不盲发无 CAS 键；
- *   d) pong 坏形状：显式 herdr_protocol_violation，绝不把坏数据当能力判断。
+ * agent.send_keys 协议级 CAS、RPC 解析边界与 Ask 审批桥协调器全链路回归：
+ * - 纯契约：buildSendKeysParams / parsePong / isStaleStateError / parseAgentResult / parsePaneRead；
+ * - AskCoordinator 纯状态机：seq 回退墓碑失效、乱序旧观测不作废 pending、settleAllAsSuperseded 清空条目、
+ *   keysSent=false 卡死同 seq 的 reopenUnresolved 逃生门；
+ * - 全链路（真实 PluginHost + UDS 行协议 fixture）：
+ *   a) 能力通告时 send_keys 携带 expected_state_seq 且按 target 冻结单次 ping；
+ *   b) stale_state 竞态拒绝不重试、不记发送成功、Ask 安全收敛；
+ *   c) 未通告 CAS 能力显式 herdr_cas_unsupported、pong 坏形状显式 herdr_protocol_violation；
+ *   d) askId 三段归属校验与权威 agent.get 现查真实 seq；
+ *   e) 启动期 blocked 先审批后 prompt、自愈追问遇 blocked 走同一审批桥；
+ *   f) 远端无事件权威轮询销单、入库晚于首次销单收敛、身份漂移 herdr_ownership_lost 零发键；
+ *   g) Ask 轮询瞬时故障退避容忍、持续失败先销单再保留现场、abort 销单失败退避有界、
+ *      keepalive 窗格事件不登记幽灵 creating 审批条目。
  */
-import { createPluginBuildProvider } from '@helm/plugin-build'
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
-import { HelmError, type AskResult, type ConversationSummary } from '@helm/protocol'
-import { PluginHost, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
-import { createHerdrPlugin } from '../src/herdr.js'
-import { completeBackend } from '../../kernel/test/helpers/host-backend-stub.js'
+import { HelmError } from '@helm/protocol'
 import {
-  FsOutputFiles,
-  HERDR_FAST_TEST_TIMINGS,
+  HerdrFakeBackend,
+  StandardFakeHerdrTransport,
   agentInfoOf,
-  serveTransport,
-  type HerdrPaneState as PaneState,
-  type HerdrPaneStatus as PaneStatus,
+  herdrFileNameOf,
+  openHerdrUnitEnv,
+  scriptHerdrSuccess,
+  spawnHerdrDirect,
+  type HerdrUnitEnv,
 } from './helpers/herdr-unit-fixture.js'
+import { MemoryDocStore, waitFor as baseWaitFor } from './helpers/plugin-test-env.js'
+import type { HerdrTransport } from '../src/herdr/contracts.js'
+import { AskCoordinator, askKey } from '../src/herdr/asks.js'
 import {
-  MemoryConfigStore,
-  MemoryDocStore,
-  makeConversationSummary,
-  waitFor as baseWaitFor,
-} from './helpers/plugin-test-env.js'
-import type { HerdrEvent, HerdrTarget, HerdrTransport } from '../src/herdr/contracts.js'
-import {
+  SEND_KEYS_CAS_CAPABILITY,
   buildSendKeysParams,
   isStaleStateError,
+  parseAgentResult,
+  parsePaneRead,
   parsePong,
-  SEND_KEYS_CAS_CAPABILITY,
 } from '../src/herdr/rpc.js'
 
+const waitFor = (predicate: () => boolean | Promise<boolean>, timeoutMs = 8_000, intervalMs = 10): Promise<void> =>
+  baseWaitFor(predicate, { timeoutMs, intervalMs, message: 'waitFor 超时：条件在限定时间内未成立' })
+
+function prepareBlockedOutput(env: HerdrUnitEnv): void {
+  env.transport.pongVersion = 'cas-test-server'
+  env.transport.promptStatus = 'blocked'
+  env.transport.onPrompt = (pane, text) => {
+    env.transport.outputFiles.set(`${pane.cwd}/.helm/${herdrFileNameOf(text)}`, 'approved')
+  }
+}
+
 // ---------------------------------------------------------------------------
-// 纯契约：buildSendKeysParams / parsePong / isStaleStateError
+// 纯契约：RPC 解析边界与 AskCoordinator 状态机
 // ---------------------------------------------------------------------------
 
-test('契约: buildSendKeysParams 产出 wire 字段 expected_state_seq 并拒绝非法入参', { timeout: 60_000 }, () => {
-  const params = buildSendKeysParams({ target: 'ws:p1', keys: ['y'], expectedStateSeq: 41 })
-  assert.deepEqual(params, { target: 'ws:p1', keys: ['y'], expected_state_seq: 41 })
-  assert.throws(() => buildSendKeysParams({ target: '', keys: ['y'], expectedStateSeq: 1 }), HelmError)
-  assert.throws(() => buildSendKeysParams({ target: 'p', keys: [], expectedStateSeq: 1 }), HelmError)
-  assert.throws(() => buildSendKeysParams({ target: 'p', keys: [''], expectedStateSeq: 1 }), HelmError)
-  assert.throws(() => buildSendKeysParams({ target: 'p', keys: ['y'], expectedStateSeq: -1 }), HelmError)
-  assert.throws(() => buildSendKeysParams({ target: 'p', keys: ['y'], expectedStateSeq: 1.5 }), HelmError)
-  assert.throws(() => buildSendKeysParams({ target: 'p', keys: ['y'], expectedStateSeq: Number.MAX_SAFE_INTEGER + 1 }), HelmError)
-})
+test('契约: buildSendKeysParams / parsePong / isStaleStateError / parseAgentResult / parsePaneRead 严格边界', { timeout: 60_000 }, () => {
+  assert.deepEqual(buildSendKeysParams({ target: 'ws:p1', keys: ['y'], expectedStateSeq: 41 }), {
+    target: 'ws:p1',
+    keys: ['y'],
+    expected_state_seq: 41,
+  })
+  for (const bad of [
+    { target: '', keys: ['y'], expectedStateSeq: 1 },
+    { target: 'p', keys: [], expectedStateSeq: 1 },
+    { target: 'p', keys: [''], expectedStateSeq: 1 },
+    { target: 'p', keys: ['y'], expectedStateSeq: -1 },
+    { target: 'p', keys: ['y'], expectedStateSeq: 1.5 },
+    { target: 'p', keys: ['y'], expectedStateSeq: Number.MAX_SAFE_INTEGER + 1 },
+  ]) {
+    assert.throws(() => buildSendKeysParams(bad), HelmError)
+  }
 
-test('契约: parsePong 严格边界——通告 true 才支持，缺省如实不支持，坏形状显式违约', { timeout: 60_000 }, () => {
   const supported = parsePong({
     type: 'pong',
     version: '0.9.6-dev',
@@ -80,24 +81,20 @@ test('契约: parsePong 严格边界——通告 true 才支持，缺省如实�
   assert.equal(supported.sendKeysCas, true)
   assert.equal(supported.version, '0.9.6-dev')
   assert.equal(supported.protocol, 22)
-
-  // 缺省路径（真实 0.9.5 pong 无 CAS 字段）：不支持，不抛错。
-  const realOldServer = parsePong({
-    type: 'pong',
-    version: '0.9.5',
-    protocol: 22,
-    capabilities: { live_handoff: false, detached_server_daemon: false, endpoint_protocol_generation: 1 },
-  })
-  assert.equal(realOldServer.sendKeysCas, false)
-  assert.equal(parsePong({ type: 'pong', version: 'v', protocol: 22 }).sendKeysCas, false)
-  assert.equal(parsePong({ type: 'pong', version: 'v', protocol: 22, capabilities: null }).sendKeysCas, false)
   assert.equal(
-    parsePong({ type: 'pong', version: 'v', protocol: 22, capabilities: { [SEND_KEYS_CAS_CAPABILITY]: false } }).sendKeysCas,
+    parsePong({
+      type: 'pong',
+      version: '0.9.5',
+      protocol: 22,
+      capabilities: { live_handoff: false, detached_server_daemon: false, endpoint_protocol_generation: 1 },
+    }).sendKeysCas,
     false,
   )
+  assert.equal(parsePong({ type: 'pong', version: 'v', protocol: 22 }).sendKeysCas, false)
+  assert.equal(parsePong({ type: 'pong', version: 'v', protocol: 22, capabilities: null }).sendKeysCas, false)
+  assert.equal(parsePong({ type: 'pong', version: 'v', protocol: 22, capabilities: { [SEND_KEYS_CAS_CAPABILITY]: false } }).sendKeysCas, false)
 
-  // 坏形状：显式 herdr_protocol_violation，绝不静默当不支持。
-  const violations: Array<unknown> = [
+  for (const bad of [
     { type: 'ok' },
     { type: 'pong', protocol: 22 },
     { type: 'pong', version: '', protocol: 22 },
@@ -107,354 +104,121 @@ test('契约: parsePong 严格边界——通告 true 才支持，缺省如实�
     { type: 'pong', version: 'v', protocol: 22, capabilities: 'none' },
     { type: 'pong', version: 'v', protocol: 22, capabilities: [] },
     { type: 'pong', version: 'v', protocol: 22, capabilities: { [SEND_KEYS_CAS_CAPABILITY]: 'yes' } },
-  ]
-  for (const bad of violations) {
+  ]) {
     assert.throws(() => parsePong(bad), (error: unknown) => (error as HelmError).code === 'herdr_protocol_violation')
   }
-})
 
-test('契约: isStaleStateError 只认 stale_state 错误码', { timeout: 60_000 }, () => {
   assert.equal(isStaleStateError(new HelmError('stale_state', 'seq mismatch', 409)), true)
   assert.equal(isStaleStateError({ code: 'stale_state' }), true)
   assert.equal(isStaleStateError(new HelmError('herdr_timeout', 'no response', 504)), false)
   assert.equal(isStaleStateError(new Error('plain')), false)
   assert.equal(isStaleStateError(undefined), false)
+
+  const badAgent = (agent: Record<string, unknown>) => ({ type: 'agent_info', agent })
+  for (const fn of [
+    () => parseAgentResult(badAgent({ pane_id: 'p', tab_id: 't', workspace_id: 'w', agent_status: 'idle' }), 'agent.get', 'agent_info'),
+    () => parseAgentResult(badAgent({ pane_id: 'p', tab_id: 't', workspace_id: 'w', agent_status: 'idle', state_change_seq: 1.5 }), 'agent.get', 'agent_info'),
+    () => parseAgentResult(badAgent({ pane_id: 'p', tab_id: 't', workspace_id: 'w', agent_status: 'idle', state_change_seq: -1 }), 'agent.get', 'agent_info'),
+    () => parseAgentResult(badAgent({ pane_id: 'p', tab_id: 't', workspace_id: 'w', agent_status: 'exploded', state_change_seq: 1 }), 'agent.get', 'agent_info'),
+    () => parsePaneRead({ type: 'pane_read', read: { pane_id: 'p', text: 42 } }),
+    () => parsePaneRead({ type: 'pane_read', read: { pane_id: 'p' } }),
+  ]) {
+    assert.throws(fn, (e: unknown) => (e as HelmError).code === 'herdr_protocol_violation')
+  }
+  assert.equal(parsePaneRead({ type: 'pane_read', read: { pane_id: 'w1:p1', text: '' } }).text, '')
+})
+
+test('AskCoordinator 纯状态机：seq 回退墓碑失效、乱序旧观测不作废 pending、全量清空、livelock 逃生门', { timeout: 60_000 }, () => {
+  // 1) 权威 seq 回退时墓碑同步失效。
+  const asks1 = new AskCoordinator(() => {})
+  const b1 = asks1.beginBlocked(undefined, 'w1:p1', 5)
+  assert.ok('owner' in b1)
+  asks1.settle(b1.owner, { keysSent: true })
+  asks1.observeAuthority({ paneId: 'w1:p1', seq: 4, status: 'blocked' })
+  assert.equal(asks1.get(undefined, 'w1:p1', 5), undefined)
+
+  // 2) 乱序旧观测不作废 pending 条目，seq 推进仍作废。
+  const asks2 = new AskCoordinator(() => {})
+  const b2 = asks2.beginBlocked(undefined, 'w7:p1', 6)
+  assert.ok('owner' in b2)
+  asks2.markPending(b2.owner)
+  assert.equal(asks2.observeAuthority({ paneId: 'w7:p1', seq: 4, status: 'blocked' }).length, 0)
+  assert.equal(asks2.get(undefined, 'w7:p1', 6), b2.owner)
+  const advanced = asks2.observeAuthority({ paneId: 'w7:p1', seq: 7, status: 'idle' })
+  assert.equal(advanced.length, 1)
+  assert.equal(advanced[0]!.askId, b2.owner.askId)
+  assert.equal(asks2.get(undefined, 'w7:p1', 6), undefined)
+
+  // 3) settleAllAsSuperseded 跨启用周期零残留。
+  const asks3 = new AskCoordinator(() => {})
+  const b3 = asks3.beginBlocked(undefined, 'w9:p1', 3)
+  assert.ok('owner' in b3)
+  asks3.markPending(b3.owner)
+  asks3.settleAllAsSuperseded()
+  assert.equal(asks3.pendingCount(), 0)
+  assert.equal(asks3.describe().length, 0)
+  assert.equal(asks3.get(undefined, 'w9:p1', 3), undefined)
+
+  // 4) keysSent=false 卡死同 seq 可经 reopenUnresolved 重开审批。
+  const asks4 = new AskCoordinator(() => {})
+  const b4 = asks4.beginBlocked(undefined, 'w8:p1', 4)
+  assert.ok('owner' in b4)
+  asks4.settle(b4.owner, { keysSent: false })
+  const reopened = asks4.reopenUnresolved(undefined, 'w8:p1', 4)
+  assert.ok(reopened !== undefined)
+  assert.equal(reopened!.askId, `${b4.owner.key}:r1`)
+  assert.equal(reopened!.phase, 'creating')
 })
 
 // ---------------------------------------------------------------------------
-// 受控 FakeTransport（最小面：审批桥 CAS 全链路所需方法）
-// ---------------------------------------------------------------------------
-
-class CasFakeTransport implements HerdrTransport {
-  panes = new Map<string, PaneState>()
-  tabs = new Map<string, { closed: boolean }>()
-  calls: Array<{ target: HerdrTarget; method: string; params: Record<string, unknown> }> = []
-  sendKeysLog: Array<{ paneId: string; keys: string[] }> = []
-  outputFiles = new FsOutputFiles()
-  eventListeners: Array<(e: HerdrEvent) => void> = []
-  promptStatus: PaneStatus | Array<PaneStatus> = 'idle'
-  onPrompt: ((pane: PaneState, text: string) => void) | undefined
-  /** ping capabilities 通告：缺省模拟支持 CAS 的服务端；可改写模拟旧服务端。 */
-  pongCapabilities: Record<string, unknown> | null = {
-    live_handoff: false,
-    detached_server_daemon: false,
-    endpoint_protocol_generation: 1,
-    [SEND_KEYS_CAS_CAPABILITY]: true,
-  }
-  /** 覆盖 pong 原始响应（坏形状边界测试）；设置后忽略 pongCapabilities。 */
-  pongResultOverride: unknown
-  /** send_keys 到达时先模拟人类竞态按键（seq+1 且转 working）再校验 CAS：稳定触发 stale_state。 */
-  raceKeysOnSend = false
-
-  private paneOf(ref: unknown): PaneState {
-    const id = typeof ref === 'string' ? ref : String((ref as { pane_id?: unknown })?.pane_id ?? '')
-    const pane = this.panes.get(id)
-    if (!pane) throw new HelmError('agent_not_found', `no pane ${id}`, 404)
-    return pane
-  }
-
-  async call(target: HerdrTarget, method: string, params: Record<string, unknown>): Promise<unknown> {
-    this.calls.push({ target, method, params })
-    switch (method) {
-      case 'ping':
-        if (this.pongResultOverride !== undefined) return this.pongResultOverride
-        return {
-          type: 'pong',
-          version: 'cas-test-server',
-          protocol: 22,
-          ...(this.pongCapabilities !== null ? { capabilities: { ...this.pongCapabilities } } : {}),
-        }
-      case 'tab.create': {
-        const n = this.panes.size + 1
-        const workspaceId = 'ws-default'
-        const paneId = `${workspaceId}:p${n}`
-        const tabId = `${workspaceId}:t${n}`
-        const paneCwd = (params['cwd'] as string) ?? '/tmp'
-        // 生产 readLocalOutput 经真实 fs canonicalPath：pane cwd 必须真实存在。
-        mkdirSync(join(paneCwd, '.helm'), { recursive: true })
-        this.panes.set(paneId, { paneId, tabId, workspaceId, agentStatus: 'idle', seq: 1, cwd: paneCwd })
-        this.tabs.set(tabId, { closed: false })
-        return {
-          type: 'tab_created',
-          tab: { tab_id: tabId, workspace_id: workspaceId },
-          root_pane: { pane_id: paneId, workspace_id: workspaceId, tab_id: tabId },
-        }
-      }
-      case 'tab.close': {
-        const tabId = params['tab_id'] as string
-        const tab = this.tabs.get(tabId)
-        if (!tab) throw new HelmError('tab_not_found', `no tab ${tabId}`, 404)
-        tab.closed = true
-        return { type: 'ok' }
-      }
-      case 'agent.start': {
-        const pane = this.paneOf(params['pane_id'])
-        pane.name = params['name'] as string
-        pane.agentStatus = 'idle'
-        pane.seq += 1
-        return { type: 'agent_started', agent: agentInfoOf(pane), argv: [] }
-      }
-      case 'agent.get': {
-        const pane = this.paneOf(params['target'])
-        return { type: 'agent_info', agent: agentInfoOf(pane) }
-      }
-      case 'agent.wait': {
-        const pane = this.paneOf(params['target'])
-        const until = ((params['until'] as string[]) ?? []).map((s) => s as PaneStatus)
-        for (let i = 0; i < 2_000; i += 1) {
-          if (until.length === 0 || until.includes(pane.agentStatus)) {
-            return { type: 'agent_info', agent: agentInfoOf(pane) }
-          }
-          await delay(10)
-        }
-        throw new HelmError('timeout', 'timed out waiting for agent status', 408)
-      }
-      case 'agent.prompt': {
-        const pane = this.paneOf(params['target'])
-        const text = params['text'] as string
-        const script = this.promptStatus
-        pane.agentStatus = Array.isArray(script) ? (script.shift() ?? 'idle') : script
-        pane.seq += 1
-        if (this.onPrompt) this.onPrompt(pane, text)
-        this.emit({ type: 'pane.updated', paneId: pane.paneId })
-        return { type: 'agent_prompted', agent: agentInfoOf(pane) }
-      }
-      case 'agent.read': {
-        const pane = this.paneOf(params['target'])
-        return { type: 'pane_read', read: { pane_id: pane.paneId, text: `tail of ${pane.paneId}` } }
-      }
-      case 'agent.send_keys': {
-        // 未来服务端 CAS 行为：先应用竞态推进（可选），再校验
-        // expected_state_seq；不符即 stale_state 且键不写入。
-        const pane = this.paneOf(params['target'])
-        if (this.raceKeysOnSend) {
-          pane.seq += 1
-          pane.agentStatus = 'working'
-        }
-        const expected = params['expected_state_seq']
-        if (typeof expected !== 'number' || !Number.isSafeInteger(expected) || expected < 0) {
-          throw new HelmError('invalid_params', 'agent.send_keys 必须携带非负整数 expected_state_seq（CAS 契约）', 400)
-        }
-        if (expected !== pane.seq) {
-          throw new HelmError('stale_state', `expected_state_seq=${expected} 与当前 state_change_seq=${pane.seq} 不符，按键未发送`, 409)
-        }
-        this.sendKeysLog.push({ paneId: pane.paneId, keys: params['keys'] as string[] })
-        return { type: 'ok' }
-      }
-      case 'pane.report_metadata':
-        return { type: 'ok' }
-      case 'session.snapshot':
-        return { type: 'session_snapshot', snapshot: { version: 'test', protocol: 22, workspaces: [], tabs: [], panes: [], agents: [] } }
-      default:
-        throw new HelmError('method_not_found', `fake transport 不支持 ${method}`, 400)
-    }
-  }
-
-  async readOutput(_target: HerdrTarget, cwd: string, fileName: string): Promise<string> {
-    const content = this.outputFiles.get(`${cwd}/.helm/${fileName}`)
-    if (content === undefined) throw new HelmError('herdr_output_missing', `交接文件不存在: ${cwd}/.helm/${fileName}`, 404)
-    return content
-  }
-
-  async removeOutput(_target: HerdrTarget, cwd: string, fileName: string): Promise<void> {
-    this.outputFiles.delete(`${cwd}/.helm/${fileName}`)
-  }
-
-  async runGate(): Promise<{ ok: boolean; output: string }> {
-    return { ok: true, output: 'gate ok' }
-  }
-
-  async subscribe(
-    _target: HerdrTarget,
-    onEvent: (e: HerdrEvent) => void,
-    _onError: (error: unknown) => void,
-  ): Promise<() => void> {
-    this.eventListeners.push(onEvent)
-    return () => {
-      this.eventListeners = this.eventListeners.filter((l) => l !== onEvent)
-    }
-  }
-
-  emit(event: HerdrEvent): void {
-    for (const listener of [...this.eventListeners]) listener(event)
-  }
-
-  advancePane(paneId: string, status: PaneStatus): void {
-    const pane = this.panes.get(paneId)
-    if (!pane) return
-    pane.agentStatus = status
-    pane.seq += 1
-    this.emit({ type: 'pane.updated', paneId })
-  }
-}
-
-// ---------------------------------------------------------------------------
-// 测试环境（completeBackend 桩 + 真实 PluginHost + 真实 UDS 行协议）
-// ---------------------------------------------------------------------------
-
-const makeConversation = (id: number, cwd: string): ConversationSummary =>
-  makeConversationSummary({ id, cwd, model: '' })
-
-interface Env {
-  host: PluginHost
-  transport: CasFakeTransport
-  dataDir: string
-  createdAsks: Array<Record<string, unknown>>
-  cancelledAsks: Array<{ id: string; reason?: string }>
-  notifications: Array<{ title: string; body: string; level: string }>
-  answerAsk(id: string, result: AskResult): void
-  close(): Promise<void>
-}
-
-async function makeEnv(options: { transport?: CasFakeTransport } = {}): Promise<Env> {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-herdr-cas-'))
-  const parentCwd = join(dataDir, 'parent')
-  mkdirSync(parentCwd, { recursive: true })
-  const transport = options.transport ?? new CasFakeTransport()
-  const createdAsks: Array<Record<string, unknown>> = []
-  const cancelledAsks: Array<{ id: string; reason?: string }> = []
-  const notifications: Array<{ title: string; body: string; level: string }> = []
-  const pendingAskResolvers = new Map<string, (r: AskResult) => void>()
-  const conversation = makeConversation(1, parentCwd)
-  const backend = completeBackend({
-    conversations: new Map<number, ConversationSummary>([[1, conversation]]),
-    getConversation: (id: number) => {
-      const found = id === 1 ? conversation : undefined
-      if (found === undefined) throw new HelmError('not_found', `会话不存在: ${id}`, 404)
-      return found
-    },
-    listConversations: () => [conversation],
-    nodeIpc: {
-      isOnline: () => true,
-      call: async () => { throw new HelmError('unsupported', '本 CAS fixture 无节点 IPC', 501) },
-      subscribe: async () => { throw new HelmError('unsupported', '本 CAS fixture 无节点 IPC 订阅', 501) },
-    },
-    buildSpawnEnv: (_conversationId: number, cwd: string) => ({ HELM_TOKEN: 'SECRET-TOKEN', HELM_CWD: cwd }),
-    runGate: async () => ({ ok: true, output: 'gate ok' }),
-    createAsk: async (spec: { id?: string }) => {
-      const id = spec.id ?? `ask-${createdAsks.length + 1}`
-      createdAsks.push({ ...spec, id })
-      return new Promise<AskResult>((resolve) => pendingAskResolvers.set(id, resolve))
-    },
-    cancelAsk: async (id: string, reason?: 'cancelled' | 'superseded') => {
-      cancelledAsks.push({ id, reason })
-      pendingAskResolvers.get(id)?.({ id, status: reason === 'cancelled' ? 'cancelled' : 'superseded', answers: {} })
-      pendingAskResolvers.delete(id)
-    },
-    emitEvent: (type: string, payload: unknown) => {
-      if (type === 'notification') {
-        const n = payload as { title: string; body: string; level: string }
-        notifications.push(n)
-      }
-    },
-  }) as PluginHostBackend & {
-    conversations: Map<number, ConversationSummary>
-  }
-  const socketPath = join(dataDir, 'herdr.sock')
-  const served = await serveTransport(transport, socketPath)
-  const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: backend, docs: new MemoryDocStore(), config: new MemoryConfigStore({ socketPath }) })
-  await host.register(createHerdrPlugin(HERDR_FAST_TEST_TIMINGS), { enabled: true })
-  return {
-    host,
-    transport,
-    dataDir,
-    createdAsks,
-    cancelledAsks,
-    notifications,
-    answerAsk(id, result) {
-      pendingAskResolvers.get(id)?.(result)
-      pendingAskResolvers.delete(id)
-    },
-    async close() {
-      await host.dispose().catch(() => {})
-      await served.close()
-      rmSync(dataDir, { recursive: true, force: true })
-    },
-  }
-}
-
-/** 直接调用 spawn hook（父会话 1；返回 handled result）。 */
-async function spawnDirect(env: Env, request: Record<string, unknown> = {}): Promise<unknown> {
-  const outcome = await env.host.runHook('agent_spawn', {
-    parentConversationId: 1,
-    prompt: 'do the thing',
-    ...request,
-  } as never)
-  if (outcome.action === 'handled') return outcome.result
-  throw new HelmError('herdr_cas_unsupported', 'spawn 未被 herdr 插件接管（fixture 缺陷）', 500)
-}
-
-const waitFor = (predicate: () => boolean | Promise<boolean>, timeoutMs = 8_000, intervalMs = 10): Promise<void> =>
-  baseWaitFor(predicate, { timeoutMs, intervalMs, message: 'waitFor 超时：条件在限定时间内未成立' })
-
-function fileNameOf(text: string): string {
-  return text.match(/wf-out-[A-Za-z0-9_.-]+\.(json|md)/)?.[0] ?? ''
-}
-
-/** 提交 prompt 并落盘交接文件（任务终态前写入）。 */
-function prepareOutput(env: Env): void {
-  env.transport.promptStatus = 'blocked'
-  env.transport.onPrompt = (pane, text) => {
-    env.transport.outputFiles.set(`${pane.cwd}/.helm/${fileNameOf(text)}`, 'approved')
-  }
-}
-
-// ---------------------------------------------------------------------------
-// 全链路：能力通告 -> CAS 请求；stale_state；未通告；pong 坏形状
+// 全链路：CAS 能力门禁、stale_state 竞态与 askId 权威复核
 // ---------------------------------------------------------------------------
 
 test('审批桥 CAS: 能力通告时 send_keys 携带 expected_state_seq=条目 seq，ping 探测恰好一次', { timeout: 60_000 }, async () => {
-  const env = await makeEnv()
+  const env = await openHerdrUnitEnv()
   try {
-    prepareOutput(env)
-    const resultPromise = spawnDirect(env, { agentType: 'herdr:agy', cwd: join(env.dataDir, 'work') })
-    await waitFor(() => env.createdAsks.length === 1)
-    const askId = String(env.createdAsks[0]!['id'])
+    prepareBlockedOutput(env)
+    const resultPromise = spawnHerdrDirect(env, { agentType: 'herdr:agy', cwd: join(env.dataDir, 'work') })
+    await waitFor(() => env.backend.createdAsks.length === 1)
+    const askId = String(env.backend.createdAsks[0]!['id'])
     const entrySeq = Number(askId.slice(askId.lastIndexOf(':') + 1))
-    assert.ok(Number.isSafeInteger(entrySeq) && entrySeq > 0, `askId 应携带 seq：${askId}`)
-    env.answerAsk(askId, { id: askId, status: 'answered', answers: { decision: 'allow-y' } })
+    assert.ok(Number.isSafeInteger(entrySeq) && entrySeq > 0)
+    env.backend.answerAsk(askId, { id: askId, status: 'answered', answers: { decision: 'allow-y' } })
     await waitFor(() => env.transport.sendKeysLog.length === 1)
-    // ping 能力探测恰好一次（同 target 冻结），且先于 send_keys。
     const pingCalls = env.transport.calls.filter((c) => c.method === 'ping')
-    assert.equal(pingCalls.length, 1, 'ping 探测按 target 冻结，恰好一次')
+    assert.equal(pingCalls.length, 1)
     const sendCall = env.transport.calls.find((c) => c.method === 'agent.send_keys')!
-    assert.ok(sendCall !== undefined, '必须发出 send_keys')
-    assert.ok(env.transport.calls.indexOf(pingCalls[0]!) < env.transport.calls.indexOf(sendCall), 'ping 先于 send_keys')
-    assert.equal(sendCall.params['expected_state_seq'], entrySeq, 'wire 字段 expected_state_seq === Ask 条目 seq')
+    assert.ok(env.transport.calls.indexOf(pingCalls[0]!) < env.transport.calls.indexOf(sendCall))
+    assert.equal(sendCall.params['expected_state_seq'], entrySeq)
     assert.deepEqual(sendCall.params['keys'], ['y'])
-    assert.equal(sendCall.params['target'], env.transport.sendKeysLog[0]!.paneId)
-    // 正常 ack：终端消化 -> done -> 交接成功。
     const pane = [...env.transport.panes.values()][0]!
     env.transport.advancePane(pane.paneId, 'done')
     assert.equal(await resultPromise, 'approved')
-    assert.ok(env.notifications.some((n) => n.title === 'Herdr approval sent'))
+    assert.ok(env.backend.notifications.some((n) => n.title === 'Herdr approval sent'))
   } finally {
     await env.close()
   }
 })
 
 test('审批桥 CAS: stale_state 拒绝时不重试、不记发送成功、Ask 安全收敛', { timeout: 60_000 }, async () => {
-  const env = await makeEnv()
+  const env = await openHerdrUnitEnv()
   try {
-    prepareOutput(env)
-    env.transport.raceKeysOnSend = true // 人类竞态按键：send_keys 到达时 seq 已推进
-    const resultPromise = spawnDirect(env, { agentType: 'herdr:agy', cwd: join(env.dataDir, 'work') })
-    await waitFor(() => env.createdAsks.length === 1)
-    const askId = String(env.createdAsks[0]!['id'])
-    env.answerAsk(askId, { id: askId, status: 'answered', answers: { decision: 'allow-y' } })
+    prepareBlockedOutput(env)
+    env.transport.raceKeysOnSend = true
+    const resultPromise = spawnHerdrDirect(env, { agentType: 'herdr:agy', cwd: join(env.dataDir, 'work') })
+    await waitFor(() => env.backend.createdAsks.length === 1)
+    const askId = String(env.backend.createdAsks[0]!['id'])
+    env.backend.answerAsk(askId, { id: askId, status: 'answered', answers: { decision: 'allow-y' } })
     await waitFor(() => env.transport.calls.filter((c) => c.method === 'agent.send_keys').length === 1)
-    // 恰好一次尝试；键从未写入终端（stale = 未发送按键）。
-    assert.equal(env.transport.calls.filter((c) => c.method === 'agent.send_keys').length, 1, 'stale 后绝不重试同一批 keys')
-    assert.deepEqual(env.transport.sendKeysLog, [], 'stale 拒绝意味着键未发送')
-    await waitFor(() => env.notifications.some((n) => n.title === 'Herdr approval superseded'))
-    assert.ok(!env.notifications.some((n) => n.title === 'Herdr approval sent'), '不得记发送成功')
-    // Ask 状态安全收敛：竞态推进后（working 新 seq）不重建 Ask；重复事件不触发重发。
+    assert.equal(env.transport.calls.filter((c) => c.method === 'agent.send_keys').length, 1)
+    assert.deepEqual(env.transport.sendKeysLog, [])
+    await waitFor(() => env.backend.notifications.some((n) => n.title === 'Herdr approval superseded'))
+    assert.ok(!env.backend.notifications.some((n) => n.title === 'Herdr approval sent'))
     const pane = [...env.transport.panes.values()][0]!
     env.transport.emit({ type: 'pane.updated', paneId: pane.paneId })
     await delay(40)
-    assert.equal(env.createdAsks.length, 1, '终端已推进（working）不重建 Ask')
-    assert.equal(env.transport.calls.filter((c) => c.method === 'agent.send_keys').length, 1, '重复事件不重发键')
-    // 主循环按权威状态收敛：done + 交接文件 -> 任务成功（未被 stale 击穿）。
+    assert.equal(env.backend.createdAsks.length, 1)
+    assert.equal(env.transport.calls.filter((c) => c.method === 'agent.send_keys').length, 1)
     env.transport.advancePane(pane.paneId, 'done')
     assert.equal(await resultPromise, 'approved')
   } finally {
@@ -462,55 +226,330 @@ test('审批桥 CAS: stale_state 拒绝时不重试、不记发送成功、Ask �
   }
 })
 
-test('审批桥 CAS: 服务端未通告能力时显式 herdr_cas_unsupported，绝不盲发', { timeout: 60_000 }, async () => {
-  const env = await makeEnv()
+test('审批桥 CAS: 未通告能力显式 herdr_cas_unsupported 零盲发；pong 坏形状显式 herdr_protocol_violation', { timeout: 60_000 }, async () => {
+  const env1 = await openHerdrUnitEnv()
   try {
-    prepareOutput(env)
-    // 真实 0.9.5 pong 形状：无 CAS 能力字段。
-    env.transport.pongCapabilities = {
+    prepareBlockedOutput(env1)
+    env1.transport.pongCapabilities = {
       live_handoff: false,
       detached_server_daemon: false,
       endpoint_protocol_generation: 1,
     }
-    const resultPromise = spawnDirect(env, { agentType: 'herdr:agy', cwd: join(env.dataDir, 'work') })
-    await waitFor(() => env.createdAsks.length === 1)
-    const askId = String(env.createdAsks[0]!['id'])
-    env.answerAsk(askId, { id: askId, status: 'answered', answers: { decision: 'allow-y' } })
-    await assert.rejects(resultPromise, (error: unknown) => {
+    const p1 = spawnHerdrDirect(env1, { agentType: 'herdr:agy', cwd: join(env1.dataDir, 'work') })
+    await waitFor(() => env1.backend.createdAsks.length === 1)
+    const askId = String(env1.backend.createdAsks[0]!['id'])
+    env1.backend.answerAsk(askId, { id: askId, status: 'answered', answers: { decision: 'allow-y' } })
+    await assert.rejects(p1, (error: unknown) => {
       assert.ok(error instanceof HelmError)
       assert.equal(error.code, 'herdr_cas_unsupported')
-      assert.ok(error.message.includes(SEND_KEYS_CAS_CAPABILITY), '错误信息含能力字段名')
-      assert.ok(error.message.includes('cas-test-server'), '错误信息含服务端版本诊断')
+      assert.ok(error.message.includes(SEND_KEYS_CAS_CAPABILITY))
+      assert.ok(error.message.includes('cas-test-server'))
       return true
     })
-    // 能力门禁在 send_keys 之前拦截：零盲发。
-    assert.equal(env.transport.calls.filter((c) => c.method === 'agent.send_keys').length, 0, '绝不发出无 CAS 的 send_keys')
-    assert.deepEqual(env.transport.sendKeysLog, [])
-    assert.ok(!env.notifications.some((n) => n.title === 'Herdr approval sent'))
-    // 失败窗格保留现场（outcome=failed）。
-    const list = (await env.host.invokeAction('builtin:herdr', 'list', {})) as { panes: Array<{ outcome: string }> }
+    assert.equal(env1.transport.calls.filter((c) => c.method === 'agent.send_keys').length, 0)
+    const list = (await env1.host.invokeAction('builtin:herdr', 'list', {})) as { panes: Array<{ outcome: string }> }
     assert.equal(list.panes[0]!.outcome, 'failed')
+  } finally {
+    await env1.close()
+  }
+
+  const env2 = await openHerdrUnitEnv()
+  try {
+    prepareBlockedOutput(env2)
+    env2.transport.pongResultOverride = { type: 'ok' }
+    const p2 = spawnHerdrDirect(env2, { agentType: 'herdr:agy', cwd: join(env2.dataDir, 'work') })
+    await waitFor(() => env2.backend.createdAsks.length === 1)
+    const askId = String(env2.backend.createdAsks[0]!['id'])
+    env2.backend.answerAsk(askId, { id: askId, status: 'answered', answers: { decision: 'allow-y' } })
+    await assert.rejects(p2, (error: unknown) => error instanceof HelmError && error.code === 'herdr_protocol_violation')
+    assert.equal(env2.transport.calls.filter((c) => c.method === 'agent.send_keys').length, 0)
+  } finally {
+    await env2.close()
+  }
+})
+
+test('askId 三段归属校验：CAS resolver 拒绝伪造 id，现查权威 agent.get 真实 seq', { timeout: 60_000 }, async () => {
+  const env = await openHerdrUnitEnv()
+  try {
+    env.transport.promptStatus = 'blocked'
+    const resultPromise = spawnHerdrDirect(env, { agentType: 'herdr:agy' })
+    await waitFor(() => env.backend.createdAsks.length === 1)
+    const pane = [...env.transport.panes.values()][0]!
+    const realAskId = env.backend.createdAsks[0]!['id'] as string
+    assert.equal(realAskId, askKey(undefined, pane.paneId, pane.seq))
+    const resolver = [...env.backend.askSeqResolvers][0]!
+    assert.equal(await resolver(realAskId), pane.seq)
+    assert.equal(await resolver('herdr:local:ws-other:p9:5'), undefined)
+    assert.equal(await resolver('not-an-ask-id'), undefined)
+    env.transport.advancePane(pane.paneId, 'working')
+    assert.equal(await resolver(realAskId), pane.seq)
+    await waitFor(() => env.backend.cancelledAsks.some((c) => c.id === realAskId))
+    const promptCall = env.transport.calls.find((c) => c.method === 'agent.prompt')!
+    env.transport.outputFiles.set(`${pane.cwd}/.helm/${herdrFileNameOf(promptCall.params['text'] as string)}`, 'resolver-ok')
+    env.transport.advancePane(pane.paneId, 'done')
+    assert.equal(await resultPromise, 'resolver-ok')
   } finally {
     await env.close()
   }
 })
 
-test('审批桥 CAS: pong 坏形状显式 herdr_protocol_violation，不把坏数据当能力判断', { timeout: 60_000 }, async () => {
-  const env = await makeEnv()
+// ---------------------------------------------------------------------------
+// 启动期/自愈追问审批桥、远端轮询销单、身份漂移与退避有界容错
+// ---------------------------------------------------------------------------
+
+test('启动 blocked 先审批后 prompt；自愈追问遇 blocked 走同一审批桥完成交接', { timeout: 60_000 }, async () => {
+  // 1) 启动期 blocked：审批先于 prompt。
+  const env1 = await openHerdrUnitEnv()
   try {
-    prepareOutput(env)
-    env.transport.pongResultOverride = { type: 'ok' }
-    const resultPromise = spawnDirect(env, { agentType: 'herdr:agy', cwd: join(env.dataDir, 'work') })
-    await waitFor(() => env.createdAsks.length === 1)
-    const askId = String(env.createdAsks[0]!['id'])
-    env.answerAsk(askId, { id: askId, status: 'answered', answers: { decision: 'allow-y' } })
-    await assert.rejects(resultPromise, (error: unknown) => {
-      assert.ok(error instanceof HelmError)
-      assert.equal(error.code, 'herdr_protocol_violation')
-      return true
-    })
-    assert.equal(env.transport.calls.filter((c) => c.method === 'agent.send_keys').length, 0)
+    scriptHerdrSuccess(env1, 'after-startup')
+    const original = env1.transport.call.bind(env1.transport)
+    const transport: HerdrTransport = env1.transport
+    transport.call = async (target, method, params) => {
+      const pane = env1.transport.panes.get(String(params['target']))
+      if (method === 'agent.prompt' && pane?.agentStatus === 'blocked') {
+        throw new HelmError('agent_blocked', 'must approve first', 409)
+      }
+      const result = await original(target, method, params)
+      if (method === 'agent.start') {
+        const started = env1.transport.panes.get(String(params['pane_id']))!
+        started.agentStatus = 'blocked'
+        started.seq += 1
+        return { type: 'agent_started', agent: agentInfoOf(started) }
+      }
+      return result
+    }
+    const controller = new AbortController()
+    const observed = spawnHerdrDirect(env1, { agentType: 'herdr:pi', signal: controller.signal }).then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    )
+    try {
+      await waitFor(() => env1.backend.createdAsks.length === 1 || env1.transport.calls.some((call) => call.method === 'agent.prompt'), 1_000)
+      assert.equal(env1.backend.createdAsks.length, 1, '启动审批应先于 prompt')
+      const pane = [...env1.transport.panes.values()][0]!
+      env1.backend.answerAsk(String(env1.backend.createdAsks[0]!['id']), { id: 'answer', status: 'answered', answers: { decision: 'allow-y' } })
+      await waitFor(() => env1.transport.sendKeysLog.length === 1)
+      env1.transport.advancePane(pane.paneId, 'idle')
+      assert.deepEqual(await observed, { value: 'after-startup' })
+    } finally {
+      controller.abort()
+      await observed
+    }
   } finally {
+    await env1.close()
+  }
+
+  // 2) 自愈追问遇 blocked：同一审批桥等待，缺文件不直接判失败。
+  const env2 = await openHerdrUnitEnv()
+  try {
+    env2.transport.promptStatus = ['done', 'blocked']
+    env2.transport.onPrompt = () => {}
+    const resultPromise = spawnHerdrDirect(env2, { agentType: 'herdr:agy' })
+    await waitFor(() => env2.backend.createdAsks.length === 1)
+    const askId = env2.backend.createdAsks[0]!['id'] as string
+    env2.backend.answerAsk(askId, { id: askId, status: 'answered', answers: { decision: 'allow-y' } })
+    await waitFor(() => env2.transport.sendKeysLog.length === 1)
+    const pane = [...env2.transport.panes.values()][0]!
+    const healPrompt = env2.transport.calls.filter((c) => c.method === 'agent.prompt').pop()!
+    env2.transport.outputFiles.set(`${pane.cwd}/.helm/${herdrFileNameOf(healPrompt.params['text'] as string)}`, 'healed-after-ask')
+    env2.transport.advancePane(pane.paneId, 'done')
+    assert.equal(await resultPromise, 'healed-after-ask')
+  } finally {
+    await env2.close()
+  }
+})
+
+test('远端无 socket 事件权威轮询销单 + 创建 Ask 入库晚于首次销单仍收敛无残留', { timeout: 60_000 }, async () => {
+  // 1) 远端无事件轮询销单并重建下一轮 blocked Ask。
+  const env1 = await openHerdrUnitEnv()
+  const c1 = new AbortController()
+  let obs1: Promise<unknown> | undefined
+  try {
+    env1.transport.promptStatus = 'blocked'
+    env1.transport.emit = () => {}
+    obs1 = spawnHerdrDirect(env1, { agentType: 'herdr:pi@remote-host', signal: c1.signal }).catch((e: unknown) => e)
+    await waitFor(() => env1.backend.createdAsks.length === 1)
+    const pane = [...env1.transport.panes.values()][0]!
+    const firstId = String(env1.backend.createdAsks[0]!['id'])
+    pane.seq += 1
+    pane.agentStatus = 'working'
+    await waitFor(() => env1.backend.cancelledAsks.some((ask) => ask.id === firstId), 1_500)
+    pane.seq += 1
+    pane.agentStatus = 'blocked'
+    await waitFor(() => env1.backend.createdAsks.length === 2, 1_500)
+    assert.notEqual(env1.backend.createdAsks[1]!['id'], firstId)
+  } finally {
+    c1.abort()
+    await obs1
+    await env1.close()
+  }
+
+  // 2) createAsk 入库晚于首次销单时，后续轮询仍销掉真实 pending Ask。
+  const backend = new HerdrFakeBackend()
+  const rawCreate = backend.createAsk.bind(backend)
+  let releaseGate!: () => void
+  let creating = false
+  const gate = new Promise<void>((resolve) => { releaseGate = resolve })
+  backend.createAsk = async (spec) => {
+    creating = true
+    await gate
+    return rawCreate(spec)
+  }
+  const env2 = await openHerdrUnitEnv({ backend })
+  const c2 = new AbortController()
+  let obs2: Promise<unknown> | undefined
+  try {
+    scriptHerdrSuccess(env2, 'terminal-completed')
+    env2.transport.promptStatus = 'blocked'
+    obs2 = spawnHerdrDirect(env2, { agentType: 'herdr:pi@remote-host', signal: c2.signal }).catch((e: unknown) => e)
+    await waitFor(() => creating)
+    const pane = [...env2.transport.panes.values()][0]!
+    pane.seq += 1
+    pane.agentStatus = 'done'
+    await waitFor(() => backend.cancelledAsks.length > 0)
+    assert.equal(backend.createdAsks.length, 0)
+    releaseGate()
+    assert.equal(await obs2, 'terminal-completed')
+    assert.equal(backend.pendingAskResolvers.size, 0)
+  } finally {
+    releaseGate()
+    c2.abort()
+    await obs2
+    await env2.close()
+  }
+})
+
+test('审批等待期间 Agent 身份变化抛 herdr_ownership_lost 绝不发键；keepalive 窗格事件不登记幽灵 creating', { timeout: 60_000 }, async () => {
+  const docs = new MemoryDocStore()
+  const env = await openHerdrUnitEnv({ docs })
+  let observed: Promise<unknown> | undefined
+  try {
+    // A) keepalive 窗格收到 blocked 事件不预登记幽灵 pendingAsk。
+    scriptHerdrSuccess(env, 'done-ok')
+    await spawnHerdrDirect(env, { agentType: 'herdr:pi' })
+    const keepPane = [...env.transport.panes.values()][0]!
+    await delay(5)
+    const updatedAtBefore = docs.get('builtin:herdr:overview', { updatedAt: 0 } as { updatedAt: number }).updatedAt
+    keepPane.seq += 1
+    keepPane.agentStatus = 'blocked'
+    env.transport.emit({ type: 'pane.updated', paneId: keepPane.paneId })
+    await waitFor(() => docs.get('builtin:herdr:overview', { updatedAt: 0 } as { updatedAt: number }).updatedAt > updatedAtBefore)
+    await delay(30)
+    assert.equal(docs.get('builtin:herdr:overview', { asks: [] } as { asks: unknown[] }).asks.length, 0)
+
+    // B) 审批等待期间 Agent 身份漂移：答案绝不发到人类进程且不误关窗格。
+    env.transport.promptStatus = 'blocked'
+    env.transport.onPrompt = undefined
+    observed = spawnHerdrDirect(env, { agentType: 'herdr:pi' }).catch((error: unknown) => error)
+    await waitFor(() => env.backend.createdAsks.length === 1)
+    const activePane = [...env.transport.panes.values()].at(-1)!
+    activePane.name = 'human-agent'
+    const askId = String(env.backend.createdAsks[0]!['id'])
+    env.backend.answerAsk(askId, { id: askId, status: 'answered', answers: { decision: 'allow-y' } })
+    assert.equal(((await observed) as HelmError).code, 'herdr_ownership_lost')
+    assert.equal(env.transport.sendKeysLog.length, 0)
+    assert.equal(env.transport.tabs.get(activePane.tabId)?.closed, false)
+  } finally {
+    await observed
     await env.close()
+  }
+})
+
+test('Ask 存续轮询容错：瞬时 herdr_timeout 退避容忍、持续失败先销单保留现场、abort 销单风暴有界', { timeout: 60_000 }, async () => {
+  // 1) 瞬时 herdr_timeout 两次后恢复。
+  const env1 = await openHerdrUnitEnv()
+  const c1 = new AbortController()
+  let obs1: Promise<unknown> | undefined
+  try {
+    scriptHerdrSuccess(env1, 'transient-ok')
+    env1.transport.promptStatus = 'blocked'
+    let failuresLeft = 0
+    let injected = 0
+    const orig1 = env1.transport.call.bind(env1.transport)
+    ;(env1.transport as HerdrTransport).call = async (target, method, params) => {
+      if (method === 'agent.get' && failuresLeft > 0) {
+        failuresLeft -= 1
+        injected += 1
+        throw new HelmError('herdr_timeout', 'transient blip', 504)
+      }
+      return orig1(target, method, params)
+    }
+    obs1 = spawnHerdrDirect(env1, { agentType: 'herdr:pi', signal: c1.signal }).then((value) => ({ value }), (error: unknown) => ({ error }))
+    await waitFor(() => env1.backend.createdAsks.length === 1)
+    failuresLeft = 2
+    await waitFor(() => injected === 2, 5_000)
+    await delay(50)
+    const pane = [...env1.transport.panes.values()][0]!
+    const askId = String(env1.backend.createdAsks[0]!['id'])
+    env1.backend.answerAsk(askId, { id: askId, status: 'answered', answers: { decision: 'allow-y' } })
+    await waitFor(() => env1.transport.sendKeysLog.length === 1)
+    env1.transport.advancePane(pane.paneId, 'idle')
+    assert.deepEqual(await obs1, { value: 'transient-ok' })
+    assert.equal(env1.backend.pendingAskResolvers.size, 0)
+  } finally {
+    c1.abort()
+    await obs1
+    await env1.close()
+  }
+
+  // 2) 持续失败：先销宿主 AskDoc 再显式失败，保留现场。
+  const env2 = await openHerdrUnitEnv()
+  const c2 = new AbortController()
+  let obs2: Promise<unknown> | undefined
+  try {
+    scriptHerdrSuccess(env2, 'never-reached')
+    env2.transport.promptStatus = 'blocked'
+    let persistentFailure = false
+    const orig2 = env2.transport.call.bind(env2.transport)
+    ;(env2.transport as HerdrTransport).call = async (target, method, params) => {
+      if (method === 'agent.get' && persistentFailure) {
+        throw new HelmError('herdr_timeout', 'node down', 504)
+      }
+      return orig2(target, method, params)
+    }
+    obs2 = spawnHerdrDirect(env2, { agentType: 'herdr:pi', signal: c2.signal }).catch((error: unknown) => error)
+    await waitFor(() => env2.backend.createdAsks.length === 1)
+    persistentFailure = true
+    const askId = String(env2.backend.createdAsks[0]!['id'])
+    const error = (await obs2) as HelmError
+    assert.equal(error.code, 'herdr_timeout')
+    assert.ok(env2.backend.cancelledAsks.some((ask) => ask.id === askId && ask.reason === 'cancelled'))
+    assert.equal(env2.backend.pendingAskResolvers.size, 0)
+    const pane = [...env2.transport.panes.values()][0]!
+    assert.equal(env2.transport.tabs.get(pane.tabId)!.closed, false)
+  } finally {
+    c2.abort()
+    await obs2
+    await env2.close()
+  }
+
+  // 3) abort 后 cancelAsk 持续抛错时退避有界，不形成风暴。
+  const backend3 = new HerdrFakeBackend()
+  const cancelCalls: string[] = []
+  backend3.cancelAsk = async (id: string) => {
+    cancelCalls.push(id)
+    throw new HelmError('ask_store_broken', 'cancel boom', 500)
+  }
+  const env3 = await openHerdrUnitEnv({ backend: backend3, transport: new StandardFakeHerdrTransport() })
+  const c3 = new AbortController()
+  let obs3: Promise<unknown> | undefined
+  try {
+    scriptHerdrSuccess(env3, 'never')
+    env3.transport.promptStatus = 'blocked'
+    obs3 = spawnHerdrDirect(env3, { agentType: 'herdr:pi', signal: c3.signal }).catch((error: unknown) => error)
+    await waitFor(() => env3.backend.createdAsks.length === 1)
+    const askId = String(env3.backend.createdAsks[0]!['id'])
+    c3.abort()
+    assert.equal(((await obs3) as HelmError).code, 'aborted')
+    await waitFor(() => cancelCalls.filter((id) => id === askId).length >= 5, 3_000, 10)
+    await delay(50)
+    const count = cancelCalls.filter((id) => id === askId).length
+    assert.ok(count >= 5 && count <= 7, `销单尝试有界（实际 ${count} 次）`)
+    const stormNotifications = backend3.notifications.filter((n) => n.title === 'Herdr approval cancellation failed').length
+    assert.ok(stormNotifications <= 7)
+  } finally {
+    c3.abort()
+    await obs3
+    await env3.close()
   }
 })

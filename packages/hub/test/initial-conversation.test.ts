@@ -1,190 +1,114 @@
 /**
- * initial conversation can delete and default trigger delivery end-to-end verify (real createHelm + faux provider).
- *
- * override (root #1 special design remove after new contract):
- * - initial assistant conversation via HTTP/CLI delete succeeded (without id level exemption);
- * - delete after restart does not resurrect (tombstone + ensureInitialConversation skip);
- * - delete empty after (zero conversation) plugin action still available, new conversation can create;
- * - without explicit target trigger delivery to assistant most new ordinary conversation; all empty when on demand creates new;
- * - explicit designate deleted target  trigger explicit 404, not silently change throw;
- * - manageConversation manage right protect still takes effect (409 conversation_managed_by_plugin).
- *
- * runner: tsx --test; each items explicit timeout: 60_000 guard against deadlock.
+ * 初始会话可删除与缺省触发器投递端到端验证（真实 createHelm + faux provider）。
  */
-import { test } from 'node:test'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import assert from 'node:assert/strict'
-
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import { HelmError } from '@helm/protocol'
-
-import { startHub } from '../../kernel/src/http/index.js'
-import { createHubTestApp, type HubTestApp } from './helpers/hub-test-env.js'
-
-async function buildApp(dataDir: string, model = 'faux/faux-1') {
-  const { app, faux } = await createHubTestApp({ dataDir, cwd: dataDir, model })
-  return { faux, app }
-}
+import assert from 'node:assert/strict'
+import { join } from 'node:path'
+import { test } from 'node:test'
+import { createHubTestApp, openHubHttpEnv, useTempDir, type HubTestApp } from './helpers/hub-test-env.js'
 
 function initialConvOf(app: HubTestApp) {
   const conv = app.kernel
     .listConversations()
     .find((c) => c.profileId === 'assistant' && c.parentConversationId === undefined)
-  assert.ok(conv, 'initial assistant conversation should store in')
+  assert.ok(conv, '初始 assistant 会话应存在')
   return conv
 }
 
-test('initial conversation delete and default trigger delivery', { timeout: 60_000 }, async (t) => {
-  const root = mkdtempSync(join(tmpdir(), 'helm-initial-del-'))
-  t.after(() => rmSync(root, { recursive: true, force: true }))
-
-  await t.test('delete initial human conversation (kernel API) succeeded and restart does not resurrect', { timeout: 60_000 }, async () => {
-    const dir = join(root, 't1')
-    const first = await buildApp(dir)
-    const initial = initialConvOf(first.app)
-    await first.app.kernel.deleteConversation(initial.id)
-    assert.equal(
-      first.app.kernel.listConversations().some((c) => c.id === initial.id),
-      false,
-      'after deletion immediately invisible',
-    )
+test('删除初始人类会话成功且重启不复活，零会话下仍可新建', { timeout: 60_000 }, async (t) => {
+  const dir = join(useTempDir(t, 'helm-initial-del-'), 'restart')
+  const first = await createHubTestApp({ dataDir: dir, cwd: dir })
+  const initial = initialConvOf(first.app)
+  try {
+    await first.kernel.deleteConversation(initial.id)
+    assert.equal(first.kernel.listConversations().some((c) => c.id === initial.id), false)
+  } finally {
     await first.app.close()
+  }
 
-    const second = await buildApp(dir)
-    try {
-      assert.equal(
-        second.app.kernel.listConversations().some((c) => c.id === initial.id),
-        false,
-        'after restart must not re-, must not reseed',
-      )
-      assert.equal(second.app.kernel.listConversations().length, 0, 'delete empty after is zero conversation')
-      // zero conversation under still can creates new
-      const created = await second.app.kernel.createConversation({ title: 'new conversation', profileId: 'assistant' })
-      assert.equal(typeof created.id, 'number')
-    } finally {
-      await second.app.close()
-    }
-  })
+  const second = await createHubTestApp({ dataDir: dir, cwd: dir })
+  try {
+    assert.equal(second.kernel.listConversations().some((c) => c.id === initial.id), false, '重启后不复活、不补种')
+    assert.equal(second.kernel.listConversations().length, 0)
+    const created = await second.kernel.createConversation({ title: 'new conversation', profileId: 'assistant' })
+    assert.equal(typeof created.id, 'number')
+  } finally {
+    await second.app.close()
+  }
+})
 
-  await t.test('HTTP/CLI delete initial conversation succeeded', { timeout: 60_000 }, async () => {
-    const dir = join(root, 't2')
-    const { app } = await buildApp(dir)
-    const hub = await startHub({ kernel: app.kernel as never, port: 0 })
-    try {
-      const token = app.kernel.auth.createProcessToken().token
-      const initial = initialConvOf(app)
-      const res = await fetch(`${hub.url}/api/conversations/${initial.id}`, {
-        method: 'DELETE',
-        headers: { authorization: `Bearer ${token}` },
-      })
-      assert.equal(res.status, 200, `HTTP delete initial conversation should 200:${await res.text()}`)
-      const gone = await fetch(`${hub.url}/api/conversations/${initial.id}`, {
-        headers: { authorization: `Bearer ${token}` },
-      })
-      assert.equal(gone.status, 404)
-    } finally {
-      await hub.close()
-      await app.close()
-    }
-  })
+test('HTTP 删除、受管保护与触发器路由契约（无显式目标投递 / 全删空按需新建 / 失效显式目标 404 不静默改投）', { timeout: 60_000 }, async () => {
+  const env = await openHubHttpEnv({ prefix: 'helm-initial-http-' })
+  try {
+    const initial = initialConvOf(env.app)
 
-  await t.test('manageConversation manage right protect still takes effect (409)', { timeout: 60_000 }, async () => {
-    const dir = join(root, 't3')
-    const { app } = await buildApp(dir)
-    try {
-      const initial = initialConvOf(app)
-      const release = app.kernel.manageConversation(initial.id, 'test:owner')
-      await assert.rejects(
-        () => app.kernel.deleteConversation(initial.id),
-        (err: unknown) => err instanceof HelmError && err.code === 'conversation_managed_by_plugin',
-      )
-      release()
-      await app.kernel.deleteConversation(initial.id)
-    } finally {
-      await app.close()
-    }
-  })
+    // 1. manageConversation 保护生效（409），释放后允许后续删除
+    const release = env.kernel.manageConversation(initial.id, 'test:owner')
+    await assert.rejects(
+      () => env.kernel.deleteConversation(initial.id),
+      (err: unknown) => err instanceof HelmError && err.code === 'conversation_managed_by_plugin',
+    )
+    release()
 
-  await t.test('without explicit target trigger: delivery to assistant most new ordinary conversation', { timeout: 60_000 }, async () => {
-    const dir = join(root, 't4')
-    const { faux, app } = await buildApp(dir)
-    try {
-      const initial = initialConvOf(app)
-      faux.setResponses([fauxAssistantMessage('receives by default event')])
-      await app.kernel.dispatchTrigger({
-        id: 'evt-1',
-        source: 'cron:test',
-        text: 'by default target event',
-        createdAt: Date.now(),
-      })
-      await app.kernel.waitForIdle(initial.id)
-      const detail = await app.kernel.getConversationDetail(initial.id, { limit: 10 })
-      assert.ok(
-        detail.entries.some((e) => e.kind === 'helm.input' && JSON.stringify(e.data).includes('by default target event')),
-        'without explicit target event should enter assistant most new ordinary conversation',
-      )
-    } finally {
-      await app.close()
-    }
-  })
+    // 2. 无显式目标触发器投递到 assistant 最新普通会话
+    env.faux.setResponses([fauxAssistantMessage('receives by default event')])
+    await env.kernel.dispatchTrigger({
+      id: 'evt-1',
+      source: 'cron:test',
+      text: 'by default target event',
+      createdAt: Date.now(),
+    })
+    await env.kernel.waitForIdle(initial.id)
+    const detail1 = await env.kernel.getConversationDetail(initial.id, { limit: 10 })
+    assert.ok(
+      detail1.entries.some((e) => e.kind === 'helm.input' && JSON.stringify(e.data).includes('by default target event')),
+    )
 
-  await t.test('all delete empty after trigger on demand creates new conversation and delivery (concurrency-safe)', { timeout: 60_000 }, async () => {
-    const dir = join(root, 't5')
-    const { faux, app } = await buildApp(dir)
-    try {
-      const initial = initialConvOf(app)
-      await app.kernel.deleteConversation(initial.id)
-      faux.setResponses([fauxAssistantMessage('rebuild after answer')])
-      await app.kernel.dispatchTrigger({
-        id: 'evt-2',
-        source: 'cron:rebuild',
-        text: 'delete empty after by default event',
-        createdAt: Date.now(),
-      })
-      const convs = app.kernel.listConversations().filter((c) => c.profileId === 'assistant')
-      assert.equal(convs.length, 1, 'delete empty after default trigger should on demand creates new exactly a assistant conversation')
-      await app.kernel.waitForIdle(convs[0]!.id)
-      const detail = await app.kernel.getConversationDetail(convs[0]!.id, { limit: 10 })
-      assert.ok(
-        detail.entries.some((e) => e.kind === 'helm.input' && JSON.stringify(e.data).includes('delete empty after by default event')),
-        'creates new conversation should receives event',
-      )
-    } finally {
-      await app.close()
-    }
-  })
+    // 3. HTTP 删除初始会话成功（无 ID 级删除豁免），二次读取 404
+    const del = await env.call('DELETE', `/api/conversations/${initial.id}`)
+    assert.equal(del.status, 200)
+    const gone = await env.call('GET', `/api/conversations/${initial.id}`)
+    assert.equal(gone.status, 404)
 
-  await t.test('explicit designate deleted target  trigger explicit 404, not silently change throw', { timeout: 60_000 }, async () => {
-    const dir = join(root, 't6')
-    const { faux, app } = await buildApp(dir)
-    try {
-      const initial = initialConvOf(app)
-      const deadId = initial.id
-      const other = await app.kernel.createConversation({ title: 'other conversation', profileId: 'assistant' })
-      await app.kernel.deleteConversation(deadId)
-      faux.setResponses([fauxAssistantMessage('must not receives')])
-      await assert.rejects(
-        () =>
-          app.kernel.dispatchTrigger({
-            id: 'evt-3',
-            source: 'webhook:stale',
-            text: 'points to already delete conversation event',
-            targetConversationId: deadId,
-            createdAt: Date.now(),
-          }),
-        (err: unknown) => err instanceof HelmError && err.code === 'not_found',
-      )
-      // other conversation not received (not silently change throw)
-      const otherDetail = await app.kernel.getConversationDetail(other.id, { limit: 10 })
-      assert.equal(
-        otherDetail.entries.filter((e) => e.kind === 'helm.input' && JSON.stringify(e.data).includes('points to already delete conversation event')).length,
-        0,
-        'expires target must not static default change throw other conversation',
-      )
-    } finally {
-      await app.close()
-    }
-  })
+    // 4. 全部删空后触发器按需新建唯一 assistant 会话并投递
+    env.faux.setResponses([fauxAssistantMessage('rebuild after answer')])
+    await env.kernel.dispatchTrigger({
+      id: 'evt-2',
+      source: 'cron:rebuild',
+      text: 'delete empty after by default event',
+      createdAt: Date.now(),
+    })
+    const convs = env.kernel.listConversations().filter((c) => c.profileId === 'assistant')
+    assert.equal(convs.length, 1)
+    const rebuiltId = convs[0]!.id
+    await env.kernel.waitForIdle(rebuiltId)
+    const detail2 = await env.kernel.getConversationDetail(rebuiltId, { limit: 10 })
+    assert.ok(
+      detail2.entries.some((e) => e.kind === 'helm.input' && JSON.stringify(e.data).includes('delete empty after by default event')),
+    )
+
+    // 5. 显式指定已删目标的触发器显式 404，绝不静默改投其他会话
+    const other = await env.kernel.createConversation({ title: 'other conversation', profileId: 'assistant' })
+    await env.kernel.deleteConversation(rebuiltId)
+    env.faux.setResponses([fauxAssistantMessage('must not receives')])
+    await assert.rejects(
+      () =>
+        env.kernel.dispatchTrigger({
+          id: 'evt-3',
+          source: 'webhook:stale',
+          text: 'points to already delete conversation event',
+          targetConversationId: rebuiltId,
+          createdAt: Date.now(),
+        }),
+      (err: unknown) => err instanceof HelmError && err.code === 'not_found',
+    )
+    const otherDetail = await env.kernel.getConversationDetail(other.id, { limit: 10 })
+    assert.equal(
+      otherDetail.entries.filter((e) => e.kind === 'helm.input' && JSON.stringify(e.data).includes('points to already delete conversation event')).length,
+      0,
+    )
+  } finally {
+    await env.close()
+  }
 })

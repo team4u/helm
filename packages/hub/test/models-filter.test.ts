@@ -1,468 +1,226 @@
 /**
- * model manifest start stop end-to-end persist test (real createHelm + startHub + faux provider):
- * - PUT /api/models/filter settings/empty disable collection (config.json.disabledModels atomic persist);
- * - GET /api/models directory mark note disabled(available semantics do not change, credentials availability independent express);
- * - disable model after conversation explicit choose use and commit input all by refuse (409 model_disabled), never static default fall back;
- * - original generate spawn three model parse path (explicit request / profile / global by default) before creation reject disable model;
- * - original generate spawn resume since has sub-conversation: bind set model after come by disable when commit input before reject (409 model_disabled);
- * - HTTP POST/PUT /api/profiles bind set disable model in before reject;
- * - setDisabledModels update after publish models.changed event (connected Web client refresh directory);
- * - restart semantics: the same dataDir re- createHelm after disable collection still takes effect (loadDefaultsFromConfig);
- * - validate boundary: illegal model id(empty string/contains '/'), without provider carry disable items 400; illegal config shape config_corrupt.
+ * 模型目录禁用过滤端到端与持久化回归测试（共享主 Hub 实例减少重复冷启动，保留多 provider / 重启 / 损坏配置独立验证）。
  */
-import test from 'node:test'
-import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { fauxAssistantMessage, fauxProvider } from '@earendil-works/pi-ai/providers/faux'
 import { createModels } from '@earendil-works/pi-ai/models'
-import { startHub } from '../../kernel/src/http/index.js'
-import { createHubTestApp, type HubTestApp } from './helpers/hub-test-env.js'
+import { fauxAssistantMessage, fauxProvider } from '@earendil-works/pi-ai/providers/faux'
+import assert from 'node:assert/strict'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { after, afterEach, before, test } from 'node:test'
+import {
+  createHubTestApp,
+  openHubHttpEnv,
+  useTempDir,
+  type HubHttpTestEnv,
+} from './helpers/hub-test-env.js'
 
-interface Env {
-  dataDir: string
-  app: HubTestApp
-  hubUrl: string
-  hubToken?: string
-  close(): Promise<void>
-}
+let env: HubHttpTestEnv
 
-/** double model faux provider:faux-1(by default enable)/ faux-2(disable target);nested/model verify contains slash model id. */
-async function makeEnv(): Promise<Env> {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-models-filter-'))
-  const { app, faux } = await createHubTestApp({
-    dataDir,
-    cwd: dataDir,
+before(async () => {
+  env = await openHubHttpEnv({
+    prefix: 'helm-models-filter-',
     fauxOptions: { models: [{ id: 'faux-1' }, { id: 'faux-2' }, { id: 'nested/model' }] },
   })
-  faux.setResponses([fauxAssistantMessage('ok')])
-  const hub = await startHub({ kernel: app.kernel, port: 0 })
-  const env: Env = {
-    dataDir,
-    app,
-    hubUrl: hub.url,
-    async close() {
-      await hub.close().catch(() => {})
-      await app.close().catch(() => {})
-      rmSync(dataDir, { recursive: true, force: true })
-    },
-  }
-  // setup authentication (first time start without password then directly establish token).
-  const setup = await fetch(`${env.hubUrl}/api/auth/setup`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ password: 'fixture-filter-pass' }),
-  })
-  if (setup.status === 200) {
-    env.hubToken = ((await setup.json()) as { token: string }).token
-  } else {
-    const login = await fetch(`${env.hubUrl}/api/auth/login`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ password: 'fixture-filter-pass' }),
-    })
-    assert.equal(login.status, 200, 'auth setup/login should at least a succeeded')
-    env.hubToken = ((await login.json()) as { token: string }).token
-  }
-  return env
-}
+})
 
-async function call(
-  env: Env,
-  method: string,
-  path: string,
-  body?: unknown,
-): Promise<{ status: number; body: any }> {
-  const res = await fetch(`${env.hubUrl}${path}`, {
-    method,
-    headers: {
-      'content-type': 'application/json',
-      ...(env.hubToken !== undefined ? { authorization: `Bearer ${env.hubToken}` } : {}),
-    },
-    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-  })
-  const text = await res.text()
-  let parsed: any = null
-  try {
-    parsed = text.length > 0 ? JSON.parse(text) : null
-  } catch {
-    parsed = text
-  }
-  return { status: res.status, body: parsed }
-}
-
-function configPath(env: Env): string {
-  return join(env.dataDir, 'config.json')
-}
-
-test('PUT /api/models/filter settings disable collection,GET /api/models mark note disabled and config.json persist', { timeout: 60_000 }, async () => {
-  const env = await makeEnv()
-  try {
-    // initial directory: three model all available, without disabled mark note.
-    const before = await call(env, 'GET', '/api/models')
-    assert.equal(before.status, 200)
-    const fauxEntries = before.body.models.filter((m: any) => m.provider === 'faux')
-    assert.equal(fauxEntries.length, 3)
-    assert.ok(fauxEntries.every((m: any) => m.disabled === undefined))
-
-    // settings disable collection:faux provider disable faux-2.
-    const put = await call(env, 'PUT', '/api/models/filter', { provider: 'faux', disabledModels: ['faux-2'] })
-    assert.equal(put.status, 200)
-    assert.equal(put.body.ok, true)
-    const entry = put.body.catalog.models.find((m: any) => m.provider === 'faux' && m.modelId === 'faux-2')
-    assert.equal(entry.disabled, true)
-    // available semantics do not change (credentials availability independent express;faux without credentials want seek still is available).
-    assert.equal(entry.available, true)
-    const other = put.body.catalog.models.find((m: any) => m.provider === 'faux' && m.modelId === 'faux-1')
-    assert.equal(other.disabled, undefined)
-
-    // GET directory same mark note.
-    const after = await call(env, 'GET', '/api/models')
-    const afterEntry = after.body.models.find((m: any) => m.provider === 'faux' && m.modelId === 'faux-2')
-    assert.equal(afterEntry.disabled, true)
-
-    // config.json atomic persist.
-    const raw = JSON.parse(readFileSync(configPath(env), 'utf8')) as Record<string, unknown>
-    assert.deepEqual(raw['disabledModels'], { faux: ['faux-2'] })
-
-    // empty the provider disable collection:disabledModels key whole reclaim.
-    const clear = await call(env, 'PUT', '/api/models/filter', { provider: 'faux', disabledModels: [] })
-    assert.equal(clear.status, 200)
-    const cleared = clear.body.catalog.models.find((m: any) => m.provider === 'faux' && m.modelId === 'faux-2')
-    assert.equal(cleared.disabled, undefined)
-    const rawCleared = JSON.parse(readFileSync(configPath(env), 'utf8')) as Record<string, unknown>
-    assert.equal('disabledModels' in rawCleared, false)
-  } finally {
-    await env.close()
+afterEach(async () => {
+  if (env !== undefined) {
+    await env.call('PUT', '/api/models/filter', { disabledModels: [] })
   }
 })
 
-test('many provider disable collection mutual do not interference; default provider PUT empty all', { timeout: 60_000 }, async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-models-filter-multi-'))
+after(async () => {
+  await env?.close()
+})
+
+test('PUT /api/models/filter 设置与清空、GET /api/models 标注、config.json 持久化、参数校验与 models.changed 事件广播', { timeout: 60_000 }, async () => {
+  const seenEvents: Array<{ providers: unknown }> = []
+  const unsub = env.kernel.events.subscribe((frame) => {
+    const event = frame.event as { type: string; payload?: unknown }
+    if (event.type === 'models.changed') seenEvents.push(event.payload as { providers: unknown })
+  })
+
+  try {
+    const beforeCatalog = await env.call('GET', '/api/models')
+    assert.equal(beforeCatalog.status, 200)
+    const fauxEntries = beforeCatalog.body.models.filter((m: { provider: string }) => m.provider === 'faux')
+    assert.equal(fauxEntries.length, 3)
+    assert.ok(fauxEntries.every((m: { disabled?: boolean }) => m.disabled === undefined))
+
+    const put = await env.call('PUT', '/api/models/filter', { provider: 'faux', disabledModels: ['faux-2'] })
+    assert.equal(put.status, 200)
+    const disabledEntry = put.body.catalog.models.find((m: { provider: string; modelId: string }) => m.provider === 'faux' && m.modelId === 'faux-2')
+    assert.equal(disabledEntry.disabled, true)
+    assert.equal(disabledEntry.available, true)
+    assert.equal(
+      put.body.catalog.models.find((m: { provider: string; modelId: string }) => m.provider === 'faux' && m.modelId === 'faux-1').disabled,
+      undefined,
+    )
+    assert.equal(
+      (await env.call('GET', '/api/models')).body.models.find((m: { provider: string; modelId: string }) => m.provider === 'faux' && m.modelId === 'faux-2').disabled,
+      true,
+    )
+    assert.deepEqual(
+      (JSON.parse(readFileSync(join(env.dataDir, 'config.json'), 'utf8')) as Record<string, unknown>)['disabledModels'],
+      { faux: ['faux-2'] },
+    )
+
+    const clear = await env.call('PUT', '/api/models/filter', { provider: 'faux', disabledModels: [] })
+    assert.equal(clear.status, 200)
+    assert.equal('disabledModels' in (JSON.parse(readFileSync(join(env.dataDir, 'config.json'), 'utf8')) as Record<string, unknown>), false)
+
+    const clearAll = await env.call('PUT', '/api/models/filter', { disabledModels: [] })
+    assert.equal(clearAll.status, 200)
+    assert.deepEqual(seenEvents, [{ providers: ['faux'] }, { providers: ['faux'] }, { providers: [] }])
+
+    // 校验边界（含带 '/' 的模型 ID 与自由字符串）
+    for (const bad of [
+      {},
+      { disabledModels: ['x'] },
+      { provider: 'faux', disabledModels: [''] },
+      { provider: 'faux', disabledModels: [1] },
+      { provider: 'faux', disabledModels: [], extra: 1 },
+    ]) {
+      assert.equal((await env.call('PUT', '/api/models/filter', bad)).status, 400)
+    }
+    const slashed = await env.call('PUT', '/api/models/filter', { provider: 'faux', disabledModels: ['nested/model'] })
+    assert.equal(slashed.status, 200)
+    assert.equal(slashed.body.catalog.models.find((m: { modelId: string }) => m.modelId === 'nested/model')?.disabled, true)
+
+    const free = await env.call('PUT', '/api/models/filter', { provider: 'faux', disabledModels: ['not-in-catalog'] })
+    assert.equal(free.status, 200)
+    assert.deepEqual(
+      (JSON.parse(readFileSync(join(env.dataDir, 'config.json'), 'utf8')) as Record<string, unknown>)['disabledModels'],
+      { faux: ['not-in-catalog'] },
+    )
+  } finally {
+    unsub()
+  }
+})
+
+test('禁用模型执行门禁：会话创建/更新/提交、默认模型、Profile 创建/更新、原生 spawn 三路径与 resume 均 409 model_disabled，重启用后恢复', { timeout: 60_000 }, async () => {
+  await env.call('PUT', '/api/models/filter', { provider: 'faux', disabledModels: ['faux-2'] })
+
+  // 1. 会话与默认模型 HTTP 门禁
+  const created = await env.call('POST', '/api/conversations', { model: 'faux/faux-2' })
+  assert.equal(created.status, 409)
+  assert.equal(created.body.error.code, 'model_disabled')
+
+  const conv = await env.kernel.createConversation({ title: 'filter-guard' })
+  assert.equal((await env.call('PATCH', `/api/conversations/${conv.id}`, { model: 'faux/faux-2' })).status, 409)
+
+  await env.call('PUT', '/api/models/filter', { provider: 'faux', disabledModels: ['faux-1'] })
+  assert.equal((await env.call('POST', `/api/conversations/${conv.id}/input`, { text: 'hello' })).status, 409)
+  assert.equal((await env.call('PUT', '/api/models/default', { model: 'faux/faux-1' })).status, 409)
+
+  await env.call('PUT', '/api/models/filter', { provider: 'faux', disabledModels: ['faux-2'] })
+  env.faux.setResponses([fauxAssistantMessage('ok')])
+  assert.equal((await env.call('POST', `/api/conversations/${conv.id}/input`, { text: 'hello again' })).status, 202)
+  await env.kernel.waitForIdle(conv.id)
+
+  // 2. Profile POST / PUT 门禁
+  const profCreated = await env.call('POST', '/api/profiles', { id: 'disabled-bind', name: 'disabled', model: 'faux/faux-2' })
+  assert.equal(profCreated.status, 409)
+  assert.equal(await env.kernel.profiles.get('disabled-bind'), undefined)
+
+  await env.kernel.profiles.save({ id: 'put-target', name: 'existing', model: 'faux/faux-1' })
+  assert.equal((await env.call('PUT', '/api/profiles/put-target', { name: 'rebind', model: 'faux/faux-2' })).status, 409)
+  assert.equal((await env.kernel.profiles.get('put-target'))?.model, 'faux/faux-1')
+  assert.equal((await env.call('PUT', '/api/profiles/put-target', { name: 'ok', model: 'faux/faux-1' })).status, 200)
+
+  // 3. 原生 spawn 三条模型解析路径（显式 / profile / 全局默认）创建前拒绝且零孤儿子会话
+  const spawnParent = await env.kernel.createConversation({ title: 'spawn-parent' })
+  await assert.rejects(
+    () => env.kernel.spawnAgent({ parentConversationId: spawnParent.id, prompt: 'x', model: 'faux/faux-2' }),
+    { code: 'model_disabled' },
+  )
+  await env.kernel.profiles.save({ id: 'spawnable', name: 'S', model: 'faux/faux-2' })
+  await assert.rejects(
+    () => env.kernel.spawnAgent({ parentConversationId: spawnParent.id, prompt: 'x', agentType: 'spawnable' }),
+    { code: 'model_disabled' },
+  )
+  await env.kernel.setDisabledModels('faux', ['faux-1', 'faux-2'])
+  await assert.rejects(
+    () => env.kernel.spawnAgent({ parentConversationId: spawnParent.id, prompt: 'x' }),
+    { code: 'model_disabled' },
+  )
+  assert.equal(env.kernel.listConversations().filter((c) => c.parentConversationId === spawnParent.id).length, 0)
+
+  // 4. 重启用后 spawn 与子会话 resume 事后禁用/恢复契约
+  await env.kernel.setDisabledModels('faux', [])
+  env.faux.setResponses([fauxAssistantMessage('child-first')])
+  assert.equal(
+    await env.kernel.spawnAgent({ parentConversationId: spawnParent.id, prompt: 'x', model: 'faux/faux-2' }),
+    'child-first',
+  )
+  const child = env.kernel.listConversations().find((c) => c.parentConversationId === spawnParent.id)!
+  assert.equal(child.model, 'faux/faux-2')
+
+  await env.kernel.setDisabledModels('faux', ['faux-2'])
+  const callsBefore = env.faux.state.callCount
+  await assert.rejects(
+    () => env.kernel.spawnAgent({ parentConversationId: spawnParent.id, resume: String(child.id), prompt: 'continue' }),
+    (err: unknown) => err instanceof Error && (err as { code?: string; status?: number }).code === 'model_disabled' && (err as { status?: number }).status === 409,
+  )
+  assert.equal(env.faux.state.callCount, callsBefore)
+
+  await env.kernel.setDisabledModels('faux', [])
+  env.faux.setResponses([fauxAssistantMessage('resumed ok')])
+  assert.equal(
+    await env.kernel.spawnAgent({ parentConversationId: spawnParent.id, resume: String(child.id), prompt: 'continue' }),
+    'resumed ok',
+  )
+  assert.equal(env.kernel.listConversations().filter((c) => c.parentConversationId === spawnParent.id).length, 1)
+})
+
+test('多 provider 隔离与清空全部、重启恢复生效及 config.json 坏形状显式 config_corrupt', { timeout: 60_000 }, async (t) => {
+  // 1. 多 provider 互不干扰 + 缺省 provider 空数组清空全部
+  const multiDir = join(useTempDir(t, 'helm-models-multi-'), 'hub')
   const fauxA = fauxProvider({ models: [{ id: 'faux-1' }, { id: 'faux-2' }] })
   const fauxB = fauxProvider({ provider: 'faux-b', models: [{ id: 'other-1' }] })
   const models = createModels()
   models.setProvider(fauxA.provider)
   models.setProvider(fauxB.provider)
-  const { app } = await createHubTestApp({ dataDir, cwd: dataDir, models })
-  const hub = await startHub({ kernel: app.kernel, port: 0 })
+  const multiEnv = await openHubHttpEnv({ dataDir: multiDir, cwd: multiDir, models })
   try {
-    const env: Env = { dataDir, app, hubUrl: hub.url, async close() { await hub.close().catch(() => {}) } }
-    const setup = await fetch(`${env.hubUrl}/api/auth/setup`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ password: 'fixture-filter-pass' }),
-    })
-    assert.equal(setup.status, 200)
-    env.hubToken = ((await setup.json()) as { token: string }).token
+    await multiEnv.call('PUT', '/api/models/filter', { provider: 'faux', disabledModels: ['faux-2'] })
+    await multiEnv.call('PUT', '/api/models/filter', { provider: 'faux-b', disabledModels: ['other-1'] })
+    const cat = (await multiEnv.call('GET', '/api/models')).body
+    assert.equal(cat.models.find((m: { provider: string; modelId: string }) => m.provider === 'faux' && m.modelId === 'faux-2')?.disabled, true)
+    assert.equal(cat.models.find((m: { provider: string; modelId: string }) => m.provider === 'faux-b' && m.modelId === 'other-1')?.disabled, true)
+    assert.equal(cat.models.find((m: { provider: string; modelId: string }) => m.provider === 'faux' && m.modelId === 'faux-1')?.disabled, undefined)
 
-    await call(env, 'PUT', '/api/models/filter', { provider: 'faux', disabledModels: ['faux-2'] })
-    await call(env, 'PUT', '/api/models/filter', { provider: 'faux-b', disabledModels: ['other-1'] })
-    let catalog = (await call(env, 'GET', '/api/models')).body
-    assert.equal(catalog.models.find((m: any) => m.provider === 'faux' && m.modelId === 'faux-2')?.disabled, true)
-    assert.equal(catalog.models.find((m: any) => m.provider === 'faux-b' && m.modelId === 'other-1')?.disabled, true)
-    // not involves model do not subject to interference.
-    assert.equal(catalog.models.find((m: any) => m.provider === 'faux' && m.modelId === 'faux-1')?.disabled, undefined)
-
-    // default provider + empty array = empty all (config key reclaim).
-    const clearAll = await call(env, 'PUT', '/api/models/filter', { disabledModels: [] })
-    assert.equal(clearAll.status, 200)
-    catalog = clearAll.body.catalog
-    assert.ok(catalog.models.every((m: any) => m.disabled !== true))
-    const raw = JSON.parse(readFileSync(join(dataDir, 'config.json'), 'utf8')) as Record<string, unknown>
-    assert.equal('disabledModels' in raw, false)
+    // 保留 faux 禁用集供重启验证前，先验证清空全部再重设
+    const clearAll = await multiEnv.call('PUT', '/api/models/filter', { disabledModels: [] })
+    assert.ok(clearAll.body.catalog.models.every((m: { disabled?: boolean }) => m.disabled !== true))
+    await multiEnv.call('PUT', '/api/models/filter', { provider: 'faux', disabledModels: ['faux-2'] })
   } finally {
-    await hub.close().catch(() => {})
-    await app.close().catch(() => {})
-    rmSync(dataDir, { recursive: true, force: true })
+    await multiEnv.close()
   }
-})
 
-test('validate boundary: illegal model id / without provider carry disable items / unknown field / illegal body', { timeout: 60_000 }, async () => {
-  const env = await makeEnv()
-  try {
-    // empty body and {} all is explicit validate error (missing disabledModels).
-    const empty = await call(env, 'PUT', '/api/models/filter', {})
-    assert.equal(empty.status, 400)
-    assert.equal(empty.body.error.code, 'validation_error')
-
-    // without provider carry disable items.
-    const noProvider = await call(env, 'PUT', '/api/models/filter', { disabledModels: ['x'] })
-    assert.equal(noProvider.status, 400)
-
-    // model id contains '/' legal (aggregate gateway model name itself contains slash), only empty string/non- string reject.
-    const slashed = await call(env, 'PUT', '/api/models/filter', { provider: 'faux', disabledModels: ['nested/model'] })
-    assert.equal(slashed.status, 200)
-    assert.equal(slashed.body.catalog.models.find((m: { modelId: string }) => m.modelId === 'nested/model')?.disabled, true)
-
-    // empty string model id.
-    const emptyId = await call(env, 'PUT', '/api/models/filter', { provider: 'faux', disabledModels: [''] })
-    assert.equal(emptyId.status, 400)
-
-    // non- string array.
-    const notStrings = await call(env, 'PUT', '/api/models/filter', { provider: 'faux', disabledModels: [1] })
-    assert.equal(notStrings.status, 400)
-
-    // unknown field reject.
-    const unknownKey = await call(env, 'PUT', '/api/models/filter', { provider: 'faux', disabledModels: [], extra: 1 })
-    assert.equal(unknownKey.status, 400)
-
-    // directory in missing model id also by accept (self by string store).
-    const free = await call(env, 'PUT', '/api/models/filter', { provider: 'faux', disabledModels: ['not-in-catalog'] })
-    assert.equal(free.status, 200)
-    const raw = JSON.parse(readFileSync(configPath(env), 'utf8')) as Record<string, unknown>
-    assert.deepEqual(raw['disabledModels'], { faux: ['not-in-catalog'] })
-  } finally {
-    await env.close()
-  }
-})
-
-test('disable model after conversation explicit choose use and commit input by refuse (409 model_disabled), re- enable after restore', { timeout: 60_000 }, async () => {
-  const env = await makeEnv()
-  try {
-    await call(env, 'PUT', '/api/models/filter', { provider: 'faux', disabledModels: ['faux-2'] })
-
-    // create conversation when explicit choose use by refuse.
-    const created = await call(env, 'POST', '/api/conversations', { model: 'faux/faux-2' })
-    assert.equal(created.status, 409)
-    assert.equal(created.body.error.code, 'model_disabled')
-
-    // update since has conversation model is disable model by refuse.
-    const conv = env.app.kernel.listConversations().find((c) => c.profileId === 'assistant')
-    assert.ok(conv)
-    const patched = await call(env, 'PATCH', `/api/conversations/${conv.id}`, { model: 'faux/faux-2' })
-    assert.equal(patched.status, 409)
-    assert.equal(patched.body.error.code, 'model_disabled')
-
-    // takes effect model by disable (by default model matter after by forbid) when commit input by refuse, never static default fall back other model.
-    await call(env, 'PUT', '/api/models/filter', { provider: 'faux', disabledModels: ['faux-1'] })
-    const submitted = await call(env, 'POST', `/api/conversations/${conv.id}/input`, { text: 'hello' })
-    assert.equal(submitted.status, 409)
-    assert.equal(submitted.body.error.code, 'model_disabled')
-
-    // settings global by default model is disable model same by refuse.
-    const defaultRejected = await call(env, 'PUT', '/api/models/default', { model: 'faux/faux-1' })
-    assert.equal(defaultRejected.status, 409)
-    assert.equal(defaultRejected.body.error.code, 'model_disabled')
-
-    // re- enable after commit restore succeeded (faux already script a response).
-    await call(env, 'PUT', '/api/models/filter', { provider: 'faux', disabledModels: [] })
-    const ok = await call(env, 'POST', `/api/conversations/${conv.id}/input`, { text: 'hello again' })
-    assert.equal(ok.status, 202)
-  } finally {
-    await env.close()
-  }
-})
-
-test('disable model after original generate spawn three parse path all in before creation reject (409 model_disabled), re- enable after restore', { timeout: 60_000 }, async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-models-filter-spawn-'))
-  const { app, faux } = await createHubTestApp({
-    dataDir,
-    cwd: dataDir,
+  // 2. 同一 dataDir 重启后禁用集持续生效
+  const restarted = await createHubTestApp({
+    dataDir: multiDir,
+    cwd: multiDir,
     fauxOptions: { models: [{ id: 'faux-1' }, { id: 'faux-2' }] },
   })
-  faux.setResponses([fauxAssistantMessage('ok')])
   try {
-    const parent = app.kernel.listConversations().find((c) => c.profileId === 'assistant')
-    assert.ok(parent)
-
-    // path 1: explicit request.model.
-    await app.kernel.setDisabledModels('faux', ['faux-2'])
+    const catalog = await restarted.kernel.listModels()
+    assert.equal(catalog.models.find((m) => m.provider === 'faux' && m.modelId === 'faux-2')?.disabled, true)
     await assert.rejects(
-      () => app.kernel.spawnAgent({ parentConversationId: parent.id, prompt: 'x', model: 'faux/faux-2' }),
-      (err: unknown) => err instanceof Error && (err as { code?: string }).code === 'model_disabled',
+      () => restarted.kernel.createConversation({ model: 'faux/faux-2' }),
+      { code: 'model_disabled' },
     )
-
-    // path 2:profile.model(spawnable profile bind set disable model, request do not carries explicit model).
-    await app.kernel.profiles.save({ id: 'spawnable', name: 'S', model: 'faux/faux-2' })
-    await assert.rejects(
-      () => app.kernel.spawnAgent({ parentConversationId: parent.id, prompt: 'x', agentType: 'spawnable' }),
-      (err: unknown) => err instanceof Error && (err as { code?: string }).code === 'model_disabled',
-    )
-
-    // path 3: global by default model by disable (without explicit model, without profile.model).
-    await app.kernel.setDisabledModels('faux', ['faux-1', 'faux-2'])
-    await assert.rejects(
-      () => app.kernel.spawnAgent({ parentConversationId: parent.id, prompt: 'x' }),
-      (err: unknown) => err instanceof Error && (err as { code?: string }).code === 'model_disabled',
-    )
-
-    // reject occur in create before: must not leftover sub-conversation (parent conversation still is unique assistant conversation).
-    assert.equal(
-      app.kernel.listConversations().filter((c) => c.parentConversationId === parent.id).length,
-      0,
-      'spawn by refuse when must not create sub-conversation',
-    )
-
-    // re- enable after spawn restore (global by default faux-1).
-    await app.kernel.setDisabledModels('faux', [])
-    const result = await app.kernel.spawnAgent({ parentConversationId: parent.id, prompt: 'dry' })
-    assert.equal(result, 'ok')
   } finally {
-    await app.close().catch(() => {})
-    rmSync(dataDir, { recursive: true, force: true })
+    await restarted.app.close().catch(() => {})
   }
-})
 
-test('resume since has sub-conversation: bind set model after come by disable when 409 model_disabled and do not commit input', { timeout: 60_000 }, async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-models-filter-resume-'))
-  const { app, faux } = await createHubTestApp({
-    dataDir,
-    cwd: dataDir,
-    fauxOptions: { models: [{ id: 'faux-1' }, { id: 'faux-2' }] },
-  })
-  faux.setResponses([fauxAssistantMessage('ok')])
-  try {
-    const parent = app.kernel.listConversations().find((c) => c.profileId === 'assistant')
-    assert.ok(parent)
-
-    // first time spawn: explicit bind set faux-2(now enable) succeeded create sub-conversation and complete turn.
-    const first = await app.kernel.spawnAgent({ parentConversationId: parent.id, prompt: 'x', model: 'faux/faux-2' })
-    assert.equal(first, 'ok')
-    const child = app.kernel.listConversations().find((c) => c.parentConversationId === parent.id)
-    assert.ok(child)
-    assert.equal(child.model, 'faux/faux-2')
-
-    // bind set model matter after by disable:resume in commit input before reject, do not bypass disable policy.
-    await app.kernel.setDisabledModels('faux', ['faux-2'])
-    const callsBefore = faux.state.callCount
-    await assert.rejects(
-      () => app.kernel.spawnAgent({ parentConversationId: parent.id, resume: String(child.id), prompt: 'continue' }),
-      (err: unknown) => {
-        assert.ok(err instanceof Error)
-        assert.equal((err as { code?: string }).code, 'model_disabled')
-        assert.equal((err as { status?: number }).status, 409)
-        return true
-      },
-    )
-    assert.equal(faux.state.callCount, callsBefore, 'resume by refuse when must not commit input (without new increase model request)')
-
-    // re- enable after resume restore (away the same sub-conversation resume, do not creates new).
-    await app.kernel.setDisabledModels('faux', [])
-    faux.setResponses([fauxAssistantMessage('resumed ok')])
-    const resumed = await app.kernel.spawnAgent({ parentConversationId: parent.id, resume: String(child.id), prompt: 'continue' })
-    assert.equal(resumed, 'resumed ok')
-    const children = app.kernel.listConversations().filter((c) => c.parentConversationId === parent.id)
-    assert.equal(children.length, 1, 'resume must not creates new sub-conversation')
-  } finally {
-    await app.close().catch(() => {})
-    rmSync(dataDir, { recursive: true, force: true })
-  }
-})
-
-test('disable model after HTTP POST/PUT /api/profiles bind set disable model in before reject (409 model_disabled)', { timeout: 60_000 }, async () => {
-  const env = await makeEnv()
-  try {
-    await call(env, 'PUT', '/api/models/filter', { provider: 'faux', disabledModels: ['faux-2'] })
-
-    // POST create: bind set disable model reject and do not.
-    const created = await call(env, 'POST', '/api/profiles', {
-      id: 'disabled-bind',
-      name: 'bind set disable model',
-      model: 'faux/faux-2',
-    })
-    assert.equal(created.status, 409)
-    assert.equal(created.body.error.code, 'model_disabled')
-    assert.equal(await env.app.kernel.profiles.get('disabled-bind'), undefined)
-
-    // PUT update since has profile: change bind disable model reject, original value do not change.
-    await env.app.kernel.profiles.save({ id: 'put-target', name: 'since has role', model: 'faux/faux-1' })
-    const putRejected = await call(env, 'PUT', '/api/profiles/put-target', {
-      name: 'change bind disable model',
-      model: 'faux/faux-2',
-    })
-    assert.equal(putRejected.status, 409)
-    assert.equal(putRejected.body.error.code, 'model_disabled')
-    assert.equal((await env.app.kernel.profiles.get('put-target'))?.model, 'faux/faux-1')
-
-    // legal model still can save.
-    const ok = await call(env, 'PUT', '/api/profiles/put-target', {
-      name: 'change bind available model',
-      model: 'faux/faux-1',
-    })
-    assert.equal(ok.status, 200)
-  } finally {
-    await env.close()
-  }
-})
-
-test('setDisabledModels update after publish models.changed event (Web client refresh directory)', { timeout: 60_000 }, async () => {
-  const env = await makeEnv()
-  try {
-    const seen: Array<{ providers: unknown }> = []
-    env.app.kernel.events.subscribe((frame) => {
-      const event = frame.event as { type: string; payload?: unknown }
-      if (event.type === 'models.changed') {
-        seen.push(event.payload as { providers: unknown })
-      }
-    })
-    await call(env, 'PUT', '/api/models/filter', { provider: 'faux', disabledModels: ['faux-2'] })
-    assert.equal(seen.length, 1, 'settings disable collection exactly publish once models.changed')
-    assert.deepEqual(seen[0], { providers: ['faux'] })
-
-    await call(env, 'PUT', '/api/models/filter', { provider: 'faux', disabledModels: [] })
-    assert.equal(seen.length, 2, 'empty same publish')
-    assert.deepEqual(seen[1], { providers: ['faux'] })
-
-    await call(env, 'PUT', '/api/models/filter', { disabledModels: [] })
-    assert.equal(seen.length, 3, 'default provider empty all also publish')
-    assert.deepEqual(seen[2], { providers: [] })
-  } finally {
-    await env.close()
-  }
-})
-
-test('restart persist: the same dataDir re- createHelm after disable collection still takes effect', { timeout: 60_000 }, async () => {
-  const env = await makeEnv()
-  await call(env, 'PUT', '/api/models/filter', { provider: 'faux', disabledModels: ['faux-2'] })
-  // env.close will clean up temp directory, first read config content again rebuild directory verify restart semantics.
-  const raw = readFileSync(configPath(env), 'utf8')
-  await env.close()
-
-  const freshDir = mkdtempSync(join(tmpdir(), 'helm-models-filter-restart-'))
-  try {
-    writeFileSync(join(freshDir, 'config.json'), raw)
-    const { app } = await createHubTestApp({
-      dataDir: freshDir,
-      cwd: freshDir,
-      fauxOptions: { models: [{ id: 'faux-1' }, { id: 'faux-2' }] },
-    })
-    try {
-      const catalog = await app.kernel.listModels()
-      const entry = catalog.models.find((m) => m.provider === 'faux' && m.modelId === 'faux-2')
-      assert.equal(entry?.disabled, true)
-      // conversation choose use still by refuse (config drive memory snapshot takes effect).
-      await assert.rejects(
-        () => app.kernel.createConversation({ model: 'faux/faux-2' }),
-        (err: unknown) => {
-          assert.ok(err instanceof Error)
-          assert.equal((err as { code?: string }).code, 'model_disabled')
-          return true
-        },
-      )
-    } finally {
-      await app.close().catch(() => {})
-    }
-  } finally {
-    rmSync(freshDir, { recursive: true, force: true })
-  }
-})
-
-test('config.json.disabledModels illegal shape: start explicit config_corrupt, never static default discard', { timeout: 60_000 }, async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-models-filter-corrupt-'))
-  try {
-    writeFileSync(join(dataDir, 'config.json'), JSON.stringify({ disabledModels: { faux: 'not-an-array' } }))
-    await assert.rejects(
-      () => createHubTestApp({ dataDir, cwd: dataDir }),
-      (err: unknown) => {
-        assert.ok(err instanceof Error)
-        assert.equal((err as { code?: string }).code, 'config_corrupt')
-        return true
-      },
-    )
-    assert.equal(existsSync(join(dataDir, 'config.json')), true)
-  } finally {
-    rmSync(dataDir, { recursive: true, force: true })
-  }
+  // 3. config.json.disabledModels 坏形状启动显式 config_corrupt
+  const corruptDir = useTempDir(t, 'helm-models-corrupt-')
+  writeFileSync(join(corruptDir, 'config.json'), JSON.stringify({ disabledModels: { faux: 'not-an-array' } }))
+  await assert.rejects(
+    () => createHubTestApp({ dataDir: corruptDir, cwd: corruptDir }),
+    { code: 'config_corrupt' },
+  )
+  assert.equal(existsSync(join(corruptDir, 'config.json')), true)
 })
