@@ -211,7 +211,7 @@ test('插件 CSS 本地 @import 正常合并（跨文件依赖），远程 @impo
   await writeFile(join(remoteRoot, 'index.tsx'), "import './styles.css'\nexport function Widget() { return 'w' }\n")
   await assert.rejects(
     () => compilePluginClientModule('test:css-remote', remoteRoot, 'index.tsx', dataDir),
-    (err: unknown) => err instanceof HelmError && err.code === 'client_compile_failed' && /远程 @import/.test(err.message),
+    (err: unknown) => err instanceof HelmError && err.code === 'client_compile_failed' && /far process @import/.test(err.message),
   )
 })
 
@@ -492,7 +492,7 @@ test('非共享裸依赖（npm 包）显式拒绝：绝不把 node_modules 打�
       (err: unknown) =>
         err instanceof HelmError &&
         err.code === 'client_compile_failed' &&
-        err.message.includes('裸依赖') &&
+        err.message.includes('bare dependency') &&
         err.message.includes('assert'),
     )
   } finally {
@@ -528,7 +528,7 @@ test('依赖符号链接越根拒绝：本地 import 指向根外符号链接（
     await assert.rejects(
       pluginHost.getClientModule('test:client-fixture', 'entry-linked.ts'),
       (err: unknown) =>
-        err instanceof HelmError && err.code === 'client_compile_failed' && err.message.includes('越界'),
+        err instanceof HelmError && err.code === 'client_compile_failed' && err.message.includes('out of bounds'),
     )
   } finally {
     await rm(join(clientRoot, 'linked-dep.ts'), { force: true })
