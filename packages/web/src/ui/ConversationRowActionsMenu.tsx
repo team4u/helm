@@ -17,6 +17,7 @@ import { useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ConversationSummary } from '@helm/protocol/browser'
 import { HelmIcon } from '@helm/plugin-client'
+import { useWebLocale } from '../i18n/use-web-locale.js'
 import { useHelmStore } from '../lib/store-context.js'
 import { PluginMicroAction } from './PluginMicroAction.js'
 import { matchConversationActions } from '../conversation/action-model.js'
@@ -40,6 +41,7 @@ export function ConversationRowActionsMenu({
   conversation: ConversationSummary
 }): ReactNode {
   const store = useHelmStore()
+  const { t } = useWebLocale()
   const [open, setOpen] = useState(false)
   const [archiving, setArchiving] = useState(false)
 
@@ -68,26 +70,29 @@ export function ConversationRowActionsMenu({
       store.pushNotice({
         type: 'notification',
         level: 'info',
-        title: hostArchiveAction === 'archive' ? 'Conversations archived' : 'Conversations restored',
+        title: hostArchiveAction === 'archive' ? t('conv.pane.archived') : t('conv.pane.restored'),
         body:
           hostArchiveAction === 'archive'
-            ? `Conversation #${conversation.id} moved to the Archived group in the sidebar`
-            : `Conversation #${conversation.id} restored to the agent list`,
+            ? t('conv.row.archivedBody', { id: conversation.id })
+            : t('conv.row.restoredBody', { id: conversation.id }),
       })
       setOpen(false)
     } catch (err) {
       store.pushNotice({
         type: 'notification',
         level: 'error',
-        title: hostArchiveAction === 'archive' ? 'Failed to archive conversation' : 'Failed to restore conversation',
-        body: `Conversation #${conversation.id}: ${err instanceof Error ? err.message : String(err)}`,
+        title: hostArchiveAction === 'archive' ? t('conv.row.archiveFailed') : t('conv.row.restoreFailed'),
+        body: t('conv.row.errorBody', {
+          id: conversation.id,
+          error: err instanceof Error ? err.message : String(err),
+        }),
       })
     } finally {
       setArchiving(false)
     }
   }
 
-  const menuLabel = hostArchiveAction === null ? 'Plugin conversation actions' : 'Conversation actions'
+  const menuLabel = hostArchiveAction === null ? t('conv.row.pluginActions') : t('conv.row.actions')
 
   return (
     <DropdownMenu open={open} onOpenChange={setOpen}>
@@ -96,7 +101,7 @@ export function ConversationRowActionsMenu({
           type="button"
           className="btn btn-ghost btn-icon-xs"
           title={menuLabel}
-          aria-label={`Conversation #${conversation.id} ${menuLabel}`}
+          aria-label={t('conv.row.menuAria', { id: conversation.id, label: menuLabel })}
           onClick={(e) => e.stopPropagation()}
         >
           <HelmIcon name="more" size={13} />
@@ -109,8 +114,8 @@ export function ConversationRowActionsMenu({
               disabled={archiving}
               title={
                 hostArchiveAction === 'archive'
-                  ? 'Archive moves it from the agent list to the Archived group in the sidebar'
-                  : 'Restore to the original agent conversation list'
+                  ? t('conv.row.archiveTitle')
+                  : t('conv.row.restoreTitle')
               }
               onSelect={() => {
                 void runHostArchiveAction()
@@ -122,7 +127,7 @@ export function ConversationRowActionsMenu({
                   size={13}
                   className={archiving ? 'spin-slow' : undefined}
                 />
-                {hostArchiveAction === 'archive' ? 'Archive conversation' : 'Restore conversation'}
+                {hostArchiveAction === 'archive' ? t('conv.pane.archiveConversation') : t('conv.pane.restoreConversation')}
               </span>
             </DropdownMenuItem>
           )}

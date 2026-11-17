@@ -8,6 +8,7 @@
  */
 import type { ArtifactKind, ArtifactMetadata, HelmLocale, WorkbenchPanelBadgeSpec, WorkbenchPanelSpec } from '@helm/protocol/browser'
 import { resolveLocalizedText } from '@helm/protocol/browser'
+import { createWebTranslator, englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 import type { GroupedUiSpecs } from '../lib/types.js'
 
 export type WorkbenchBadgeTone = 'warn' | 'accent' | 'neutral'
@@ -100,11 +101,14 @@ export function buildWorkbenchTabs(input: {
   conversationId: number | undefined
   /** 面板 label（LocalizedText）的解析 locale。 */
   locale: HelmLocale
+  /** 可选 Web 翻译器（未传时按 input.locale 派生）。 */
+  t?: WebMessageTranslator
 }): WorkbenchTab[] {
+  const t = input.t ?? createWebTranslator(input.locale)
   const tabs: WorkbenchTab[] = [
     {
       id: WORKBENCH_ARTIFACTS_TAB_ID,
-      label: 'Artifacts',
+      label: t('conv.workbench.artifactsTab'),
       order: 20,
       count: input.artifactCount,
       tone: 'neutral',
@@ -190,32 +194,36 @@ export function countDeliverableArtifacts(artifacts: ReadonlyArray<ArtifactMetad
   return count
 }
 
-export function artifactKindLabel(kind: ArtifactKind): string {
-  if (kind === 'registered') return 'Registered artifact'
-  if (kind === 'upload') return 'Uploaded attachment'
-  return 'Output snapshot'
+export function artifactKindLabel(kind: ArtifactKind, t: WebMessageTranslator = englishWebTranslator): string {
+  if (kind === 'registered') return t('conv.workbench.kindRegistered')
+  if (kind === 'upload') return t('conv.workbench.kindUpload')
+  return t('conv.workbench.kindSpill')
 }
 
 export function isImageArtifact(mimeType: string): boolean {
   return mimeType.toLowerCase().startsWith('image/')
 }
 
-export function artifactFormatLabel(mimeType: string, filename: string): string {
+export function artifactFormatLabel(
+  mimeType: string,
+  filename: string,
+  t: WebMessageTranslator = englishWebTranslator,
+): string {
   const mime = mimeType.toLowerCase()
-  if (mime.startsWith('image/')) return 'Image'
+  if (mime.startsWith('image/')) return t('conv.workbench.formatImage')
   if (mime === 'application/pdf') return 'PDF'
   if (mime.includes('markdown') || filename.toLowerCase().endsWith('.md')) return 'Markdown'
   if (mime.includes('json') || filename.toLowerCase().endsWith('.json')) return 'JSON'
   if (mime.includes('csv') || filename.toLowerCase().endsWith('.csv')) return 'CSV'
   if (mime.includes('html') || /\.(html?|xhtml)$/i.test(filename)) return 'HTML'
   if (mime.includes('yaml') || /\.(ya?ml)$/i.test(filename)) return 'YAML'
-  if (mime.startsWith('text/')) return 'Text'
+  if (mime.startsWith('text/')) return t('conv.workbench.formatText')
   const dot = filename.lastIndexOf('.')
   if (dot > 0 && dot < filename.length - 1) {
     const ext = filename.slice(dot + 1).trim()
     if (ext.length > 0 && ext.length <= 6) return ext.toUpperCase()
   }
-  return 'File'
+  return t('conv.workbench.formatFile')
 }
 
 export function artifactIconName(mimeType: string, kind: ArtifactKind): 'file-code' | 'file-text' | 'file' {

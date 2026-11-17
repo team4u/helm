@@ -1,5 +1,6 @@
 import { useEffect, useMemo } from 'react'
 import type { ConversationSummary } from '@helm/protocol/browser'
+import { useWebLocale } from '../i18n/use-web-locale.js'
 import { useHelmStore } from '../lib/store-context.js'
 import { matchesUiScope } from '../lib/types.js'
 import { buildWorkbenchTabs, countDeliverableArtifacts } from './workbench-model.js'
@@ -7,7 +8,7 @@ import { buildWorkbenchTabs, countDeliverableArtifacts } from './workbench-model
 /** 顶栏与抽屉共享同一 scope、排序与 public-doc 角标数据源。 */
 export function useWorkbenchTabs(conversationId: number | undefined, conversation: ConversationSummary | undefined) {
   const store = useHelmStore()
-  const locale = store.locale
+  const { locale, t } = useWebLocale()
   const panels = useMemo(() => conversation === undefined ? [] : store.groupedUi.workbenchPanels.filter(
     (panel) => matchesUiScope(conversation, panel.spec.scope),
   ), [conversation, store.groupedUi.workbenchPanels])
@@ -20,6 +21,6 @@ export function useWorkbenchTabs(conversationId: number | undefined, conversatio
   }, [panels, authenticated, ensurePluginDoc])
   const artifactCount = conversationId === undefined ? 0 : countDeliverableArtifacts(store.conversationArtifacts[conversationId])
   return useMemo(() => buildWorkbenchTabs({
-    groupedUi: { workbenchPanels: panels }, pluginDocs: store.pluginDocs, artifactCount, conversationId, locale,
-  }), [panels, store.pluginDocs, artifactCount, conversationId, locale])
+    groupedUi: { workbenchPanels: panels }, pluginDocs: store.pluginDocs, artifactCount, conversationId, locale, t,
+  }), [panels, store.pluginDocs, artifactCount, conversationId, locale, t])
 }

@@ -56,9 +56,10 @@ export interface ComposerProps {
 // ---------------------------------------------------------------------------
 
 function ContextUsageStatus({ conversation }: { conversation: ConversationSummary }) {
+  const { t } = useWebLocale()
   const usage = conversation.contextUsage
   if (usage === undefined) return null
-  const label = contextUsageLabel(usage)
+  const label = contextUsageLabel(usage, t)
   if (label === null) return null
   return (
     <span
@@ -72,7 +73,7 @@ function ContextUsageStatus({ conversation }: { conversation: ConversationSummar
 
 export function Composer({ conversation, prefill, onSendingChange, onNewThread }: ComposerProps) {
   const store = useHelmStore()
-  const { locale } = useWebLocale()
+  const { locale, t } = useWebLocale()
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const composerBoxRef = useRef<HTMLDivElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
@@ -225,7 +226,7 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
     try {
       await conversationsApi.abort(conversation.id)
     } catch (err) {
-      notifyError('Failed to abort turn', err)
+      notifyError(t('conv.composer.abortFailed'), err)
     }
   }
 
@@ -280,7 +281,7 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
       await conversationsApi.patch(conversation.id, { thinkingLevel: next })
     } catch (err) {
       optimisticThinkingRef.current = null
-      notifyError('Failed to switch thinking level', err)
+      notifyError(t('composer.model.thinkingSwitchFailed'), err)
     } finally {
       thinkingPendingRef.current = false
     }
@@ -346,7 +347,7 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
                   pluginId={w.pluginId}
                   spec={w.spec}
                   conversationId={conversation.id}
-                  label={`Widget ${w.spec.id}`}
+                  label={t('conv.composer.widgetLabel', { id: w.spec.id })}
                   slotProps={{ conversation, composer }}
                   composer={composer}
                 />
@@ -386,17 +387,17 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
               <span className="composer-edit-banner-text">
                 <HelmIcon name="edit" size={12} />
                 <span>{working
-                  ? 'Editing a history message · resending overwrites this message and everything after it, and stops the current execution'
-                  : 'Editing a history message · resending overwrites this message and everything after it (including later human messages)'}</span>
+                  ? t('conv.composer.editingWorking')
+                  : t('conv.composer.editingIdle')}</span>
               </span>
               <button
                 type="button"
                 className="btn btn-ghost btn-sm composer-edit-cancel"
                 onClick={cancelEdit}
-                title="Cancel editing (Esc)"
+                title={t('conv.composer.cancelEditTitle')}
               >
                 <HelmIcon name="x" size={12} />
-                <span>Cancel</span>
+                <span>{t('common.cancel')}</span>
                 <span className="kbd-hint composer-inline-kbd">Esc</span>
               </button>
             </div>
@@ -408,12 +409,12 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
                   <HelmIcon name="paperclip" size={11} />
                   <span>{att.name}</span>
                   <span className="mono tabular-nums">{formatBytes(att.size)}</span>
-                  <Tooltip content={`Remove attachment ${att.name}`} side="top">
+                  <Tooltip content={t('composer.standby.removeAttachmentTitle', { name: att.name })} side="top">
                     <button
                       type="button"
                       className="btn btn-ghost btn-icon-xs"
-                      title="Remove attachment"
-                      aria-label={`Remove attachment ${att.name}`}
+                      title={t('composer.standby.removeAttachment')}
+                      aria-label={t('composer.standby.removeAttachmentTitle', { name: att.name })}
                       onClick={() => removeAttachment(att.artifactId)}
                     >
                       <HelmIcon name="x" size={10} />
@@ -424,12 +425,12 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
             </div>
           ) : null}
           <textarea
-            aria-label="Type a message"
+            aria-label={t('conv.composer.inputAria')}
             ref={textareaRef}
             className="composer-textarea selectable"
             value={text}
             rows={1}
-            placeholder={getComposerPlaceholder(working, isMobile)}
+            placeholder={getComposerPlaceholder(working, isMobile, t)}
             onChange={(e) => {
               setDraftState(e.target.value)
               detectPopover(e.target.value, e.target.selectionStart ?? e.target.value.length)
@@ -458,12 +459,12 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
           />
           <div className="composer-toolbar">
             <div className="composer-toolbar-left">
-              <Tooltip content="Uploaded attachment" side="top">
+              <Tooltip content={t('conv.composer.uploadAttachment')} side="top">
                 <button
                   type="button"
                   className="btn btn-ghost btn-sm composer-icon-button"
-                  title="Uploaded attachment"
-                  aria-label="Uploaded attachment"
+                  title={t('conv.composer.uploadAttachment')}
+                  aria-label={t('conv.composer.uploadAttachment')}
                   onClick={() => fileInputRef.current?.click()}
                 >
                   <HelmIcon name="plus" size={19} />
@@ -501,7 +502,7 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
                         pluginId={p.pluginId}
                         spec={p.spec}
                         conversationId={conversation.id}
-                        label={`Pill ${p.spec.id}`}
+                        label={t('conv.composer.pillLabel', { id: p.spec.id })}
                         slotProps={{ conversation, composer }}
                         composer={composer}
                       />
@@ -510,7 +511,7 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
                 </span>
               ) : pills.length > 0 || widgets.length > 0 ? (
                 <details className="composer-extras" ref={extrasRef}>
-                  <summary className="btn btn-ghost btn-sm composer-icon-button" aria-label="Conversation tools" title="Conversation tools">
+                  <summary className="btn btn-ghost btn-sm composer-icon-button" aria-label={t('conv.composer.toolsLabel')} title={t('conv.composer.toolsLabel')}>
                     <HelmIcon name="more" size={18} />
                   </summary>
                   <div className="composer-popover composer-extras-popover">
@@ -520,7 +521,7 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
                           pluginId={p.pluginId}
                           spec={p.spec}
                           conversationId={conversation.id}
-                          label={`Pill ${p.spec.id}`}
+                          label={t('conv.composer.pillLabel', { id: p.spec.id })}
                           slotProps={{ conversation, composer }}
                           composer={composer}
                         />
@@ -537,10 +538,14 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
                         }}
                       >
                         <HelmIcon name="layers" size={15} />
-                        {widgetsExpanded ? 'Collapse' : 'View'}
-                        {widgets.length === 1
-                          ? resolveLocalizedText(widgets[0]!.spec.title ?? '', locale) || 'Conversation panels'
-                          : `Conversation panels (${widgets.length})`}
+                        {(() => {
+                          const target = widgets.length === 1
+                            ? resolveLocalizedText(widgets[0]!.spec.title ?? '', locale) || t('conv.composer.panels')
+                            : t('conv.composer.panelsCount', { count: widgets.length })
+                          return widgetsExpanded
+                            ? t('conv.composer.collapsePanels', { target })
+                            : t('conv.composer.viewPanels', { target })
+                        })()}
                       </button>
                     ) : null}
                   </div>

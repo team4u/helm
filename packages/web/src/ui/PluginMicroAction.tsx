@@ -47,7 +47,7 @@ export function PluginMicroAction({
   onInvoked,
 }: PluginMicroActionProps): ReactNode {
   const store = useHelmStore()
-  const { locale } = useWebLocale()
+  const { locale, t } = useWebLocale()
   const [pending, setPending] = useState(false)
   const spec = action.spec
 
@@ -58,7 +58,7 @@ export function PluginMicroAction({
         pluginId={action.pluginId}
         spec={spec}
         conversationId={conversationId}
-        label={`Micro action ${spec.id}`}
+        label={t('conv.microAction.label', { id: spec.id })}
         slotProps={slotProps}
       />
     )
@@ -80,14 +80,14 @@ export function PluginMicroAction({
       store.pushNotice({
         type: 'notification',
         level: 'info',
-        title: `Executed: ${label}`,
+        title: t('conv.microAction.executed', { label }),
         conversationId,
       })
     } catch (err) {
       store.pushNotice({
         type: 'notification',
         level: 'error',
-        title: `Execution failed: ${label}`,
+        title: t('conv.microAction.executionFailed', { label }),
         body: err instanceof Error ? err.message : String(err),
         conversationId,
       })

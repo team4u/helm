@@ -2,6 +2,7 @@ import { useEffect, useId, useMemo, useState } from 'react'
 import type { ArtifactMetadata, ConversationSummary } from '@helm/protocol/browser'
 import { HelmIcon, Dialog, DialogContent, DialogOverlay, DialogPortal, DialogTitle, Tabs, TabsList, TabsTrigger } from '@helm/plugin-client'
 import { useHelmStore } from '../lib/store-context.js'
+import { useWebLocale } from '../i18n/use-web-locale.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
 import { Tooltip } from '../ui/Tooltip.js'
 import { artifactsApi } from '../lib/api.js'
@@ -66,7 +67,8 @@ function ArtifactCard({
   onPreview,
   onDownload,
 }: ArtifactCardProps) {
-  const formatLabel = artifactFormatLabel(artifact.mimeType, artifact.name)
+  const { t } = useWebLocale()
+  const formatLabel = artifactFormatLabel(artifact.mimeType, artifact.name, t)
   const timestamp = artifact.createdAt > 0 ? formatMessageTime(artifact.createdAt) : ''
 
   return (
@@ -86,14 +88,14 @@ function ArtifactCard({
         <button
           type="button"
           className="artifact-card-title-btn"
-          title={`Preview ${artifact.name}`}
+          title={t('conv.attachment.previewName', { name: artifact.name })}
           onClick={() => onPreview(artifact)}
         >
           <span className="artifact-card-name">{artifact.name}</span>
         </button>
         <div className="artifact-card-meta">
           <span className={artifact.kind === 'registered' ? 'badge badge-accent' : 'badge badge-neutral'}>
-            {artifactKindLabel(artifact.kind)}
+            {artifactKindLabel(artifact.kind, t)}
           </span>
           <span className="artifact-card-format">{formatLabel}</span>
           <span className="mono artifact-card-mime" title={artifact.mimeType}>{artifact.mimeType}</span>
@@ -109,23 +111,23 @@ function ArtifactCard({
         <button
           type="button"
           className="btn btn-ghost btn-xs artifact-action-btn"
-          aria-label={`Preview ${artifact.name}`}
-          title="Preview"
+          aria-label={t('conv.attachment.previewName', { name: artifact.name })}
+          title={t('conv.workbench.preview')}
           onClick={() => onPreview(artifact)}
         >
           <HelmIcon name="eye" size={12} />
-          <span>Preview</span>
+          <span>{t('conv.workbench.preview')}</span>
         </button>
         <button
           type="button"
           className="btn btn-ghost btn-xs artifact-action-btn"
-          aria-label={`Download ${artifact.name}`}
-          title="Download"
+          aria-label={t('conv.workbench.downloadName', { name: artifact.name })}
+          title={t('common.download')}
           disabled={isDownloading}
           onClick={() => onDownload(artifact)}
         >
           <HelmIcon name={isDownloading ? 'loader' : 'download'} size={12} />
-          <span>{isDownloading ? 'Downloading' : 'Download'}</span>
+          <span>{isDownloading ? t('conv.workbench.downloading') : t('common.download')}</span>
         </button>
       </div>
     </div>
@@ -134,6 +136,7 @@ function ArtifactCard({
 
 function ArtifactsTab({ conversationId }: { conversationId: number }) {
   const store = useHelmStore()
+  const { t } = useWebLocale()
   const rawArtifacts = store.conversationArtifacts[conversationId]
   const artifacts = useMemo(() => (Array.isArray(rawArtifacts) ? rawArtifacts : []), [rawArtifacts])
   const { deliverables, spills } = useMemo(() => partitionArtifactsByKind(artifacts), [artifacts])
@@ -152,7 +155,7 @@ function ArtifactsTab({ conversationId }: { conversationId: number }) {
         store.pushNotice({
           type: 'notification',
           level: 'error',
-          title: 'Failed to download artifact',
+          title: t('conv.workbench.downloadFailed'),
           body: err instanceof Error ? err.message : String(err),
         })
       })
@@ -164,20 +167,20 @@ function ArtifactsTab({ conversationId }: { conversationId: number }) {
   if (artifacts.length === 0) {
     return (
       <div className="empty-state empty-state-compact">
-        <p className="empty-state-title">No artifacts in this conversation yet</p>
+        <p className="empty-state-title">{t('conv.workbench.noArtifacts')}</p>
       </div>
     )
   }
 
   return (
     <div className="workbench-artifacts-body">
-      <section className="artifact-section" aria-label="Registered artifacts">
+      <section className="artifact-section" aria-label={t('conv.workbench.registeredSectionAria')}>
         <div className="artifact-section-head">
-          <span className="artifact-section-title">Uploaded attachments</span>
+          <span className="artifact-section-title">{t('conv.workbench.deliverablesTitle')}</span>
           <span className="badge badge-neutral tabular-nums">{deliverables.length}</span>
         </div>
         {deliverables.length === 0 ? (
-          <div className="artifact-empty-hint">No registered artifacts or uploaded attachments yet</div>
+          <div className="artifact-empty-hint">{t('conv.workbench.noDeliverables')}</div>
         ) : (
           <div className="artifact-card-list">
             {deliverables.map((artifact) => (
@@ -194,7 +197,7 @@ function ArtifactsTab({ conversationId }: { conversationId: number }) {
       </section>
 
       {spills.length > 0 ? (
-        <section className="artifact-spill-section" aria-label="Oversized tool output snapshot">
+        <section className="artifact-spill-section" aria-label={t('conv.workbench.spillTitle')}>
           <button
             type="button"
             className="artifact-spill-toggle"
@@ -203,9 +206,9 @@ function ArtifactsTab({ conversationId }: { conversationId: number }) {
             onClick={() => setSpillExpanded((v) => !v)}
           >
             <HelmIcon name={spillExpanded ? 'chevron-down' : 'chevron-right'} size={13} />
-            <span className="artifact-spill-title">Oversized tool output snapshot</span>
+            <span className="artifact-spill-title">{t('conv.workbench.spillTitle')}</span>
             <span className="badge badge-neutral tabular-nums">{spills.length}</span>
-            <span className="artifact-spill-hint">{spillExpanded ? 'Collapse' : 'Click to expand'}</span>
+            <span className="artifact-spill-hint">{spillExpanded ? t('common.collapse') : t('conv.workbench.clickToExpand')}</span>
           </button>
           {spillExpanded ? (
             <div id={spillPanelId} className="artifact-spill-list">
@@ -239,6 +242,7 @@ export interface WorkbenchDrawerProps {
 export function WorkbenchDrawer(props: WorkbenchDrawerProps) {
   const inline = props.inline ?? false
   const store = useHelmStore()
+  const { t } = useWebLocale()
   const conversationId =
     props.conversation?.id ??
     props.conversationId ??
@@ -267,9 +271,9 @@ export function WorkbenchDrawer(props: WorkbenchDrawerProps) {
   return (
     <Dialog open inline={inline} onOpenChange={(open) => { if (!open) setWorkbenchOpen(false) }}>
       <DialogPortal inline={inline}>
-        <DialogOverlay className="workbench-backdrop" aria-label="Close workbench">
-          <DialogContent className="helm-workbench" aria-label="Workbench drawer">
-            <DialogTitle style={{ display: 'none' }}>Workbench</DialogTitle>
+        <DialogOverlay className="workbench-backdrop" aria-label={t('conv.workbench.close')}>
+          <DialogContent className="helm-workbench" aria-label={t('conv.workbench.drawerAria')}>
+            <DialogTitle style={{ display: 'none' }}>{t('conv.pane.workbench')}</DialogTitle>
             <Tabs
         value={activeTab}
         onValueChange={(val) => store.setWorkbenchTab(val)}
@@ -294,12 +298,12 @@ export function WorkbenchDrawer(props: WorkbenchDrawerProps) {
                 </TabsTrigger>
               ))}
             </div>
-            <Tooltip content="Close workbench" side="left">
+            <Tooltip content={t('conv.workbench.close')} side="left">
               <button
                 type="button"
                 className="btn btn-ghost btn-icon-sm workbench-close-btn"
-                aria-label="Close workbench"
-                title="Close workbench"
+                aria-label={t('conv.workbench.close')}
+                title={t('conv.workbench.close')}
                 onClick={() => store.setWorkbenchOpen(false)}
               >
                 <HelmIcon name="x" size={14} />
@@ -310,7 +314,7 @@ export function WorkbenchDrawer(props: WorkbenchDrawerProps) {
         <div className="workbench-body">
           {conversationId === undefined ? (
             <div className="empty-state empty-state-compact">
-              <p className="empty-state-title">No active conversation context</p>
+              <p className="empty-state-title">{t('conv.workbench.noActiveConversation')}</p>
             </div>
           ) : activeTab === 'artifacts' ? (
             <ArtifactsTab key={conversationId} conversationId={conversationId} />
@@ -320,13 +324,13 @@ export function WorkbenchDrawer(props: WorkbenchDrawerProps) {
                 pluginId={activePanel.pluginId}
                 spec={activePanel.spec}
                 conversationId={conversationId}
-                label={`Workbench ${activePanel.label}`}
+                label={t('conv.workbench.panelLabel', { label: activePanel.label })}
                 slotProps={{ conversation: conversation ?? { id: conversationId } }}
               />
             </div>
           ) : (
             <div className="empty-state empty-state-compact">
-              <p className="empty-state-title">Workbench tab missing or unavailable for this conversation</p>
+              <p className="empty-state-title">{t('conv.workbench.tabUnavailable')}</p>
             </div>
           )}
         </div>

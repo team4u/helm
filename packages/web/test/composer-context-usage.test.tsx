@@ -274,3 +274,29 @@ test('composer/status renders no container without contributions (zero noise in 
     unmount()
   }
 })
+
+test('Composer localizes input aria, upload button, placeholder and compacting status in zh-CN', { timeout: 60_000 }, async () => {
+  const conversation = conv({ tokens: null, contextWindow: 100_000, compacting: true })
+  const storeZh = makeTestStore({ locale: 'zh-CN', conversations: [conversation] })
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = createRoot(host)
+  try {
+    await act(async () => {
+      root.render(e(HostStoreProviders, { value: storeZh }, e(Composer, { conversation, prefill: null })))
+    })
+    assert.ok(host.querySelector('textarea[aria-label="输入消息"]') !== null)
+    assert.ok(host.querySelector('button[aria-label="上传附件"]') !== null)
+    assert.equal(statusSpan(host)?.textContent, '精简中…')
+
+    await act(async () => {
+      root.render(e(HostStoreProviders, { value: { ...storeZh, locale: 'en' } }, e(Composer, { conversation, prefill: null })))
+    })
+    assert.ok(host.querySelector('textarea[aria-label="Type a message"]') !== null)
+    assert.ok(host.querySelector('button[aria-label="Uploaded attachment"]') !== null)
+    assert.equal(statusSpan(host)?.textContent, 'Compacting…')
+  } finally {
+    act(() => root.unmount())
+    host.remove()
+  }
+})
