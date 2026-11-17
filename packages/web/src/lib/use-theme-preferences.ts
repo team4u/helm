@@ -11,23 +11,27 @@ import { requestBrowserNotificationPermission } from './browser-notification.js'
 import {
   applyDocumentLocale,
   applyDocumentTheme,
+  getStoredLocalePreference,
   getStoredPreference,
   getStoredQuietNotify,
   nextThemePreference,
-  persistLocale,
+  persistLocalePreference,
   persistQuietNotify,
   persistThemePreference,
-  resolveInitialLocale,
+  resolveBrowserLocale,
+  resolveLocale,
   resolveTheme,
 } from './theme-preferences.js'
-import type { ThemeMode, ThemePreference, ToastNotice } from './types.js'
+import type { LocalePreference, ThemeMode, ThemePreference, ToastNotice } from './types.js'
 
 export interface UseThemePreferencesResult {
   theme: ThemeMode
   themePreference: ThemePreference
   quietNotifyEnabled: boolean
-  /** Current UI locale (persisted preference; browser-derived default zh-* -> zh-CN, others -> en). */
+  /** Current UI locale (resolved from localePreference; browser-derived default zh-* -> zh-CN, others -> en). */
   locale: HelmLocale
+  /** Stored UI locale preference ('auto' follows browser language; explicit locale overrides). */
+  localePreference: LocalePreference
   /**
    * Referentially stable display-copy translator: always resolves with the
    * locale current at call time (localeRef), so async callbacks neither
@@ -39,6 +43,7 @@ export interface UseThemePreferencesResult {
   toggleTheme: () => void
   setQuietNotify: (on: boolean) => Promise<void>
   setLocale: (next: HelmLocale) => void
+  setLocalePreference: (next: LocalePreference) => void
 }
 
 export function useThemePreferences(
@@ -49,7 +54,8 @@ export function useThemePreferences(
   const [quietNotifyEnabled, setQuietNotifyEnabledState] = useState<boolean>(getStoredQuietNotify)
   // Persisted locale preference wins over the browser-derived default; the
   // state initializer is deliberately lazy so SSR/hydration reads storage once.
-  const [locale, setLocaleState] = useState<HelmLocale>(() => resolveInitialLocale())
+  const [localePreference, setLocalePreferenceState] = useState<LocalePreference>(getStoredLocalePreference)
+  const [locale, setLocaleState] = useState<HelmLocale>(() => resolveLocale(getStoredLocalePreference()))
   // Locale mirror for stable callbacks: kept fresh in a layout effect so a
   // discarded concurrent render never leaks an uncommitted locale, while every
   // post-commit callback (permission requests, timers) reads the live value.
@@ -80,15 +86,32 @@ export function useThemePreferences(
     })
   }, [])
 
-  const setLocale = useCallback((next: HelmLocale) => {
-    setLocaleState(next)
-    persistLocale(next)
+  const setLocalePreference = useCallback((next: LocalePreference) => {
+    setLocalePreferenceState(next)
+    const effective = resolveLocale(next)
+    setLocaleState(effective)
+    applyDocumentLocale(effective)
+    persistLocalePreference(next)
   }, [])
+
+  const setLocale = useCallback((next: HelmLocale) => setLocalePreference(next), [setLocalePreference])
 
   // Keep <html lang> in sync with the effective locale (covers the initial mount too).
   useEffect(() => {
     applyDocumentLocale(locale)
   }, [locale])
+
+  // Follow browser language changes while localePreference === 'auto'.
+  useEffect(() => {
+    if (typeof window === 'undefined' || localePreference !== 'auto') return
+    const handler = () => {
+      const next = resolveBrowserLocale()
+      setLocaleState(next)
+      applyDocumentLocale(next)
+    }
+    window.addEventListener('languagechange', handler)
+    return () => window.removeEventListener('languagechange', handler)
+  }, [localePreference])
 
   /** Requests browser notification permission before enabling (inside the user gesture): refused -> not enabled, explicit notice, never silently pretending it is on. */
   const setQuietNotify = useCallback(
@@ -148,11 +171,13 @@ export function useThemePreferences(
     themePreference,
     quietNotifyEnabled,
     locale,
+    localePreference,
     translate,
     setTheme,
     setThemePreference,
     toggleTheme,
     setQuietNotify,
     setLocale,
+    setLocalePreference,
   }
 }

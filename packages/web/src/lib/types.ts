@@ -41,6 +41,7 @@ export type { SessionDocKey }
 
 export type ThemeMode = 'light' | 'dark'
 export type ThemePreference = 'system' | 'light' | 'dark'
+export type LocalePreference = 'auto' | HelmLocale
 export type FocusedPanel = 'primary' | 'split'
 
 /** Screen param key: non-empty, limited to letters/digits/dot/underscore/hyphen (a stable sub-key inside the URL query namespace). */
@@ -428,8 +429,10 @@ export interface HelmStoreValue {
   sseConnected: boolean
   theme: ThemeMode
   themePreference: ThemePreference
-  /** Current UI locale (localStorage-persisted preference; browser-derived default zh-* -> zh-CN, others -> en). */
+  /** Current UI locale (resolved from localePreference; browser-derived default zh-* -> zh-CN, others -> en). */
   locale: HelmLocale
+  /** Stored UI locale preference ('auto' follows navigator.languages; manual value overrides). Test doubles may omit it. */
+  localePreference?: LocalePreference
   /** Background browser notification preference (localStorage persisted; delivered only when permission is granted). */
   quietNotifyEnabled: boolean
 
@@ -485,6 +488,8 @@ export interface HelmStoreValue {
   toggleTheme(): void
   /** Sets the UI locale and persists the preference. */
   setLocale(locale: HelmLocale): void
+  /** Sets the UI locale preference ('auto' clears storage override and follows the browser). Test doubles may omit it. */
+  setLocalePreference?(pref: LocalePreference): void
   /** When enabling, requests browser notification permission first; on denial stays disabled with a toast notice; disabling takes effect immediately. */
   setQuietNotify(on: boolean): Promise<void>
   checkAuth(): Promise<void>

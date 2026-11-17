@@ -18,14 +18,17 @@ import {
   getStoredPreference,
   getStoredQuietNotify,
   getStoredLocale,
+  getStoredLocalePreference,
   getSystemTheme,
   nextThemePreference,
   persistQuietNotify,
   persistThemePreference,
   persistLocale,
+  persistLocalePreference,
   QUIET_NOTIFY_STORAGE_KEY,
   resolveBrowserLocale,
   resolveInitialLocale,
+  resolveLocale,
   resolveTheme,
   THEME_STORAGE_KEY,
   LOCALE_STORAGE_KEY,
@@ -413,4 +416,44 @@ test('theme-preferences: UI language preference read/write, browser-default reso
   }
   assert.equal(getStoredLocale(brokenStorage), undefined)
   assert.doesNotThrow(() => persistLocale('zh-CN', brokenStorage))
+})
+
+test('theme-preferences: LocalePreference auto/manual read/write and resolveLocale', { timeout: 60_000 }, () => {
+  const storage = createMemoryStorage()
+  // Absent storage key resolves to 'auto'
+  assert.equal(getStoredLocalePreference(storage), 'auto')
+  assert.equal(resolveLocale('auto', ['zh-CN']), 'zh-CN')
+  assert.equal(resolveLocale('auto', ['en-US']), 'en')
+
+  // Manual override persists explicit tag and overrides browser languages
+  persistLocalePreference('zh-CN', storage)
+  assert.equal(storage.getItem(LOCALE_STORAGE_KEY), 'zh-CN')
+  assert.equal(getStoredLocalePreference(storage), 'zh-CN')
+  assert.equal(resolveLocale('zh-CN', ['en-US']), 'zh-CN')
+
+  persistLocalePreference('en', storage)
+  assert.equal(storage.getItem(LOCALE_STORAGE_KEY), 'en')
+  assert.equal(getStoredLocalePreference(storage), 'en')
+  assert.equal(resolveLocale('en', ['zh-CN']), 'en')
+
+  // Switching back to 'auto' removes the storage override
+  persistLocalePreference('auto', storage)
+  assert.equal(storage.getItem(LOCALE_STORAGE_KEY), null)
+  assert.equal(getStoredLocalePreference(storage), 'auto')
+
+  // Stored non-canonical values normalize via normalizeLocaleTag
+  storage.setItem(LOCALE_STORAGE_KEY, 'zh-HK')
+  assert.equal(getStoredLocalePreference(storage), 'zh-CN')
+  storage.setItem(LOCALE_STORAGE_KEY, 'ja-JP')
+  assert.equal(getStoredLocalePreference(storage), 'en')
+
+  // Storage-failure safety
+  const brokenStorage = {
+    getItem() { throw new Error('quota/security error') },
+    setItem() { throw new Error('quota/security error') },
+    removeItem() { throw new Error('quota/security error') },
+  }
+  assert.equal(getStoredLocalePreference(brokenStorage), 'auto')
+  assert.doesNotThrow(() => persistLocalePreference('auto', brokenStorage))
+  assert.doesNotThrow(() => persistLocalePreference('zh-CN', brokenStorage))
 })

@@ -223,4 +223,69 @@ export const shellMessages = {
     'zh-CN': '搜索条目已不在会话历史中',
   },
   'shell.unread.markFailed': { en: 'Failed to mark as read', 'zh-CN': '标记已读失败' },
+
+  // Sidebar chrome, spaces, centers, language switcher, theme & quiet notify
+  'shell.sidebar.sectionLabel': { en: 'Sidebar section {id}', 'zh-CN': '侧栏分组 {id}' },
+  'shell.sidebar.itemLabel': { en: 'Sidebar item {id}', 'zh-CN': '侧栏项 {id}' },
+  'shell.sidebar.collapseSection': { en: 'Collapse section', 'zh-CN': '收起分组' },
+  'shell.sidebar.expandSection': { en: 'Expand section', 'zh-CN': '展开分组' },
+  'shell.sidebar.viewsHeader': { en: 'Views', 'zh-CN': '视图' },
+  'shell.sidebar.openInRightSplit': { en: 'Open in right split', 'zh-CN': '在右侧分屏打开' },
+  'shell.sidebar.mainNavigation': { en: 'Main navigation', 'zh-CN': '主导航' },
+  'shell.sidebar.expandNav': { en: 'Expand navigation bar', 'zh-CN': '展开导航栏' },
+  'shell.sidebar.expandNavWithShortcut': {
+    en: 'Expand navigation bar ({shortcut})',
+    'zh-CN': '展开导航栏 ({shortcut})',
+  },
+  'shell.sidebar.collapseNav': { en: 'Collapse navigation bar', 'zh-CN': '收起导航栏' },
+  'shell.sidebar.collapseNavWithShortcut': {
+    en: 'Collapse navigation bar ({shortcut})',
+    'zh-CN': '收起导航栏 ({shortcut})',
+  },
+  'shell.sidebar.spaceHeaderConversations': { en: 'Conversation', 'zh-CN': '会话' },
+  'shell.sidebar.spaceHeaderSettings': { en: 'Settings', 'zh-CN': '设置' },
+  'shell.sidebar.openCommandPalette': {
+    en: 'Open Cmd K global search and command palette',
+    'zh-CN': '打开 Cmd K 全局搜索与命令面板',
+  },
+  'shell.space.conversations': { en: 'Conversations space', 'zh-CN': '对话空间' },
+  'shell.space.views': { en: 'Views space', 'zh-CN': '视图空间' },
+  'shell.space.settings': { en: 'Settings space', 'zh-CN': '设置空间' },
+  'shell.center.profiles': { en: 'Profile', 'zh-CN': '角色' },
+  'shell.center.models': { en: 'Models & credentials', 'zh-CN': '模型与凭据' },
+  'shell.center.skills': { en: 'Skills', 'zh-CN': '技能' },
+  'shell.center.nodes': { en: 'Compute nodes', 'zh-CN': '计算节点' },
+  'shell.center.plugins': { en: 'Plugin Center', 'zh-CN': '插件中心' },
+  'shell.theme.system': { en: 'System', 'zh-CN': '跟随系统' },
+  'shell.theme.light': { en: 'Light mode', 'zh-CN': '浅色模式' },
+  'shell.theme.dark': { en: 'Dark mode', 'zh-CN': '暗色模式' },
+  'shell.locale.label': { en: 'Interface language', 'zh-CN': '界面语言' },
+  'shell.locale.auto': { en: 'Auto', 'zh-CN': '自动' },
+  'shell.quietNotify.toggleTooltip': {
+    en: 'Background notifications: click to toggle',
+    'zh-CN': '后台浏览器通知：点击切换开关',
+  },
+  'shell.quietNotify.off': {
+    en: 'Background notifications: off (alert when a conversation completes or awaits input while the page is in the background)',
+    'zh-CN': '后台浏览器通知：已关闭（页面在后台时，会话完成或需要输入将提醒）',
+  },
+  'shell.quietNotify.denied': {
+    en: 'Background notifications: browser permission not granted; allow notifications in browser site settings and re-enable',
+    'zh-CN': '后台浏览器通知：浏览器权限未授予，请在浏览器站点设置中允许通知后重新开启',
+  },
+  'shell.quietNotify.on': {
+    en: 'Background notifications: on (alert when a conversation completes or awaits input while the page is in the background; this page must stay open)',
+    'zh-CN': '后台浏览器通知：已开启（页面在后台时，会话完成或需要输入将提醒；需保持本页打开）',
+  },
+
+  // ScreenHost fallback and view wrapper
+  'shell.screen.notFoundTitle': {
+    en: 'View {pluginId}/{screenId} not found',
+    'zh-CN': '未找到视图 {pluginId}/{screenId}',
+  },
+  'shell.screen.notFoundBody': {
+    en: 'This view does not exist or its plugin is disabled ({pluginId}/{screenId}). Make sure the plugin is enabled in Settings.',
+    'zh-CN': '该视图不存在或所属插件已停用（{pluginId}/{screenId}）。请在设置中确认对应插件已启用。',
+  },
+  'shell.screen.viewLabel': { en: 'View {id}', 'zh-CN': '视图 {id}' },
 } satisfies MessageTable

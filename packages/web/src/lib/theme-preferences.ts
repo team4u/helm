@@ -5,7 +5,7 @@
  */
 import type { HelmLocale } from '@helm/protocol/browser'
 import { normalizeLocaleTag } from '@helm/protocol/browser'
-import type { ThemeMode, ThemePreference } from './types.js'
+import type { LocalePreference, ThemeMode, ThemePreference } from './types.js'
 
 export const THEME_STORAGE_KEY = 'helm:theme'
 export const QUIET_NOTIFY_STORAGE_KEY = 'helm:quiet-notify'
@@ -77,6 +77,42 @@ export function persistQuietNotify(
 // ---------------------------------------------------------------------------
 // UI locale preference (localStorage 'helm:locale'; browser-derived default)
 // ---------------------------------------------------------------------------
+
+/** Read the persisted UI locale preference; returns 'auto' when the key is absent. */
+export function getStoredLocalePreference(storage?: Pick<Storage, 'getItem'>): LocalePreference {
+  try {
+    const store = storage ?? localStorage
+    const raw = store.getItem(LOCALE_STORAGE_KEY)
+    return raw === null ? 'auto' : normalizeLocaleTag(raw)
+  } catch {
+    return 'auto'
+  }
+}
+
+/**
+ * Persist the UI locale preference; 'auto' removes the explicit key so the
+ * effective locale follows the browser language.
+ */
+export function persistLocalePreference(
+  pref: LocalePreference,
+  storage?: Pick<Storage, 'setItem' | 'removeItem'>,
+): void {
+  try {
+    const store = storage ?? localStorage
+    if (pref === 'auto') {
+      store.removeItem(LOCALE_STORAGE_KEY)
+    } else {
+      store.setItem(LOCALE_STORAGE_KEY, pref)
+    }
+  } catch {
+    /* The in-memory preference still applies to this session. */
+  }
+}
+
+/** Resolve a LocalePreference into the effective HelmLocale. */
+export function resolveLocale(pref: LocalePreference, languages?: readonly string[]): HelmLocale {
+  return pref === 'auto' ? resolveBrowserLocale(languages) : pref
+}
 
 /**
  * Read the persisted UI locale preference. Returns undefined when the key is

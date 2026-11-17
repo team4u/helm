@@ -7,6 +7,7 @@ import * as React from 'react'
 import { useMemo } from 'react'
 import { HelmIcon } from '@helm/plugin-client'
 import { resolveLocalizedText, type ScreenSpec } from '@helm/protocol/browser'
+import { useWebLocale } from '../i18n/use-web-locale.js'
 import { useHelmStore } from '../lib/store-context.js'
 import type { ResolvedTarget } from '../lib/types.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
@@ -21,6 +22,7 @@ export interface ScreenHostProps {
 
 export function ScreenHost({ pluginId, screenId, isSplit, onCloseSplit }: ScreenHostProps): React.JSX.Element {
   const store = useHelmStore()
+  const { locale, t } = useWebLocale()
   const matched = store.groupedUi.screens.find(
     (s) => s.pluginId === pluginId && (s.spec as { id?: string }).id === screenId,
   )
@@ -69,7 +71,7 @@ export function ScreenHost({ pluginId, screenId, isSplit, onCloseSplit }: Screen
           <div className="pane-title-group">
             <HelmIcon name="alert-triangle" size={14} />
             <span className="pane-title">
-              View {pluginId}/{screenId} not found
+              {t('shell.screen.notFoundTitle', { pluginId, screenId })}
             </span>
           </div>
           <div className="pane-actions">
@@ -87,7 +89,7 @@ export function ScreenHost({ pluginId, screenId, isSplit, onCloseSplit }: Screen
           <div className="callout callout-warn">
             <HelmIcon name="alert-triangle" size={13} />
             <span>
-              This view does not exist or its plugin is disabled ({pluginId}/{screenId}). Make sure the plugin is enabled in Settings.
+              {t('shell.screen.notFoundBody', { pluginId, screenId })}
             </span>
           </div>
         </div>
@@ -103,7 +105,7 @@ export function ScreenHost({ pluginId, screenId, isSplit, onCloseSplit }: Screen
       <div className="pane-topbar">
         <div className="pane-title-group">
           {spec.icon !== undefined && <HelmIcon name={spec.icon} size={14} />}
-          <span className="pane-title">{resolveLocalizedText(spec.label, store.locale) || `${pluginId}/${screenId}`}</span>
+          <span className="pane-title">{resolveLocalizedText(spec.label, locale) || `${pluginId}/${screenId}`}</span>
         </div>
         <div className="pane-actions">
           {isSplit ? (
@@ -122,7 +124,7 @@ export function ScreenHost({ pluginId, screenId, isSplit, onCloseSplit }: Screen
             pluginId={pluginId}
             spec={spec}
             slotProps={slotProps}
-            label={`View ${screenId}`}
+            label={t('shell.screen.viewLabel', { id: screenId })}
           />
         </div>
       </div>

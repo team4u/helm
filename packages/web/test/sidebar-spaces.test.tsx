@@ -18,6 +18,8 @@ const { act } = await import('react')
 const { createRoot } = await import('react-dom/client')
 ;(globalThis as Record<string, unknown>).React = React
 const { Sidebar } = await import('../src/shell/Sidebar.js')
+const { CommandPaletteModal } = await import('../src/modals/CommandPaletteModal.js')
+const { ScreenHost } = await import('../src/screens/ScreenHost.js')
 const { HostStoreProviders } = await import('./helpers/host-store.js')
 
 const e = React.createElement
@@ -435,25 +437,33 @@ test('Sidebar 分屏协同展开与焦点高亮：双不同智能体均展开，
   assert.equal(conv40Split.querySelector('.nav-pane-tag')?.textContent, 'Split')
 })
 
-test('Sidebar 偏好菜单语言选择器：双语言选项，切换经 store.setLocale 且展示随 locale', { timeout: 60_000 }, async () => {
+test('Sidebar 偏好菜单语言选择器：三态选项（auto/en/zh-CN），切换经 setLocalePreference（及 setLocale 兜底）且展示随 locale', { timeout: 60_000 }, async () => {
+  const prefCalls: string[] = []
   const setLocaleCalls: string[] = []
   const base = makeStore()
-  const store: HelmStoreValue = { ...base, setLocale: (locale) => { setLocaleCalls.push(locale) } }
+  const store: HelmStoreValue = {
+    ...base,
+    locale: 'en',
+    localePreference: 'auto',
+    setLocalePreference: (pref) => { prefCalls.push(pref) },
+    setLocale: (locale) => { setLocaleCalls.push(locale) },
+  }
   const api = { current: {} as { update?: (patch: Partial<HelmStoreValue>) => void } }
   render(store, e(MutableStoreSidebar, { base: store, apiRef: api }))
   await act(async () => {})
 
-  // 触发器：SDK Select（Radix 封装，无原生 select），默认 locale=en
+  // 触发器：SDK Select（Radix 封装，无原生 select），默认 localePreference='auto' + locale='en'
   const trigger = document.body.querySelector('.sidebar-locale-select .helm-select-trigger') as HTMLElement | null
   assert.ok(trigger, '偏好菜单应渲染语言 Select 触发器')
   assert.equal(trigger.getAttribute('aria-label'), 'Interface language')
-  assert.ok(trigger.textContent?.includes('English'), '展示当前语言')
+  assert.ok(trigger.textContent?.includes('Auto'), 'auto 模式下英文展示 Auto')
 
-  // 键盘打开（Radix Select 契约），双语选项各自以本身语言呈现
+  // 键盘打开（Radix Select 契约），包含 Auto / English / 简体中文 三个选项
   await act(async () => {
     trigger.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
   })
   const options = Array.from(document.querySelectorAll('[role="option"]')) as HTMLElement[]
+  assert.ok(options.some((el) => el.textContent?.includes('Auto')), '含 Auto 选项')
   assert.ok(options.some((el) => el.textContent?.includes('English')), '含 English 选项')
   assert.ok(options.some((el) => el.textContent?.includes('简体中文')), '含 简体中文 选项')
   const zhOption = options.find((el) => el.textContent?.includes('简体中文'))
@@ -462,12 +472,106 @@ test('Sidebar 偏好菜单语言选择器：双语言选项，切换经 store.se
   await act(async () => {
     zhOption!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
   })
-  assert.deepEqual(setLocaleCalls, ['zh-CN'], '切换语言走 store.setLocale')
+  assert.deepEqual(prefCalls, ['zh-CN'], '切换语言优先走 store.setLocalePreference')
 
-  // store locale 更新后触发器展示与 aria-label 随 locale
-  act(() => { api.current.update!({ locale: 'zh-CN' }) })
+  // store 更新为手动 zh-CN 后，触发器、aria-label 及侧栏文案随 locale 立即切换
+  act(() => { api.current.update!({ locale: 'zh-CN', localePreference: 'zh-CN' }) })
   const triggerAfter = document.body.querySelector('.sidebar-locale-select .helm-select-trigger') as HTMLElement | null
   assert.ok(triggerAfter)
   assert.equal(triggerAfter.getAttribute('aria-label'), '界面语言')
   assert.ok(triggerAfter.textContent?.includes('简体中文'))
+  assert.ok(document.body.textContent?.includes('会话'), '侧栏空间标题随 locale 切换为中文')
+
+  // 切回 auto + zh-CN：展示「自动」
+  act(() => { api.current.update!({ locale: 'zh-CN', localePreference: 'auto' }) })
+  const triggerAutoZh = document.body.querySelector('.sidebar-locale-select .helm-select-trigger') as HTMLElement | null
+  assert.ok(triggerAutoZh?.textContent?.includes('自动'), 'auto + zh-CN 下展示 自动')
+
+  // 当 test double 未提供 setLocalePreference 时，回落到 store.setLocale
+  act(() => { api.current.update!({ locale: 'en', localePreference: 'en', setLocalePreference: undefined }) })
+  const triggerFallback = document.body.querySelector('.sidebar-locale-select .helm-select-trigger') as HTMLElement | null
+  assert.ok(triggerFallback?.textContent?.includes('English'))
+  await act(async () => {
+    triggerFallback!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+  })
+  const zhOpt2 = Array.from(document.querySelectorAll('[role="option"]')).find((el) => el.textContent?.includes('简体中文')) as HTMLElement
+  await act(async () => {
+    zhOpt2.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+  })
+  assert.deepEqual(setLocaleCalls, ['zh-CN'], '无 setLocalePreference 时回落到 store.setLocale')
+})
+
+test('CommandPaletteModal 与 ScreenHost 双语本地化及语言循环命令（Auto -> English -> 简体中文）', { timeout: 60_000 }, async () => {
+  const prefCalls: string[] = []
+  const store = makeTestStore({
+    locale: 'zh-CN',
+    localePreference: 'auto',
+    activeModal: { kind: 'command-palette' },
+    setLocalePreference: (pref) => { prefCalls.push(pref) },
+  })
+  render(store, e(CommandPaletteModal, { onClose: () => {} }))
+  await act(async () => {})
+
+  const dialog = document.querySelector('.modal[aria-label="命令面板与全局搜索"]')
+  assert.ok(dialog, 'zh-CN 下命令面板标题与搜索框使用中文文案')
+  const searchInput = dialog.querySelector('input') as HTMLInputElement
+  assert.equal(searchInput.placeholder, '搜索消息正文、跳转会话或执行命令...')
+  assert.ok(dialog.textContent?.includes('新建会话'), '命令条目随 locale 本地化')
+  assert.ok(dialog.textContent?.includes('打开插件中心'), '导航命令条目随 locale 本地化')
+
+  // 点击语言切换命令：auto -> en
+  const langRowAuto = [...dialog.querySelectorAll<HTMLElement>('[data-idx].nav-item')].find((el) =>
+    el.textContent?.includes('切换语言为 English'),
+  )
+  assert.ok(langRowAuto, 'auto 模式下应提供切换语言为 English 命令')
+  await act(async () => { langRowAuto!.click() })
+  assert.deepEqual(prefCalls, ['en'])
+
+  // en -> zh-CN
+  render(
+    makeTestStore({
+      locale: 'en',
+      localePreference: 'en',
+      activeModal: { kind: 'command-palette' },
+      setLocalePreference: (pref) => { prefCalls.push(pref) },
+    }),
+    e(CommandPaletteModal, { onClose: () => {} }),
+  )
+  await act(async () => {})
+  const langRowEn = [...document.querySelectorAll<HTMLElement>('[data-idx].nav-item')].find((el) =>
+    el.textContent?.includes('Switch language to 简体中文'),
+  )
+  assert.ok(langRowEn, 'en 模式下应提供 Switch language to 简体中文 命令')
+  await act(async () => { langRowEn!.click() })
+  assert.deepEqual(prefCalls, ['en', 'zh-CN'])
+
+  // zh-CN -> auto
+  render(
+    makeTestStore({
+      locale: 'zh-CN',
+      localePreference: 'zh-CN',
+      activeModal: { kind: 'command-palette' },
+      setLocalePreference: (pref) => { prefCalls.push(pref) },
+    }),
+    e(CommandPaletteModal, { onClose: () => {} }),
+  )
+  await act(async () => {})
+  const langRowZh = [...document.querySelectorAll<HTMLElement>('[data-idx].nav-item')].find((el) =>
+    el.textContent?.includes('切换语言为自动（跟随浏览器）'),
+  )
+  assert.ok(langRowZh, 'zh-CN 模式下应提供切换语言为自动命令')
+  await act(async () => { langRowZh!.click() })
+  assert.deepEqual(prefCalls, ['en', 'zh-CN', 'auto'])
+
+  // ScreenHost 缺失视图在 zh-CN 下使用本地化文案
+  render(
+    makeTestStore({
+      locale: 'zh-CN',
+      primaryTarget: { kind: 'screen', pluginId: 'ext:missing', screenId: 'overview' },
+    }),
+    e(ScreenHost, { pluginId: 'ext:missing', screenId: 'overview' }),
+  )
+  await act(async () => {})
+  assert.ok(document.body.textContent?.includes('未找到视图 ext:missing/overview'))
+  assert.ok(document.body.textContent?.includes('该视图不存在或所属插件已停用（ext:missing/overview）'))
 })

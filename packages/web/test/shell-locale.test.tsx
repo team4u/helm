@@ -231,3 +231,76 @@ test('内核连接失败：authError 前缀随 locale，协议错误详情原样
     }
   })
 })
+
+function withBrowserLanguages(initial: string[], fn: (setLangs: (next: string[]) => void) => Promise<void>): Promise<void> {
+  const originalLanguages = Object.getOwnPropertyDescriptor(Navigator.prototype, 'languages')
+  const originalLanguage = Object.getOwnPropertyDescriptor(Navigator.prototype, 'language')
+  const originalInstanceLanguages = Object.getOwnPropertyDescriptor(navigator, 'languages')
+  const originalInstanceLanguage = Object.getOwnPropertyDescriptor(navigator, 'language')
+  let current = initial
+  Object.defineProperty(navigator, 'languages', { configurable: true, get: () => current })
+  Object.defineProperty(navigator, 'language', { configurable: true, get: () => current[0] ?? 'en' })
+  return fn((next) => { current = next }).finally(() => {
+    if (originalInstanceLanguages) Object.defineProperty(navigator, 'languages', originalInstanceLanguages)
+    else delete (navigator as unknown as Record<string, unknown>).languages
+    if (originalInstanceLanguage) Object.defineProperty(navigator, 'language', originalInstanceLanguage)
+    else delete (navigator as unknown as Record<string, unknown>).language
+    if (originalLanguages) Object.defineProperty(Navigator.prototype, 'languages', originalLanguages)
+    if (originalLanguage) Object.defineProperty(Navigator.prototype, 'language', originalLanguage)
+  })
+}
+
+test('auto 语言模式：跟随 navigator.languages 与 languagechange，手动覆盖后不再被浏览器语言覆盖', { timeout: 60_000 }, async () => {
+  await withLocaleStorage(null, async () => {
+    await withBrowserLanguages(['en-US'], async (setLangs) => {
+      const fetchStub = installFetch({})
+      try {
+        const mount = mountProvider()
+        await mount.waitFor(() => mount.store().assetsLoaded)
+        assert.equal(mount.store().localePreference, 'auto')
+        assert.equal(mount.store().locale, 'en')
+        assert.equal(document.documentElement.lang, 'en')
+        assert.equal(localStorage.getItem('helm:locale'), null)
+
+        // 浏览器语言变化且偏好为 auto：自动切换为 zh-CN 并同步 <html lang>
+        setLangs(['zh-CN', 'en-US'])
+        await act(async () => {
+          window.dispatchEvent(new Event('languagechange'))
+        })
+        await mount.settle()
+        assert.equal(mount.store().localePreference, 'auto')
+        assert.equal(mount.store().locale, 'zh-CN')
+        assert.equal(document.documentElement.lang, 'zh-CN')
+        assert.equal(localStorage.getItem('helm:locale'), null, 'auto 模式不写入 helm:locale')
+
+        // 手动切换到 en：持久化 en，此后浏览器 languagechange 不得覆盖
+        await act(async () => { mount.store().setLocalePreference?.('en') })
+        await mount.settle()
+        assert.equal(mount.store().localePreference, 'en')
+        assert.equal(mount.store().locale, 'en')
+        assert.equal(localStorage.getItem('helm:locale'), 'en')
+
+        setLangs(['zh-TW'])
+        await act(async () => {
+          window.dispatchEvent(new Event('languagechange'))
+        })
+        await mount.settle()
+        assert.equal(mount.store().localePreference, 'en', '手动覆盖后保持 en')
+        assert.equal(mount.store().locale, 'en', 'languagechange 不得覆盖手动选择')
+        assert.equal(document.documentElement.lang, 'en')
+
+        // 切回 auto：清除 helm:locale 并立即按当前浏览器语言（zh-TW -> zh-CN）生效
+        await act(async () => { mount.store().setLocalePreference?.('auto') })
+        await mount.settle()
+        assert.equal(mount.store().localePreference, 'auto')
+        assert.equal(localStorage.getItem('helm:locale'), null)
+        assert.equal(mount.store().locale, 'zh-CN')
+        assert.equal(document.documentElement.lang, 'zh-CN')
+
+        mount.unmount()
+      } finally {
+        fetchStub.restore()
+      }
+    })
+  })
+})

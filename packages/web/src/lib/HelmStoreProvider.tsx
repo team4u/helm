@@ -178,12 +178,14 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     theme,
     themePreference,
     locale,
+    localePreference,
     quietNotifyEnabled,
     translate,
     setTheme,
     setThemePreference,
     toggleTheme,
     setLocale,
+    setLocalePreference,
     setQuietNotify,
   } = useThemePreferences(pushNotice)
 
@@ -755,14 +757,14 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
   // state should re-render every consuming component.
   const store: HelmStoreValue = useMemo(
     () => ({
-      ...live, authReady, authConfigured, authenticated, authError, connectionError, loadErrors, sseConnected, kernelBootId, theme, themePreference, locale, quietNotifyEnabled, conversationArtifacts, profilesLoaded, assetsLoaded,
+      ...live, authReady, authConfigured, authenticated, authError, connectionError, loadErrors, sseConnected, kernelBootId, theme, themePreference, locale, localePreference, quietNotifyEnabled, conversationArtifacts, profilesLoaded, assetsLoaded,
       groupedUi, profiles, models, providers, credentials, skills, actions, primaryTarget, splitTarget, focusedPanel, sidebarCollapsed, pendingEscAbortConversationId, workbenchOpen, workbenchTab, activeModal, highlightedEntry, notices,
-      setTheme, setThemePreference, toggleTheme, setLocale, setQuietNotify, checkAuth, onAuthenticated, logout, refreshAssets, syncPlugins, refreshNodes, loadConversationDetail, loadEarlierEntries, backfillConversationEntry, loadConversationArtifacts, ensurePluginDoc, subscribeSessionDoc, getSessionDocState, getPluginSessionDoc, retrySessionDoc, openTarget, closeSplit, setFocusedPanel, setSidebarCollapsed, toggleSidebarCollapsed, setScreenParams, setWorkbenchOpen, setWorkbenchTab, openSpace, setActiveModal, dismissNotice, pushNotice, invokePluginAction,
+      setTheme, setThemePreference, toggleTheme, setLocale, setLocalePreference, setQuietNotify, checkAuth, onAuthenticated, logout, refreshAssets, syncPlugins, refreshNodes, loadConversationDetail, loadEarlierEntries, backfillConversationEntry, loadConversationArtifacts, ensurePluginDoc, subscribeSessionDoc, getSessionDocState, getPluginSessionDoc, retrySessionDoc, openTarget, closeSplit, setFocusedPanel, setSidebarCollapsed, toggleSidebarCollapsed, setScreenParams, setWorkbenchOpen, setWorkbenchTab, openSpace, setActiveModal, dismissNotice, pushNotice, invokePluginAction,
     }),
     [
-      live, authReady, authConfigured, authenticated, authError, connectionError, loadErrors, sseConnected, kernelBootId, theme, themePreference, locale, quietNotifyEnabled, conversationArtifacts, profilesLoaded, assetsLoaded,
+      live, authReady, authConfigured, authenticated, authError, connectionError, loadErrors, sseConnected, kernelBootId, theme, themePreference, locale, localePreference, quietNotifyEnabled, conversationArtifacts, profilesLoaded, assetsLoaded,
       groupedUi, profiles, models, providers, credentials, skills, actions, primaryTarget, splitTarget, focusedPanel, sidebarCollapsed, pendingEscAbortConversationId, workbenchOpen, workbenchTab, activeModal, highlightedEntry, notices,
-      setTheme, setThemePreference, toggleTheme, setLocale, setQuietNotify, checkAuth, onAuthenticated, logout, refreshAssets, syncPlugins, refreshNodes, loadConversationDetail, loadEarlierEntries, backfillConversationEntry, loadConversationArtifacts, ensurePluginDoc, getPluginSessionDoc, openTarget, closeSplit, setFocusedPanel, setSidebarCollapsed, toggleSidebarCollapsed, setScreenParams, setWorkbenchOpen, setWorkbenchTab, openSpace, setActiveModal, dismissNotice, pushNotice, invokePluginAction,
+      setTheme, setThemePreference, toggleTheme, setLocale, setLocalePreference, setQuietNotify, checkAuth, onAuthenticated, logout, refreshAssets, syncPlugins, refreshNodes, loadConversationDetail, loadEarlierEntries, backfillConversationEntry, loadConversationArtifacts, ensurePluginDoc, getPluginSessionDoc, openTarget, closeSplit, setFocusedPanel, setSidebarCollapsed, toggleSidebarCollapsed, setScreenParams, setWorkbenchOpen, setWorkbenchTab, openSpace, setActiveModal, dismissNotice, pushNotice, invokePluginAction,
     ],
   )
   useEffect(() => {
