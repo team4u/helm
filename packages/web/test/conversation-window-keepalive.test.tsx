@@ -381,7 +381,7 @@ test('deleting a hidden conversation prunes its kept-alive window and dirty repo
     sendEvent!(eventFrame(2, { type: 'conversation.deleted', conversationId: 1 }))
   })
   await settle()
-  assert.ok(paneA.isConnected === false, '会话删除后其隐藏窗口应被卸载')
+  assert.ok(!paneA.isConnected, '会话删除后其隐藏窗口应被卸载')
   const dirtyAfterDelete = composerDirty()
   assert.ok(dirtyAfterDelete === false, '删除清理后脏报告应清空')
   assert.ok(windowCount() === 1, '窗口池只剩 B')
