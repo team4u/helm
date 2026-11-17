@@ -327,6 +327,14 @@
   height: 6px;
 }
 
+.nav-item-sub,
+.nav-item-sub.nav-item-active,
+.nav-item-sub.nav-item-split,
+.sidebar-context .nav-item.nav-item-sub.nav-item-active,
+.sidebar-context .nav-item.nav-item-sub.nav-item-split {
+  font-weight: 400;
+}
+
 .nav-item-sub {
   min-height: 28px;
   padding: 4px 8px;
@@ -334,14 +342,17 @@
   font-size: 12.5px;
 }
 
-.nav-item-sub .nav-item-label {
-  font-size: 12.5px;
+.nav-item-sub .nav-item-label,
+.nav-item-sub.nav-item-active .nav-item-label,
+.nav-item-sub.nav-item-split .nav-item-label,
+.sidebar-conversation-row .nav-item-label,
+.sidebar-conversation-row.nav-item-active .nav-item-label,
+.sidebar-conversation-row.nav-item-split .nav-item-label {
   font-weight: 400;
 }
 
-.nav-item-sub.nav-item-active .nav-item-label,
-.nav-item-sub.nav-item-split .nav-item-label {
-  font-weight: 500;
+.nav-item-sub .nav-item-label {
+  font-size: 12.5px;
 }
 
 /* 行级悬停操作（子会话重命名/删除、站位与视图行的分屏按钮与新建按钮）：

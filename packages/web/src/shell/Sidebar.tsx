@@ -80,7 +80,7 @@ function ConversationRow({
   const { t } = useWebLocale()
   return (
     <div
-      className={`nav-item${presenceNavClassSuffix(presence)}`}
+      className={`nav-item sidebar-conversation-row${presenceNavClassSuffix(presence)}`}
       style={{ minHeight: 30, opacity: 1 }}
     >
       <button
