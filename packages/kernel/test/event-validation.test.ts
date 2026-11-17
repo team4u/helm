@@ -7,7 +7,12 @@
 import { strict as assert } from 'node:assert'
 import { describe, it } from 'node:test'
 import { HelmError } from '@helm/protocol'
-import { assembleHelmEvent, assertSessionDocUpdateShape, pruneUndefined } from '../src/runtime/event-validation.js'
+import {
+  assembleHelmEvent,
+  assertSessionDocUpdateShape,
+  pruneUndefined,
+  validateAndRedactConversationLive,
+} from '../src/runtime/event-validation.js'
 
 const identity = (t: string) => t
 
@@ -29,11 +34,84 @@ describe('assembleHelmEvent', { timeout: 60_000 }, () => {
       () => assembleHelmEvent('plugin.session_doc.updated', { doc: { pluginId: 'p', name: 'n', conversationId: 1, value: 1 } }, identity),
       /disallows enter global event stream/,
     )
+    assert.throws(
+      () =>
+        assembleHelmEvent(
+          'conversation.live',
+          { live: { conversationId: 1, text: 'hi', tools: [], updatedAt: 1 } },
+          identity,
+        ),
+      /transient/,
+    )
+  })
+
+  it('conversation.upsert validates optional non-negative integer lastEntryId', { timeout: 60_000 }, () => {
+    const base = {
+      id: 1,
+      title: 't',
+      profileId: 'assistant',
+      tags: [],
+      cwd: '/tmp',
+      model: 'm',
+      thinkingLevel: '',
+      status: 'idle',
+      stateChangeSeq: 1,
+      completionSeq: 0,
+      unread: false,
+      pinned: false,
+      pendingAskCount: 0,
+      createdAt: 1,
+      updatedAt: 1,
+    }
+    const ok = assembleHelmEvent('conversation.upsert', { ...base, lastEntryId: 42 }, identity)
+    assert.equal((ok as { conversation: { lastEntryId?: number } }).conversation.lastEntryId, 42)
+    const zero = assembleHelmEvent('conversation.upsert', { ...base, lastEntryId: 0 }, identity)
+    assert.equal((zero as { conversation: { lastEntryId?: number } }).conversation.lastEntryId, 0)
+    for (const bad of [-1, 1.5, Number.NaN, '42', Number.MAX_SAFE_INTEGER + 1]) {
+      assert.throws(() => assembleHelmEvent('conversation.upsert', { ...base, lastEntryId: bad }, identity), HelmError)
+    }
   })
 
   it('notification legal payload keep optional field default semantics', { timeout: 60_000 }, () => {
     const event = assembleHelmEvent('notification', { level: 'warning', title: 't' }, identity)
     assert.deepEqual(event, { type: 'notification', level: 'warning', title: 't' })
+  })
+})
+
+describe('validateAndRedactConversationLive', { timeout: 60_000 }, () => {
+  it('validates ConversationLive shape, prunes undefined, and redacts secrets', { timeout: 60_000 }, () => {
+    const redact = (t: string) => t.replaceAll('sk-secret', '[REDACTED]')
+    const live = validateAndRedactConversationLive(
+      {
+        conversationId: 3,
+        text: 'hello sk-secret',
+        thinking: undefined,
+        tools: [{ callId: 'c1', toolName: 'bash', status: 'running', input: { token: 'sk-secret' } }],
+        updatedAt: 123,
+      },
+      redact,
+    )
+    assert.equal(live.conversationId, 3)
+    assert.equal(live.text, 'hello [REDACTED]')
+    assert.equal('thinking' in live, false)
+    assert.equal((live.tools[0]?.input as { token?: string }).token, '[REDACTED]')
+  })
+
+  it('rejects malformed ConversationLive payloads explicitly', { timeout: 60_000 }, () => {
+    for (const bad of [
+      null,
+      {},
+      { live: { conversationId: 1, text: '', tools: [], updatedAt: 1 } },
+      { conversationId: 0, text: '', tools: [], updatedAt: 1 },
+      { conversationId: -1, text: '', tools: [], updatedAt: 1 },
+      { conversationId: 1, text: 123, tools: [], updatedAt: 1 },
+      { conversationId: 1, text: '', tools: 'bad', updatedAt: 1 },
+      { conversationId: 1, text: '', tools: [], updatedAt: Number.NaN },
+      { conversationId: 1, text: '', tools: [], thinking: 42, updatedAt: 1 },
+      { conversationId: 1, text: '', tools: [], queuedInputs: 'bad', updatedAt: 1 },
+    ]) {
+      assert.throws(() => validateAndRedactConversationLive(bad, identity), HelmError)
+    }
   })
 })
 

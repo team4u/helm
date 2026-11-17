@@ -32,8 +32,10 @@ export interface ConversationDetailHost {
   readonly collectRewindIntervals: (
     conversation: NonNullable<Awaited<ReturnType<Harness['conversation']>>>,
   ) => Promise<RewindInterval[]>
-  /** contextUsage refresh chain archive silent wait for (tracker.ensureContextUsage; parallel leg of one). */
-  readonly ensureContextUsage: (id: number) => Promise<void>
+  /** Non-blocking background contextUsage refresh trigger (optional; falls back to fire-and-forget ensureContextUsage). */
+  readonly scheduleContextUsage?: (id: number) => void
+  /** contextUsage refresh chain trigger (called fire-and-forget without blocking detail return). */
+  readonly ensureContextUsage?: (id: number) => Promise<void>
 }
 
 export class ConversationDetailService {
@@ -48,21 +50,24 @@ export class ConversationDetailService {
    *   again from SDK raw cursor page read, filter override item until satisfy limit or without more many;
    * - cursor is base64url(JSON{conversationId,cursor:SDK next}): bind set conversation,
    *   length/JSON legal validate,limit clamp 1..500; not silently truncate;
-   * - entry keep model message and data, out boundary before via event same source redaction (publish path unify).
+   * - entry keep model message and data, out boundary before via event same source redaction (publish path unify);
+   * - contextUsage refresh is decoupled asynchronously so slow usage calculations never block timeline delivery;
+   *   when uncached usage finishes computing in the background, `conversation.upsert` pushes it to subscribers.
    */
   async getConversationDetail(
     id: number,
     options?: { limit?: number; cursor?: string },
   ): Promise<ConversationDetail> {
-    // parallel:contextUsage refresh (after restart first open etc. cold path) and timeline page mutual independent of.
-    // Promise.all guarantee any one leg failed i.e. whole reject (never return half true detail situation, without not handle reject);
-    // two leg after completion must heavy take right threat summary merge - -assembleDetail in parallel window inside grab first read
-    // summary may missing just refresh out contextUsage(cache hit/refresh failed path and serial same construct:
-    // on failure usage honest ground keep default, do not fabricate).
-    const [, detail] = await Promise.all([
-      this.host.ensureContextUsage(id),
-      this.assembleDetail(id, options),
-    ])
+    const detail = await this.assembleDetail(id, options)
+    if (this.host.scheduleContextUsage !== undefined) {
+      this.host.scheduleContextUsage(id)
+    } else if (this.host.ensureContextUsage !== undefined) {
+      try {
+        void Promise.resolve(this.host.ensureContextUsage(id)).catch(() => {})
+      } catch {
+        // background usage refresh errors must not block detail response
+      }
+    }
     return { ...detail, ...this.host.getConversation(id) }
   }
 

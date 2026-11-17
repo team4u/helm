@@ -65,6 +65,8 @@ export class ContextUsageRefresh {
   private readonly pending = new Set<number>()
   /** in-flight during receives new trigger signal conversation (after completion heavy run once). */
   private readonly dirty = new Set<number>()
+  /** conversations whose on-demand readiness (e.g. opening detail or post-turn settle) should publish initial `conversation.upsert`. */
+  private readonly notifyInitial = new Set<number>()
 
   constructor(private readonly host: ContextUsageHost) {}
 
@@ -87,9 +89,12 @@ export class ContextUsageRefresh {
   }
 
   /** scheduling async context use amount refresh (fire-and-forget;observe call back inside sync invoke cannot await). */
-  schedule(conversationId: number): void {
+  schedule(conversationId: number, options?: { publishWhenReady?: boolean }): void {
     if (this.host.isClosing?.()) return
     if (!this.host.store.getConv(conversationId)) return
+    if (options?.publishWhenReady === true && !this.cache.has(conversationId)) {
+      this.notifyInitial.add(conversationId)
+    }
     if (this.pending.has(conversationId)) {
       this.dirty.add(conversationId)
       return
@@ -136,6 +141,9 @@ export class ContextUsageRefresh {
    *   8 round only guard against defend illness state chain (continuous by proxy count guard discard and do not assert has new trigger).
    */
   async ensure(conversationId: number): Promise<void> {
+    if (!this.cache.has(conversationId) && this.host.store.getConv(conversationId) && !this.host.isClosing?.()) {
+      this.notifyInitial.add(conversationId)
+    }
     for (let round = 0; round < 8; round += 1) {
       if (this.cache.has(conversationId) && !this.pending.has(conversationId)) {
         return
@@ -197,6 +205,7 @@ export class ContextUsageRefresh {
     this.cache.delete(conversationId)
     this.keys.delete(conversationId)
     this.dirty.delete(conversationId)
+    this.notifyInitial.delete(conversationId)
     this.entryWatermark.delete(conversationId)
     const waiters = this.waiters.get(conversationId)
     if (waiters !== undefined) {
@@ -243,16 +252,15 @@ export class ContextUsageRefresh {
     const key = contextUsageKeyOf(usage)
     const previous = this.cache.get(conversationId)
     const previousKey = this.keys.get(conversationId)
+    const shouldPublishInitial = this.notifyInitial.delete(conversationId)
     // cache first row update:HTTP / SSE snapshot read immediately see to new value (event is otherwise another see under).
     this.cache.set(conversationId, usage)
     this.keys.set(conversationId, key)
-    // first time fill by default static default: value via snapshot / HTTP read self however visible, do not event (avoid startup phase each
-    // conversation one frame noise, dimension hold terminal state after without duplicate semantics frame since has frame discipline). unique exception:
-    // fill when already carry compress in progress state (compacting, such as startup phase restore in progress compress, first time
-    // refresh in manually compress window inside) must publish - - otherwise no any after continue semantics frame will carry it,
-    // subscribe way forever see fewer than the state.
+    // first time fill from startup observe stays silent (avoid startup N-conversation frame noise);
+    // exceptions: (1) compacting=true on initial hydrate, or (2) an explicit on-demand trigger
+    // (detail open / post-turn settle) requested publishing once usage becomes ready.
     if (previousKey === undefined) {
-      if (usage.compacting !== undefined) {
+      if (usage.compacting !== undefined || shouldPublishInitial) {
         this.host.onSummaryChanged(this.host.summaryOf(conversationId))
       }
       return

@@ -147,11 +147,19 @@ describe('conversation.live generation event boundary validate', { timeout: 60_0
 
   const baseLive = { conversationId: 1, text: '', tools: [], updatedAt: 1 }
 
-  it('legal generation(taskId+attempt-only / all amount throw shadow) via;entry.taskId can missing cannot wrong', { timeout: 60_000 }, () => {
+  it('legal generation(taskId+attempt-only / all amount throw shadow) via publishTransientLive; durable publish rejects live and entry.taskId validates', { timeout: 60_000 }, () => {
     const hub = hubOf()
-    hub.publish('conversation.live', { live: { ...baseLive, generation: { taskId: 1, attempt: 1 } } })
-    hub.publish('conversation.live', {
-      live: {
+    try {
+      const received: number[] = []
+      hub.subscribeTransientLive((f) => received.push(f.live.generation?.attempt ?? 0))
+
+      assert.throws(
+        () => hub.publish('conversation.live', { live: { ...baseLive, generation: { taskId: 1, attempt: 1 } } }),
+        (error: unknown) => error instanceof HelmError && error.code === 'invalid_event',
+      )
+
+      hub.publishTransientLive({ ...baseLive, generation: { taskId: 1, attempt: 1 } })
+      hub.publishTransientLive({
         ...baseLive,
         generation: {
           taskId: 1,
@@ -164,52 +172,61 @@ describe('conversation.live generation event boundary validate', { timeout: 60_0
             usage: { output: 5 },
           },
         },
-      },
-    })
-    hub.publish('conversation.entry', {
-      conversationId: 1,
-      entry: { id: '9', kind: 'pi.assistant', taskId: 3, model: [] },
-    })
-    hub.publish('conversation.entry', {
-      conversationId: 1,
-      entry: { id: '10', kind: 'pi.assistant', model: [] },
-    })
-    assert.equal(hub.seq, 4)
+      })
+      assert.equal(hub.seq, 0, 'transient live generation broadcasts must not advance EventHub.seq')
+      assert.deepEqual(received, [1, 2])
+
+      hub.publish('conversation.entry', {
+        conversationId: 1,
+        entry: { id: '9', kind: 'pi.assistant', taskId: 3, model: [] },
+      })
+      hub.publish('conversation.entry', {
+        conversationId: 1,
+        entry: { id: '10', kind: 'pi.assistant', model: [] },
+      })
+      assert.equal(hub.seq, 2)
+    } finally {
+      hub.close()
+    }
   })
 
   it('illegal generation / entry.taskId explicit reject and do not push enter seq(not silently fall back)', { timeout: 60_000 }, () => {
     const hub = hubOf()
-    const rejects: unknown[] = [
-      { attempt: 0 }, // non- positive integer
-      { attempt: 1.5 }, // non- integer
-      { attempt: '1' }, // non- number
-      { attempt: 1 }, // missing taskId(identity do not cannot publish)
-      { taskId: 1 }, // missing attempt
-      { taskId: 0, attempt: 1 }, // taskId non- positive integer
-      { taskId: 1.5, attempt: 1 }, // taskId non- integer
-      { taskId: 1, attempt: 1, extra: true }, // unknown field
-      { taskId: 1, attempt: 1, message: null }, // message non- object
-      { taskId: 1, attempt: 1, message: { content: 'bad' } }, // content non- array
-      { taskId: 1, attempt: 1, message: { content: [{ type: 'unknown' }] } }, // unknown chunk type
-      { taskId: 1, attempt: 1, message: { content: [{ type: 'text', text: 1 }] } }, // chunk field illegal
-      { taskId: 1, attempt: 1, message: { content: [{ type: 'text', text: 'a', extra: 1 }] } }, // chunk unknown field
-      { taskId: 1, attempt: 1, message: { content: [], usage: 'bad' } }, // usage illegal
-      { taskId: 1, attempt: 1, message: { content: [], usage: { output: 0 } } }, // non- correct output
-      { taskId: 1, attempt: 1, message: { content: [], usage: { output: 5, input: 1 } } }, // usage unknown field
-    ]
-    for (const generation of rejects) {
+    try {
+      const rejects: unknown[] = [
+        { attempt: 0 }, // non- positive integer
+        { attempt: 1.5 }, // non- integer
+        { attempt: '1' }, // non- number
+        { attempt: 1 }, // missing taskId(identity do not cannot publish)
+        { taskId: 1 }, // missing attempt
+        { taskId: 0, attempt: 1 }, // taskId non- positive integer
+        { taskId: 1.5, attempt: 1 }, // taskId non- integer
+        { taskId: 1, attempt: 1, extra: true }, // unknown field
+        { taskId: 1, attempt: 1, message: null }, // message non- object
+        { taskId: 1, attempt: 1, message: { content: 'bad' } }, // content non- array
+        { taskId: 1, attempt: 1, message: { content: [{ type: 'unknown' }] } }, // unknown chunk type
+        { taskId: 1, attempt: 1, message: { content: [{ type: 'text', text: 1 }] } }, // chunk field illegal
+        { taskId: 1, attempt: 1, message: { content: [{ type: 'text', text: 'a', extra: 1 }] } }, // chunk unknown field
+        { taskId: 1, attempt: 1, message: { content: [], usage: 'bad' } }, // usage illegal
+        { taskId: 1, attempt: 1, message: { content: [], usage: { output: 0 } } }, // non- correct output
+        { taskId: 1, attempt: 1, message: { content: [], usage: { output: 5, input: 1 } } }, // usage unknown field
+      ]
+      for (const generation of rejects) {
+        assert.throws(
+          () => hub.publishTransientLive({ ...baseLive, generation } as never),
+          (error: unknown) => error instanceof HelmError,
+          `must reject ${JSON.stringify(generation)}`,
+        )
+      }
       assert.throws(
-        () => hub.publish('conversation.live', { live: { ...baseLive, generation } }),
+        () => hub.publish('conversation.entry', { conversationId: 1, entry: { id: '9', kind: 'pi.assistant', taskId: 0, model: [] } }),
         (error: unknown) => error instanceof HelmError,
-        `must reject ${JSON.stringify(generation)}`,
+        'entry.taskId can missing cannot wrong',
       )
+      assert.equal(hub.seq, 0, 'reject do not push enter seq')
+    } finally {
+      hub.close()
     }
-    assert.throws(
-      () => hub.publish('conversation.entry', { conversationId: 1, entry: { id: '9', kind: 'pi.assistant', taskId: 0, model: [] } }),
-      (error: unknown) => error instanceof HelmError,
-      'entry.taskId can missing cannot wrong',
-    )
-    assert.equal(hub.seq, 0, 'reject do not push enter seq')
   })
 })
 

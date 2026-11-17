@@ -39,6 +39,7 @@ import {
 import { handleNodeDomain, handleEnvExecDomain } from './node-routes.js'
 import { handlePluginsDomain, handleActionsDomain } from './plugin-routes.js'
 import { handleArtifactsDomain, handleSkillsDomain } from './asset-routes.js'
+import { handleSessionDocsDomain } from './session-doc-routes.js'
 
 export async function handleApi(
   request: Request,
@@ -82,6 +83,7 @@ const DOMAIN_HANDLERS: Readonly<
   artifacts: handleArtifactsDomain,
   plugins: handlePluginsDomain,
   actions: handleActionsDomain,
+  'session-docs': handleSessionDocsDomain,
   nodes: handleNodeDomain,
   env: handleEnvExecDomain,
 }

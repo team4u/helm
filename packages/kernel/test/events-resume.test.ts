@@ -13,8 +13,14 @@
  */
 import { strict as assert } from 'node:assert'
 import { describe, it } from 'node:test'
-import type { HelmEventFrame, HelmResumedFrame, HelmSnapshot } from '@helm/protocol'
-import { EventHub } from '../src/runtime/events.js'
+import {
+  HelmError,
+  type ConversationSummary,
+  type HelmEventFrame,
+  type HelmResumedFrame,
+  type HelmSnapshot,
+} from '@helm/protocol'
+import { EventHub, type HostDispatchedEvent } from '../src/runtime/events.js'
 import { waitFor } from './helpers.js'
 
 interface HubFixture {
@@ -126,8 +132,11 @@ describe('EventHub resume: same proxy patch', { timeout: 60_000 }, () => {
     await waitFor(() => resumed.frames.length >= 1)
     assert.deepEqual(
       resumed.frames[0],
-      { event: 'resumed', data: { bootId: 'b1', seq: 0, headSeq: 0 } satisfies HelmResumedFrame },
-      'zero patch resume first frame must be resumed {bootId,seq,headSeq}',
+      {
+        event: 'resumed',
+        data: { bootId: 'b1', seq: 0, headSeq: 0, conversationLives: [] } satisfies HelmResumedFrame,
+      },
+      'zero patch resume first frame must be resumed {bootId,seq,headSeq,conversationLives}',
     )
     hub.publish('notification', { level: 'info', title: 'zero patch after real-time' })
     await waitFor(() => resumed.frames.some((f) => f.event === 'notification'))
@@ -141,7 +150,7 @@ describe('EventHub resume: same proxy patch', { timeout: 60_000 }, () => {
     const { hub } = makeHub({ bootId: 'b1', initialSeq: 7 })
     const resumed = connect(hub, eventsUrl(7, 'b1'))
     await waitFor(() => resumed.frames.length >= 1)
-    assert.deepEqual(resumed.frames[0]?.data, { bootId: 'b1', seq: 7, headSeq: 7 })
+    assert.deepEqual(resumed.frames[0]?.data, { bootId: 'b1', seq: 7, headSeq: 7, conversationLives: [] })
     await resumed.abort()
   })
 
@@ -155,7 +164,7 @@ describe('EventHub resume: same proxy patch', { timeout: 60_000 }, () => {
     await waitFor(() => resumed.frames.filter((f) => f.event === 'notification').length >= 7)
     await resumed.abort()
 
-    assert.deepEqual(resumed.frames[0]?.data, { bootId: 'b1', seq: 0, headSeq: 5 })
+    assert.deepEqual(resumed.frames[0]?.data, { bootId: 'b1', seq: 0, headSeq: 5, conversationLives: [] })
     const notes = resumed.frames.filter((f) => f.event === 'notification').map((f) => (f.data as HelmEventFrame).seq)
     assert.deepEqual(notes, [1, 2, 3, 4, 5, 6, 7], 'replay 1..5 after without seam join buffer 6..7, strictly connect continue')
     const titles = resumed.frames
@@ -199,7 +208,7 @@ describe('EventHub resume: across proxy and missing opening fall back snapshot',
     const covered = connect(hub, eventsUrl(2, 'b1'))
     await waitFor(() => covered.frames.filter((f) => f.event === 'notification').length >= 3)
     await covered.abort()
-    assert.deepEqual(covered.frames[0]?.data, { bootId: 'b1', seq: 2, headSeq: 5 })
+    assert.deepEqual(covered.frames[0]?.data, { bootId: 'b1', seq: 2, headSeq: 5, conversationLives: [] })
     assert.deepEqual(
       covered.frames.filter((f) => f.event === 'notification').map((f) => (f.data as HelmEventFrame).seq),
       [3, 4, 5],
@@ -395,7 +404,7 @@ describe('EventHub publish persist order and ring zone segment complete', { time
     const resumed = connect(hub, eventsUrl(0, 'b1'))
     await waitFor(() => resumed.frames.filter((f) => f.event === 'notification').length >= 2)
     await resumed.abort()
-    assert.deepEqual(resumed.frames[0]?.data, { bootId: 'b1', seq: 0, headSeq: 2 })
+    assert.deepEqual(resumed.frames[0]?.data, { bootId: 'b1', seq: 0, headSeq: 2, conversationLives: [] })
     assert.deepEqual(
       resumed.frames.filter((f) => f.event === 'notification').map((f) => (f.data as HelmEventFrame).seq),
       [1, 2],
@@ -440,7 +449,7 @@ describe('EventHub publish persist order and ring zone segment complete', { time
     const covered = connect(hub, eventsUrl(2, 'b1'))
     await waitFor(() => covered.frames.filter((f) => f.event === 'notification').length >= 1)
     await covered.abort()
-    assert.deepEqual(covered.frames[0]?.data, { bootId: 'b1', seq: 2, headSeq: 3 })
+    assert.deepEqual(covered.frames[0]?.data, { bootId: 'b1', seq: 2, headSeq: 3, conversationLives: [] })
     assert.deepEqual(
       covered.frames.filter((f) => f.event === 'notification').map((f) => (f.data as HelmEventFrame).seq),
       [3],
@@ -468,5 +477,195 @@ describe('EventHub bootId', { timeout: 60_000 }, () => {
     await plain.abort()
     assert.equal(plain.frames[0]?.event, 'snapshot')
     assert.equal((plain.frames[0]?.data as HelmSnapshot).bootId, 'b1')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Transient conversation.live isolation + resumed.conversationLives + ring defaults
+// ---------------------------------------------------------------------------
+
+function sampleSummary(id: number, status: ConversationSummary['status']): ConversationSummary {
+  return {
+    id,
+    title: `c${id}`,
+    profileId: 'default',
+    tags: [],
+    nodeId: 'local',
+    cwd: '/tmp/ws',
+    model: 'anthropic/claude-sonnet-4',
+    thinkingLevel: 'medium',
+    status,
+    unread: false,
+    pinned: false,
+    pendingAskCount: 0,
+    stateChangeSeq: 1,
+    completionSeq: 0,
+    lastEntryId: 0,
+    createdAt: 1000,
+    updatedAt: 2000,
+  }
+}
+
+describe('EventHub transient conversation.live separation and ring defaults', { timeout: 60_000 }, () => {
+  it('EventHub.publish refuses conversation.live while publishTransientLive bypasses seqValue, persistSeq, and ring eviction', { timeout: 60_000 }, async () => {
+    const { hub, persisted } = makeHub({ bootId: 'b1', ringMaxFrames: 3 })
+    try {
+      assert.throws(
+        () =>
+          hub.publish('conversation.live' as never, {
+            live: { conversationId: 1, text: 'x', tools: [] },
+          } as never),
+        (err: unknown) => err instanceof HelmError && err.code === 'invalid_event',
+      )
+      assert.equal(hub.seq, 0)
+      assert.deepEqual(persisted, [])
+
+      // Publish 2 durable notes (seq 1, 2), then flood 1500 transient live frames, then 1 durable note (seq 3).
+      publishNotes(hub, 2)
+      for (let i = 0; i < 1500; i++) {
+        hub.publishTransientLive({
+          conversationId: 1,
+          text: `delta-${i}`,
+          tools: [],
+          updatedAt: 1000 + i,
+        })
+      }
+      assert.equal(hub.seq, 2, '1500 transient live broadcasts must never advance seqValue')
+      assert.deepEqual(persisted, [1, 2], '1500 transient live broadcasts must never touch persistSeq')
+      publishNotes(hub, 1, { startTitle: 3 })
+      assert.equal(hub.seq, 3)
+      assert.deepEqual(persisted, [1, 2, 3])
+
+      // Replay from afterSeq=0 still hits ring [1,2,3] — 1500 transient frames did not evict any durable ring slot.
+      const resumed = connect(hub, eventsUrl(0, 'b1'))
+      try {
+        await waitFor(() => resumed.frames.filter((f) => f.event === 'notification').length >= 3)
+        assert.equal(resumed.frames[0]?.event, 'resumed')
+        const frameData = resumed.frames[0]?.data as HelmResumedFrame
+        assert.equal(frameData.seq, 0)
+        assert.equal(frameData.headSeq, 3)
+        assert.equal(frameData.conversationLives?.length, 1)
+        assert.equal(frameData.conversationLives?.[0]?.text, 'delta-1499')
+        assert.deepEqual(
+          resumed.frames.filter((f) => f.event === 'notification').map((f) => (f.data as HelmEventFrame).seq),
+          [1, 2, 3],
+        )
+      } finally {
+        await resumed.abort()
+      }
+    } finally {
+      hub.close()
+    }
+  })
+
+  it('publishTransientLive broadcasts redacted HelmTransientLiveFrame on /api/events and dispatches to hostDispatcher', { timeout: 60_000 }, async () => {
+    const { hub } = makeHub({ bootId: 'b1' })
+    hub.redactFn = (text) => text.replaceAll('sk-secret-xyz', '[REDACTED]')
+    const dispatched: HostDispatchedEvent[] = []
+    hub.setHostDispatcher((evt) => {
+      dispatched.push(evt)
+    })
+
+    const conn = connect(hub, 'http://x/api/events')
+    try {
+      await waitFor(() => conn.frames.length >= 1)
+      hub.publishTransientLive({
+        conversationId: 42,
+        text: 'token=sk-secret-xyz',
+        thinking: 'think sk-secret-xyz',
+        tools: [],
+        updatedAt: 1000,
+      })
+      await waitFor(() => conn.frames.some((f) => f.event === 'conversation.live'))
+      const liveFrame = conn.frames.find((f) => f.event === 'conversation.live')
+      assert.deepEqual(liveFrame?.data, {
+        live: {
+          conversationId: 42,
+          text: 'token=[REDACTED]',
+          thinking: 'think [REDACTED]',
+          tools: [],
+          updatedAt: 1000,
+        },
+      })
+      assert.equal(hub.seq, 0, 'transient SSE frame must not increment durable seq')
+      assert.equal(dispatched.length, 1)
+      assert.deepEqual(dispatched[0], {
+        type: 'conversation.live',
+        live: {
+          conversationId: 42,
+          text: 'token=[REDACTED]',
+          thinking: 'think [REDACTED]',
+          tools: [],
+          updatedAt: 1000,
+        },
+      })
+    } finally {
+      await conn.abort()
+      hub.close()
+    }
+  })
+
+  it('resumed.conversationLives reconciles active lives across upsert terminal state, queuedInputs, inactive live, and deletion', { timeout: 60_000 }, async () => {
+    const { hub } = makeHub({ bootId: 'b1' })
+    try {
+      // Conv 1: active text + no queue -> cleared when conversation.upsert becomes idle.
+      // Conv 2: active text + queuedInputs -> terminal upsert preserves queuedInputs-only entry.
+      // Conv 3: active text -> cleared on conversation.deleted.
+      // Conv 4: becomes inactive via empty live broadcast.
+      hub.publishTransientLive({ conversationId: 1, text: 'working-1', tools: [], updatedAt: 1001 })
+      hub.publishTransientLive({
+        conversationId: 2,
+        text: 'working-2',
+        tools: [],
+        queuedInputs: [{ id: 'q1', submissionId: 'sub-101', text: 'next', mode: 'followUp', origin: 'human', createdAt: 10 }],
+        updatedAt: 1002,
+      })
+      hub.publishTransientLive({ conversationId: 3, text: 'working-3', tools: [], updatedAt: 1003 })
+      hub.publishTransientLive({ conversationId: 4, text: 'working-4', tools: [], updatedAt: 1004 })
+
+      hub.publish('conversation.upsert', { conversation: sampleSummary(1, 'idle') })
+      hub.publish('conversation.upsert', { conversation: sampleSummary(2, 'done') })
+      hub.publish('conversation.deleted', { conversationId: 3 })
+      hub.publishTransientLive({ conversationId: 4, text: '', tools: [], updatedAt: 1005 })
+
+      const resumed = connect(hub, eventsUrl(0, 'b1'))
+      try {
+        await waitFor(() => resumed.frames.some((f) => f.event === 'resumed'))
+        const frame = resumed.frames[0]?.data as HelmResumedFrame
+        assert.deepEqual(frame.conversationLives, [
+          {
+            conversationId: 2,
+            text: '',
+            tools: [],
+            queuedInputs: [{ id: 'q1', submissionId: 'sub-101', text: 'next', mode: 'followUp', origin: 'human', createdAt: 10 }],
+            updatedAt: 1002,
+          },
+        ])
+      } finally {
+        await resumed.abort()
+      }
+    } finally {
+      hub.close()
+    }
+  })
+
+  it('default ring retains >256 durable frames (300 frames resume via resumed without snapshot fallback)', { timeout: 60_000 }, async () => {
+    const { hub } = makeHub({ bootId: 'b1' })
+    try {
+      publishNotes(hub, 300)
+      assert.equal(hub.seq, 300)
+      const resumed = connect(hub, eventsUrl(0, 'b1'))
+      try {
+        await waitFor(() => resumed.frames.filter((f) => f.event === 'notification').length >= 300)
+        assert.equal(resumed.frames[0]?.event, 'resumed', 'default 1024-frame ring covers 300 frames without falling back to snapshot')
+        const head = resumed.frames[0]?.data as HelmResumedFrame
+        assert.equal(head.seq, 0)
+        assert.equal(head.headSeq, 300)
+      } finally {
+        await resumed.abort()
+      }
+    } finally {
+      hub.close()
+    }
   })
 })

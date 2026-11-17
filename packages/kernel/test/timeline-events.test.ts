@@ -19,7 +19,7 @@ import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import { Harness } from '@earendil-works/pi-durable'
 import { createRegistry } from '@earendil-works/pi-durable'
-import type { ConversationEntry, ConversationLive, HelmEventFrame, HelmSnapshot } from '@helm/protocol'
+import type { ConversationEntry, ConversationLive, HelmEventFrame, HelmSnapshot, HelmTransientLiveFrame } from '@helm/protocol'
 import { HelmError } from '@helm/protocol'
 import { ConversationTracker, type TrackerEvents } from '../src/runtime/conversations.js'
 import { deriveConversationLive, toConversationEntry } from '../src/runtime/entries.js'
@@ -245,14 +245,29 @@ describe('EventHub new core event type', { timeout: 60_000 }, () => {
     assert.deepEqual(e2.entry, entry)
   })
 
-  it('conversation.live: double shape;live original carry do not second embed set', () => {
+  it('conversation.live: EventHub.publish rejects as transient; publishTransientLive delivers via subscribeTransientLive and keeps seq=0', { timeout: 60_000 }, async () => {
     const { hub, frames } = makeHub()
-    hub.publish('conversation.live', { live })
-    hub.publish('conversation.live', { type: 'conversation.live', live })
-    const [e1, e2] = frames.map((f) => f.event) as Array<{ live: ConversationLive }>
-    assert.ok(e1 && e2)
-    assert.deepEqual(e1.live, live)
-    assert.deepEqual(e2.live, live)
+    try {
+      assert.throws(
+        () => hub.publish('conversation.live', { live }),
+        (err: unknown) => err instanceof HelmError && err.code === 'invalid_event',
+      )
+      assert.throws(
+        () => hub.publish('conversation.live', { type: 'conversation.live', live }),
+        (err: unknown) => err instanceof HelmError && err.code === 'invalid_event',
+      )
+      const received: HelmTransientLiveFrame[] = []
+      const unsub = hub.subscribeTransientLive((f) => received.push(f))
+      hub.publishTransientLive(live)
+      unsub()
+      hub.publishTransientLive({ ...live, text: 'after unsub' })
+      assert.equal(hub.seq, 0, 'transient live must never advance EventHub.seq')
+      assert.equal(frames.length, 0, 'transient live must never enter durable subscriber queue')
+      assert.equal(received.length, 1)
+      assert.deepEqual(received[0], { live })
+    } finally {
+      hub.close()
+    }
   })
 
   it('plugin.doc.updated: double shape;doc three field complete', () => {
@@ -287,9 +302,11 @@ describe('EventHub new core event type', { timeout: 60_000 }, () => {
       () => hub.publish('conversation.entry', { conversationId: 'x', entry }),
       HelmError,
     )
-    // conversation.live: missing field
+    // conversation.live: EventHub.publish always rejects; publishTransientLive rejects malformed shapes too
     assert.throws(() => hub.publish('conversation.live', { live: { conversationId: 1 } }), HelmError)
     assert.throws(() => hub.publish('conversation.live', {}), HelmError)
+    assert.throws(() => hub.publishTransientLive({ conversationId: 1 } as never), HelmError)
+    assert.throws(() => hub.publishTransientLive(null as never), HelmError)
     // plugin.doc.updated: missing value / pluginId
     assert.throws(
       () => hub.publish('plugin.doc.updated', { doc: { pluginId: 'p', name: 'n' } }),
@@ -301,15 +318,18 @@ describe('EventHub new core event type', { timeout: 60_000 }, () => {
     assert.equal(frames.length, 0)
   })
 
-  it('publish before unify redaction keep:entry/live/doc plaintext secret do not leak', () => {
+  it('publish before unify redaction keep:entry/live/doc plaintext secret do not leak', { timeout: 60_000 }, () => {
     const { hub, frames } = makeHub()
     hub.redactFn = (t) => t.replaceAll('sk-plain', '[REDACTED]')
+    const liveReceived: HelmTransientLiveFrame[] = []
+    hub.subscribeTransientLive((f) => liveReceived.push(f))
     hub.publish('conversation.entry', {
       conversationId: 1,
       entry: { id: '1', kind: 'helm.input', data: { text: 'upload sk-plain secret key' } },
     })
     hub.publish('plugin.doc.updated', { doc: { pluginId: 'p', name: 'n', value: 'token=sk-plain' } })
-    const text = JSON.stringify(frames.map((f) => f.event))
+    hub.publishTransientLive({ conversationId: 1, text: 'secret sk-plain', tools: [], updatedAt: 10 })
+    const text = JSON.stringify([...frames.map((f) => f.event), ...liveReceived])
     assert.ok(!text.includes('sk-plain'), 'event payload must not leak plaintext secret')
     assert.ok(text.includes('[REDACTED]'))
   })
@@ -629,6 +649,135 @@ describe('ConversationTracker real SDK timeline and real-time event', { timeout:
       await harness.close(BACKGROUND_CONTEXT)
       await store.close()
       await database.close()
+    }
+  })
+
+  it('ConversationSummary.lastEntryId tracks latest visible entry across observe, turn, system-only write, and restart', { timeout: 60_000 }, async () => {
+    const dir = join(root, `last-entry-${Date.now()}`)
+    const database = await openHelmDatabase(dir)
+    const store = new HelmStore(database)
+    await store.load()
+    const { models, faux } = makeFauxModels()
+    faux.setResponses([fauxAssistantMessage('hello back')])
+    const registry = createRegistry()
+    const harness = await Harness.open(
+      database.storage,
+      { models: () => models, registry, settings: { followUpMode: 'all' } },
+      BACKGROUND_CONTEXT,
+    )
+    harness.resume()
+    let expectedVisibleId = 0
+    let convId = 0
+    try {
+      const conv = await harness.createConversation(
+        { ownership: { kind: 'ownerless' }, agent: { model: { provider: 'faux', modelId: 'faux-1' } } },
+        BACKGROUND_CONTEXT,
+      )
+      convId = conv.id as number
+      store.upsertConv(convMeta(convId))
+
+      const emittedSummaries: Array<{ lastEntryId?: number }> = []
+      const tracker = new ConversationTracker({
+        harness,
+        store,
+        events: {
+          onSummaryChanged: (s) => emittedSummaries.push({ lastEntryId: s.lastEntryId }),
+          onInputCommitted: () => {},
+          onAssistantText: () => {},
+          onTurnSettled: () => {},
+        },
+      })
+
+      // Write an initial hidden pi.system entry before observe: visible lastEntryId must remain 0.
+      await conv.submit(
+        { type: 'write', entry: { kind: 'pi.system', data: { content: 'boot prompt' } } },
+        BACKGROUND_CONTEXT,
+      )
+      await tracker.observe(convId)
+      assert.equal(tracker.summaryOf(convId)?.lastEntryId, 0)
+      assert.equal(summaryOf(store.getConv(convId)!, 'idle', 0).lastEntryId, 0)
+
+      // Submit a visible turn: lastEntryId advances to the newest visible entry (assistant message).
+      await conv.submit(
+        {
+          type: 'input',
+          content: 'hi',
+          entry: { kind: 'helm.input', data: { id: 'le-1', text: 'hi', origin: 'human', createdAt: 10 } },
+          requestId: 'le-1',
+        },
+        BACKGROUND_CONTEXT,
+      )
+      await conv.waitForIdle(BACKGROUND_CONTEXT)
+      const viewAfterTurn = await conv.entries({ order: 'ascending' }, 50, undefined, BACKGROUND_CONTEXT)
+      const latestTurnVisible = [...viewAfterTurn.items].reverse().find((e) => e.kind !== 'pi.system')
+      assert.ok(latestTurnVisible, 'expected visible entry after turn')
+      expectedVisibleId = Number(latestTurnVisible.id)
+      await waitFor(() => tracker.summaryOf(convId)?.lastEntryId === expectedVisibleId, 5_000)
+      assert.equal(summaryOf(store.getConv(convId)!, 'idle', 0).lastEntryId, expectedVisibleId)
+      assert.ok(
+        emittedSummaries.some((s) => s.lastEntryId === expectedVisibleId),
+        'onSummaryChanged should carry updated lastEntryId',
+      )
+
+      // Hidden pi.system entry written while idle must NOT advance lastEntryId.
+      await conv.submit(
+        { type: 'write', entry: { kind: 'pi.system', data: { content: 'hidden update' } } },
+        BACKGROUND_CONTEXT,
+      )
+      await new Promise((r) => setTimeout(r, 80))
+      assert.equal(tracker.summaryOf(convId)?.lastEntryId, expectedVisibleId)
+
+      // Visible pi.reset entry written while idle advances lastEntryId and notifies onSummaryChanged.
+      await conv.submit(
+        { type: 'write', entry: { kind: 'pi.reset', data: { handoff: 'fresh' } } },
+        BACKGROUND_CONTEXT,
+      )
+      const viewAfterReset = await conv.entries({ order: 'ascending' }, 50, undefined, BACKGROUND_CONTEXT)
+      const latestAfterReset = [...viewAfterReset.items].reverse().find((e) => e.kind !== 'pi.system')
+      assert.ok(latestAfterReset)
+      expectedVisibleId = Number(latestAfterReset.id)
+      await waitFor(() => tracker.summaryOf(convId)?.lastEntryId === expectedVisibleId, 5_000)
+      assert.equal(summaryOf(store.getConv(convId)!, 'idle', 0).lastEntryId, expectedVisibleId)
+
+      tracker.close()
+      await store.flushPublic()
+    } finally {
+      await harness.close(BACKGROUND_CONTEXT)
+      await store.close()
+      await database.close()
+    }
+
+    // Reopen database + HelmStore + ConversationTracker: lastEntryId is restored accurately.
+    const db2 = await openHelmDatabase(dir)
+    const store2 = new HelmStore(db2)
+    await store2.load()
+    const { models: models2 } = makeFauxModels()
+    const registry2 = createRegistry()
+    const harness2 = await Harness.open(
+      db2.storage,
+      { models: () => models2, registry: registry2, settings: { followUpMode: 'all' } },
+      BACKGROUND_CONTEXT,
+    )
+    harness2.resume()
+    try {
+      const tracker2 = new ConversationTracker({
+        harness: harness2,
+        store: store2,
+        events: {
+          onSummaryChanged: () => {},
+          onInputCommitted: () => {},
+          onAssistantText: () => {},
+          onTurnSettled: () => {},
+        },
+      })
+      await tracker2.observe(convId)
+      assert.equal(summaryOf(store2.getConv(convId)!, 'idle', 0).lastEntryId, expectedVisibleId)
+      assert.equal(tracker2.summaryOf(convId)?.lastEntryId, expectedVisibleId)
+      tracker2.close()
+    } finally {
+      await harness2.close(BACKGROUND_CONTEXT)
+      await store2.close()
+      await db2.close()
     }
   })
 })

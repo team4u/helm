@@ -16,7 +16,7 @@ import type { Model, Provider } from '@earendil-works/pi-ai'
 import type { ConversationSummary } from '@helm/protocol'
 import { KernelRuntime } from '../src/runtime/index.js'
 import { startHub } from '../src/http/index.js'
-import { makeFauxModels, useTempDir } from './helpers.js'
+import { makeFauxModels, useTempDir, waitFor } from './helpers.js'
 
 /** and HelmModelSourceMeta / PiMagpieModel same form: unknown window mark record follow model object pass-through. */
 type WindowedModel = Model<string> & { helmContextWindowKnown?: boolean }
@@ -105,12 +105,14 @@ test('directory contextWindow throw shadow and models.changed force complete:unk
     assert.equal('contextWindow' in ((await httpEntry('m-ctx')) ?? {}), false, 'static default window must not appear in HTTP directory')
     assert.equal('contextWindow' in ((await httpEntry('m-bad')) ?? {}), false, 'non- finite window must not appear in HTTP directory')
 
-    // conversation bind set m-ctx; detail situation read fill use amount cache: window unknown (tokens estimate compute still in).
+    // conversation bind set m-ctx; detail read returns non-blockingly and schedules background usage refresh: window unknown (tokens estimate compute still in).
     const created = await kernel.createConversation({ model: 'win/m-ctx' })
     const id = created.id
     const initialDetail = await kernel.getConversationDetail(id)
-    assert.ok(initialDetail.contextUsage, 'detail situation read must carry use amount estimate compute')
-    assert.equal(initialDetail.contextUsage?.contextWindow, undefined, 'initial directory window unknown')
+    await waitFor(() => kernel!.getConversation(id).contextUsage !== undefined, 10_000)
+    const settledInitialDetail = await kernel.getConversationDetail(id)
+    assert.ok(settledInitialDetail.contextUsage, 'detail situation read must carry use amount estimate compute')
+    assert.equal(settledInitialDetail.contextUsage?.contextWindow, undefined, 'initial directory window unknown')
     const seqBefore = initialDetail.stateChangeSeq
 
     // directory refresh: same model unknown→known.idle conversation do not new input, use amount via models.changed force complete.

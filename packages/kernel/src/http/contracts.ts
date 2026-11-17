@@ -47,6 +47,7 @@ import type {
   PublicPluginDoc,
   PublicPluginSessionDoc,
   SearchHit,
+  SessionDocSubscription,
   SkillSummary,
   Profile,
 } from '@helm/protocol'
@@ -199,6 +200,13 @@ export interface SessionDocEventPort {
        * fails sync throw (HTTP layer rotate structure error); internal again do public/conversation store in validate. */
       snapshot: () => { seq: number; doc: PublicPluginSessionDoc }
       target: { pluginId: string; name: string; conversationId: number }
+    },
+  ): Response
+  multiplexResponse?(
+    subs: readonly SessionDocSubscription[],
+    request: Request,
+    options: {
+      snapshot: (sub: SessionDocSubscription) => { seq: number; doc: PublicPluginSessionDoc }
     },
   ): Response
 }

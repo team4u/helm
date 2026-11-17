@@ -29,16 +29,28 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { HelmError } from '@helm/protocol'
+import { encodeSessionDocSubParam, HelmError } from '@helm/protocol'
 import type {
+  ConversationLive,
+  ConversationSummary,
   HelmEvent,
   HelmEventFrame,
+  HelmResumedFrame,
   HelmSnapshot,
+  HelmTransientLiveFrame,
   MaybePromise,
   PublicPluginSessionDoc,
+  SessionDocMultiplexAction,
+  SessionDocMultiplexFrame,
+  SessionDocSubscription,
 } from '@helm/protocol'
 import { redactJsonValue } from '../redact.js'
-import { assembleHelmEvent, assertSessionDocUpdateShape, pruneUndefined } from './event-validation.js'
+import {
+  assembleHelmEvent,
+  assertSessionDocUpdateShape,
+  pruneUndefined,
+  validateAndRedactConversationLive,
+} from './event-validation.js'
 import { byteBoundedWrite, closeControllerQuietly, encodeSseChunk, KEEPALIVE_CHUNK, sseResponse } from './sse-stream.js'
 
 /**
@@ -70,12 +82,20 @@ interface RingEntry {
   chunk: Uint8Array
 }
 
+/** Event dispatched internally to plugin host listeners (`HelmEvent` plus transient `conversation.live`). */
+export type HostDispatchedEvent =
+  | HelmEvent
+  | { type: 'conversation.live'; live: ConversationLive }
+
+/** Internal host event dispatcher installed by `KernelRuntime`. */
+export type HostEventDispatcher = (event: HostDispatchedEvent) => MaybePromise<void>
+
 /** subscribe establish to snapshot conflict refresh complete between not decide frame count cap (overflow i.e. slow client, closure stream reconnect). */
 const MAX_PENDING_EVENTS = 512
 
-/** resume ring by default cap:256 frame / 1 MiB byte (over limit from head trim). */
-const DEFAULT_RING_MAX_FRAMES = 256
-const DEFAULT_RING_MAX_BYTES = 1024 * 1024
+/** resume ring by default cap: 1024 frames / 4 MiB bytes (over limit from head trim). */
+const DEFAULT_RING_MAX_FRAMES = 1024
+const DEFAULT_RING_MAX_BYTES = 4 * 1024 * 1024
 
 /** streaming phase not read byte cap (by default 1 MiB, available maxPendingBytes override, test use small value). */
 const DEFAULT_MAX_PENDING_BYTES = 1024 * 1024
@@ -93,8 +113,14 @@ export class EventHub {
   private readonly ringMaxFrames: number
   private readonly ringMaxBytes: number
   private readonly subscribers = new Set<(frame: HelmEventFrame, chunk: Uint8Array) => void>()
+  /** Connected `/api/events` SSE stream transient live senders (excluded from durable `subscribers` / `seq` / `ring`). */
+  private readonly transientStreamSenders = new Set<(chunk: Uint8Array) => void>()
+  /** Programmatic transient `conversation.live` listeners (never consume durable `seq`). */
+  private readonly transientListeners = new Set<(frame: HelmTransientLiveFrame) => void>()
+  /** Latest active live views per conversation (reconciled into `HelmResumedFrame.conversationLives`). */
+  private readonly latestLives = new Map<number, ConversationLive>()
   /** internal host event delivery (runtime install; each time publish exactly invoke once, single one delivery boundary). */
-  private hostDispatcher: ((event: HelmEvent) => MaybePromise<void>) | undefined
+  private hostDispatcher: HostEventDispatcher | undefined
   private readonly snapshot: SnapshotProvider
   private readonly persistSeq: (seq: number) => void
   private readonly streamClosers = new Set<() => void>()
@@ -146,6 +172,9 @@ export class EventHub {
   close(): void {
     for (const stop of [...this.streamClosers]) stop()
     this.subscribers.clear()
+    this.transientStreamSenders.clear()
+    this.transientListeners.clear()
+    this.latestLives.clear()
     this.hostDispatcher = undefined
   }
 
@@ -156,7 +185,7 @@ export class EventHub {
    * must not throw (listener error by delivery itself isolated), otherwise will break publish since has
    * error semantics (broadcast completed after again errors belongs to false failed).
    */
-  setHostDispatcher(dispatch: (event: HelmEvent) => MaybePromise<void>): void {
+  setHostDispatcher(dispatch: HostEventDispatcher): void {
     this.hostDispatcher = dispatch
   }
 
@@ -182,6 +211,7 @@ export class EventHub {
     this.persistSeq(nextSeq)
     this.seqValue = nextSeq
     this.pushRing(nextSeq, chunk)
+    this.reconcileLatestLivesOnDurableEvent(event)
     for (const deliver of [...this.subscribers]) {
       try {
         deliver(frame, chunk)
@@ -190,6 +220,71 @@ export class EventHub {
       }
     }
     return { frame, internal: this.hostDispatcher?.(event) }
+  }
+
+  /**
+   * Publish a transient `conversation.live` frame without touching `seqValue`, `persistSeq`,
+   * or the durable replay ring buffer. Validates and redacts the live view, updates
+   * `latestLives` for `resumed` reconciliation, broadcasts `event: conversation.live`
+   * directly to connected `/api/events` SSE clients, and dispatches `{ type: 'conversation.live', live }`
+   * synchronously to the internal host dispatcher (`ctx.host.onEvent`).
+   */
+  publishTransientLive(live: ConversationLive): MaybePromise<void> | undefined {
+    const validated = validateAndRedactConversationLive(live, (t) => this.redact(t))
+    if (isActiveLiveView(validated)) {
+      this.latestLives.set(validated.conversationId, validated)
+    } else {
+      this.latestLives.delete(validated.conversationId)
+    }
+    const frame: HelmTransientLiveFrame = { live: validated }
+    const chunk = encodeSseChunk('conversation.live', frame)
+    for (const send of [...this.transientStreamSenders]) {
+      try {
+        send(chunk)
+      } catch {
+        // isolate broken stream sender (stream cleanup already ran on shutdown)
+      }
+    }
+    for (const listen of [...this.transientListeners]) {
+      try {
+        listen(frame)
+      } catch {
+        // isolate broken programmatic listener
+      }
+    }
+    return this.hostDispatcher?.({ type: 'conversation.live', live: validated })
+  }
+
+  /** Subscribe to transient `conversation.live` frames (test / in-process consumption). */
+  subscribeTransientLive(listener: (frame: HelmTransientLiveFrame) => void): () => void {
+    this.transientListeners.add(listener)
+    return () => {
+      this.transientListeners.delete(listener)
+    }
+  }
+
+  private reconcileLatestLivesOnDurableEvent(event: HelmEvent): void {
+    if (event.type === 'conversation.upsert' && 'conversation' in event) {
+      const conv = event.conversation as ConversationSummary
+      if (conv.status !== 'working' && conv.status !== 'blocked') {
+        const existing = this.latestLives.get(conv.id)
+        if (existing !== undefined) {
+          if ((existing.queuedInputs?.length ?? 0) > 0) {
+            this.latestLives.set(conv.id, {
+              conversationId: existing.conversationId,
+              text: '',
+              tools: [],
+              queuedInputs: existing.queuedInputs,
+              updatedAt: existing.updatedAt,
+            })
+          } else {
+            this.latestLives.delete(conv.id)
+          }
+        }
+      }
+    } else if (event.type === 'conversation.deleted' && 'conversationId' in event) {
+      this.latestLives.delete((event as { conversationId: number }).conversationId)
+    }
   }
 
   /** ring append: non- connect continue append(guard against defend: any way produce bare seq missing opening) first act abandon old zone segment,
@@ -314,6 +409,7 @@ export class EventHub {
         clearInterval(keepaliveTimer)
         keepaliveTimer = undefined
       }
+      this.transientStreamSenders.delete(sendTransientChunk)
       request.signal.removeEventListener('abort', shutdown)
       unsubscribe?.()
       unsubscribe = undefined
@@ -322,13 +418,17 @@ export class EventHub {
       closeControllerQuietly(controller)
     }
 
+    const sendTransientChunk = (chunk: Uint8Array): void => {
+      if (closed) return
+      const ok = flushing ? pushOutbound(chunk) : write(chunk)
+      if (!ok) shutdown()
+    }
+
     const startKeepalive = (): void => {
       // idle heartbeat:SSE note release row (: open head), client parse ignore, never fabricate business event,
       // do not push enter seq; away unify write back press path (do not read slow consumer heap accumulate over limit same closure stream).
-      if (this.keepaliveMs <= 0 || keepaliveTimer !== undefined || closed) return
-      keepaliveTimer = setInterval(() => {
-        if (!write(KEEPALIVE_CHUNK)) shutdown()
-      }, this.keepaliveMs)
+      if (keepaliveTimer !== undefined || closed) return
+      keepaliveTimer = startKeepaliveInterval(this.keepaliveMs, write, shutdown)
     }
 
     // first subscribe again sync sampling (same microtask inside complete, buffer do not lose frame); snapshot failed sync throw to HTTP layer.
@@ -350,7 +450,13 @@ export class EventHub {
     if (resume !== undefined && this.canResume(resume)) {
       // resume: sampling headSeq + ring cut piece (subscribe already establish, this after publish enter conflict refresh queue/direct write, without window).
       liveSeq = this.seqValue
-      handshake = encodeSseChunk('resumed', { bootId: this.bootId, seq: resume.afterSeq, headSeq: liveSeq })
+      const resumedFrame: HelmResumedFrame = {
+        bootId: this.bootId,
+        seq: resume.afterSeq,
+        headSeq: liveSeq,
+        conversationLives: [...this.latestLives.values()],
+      }
+      handshake = encodeSseChunk('resumed', resumedFrame)
       replay = this.ring.filter((entry) => entry.seq > resume.afterSeq).map((entry) => entry.chunk)
     } else {
       let snap: HelmSnapshot
@@ -388,6 +494,7 @@ export class EventHub {
         flushing = outbound.length > 0
         // conflict refresh subscribe buffer (seq > liveSeq frame): conflict refresh in conflict refresh queue tail, otherwise direct write.
         if (!handle.goLive(liveSeq)) return
+        if (!closed) this.transientStreamSenders.add(sendTransientChunk)
         if (!flushing) startKeepalive()
       },
       pull: () => {
@@ -536,7 +643,7 @@ export interface SessionDocSnapshot {
 }
 
 interface SessionDocStreamEntry {
-  target: { pluginId: string; name: string; conversationId: number }
+  targets: ReadonlyArray<{ pluginId: string; name: string; conversationId: number }>
   stop: () => void
 }
 
@@ -544,6 +651,33 @@ interface SessionDocStreamEntry {
 interface SessionDocQueuedFrame {
   seq: number
   chunk: Uint8Array
+}
+
+interface SessionDocMultiplexQueuedFrame {
+  key: string
+  seq: number
+  chunk: Uint8Array
+}
+
+function isActiveLiveView(live: ConversationLive): boolean {
+  return (
+    live.text !== '' ||
+    (live.thinking !== undefined && live.thinking !== '') ||
+    live.tools.length > 0 ||
+    live.generation !== undefined ||
+    (live.queuedInputs?.length ?? 0) > 0
+  )
+}
+
+function startKeepaliveInterval(
+  keepaliveMs: number,
+  write: (chunk: Uint8Array) => boolean,
+  shutdown: () => void,
+): ReturnType<typeof setInterval> | undefined {
+  if (keepaliveMs <= 0) return undefined
+  return setInterval(() => {
+    if (!write(KEEPALIVE_CHUNK)) shutdown()
+  }, keepaliveMs)
 }
 
 /**
@@ -570,10 +704,13 @@ export class SessionDocEventHub {
   private readonly maxPending = MAX_PENDING_EVENTS
   /** streaming phase not read byte cap (by default 1 MiB; slow client explicit closure stream, never unbounded queue up). */
   private readonly maxPendingBytes: number
+  /** SSE idle heartbeat interval (ms); defaults to 15s, <= 0 disables (for deterministic tests). */
+  private readonly keepaliveMs: number
   private redactFn: (text: string) => string = (t) => t
 
-  constructor(options: { maxPendingBytes?: number } = {}) {
+  constructor(options: { maxPendingBytes?: number; keepaliveMs?: number } = {}) {
     this.maxPendingBytes = options.maxPendingBytes ?? DEFAULT_MAX_PENDING_BYTES
+    this.keepaliveMs = options.keepaliveMs ?? DEFAULT_KEEPALIVE_MS
   }
 
   set redact(fn: (text: string) => string) {
@@ -603,12 +740,12 @@ export class SessionDocEventHub {
 
   /** close designate plugin all dedicated use stream (plugin deactivate/deregister:plugin.changed enabled=false). */
   closeForPlugin(pluginId: string): void {
-    this.closeStreams((entry) => entry.target.pluginId === pluginId)
+    this.closeStreams((entry) => entry.targets.some((t) => t.pluginId === pluginId))
   }
 
   /** close designate conversation all dedicated use stream (conversation delete:conversation.deleted). */
   closeForConversation(conversationId: number): void {
-    this.closeStreams((entry) => entry.target.conversationId === conversationId)
+    this.closeStreams((entry) => entry.targets.some((t) => t.conversationId === conversationId))
   }
 
   private closeStreams(match: (entry: SessionDocStreamEntry) => boolean): void {
@@ -691,6 +828,7 @@ export class SessionDocEventHub {
     let closed = false
     let unsubscribe: (() => void) | undefined
     let controllerRef: ReadableStreamDefaultController<Uint8Array> | undefined
+    let keepaliveTimer: ReturnType<typeof setInterval> | undefined
 
     const write = (chunk: Uint8Array): boolean =>
       byteBoundedWrite(controllerRef, closed, chunk, this.maxPendingBytes)
@@ -700,6 +838,10 @@ export class SessionDocEventHub {
     const shutdown = (): void => {
       if (closed) return
       closed = true
+      if (keepaliveTimer !== undefined) {
+        clearInterval(keepaliveTimer)
+        keepaliveTimer = undefined
+      }
       request.signal.removeEventListener('abort', shutdown)
       unsubscribe?.()
       unsubscribe = undefined
@@ -707,6 +849,11 @@ export class SessionDocEventHub {
       const controller = controllerRef
       controllerRef = undefined
       closeControllerQuietly(controller)
+    }
+
+    const startKeepalive = (): void => {
+      if (keepaliveTimer !== undefined || closed) return
+      keepaliveTimer = startKeepaliveInterval(this.keepaliveMs, write, shutdown)
     }
 
     // first subscribe buffer (and snapshot read the same sync window, do not lose frame; buffer frame keep seq supply conflict refresh filter choose).
@@ -735,7 +882,7 @@ export class SessionDocEventHub {
       throw error
     }
     const snapshotChunk = encodeSseChunk('snapshot', snap)
-    streamEntry = { target: options.target, stop: shutdown }
+    streamEntry = { targets: [options.target], stop: shutdown }
     if (!closed) this.streams.add(streamEntry)
 
     return sseResponse({
@@ -766,6 +913,166 @@ export class SessionDocEventHub {
           }
         }
         pending = []
+        startKeepalive()
+      },
+      cancel: () => {
+        shutdown()
+      },
+    })
+  }
+
+  /**
+   * Multiplexed SessionDoc SSE response: subscribes to a validated non-empty list
+   * of `(pluginId, name, conversationId)` tuples over one SSE connection.
+   *
+   * - Subscribes to all targets first so concurrent dispatches during snapshot
+   *   collection are buffered and deduplicated per tuple via `seq <= snapshot.seq`.
+   * - Validates every tuple via `options.snapshot(sub)` before opening the stream
+   *   (failing fast with `shutdown()` + rethrow when any target is disabled/unregistered/missing).
+   * - Emits initial `SessionDocMultiplexFrame` (`action: 'snapshot'`) per target,
+   *   followed by `'updated'` or `'deleted'` frames only for subscribed tuples,
+   *   plus periodic `: keepalive` heartbeats (`keepaliveMs`, default 15s).
+   */
+  multiplexResponse(
+    subs: readonly SessionDocSubscription[],
+    request: Request,
+    options: {
+      snapshot: (sub: SessionDocSubscription) => SessionDocSnapshot
+    },
+  ): Response {
+    if (!Array.isArray(subs) || subs.length === 0) {
+      throw new HelmError('validation_error', 'session doc multiplex subscription requires at least one target', 400)
+    }
+    const seen = new Set<string>()
+    const targets: SessionDocSubscription[] = []
+    for (const sub of subs) {
+      const canonical = encodeSessionDocSubParam(sub)
+      if (seen.has(canonical)) {
+        throw new HelmError('validation_error', `duplicate session doc subscription: ${canonical}`, 400)
+      }
+      seen.add(canonical)
+      targets.push({ pluginId: sub.pluginId, name: sub.name, conversationId: sub.conversationId })
+    }
+
+    let pending: SessionDocMultiplexQueuedFrame[] = []
+    let streaming = false
+    let closed = false
+    const unsubscribes: Array<() => void> = []
+    let controllerRef: ReadableStreamDefaultController<Uint8Array> | undefined
+    let keepaliveTimer: ReturnType<typeof setInterval> | undefined
+    let streamEntry: SessionDocStreamEntry | undefined
+
+    const write = (chunk: Uint8Array): boolean =>
+      byteBoundedWrite(controllerRef, closed, chunk, this.maxPendingBytes)
+
+    const shutdown = (): void => {
+      if (closed) return
+      closed = true
+      if (keepaliveTimer !== undefined) {
+        clearInterval(keepaliveTimer)
+        keepaliveTimer = undefined
+      }
+      request.signal.removeEventListener('abort', shutdown)
+      while (unsubscribes.length > 0) {
+        const unsub = unsubscribes.pop()
+        unsub?.()
+      }
+      if (streamEntry !== undefined) this.streams.delete(streamEntry)
+      const controller = controllerRef
+      controllerRef = undefined
+      closeControllerQuietly(controller)
+    }
+
+    const startKeepalive = (): void => {
+      if (keepaliveTimer !== undefined || closed) return
+      keepaliveTimer = startKeepaliveInterval(this.keepaliveMs, write, shutdown)
+    }
+
+    for (const target of targets) {
+      const key = SessionDocEventHub.keyOf(target)
+      const unsub = this.subscribe(target, (frame) => {
+        if (closed) return
+        const doc = (frame.event as { doc: PublicPluginSessionDoc }).doc
+        const action: SessionDocMultiplexAction = doc.deleted === true ? 'deleted' : 'updated'
+        const multiplexFrame: SessionDocMultiplexFrame = {
+          action,
+          pluginId: target.pluginId,
+          name: target.name,
+          conversationId: target.conversationId,
+          seq: frame.seq,
+          doc,
+        }
+        const chunk = encodeSseChunk('session_doc', multiplexFrame)
+        if (streaming) {
+          if (!write(chunk)) shutdown()
+          return
+        }
+        if (pending.length >= this.maxPending) {
+          shutdown()
+          return
+        }
+        pending.push({ key, seq: frame.seq, chunk })
+      })
+      unsubscribes.push(unsub)
+    }
+
+    const snapshotSeqs = new Map<string, number>()
+    const snapshotChunks: Uint8Array[] = []
+    try {
+      if (request.signal.aborted) {
+        throw new HelmError('aborted', 'subscribe establish before request interrupted', 499)
+      }
+      for (const target of targets) {
+        const key = SessionDocEventHub.keyOf(target)
+        const snap = options.snapshot(target)
+        snapshotSeqs.set(key, snap.seq)
+        const multiplexFrame: SessionDocMultiplexFrame = {
+          action: 'snapshot',
+          pluginId: target.pluginId,
+          name: target.name,
+          conversationId: target.conversationId,
+          seq: snap.seq,
+          doc: snap.doc,
+        }
+        snapshotChunks.push(encodeSseChunk('session_doc', multiplexFrame))
+      }
+    } catch (error) {
+      shutdown()
+      throw error
+    }
+
+    streamEntry = { targets, stop: shutdown }
+    if (!closed) this.streams.add(streamEntry)
+
+    return sseResponse({
+      start: (controller) => {
+        controllerRef = controller as ReadableStreamDefaultController<Uint8Array>
+        if (closed) {
+          closeControllerQuietly(controllerRef)
+          return
+        }
+        if (request.signal.aborted) {
+          shutdown()
+          return
+        }
+        request.signal.addEventListener('abort', shutdown)
+        for (const chunk of snapshotChunks) {
+          if (!write(chunk)) {
+            shutdown()
+            return
+          }
+        }
+        streaming = true
+        for (const item of pending) {
+          const snapSeq = snapshotSeqs.get(item.key) ?? -1
+          if (item.seq <= snapSeq) continue
+          if (!write(item.chunk)) {
+            shutdown()
+            return
+          }
+        }
+        pending = []
+        startKeepalive()
       },
       cancel: () => {
         shutdown()

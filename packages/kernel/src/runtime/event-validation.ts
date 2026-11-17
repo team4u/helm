@@ -109,11 +109,15 @@ function assertConversationSummaryShape(value: unknown): void {
     (conv['thinkingLevelOverride'] !== undefined && typeof conv['thinkingLevelOverride'] !== 'string') ||
     (conv['doing'] !== undefined && typeof conv['doing'] !== 'string') ||
     (conv['lastError'] !== undefined && typeof conv['lastError'] !== 'string') ||
+    (conv['lastEntryId'] !== undefined &&
+      (typeof conv['lastEntryId'] !== 'number' ||
+        !Number.isSafeInteger(conv['lastEntryId']) ||
+        conv['lastEntryId'] < 0)) ||
     (conv['contextUsage'] !== undefined && !isContextUsageShape(conv['contextUsage']))
   ) {
     throw new HelmError(
       'invalid_event',
-      'conversation.upsert optional field (parentConversationId/parentToolCallId/ownedBy/nodeId/thinkingLevelOverride/doing/lastError/contextUsage) store in when type must legal',
+      'conversation.upsert optional field (parentConversationId/parentToolCallId/ownedBy/nodeId/thinkingLevelOverride/doing/lastError/lastEntryId/contextUsage) store in when type must legal',
       500,
     )
   }
@@ -344,31 +348,12 @@ export function assembleHelmEvent(
       return { type, conversationId, entry: entry as ConversationEntry }
     }
     case 'conversation.live': {
-      const source = (envelope ?? record) as Record<string, unknown> | undefined
-      const live = source?.['live']
-      if (
-        live === null ||
-        typeof live !== 'object' ||
-        !Number.isInteger((live as { conversationId?: unknown }).conversationId) ||
-        typeof (live as { text?: unknown }).text !== 'string' ||
-        !Array.isArray((live as { tools?: unknown }).tools) ||
-        !Number.isFinite((live as { updatedAt?: unknown }).updatedAt)
-      ) {
-        throw new HelmError(
-          'invalid_event',
-          'conversation.live need to { conversationId, text, tools, updatedAt } shape live',
-          500,
-        )
-      }
-      const generation = (live as { generation?: unknown }).generation
-      if (generation !== undefined && !isLiveGenerationShape(generation)) {
-        throw new HelmError(
-          'invalid_event',
-          'conversation.live  generation need to { taskId: positive integer, attempt: positive integer, message?: { content, usage? } } shape',
-          500,
-        )
-      }
-      return { type, live: live as ConversationLive }
+      // Transient live frames bypass EventHub.publish / seq / replay ring; callers must use publishTransientLive().
+      throw new HelmError(
+        'invalid_event',
+        'conversation.live is transient and disallows entering durable EventHub.publish stream (use publishTransientLive)',
+        500,
+      )
     }
     case 'ask.upsert': {
       const source = (envelope ?? record) as Record<string, unknown> | undefined
@@ -530,4 +515,55 @@ export function assertSessionDocUpdateShape(payload: unknown): PublicPluginSessi
     throw new HelmError('invalid_event', 'plugin.session_doc.updated  deleted if has must is true', 500)
   }
   return doc as PublicPluginSessionDoc
+}
+
+/**
+ * Transient `conversation.live` boundary validation and secret redaction (shared by
+ * `EventHub.publishTransientLive`). Prunes optional `undefined` fields, applies recursive
+ * JSON redaction, and rejects malformed `ConversationLive` shapes without falling back.
+ */
+export function validateAndRedactConversationLive(
+  payload: unknown,
+  redact: (text: string) => string,
+): ConversationLive {
+  const clean = pruneUndefined(payload, new WeakSet())
+  const redacted = redactJsonValue(clean, (t) => redact(t))
+  if (redacted === null || typeof redacted !== 'object' || Array.isArray(redacted)) {
+    throw new HelmError(
+      'invalid_event',
+      'conversation.live need to { conversationId, text, tools, updatedAt } shape live',
+      500,
+    )
+  }
+  const live = redacted as Record<string, unknown>
+  if (
+    typeof live['conversationId'] !== 'number' ||
+    !Number.isSafeInteger(live['conversationId']) ||
+    live['conversationId'] <= 0 ||
+    typeof live['text'] !== 'string' ||
+    !Array.isArray(live['tools']) ||
+    typeof live['updatedAt'] !== 'number' ||
+    !Number.isFinite(live['updatedAt'])
+  ) {
+    throw new HelmError(
+      'invalid_event',
+      'conversation.live need to { conversationId, text, tools, updatedAt } shape live',
+      500,
+    )
+  }
+  if (live['thinking'] !== undefined && typeof live['thinking'] !== 'string') {
+    throw new HelmError('invalid_event', 'conversation.live thinking must be string when present', 500)
+  }
+  if (live['queuedInputs'] !== undefined && !Array.isArray(live['queuedInputs'])) {
+    throw new HelmError('invalid_event', 'conversation.live queuedInputs must be array when present', 500)
+  }
+  const generation = live['generation']
+  if (generation !== undefined && !isLiveGenerationShape(generation)) {
+    throw new HelmError(
+      'invalid_event',
+      'conversation.live  generation need to { taskId: positive integer, attempt: positive integer, message?: { content, usage? } } shape',
+      500,
+    )
+  }
+  return redacted as ConversationLive
 }

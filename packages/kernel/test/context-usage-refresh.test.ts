@@ -368,11 +368,12 @@ describe('context use amount refresh: stop observe and delete guard', { timeout:
     env.tracker.stopObserving(1)
     gate.resolve(usageView(60))
     await flush()
+    assert.equal(env.events.summaries.length, 0, 'stop observe after late discard must not publish any ghost event')
 
     // if late to refresh re- cache,ensure direct through zero refresh; correct behavior is need to all new refresh.
     await env.tracker.ensureContextUsage(1)
     assert.equal(env.harness.contextCalls, 3, 'late to result by discard,ensure must all new refresh')
-    assert.equal(env.events.summaries.length, 0, 'stop observe after must not publish any ghost event')
+    assert.equal(env.events.summaries.length, 1, 'explicit on-demand ensure after cache clear publishes fresh usage once ready')
   })
 
   it('refresh during metadata by delete: late to result do not back write cache', { timeout: 60_000 }, async () => {
@@ -410,12 +411,29 @@ describe('context use amount refresh: first time fill publish rule', { timeout: 
     assert.equal(usage?.compacting, true, 'publish frame must carry compacting boolean')
   })
 
-  it('without compress state first time fill keep static default (frame discipline do not change)', { timeout: 60_000 }, async () => {
+  it('without compress state first time startup fill keep static default (frame discipline do not change)', { timeout: 60_000 }, async () => {
     const env = trackerEnv({})
     await env.tracker.observe(1)
-    await env.tracker.ensureContextUsage(1)
+    await flush()
     assert.equal(env.events.summaries.length, 0)
     assert.ok(env.tracker.summaryOf(1).contextUsage, 'static default fill via read path still visible')
+  })
+
+  it('on-demand ensureContextUsage or publishWhenReady publishes upsert when uncached usage becomes ready, without duplicating cached calls', { timeout: 60_000 }, async () => {
+    const env = trackerEnv({})
+    await env.tracker.ensureContextUsage(1)
+    assert.equal(env.events.summaries.length, 1, 'uncached on-demand ensureContextUsage pushes upsert once ready')
+    assert.ok(env.events.summaries[0]!.contextUsage)
+
+    // Repeat while already cached: no extra refresh or duplicate upsert.
+    await env.tracker.ensureContextUsage(1)
+    assert.equal(env.events.summaries.length, 1, 'cached ensureContextUsage does not re-emit upsert')
+
+    // Clear cache via stopObserving, then trigger fire-and-forget scheduleContextUsageRefresh(..., { publishWhenReady: true }).
+    env.tracker.stopObserving(1)
+    env.tracker.scheduleContextUsageRefresh(1, { publishWhenReady: true })
+    await flush()
+    assert.equal(env.events.summaries.length, 2, 'publishWhenReady pushes upsert after background refresh finishes')
   })
 })
 
@@ -613,7 +631,7 @@ describe('context use amount refresh: leap run during window change', { timeout:
       models: () => models,
     })
     await env.tracker.observe(1)
-    await env.tracker.ensureContextUsage(1)
+    await flush()
     assert.equal(env.events.summaries.length, 0, 'first time fill without compacting keep static default')
     const seqBefore = env.store.convs.get(1)!.stateChangeSeq
 

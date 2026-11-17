@@ -42,6 +42,7 @@ import type { Models } from '@earendil-works/pi-ai'
 import type { ConvMeta, HelmStore } from './store.js'
 import { summaryOf } from './store.js'
 import { deriveConversationLive, toConversationEntry, type EntryRecordLike } from './entries.js'
+import { coveredByRewind, rewindIntervalOf, type RewindInterval } from './runtime-helpers.js'
 import { emitDiagnostic, type KernelDiagnosticInput, type KernelDiagnosticSink } from './diagnostics.js'
 import { compactionFailureNoticeOf } from './context-usage.js'
 import { ContextUsageRefresh, type ContextUsageHost } from './context-usage-refresh.js'
@@ -94,6 +95,8 @@ export class ConversationTracker {
   private readonly notifiedCompactionFailures = new Map<number, number>()
   /** contextUsage cache/refresh chain (in-flight refresh can across exceeds stop observe, state does not enter mirror). */
   private readonly usage: ContextUsageRefresh
+  /** conversation -> latest visible timeline entry ID (`0` when none; excludes `pi.system` and rewound intervals). */
+  private readonly lastEntryIds = new Map<number, number>()
   /** tracker close guard (close() or host isClosed placement after reject late to async for account side effect). */
   private closed = false
 
@@ -234,6 +237,10 @@ export class ConversationTracker {
     mirror.lastEmittedEntry = watermark
     mirror.lastSeenEntryId = seenEntryId
     if (usageWatermark >= 0) this.usage.advanceWatermarkTo(id, usageWatermark)
+    const windowEntries = view.entries as never as ReadonlyArray<EntryRecordLike>
+    let initialLastEntryId = latestVisibleEntryIdOf(windowEntries)
+    this.lastEntryIds.set(id, Math.max(this.lastEntryIds.get(id) ?? 0, initialLastEntryId))
+    this.store.setLastEntryId?.(id, this.lastEntryIds.get(id)!)
     // inbox mirror register first at run decide: restart/stop run but inbox still has queue up input when,
     // queuedInputs derive and listLiveViews snapshot do not lose queue up fact (do not in web fabricate queue).
     const inbox = view.docs['pi.inbox'] as { items?: InboxItemShape[] } | undefined
@@ -243,6 +250,13 @@ export class ConversationTracker {
     // first time hang connect i.e. fill context use amount cache (restart/fork/creates new conversation initial read path);
     // idle conversation same need to (otherwise only leap run conversation has initial value, history conversation open after without pill).
     this.usage.schedule(id)
+    if (initialLastEntryId === 0 && (view as { before?: unknown }).before !== undefined) {
+      initialLastEntryId = await this.scanLatestVisibleEntryId(id)
+      if (this.mirrors.get(id)?.observeGeneration !== generation) return
+      const merged = Math.max(this.lastEntryIds.get(id) ?? 0, initialLastEntryId)
+      this.lastEntryIds.set(id, merged)
+      this.store.setLastEntryId?.(id, merged)
+    }
     if (!live?.run) return
     mirror.runTaskId = live.run.taskId
     mirror.consumedInputs = new Set<string>()
@@ -340,8 +354,38 @@ export class ConversationTracker {
     const settledWaiters = mirror?.settledWaiters ?? []
     for (const resolve of settledWaiters) resolve()
     this.mirrors.delete(id)
+    this.lastEntryIds.delete(id)
     for (const runKey of this.settledRuns) {
       if (runKey.startsWith(`${id}:`)) this.settledRuns.delete(runKey)
+    }
+  }
+
+  /** Scan backwards from tail when the initial 50-entry view window contained only hidden entries. */
+  private async scanLatestVisibleEntryId(id: number): Promise<number> {
+    const conversation = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
+    if (!conversation || typeof conversation.entries !== 'function') return 0
+    const cuts: RewindInterval[] = []
+    let cursor: unknown = undefined
+    for (;;) {
+      const page = await conversation.entries(
+        { order: 'descending' },
+        100,
+        cursor as never,
+        BACKGROUND_CONTEXT,
+      )
+      for (const raw of page.items as never as ReadonlyArray<EntryRecordLike>) {
+        if (raw.kind === 'helm.rewind') {
+          const cut = rewindIntervalOf(raw)
+          if (cut !== undefined) cuts.push(cut)
+        }
+        const numeric = Number(raw.id)
+        if (!Number.isSafeInteger(numeric) || numeric <= 0) continue
+        if (raw.kind === 'pi.system') continue
+        if (raw.kind !== 'helm.rewind' && coveredByRewind(numeric, cuts)) continue
+        return numeric
+      }
+      if (page.next === undefined) return 0
+      cursor = page.next
     }
   }
 
@@ -647,8 +691,20 @@ export class ConversationTracker {
       void this.reconcileFinishedCompaction(id, mirror.observeGeneration, finishedCompactions)
     }
 
+    // Update latest visible entry watermark before emitSettled / emitRunSummary so emitted upserts carry it.
+    const prevLastEntryId = this.lastEntryIds.get(id) ?? this.store.getConv(id)?.lastEntryId ?? 0
+    const windowLatestVisible = latestVisibleEntryIdOf(view.entries as never as ReadonlyArray<EntryRecordLike>)
+    const nextLastEntryId = Math.max(prevLastEntryId, windowLatestVisible)
+    const lastEntryAdvanced = nextLastEntryId > prevLastEntryId
+    if (lastEntryAdvanced) {
+      this.lastEntryIds.set(id, nextLastEntryId)
+      this.store.setLastEntryId?.(id, nextLastEntryId)
+    }
+
     // first compute already end prev run(contains same snapshot collapse:run1 end + run2 start same commit).
+    let settledInAdopt = false
     if (prev?.run && (!live?.run || live.run.taskId !== prev.run.taskId)) {
+      settledInAdopt = true
       const prevRun = prev.run
       const runKey = `${id}:${prevRun.taskId}`
       if (!this.settledRuns.has(runKey)) {
@@ -708,6 +764,13 @@ export class ConversationTracker {
     this.emitLiveThrottled(id, live)
     // run leap during real-time summary:run start and doing semantics change (first token before i.e. has working).
     this.emitRunSummary(id)
+    // When idle visible entries advance without a run settlement (e.g. compaction, reset, rewind, or write),
+    // push conversation.upsert so reconnect SWR watermarks stay current.
+    if (!settledInAdopt && !live?.run && lastEntryAdvanced && this.store.getConv(id) !== undefined) {
+      const summary = this.summaryOf(id)
+      this.mirrorOf(id).lastSummaryKey = summaryKeyOf(summary)
+      this.events.onSummaryChanged(summary)
+    }
   }
 
   /** new written to the database item: by id order push enter watermark line, each exactly once. */
@@ -931,6 +994,7 @@ export class ConversationTracker {
           0,
           undefined,
           settledStatus === 'error' ? lastErrorOf(this.mirrors.get(conversationId)?.live, this.redactError) : undefined,
+          this.lastEntryIds.get(conversationId) ?? updated.lastEntryId ?? 0,
         )
         const cachedUsage = this.usage.peek(conversationId)
         const settledSummary = cachedUsage === undefined ? settledRaw : { ...settledRaw, contextUsage: cachedUsage }
@@ -938,7 +1002,7 @@ export class ConversationTracker {
         this.mirrorOf(conversationId).lastSummaryKey = summaryKeyOf(settledSummary)
         this.events.onSummaryChanged(settledSummary)
         // turn compute after context already set: async refresh use amount (change only then patch upsert; do not push enter seq).
-        this.usage.schedule(conversationId)
+        this.usage.schedule(conversationId, { publishWhenReady: cachedUsage === undefined })
       }
       const payload: TurnSettledPayload = {
         conversation: this.summaryOf(conversationId, outcome),
@@ -1011,14 +1075,15 @@ export class ConversationTracker {
       : undefined
     // failed diagnose summary only follow error state carry (new run after startup live.runFailure by clear, self however sync disappear).
     const lastError = status === 'error' ? lastErrorOf(live, this.redactError) : undefined
-    const summary = summaryOf(meta, status, pendingAsks, doing, lastError)
+    const lastEntryId = this.lastEntryIds.get(conversationId) ?? meta.lastEntryId ?? 0
+    const summary = summaryOf(meta, status, pendingAsks, doing, lastError, lastEntryId)
     const usage = this.usage.cachedOrSchedule(conversationId)
     return usage === undefined ? summary : { ...summary, contextUsage: usage }
   }
 
   /** scheduling async context use amount refresh (delegate refresh chain module; for outside port keep to service/ops consumer). */
-  scheduleContextUsageRefresh(conversationId: number): void {
-    this.usage.schedule(conversationId)
+  scheduleContextUsageRefresh(conversationId: number, options?: { publishWhenReady?: boolean }): void {
+    this.usage.schedule(conversationId, options)
   }
 
   /** models.changed after set to force complete context use amount cache.
@@ -1271,6 +1336,25 @@ function assistantTextOf(entry: {
 }
 
 export { deriveTitle }
+
+/** Compute latest visible entry ID (excluding `pi.system` and entries covered by `helm.rewind`; `0` when none). */
+function latestVisibleEntryIdOf(entries: ReadonlyArray<EntryRecordLike>): number {
+  const cuts: RewindInterval[] = []
+  for (const raw of entries) {
+    if (raw.kind !== 'helm.rewind') continue
+    const cut = rewindIntervalOf(raw)
+    if (cut !== undefined) cuts.push(cut)
+  }
+  let latest = 0
+  for (const raw of entries) {
+    const numeric = Number(raw.id)
+    if (!Number.isSafeInteger(numeric) || numeric <= 0) continue
+    if (raw.kind === 'pi.system') continue
+    if (raw.kind !== 'helm.rewind' && coveredByRewind(numeric, cuts)) continue
+    if (numeric > latest) latest = numeric
+  }
+  return latest
+}
 
 /** first input title: strip code chunk and newline, take before 36 valid character. */
 function deriveTitle(text: string): string {

@@ -271,7 +271,7 @@ export function assembleRuntimeServices(
         events.publish('conversation.entry', { conversationId, entry })
       },
       onLiveChanged: (live) => {
-        events.publish('conversation.live', { live })
+        events.publishTransientLive(live)
       },
       onNotification: (payload) => {
         events.publish('notification', payload)

@@ -19,8 +19,8 @@ import { after, before, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { KernelRuntime } from '../src/runtime/index.js'
 import { buildToolEnv } from '../src/runtime/tools.js'
-import type { HelmEventFrame, HelmSnapshot } from '@helm/protocol'
-import { cleanupDir, makeFauxModels, makeTempDir } from './helpers.js'
+import type { ConversationSummary, HelmEventFrame, HelmSnapshot, HelmTransientLiveFrame } from '@helm/protocol'
+import { cleanupDir, makeFauxModels, makeTempDir, waitFor } from './helpers.js'
 
 /**
  * faux provider bind set:KernelRuntime.open allows options.models directly inject test
@@ -1690,23 +1690,160 @@ describe('waitForInput precise wait for', { timeout: 60_000 }, () => {
 // ---------------------------------------------------------------------------
 
 describe('conversation.entry / live event', { timeout: 60_000 }, () => {
-  it('real turn produce entry event frame and live frame; frame payload already redaction', { timeout: 60_000 }, async () => {
+  it('real turn emits durable entry frames and transient redacted live frames (without advancing durable seq)', { timeout: 60_000 }, async () => {
     const dir = join(root, 'ev1')
     const kernel = await openRuntime(dir, { model: 'faux/faux-1' })
+    const sseAbort = new AbortController()
+    const sseFrames: Array<{ event: string; data: unknown }> = []
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
+    let readLoop: Promise<void> | undefined
     try {
-      const frames: HelmEventFrame[] = []
-      kernel.events.subscribe((f) => frames.push(f))
+      const durableFrames: HelmEventFrame[] = []
+      const transientFrames: HelmTransientLiveFrame[] = []
+      const pluginLiveEvents: unknown[] = []
+      kernel.events.subscribe((f) => durableFrames.push(f))
+      kernel.events.subscribeTransientLive((f) => transientFrames.push(f))
+      kernel.onEvent('conversation.live', (evt) => {
+        pluginLiveEvents.push(evt)
+      })
+
+      const res = kernel.events.response(new Request('http://localhost/api/events', { signal: sseAbort.signal }))
+      reader = res.body!.getReader()
+      const decoder = new TextDecoder()
+      readLoop = (async () => {
+        let buf = ''
+        for (;;) {
+          const { done, value } = await reader!.read()
+          if (done) break
+          buf += decoder.decode(value, { stream: true })
+          const blocks = buf.split('\n\n')
+          buf = blocks.pop() ?? ''
+          for (const block of blocks) {
+            if (block.trim() === '' || block.trimStart().startsWith(':')) continue
+            let event = 'message'
+            let data = ''
+            for (const line of block.split('\n')) {
+              if (line.startsWith('event: ')) event = line.slice('event: '.length)
+              else if (line.startsWith('data: ')) data += line.slice('data: '.length)
+            }
+            if (data !== '') sseFrames.push({ event, data: JSON.parse(data) })
+          }
+        }
+      })()
+
       kernel.__faux.setResponses([fauxAssistantMessage('real-time answer text')])
       await kernel.submitInput(1, 'trigger event')
       await kernel.waitForIdle(1)
-      const entryFrames = frames.filter((f) => f.event.type === 'conversation.entry')
-      assert.ok(entryFrames.length >= 1, 'should at least has a conversation.entry')
-      const liveFrames = frames.filter((f) => f.event.type === 'conversation.live')
-      assert.ok(liveFrames.length >= 1, 'should at least has a conversation.live')
-      const payload = JSON.stringify(frames)
-      assert.ok(!payload.includes('sk-'), 'frame inside must not has secret plaintext')
+      await waitFor(() => transientFrames.length >= 1 && pluginLiveEvents.length >= 1, 5_000)
+      await waitFor(() => sseFrames.some((f) => f.event === 'conversation.live'), 5_000)
+
+      const entryFrames = durableFrames.filter((f) => f.event.type === 'conversation.entry')
+      assert.ok(entryFrames.length >= 1, 'should emit at least one durable conversation.entry frame')
+      assert.equal(
+        durableFrames.filter((f) => (f.event as { type: string }).type === 'conversation.live').length,
+        0,
+        'durable EventHub subscriber must never receive conversation.live',
+      )
+      assert.ok(transientFrames.length >= 1, 'should emit transient conversation.live via subscribeTransientLive')
+      assert.ok(pluginLiveEvents.length >= 1, 'should preserve internal host.onEvent("conversation.live") delivery')
+      assert.ok(sseFrames.some((f) => f.event === 'conversation.live'), '/api/events SSE should emit event: conversation.live')
+      const payload = JSON.stringify({ durableFrames, transientFrames, pluginLiveEvents })
+      assert.ok(!payload.includes('sk-'), 'frame inside must not leak secret plaintext')
+    } finally {
+      sseAbort.abort()
+      await reader?.cancel().catch(() => {})
+      await readLoop?.catch(() => {})
+      await kernel.close()
+    }
+  })
+
+  it('ConversationSummary.lastEntryId tracks latest visible entry across create, turn, rewind, compact, reset, and restart', { timeout: 60_000 }, async () => {
+    const dir = join(root, 'last-entry-e2e')
+    const kernel = await openRuntime(dir, { model: 'faux/faux-1' })
+    const upserts: ConversationSummary[] = []
+    let latestVisibleId = 0
+    try {
+      kernel.events.subscribe((f) => {
+        if (f.event.type === 'conversation.upsert' && 'conversation' in f.event) {
+          upserts.push(f.event.conversation)
+        }
+      })
+      const created = await kernel.createConversation({ title: 'lastEntryId e2e' })
+      assert.equal(created.lastEntryId, 0, 'brand-new conversation starts with lastEntryId=0')
+      const cid = created.id
+
+      // 1. Normal turn advances lastEntryId to latest visible entry in detail.
+      const big = 'context chunk '.repeat(3500)
+      kernel.__faux.setResponses([
+        fauxAssistantMessage('first reply'),
+        fauxAssistantMessage('second reply'),
+        fauxAssistantMessage('third reply'),
+      ])
+      for (const label of ['t1', 't2', 't3']) {
+        await kernel.submitInput(cid, `${label}: ${big}`)
+        await kernel.waitForIdle(cid)
+      }
+      const detailAfterTurns = await kernel.getConversationDetail(cid, { limit: 50 })
+      const expectedAfterTurns = Number(detailAfterTurns.entries.at(-1)!.id)
+      assert.ok(expectedAfterTurns > 0)
+      await waitFor(() => kernel.getConversation(cid).lastEntryId === expectedAfterTurns, 5_000)
+      assert.ok(
+        upserts.some((u) => u.id === cid && u.lastEntryId === expectedAfterTurns),
+        'conversation.upsert emits updated lastEntryId after turns',
+      )
+
+      // 2. Rewind via replaceFromEntryId advances lastEntryId to post-rewind visible entry (never hidden range).
+      const targetInput = detailAfterTurns.entries.find((e) => e.kind === 'helm.input')!
+      kernel.__faux.setResponses([fauxAssistantMessage('rewound reply')])
+      await kernel.submitInput(cid, `${big} rw1`, { replaceFromEntryId: Number(targetInput.id) })
+      await kernel.waitForIdle(cid)
+      const detailAfterRewind = await kernel.getConversationDetail(cid, { limit: 50 })
+      const expectedAfterRewind = Number(detailAfterRewind.entries.at(-1)!.id)
+      assert.ok(expectedAfterRewind > expectedAfterTurns)
+      await waitFor(() => kernel.getConversation(cid).lastEntryId === expectedAfterRewind, 5_000)
+
+      // 3. Extra turns + real compaction advances lastEntryId to latest visible entry (including pi.compaction).
+      kernel.__faux.setResponses([
+        fauxAssistantMessage('pre-compact 1'),
+        fauxAssistantMessage('pre-compact 2'),
+        fauxAssistantMessage('pre-compact 3'),
+        fauxAssistantMessage('compaction summary text'),
+      ])
+      for (const label of ['c1', 'c2', 'c3']) {
+        await kernel.submitInput(cid, `${label}: ${big}`)
+        await kernel.waitForIdle(cid)
+      }
+      await kernel.compactConversation(cid)
+      await waitFor(() => kernel.getConversation(cid).contextUsage?.compacting === undefined, 20_000)
+      const detailAfterCompact = await kernel.getConversationDetail(cid, { limit: 50 })
+      const expectedAfterCompact = Number(detailAfterCompact.entries.at(-1)!.id)
+      assert.ok(expectedAfterCompact > expectedAfterRewind)
+      await waitFor(() => kernel.getConversation(cid).lastEntryId === expectedAfterCompact, 5_000)
+
+      // 4. Reset advances lastEntryId to visible pi.reset entry.
+      const resetSummary = await kernel.resetConversation(cid, { handoff: 'next phase' })
+      assert.equal(resetSummary.id, cid)
+      const detailAfterReset = await kernel.getConversationDetail(cid, { limit: 50 })
+      latestVisibleId = Number(detailAfterReset.entries.at(-1)!.id)
+      assert.ok(latestVisibleId > expectedAfterCompact)
+      await waitFor(() => kernel.getConversation(cid).lastEntryId === latestVisibleId, 5_000)
+      assert.ok(
+        upserts.some((u) => u.id === cid && u.lastEntryId === latestVisibleId),
+        'conversation.upsert emits updated lastEntryId after reset',
+      )
     } finally {
       await kernel.close()
+    }
+
+    // 5. Reopen runtime: snapshot & getConversation preserve lastEntryId.
+    const reopened = await openRuntime(dir, { model: 'faux/faux-1' })
+    try {
+      const conv = reopened.listConversations().find((c) => c.title === 'lastEntryId e2e')
+      assert.ok(conv)
+      await waitFor(() => reopened.getConversation(conv.id).lastEntryId === latestVisibleId, 5_000)
+      assert.equal(reopened.events.currentSnapshot().conversations.find((c) => c.id === conv.id)?.lastEntryId, latestVisibleId)
+    } finally {
+      await reopened.close()
     }
   })
 })

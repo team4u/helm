@@ -39,6 +39,8 @@ export interface ConvMeta {
   pinned: boolean
   stateChangeSeq: number
   completionSeq: number
+  /** Latest visible timeline entry ID (`0` when none; hydrated by tracker.observe/adopt and maintained in memory). */
+  lastEntryId?: number
   createdAt: number
   updatedAt: number
 }
@@ -297,12 +299,30 @@ export class HelmStore {
     return meta ? cloneConv(meta) : undefined
   }
 
+  /** Update the in-memory `lastEntryId` watermark for a conversation without emitting a SQLite write. */
+  setLastEntryId(id: number, lastEntryId: number): void {
+    if (!Number.isSafeInteger(lastEntryId) || lastEntryId < 0) {
+      throw new HelmError(
+        'validation_error',
+        `lastEntryId must be a non-negative safe integer, received: ${String(lastEntryId)}`,
+        400,
+      )
+    }
+    const existing = this.convs.get(id)
+    if (existing !== undefined) {
+      existing.lastEntryId = lastEntryId
+    }
+  }
+
   upsertConv(meta: ConvMeta): void {
     this.assertWritable()
     const prev = this.convs.get(meta.id)
     const titleChanged = prev?.title !== meta.title
     // snapshot deep copy: queue up SQL bind set snapshot value, caller after continue original ground sudden change does not affect already queue write.
     const snap = cloneConv(meta)
+    if (snap.lastEntryId === undefined && prev?.lastEntryId !== undefined) {
+      snap.lastEntryId = prev.lastEntryId
+    }
     this.convs.set(snap.id, snap)
     this.enqueue(async () => {
       await this.db.run(
@@ -837,6 +857,7 @@ export function summaryOf(
   pendingAskCount: number,
   doing?: string,
   lastError?: string,
+  lastEntryId?: number,
 ): ConversationSummary {
   return {
     id: meta.id,
@@ -857,6 +878,7 @@ export function summaryOf(
     ...(lastError !== undefined && lastError !== '' ? { lastError } : {}),
     stateChangeSeq: meta.stateChangeSeq,
     completionSeq: meta.completionSeq,
+    lastEntryId: lastEntryId ?? meta.lastEntryId ?? 0,
     unread: meta.unread,
     pinned: meta.pinned,
     pendingAskCount,

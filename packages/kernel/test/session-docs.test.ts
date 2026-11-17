@@ -16,6 +16,8 @@ import {
   HelmError,
   type PluginDefinition,
   type HelmEventFrame,
+  type SessionDocMultiplexFrame,
+  type SessionDocSubscription,
 } from '@helm/protocol'
 import {
   PluginHost,
@@ -32,6 +34,7 @@ import {
   cleanupDir,
   makeConversationSummary,
   makeTempDir,
+  waitFor,
 } from './helpers.js'
 
 // ---------------------------------------------------------------------------
@@ -609,6 +612,9 @@ test('SessionDocEventHub.response: snapshot provider heavy publish do not lose f
   // terminal state: each frame exactly once (n=1 only in snapshot,n=2 only in incremental).
   assert.equal((text.match(/"n":1/g) ?? []).length, 1)
   assert.equal((text.match(/"n":2/g) ?? []).length, 1)
+  await reader.cancel().catch(() => {})
+  hub.close()
+  assert.equal(hub.subscriberCount, 0)
 })
 
 test('SessionDocEventHub.response: snapshot provider fails sync clean up (do not create stream leaves no residue subscribe)', { timeout: 60_000 }, () => {
@@ -805,5 +811,256 @@ test('HelmStore after restart mirror restore conversation document (real sqlite)
     }
   } finally {
     await cleanupDir(dir)
+  }
+})
+
+// ---------------------------------------------------------------------------
+// SessionDocEventHub keepalive & multiplexResponse
+// ---------------------------------------------------------------------------
+
+function parseMultiplexSse(text: string): Array<{ event: string; data: unknown }> {
+  const frames: Array<{ event: string; data: unknown }> = []
+  for (const block of text.split('\n\n')) {
+    if (block.trim() === '' || block.trimStart().startsWith(':')) continue
+    let event = 'message'
+    let data = ''
+    for (const line of block.split('\n')) {
+      if (line.startsWith('event: ')) event = line.slice('event: '.length)
+      else if (line.startsWith('data: ')) data += line.slice('data: '.length)
+    }
+    frames.push({ event, data: data === '' ? null : (JSON.parse(data) as unknown) })
+  }
+  return frames
+}
+
+test('SessionDocEventHub.response idle keepalive sends comment lines, disables via keepaliveMs=0, and cleans timer on abort/cancel', { timeout: 60_000 }, async () => {
+  const target = { pluginId: 'p:ka', name: 'm', conversationId: 1 }
+
+  // 1. Active keepalive sends `: keepalive\n\n` without incrementing hub.seq, and abort cleans timer.
+  const hub = new SessionDocEventHub({ keepaliveMs: 20 })
+  const controller = new AbortController()
+  const res = hub.response(new Request('http://localhost/events', { signal: controller.signal }), {
+    target,
+    snapshot: () => ({ seq: 0, doc: { ...target, value: { n: 0 } } }),
+  })
+  const reader = res.body!.getReader()
+  const decoder = new TextDecoder()
+  try {
+    const first = await reader.read()
+    assert.match(decoder.decode(first.value!), /event: snapshot/)
+    const beat = await Promise.race([
+      reader.read(),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('keepalive timeout')), 2_000)),
+    ])
+    const beatText = decoder.decode(beat.value!)
+    assert.equal(beatText, ': keepalive\n\n')
+    assert.equal(hub.seq, 0, 'keepalive must not increment SessionDocEventHub.seq')
+    controller.abort()
+    assert.equal(hub.subscriberCount, 0)
+    await new Promise((r) => setTimeout(r, 60))
+    const done = await reader.read()
+    assert.equal(done.done, true, 'no further heartbeat bytes after abort')
+  } finally {
+    controller.abort()
+    await reader.cancel().catch(() => {})
+    hub.close()
+  }
+
+  // 2. keepaliveMs=0 disables heartbeat completely.
+  const silentHub = new SessionDocEventHub({ keepaliveMs: 0 })
+  const silentCtrl = new AbortController()
+  const silentRes = silentHub.response(new Request('http://localhost/events', { signal: silentCtrl.signal }), {
+    target,
+    snapshot: () => ({ seq: 0, doc: { ...target, value: { n: 0 } } }),
+  })
+  const silentReader = silentRes.body!.getReader()
+  try {
+    await silentReader.read()
+    const gotExtra = await Promise.race([
+      silentReader.read().then(() => true),
+      new Promise<boolean>((r) => setTimeout(() => r(false), 80)),
+    ])
+    assert.equal(gotExtra, false, 'keepaliveMs=0 must not emit heartbeat comments')
+  } finally {
+    silentCtrl.abort()
+    await silentReader.cancel().catch(() => {})
+    silentHub.close()
+  }
+})
+
+test('SessionDocEventHub.multiplexResponse validates subscriptions, emits snapshots + isolated updates/deletes, and dedupes atomic window', { timeout: 60_000 }, async () => {
+  const hub = new SessionDocEventHub({ keepaliveMs: 0 })
+  const subA: SessionDocSubscription = { pluginId: 'p:a', name: 'runs', conversationId: 1 }
+  const subB: SessionDocSubscription = { pluginId: 'p:b', name: 'state', conversationId: 2 }
+
+  assert.throws(
+    () => hub.multiplexResponse([], new Request('http://localhost/m'), { snapshot: () => ({ seq: 0, doc: { pluginId: 'p:a', name: 'runs', conversationId: 1, value: null } }) }),
+    (err: unknown) => err instanceof HelmError && err.code === 'validation_error' && err.status === 400,
+  )
+  assert.throws(
+    () =>
+      hub.multiplexResponse([subA, { ...subA }], new Request('http://localhost/m'), {
+        snapshot: () => ({ seq: 0, doc: { ...subA, value: null } }),
+      }),
+    (err: unknown) => err instanceof HelmError && err.code === 'validation_error' && err.status === 400,
+  )
+  assert.equal(hub.subscriberCount, 0)
+
+  const ctrl = new AbortController()
+  const response = hub.multiplexResponse([subA, subB], new Request('http://localhost/m', { signal: ctrl.signal }), {
+    snapshot: (sub) => {
+      if (sub.pluginId === 'p:a') {
+        // Dispatch inside snapshot gathering: same seq is covered by snapshot (deduped), later seq passes through.
+        hub.dispatch({ doc: { ...subA, value: { phase: 'during-snap' } } })
+        const seq = hub.seq
+        hub.dispatch({ doc: { ...subB, value: { phase: 'after-b-will-see' } } })
+        return { seq, doc: { ...subA, value: { phase: 'during-snap' } } }
+      }
+      return { seq: hub.seq, doc: { ...subB, value: { phase: 'snap-b' } } }
+    },
+  })
+  assert.equal(response.headers.get('content-type'), 'text/event-stream')
+  assert.equal(hub.subscriberCount, 2)
+
+  const reader = response.body!.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  const collected: SessionDocMultiplexFrame[] = []
+  const readLoop = (async () => {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const parsed = parseMultiplexSse(buffer)
+      collected.length = 0
+      for (const f of parsed) {
+        if (f.event === 'session_doc' && f.data !== null) collected.push(f.data as SessionDocMultiplexFrame)
+      }
+    }
+  })()
+
+  try {
+    await waitFor(() => collected.length >= 2)
+    assert.deepEqual(
+      collected.slice(0, 2).map((f) => ({ action: f.action, pluginId: f.pluginId, name: f.name, conversationId: f.conversationId, value: f.doc.value })),
+      [
+        { action: 'snapshot', pluginId: 'p:a', name: 'runs', conversationId: 1, value: { phase: 'during-snap' } },
+        { action: 'snapshot', pluginId: 'p:b', name: 'state', conversationId: 2, value: { phase: 'snap-b' } },
+      ],
+    )
+
+    // Unsubscribed targets must not leak onto this multiplexed connection.
+    hub.dispatch({ doc: { pluginId: 'p:other', name: 'x', conversationId: 1, value: { leak: true } } })
+    hub.dispatch({ doc: { pluginId: 'p:a', name: 'runs', conversationId: 99, value: { leak: true } } })
+    hub.dispatch({ doc: { ...subA, value: { step: 2 } } })
+    hub.dispatch({ doc: { ...subB, value: null, deleted: true } })
+
+    await waitFor(() => collected.length >= 4)
+    assert.equal(collected.length, 4, 'unsubscribed targets must be filtered out')
+    assert.deepEqual(
+      collected.slice(2).map((f) => ({
+        action: f.action,
+        pluginId: f.pluginId,
+        name: f.name,
+        conversationId: f.conversationId,
+        value: f.doc.value,
+        deleted: f.doc.deleted,
+      })),
+      [
+        { action: 'updated', pluginId: 'p:a', name: 'runs', conversationId: 1, value: { step: 2 }, deleted: undefined },
+        { action: 'deleted', pluginId: 'p:b', name: 'state', conversationId: 2, value: null, deleted: true },
+      ],
+    )
+  } finally {
+    ctrl.abort()
+    await reader.cancel().catch(() => {})
+    await readLoop.catch(() => {})
+    hub.close()
+  }
+  assert.equal(hub.subscriberCount, 0)
+})
+
+test('SessionDocEventHub.multiplexResponse handles snapshot failure cleanup, keepalive, closeForPlugin/closeForConversation, and backpressure', { timeout: 60_000 }, async () => {
+  const subA: SessionDocSubscription = { pluginId: 'p:a', name: 'runs', conversationId: 1 }
+  const subB: SessionDocSubscription = { pluginId: 'p:b', name: 'state', conversationId: 2 }
+
+  // 1. Throwing on 2nd snapshot cleans up 1st subscription without leaking.
+  const errHub = new SessionDocEventHub({ keepaliveMs: 0 })
+  assert.throws(
+    () =>
+      errHub.multiplexResponse([subA, subB], new Request('http://localhost/m'), {
+        snapshot: (sub) => {
+          if (sub.pluginId === 'p:b') throw new HelmError('plugin_doc_not_found', 'missing doc', 404)
+          return { seq: 0, doc: { ...sub, value: {} } }
+        },
+      }),
+    (err: unknown) => err instanceof HelmError && err.code === 'plugin_doc_not_found',
+  )
+  assert.equal(errHub.subscriberCount, 0)
+
+  // 2. closeForPlugin / closeForConversation close the multiplexed stream cleanly when ANY tuple matches.
+  for (const killer of [
+    (h: SessionDocEventHub) => h.closeForPlugin('p:b'),
+    (h: SessionDocEventHub) => h.closeForConversation(2),
+  ]) {
+    const hub = new SessionDocEventHub({ keepaliveMs: 25 })
+    const res = hub.multiplexResponse([subA, subB], new Request('http://localhost/m'), {
+      snapshot: (sub) => ({ seq: 0, doc: { ...sub, value: { ok: true } } }),
+    })
+    assert.equal(hub.subscriberCount, 2)
+    const reader = res.body!.getReader()
+    const decoder = new TextDecoder()
+    try {
+      let seenKeepalive = false
+      let snapshotCount = 0
+      const deadline = Date.now() + 2_000
+      while (!seenKeepalive) {
+        const remaining = deadline - Date.now()
+        assert.ok(remaining > 0, 'multiplex keepalive timeout')
+        const chunk = await Promise.race([
+          reader.read(),
+          new Promise<never>((_, reject) => setTimeout(() => reject(new Error('multiplex keepalive timeout')), remaining)),
+        ])
+        assert.equal(chunk.done, false)
+        const text = decoder.decode(chunk.value!)
+        if (text === ': keepalive\n\n') {
+          seenKeepalive = true
+        } else {
+          assert.match(text, /event: session_doc/)
+          snapshotCount += (text.match(/event: session_doc/g) ?? []).length
+        }
+      }
+      assert.equal(snapshotCount, 2, 'should emit both initial snapshots before keepalive')
+      killer(hub)
+      assert.equal(hub.subscriberCount, 0)
+      let done = false
+      while (!done) {
+        done = (await reader.read()).done === true
+      }
+      assert.equal(done, true)
+    } finally {
+      await reader.cancel().catch(() => {})
+      hub.close()
+    }
+  }
+
+  // 3. Slow consumer backpressure terminates stream and cleans up subscriptions.
+  const bpHub = new SessionDocEventHub({ maxPendingBytes: 512, keepaliveMs: 0 })
+  const ctrl = new AbortController()
+  const bpRes = bpHub.multiplexResponse([subA], new Request('http://localhost/m', { signal: ctrl.signal }), {
+    snapshot: (sub) => ({ seq: 0, doc: { ...sub, value: { init: true } } }),
+  })
+  const bpReader = bpRes.body!.getReader()
+  try {
+    await bpReader.read()
+    for (let i = 0; i < 32; i++) {
+      bpHub.dispatch({ doc: { ...subA, value: { fill: 'x'.repeat(128), i } } })
+      if (bpHub.subscriberCount === 0) break
+    }
+    assert.equal(bpHub.subscriberCount, 0)
+  } finally {
+    ctrl.abort()
+    await bpReader.cancel().catch(() => {})
+    bpHub.close()
   }
 })

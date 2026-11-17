@@ -538,18 +538,19 @@ describe('collection into: summary carry contextUsage and event publish', { time
     await waitFor(() => (kernel.getConversation(1).contextUsage?.tokens ?? 0) > 0)
     await kernel.close()
 
-    // restart: restore chain observe idle conversation; first detail situation (do not via any list read/wait for) must
-    // already carry usage(getConversationDetail in cache missing when etc. initial refresh complete).
+    // restart: restore chain observe idle conversation; first detail read returns immediately without blocking on
+    // background contextUsage computation, and once ready pushes/caches usage so subsequent reads include it.
     const reopened = await openRuntime('idle-detail')
     try {
       const detail = await reopened.getConversationDetail(1, { limit: 5 })
-      assert.ok(detail.contextUsage, 'after restart first detail situation must carry contextUsage')
-      assert.equal(typeof detail.contextUsage.tokens, 'number', 'history measured anchor restore after tokens is known count value')
-      assert.ok((detail.contextUsage.tokens ?? 0) > 0)
+      assert.ok(detail.entries.length >= 1, 'detail returns entries immediately without waiting on contextUsage')
+      await waitFor(() => (reopened.getConversation(1).contextUsage?.tokens ?? 0) > 0, 10_000)
+      const tokens = reopened.getConversation(1).contextUsage!.tokens
+      assert.equal(typeof tokens, 'number', 'history measured anchor restore after tokens is known count value')
       // after continue page does not repeat refresh (cache direct through): still carry and value stable.
       const page2 = await reopened.getConversationDetail(1, { limit: 5 })
       assert.ok(page2.contextUsage)
-      assert.equal(page2.contextUsage.tokens, detail.contextUsage.tokens)
+      assert.equal(page2.contextUsage.tokens, tokens)
     } finally {
       await reopened.close()
     }
@@ -571,10 +572,16 @@ describe('collection into: summary carry contextUsage and event publish', { time
       models: buildModels({ providers: [compatConfig], apiKeys: () => ({}) }),
     })
     try {
+      const recorded = recordUpserts(kernel, 1)
+      const firstDetail = await kernel.getConversationDetail(1, { limit: 5 })
+      assert.equal(firstDetail.model, 'gw-static/static-model')
+      await waitFor(() => kernel.getConversation(1).contextUsage !== undefined, 10_000)
       const detail = await kernel.getConversationDetail(1, { limit: 5 })
       assert.ok(detail.contextUsage, 'use amount estimate compute (tokens) still provide')
       assert.equal(detail.contextUsage.contextWindow, undefined, 'static default window must not show is known window')
-      assert.equal(detail.model, 'gw-static/static-model')
+      if (firstDetail.contextUsage === undefined) {
+        await waitFor(() => recorded.frames.some((f) => f.contextUsage !== undefined), 5_000)
+      }
     } finally {
       await kernel.close()
     }
