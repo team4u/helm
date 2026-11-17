@@ -1,5 +1,5 @@
 /**
- * builtin:token-speed: a real-time decoding speed (tok/s) read-only state plugin (disabled by default, optionally enabled).
+ * builtin:token-speed: real-time decoding speed (tok/s) read-only status plugin.
  *
  * Responsibility boundary (mechanism vs policy):
  * - The kernel only passes through ConversationLive.generation's generic streaming facts (taskId +
@@ -7,14 +7,14 @@
  *   facts and derives all policy itself: time-sliding-window speed, chars/4 estimation, TTFT (start =
  *   first observation, never fabricated), burst/stall smoothing, exact per-taskId reconciliation, and
  *   tool-execution time exclusion (see tracker.ts); disabling this plugin produces no extra kernel
- *   computation or persistent write amplification;
- * - High-frequency conversation-scoped state goes only into a public sessionDoc (dedicated SSE
- *   subscribed on demand, writes throttled to 120ms with the trailing frame written late; first
- *   measurement / phase change / terminal state written immediately), never into global ctx.doc or the
- *   conversation summary;
+ *   computation or write overhead;
+ * - High-frequency conversation-scoped state goes into an in-memory transient public sessionDoc
+ *   (`durable: false`, dedicated SSE subscribed on demand, writes throttled to 120ms with trailing-frame
+ *   deferred commit; first measurement / phase change / terminal state written immediately), never touching
+ *   SQLite, global ctx.doc, or the conversation summary;
  * - Display injects into COMPOSER_STATUS_SLOT (the host's composer status line) via ctx.ui.slot;
- *
  *   disabling removes it along with the UI contribution, leaving no phantom prompt; no actions / no tools / no CLI (pure read-only display, triggering no five-end mapping obligations).
+ *
  * Event-ordering facts (kernel observation chain, stable across same-commit folds):
  * - conversation.entry (pi.assistant final usage) arrives before the same commit's conversation.live
  *   frames -- completion facts associate exactly to segments by taskId (failed attempts' counts
@@ -25,9 +25,8 @@
  *
  * Lifecycle and cleanup semantics (all derived measurements, rebuildable from new traffic; no
  * migration, no fallback):
- * - Enable-cycle start (the service prepare barrier, before any start / input resumption): clear all
- *   speed session docs left from the previous cycle -- a restart or mid-way enable cannot get complete
- *   measurements; prefer showing empty over passing last cycle's decoding/tools state off as live;
+ * - Transient sessionDoc (`durable: false`): automatically starts empty on each enable/restart and clears
+ *   on disable, conversation deletion, or process exit without SQLite writes or startup DB cleanup;
  * - pi.reset / pi.compaction / helm.rewind landing: the old context is invalid; wipe that
  *   conversation's speed state completely, never re-reading the old context or falling back to old TPS;
  * - Failed / aborted turns (turn_settled outcome): clear the current measurement outright; an unfinished answer must never pose as a normal terminal state; a runtime completed terminal state stays displayed until the next turn's first measurement overwrites it.
@@ -82,7 +81,10 @@ export function createTokenSpeedPlugin(options?: { now?: () => number }): Plugin
         },
       })
 
-      const speedDoc = ctx.sessionDoc<TokenSpeedStatus | null>(TOKEN_SPEED_DOC, null, { public: true })
+      const speedDoc = ctx.sessionDoc<TokenSpeedStatus | null>(TOKEN_SPEED_DOC, null, {
+        public: true,
+        durable: false,
+      })
 
       /** conversation -> speed state machine (created per chain; config changes take effect next turn). */
       const trackers = new Map<number, ConversationTokenSpeedTracker>()
@@ -271,26 +273,13 @@ export function createTokenSpeedPlugin(options?: { now?: () => number }): Plugin
         clearConversationState(conversationId)
       })
 
-      // Lifecycle service: all this plugin's data is derived measurements (rebuildable from new traffic).
-      // At enable-cycle start (the global prepare barrier, before any service start / input resumption)
-      // clear the previous cycle's leftover speed session docs -- a restart or mid-way enable cannot get
-      // complete measurements; prefer showing empty over passing last cycle's decoding/tools live state
-      // off as current; no migration, no fallback. stop clears in-memory state and the throttle deferred-write timers (handles go with the cycle; no in-flight background tasks to wait for).
+      // Lifecycle service: all derived measurements use transient in-memory sessionDocs (`durable: false`),
+      // so disable/restart automatically drops prior cycle docs without SQLite cleanup. `stop` cancels
+      // deferred-write throttle timers and clears in-memory trackers for this cycle.
       ctx.service({
         id: 'speed-lifecycle',
-        prepare: () => {
-          serviceActive = true
-          for (const conversationId of speedDoc.listConversationIds()) {
-            try {
-              speedDoc.delete(conversationId)
-            } catch (error) {
-              if (!(error instanceof HelmError && error.status === 404)) throw error
-            }
-          }
-        },
         start: () => {
           serviceActive = true
-          // No background tasks to start (event-driven + read-only display); cycle cleanup already happened in prepare.
         },
         stop: () => {
           serviceActive = false

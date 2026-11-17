@@ -1,31 +1,25 @@
 /**
- * external plugin package manage:install / update / remove transaction.
+ * External plugin package management: install / update / remove transactions.
  *
- * imitate Pi package manager  source model (npm / git / local one step to), but helm
- * install semantics isstaging copy + existing doctor all chain + atomic enter managed directory + persist
- * record + register enter PluginHost, does not market database, does not version directory pool, does not to after migration.
+ * Follows pi's source model (npm / git / local), with helm semantics:
+ * staging copy + full doctor preflight + atomic move into managed directory +
+ * persisted record + registration into PluginHost. No marketplace DB, versioned pool,
+ * or migration scripts.
  *
- * security and honest discipline:
- * - npm install forever do not run lifecycle scripts(--ignore-scripts --no-audit --no-fund,
- *   --foreground-scripts make any bypass explicit visible);git use non- interaction environment variable
- *   (GIT_TERMINAL_PROMPT=0/GIT_ASKPASS=echo) and --depth 1 shallow clone;
- * - staging one rule in <dataDir>/plugins/.staging/<uuid>/ inside; after success atomic rename
- *   enter <dataDir>/plugins/<safeName>/; failed (contains doctor failed, register failed) clean up
- *   staging, never half artifact;rename failed explicit errors and clean up;
- * - local source and npm/git same copy enter managed directory (do not symlink):PluginHost.register
- *   will <dataDir>/plugins/<pluginId> also as plugin source directory and ctx.dataDir, symbol
- *   link will plugin data write user source code tree,remove will break user file. proxy price (edit source code
- *   must update heavy sync) in install result and error information in such as note;
- * - copy exclude node_modules / .git / point open head file/directory (managed install excludes build artifact and
- *   VCS metadata;npm source runtime dependency declaration at package.json.dependencies, by
- *   managed install step with --omit=dev patch complete and same do not run lifecycle scripts);
- * - subject to message plugin process inside execute boundary such as declaration:doctor/register/enable plugin code in this Hub
- *   process inside run, own host permission; this manage path validate only is managed directory boundary convention,
- *   is not sandbox. this file head and error information by this opening path table state, never sound call sandbox.
- *
- * install directory name safeName: takes precedence package inside define id(plugin.json/package.json helm field
- * parse after plugin id), fall back directory probe name; eventually with doctor real import obtain to plugin id
- * is allow (directory name and id inconsistent when with id is allow, install record same by id key control).
+ * Security & honesty invariants:
+ * - `npm install` never runs lifecycle scripts (`--ignore-scripts --no-audit --no-fund --foreground-scripts`
+ *   makes any bypass visible); `git` runs non-interactively (`GIT_TERMINAL_PROMPT=0 / GIT_ASKPASS=echo`)
+ *   with `--depth 1` shallow clones;
+ * - Staging happens under `<dataDir>/plugins/.staging/<uuid>/`, atomically renamed into
+ *   `<dataDir>/plugins/<safeName>/`; failures (including doctor or registration failure) clean up
+ *   staging without leaving partial artifacts;
+ * - Local sources are copied (not symlinked) into the managed directory, because PluginHost.register
+ *   uses `<dataDir>/plugins/<pluginId>` as both source dir and `ctx.dataDir` (symlinks would write data
+ *   into user source trees and `remove` would delete user files);
+ * - Copies exclude `node_modules`, `.git`, and dot-prefixed entries; runtime dependencies declared in
+ *   `package.json.dependencies` are installed cleanly with `--omit=dev` and lifecycle scripts disabled;
+ * - In-process execution disclosure: doctor/register/enable run plugin code inside the Hub process with
+ *   full host permissions; this manager enforces managed path boundaries only, never claiming sandboxing.
  */
 import { spawn } from 'node:child_process';
 import { cp, mkdir, mkdtemp, readdir, rename, rm, stat } from 'node:fs/promises';
@@ -38,7 +32,7 @@ import { readHelmClientDependencies } from './plugin-manifest.js';
 import type { PluginPackageManagerStore } from './package-store.js';
 
 // ---------------------------------------------------------------------------
-// process execute bottom seat (can inject fake: test independent of real network)
+// Process runner (injectable for tests without real network access)
 // ---------------------------------------------------------------------------
 
 export interface RunResult {
@@ -47,10 +41,10 @@ export interface RunResult {
   stderr: string
 }
 
-/** process run: real implement spawn npm/git; test inject fake. */
+/** Process execution abstraction: spawns npm/git in production; mocked in tests. */
 export type PackageRunner = (cmd: string, args: string[], opts: { cwd: string; timeoutMs: number }) => Promise<RunResult>;
 
-/** by default runner: non- interaction environment, merge stdout/stderr, timeout SIGKILL. */
+/** Default runner: non-interactive env, merged stdio tails, SIGKILL on timeout. */
 export const defaultPackageRunner: PackageRunner = (cmd, args, opts) =>
   new Promise((resolvePromise, rejectPromise) => {
     const child = spawn(cmd, args, {
@@ -86,7 +80,7 @@ export const defaultPackageRunner: PackageRunner = (cmd, args, opts) =>
     });
   });
 
-/** end 40 row snapshot (honest discipline: external handover failed must attach terminal output). */
+/** Trailing 40-line snapshot (honesty invariant: external tool failures attach terminal output tail). */
 export function tailLines(text: string, lines = 40): string {
   const all = text.split('\n');
   return all.slice(Math.max(0, all.length - lines)).join('\n').trim();
@@ -95,28 +89,28 @@ export function tailLines(text: string, lines = 40): string {
 function commandError(kind: string, cmd: string, args: string[], result: RunResult): HelmError {
   return new HelmError(
     `plugin_package_${kind}_failed`,
-    `plugin package${kind === 'install' ? 'install' : kind === 'update' ? 'update' : 'remove'}command failed:${cmd} ${args.join(' ')}(exit ${result.code})\n${tailLines(result.stderr || result.stdout)}`,
+    `plugin package ${kind} command failed: ${cmd} ${args.join(' ')} (exit ${result.code})\n${tailLines(result.stderr || result.stdout)}`,
     500,
     { cmd, args, code: result.code, stdoutTail: tailLines(result.stdout), stderrTail: tailLines(result.stderr) },
   );
 }
 
 // ---------------------------------------------------------------------------
-// manage
+// Manager
 // ---------------------------------------------------------------------------
 
-/** PluginHost collection into port (real PluginHost structure compatibility, convenient at test inject fake host). */
+/** Host integration port required by PluginPackageManager (structurally compatible with PluginHost). */
 export interface PackageManagerHost {
   registerManagedPlugin(dir: string, options: { enabled: boolean }): Promise<{ summary: PluginSummary; pluginId: string }>;
-  /** install after enable (install enable: true path; failed diagnose to on pass-through, do not rollback install). */
+  /** Enable after install (enable: true path; failure surfaces on diagnostic field without rolling back install). */
   enableManagedPlugin(pluginId: string): Promise<PluginSummary>;
-  /** update switch before security preflight: in-flight task 409 / provider busy then reject (old instance and old directory do not motion). */
+  /** Safety preflight before update swap: reject 409 on live tasks / busy providers without touching old instance or dir. */
   assertManagedPluginUpdateSafe(pluginId: string): Promise<void> | void;
   updateManagedPlugin(pluginId: string, dir: string, options: { keepEnabled: boolean }): Promise<{ summary: PluginSummary }>;
   removeManagedPlugin(pluginId: string): Promise<{ wasEnabled: boolean }>;
   /**
-   * unload related clean up: delete the plugin persist document data (global doc + conversation document) and wait for
-   * DELETE real; failed explicit reject,remove based on this keep directory and install record with convenient retry.
+   * Purge persisted plugin data (global docs + session docs) on remove and await durable DELETE flush;
+   * rejects explicitly on failure so the directory and record remain intact for retry.
    */
   purgePluginPersistentData(pluginId: string): Promise<void>;
   listSummaries(): PluginSummary[];
@@ -124,17 +118,17 @@ export interface PackageManagerHost {
 
 export interface PluginPackageManagerOptions {
   dataDir: string
-  /** Hub cwd(each other for local path parse base allow). */
+  /** Hub working directory (base directory for resolving relative local paths). */
   cwd: string
   store: PluginPackageManagerStore
   host: PackageManagerHost
   runner?: PackageRunner
-  /** single command timeout (by default 120s). */
+  /** Per-command timeout in ms (defaults to 120s). */
   commandTimeoutMs?: number
   /**
-   * plugin build port (runtime inject, and PluginHostOptions.buildProvider the same instance):
-   * install/update  doctor preflight and produce the same compile/transpile opening path. missing when carries client reference
-   * or TS source package in doctor where such as failed, not silently fall back.
+   * Plugin build port (shared instance with PluginHostOptions.buildProvider):
+   * used during doctor preflight for client module compilation and backend TS transpilation.
+   * Rejects explicitly when missing for packages requiring compilation/transpilation.
    */
   buildProvider?: PluginBuildProvider
 }
@@ -144,7 +138,7 @@ const PLUGIN_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
 function safeDirName(pluginId: string): string {
   if (!PLUGIN_ID_PATTERN.test(pluginId) || pluginId.startsWith('builtin:')) {
-    throw new HelmError('invalid_plugin_definition', `plugin id disallows as managed install directory name:${pluginId}`, 400, { pluginId });
+    throw new HelmError('invalid_plugin_definition', `plugin id is not allowed as a managed install directory name: ${pluginId}`, 400, { pluginId });
   }
   return pluginId;
 }
@@ -152,11 +146,11 @@ function safeDirName(pluginId: string): string {
 function assertInsideDataDir(dataDir: string, target: string): void {
   const rel = relative(resolve(dataDir), resolve(target));
   if (rel === '' || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
-    throw new HelmError('validation_error', `install target exceeds out managed plugin directory:${target}`, 400, { target });
+    throw new HelmError('validation_error', `install target escapes managed plugins directory: ${target}`, 400, { target });
   }
 }
 
-/** pure data directory copy (excludes symlink target; ignore node_modules/.git/point prefix). */
+/** Copy directory contents excluding symlinks, dot-prefixed entries, node_modules, and VCS metadata. */
 async function copyTreeFiltered(src: string, dest: string): Promise<void> {
   const entries = await readdir(src, { withFileTypes: true });
   await mkdir(dest, { recursive: true });
@@ -169,13 +163,13 @@ async function copyTreeFiltered(src: string, dest: string): Promise<void> {
     } else if (entry.isFile()) {
       await cp(from, to, { force: true });
     }
-    // symlink / fifo etc. special file skip (managed install does not carry link and device file)
+    // Skip special files such as symlinks and FIFOs.
   }
 }
 
 /**
- * plugin package manage. all operation via manager level mutual exclusion queue serial (install/update/remove
- * mutual do not concurrency;PluginHost internal per-plugin lifecycle queue by host port guarantee).
+ * Plugin package manager: all install/update/remove operations are serialized through a manager-level queue,
+ * while PluginHost maintains its own per-plugin lifecycle queue.
  */
 export class PluginPackageManager {
   private readonly dataDir: string;
@@ -211,7 +205,7 @@ export class PluginPackageManager {
     return join(this.pluginsDir(), '.staging');
   }
 
-  /** staging directory create (idempotent; first time install before guarantee store in). */
+  /** Ensure staging directory exists (idempotent). */
   private async ensureStagingRoot(): Promise<string> {
     const root = this.stagingRoot();
     await mkdir(root, { recursive: true });
@@ -221,49 +215,43 @@ export class PluginPackageManager {
   // --- install -------------------------------------------------------------
 
   /**
-   * install plugin package: parse source -> staging get -> runtime dependency -> doctor all chain ->
-   * atomic enter managed directory -> persist record -> register (by default disabled).
+   * Install a plugin package: parse source -> fetch into staging -> install runtime deps -> doctor preflight ->
+   * atomic move into managed directory -> persist record -> register (disabled by default).
    *
-   * transaction semantics (do not half artifact, do not break run in instance):
-   * - duplicate install protect: same pluginId already has managed record or registered instance when explicit 409
-   *   plugin_package_already_installed(not silently override; must update please away update);
-   * - target directory occupy protect:target already exists (leftover directory or same name other plugin directory) when
-   *   explicit 409, do not first delete after install;
-   * - rename enter after any failed (register / persist): delete new target rollback,staging
-   *   one and clean up, never not registered directory and registered instance tear state;
-   * - enable: true enable failed do not rollback install (design allows, failed diagnose via enableError
-   *   pass-through), but install/record chain itself on failure must fully rollback; enable on failure plugin keep
-   *   disabled, record persisted, after restart can normal load and retry enable.
+   * Transactional semantics (no partial artifacts, live instance stays safe):
+   * - Duplicate install protection: existing managed record or registered instance rejects with 409
+   *   `plugin_package_already_installed`;
+   * - Target occupancy protection: existing target directory rejects with 409 without deleting first;
+   * - Post-rename failure (register / persist): removes new target and cleans staging completely;
+   * - With `enable: true`, enable failure surfaces via `enableError` without rolling back installation.
    */
   async install(source: string, options: { enable?: boolean } = {}): Promise<PluginInstallResult> {
     const parsed = parsePluginSource(source, this.cwd);
     return this.enqueue(async () => {
       await this.ensureStagingRoot();
       const staging = await mkdtemp(join(this.stagingRoot(), 'pkg-'));
-      let inPlace = false; // payload already rename enter managed target
+      let inPlace = false; // payload already moved into managed target
       try {
         const payloadDir = await this.fetchIntoStaging(parsed, staging);
-        // runtime dependency first at doctor: carries package.json package (npm/git/local same right) in
-        // staging copy inside patch install --omit=dev(do not trigger touch user local source:local already is filter copy),
-        // otherwise dependency npm package entry in doctor proxy boundary import when i.e. failed (mistakenly report is plugin defect).
+        // Install runtime dependencies in staging before doctor preflight so package imports succeed.
         await this.installRuntimeDeps(payloadDir);
         const { pluginId, dirName } = await this.identifyPlugin(payloadDir, parsed);
-        // doctor all chain (manifest/backend/register/client) in dependency ready after execute
+        // Full doctor preflight (manifest/backend/register/client) once dependencies are present.
         const report = await doctorPluginDir(payloadDir, { buildProvider: this.buildProvider });
         if (!report.ok) {
           const first = report.checks.find((c) => c.error !== undefined);
           throw new HelmError(
             'plugin_package_doctor_failed',
-            `plugin package install preflight failed (${first ? `${first.label}:${first.error!.message}` : 'unknown check failed'}), already abandon install`,
+            `plugin package install preflight failed (${first ? `${first.label}: ${first.error!.message}` : 'unknown check failed'}); aborting install`,
             422,
             { source: parsed, staging: payloadDir, report },
           );
         }
-        // duplicate install protect (first at any directory operation): already has managed record or registered instance all reject
+        // Duplicate install protection: reject if a managed record or registered instance already exists.
         if (this.store.getRecord(pluginId) !== undefined) {
           throw new HelmError(
             'plugin_package_already_installed',
-            `plugin ${pluginId} already managed install (please use update update, or first remove after heavy install)`,
+            `plugin ${pluginId} is already installed via package manager (run update or remove before reinstalling)`,
             409,
             { pluginId },
           );
@@ -271,7 +259,7 @@ export class PluginPackageManager {
         if (this.host.listSummaries().some((s) => s.id === pluginId)) {
           throw new HelmError(
             'plugin_package_already_installed',
-            `plugin ${pluginId} registered (may is manually put placement directory external plugin), reject duplicate install`,
+            `plugin ${pluginId} is already registered (possibly manually placed in plugins directory); refusing duplicate install`,
             409,
             { pluginId },
           );
@@ -281,7 +269,7 @@ export class PluginPackageManager {
         if (await pathExists(target)) {
           throw new HelmError(
             'plugin_package_target_occupied',
-            `install target directory already exists (unknown source leftover, please human check post-process):${target}`,
+            `install target directory already exists (untracked leftover; inspect and clean up manually): ${target}`,
             409,
             { pluginId, target },
           );
@@ -289,19 +277,17 @@ export class PluginPackageManager {
         await mkdir(dirname(target), { recursive: true });
         await rename(payloadDir, target);
         inPlace = true;
-        // register -> persist: any one failed delete new target fully rollback (not registered directory leaves no residue)
+        // register -> persist: remove target completely on failure so no unregistered directory lingers.
         let registered: Awaited<ReturnType<PackageManagerHost['registerManagedPlugin']>>;
         try {
           registered = await this.host.registerManagedPlugin(target, { enabled: false });
         } catch (err) {
-          // register failed may is concurrency host heavy scan (rescan/load chain, do not via this manager mutual exclusion)
-          // already from same directory grab first register same name plugin: now directory already ownership that instance,rm will hollow out
-          // its source directory and dataDir. only confirm without same name registered instance when only then delete directory rollback.
+          // Keep directory & instance if a concurrent scan already registered the same plugin ID.
           if (this.host.listSummaries().some((s) => s.id === pluginId)) {
             inPlace = false;
             throw new HelmError(
               'plugin_package_install_failed',
-              `plugin ${pluginId} install after register failed: detect to same name plugin registered (may is concurrency scan from same directory grab first register), directory and the instance already keep, please human confirm after use remove take over (without managed install record):${err instanceof Error ? err.message : String(err)}`,
+              `Plugin ${pluginId} registration failed after install: same name plugin registered concurrently; keeping existing directory and instance without managed record: ${err instanceof Error ? err.message : String(err)}`,
               500,
               {
                 pluginId,
@@ -315,7 +301,7 @@ export class PluginPackageManager {
           inPlace = false;
           throw new HelmError(
             'plugin_package_install_failed',
-            `plugin ${pluginId} install after register failed, already rollback (new directory deleted):${err instanceof Error ? err.message : String(err)}`,
+            `Plugin ${pluginId} registration failed after install; rolled back and deleted directory: ${err instanceof Error ? err.message : String(err)}`,
             500,
             {
               pluginId,
@@ -369,7 +355,7 @@ export class PluginPackageManager {
             inPlace = false;
             throw new HelmError(
               'plugin_package_install_failed',
-              `plugin ${pluginId} install record persist failed, already rollback (instance deregister, new directory delete):${err instanceof Error ? err.message : String(err)}`,
+              `Plugin ${pluginId} failed to persist install record; rolled back (unregistered and deleted directory): ${err instanceof Error ? err.message : String(err)}`,
               500,
               {
                 pluginId,
@@ -381,7 +367,7 @@ export class PluginPackageManager {
           }
           throw new HelmError(
             'plugin_package_install_failed',
-            `plugin ${pluginId} install record persist failed, and rollback deregister instance failed (${unregisterError instanceof Error ? unregisterError.message : String(unregisterError)}); directory and instance already keep (please clean up in-flight task after manually remove)`,
+            `Plugin ${pluginId} failed to persist install record, and rollback unregister failed (${unregisterError instanceof Error ? unregisterError.message : String(unregisterError)}); directory and instance already keep`,
             500,
             {
               pluginId,
@@ -402,7 +388,7 @@ export class PluginPackageManager {
     });
   }
 
-  /** summary additional managed package metadata (PluginSummary.managed mapping). */
+  /** Attach managed package metadata (`PluginSummary.managed`). */
   private attachManaged(summary: PluginSummary, record: PluginPackageRecord): PluginSummary {
     return {
       ...summary,
@@ -418,36 +404,34 @@ export class PluginPackageManager {
   // --- update -------------------------------------------------------------
 
   /**
-   * atomic update installed plugin package:
-   * 1. security preflight (in-flight task 409 / provider busy) - - old instance and old directory keep do not motion;
-   * 2. staging heavy take source -> runtime dependency patch install -> doctor all chain (same do not motion old directory);
-   * 3. switch: old directory rename to staging backup -> new payload rename enter managed directory
-   *    -> reload heavy register (keep enable state); after success delete backup;
-   * 4. switch failed (reload/register throws): new directory move back staging,backup rename
-   *    back managed directory, again reload restore old instance; rollback failed such as on report (must human introduce).
-   * record only in switch after success push enter.local source code edit after update i.e. re- copy sync.
+   * Atomically update an installed plugin package:
+   * 1. Safety preflight (409 on live tasks / busy providers; old instance and directory untouched);
+   * 2. Re-fetch into staging -> install runtime deps -> full doctor preflight;
+   * 3. Swap: rename old directory to staging backup -> move new payload into managed directory ->
+   *    re-register while keeping enabled state -> delete backup on success;
+   * 4. On swap failure, restore backup directory and reload the old instance (surfaces rollback error if restore fails).
    */
   async update(pluginId: string): Promise<PluginUpdateResult> {
     return this.enqueue(async () => {
       const record = this.store.getRecord(pluginId);
       if (record === undefined) {
-        throw new HelmError('unknown_plugin_package', `plugin ${pluginId} no managed install record (only managed install plugin can update)`, 404, { pluginId });
+        throw new HelmError('unknown_plugin_package', `plugin ${pluginId} has no managed install record (only managed packages can be updated)`, 404, { pluginId });
       }
-      // 1. security preflight: in-flight task / provider busy when reject, old directory and old instance do not motion
+      // 1. Safety preflight: reject when live tasks or busy providers exist without modifying anything.
       await this.host.assertManagedPluginUpdateSafe(pluginId);
       await this.ensureStagingRoot();
       const staging = await mkdtemp(join(this.stagingRoot(), 'pkg-'));
       const backup = join(staging, 'backup');
       let switched = false;
       try {
-        // 2. staging heavy take + dependency + doctor(all in staging inside, old directory do not motion)
+        // 2. Staging fetch + dependencies + doctor preflight (leaves live directory untouched).
         const payloadDir = await this.fetchIntoStaging(record.source, staging);
         await this.installRuntimeDeps(payloadDir);
         const identified = await this.identifyPlugin(payloadDir, record.source);
         if (identified.pluginId !== pluginId) {
           throw new HelmError(
             'plugin_package_id_changed',
-            `update after plugin id change (expectation ${pluginId}, actual ${identified.pluginId}), reject replace`,
+            `plugin id changed during update (expected ${pluginId}, actual ${identified.pluginId}); rejecting replacement`,
             409,
             { pluginId, actualId: identified.pluginId },
           );
@@ -457,7 +441,7 @@ export class PluginPackageManager {
           const first = report.checks.find((c) => c.error !== undefined);
           throw new HelmError(
             'plugin_package_doctor_failed',
-            `plugin package update preflight failed (${first ? `${first.label}:${first.error!.message}` : 'unknown check failed'}), already keep now install`,
+            `Plugin package update preflight failed (${first ? `${first.label}: ${first.error!.message}` : 'unknown check failed'}); keeping existing installation`,
             422,
             { source: record.source, staging: payloadDir, report },
           );
@@ -543,24 +527,22 @@ export class PluginPackageManager {
   // --- remove -------------------------------------------------------------
 
   /**
-   * remove managed install:unregister(builtin/in-flight task/providers by host protect)->
-   * related clean up persist document data (wait for DELETE real, failed explicit reject)-> delete
-   * managed directory -> delete record.local source only delete managed copy and record, never trigger touch user source directory
-   * (install i.e. copy, user source from not enter managed tree). clean up in delete directory/record before and wait for
-   * : any one step failed can retry (record not delete i.e. idempotent can continue).
+   * Remove a managed plugin installation: unregister (protected against builtin / live tasks / busy providers) ->
+   * purge persistent plugin documents (awaiting real DELETE flush; rejects explicitly on failure) ->
+   * delete managed directory -> delete package record.
+   * For local sources, only the managed copy is deleted (never touches user source directory).
    */
   async remove(pluginId: string): Promise<PluginRemoveResult> {
     return this.enqueue(async () => {
       if (pluginId.startsWith('builtin:')) {
-        throw new HelmError('plugin_locked', `built-in plugin ${pluginId} cannot remove`, 403, { pluginId });
+        throw new HelmError('plugin_locked', `built-in plugin ${pluginId} cannot be removed`, 403, { pluginId });
       }
       const record = this.store.getRecord(pluginId);
       if (record === undefined) {
-        throw new HelmError('unknown_plugin_package', `plugin ${pluginId} no managed install record (manually put placement directory plugin please directly delete directory)`, 404, { pluginId });
+        throw new HelmError('unknown_plugin_package', `plugin ${pluginId} has no managed install record (delete manually placed plugin directories directly)`, 404, { pluginId });
       }
       const { wasEnabled } = await this.host.removeManagedPlugin(pluginId);
-      // purge wait for DELETE real after only then resolve: failed in this explicit reject, directory and
-      // install record keep original (record not delete i.e. idempotent can retry).
+      // Purge persisted docs and flush before removing files/records so failures remain safely retryable.
       await this.host.purgePluginPersistentData(pluginId);
       const target = record.installPath;
       assertInsideDataDir(this.pluginsDir(), target);
@@ -570,7 +552,7 @@ export class PluginPackageManager {
     });
   }
 
-  // --- staging get (by source dispatch) ----------------------------------------
+  // --- staging fetch (dispatched by source kind) --------------------------------
 
   private async fetchIntoStaging(source: PluginPackageSource, staging: string): Promise<string> {
     if (source.kind === 'npm') return this.fetchNpm(source, staging);
@@ -578,7 +560,7 @@ export class PluginPackageManager {
     return this.fetchLocal(source, staging);
   }
 
-  /** npm pack pull tarball + unwrap (does not global npm install, never run scripts). */
+  /** Pull tarball via npm pack and extract (never runs global npm install or lifecycle scripts). */
   private async fetchNpm(source: Extract<PluginPackageSource, { kind: 'npm' }>, staging: string): Promise<string> {
     const packDir = join(staging, 'pack');
     await mkdir(packDir, { recursive: true });
@@ -587,23 +569,23 @@ export class PluginPackageManager {
     if (pack.code !== 0) {
       throw commandError('install', 'npm', packArgs, pack);
     }
-    // find tarball and unwrap to payload/
+    // Locate packed tarball and extract into payload/
     const files = await readdir(packDir);
     const tarball = files.find((f) => f.endsWith('.tgz'));
     if (tarball === undefined) {
-      throw new HelmError('plugin_package_install_failed', `npm pack not produce out tarball(spec: ${source.spec})`, 500, { spec: source.spec, stdoutTail: tailLines(pack.stdout) });
+      throw new HelmError('plugin_package_install_failed', `npm pack did not produce a tarball (spec: ${source.spec})`, 500, { spec: source.spec, stdoutTail: tailLines(pack.stdout) });
     }
     const payload = join(staging, 'payload');
     await mkdir(payload, { recursive: true });
     const extract = await this.run('tar', ['-xzf', join(packDir, tarball), '-C', payload]);
     if (extract.code !== 0) throw commandError('install', 'tar', ['-xzf'], extract);
-    // npm tarball inside layer is package/ directory
+    // npm tarballs wrap contents inside a package/ directory
     const inner = join(payload, 'package');
     const innerStat = await stat(inner).catch(() => undefined);
     return innerStat?.isDirectory() === true ? inner : payload;
   }
 
-  /** git clone --depth 1(carries ref when add --branch)+ subdirectory locate. */
+  /** Shallow git clone --depth 1 (with --branch when ref is provided) + subdirectory resolution. */
   private async fetchGit(source: Extract<PluginPackageSource, { kind: 'git' }>, staging: string): Promise<string> {
     const repoDir = join(staging, 'repo');
     const args = ['clone', '--depth', '1', ...(source.ref !== undefined ? ['--branch', source.ref] : []), '--', source.repo, repoDir];
@@ -614,7 +596,7 @@ export class PluginPackageManager {
       root = join(repoDir, source.subdirectory);
       const st = await stat(root).catch(() => undefined);
       if (st?.isDirectory() !== true) {
-        throw new HelmError('plugin_package_install_failed', `git repository inside subdirectory missing:${source.subdirectory}`, 404, { repo: source.repo, subdirectory: source.subdirectory });
+        throw new HelmError('plugin_package_install_failed', `git repository subdirectory is missing: ${source.subdirectory}`, 404, { repo: source.repo, subdirectory: source.subdirectory });
       }
     }
     const payload = join(staging, 'payload');
@@ -622,18 +604,18 @@ export class PluginPackageManager {
     return payload;
   }
 
-  /** local: validate directory store in and do not in managed plugin tree internal (guard against self copy), filter copy. */
+  /** Local source: verify directory exists outside the managed plugins tree (preventing self-install) and filter-copy. */
   private async fetchLocal(source: Extract<PluginPackageSource, { kind: 'local' }>, staging: string): Promise<string> {
     const st = await stat(source.path).catch(() => undefined);
     if (st?.isDirectory() !== true) {
-      throw new HelmError('plugin_package_install_failed', `local plugin directory missing or is not directory:${source.path}`, 404, { path: source.path });
+      throw new HelmError('plugin_package_install_failed', `local plugin path is missing or not a directory: ${source.path}`, 404, { path: source.path });
     }
     const rel = relative(resolve(this.pluginsDir()), resolve(source.path));
     const inside = !(rel === '' || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel));
     if (inside) {
       throw new HelmError(
         'validation_error',
-        `local plugin directory at managed plugin tree internal (${this.pluginsDir()}), forbidden self install:${source.path}`,
+        `local plugin directory lies inside the managed plugins tree (${this.pluginsDir()}); self-installation is disallowed: ${source.path}`,
         400,
         { path: source.path },
       );
@@ -644,15 +626,9 @@ export class PluginPackageManager {
   }
 
   /**
-   * staging copy inside install runtime dependency (npm/git/local same right: ordinary carry package.json
-   * i.e. patch install;--omit=dev and forever do not run lifecycle scripts;local source already is filter copy,
-   * user source directory do not subject to affect). without package.json when is no-op.
-   *
-   * frontend subject to control dependency (manifest clientDependencies) separate patch install: they is not runtime
-   * dependencies(--no-save never change write package.json), but must enter node_modules- -
-   * otherwise doctor / client compile chain because dependency missing explicit failed. version takes precedence take package.json
-   * already declaration range(dependencies/devDependencies all recognize, guarantee can re- now), not declaration
-   * when by note symbol for should package name install (sub- path note symbol only used to compile parse, cannot as npm package name).
+   * Install runtime dependencies inside staging (`--omit=dev`, lifecycle scripts always disabled).
+   * Also installs manifest `clientDependencies` with `--no-save` so doctor and client compilation find them
+   * in `node_modules` without mutating `package.json`.
    */
   private async installRuntimeDeps(dir: string): Promise<void> {
     const pkgJson = join(dir, 'package.json');
@@ -677,7 +653,7 @@ export class PluginPackageManager {
         }
       }
     }
-    // note symbol take package name part (sub- path declaration such as pkg/sub.js version by package range decide).
+    // Extract package names from specifiers (subpath specifiers like pkg/sub.js resolve version range from pkg).
     const installSpecs = clientSpecs.map((spec) => {
       const pkgName = spec.startsWith('@') ? spec.split('/').slice(0, 2).join('/') : (spec.split('/')[0] ?? spec);
       const range = ranges.get(pkgName);
@@ -692,20 +668,19 @@ export class PluginPackageManager {
   }
 
   /**
-   * from payload directory identify plugin id: takes precedence plugin.json/package.json helm field push lead,
-   * fall back convention entry probe name; eventually with doctor report pluginId is allow.
+   * Identify plugin id from payload directory (prefers doctor's imported pluginId; falls back to manifest declaration).
    */
   private async identifyPlugin(payloadDir: string, source: PluginPackageSource): Promise<{ pluginId: string; dirName: string }> {
     const report = await doctorPluginDir(payloadDir, { buildProvider: this.buildProvider });
     if (report.ok && report.pluginId !== undefined) {
       return { pluginId: report.pluginId, dirName: report.pluginId };
     }
-    // doctor not reach define export: use manifest declaration id fall back directory name (doctor failed will in then step such as errors)
+    // Fallback to manifest-declared id if doctor could not reach definition export (doctor will reject in next step).
     const declared = await readDeclaredPluginId(payloadDir);
     if (declared !== undefined) return { pluginId: declared, dirName: declared };
     throw new HelmError(
       'plugin_package_doctor_failed',
-      `cannot identify plugin id(doctor not via and manifest not declaration id):${source.raw}`,
+      `cannot determine plugin id (doctor failed and manifest declares no id): ${source.raw}`,
       422,
       { source, report },
     );
@@ -714,7 +689,7 @@ export class PluginPackageManager {
   private async run(cmd: string, args: string[], cwd?: string): Promise<RunResult> {
     const workDir = cwd ?? (await this.ensureStagingRoot());
     const result = await this.runner(cmd, args, { cwd: workDir, timeoutMs: this.timeoutMs });
-    // npm pack non-zero exit in invoke where add work (need to tarball probe semantics); the rest command unify errors
+    // npm pack non-zero exits are handled by callers for tarball-specific diagnostics.
     const isNpmPack = cmd === 'npm' && args[0] === 'pack';
     if (result.code !== 0 && !isNpmPack) {
       throw commandError('install', cmd, args, result);
@@ -723,7 +698,7 @@ export class PluginPackageManager {
   }
 }
 
-/** path store in probe (directory or file;IO error original on throw, do not shoulder swallow). */
+/** Probe whether a directory or file exists (rethrows non-ENOENT IO errors cleanly). */
 async function pathExists(target: string): Promise<boolean> {
   try {
     await stat(target);
@@ -734,15 +709,15 @@ async function pathExists(target: string): Promise<boolean> {
   }
 }
 
-/** read plugin.json id / package.json name|helm field (only directory name push lead use). */
+/** Read plugin.json id or package.json name/helm.id (used only as directory-name hint). */
 async function readDeclaredPluginId(dir: string): Promise<string | undefined> {
   const { readFile } = await import('node:fs/promises');
   const pluginJson = join(dir, 'plugin.json');
   try {
     const manifest = JSON.parse(await readFile(pluginJson, 'utf8')) as Record<string, unknown>;
     if (typeof manifest['id'] === 'string' && manifest['id'].length > 0) return manifest['id'];
-    if (typeof manifest['main'] === 'string') return undefined; // main store in but without id: hand over to doctor
-  } catch { /* without plugin.json or corrupt:doctor chain will to structure report */ }
+    if (typeof manifest['main'] === 'string') return undefined; // main exists without id: defer to doctor
+  } catch { /* missing/corrupt plugin.json: doctor reports structured error */ }
   const pkgJson = join(dir, 'package.json');
   try {
     const pkg = JSON.parse(await readFile(pkgJson, 'utf8')) as Record<string, unknown>;
@@ -751,6 +726,6 @@ async function readDeclaredPluginId(dir: string): Promise<string | undefined> {
       return (helm as Record<string, unknown>)['id'] as string;
     }
     if (typeof pkg['name'] === 'string' && PLUGIN_ID_PATTERN.test(pkg['name'])) return pkg['name'];
-  } catch { /* same on */ }
+  } catch { /* ignore */ }
   return undefined;
 }

@@ -1,17 +1,7 @@
 /**
- * scan-visitor.ts:`<dataDir>/plugins/` directory scan public access.
- *
- * loadExternalPlugins(start all amount scan) and rescanExternalPlugins(incremental heavy scan)
- * directory loop about 80% duplicate (skip hide/builtin data directory,registerPluginTsRoot
- * reference counter, entry parse, proxy boundary import,register/registerScanFailure,finally release),
- * unify converge is visitExternalPluginDirs; two caller difference point via ScanVisitPolicy
- * parameter, behavior and converge before one by one branch etc. price:
- * - directory name same name registered plugin fast skip: only rescan(load without this quick path - - same name directory
- *   must real import define after in id conflict branch where placement);
- * - import define id registered:load treated as conflict throw plugin_already_registered(hand over by
- *   fault register fall back),rescan static default skip count skipped(do not reload, do not interference);
- * - each by skip directory (pure data directory / registered directory) call back onSkipped: only rescan
- *   counter,load without operation.
+ * scan-visitor.ts: shared `<dataDir>/plugins/` directory visitor used by both startup
+ * scanning (`loadExternalPlugins`) and incremental discovery (`rescanExternalPlugins`),
+ * parameterized by `ScanVisitPolicy`.
  */
 import { readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -33,9 +23,8 @@ import {
 import { readManifestMeta } from './plugin-manifest.js';
 
 /**
- * scan import: first ordinary import (compatibility top-level await; first time load without cache overhead);
- * if return id already by occupy (may is old scan ESM cache define), swap new one proxy proxy boundary import
- * retry take most new source code (user may already fix/swap id heavy write directory). still conflict only then true conflict.
+ * Imports a plugin definition; if its ID collides with an existing plugin (possibly due to an older
+ * cached scan module), retries once with a fresh generation cache-buster to inspect latest source.
  */
 async function importScanDefinition(
   dirPath: string,
@@ -49,8 +38,8 @@ async function importScanDefinition(
 }
 
 /**
- * fault plugin occupy ID: takes precedence manifest legal id; otherwise directory name archive one (illegal character rotate _,
- * do not and registered id conflict when directly use, conflict when append directory name suffix).
+ * Resolves the placeholder ID for a failed external plugin: prefers a valid `manifest.id` (no colon),
+ * otherwise falls back to a sanitized directory name deduplicated against `existingIds`.
  */
 function resolveFailedPluginId(
   dirPath: string,
@@ -59,8 +48,7 @@ function resolveFailedPluginId(
 ): { id: string; meta: Record<string, unknown> } {
   const meta = readManifestMeta(dirPath);
   const manifestId = meta['id'];
-  // external plugin id forbidden smoke number (smoke number only act builtin: naming empty between isolate symbol, and managed plugin package
-  // PLUGIN_ID_PATTERN align; otherwise source directory and ctx.dataDir will fork, see plugin-dir-name.ts)
+  // Colons are reserved for `builtin:` plugin IDs so external dirs align cleanly with ctx.dataDir.
   if (
     typeof manifestId === 'string' &&
     /^[A-Za-z0-9_-]+$/.test(manifestId) &&
@@ -77,10 +65,7 @@ function resolveFailedPluginId(
   return { id, meta };
 }
 
-/**
- * single directory fault register: archive one exception is PluginDiagnosticError after invoke registerFailed;
- * registerFailed unavailable (test stub) when keep old behavior on throw.
- */
+/** Records a directory scan/load error via `registerFailed` (or rethrows on minimal test hosts lacking it). */
 async function registerScanFailure(
   plugins: ExternalPluginHost,
   dirPath: string,
@@ -115,35 +100,31 @@ async function registerScanFailure(
   existingIds.add(id);
 }
 
-/** load and rescan directory where placement difference (see file head). */
+/** Behavioral policy distinguishing startup scan (`load`) vs incremental `rescan`. */
 export interface ScanVisitPolicy {
-  /** directory name and registered id same name when fast skip (rescan: do not reload;load without this quick path). */
+  /** Skip immediately when directory name matches an already-registered plugin ID (true for `rescan`). */
   fastSkipDirNameEqualsId: boolean;
-  /** import define id registered:'fail' throw conflict error (load, hand over by fault register);'skip' static default skip (rescan). */
+  /** Conflict handling after import: `'fail'` throws `plugin_already_registered` (`load`); `'skip'` silently skips (`rescan`). */
   alreadyRegistered: 'fail' | 'skip';
-  /** each by skip directory call back once (rescan count skipped;load without operation). */
+  /** Invoked for each skipped directory (`rescan` increments skipped count). */
   onSkipped(): void;
 }
 
-/** visitExternalPluginDirs reference. */
 export interface ScanVisitParams {
   dataDir: string;
   plugins: ExternalPluginHost;
-  /** registered id set (caller pre- fill; access follow register succeeded append, supply after continue directory decide). */
+  /** Registered plugin IDs seen so far (updated in place as directories succeed or register as failed). */
   existingIds: Set<string>;
-  /** succeeded register id append target (caller collect return value). */
+  /** Output list of newly registered plugin IDs. */
   registered: string[];
-  /** backend TS transpile function (host build port inject; not connect line when TS plugin in transpile phase explicit reject). */
+  /** Backend TS transpiler from host build port (missing rejects TS plugins during transpilation). */
   transform: BackendTsTransformFn | undefined;
   policy: ScanVisitPolicy;
 }
 
 /**
- * scan `<dataDir>/plugins/` all external plugin directory and by policy where placement. single directory fault
- * (scan / load phase) via registerScanFailure register is failed occupy, do not block assert other
- * directory load;register phase define / enable fault by PluginHost  isolateFailure
- * mechanism fall back is failed item, same without interruption loop.plugins directory missing (ENOENT) when
- * static default return (two caller all treated as empty result).
+ * Scans `<dataDir>/plugins/` according to `policy`. Individual scan/load errors record a `failed`
+ * placeholder without blocking sibling plugins; missing `<dataDir>/plugins/` (`ENOENT`) returns cleanly.
  */
 async function visitExternalPluginDirs(params: ScanVisitParams): Promise<void> {
   const { dataDir, plugins, existingIds, registered, transform, policy } = params;
@@ -156,36 +137,32 @@ async function visitExternalPluginDirs(params: ScanVisitParams): Promise<void> {
     throw err;
   }
   for (const entry of entries) {
-    // built-in plugin data directory (builtin%3Aprofile etc.) and hide directory one rule does not participate external plugin discover
+    // Built-in plugin data dirs (`builtin%3A...`) and dotfiles never participate in external plugin discovery.
     if (!entry.isDirectory()) continue;
     if (entry.name.startsWith('.') || isBuiltinPluginDataDirName(entry.name)) continue;
     const dirPath = resolve(pluginsDir, entry.name);
     if (policy.fastSkipDirNameEqualsId && existingIds.has(entry.name)) {
-      policy.onSkipped(); // directory name same name registered plugin: fast skip (do not reload)
+      policy.onSkipped();
       continue;
     }
-    // is plugin directory enable backend TS transpile (contains run phase motion state import each other for TS dependency).
-    // any one failed path (import / id conflict / host register) all release counter; succeeded register then common resident
-    // this process: plugin run phase motion state import dependency transpile available, already load module in ESM cache in keep
-    // identity. therefore plugin deactivate/unload do not release, do not unload already load module (same process inside re-
-    // register does not repeat initialize); release only occur in failed to load fall back when.
+    // Enable backend TS transpilation for the plugin root; released on failure, retained across process lifetime on success.
     const releaseTsRoot = registerPluginTsRoot(dirPath, { transform });
     let committed = false;
     try {
       const entryPath = await resolvePluginEntry(dirPath);
       if (entryPath === undefined) {
-        policy.onSkipped(); // pure plugin data directory: static default skip
+        policy.onSkipped(); // Pure data directory: skip silently
         continue;
       }
       const definition = await importScanDefinition(dirPath, entryPath, existingIds);
       if (existingIds.has(definition.id)) {
         if (policy.alreadyRegistered === 'skip') {
-          policy.onSkipped(); // directory name and id inconsistent but registered: skip (do not reload)
+          policy.onSkipped();
           continue;
         }
         throw new HelmError(
           'plugin_already_registered',
-          `external plugin ${dirPath}  id and registered plugin conflict: ${definition.id}`,
+          `External plugin ${dirPath} id collides with an already registered plugin: ${definition.id}`,
           409,
           { dirPath, id: definition.id },
         );
@@ -232,7 +209,7 @@ export async function loadExternalPlugins(dataDir: string, plugins: ExternalPlug
 }
 
 /**
- * incremental heavy scan plugin directory: only register when before not registered external plugin (by default disabled,
+ * Incrementally rescan the plugins directory: only register external plugins not yet registered (disabled by default,
  * enabled restore logic and start scan consistent - - via persist pluginEnabled); registered plugin do not reload,
  * do not dedupe, do not interference. return new register id list and skip directory counter (contains pure data directory/registered directory).
  */

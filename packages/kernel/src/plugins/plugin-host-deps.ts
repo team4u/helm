@@ -1,5 +1,5 @@
 /**
- * plugin dependency graph constraint, dependency collect and topology sort.
+ * Plugin dependency graph validation, dependent lookup, and topological sorting.
  */
 import { HelmError } from '@helm/protocol';
 import {
@@ -8,7 +8,7 @@ import {
 } from './lifecycle-helpers.js';
 import type { PluginState } from './types.js';
 
-/** register boundary dependency ring route validate: contains via registered plugin indirectly back to this plugin ring. */
+/** Detects dependency cycles at registration time, including indirect cycles through registered plugins. */
 export function assertNoDependencyCycle(
   plugins: ReadonlyMap<string, PluginState>,
   pluginId: string,
@@ -22,7 +22,7 @@ export function assertNoDependencyCycle(
   if (cycle !== undefined) {
     throw new HelmError(
       'plugin_dependency_cycle',
-      `plugin ${pluginId} dependency declaration into ring:${cycle.join(' -> ')}, reject register`,
+      `Plugin ${pluginId} declared a dependency cycle: ${cycle.join(' -> ')}`,
       409,
       { pluginId, cycle },
     );
@@ -30,8 +30,8 @@ export function assertNoDependencyCycle(
 }
 
 /**
- * dependency satisfy validate (enable / register i.e. enable commit gate): one by one items dependency must registered and
- * enabled and where at stable state (defining / deactivating transition state all treated as do not satisfy).
+ * Validates that all dependencies are registered, enabled, and idle before commit
+ * (`defining` / `deactivating` states do not satisfy).
  */
 export function assertDependenciesSatisfied(
   plugins: ReadonlyMap<string, PluginState>,
@@ -43,7 +43,7 @@ export function assertDependenciesSatisfied(
     if (depState === undefined) {
       throw new HelmError(
         'plugin_dependency_missing',
-        `plugin ${pluginId} dependency plugin ${dep} not registered (please first install/register and enable it)`,
+        `Plugin ${pluginId} depends on ${dep}, which is not registered (install/register and enable it first)`,
         409,
         { pluginId, dependency: dep },
       );
@@ -51,7 +51,7 @@ export function assertDependenciesSatisfied(
     if (!depState.enabled || depState.phase !== 'idle') {
       throw new HelmError(
         'plugin_dependency_not_enabled',
-        `plugin ${pluginId} dependency plugin ${dep} not enabled (dependency must registered and enabled, only register do not satisfy)`,
+        `Plugin ${pluginId} depends on ${dep}, which is not enabled (dependencies must be registered and enabled)`,
         409,
         { pluginId, dependency: dep, dependencyEnabled: depState.enabled, dependencyPhase: depState.phase },
       );
@@ -59,9 +59,7 @@ export function assertDependenciesSatisfied(
   }
 }
 
-/**
- * dependency this plugin and still occupy it plugin: enabled or correct where at defining window (by register orderBFS).
- */
+/** Collects enabled or currently-defining plugins that depend on `pluginId` (BFS in registration order). */
 export function collectDependents(
   plugins: ReadonlyMap<string, PluginState>,
   pluginId: string,
@@ -82,7 +80,7 @@ export function collectDependents(
   return out;
 }
 
-/** deregister before dependency hard protect: store in occupy dependency when reject (without force escape generate gate). */
+/** Rejects unregistering when active dependents still hold a reference (no `--force` bypass). */
 export function assertNoEnabledDependents(
   plugins: ReadonlyMap<string, PluginState>,
   pluginId: string,
@@ -91,22 +89,20 @@ export function assertNoEnabledDependents(
   if (dependents.length === 0) return;
   throw new HelmError(
     'plugin_in_use',
-    `plugin ${pluginId} by ${dependents.length} plugin dependency (${dependents.map((s) => s.definition.id).join(', ')}), reject deregister; please first deactivate or remove dependency it plugin`,
+    `Plugin ${pluginId} is required by ${dependents.length} plugin(s) (${dependents.map((s) => s.definition.id).join(', ')}); disable or remove dependents first`,
     409,
     {
       pluginId,
       usages: dependents.map((s) => ({
         kind: 'plugin_dependency',
         id: s.definition.id,
-        label: `plugin ${s.definition.id} dependency ${pluginId}(${s.enabled ? 'when before enabled' : 'is now enable'})`,
+        label: `Plugin ${s.definition.id} depends on ${pluginId} (${s.enabled ? 'enabled' : 'enabling'})`,
       })),
     },
   );
 }
 
-/**
- * force deactivate after dependency explicit mark record: do not automatically deactivate dependency, but rather write structure diagnose and broadcast change.
- */
+/** Records structured diagnostics on dependents after `--force` disable (never disables dependents automatically). */
 export function markDependentsBroken(
   plugins: ReadonlyMap<string, PluginState>,
   pluginId: string,
@@ -116,7 +112,7 @@ export function markDependentsBroken(
     if (!dependent.enabled) continue;
     dependent.lastError = {
       code: 'plugin_dependency_not_enabled',
-      message: `its dependency plugin ${pluginId} already by force deactivate, dependency no longer satisfy; please deactivate this plugin after first enable ${pluginId} again re- enable`,
+      message: `Dependency ${pluginId} was force-disabled; disable this plugin, re-enable ${pluginId}, then re-enable this plugin`,
       stage: 'enable',
       details: { pluginId: dependent.definition.id, dependency: pluginId, forced: true },
     };
@@ -124,7 +120,7 @@ export function markDependentsBroken(
   }
 }
 
-/** enabled plugin dependency topology order (by dependency in before; same layer keep register order). */
+/** Returns enabled plugins in dependency topological order (dependencies first, preserving registration order). */
 export function enabledStatesInDependencyOrder(
   plugins: ReadonlyMap<string, PluginState>,
 ): PluginState[] {

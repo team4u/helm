@@ -1,5 +1,6 @@
 /**
- * plugin state migration auxiliary: register clean up, fault isolated/rollback, occupy register,UI declaration validate and hosting summary group install.
+ * Plugin state transition helpers: registration cleanup, fault isolation/rollback,
+ * placeholder registration, UI validation, and summary decoration.
  */
 import { join } from 'node:path';
 import {
@@ -50,7 +51,7 @@ export function requirePlugin(
   pluginId: string,
 ): PluginState {
   const state = plugins.get(pluginId);
-  if (!state) throw new HelmError('unknown_plugin', `not registered plugin:${pluginId}`, 404, { pluginId });
+  if (!state) throw new HelmError('unknown_plugin', `Unregistered plugin: ${pluginId}`, 404, { pluginId });
   return state;
 }
 
@@ -86,9 +87,7 @@ export async function teardownPluginState(
   await teardownPlugin(state, opts, (s) => clearPluginRegistrations(s, registries));
 }
 
-/**
- * external plugin isolated rollback: clean up already register capability and mount asset, keep failed occupy do not to on throws.
- */
+/** Fault isolation rollback for external plugins: cleans up partial registrations/mounts without rethrowing. */
 export async function rollbackIsolatedPlugin(
   state: PluginState,
   err: unknown,
@@ -98,7 +97,7 @@ export async function rollbackIsolatedPlugin(
   try {
     await teardownPluginState(state, { stopServices: stage === 'enable' }, ctx);
   } catch {
-    // clean up failed do not mask original diagnose
+    // Do not mask the original failure during cleanup.
   }
   clearPluginRegistrations(state, ctx);
   state.enabled = false;
@@ -170,8 +169,8 @@ export async function rollbackEnablePlugin(
 }
 
 /**
- * external plugin fault occupy register (scan / load phase failed, without valid definition):
- * in plugins in register (or update)loadFailed occupy item, never override same name real plugin.
+ * Registers a failed placeholder entry for an external plugin that failed during scan/load
+ * (without a valid definition); never overwrites an existing valid plugin.
  */
 export function registerFailedPlaceholder(
   spec: {
@@ -187,7 +186,7 @@ export function registerFailedPlaceholder(
   if (existing !== undefined && !existing.loadFailed) {
     throw new HelmError(
       'plugin_already_registered',
-      `plugin ${spec.id} registered (and fault occupy conflict), reject override`,
+      `Plugin ${spec.id} is already registered (conflict with failed placeholder); refusing to overwrite`,
       409,
       { pluginId: spec.id },
     );
@@ -254,8 +253,9 @@ export function summaryWithManagedPackage(
   capabilityRegistry: CapabilityRegistry,
   uiRegistry: UiRegistry,
   packageStore?: PluginPackageManagerStore,
+  publicConfig?: Record<string, unknown>,
 ): PluginSummary {
-  const base = pluginSummaryOf(state, capabilityRegistry, uiRegistry);
+  const base = pluginSummaryOf(state, capabilityRegistry, uiRegistry, publicConfig);
   const record = packageStore?.getRecord(base.id);
   if (record === undefined || base.id.startsWith('builtin:')) return base;
   return {

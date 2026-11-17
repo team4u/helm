@@ -1,6 +1,6 @@
 /**
- * plugin module public exports:PluginHost,Hook pipeline,Schema validate and task trace.
- * contract type unify from @helm/protocol again export, guarantee consumer single one dependency entry.
+ * Public exports for the plugin host module: PluginHost, hook pipeline, schema validation, and task tracking.
+ * Protocol contract types are re-exported from `@helm/protocol` as the single source of truth.
  */
 export * from './plugin-host.js';
 export { reloadExternalPlugin, type ExternalPluginHost, type ReloadablePluginHost } from './external-loader.js';

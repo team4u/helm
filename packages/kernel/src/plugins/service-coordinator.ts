@@ -1,5 +1,5 @@
 /**
- * plugin service declaration, lifecycle screen fault (prepare -> start -> stop) and managed asset trace.
+ * Coordinates plugin service declarations, lifecycle barriers (`prepare -> start -> stop`), and resource tracking.
  */
 import {
   HelmError,
@@ -13,12 +13,9 @@ import type { PluginTaskTracker } from './tracking.js';
 import type { PluginInUseItem, PluginState, ServiceEntry } from './types.js';
 
 /**
- * in subject to control stop doc write window inside execute service stop:stop during (contains engine close internal
- * by abort wake async settle chain) this plugin this cycle ctx.doc handle eventually persist write
- * and STOP_WINDOW_HOST_CALLS by let through (phase is deactivating when no longer reject);stop return (succeeded/failed) i.e.
- * re- window, after everything write restore common rule reject. window by PluginState mark record while non- async on under
- * text pass broadcast: engine settle chain promise in stop before create,AsyncLocalStorage cannot
- * across exceeds already exists promise boundary.
+ * Executes service `stop()` inside a controlled write window so final `ctx.doc` writes and
+ * `STOP_WINDOW_HOST_CALLS` (including internal settled continuations) are permitted even though
+ * `phase === 'deactivating'`, then closes the window unconditionally on completion/error.
  */
 export async function runControlledStop(
   state: PluginState,
@@ -32,7 +29,7 @@ export async function runControlledStop(
   }
 }
 
-/** plugin inside all service prepare(by declaration order; without prepare service skip; each service only execute once). */
+/** Runs `prepare()` sequentially in declaration order (skips services without `prepare` or already prepared). */
 export async function prepareServices(state: PluginState): Promise<void> {
   for (const svc of state.services) {
     if (svc.prepare === undefined || svc.prepared) continue;
@@ -44,7 +41,7 @@ export async function prepareServices(state: PluginState): Promise<void> {
         ? err
         : new HelmError(
             'plugin_service_prepare_failed',
-            `plugin ${state.definition.id} service ${svc.id} prepare failed:${err instanceof Error ? err.message : String(err)}`,
+            `Plugin ${state.definition.id} service ${svc.id} prepare failed: ${err instanceof Error ? err.message : String(err)}`,
             500,
             { pluginId: state.definition.id, serviceId: svc.id },
           );
@@ -52,7 +49,7 @@ export async function prepareServices(state: PluginState): Promise<void> {
   }
 }
 
-/** by declaration order start service; any one failed for already start inverse to stop(stop failed aggregate enter diagnose). */
+/** Starts services in declaration order; rolls back started services in reverse order on error. */
 export async function startServices(state: PluginState): Promise<void> {
   const started: ServiceEntry[] = [];
   try {
@@ -83,7 +80,7 @@ export async function startServices(state: PluginState): Promise<void> {
     }
     throw new HelmError(
       'plugin_service_start_failed',
-      `plugin ${state.definition.id} service failed to start:${err instanceof Error ? err.message : String(err)}`,
+      `Plugin ${state.definition.id} service failed to start: ${err instanceof Error ? err.message : String(err)}`,
       500,
       { pluginId: state.definition.id, stopErrors },
     );
@@ -91,8 +88,8 @@ export async function startServices(state: PluginState): Promise<void> {
 }
 
 /**
- * after startup failed inverse to stop: aggregate each service stop error (teardown same style aggregate),
- * deactivated item skip; used to start screen fault phase 2 rollback.
+ * Stops already-started services in reverse declaration order during startup-barrier rollback,
+ * aggregating all stop errors cleanly.
  */
 export async function stopServicesQuietly(state: PluginState): Promise<void> {
   const errors: Array<{ serviceId: string; error: JsonSafeErrorInfo }> = [];
@@ -109,16 +106,14 @@ export async function stopServicesQuietly(state: PluginState): Promise<void> {
   if (errors.length > 0) {
     throw new HelmError(
       'plugin_service_stop_failed',
-      `rollback stop plugin ${state.definition.id} service when failed:${errors.map((e) => e.serviceId).join(', ')}`,
+      `Failed to stop plugin ${state.definition.id} services during rollback: ${errors.map((e) => e.serviceId).join(', ')}`,
       500,
       { pluginId: state.definition.id, stopErrors: errors },
     );
   }
 }
 
-/**
- * clean up when inverse to stop plugin already start service, return aggregate stop error list.
- */
+/** Stops started services in reverse declaration order during cleanup, returning collected stop errors. */
 export async function stopPluginServices(
   state: PluginState,
 ): Promise<Array<{ serviceId: string; error: JsonSafeErrorInfo }>> {
@@ -137,18 +132,18 @@ export async function stopPluginServices(
 }
 
 /**
- * explicit start screen fault: first for all enabled plugin one by one execute service prepare,
- * again one by one plugin by declaration order start(atomicity screen fault: any one failed i.e. moment rollback and explicit throws).
+ * Global startup barrier: prepares all enabled plugins first, then starts each plugin in order;
+ * rolls back started services atomically on any failure.
  */
 export async function startServiceBarrier(
   enabledPlugins: PluginState[],
 ): Promise<void> {
-  // phase 1: global prepare first row
+  // Phase 1: global prepare pass
   for (const state of enabledPlugins) {
     await prepareServices(state);
   }
 
-  // phase 2: global start(atomicity rollback: any one failed inverse order stop already start plugin service)
+  // Phase 2: global start pass (rollback in reverse order on failure)
   const started: PluginState[] = [];
   try {
     for (const state of enabledPlugins) {
@@ -185,7 +180,7 @@ export async function startServiceBarrier(
       }
       throw new HelmError(
         'plugin_service_start_failed',
-        `plugin service failed to start:${err instanceof Error ? err.message : String(err)}`,
+        `Plugin service failed to start: ${err instanceof Error ? err.message : String(err)}`,
         500,
         { rollbackStopErrors },
       );
@@ -195,9 +190,8 @@ export async function startServiceBarrier(
 }
 
 /**
- * deactivate/unload before durable asset occupy aggregate: iterate already start and declaration inUse service, merge
- * return value. service inUse throws or return illegal shape when explicit plugin_in_use_check_failed
- * (unknown i.e. occupy principle), never static default when empty let through.
+ * Collects persistent resource usages declared by started services before disable/unregister.
+ * Rejects explicitly (`500 plugin_in_use_check_failed`) if `inUse()` throws or returns an invalid shape.
  */
 export async function collectServiceInUse(
   pluginId: string,
@@ -212,7 +206,7 @@ export async function collectServiceInUse(
     } catch (err) {
       throw new HelmError(
         'plugin_in_use_check_failed',
-        `plugin ${pluginId} service ${svc.id}  inUse check throw exception, by occupy handle reject deactivate`,
+        `Plugin ${pluginId} service ${svc.id} inUse check threw an error; refusing disable`,
         500,
         { pluginId, serviceId: svc.id, error: toJsonSafeError(err) },
       );
@@ -234,7 +228,7 @@ export async function collectServiceInUse(
     ) {
       throw new HelmError(
         'plugin_in_use_check_failed',
-        `plugin ${pluginId} service ${svc.id}  inUse must return { kind, id, label } all is non-empty string array`,
+        `Plugin ${pluginId} service ${svc.id} inUse must return an array of { kind, id, label } non-empty strings`,
         500,
         { pluginId, serviceId: svc.id, returned: String(declared) },
       );
@@ -245,10 +239,8 @@ export async function collectServiceInUse(
 }
 
 /**
- * deactivate/unload before in-flight task gate:tracker task + already start service declaration liveTasks tag
- * take and collection, has any one i.e. 409 reject (does not enter stop, do not change durable switch).liveTasks exception or
- * return non- string array when exception/illegal output such as explicit errors, never static default when empty - - plugin declaration
- * keep-alive check broken then must fix, cannot rely guess let through.
+ * Pre-disable/unregister gate for in-flight tasks: aggregates `PluginTaskTracker` active labels
+ * with `service.liveTasks()` labels (`409 plugin_has_live_tasks` if non-empty; `500` if `liveTasks` throws/is invalid).
  */
 export function assertNoLiveTasks(
   pluginId: string,
@@ -265,7 +257,7 @@ export function assertNoLiveTasks(
       } catch (err) {
         throw new HelmError(
           'plugin_live_tasks_check_failed',
-          `plugin ${pluginId} service ${svc.id}  liveTasks check throw exception, reject deactivate/unload`,
+          `Plugin ${pluginId} service ${svc.id} liveTasks check threw an error; refusing disable/unregister`,
           500,
           { pluginId, serviceId: svc.id, error: toJsonSafeError(err) },
         );
@@ -276,7 +268,7 @@ export function assertNoLiveTasks(
       ) {
         throw new HelmError(
           'plugin_live_tasks_check_failed',
-          `plugin ${pluginId} service ${svc.id}  liveTasks must return string array, actual:${Object.prototype.toString.call(declared)}`,
+          `Plugin ${pluginId} service ${svc.id} liveTasks must return a string array, got ${Object.prototype.toString.call(declared)}`,
           500,
           { pluginId, serviceId: svc.id, returned: String(declared) },
         );
@@ -284,14 +276,12 @@ export function assertNoLiveTasks(
       labels.push(...declared);
     }
   }
-  // tracker tag finally read:svc.liveTasks is any sync plugin code, during sync start task
-  //(such as sync invoke invokeAction) also will by tail read catch; read completely after until caller placement deactivating
-  // without await, gate closed together without window.
+  // Check tracker after synchronous `svc.liveTasks()` so any task spawned during that call is also caught.
   labels.push(...tracker.activeLabels(pluginId));
   if (labels.length > 0) {
     throw new HelmError(
       'plugin_has_live_tasks',
-      `plugin ${pluginId} still has ${labels.length} in-flight task (${labels.join(', ')}), reject deactivate/unload`,
+      `Plugin ${pluginId} still has ${labels.length} live task(s) (${labels.join(', ')}); refusing disable/unregister`,
       409,
       { pluginId, activeTasks: labels },
     );

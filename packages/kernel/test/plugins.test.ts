@@ -14,13 +14,17 @@ import {
   type PluginConfigFieldSchema,
   type PluginDefinition,
   type PluginDocHandle,
+  type PluginSessionDocHandle,
+  type PluginSummary,
 } from '@helm/protocol';
 import {
   PluginHost,
   actionToolAlias,
   validatePluginInput,
   type PluginConfigStore,
+  type PluginDocStore,
   type PluginHostBackend,
+  type PluginSessionDocStore,
 } from '../src/plugins/index.js';
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js';
 import { pluginDataDirName } from '../src/plugins/plugin-dir-name.js';
@@ -787,7 +791,7 @@ test('normal disable: service by register inverse order stop', { timeout: 60_000
 });
 
 // ---------------------------------------------------------------------------
-// locked plugin / doc naming empty between / config honest
+// locked plugin / doc namespacing / config honesty
 // ---------------------------------------------------------------------------
 
 test('locked plugin disable/unregister 403 plugin_locked', { timeout: 60_000 }, async () => {
@@ -806,7 +810,7 @@ test('locked plugin disable/unregister 403 plugin_locked', { timeout: 60_000 }, 
   await assertRejectsCode(() => host.unregister('builtin:profile'), 'plugin_locked', 403);
 });
 
-test('doc naming empty interval leave pluginId:name;get return clone guard against not persisted sudden change', { timeout: 60_000 }, async () => {
+test('doc namespace isolation pluginId:name; get returns clone preventing unpersisted mutations', { timeout: 60_000 }, async () => {
   const host = makeHost();
   await host.register({
     id: 'p:docs',
@@ -814,7 +818,7 @@ test('doc naming empty interval leave pluginId:name;get return clone guard again
       const doc = ctx.doc('counter', { n: 0, items: [] as string[] });
       doc.update((s) => ({ ...s, n: s.n + 1 }));
       doc.set({ n: 99, items: ['a'] });
-      // get  clone: original ground push must not pollute store
+      // get returns a clone: in-place push must not pollute the store
       doc.get().items.push('MUTANT');
     },
   });
@@ -829,11 +833,11 @@ test('doc naming empty interval leave pluginId:name;get return clone guard again
   const a = docs.get('p:docs:counter', { n: -1, items: [] as string[] });
   const b = docs.get('p:docs2:counter', { n: -1, items: [] as string[] });
   assert.equal(a.n, 99);
-  assert.deepEqual(a.items, ['a']); // MUTANT not leak leak
-  assert.equal(b.n, 5); // naming empty interval leave
+  assert.deepEqual(a.items, ['a']); // MUTANT does not leak into store
+  assert.equal(b.n, 5); // namespace isolated per plugin
 });
 
-test('not provide ConfigStore when setConfig explicit 501, do not false persist; provide when can write', { timeout: 60_000 }, async () => {
+test('setConfig explicitly rejects with 501 when ConfigStore is absent; persists when provided', { timeout: 60_000 }, async () => {
   const noStore = makeHost();
   await noStore.register({ id: 'p:cfg', definePlugin: () => {} });
   await assert.rejects(noStore.setConfig('p:cfg', { k: 1 }), (err: unknown) => {
@@ -860,7 +864,7 @@ test('not provide ConfigStore when setConfig explicit 501, do not false persist;
 // routing / UI collect / dispose
 // ---------------------------------------------------------------------------
 
-test('routing declaration relative path: host concatenate to plugin naming empty between, complete /api prefix/point segment/query string/empty segment reject', { timeout: 60_000 }, async () => {
+test('routing declaration relative path: host prepends plugin namespace; rejects full /api prefix, dot segments, query strings, and empty segments', { timeout: 60_000 }, async () => {
   const host = makeHost();
   await host.register({
     id: 'triggers',
@@ -899,7 +903,7 @@ test('routing declaration relative path: host concatenate to plugin naming empty
       .some((r) => r.pluginId === 'p:params' && r.path === '/api/plugins/p%3Aparams/routes/webhook/:id'),
   );
 
-  // complete /api prefix one rule reject (new contract only relative path, naming empty between by host negative duty)
+  // Reject full /api prefix (contract accepts relative paths only; host owns plugin namespace prefixing)
   await assertRejectsCode(
     () =>
       host.register({
@@ -1021,7 +1025,7 @@ test('dispose inverse order deactivate all plugin;dispose after invoke explicit 
   await host.dispose(); // idempotent
 });
 
-test('cli.command semantics command path: legal declaration pass-through manifest, action id forbidden point number', { timeout: 60_000 }, async () => {
+test('cli.command semantic path: valid declarations propagate to manifest; action id forbids dots', { timeout: 60_000 }, async () => {
   const host = makeHost();
   await host.register({
     id: 'builtin:triggers',
@@ -1039,7 +1043,7 @@ test('cli.command semantics command path: legal declaration pass-through manifes
   const manifest = host.listActions().find((a) => a.id === 'cron_create')!;
   assert.deepEqual(manifest.cli?.command, ['cron', 'create']);
 
-  // action id forbidden point number: all limit set ID with first '.' split, contains point will produce ambiguity parse
+  // action id forbids dots because CLI resolution splits qualified names on the first '.'
   const hDot = makeHost();
   await assertRejectsCode(
     () =>
@@ -1058,7 +1062,7 @@ test('cli.command semantics command path: legal declaration pass-through manifes
     'invalid_action_spec',
   );
   assert.equal(hDot.list().length, 0);
-  // doc id / service id still allows point number (forbid make only limit action id, other mistakenly forbid other identifier)
+  // doc id and service id still permit dots (dot restriction applies only to action ids)
   await hDot.register({
     id: 'p:dot-ok',
     definePlugin: (ctx) => {
@@ -1191,7 +1195,7 @@ test('old context in disable after disallows continue register/modify:epoch make
   void stolen;
 });
 
-test('ctx.dataDir is plugin dedicated belong subdirectory join(root, plugins, id) and already create', { timeout: 60_000 }, async () => {
+test('ctx.dataDir is dedicated plugin subdirectory join(root, plugins, id) and created eagerly', { timeout: 60_000 }, async () => {
   const host = makeHost();
   let seen: string | undefined;
   await host.register({
@@ -1200,17 +1204,16 @@ test('ctx.dataDir is plugin dedicated belong subdirectory join(root, plugins, id
       seen = ctx.dataDir;
     },
   });
-  // id in `:` when escaping is %3A(Windows NTFS hand over replace data stream hard rule),
-  // directory name via pluginDataDirName unique right threat point compute.
+  // Escape `:` as `%3A` (Windows NTFS alternate data stream rule) via pluginDataDirName.
   assert.equal(seen, join(dataDir, 'plugins', pluginDataDirName('builtin:sub')));
-  assert.ok(existsSync(seen!), 'plugin data directory should in register when create');
+  assert.ok(existsSync(seen!), 'plugin data directory should be created at registration');
 });
 
 // ---------------------------------------------------------------------------
 // regression: lifecycle async race
 // ---------------------------------------------------------------------------
 
-test('disable  await during new invokeAction/executeTool/runHook by isolated;stop failed produces no fake enabled state', { timeout: 60_000 }, async () => {
+test('disable awaits stop while gating invokeAction/executeTool/runHook; stop failure leaves no fake enabled state', { timeout: 60_000 }, async () => {
   const host = makeHost();
   let releaseStop!: () => void;
   const stopGate = new Promise<void>((res) => (releaseStop = res));
@@ -1239,8 +1242,8 @@ test('disable  await during new invokeAction/executeTool/runHook by isolated;sto
 
   const disabling = host.disable('p:race');
   await new Promise((r) => setTimeout(r, 20));
-  assert.ok(stopStarted, 'stop should already start (where at await)');
-  // await during new task one rule reject;runHook do not execute its handler(without reference and away continue)
+  assert.ok(stopStarted, 'stop should already have started before await settles');
+  // While stopping, new invocations reject and hooks skip the disabling plugin's handlers.
   await assertRejectsCode(() => host.invokeAction('p:race', 'ping', {}), 'plugin_disabled');
   await assertRejectsCode(() => host.executeTool('nope', {}, { conversationId: 1 }), 'unknown_tool');
   const hookResult = await host.runHook('trigger', makeEnvelope());
@@ -1342,18 +1345,18 @@ test('disable encounter stop failed: state deactivated (do not fake enabled=true
 });
 
 // ---------------------------------------------------------------------------
-// regression:stop failed but state already actual convert when, still must publish real plugin.changed event
-// (enabled:false / ui:[]), and without state change reject strictly zone
+// regression: when stop fails after state transition, still emit real plugin.changed
+// (enabled: false / ui: []) while clearly distinguishing failures before transition
 // ---------------------------------------------------------------------------
 
-/** when before all plugin.changed payload. */
+/** All captured `plugin.changed` event payloads. */
 function changedPayloads(): Array<{ plugin: { id: string; enabled: boolean }; ui: unknown[] }> {
   return eventPayloads
     .filter((e) => e.type === 'plugin.changed')
     .map((e) => e.payload as { plugin: { id: string; enabled: boolean }; ui: unknown[] });
 }
 
-/** declaration carries UI / action / tool / service / host asset complete plugin (stop behavior can inject). */
+/** Declare a full plugin with UI / action / tool / service / host assets (injectable stop handler). */
 function fullPlugin(id: string, stop: () => void): PluginDefinition {
   return {
     id,
@@ -1380,7 +1383,7 @@ function fullPlugin(id: string, stop: () => void): PluginDefinition {
   };
 }
 
-test('disable stop failed: already deactivate, still once plugin.changed(enabled:false, ui:[]), original error on throw, capability all expires and hosting release', { timeout: 60_000 }, async () => {
+test('disable stop failure: already deactivated, still emits plugin.changed(enabled:false, ui:[]), rethrows original error, expires capabilities', { timeout: 60_000 }, async () => {
   const host = makeHost();
   await host.register(fullPlugin('p:dfail', () => { throw new Error('svc blast'); }));
   assert.equal(host.listUi().length, 2);
@@ -1390,9 +1393,9 @@ test('disable stop failed: already deactivate, still once plugin.changed(enabled
   const changedBefore = changedPayloads().length;
   let disableDiag: HelmError | undefined;
   await assert.rejects(host.disable('p:dfail'), (err: unknown) => {
-    assert.ok(err instanceof HelmError, `expectation HelmError, actual:${String(err)}`);
+    assert.ok(err instanceof HelmError, `expected HelmError, got: ${String(err)}`);
     assert.equal(err.code, 'plugin_service_stop_failed');
-    // diagnose JSON-safe: service ID and original stop message all keep and can serialization (HTTP error message seal hard rule)
+    // Diagnostics are JSON-safe: service ID and stop error message survive HTTP serialization.
     const details = err.details as { pluginId: string; stopErrors: Array<{ serviceId: string; error: { message: string } }> };
     assert.equal(details.pluginId, 'p:dfail');
     assert.deepEqual(
@@ -1437,7 +1440,7 @@ test('disable stop failed: already deactivate, still once plugin.changed(enabled
   assert.equal(host.list().find((p) => p.id === 'p:dfail'), undefined);
 });
 
-test('unregister stop failed: plugin already remove still once plugin.changed(enabled:false, ui:[]), original error on throw', { timeout: 60_000 }, async () => {
+test('unregister stop failure: plugin removed, still emits plugin.changed(enabled:false, ui:[]), rethrows original error', { timeout: 60_000 }, async () => {
   const host = makeHost();
   await host.register(fullPlugin('p:ufail', () => { throw new Error('svc crash'); }));
   assert.equal(host.listUi().length, 2);
@@ -1460,16 +1463,16 @@ test('unregister stop failed: plugin already remove still once plugin.changed(en
   assert.equal(changed.at(-1)!.plugin.enabled, false);
   assert.deepEqual(changed.at(-1)!.ui, []);
 
-  // register table already actual remove
+  // Registry entry is already removed
   assert.equal(host.list().find((p) => p.id === 'p:ufail'), undefined);
   assert.deepEqual(host.listUi(), []);
   assert.deepEqual(host.listTools(), []);
   assert.ok(events.includes('release:p:ufail:7'));
 });
 
-test('stop and event publish also failed: keep stop diagnose (aggregate eventError), do not mask original error', { timeout: 60_000 }, async () => {
+test('stop and event publish both fail: preserves stop diagnostics (adds eventError) without masking root cause', { timeout: 60_000 }, async () => {
   const stopErr = new Error('stop diagnose');
-  // let host emitEvent in plugin.changed when throws (double failed); the rest event normal account
+  // Throw on `plugin.changed` in emitEvent while forwarding other events normally.
   const backend = makeHostApi(events);
   const originalEmit = backend.emitEvent;
   let emitBroken = false;
@@ -1481,17 +1484,16 @@ test('stop and event publish also failed: keep stop diagnose (aggregate eventErr
   await host.register(fullPlugin('p:double', () => { throw stopErr; }));
   emitBroken = true;
 
-  // teardown aggregate is HelmError(plugin_service_stop_failed), double heavy failed still with it is main error;
-  // diagnose already JSON-safe archive one (Error cannot serialization): by semantics validate original message/name, do not want seek reference each other etc.
+  // Teardown failure stays `HelmError(plugin_service_stop_failed)` with JSON-safe diagnostics.
   await assert.rejects(host.disable('p:double'), (err: unknown) => {
-    assert.ok(err instanceof HelmError, `expectation HelmError, actual:${String(err)}`);
+    assert.ok(err instanceof HelmError, `expected HelmError, got: ${String(err)}`);
     assert.equal(err.code, 'plugin_service_stop_failed');
     const details = err.details as {
       stopErrors?: Array<{ serviceId: string; error: { name: string; message: string } }>;
       eventError?: { name: string; message: string };
     };
     const stopDiag = details.stopErrors?.find((e) => e.serviceId === 'svc')?.error;
-    assert.equal(stopDiag?.message, 'stop diagnose', 'stop diagnose keep in details.stopErrors(original message)');
+    assert.equal(stopDiag?.message, 'stop diagnose', 'stop diagnostic preserves original message in details.stopErrors');
     assert.equal(stopDiag?.name, 'Error');
     assert.equal(details.eventError?.message, 'event pipeline crash', 'event publish error aggregate in details.eventError(original message)');
     assert.equal(details.eventError?.name, 'Error');
@@ -1755,26 +1757,26 @@ test('doc initial value/set/update boundary refuse non- JSON value; legal pure o
   assert.equal(docs.get('p:doc:k', { n: -1, items: [] }).n, 1);
   throwsCode(() => doc!.set({ n: NaN, items: [] } as never), 'invalid_json_value');
   throwsCode(() => doc!.set({ n: 1, items: ['a'], d: new Date() } as never), 'invalid_json_value');
-  // undefined field by refuse while non- static default discard
+  // Reject undefined fields rather than silently stripping them
   throwsCode(() => doc!.set({ n: 1, items: [], extra: undefined } as never), 'invalid_json_value');
-  // update pass illegal artifact same refuse
+  // Rejected updates likewise leave storage clean
   throwsCode(
     () =>
       doc!.update(() => ({ n: 1, items: [10n as unknown as string] })),
     'invalid_json_value',
   );
-  // store not by pollute
+  // Backing store stays untouched
   const cur = docs.get('p:doc:k', { n: -1, items: [] });
   assert.equal(cur.n, 1);
   assert.deepEqual(cur.items, ['a']);
-  // get return JSON-safe clone
+  // get returns a JSON-safe clone
   const got = doc!.get();
   assert.deepEqual(got, { n: 1, items: ['a'] });
   got.items.push('MUT');
   assert.deepEqual(docs.get('p:doc:k', { n: -1, items: [] }).items, ['a']);
 });
 
-test('action output contains Map/undefined/loop etc. non- JSON value when boundary explicit errors, not silently lose data', { timeout: 60_000 }, async () => {
+test('action output with Map/undefined/cycles fails explicitly at boundary without silent data loss', { timeout: 60_000 }, async () => {
   const host = makeHost();
   await host.register({
     id: 'p:out',
@@ -1800,10 +1802,10 @@ test('action output contains Map/undefined/loop etc. non- JSON value when bounda
 });
 
 // ---------------------------------------------------------------------------
-// regression:$async Schema and register phase pre- compile
+// regression: $async Schema and register-phase precompilation
 // ---------------------------------------------------------------------------
 
-test('action declaration $async Schema in register boundary i.e. refuse (invalid_plugin_schema) and whole rollback', { timeout: 60_000 }, async () => {
+test('action declaration with $async schema fails immediately at register boundary (invalid_plugin_schema) with full rollback', { timeout: 60_000 }, async () => {
   const host = makeHost();
   await assertRejectsCode(
     () =>
@@ -1823,7 +1825,7 @@ test('action declaration $async Schema in register boundary i.e. refuse (invalid
   );
   assert.equal(host.list().length, 0);
 
-  // illegal Schema(cannot compile) same in register boundary rollback, do not etc. first time invoke
+  // Uncompilable schema also rolls back at register boundary instead of waiting for first invocation
   await assertRejectsCode(
     () =>
       host.register({
@@ -1843,9 +1845,9 @@ test('action declaration $async Schema in register boundary i.e. refuse (invalid
   assert.equal(host.list().length, 0);
 });
 
-test('$async Schema if bypass register (validatePluginInput directly invoke) also will not Promise when true let through invalid input', { timeout: 60_000 }, async () => {
-  // AJV $async validate function return Promise: sync boolean decide will mistakenly when via.
-  // compile boundary already refuse, this in verify directly invoke also do not reason row: invalid input still reject.
+test('$async schema passed directly to validatePluginInput still rejects invalid input rather than treating Promise as truthy', { timeout: 60_000 }, async () => {
+  // AJV $async validators return a Promise; boolean checks would mistakenly accept them as truthy.
+  // Verify direct calls reject invalid input synchronously as well as at compile time.
   const schema = { type: 'object', properties: { n: { type: 'number' } }, required: ['n'], $async: true } as never;
   throwsCode(() => validatePluginInput('p', 'a', schema, { n: 'not-a-number' }), 'invalid_plugin_schema');
 });
@@ -2190,10 +2192,10 @@ test('doc lifecycle regression: same ID unload after re- register (epoch reset i
   });
 
   assert.ok(newHandle);
-  // new handle available
-  assert.deepEqual(newHandle.get(), { count: 20 }); // persist store in already is 20
+  // New handle reads persisted value
+  assert.deepEqual(newHandle.get(), { count: 20 });
 
-  // 4. old handle get / set / update / flush all reject and throw plugin_context_expired
+  // 4. Old handle get / set / update / flush all reject with plugin_context_expired
   throwsCode(() => oldHandle!.get(), 'plugin_context_expired');
   throwsCode(() => oldHandle!.set({ count: 999 }), 'plugin_context_expired');
   throwsCode(() => oldHandle!.update((s) => ({ count: s.count + 1 })), 'plugin_context_expired');
@@ -2204,19 +2206,19 @@ test('doc lifecycle regression: same ID unload after re- register (epoch reset i
     (err: unknown) => err instanceof HelmError && err.code === 'plugin_context_expired',
   );
 
-  // 5. validate old handle by reject when forbidden store and event side effect
+  // 5. Rejected old handle produces no store mutation or event side effects
   assert.deepEqual((docs as unknown as { get: (k: string, init: unknown) => unknown }).get('p:doc-lifecycle:state', null), storeBefore);
   const docUpdatedEvents = eventPayloads.filter((e) => e.type === 'plugin.doc.updated');
-  assert.equal(docUpdatedEvents.length, 0, 'old doc handle operation by reject after must not produce plugin.doc.updated event side effect');
+  assert.equal(docUpdatedEvents.length, 0, 'rejected operations on expired doc handle must not emit plugin.doc.updated');
 
-  // 6. new handle still fully normal available
+  // 6. New handle remains fully operational
   newHandle.set({ count: 42 });
   assert.deepEqual(newHandle.get(), { count: 42 });
   await newHandle.flush();
   assert.deepEqual((docs as unknown as { get: (k: string, init: unknown) => unknown }).get('p:doc-lifecycle:state', null), { count: 42 });
 });
 
-test('client module compile in-flight regression: same ID unload after re- register (epoch reset is 1), compile complete before old cycle act abandon and reject', { timeout: 60_000 }, async (t) => {
+test('in-flight client module compile regression: unregister then re-register same ID (epoch resets to 1) rejects stale artifact', { timeout: 60_000 }, async (t) => {
   let compileStartedResolve!: () => void;
   const compileStarted = new Promise<void>((r) => { compileStartedResolve = r; });
   let compileFinishResolve!: () => void;
@@ -2234,7 +2236,7 @@ test('client module compile in-flight regression: same ID unload after re- regis
         };
       },
       transformBackendTs: () => {
-        throw new HelmError('not_supported', 'test stub do not provide backend transpile', 501);
+        throw new HelmError('not_supported', 'test stub does not provide backend transpilation', 501);
       },
     },
   });
@@ -2249,25 +2251,25 @@ test('client module compile in-flight regression: same ID unload after re- regis
     definePlugin: () => {},
   };
 
-  // 1. register plugin P
+  // 1. Register plugin P
   await host.register(def);
 
-  // 2. start client module compile, enter internal compile gate control in
+  // 2. Start compiling client module and suspend at test gate
   const compilingPromise = host.getClientModule('p:client-race', 'index.tsx');
 
-  // wait for compile enter suspended state (determinism gate control, forbidden sleep)
+  // Wait deterministically for compile to enter suspended state
   await compileStarted;
 
-  // 3. in compile suspended in-flight during, cancel register P
+  // 3. Unregister P while compile is in-flight
   await host.unregister('p:client-race');
 
-  // 4. again with identical ID re- register P(all new PluginState,epoch re- is 1, state idle)
+  // 4. Re-register P with identical ID (fresh PluginState with epoch=1, phase=idle)
   await host.register(def);
 
-  // 5. let through compile complete
+  // 5. Release compile gate
   compileFinishResolve();
 
-  // 6. verify in-flight compile because registration identity does not match while by reject (409 plugin_client_unavailable)
+  // 6. Verify stale in-flight compile rejects due to mismatched registration identity (409 plugin_client_unavailable)
   await assert.rejects(
     compilingPromise,
     (err: unknown) => err instanceof HelmError && err.code === 'plugin_client_unavailable',
@@ -2545,4 +2547,258 @@ test('HTTP client.mjs main module ?hash=: immutable cache on match, 304 on ETag,
     httpHost.getClientModule('p:http-hash', 'index.tsx', { hash: 'stale-hash-000' }),
     (err: unknown) => err instanceof HelmError && err.code === 'client_module_stale' && err.status === 409,
   );
+});
+
+// ---------------------------------------------------------------------------
+// Transient docs (durable: false) & PluginSummary.publicConfig
+// ---------------------------------------------------------------------------
+
+test('ctx.doc durable: false keeps state strictly in memory (zero store I/O, clone, 2 MiB limit, public SSE/snapshot, eviction on disable)', { timeout: 60_000 }, async (t) => {
+  const ops: string[] = [];
+  const spyDocs: PluginDocStore = {
+    get: (key, initial) => {
+      ops.push(`get:${key}`);
+      return docs.get(key, initial);
+    },
+    set: (key, value) => {
+      ops.push(`set:${key}`);
+      docs.set(key, value);
+    },
+    deletePlugin: (pluginId) => {
+      ops.push(`deletePlugin:${pluginId}`);
+      docs.deletePlugin(pluginId);
+    },
+    flush: async () => {
+      ops.push('flush');
+    },
+  };
+  const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: makeHostApi(events), docs: spyDocs });
+  t.after(() => host.dispose());
+
+  let privDoc!: PluginDocHandle<{ count: number }>;
+  let pubDoc!: PluginDocHandle<{ phase: string; items: string[] }>;
+
+  await host.register({
+    id: 'p:transient-global',
+    definePlugin: (ctx) => {
+      privDoc = ctx.doc('priv', { count: 0 }, { durable: false });
+      pubDoc = ctx.doc('pub', { phase: 'idle', items: [] as string[] }, { public: true, durable: false });
+    },
+  });
+
+  // Invalid `durable` option rejects cleanly at declaration time.
+  await assertRejectsCode(
+    () =>
+      host.register({
+        id: 'p:bad-durable',
+        definePlugin: (ctx) => {
+          ctx.doc('bad', {}, { durable: 'yes' as never });
+        },
+      }),
+    'invalid_doc_spec',
+  );
+
+  privDoc.set({ count: 7 });
+  pubDoc.update((prev) => ({ ...prev, phase: 'active', items: ['x'] }));
+  // Returned handle clone must not mutate internal transient memory.
+  pubDoc.get().items.push('MUTATED');
+  assert.deepEqual(pubDoc.get(), { phase: 'active', items: ['x'] });
+  assert.deepEqual(privDoc.get(), { count: 7 });
+
+  // Public doc snapshot & events work identically to durable docs.
+  assert.deepEqual(host.getPublicDoc('p:transient-global', 'pub').value, { phase: 'active', items: ['x'] });
+  assert.ok(host.listPublicDocs().some((d) => d.pluginId === 'p:transient-global' && d.name === 'pub'));
+  const docEvents = eventPayloads.filter((e) => e.type === 'plugin.doc.updated');
+  assert.equal(docEvents.length, 1);
+
+  // Enforce JSON value & 2 MiB size limit even in transient mode.
+  throwsCode(() => pubDoc.set({ phase: 'bad', items: [undefined as never] }), 'invalid_json_value');
+  throwsCode(() => pubDoc.set({ phase: 'huge', items: ['a'.repeat(2 * 1024 * 1024 + 100)] }), 'plugin_doc_too_large');
+
+  // flush() resolves immediately without hitting persistent doc store.
+  await pubDoc.flush();
+  assert.deepEqual(ops.filter((op) => !op.startsWith('flush')), [], 'durable: false 绝不触发 PluginDocStore get/set/delete');
+
+  // Disable clears transient docs immediately; re-enabling starts fresh from initial.
+  await host.disable('p:transient-global');
+  throwsCode(() => host.getPublicDoc('p:transient-global', 'pub'), 'plugin_doc_not_found');
+
+  await host.enable('p:transient-global');
+  assert.deepEqual(host.getPublicDoc('p:transient-global', 'pub').value, { phase: 'idle', items: [] });
+  assert.deepEqual(ops.filter((op) => op.startsWith('get:') || op.startsWith('set:')), []);
+});
+
+test('ctx.sessionDoc durable: false works without sessionDocs store, performs zero SQLite/store I/O, and cleans up on conversation.deleted & disable', { timeout: 60_000 }, async (t) => {
+  const sessionOps: string[] = [];
+  const backing = new Map<string, string>();
+  const spySessionDocs: PluginSessionDocStore = {
+    get: (pluginId, name, conversationId) => {
+      sessionOps.push(`get:${pluginId}:${name}:${conversationId}`);
+      return backing.get(`${pluginId}:${name}:${conversationId}`);
+    },
+    put: (pluginId, name, conversationId, valueJson) => {
+      sessionOps.push(`put:${pluginId}:${name}:${conversationId}`);
+      backing.set(`${pluginId}:${name}:${conversationId}`, valueJson);
+    },
+    delete: (pluginId, name, conversationId) => {
+      sessionOps.push(`delete:${pluginId}:${name}:${conversationId}`);
+      backing.delete(`${pluginId}:${name}:${conversationId}`);
+    },
+    deletePlugin: (pluginId) => {
+      sessionOps.push(`deletePlugin:${pluginId}`);
+    },
+    listConversationIds: (pluginId, name) => {
+      sessionOps.push(`list:${pluginId}:${name}`);
+      return [];
+    },
+    flush: async () => {
+      sessionOps.push('flush');
+    },
+  };
+
+  const deletedListeners = new Set<(payload: unknown) => void>();
+  const baseHost = makeHostApi(events);
+  const hostApi: PluginHostBackend = {
+    ...baseHost,
+    onEvent: (type, listener) => {
+      if (type === 'conversation.deleted') {
+        deletedListeners.add(listener as (payload: unknown) => void);
+        return () => {
+          deletedListeners.delete(listener as (payload: unknown) => void);
+        };
+      }
+      return baseHost.onEvent(type, listener);
+    },
+  };
+
+  // Pre-seed stale durable row to verify transient mode ignores durable backing store completely.
+  backing.set('p:transient-sess:speed:1', JSON.stringify({ tps: 999 }));
+
+  // 1. Works even with sessionDocs omitted completely.
+  const noStoreHost = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: hostApi, docs });
+  t.after(() => noStoreHost.dispose());
+  await noStoreHost.register({
+    id: 'p:transient-no-store',
+    definePlugin: (ctx) => {
+      const s = ctx.sessionDoc('s', { n: 0 }, { public: true, durable: false });
+      s.set(1, { n: 5 });
+    },
+  });
+  assert.deepEqual(noStoreHost.getPublicSessionDoc('p:transient-no-store', 's', 1).value, { n: 5 });
+
+  // 2. With spy sessionDocs store present, zero durable reads/writes happen.
+  const host = new PluginHost({
+    buildProvider: createPluginBuildProvider(),
+    dataDir,
+    host: hostApi,
+    docs,
+    sessionDocs: spySessionDocs,
+  });
+  t.after(() => host.dispose());
+
+  let transientHandle!: PluginSessionDocHandle<{ tps: number } | null>;
+  await host.register({
+    id: 'p:transient-sess',
+    definePlugin: (ctx) => {
+      transientHandle = ctx.sessionDoc<{ tps: number } | null>('speed', null, { public: true, durable: false });
+    },
+  });
+  transientHandle.set(1, { tps: 42 });
+  transientHandle.set(2, { tps: 84 });
+
+  // Never reads pre-seeded stale durable row; reads in-memory values only.
+  assert.deepEqual(host.getPublicSessionDoc('p:transient-sess', 'speed', 1).value, { tps: 42 });
+  assert.deepEqual(sessionOps, [], '注册并写入瞬态 sessionDoc 全程零持久存储访问');
+
+  // conversation.deleted event automatically evicts transient sessionDoc entry for conversation 1.
+  for (const listener of deletedListeners) listener({ type: 'conversation.deleted', conversationId: 1 });
+  assert.equal(host.getPublicSessionDoc('p:transient-sess', 'speed', 1).value, null, 'conversation.deleted 自动清理瞬态会话文档');
+  assert.deepEqual(host.getPublicSessionDoc('p:transient-sess', 'speed', 2).value, { tps: 84 });
+
+  // Disable immediately clears all remaining transient session entries (conv 2).
+  await host.disable('p:transient-sess');
+  throwsCode(() => host.getPublicSessionDoc('p:transient-sess', 'speed', 2), 'plugin_doc_not_found');
+  await host.enable('p:transient-sess');
+  assert.equal(host.getPublicSessionDoc('p:transient-sess', 'speed', 2).value, null);
+  assert.deepEqual(sessionOps.filter((op) => op !== 'flush'), []);
+});
+
+test('PluginSummary.publicConfig filters secret fields, merges defaults, redacts secrets, and updates via plugin.changed', { timeout: 60_000 }, async (t) => {
+  const cfgStore = new MemoryConfigStore();
+  cfgStore.set('p:cfg-mixed', {
+    apiKey: 'sk-live-secret',
+    note: 'token is sk-live-secret',
+    windowMs: 2_000,
+    undeclaredKey: 'ignored',
+  });
+
+  const baseBackend = makeHostApi(events);
+  const host = new PluginHost({
+    buildProvider: createPluginBuildProvider(),
+    dataDir,
+    host: {
+      ...baseBackend,
+      setPluginConfig: async (pluginId, values) => {
+        cfgStore.set(pluginId, values);
+      },
+    },
+    docs,
+    config: cfgStore,
+    redactText: (text) => text.replaceAll('sk-live-secret', '[REDACTED]'),
+  });
+  t.after(() => host.dispose());
+
+  let updateFromCtxHost!: (next: Record<string, unknown>) => Promise<void>;
+
+  await host.register({
+    id: 'p:cfg-no-schema',
+    definePlugin: () => {},
+  });
+  await host.register({
+    id: 'p:cfg-secret-only',
+    definePlugin: (ctx) => {
+      ctx.configSchema({
+        token: { type: 'string', secret: true, default: 's1' },
+      });
+    },
+  });
+  await host.register({
+    id: 'p:cfg-mixed',
+    definePlugin: (ctx) => {
+      ctx.configSchema({
+        windowMs: { type: 'number', default: 1_000 },
+        label: { type: 'string', default: 'fast' },
+        note: { type: 'string' },
+        apiKey: { type: 'string', secret: true, default: 'sk-default' },
+      });
+      updateFromCtxHost = (next) => ctx.host.setConfig(next);
+    },
+  });
+
+  assert.equal(host.get('p:cfg-no-schema')?.publicConfig, undefined);
+  assert.equal(host.get('p:cfg-secret-only')?.publicConfig, undefined);
+  assert.deepEqual(host.get('p:cfg-mixed')?.publicConfig, {
+    windowMs: 2_000,
+    label: 'fast',
+    note: 'token is [REDACTED]',
+  });
+  assert.equal('apiKey' in (host.get('p:cfg-mixed')?.publicConfig ?? {}), false);
+  assert.equal('undeclaredKey' in (host.get('p:cfg-mixed')?.publicConfig ?? {}), false);
+
+  const changedStart = eventPayloads.filter((e) => e.type === 'plugin.changed').length;
+  await host.setConfig('p:cfg-mixed', { windowMs: 3_500, apiKey: 'sk-live-secret' });
+  const updated = host.get('p:cfg-mixed')!;
+  assert.deepEqual(updated.publicConfig, { windowMs: 3_500, label: 'fast' });
+
+  const afterHostSet = eventPayloads.filter((e) => e.type === 'plugin.changed').slice(changedStart);
+  assert.equal(afterHostSet.length, 1);
+  assert.deepEqual((afterHostSet[0]!.payload as { plugin: PluginSummary }).plugin.publicConfig, {
+    windowMs: 3_500,
+    label: 'fast',
+  });
+
+  await updateFromCtxHost({ windowMs: 4_000, label: 'turbo', apiKey: 'another-secret' });
+  const lastChanged = eventPayloads.filter((e) => e.type === 'plugin.changed').at(-1)!.payload as { plugin: PluginSummary };
+  assert.deepEqual(lastChanged.plugin.publicConfig, { windowMs: 4_000, label: 'turbo' });
+  assert.equal('apiKey' in (lastChanged.plugin.publicConfig ?? {}), false);
 });

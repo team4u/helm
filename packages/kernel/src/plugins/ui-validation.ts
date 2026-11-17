@@ -1,5 +1,5 @@
 /**
- * PluginHost UI register specification and action bind set validate.
+ * PluginHost UI registration validation and action binding checks.
  */
 import { HelmError } from '@helm/protocol';
 import type { UiRegistry } from './ui-registry.js';
@@ -21,13 +21,12 @@ export function assertUiDocsRegistered(
 }
 
 /**
- * composer.completer action source bind set validate (define phase end / enable commit point):
- * - this plugin reference: action must already declaration and idempotent: true(completion query high frequency trigger,
- *   must not bind set non- idempotent side effect action); action declaration can later than UI declaration, reason in define phase end validate;
- * - across plugin reference: only in enable commit point (crossPlugin=true, and enabled publish the same sync chunk)
- *   and target plugin when before enabled when validate store in and idempotent; target not yet register/enable when do not reject
- *   (legal later register, run phase frontend via action manifest honor bottom validate availability).
- * idempotent only is declaration mark record (allows assert chain heavy run), does not mean code security sandbox.
+ * Validates `composer.completer` action source bindings at definition end and enable commit:
+ * - Same-plugin references: the action must be declared with `idempotent: true` (completer queries
+ *   fire frequently and must not trigger side-effecting actions); verified at end of definition;
+ * - Cross-plugin references: checked at enable commit (`crossPlugin=true`) when the target plugin is
+ *   currently enabled; unregistered/disabled targets are allowed to register later and verified at runtime.
+ * `idempotent` is a declarative contract (safe to replay on disconnect), not an execution sandbox.
  */
 export function assertUiCompleterActionBindings(
   pluginId: string,
@@ -41,19 +40,19 @@ export function assertUiCompleterActionBindings(
     const source = (u.spec as { source?: unknown }).source;
     if (!isPlainObject(source) || source['kind'] !== 'action') continue;
     const actionId = source['actionId'];
-    if (typeof actionId !== 'string') continue; // register boundary already reject illegal shape
+    if (typeof actionId !== 'string') continue; // invalid shape already rejected at registration
     const actionPluginId = source['actionPluginId'];
     const targetPluginId =
       typeof actionPluginId === 'string' && actionPluginId.length > 0 ? actionPluginId : pluginId;
     if (targetPluginId !== pluginId && !crossPlugin) continue;
     if (targetPluginId !== pluginId) {
       const target = plugins.get(targetPluginId);
-      if (!target || !target.enabled) continue; // target not registered/not enabled: allows later register
+      if (!target || !target.enabled) continue; // target not yet registered/enabled: allow deferred registration
       const binding = capabilityRegistry.getActionBinding(targetPluginId, actionId);
       if (binding === undefined) {
         throw new HelmError(
           'invalid_ui_spec',
-          `plugin ${pluginId} completion source reference plugin ${targetPluginId} not declaration action ${actionId}`,
+          `Plugin ${pluginId} completion source references undeclared action ${actionId} from plugin ${targetPluginId}`,
           400,
           { pluginId, id: String((u.spec as { id?: unknown }).id), targetPluginId, actionId },
         );
@@ -61,7 +60,7 @@ export function assertUiCompleterActionBindings(
       if (!binding.idempotent) {
         throw new HelmError(
           'invalid_ui_spec',
-          `plugin ${pluginId} completion source bind set action ${targetPluginId}.${actionId} must idempotent: true`,
+          `Plugin ${pluginId} completion source action ${targetPluginId}.${actionId} must declare idempotent: true`,
           400,
           { pluginId, id: String((u.spec as { id?: unknown }).id), targetPluginId, actionId },
         );
@@ -72,7 +71,7 @@ export function assertUiCompleterActionBindings(
     if (binding === undefined) {
       throw new HelmError(
         'invalid_ui_spec',
-        `plugin ${pluginId} completion source reference this plugin not declaration action ${actionId}`,
+        `Plugin ${pluginId} completion source references undeclared action ${actionId}`,
         400,
         { pluginId, id: String((u.spec as { id?: unknown }).id), actionId },
       );
@@ -80,7 +79,7 @@ export function assertUiCompleterActionBindings(
     if (!binding.idempotent) {
       throw new HelmError(
         'invalid_ui_spec',
-        `plugin ${pluginId} completion source bind set action ${actionId} must idempotent: true(completion query must not trigger non- idempotent side effect)`,
+        `Plugin ${pluginId} completion source action ${actionId} must declare idempotent: true (completion queries must not trigger non-idempotent side effects)`,
         400,
         { pluginId, id: String((u.spec as { id?: unknown }).id), actionId },
       );

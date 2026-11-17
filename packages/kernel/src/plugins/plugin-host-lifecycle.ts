@@ -1,5 +1,5 @@
 /**
- * plugin register, deregister, enable and deactivate lifecycle transaction stream process.
+ * Plugin registration, unregistration, enable, and disable lifecycle transactions.
  */
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -43,6 +43,7 @@ export interface PluginLifecycleContext extends PluginTransitionContext {
   servicesStarted: boolean;
   createPluginContext: (state: PluginState, epoch: number) => HelmPluginContext;
   getPluginLifecycle: ClientLifecycleLookup['getPluginLifecycle'];
+  ensureTransientSessionDocListener?: (pluginId: string) => void;
   isDisposed: () => boolean;
 }
 
@@ -103,7 +104,7 @@ export async function runRegisterTransaction(
 ): Promise<void> {
   const pluginId = definition.id;
   if (ctx.plugins.has(pluginId)) {
-    throw new HelmError('plugin_already_registered', `plugin registered:${pluginId}`, 409, { pluginId });
+    throw new HelmError('plugin_already_registered', `Plugin is already registered: ${pluginId}`, 409, { pluginId });
   }
   const dependencies = normalizeDependencies(definition);
   assertNoDependencyCycle(ctx.plugins, pluginId, dependencies);
@@ -139,8 +140,9 @@ export async function runRegisterTransaction(
 
   if (wantsEnabled) {
     try {
-      // commit point final inspect first at mount, then sync placement enabled+idle avoid manifest first expose out capability
+      // Commit enablement checks before marking enabled+idle so capabilities are not exposed early.
       assertEnableCommitChecks(state, ctx);
+      ctx.ensureTransientSessionDocListener?.(pluginId);
       await precompilePluginClientModules(state, ctx);
       await registerProviders(state, ctx.providers);
       await activatePluginServices(state, ctx.servicesStarted);
@@ -197,7 +199,7 @@ export async function runEnableTransaction(
   if (state.loadFailed === true) {
     throw new HelmError(
       'plugin_load_failed',
-      `plugin ${pluginId} failed to load (${state.lastError?.message ?? 'unknown error'}), please fix plugin source code after use reload or restart Hub`,
+      `Plugin ${pluginId} failed to load (${state.lastError?.message ?? 'unknown error'}); fix plugin source and reload or restart Hub`,
       409,
       { pluginId, error: state.lastError },
     );
@@ -212,12 +214,13 @@ export async function runEnableTransaction(
   try {
     await runDefinition(state, ctx);
     ctx.uiRegistry.assertCrossPluginUnique(pluginId, getActiveEnabledPluginIds(ctx.plugins));
+    ctx.ensureTransientSessionDocListener?.(pluginId);
     await precompilePluginClientModules(state, ctx);
     await registerProviders(state, ctx.providers);
     await activatePluginServices(state, ctx.servicesStarted);
     await persistEnabled(ctx.configStore, state, true);
     persistedEnabled = true;
-    // and enabled=true same where the same sync segment, close concurrency deactivate dependency TOCTOU window
+    // Commit enablement and idle phase in the same synchronous block to avoid TOCTOU races with concurrent disables.
     assertEnableCommitChecks(state, ctx);
     commitEnabled(state);
     state.lastError = undefined;
@@ -245,13 +248,13 @@ export async function runDisableTransaction(
     if (usages.length > 0) {
       throw new HelmError(
         'plugin_in_use',
-        `plugin ${pluginId} store in ${usages.length} where related asset occupy, deactivate after related feature can unavailable (confirm after can pass force force deactivate)`,
+        `Plugin ${pluginId} has ${usages.length} active resource usage(s); disabling may break dependent features (pass force to override)`,
         409,
         { pluginId, usages },
       );
     }
   }
-  // inUse contains async IO; return after second gate and sync placement deactivating, eliminate and new task TOCTOU
+  // Re-check idle after async in-use probes and mark deactivating synchronously to prevent TOCTOU races.
   assertPluginIdle(pluginId, state, ctx);
   state.phase = 'deactivating';
   let stopError: { err: unknown } | undefined;

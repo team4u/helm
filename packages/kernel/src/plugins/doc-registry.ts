@@ -1,14 +1,14 @@
 /**
- * doc-registry.ts: manage plugin public/conversation document (PluginDoc / PluginSessionDoc).
+ * doc-registry.ts: manages plugin public/session documents (`PluginDoc` / `PluginSessionDoc`).
  *
- * responsibility:
- * - maintain plugin public/private doc and conversation level sessionDoc register state and handle;
- * - isolated different plugin document read write (global key pluginId:name, conversation key (pluginId, name, conversationId) three meta group);
- * - wrap global PluginDocStore and conversation dedicated use PluginSessionDocStore, and and public document
- *   update event (global SSE / conversation dedicated use subscribe stream) hit through.
+ * Responsibilities:
+ * - Track registrations and handles for plugin-scoped `doc` and conversation-scoped `sessionDoc`;
+ * - Isolate reads/writes across plugins (`pluginId:name` globally, `(pluginId, name, conversationId)` per session);
+ * - Support durable storage via `PluginDocStore` / `PluginSessionDocStore` as well as in-memory transient
+ *   documents (`durable: false`) without touching SQLite, while preserving 2 MiB validation and public SSE streams.
  *
- * naming empty between convention:doc and sessionDoc sharing document naming empty between (the same plugin inside forbidden same name),
- * otherwise GET /api/plugins/:id/docs/:name will appear routing ambiguity.
+ * Namespace rule: `doc` and `sessionDoc` share the per-plugin document name space (duplicate names across them
+ * are rejected) to prevent routing ambiguity on `GET /api/plugins/:id/docs/:name`.
  */
 import {
   HelmError,
@@ -23,71 +23,74 @@ import { assertValidId, isPlainObject, jsonClone } from './shared.js';
 export interface PluginDocStore {
   get<T>(key: string, initial: T): T;
   set<T>(key: string, value: T): void;
-  /** delete a certain plugin in the store in all global document (`${pluginId}:` prefix key); unload related clean up use. */
+  /** Delete all global documents belonging to a plugin (`${pluginId}:` prefix); used for uninstall cleanup. */
   deletePlugin(pluginId: string): void;
-  /** wait for all queue up write truly (sync mirror ≠ persist complete; failed explicit reject). */
+  /** Wait for all queued writes to be durably persisted (in-memory mirror updates do not guarantee flush; rejects on failure). */
   flush(): Promise<void>;
 }
 
 /**
- * plugin conversation document durable layer ((pluginId, name, conversationId) three meta group key).
- * get return original JSON string (not write is undefined);put/delete is sync mirror
- * queue up write;flush wait for real, failed explicit reject. not provide the port when sessionDoc
- * declaration explicit 501(forbid memory fall back - - conversation document promise across restarts store, memory implement equals fabricate persist).
+ * Durable backing store for plugin session documents keyed by `(pluginId, name, conversationId)`.
+ * `get` returns the raw JSON string (or `undefined` if unwritten); `put`/`delete` update the sync mirror
+ * and enqueue writes; `flush` awaits real persistence and rejects explicitly on failure. Missing this port
+ * fails durable `sessionDoc` registration with 501 (no silent in-memory fallback).
  */
 export interface PluginSessionDocStore {
   get(pluginId: string, name: string, conversationId: number): string | undefined;
   put(pluginId: string, name: string, conversationId: number, valueJson: string): void;
   delete(pluginId: string, name: string, conversationId: number): void;
-  /** delete a certain plugin all conversation document (by pluginId whole clean up); unload related clean up use. */
+  /** Delete all session documents belonging to a plugin; used for uninstall cleanup. */
   deletePlugin(pluginId: string): void;
   listConversationIds(pluginId: string, name: string): number[];
   flush(): Promise<void>;
 }
 
-/** doc register items: handle + visible + archive one initial value (public snapshot not write when also can read). */
+/** Registered `doc` metadata: handle, visibility, durability, and normalized initial value. */
 export interface DocRegistration {
   handle: PluginDocHandle<unknown>;
   isPublic: boolean;
+  durable: boolean;
   initial: unknown;
 }
 
-/** sessionDoc register items: handle + visible + archive one initial value (not write read and delete event back value). */
+/** Registered `sessionDoc` metadata: handle, visibility, durability, and normalized initial/fallback value. */
 export interface SessionDocRegistration {
   handle: PluginSessionDocHandle<unknown>;
   isPublic: boolean;
+  durable: boolean;
   initial: unknown;
 }
 
-/** conversation document related host port (by PluginHost construct when inject). */
+/** Host ports for plugin session documents (injected when constructing `PluginHost`). */
 export interface PluginDocRegistryOptions {
-  /** conversation document dedicated use durable layer; missing when sessionDoc declaration explicit 501(forbid memory fall back). */
+  /** Durable store for `sessionDoc`; required whenever `durable !== false` (missing throws 501). */
   sessionStore?: PluginSessionDocStore;
   /**
-   * conversation store in validate (host getConversation adapt): each time three meta group operation before invoke,
-   * reject to deleted conversation back write orphan child data; throws original on throw (such as conversation_not_found).
+   * Conversation existence check (adapted from host `getConversation`): invoked before tuple operations
+   * so writes to deleted conversations fail cleanly with the host error (e.g. `conversation_not_found`).
    */
   assertConversationExists?: (conversationId: number) => void;
-  /** public sessionDoc change event (delete when value is initial value and carries deleted: true). */
+  /** Emits updates for public `sessionDoc` entries (deletions carry initial value with `deleted: true`). */
   emitSessionDocUpdated?: (doc: PublicPluginSessionDoc) => void;
   /**
-   * single document JSON serialization byte cap (initial / set / update unify opening path): default
-   * PLUGIN_DOC_MAX_JSON_BYTES(2 MiB). only supply test inject more small value; does not change reject semantics.
+   * Maximum serialized JSON size in bytes for any single document value (`initial` / `set` / `update`).
+   * Defaults to `PLUGIN_DOC_MAX_JSON_BYTES` (2 MiB); smaller values may be injected in tests.
    */
   maxDocJsonBytes?: number;
 }
 
 /**
- * plugin document (doc / sessionDoc) single value JSON serialization byte cap:2 MiB.
- * guard against line store in reason: document value will enter sync mirror, durable layer queue up write and public event payload,
- * without cap over large value will without sound drag collapse SQLite write queue and SSE first frame. over limit one rule in write mirror and
- * publish event before reject (413 plugin_doc_too_large), old value keep do not change.
+ * Maximum JSON-serialized byte size for a single `doc` / `sessionDoc` value: 2 MiB.
+ * Prevents oversized payloads from stalling SQLite write queues or SSE snapshots;
+ * writes exceeding this limit fail with `413 plugin_doc_too_large` before touching storage or events.
  */
 export const PLUGIN_DOC_MAX_JSON_BYTES = 2 * 1024 * 1024;
 
 export class PluginDocRegistry {
   private pluginDocs = new Map<string, Map<string, DocRegistration>>();
   private sessionDocs = new Map<string, Map<string, SessionDocRegistration>>();
+  private transientDocs = new Map<string, Map<string, unknown>>();
+  private transientSessionDocs = new Map<string, Map<string, Map<number, unknown>>>();
 
   constructor(
     private readonly store: PluginDocStore,
@@ -96,10 +99,8 @@ export class PluginDocRegistry {
   ) {}
 
   /**
-   * document value body accumulate guard against line:JSON serialization result exceeds cap when in write mirror/durable layer/publish event before
-   * explicit reject (413 plugin_doc_too_large,details carry pluginId/name/kind/bytes/
-   * maxBytes), old value keep do not change. reference should already jsonClone(loop reference/undefined/
-   * non- pure object etc. cannot serialization value in that one step already explicit failed, this where no longer duplicate validate).
+   * Enforces the serialized byte limit before writing storage/memory or emitting public events.
+   * Inputs should already have passed `jsonClone` so cycles/undefined/non-JSON values fail there first.
    */
   private assertWithinLimit(
     pluginId: string,
@@ -110,11 +111,11 @@ export class PluginDocRegistry {
   ): void {
     const maxBytes = this.options.maxDocJsonBytes ?? PLUGIN_DOC_MAX_JSON_BYTES;
     const json = JSON.stringify(value);
-    // jsonClone already reject undefined/function/loop reference; this where guard against defend honor bottom, never static default write empty.
+    // Defensive backstop: `jsonClone` already rejects undefined/functions/cycles.
     if (json === undefined) {
       throw new HelmError(
         'invalid_doc_value',
-        `plugin ${pluginId} ${kind} ${name} value cannot JSON serialization (top-level is undefined or function)`,
+        `Plugin ${pluginId} ${kind} ${name} value cannot be serialized to JSON (top-level undefined or function)`,
         400,
         { pluginId, name, kind, ...(extraDetails ?? {}) },
       );
@@ -123,18 +124,73 @@ export class PluginDocRegistry {
     if (bytes > maxBytes) {
       throw new HelmError(
         'plugin_doc_too_large',
-        `plugin ${pluginId} ${kind} ${name}  JSON serialization result ${bytes} byte, exceeds cap ${maxBytes} byte (reject write, old value keep do not change)`,
+        `Plugin ${pluginId} ${kind} ${name} JSON payload is ${bytes} bytes, exceeding limit of ${maxBytes} bytes (write rejected; previous value unchanged)`,
         413,
         { pluginId, name, kind, bytes, maxBytes, ...(extraDetails ?? {}) },
       );
     }
   }
 
+  private getTransientDoc(pluginId: string, name: string, initial: unknown): unknown {
+    const map = this.transientDocs.get(pluginId);
+    if (map?.has(name)) {
+      return jsonClone(map.get(name));
+    }
+    return jsonClone(initial);
+  }
+
+  private setTransientDoc(pluginId: string, name: string, value: unknown): void {
+    let map = this.transientDocs.get(pluginId);
+    if (!map) {
+      map = new Map();
+      this.transientDocs.set(pluginId, map);
+    }
+    map.set(name, value);
+  }
+
+  private setTransientSessionDoc(
+    pluginId: string,
+    name: string,
+    conversationId: number,
+    value: unknown,
+  ): void {
+    let byName = this.transientSessionDocs.get(pluginId);
+    if (!byName) {
+      byName = new Map();
+      this.transientSessionDocs.set(pluginId, byName);
+    }
+    let byConv = byName.get(name);
+    if (!byConv) {
+      byConv = new Map();
+      byName.set(name, byConv);
+    }
+    byConv.set(conversationId, value);
+  }
+
+  private deleteTransientSessionDocEntry(
+    pluginId: string,
+    name: string,
+    conversationId: number,
+  ): void {
+    const byName = this.transientSessionDocs.get(pluginId);
+    const byConv = byName?.get(name);
+    if (!byName || !byConv) return;
+    byConv.delete(conversationId);
+    if (byConv.size === 0) byName.delete(name);
+    if (byName.size === 0) this.transientSessionDocs.delete(pluginId);
+  }
+
+  private readDocValue(pluginId: string, name: string, reg: DocRegistration): unknown {
+    return reg.durable
+      ? jsonClone(this.store.get(`${pluginId}:${name}`, reg.initial as never))
+      : this.getTransientDoc(pluginId, name, reg.initial);
+  }
+
   registerDoc<TState>(
     pluginId: string,
     name: string,
     initial: TState,
-    opts: { public?: boolean } | undefined,
+    opts: PluginDocOptions | undefined,
     assertUsable: () => void,
   ): PluginDocHandle<TState> {
     assertValidId('doc', name);
@@ -147,52 +203,63 @@ export class PluginDocRegistry {
     }
 
     if (docs.has(name)) {
-      throw new HelmError('duplicate_doc', `plugin ${pluginId} duplicate declaration doc ${name}`, 409);
+      throw new HelmError('duplicate_doc', `Plugin ${pluginId} declared duplicate doc ${name}`, 409);
     }
-    // doc and sessionDoc sharing naming empty between: same name will build into document routing ambiguity.
+    // `doc` and `sessionDoc` share one namespace per plugin to avoid routing ambiguity.
     if (this.sessionDocs.get(pluginId)?.has(name)) {
       throw new HelmError(
         'duplicate_doc',
-        `plugin ${pluginId} duplicate declaration document name ${name}(doc and sessionDoc sharing naming empty between, forbidden same name)`,
+        `Plugin ${pluginId} declared duplicate document name ${name} (doc and sessionDoc share one namespace)`,
         409,
       );
     }
 
     const isPublic = opts?.public === true;
+    const durable = opts?.durable !== false;
     const key = `${pluginId}:${name}`;
     const store = this.store;
     const normalizedInitial = jsonClone(initial);
     this.assertWithinLimit(pluginId, 'doc', name, normalizedInitial);
 
+    const readCurrent = (): TState =>
+      durable
+        ? jsonClone(store.get<TState>(key, normalizedInitial))
+        : (this.getTransientDoc(pluginId, name, normalizedInitial) as TState);
+
+    const writeNext = (safe: TState): void => {
+      // Enforce payload limit before touching storage/memory or emitting public events.
+      this.assertWithinLimit(pluginId, 'doc', name, safe);
+      if (durable) {
+        store.set(key, safe);
+      } else {
+        this.setTransientDoc(pluginId, name, safe);
+      }
+      if (isPublic) this.emitDocUpdated(pluginId, name, jsonClone(safe));
+    };
+
     const handle: PluginDocHandle<TState> = {
       get: () => {
         assertUsable();
-        return jsonClone(store.get<TState>(key, normalizedInitial));
+        return readCurrent();
       },
       set: (next) => {
         assertUsable();
-        const safe = jsonClone(next);
-        // body accumulate guard against line first at mirror write and event publish: reject when old value keep do not change.
-        this.assertWithinLimit(pluginId, 'doc', name, safe);
-        store.set(key, safe);
-        if (isPublic) this.emitDocUpdated(pluginId, name, safe);
+        writeNext(jsonClone(next));
       },
       update: (fn) => {
         assertUsable();
-        const safe = jsonClone(fn(jsonClone(store.get<TState>(key, normalizedInitial))));
-        this.assertWithinLimit(pluginId, 'doc', name, safe);
-        store.set(key, safe);
-        if (isPublic) this.emitDocUpdated(pluginId, name, safe);
+        writeNext(jsonClone(fn(readCurrent())));
       },
       flush: async () => {
         assertUsable();
-        return store.flush();
+        return durable ? store.flush() : Promise.resolve();
       },
     };
 
     docs.set(name, {
       handle: handle as PluginDocHandle<unknown>,
       isPublic,
+      durable,
       initial: normalizedInitial,
     });
 
@@ -208,39 +275,39 @@ export class PluginDocRegistry {
   ): PluginSessionDocHandle<TState> {
     assertValidId('sessionDoc', name);
     this.assertDocOpts(pluginId, 'sessionDoc', name, opts);
-    // durable layer port missing when explicit 501(forbid memory fall back: conversation document promise across restarts store).
-    const sessionStore = this.options.sessionStore;
-    if (!sessionStore) {
+    const durable = opts?.durable !== false;
+    // Durable sessionDoc requires a persistent store; never silently degrade to memory.
+    if (durable && !this.options.sessionStore) {
       throw new HelmError(
         'session_doc_store_unavailable',
-        `plugin ${pluginId} declaration sessionDoc ${name}, but not provide conversation document durable layer (sessionStore missing), reject memory fall back`,
+        `Plugin ${pluginId} declared durable sessionDoc ${name}, but no sessionDoc durable store is configured (sessionStore missing)`,
         501,
         { pluginId, name },
       );
     }
-    // conversation store in validate port missing when explicit 501: never can skip validate pretend conversation store in (guard against orphan child back write expires).
+    // Never skip conversation existence validation (prevents orphaned writes after deletion).
     if (!this.options.assertConversationExists) {
       throw new HelmError(
         'session_doc_port_unavailable',
-        `plugin ${pluginId} declaration sessionDoc ${name}, but not provide conversation store in validate port (assertConversationExists missing), reject pretend verify conversation store in`,
+        `Plugin ${pluginId} declared sessionDoc ${name}, but no conversation existence check port is configured (assertConversationExists missing)`,
         501,
         { pluginId, name },
       );
     }
-    // public document must provide event port: missing when explicit reject, never static default lose public update event.
+    // Public docs must have an event emitter port; never silently drop updates.
     if (opts?.public === true && !this.options.emitSessionDocUpdated) {
       throw new HelmError(
         'session_doc_port_unavailable',
-        `plugin ${pluginId} declaration public sessionDoc ${name}, but not provide public conversation document event port (emitSessionDocUpdated missing), reject static default discard update`,
+        `Plugin ${pluginId} declared public sessionDoc ${name}, but no public sessionDoc event port is configured (emitSessionDocUpdated missing)`,
         501,
         { pluginId, name },
       );
     }
-    // document name and doc sharing naming empty between: same name will let GET /api/plugins/:id/docs/:name routing ambiguity.
+    // `doc` and `sessionDoc` share one namespace per plugin to avoid routing ambiguity on GET /api/plugins/:id/docs/:name.
     if (this.pluginDocs.get(pluginId)?.has(name) || this.sessionDocs.get(pluginId)?.has(name)) {
       throw new HelmError(
         'duplicate_doc',
-        `plugin ${pluginId} duplicate declaration document name ${name}(doc and sessionDoc sharing naming empty between, forbidden same name)`,
+        `Plugin ${pluginId} declared duplicate document name ${name} (doc and sessionDoc share one namespace)`,
         409,
       );
     }
@@ -253,6 +320,7 @@ export class PluginDocRegistry {
       name,
       normalizedInitial,
       isPublic,
+      durable,
       assertUsable,
     );
 
@@ -264,6 +332,7 @@ export class PluginDocRegistry {
     docs.set(name, {
       handle: handle as PluginSessionDocHandle<unknown>,
       isPublic,
+      durable,
       initial: normalizedInitial,
     });
 
@@ -271,29 +340,27 @@ export class PluginDocRegistry {
   }
 
   /**
-   * construct sessionDoc handle: each time operation all via assertUsable lifecycle guard (host closed package
-   * already wrap epoch and subject to control stop window); three meta group operation extra validate correct security integer conversation ID and
-   * conversation store in (after deletion async call back rebuild orphan child data by reject); value one rule JSON deep copy;
-   * public document publish dedicated use event (delete event value constant is initial value and carries deleted: true).
+   * Builds a `sessionDoc` handle guarded by `assertUsable` (host epoch & stop window) plus tuple checks
+   * (`conversationId` must be a positive safe integer belonging to an existing conversation). Values are
+   * always JSON deep-cloned, and public docs emit `plugin.session_doc.updated` (`deleted: true` sends initial value).
    */
   private createSessionDocHandle<TState>(
     pluginId: string,
     name: string,
     initial: TState,
     isPublic: boolean,
+    durable: boolean,
     assertUsable: () => void,
   ): PluginSessionDocHandle<TState> {
-    const store = this.options.sessionStore!;
-    // register boundary already explicit validate must to port non-empty (see registerSessionDoc), this where only type narrow.
+    const store = this.options.sessionStore;
     const assertConversationExists = this.options.assertConversationExists!;
     const emitSessionDocUpdated = this.options.emitSessionDocUpdated;
     const emit = (conversationId: number, value: unknown, deleted?: boolean): void => {
       if (!isPublic) return;
       if (!emitSessionDocUpdated) {
-        // guard against defend explicit reject (register boundary already guarantee public must has event port), never static default lose update.
         throw new HelmError(
           'session_doc_port_unavailable',
-          `plugin ${pluginId} public sessionDoc ${name} missing event publish port, reject static default discard update`,
+          `Plugin ${pluginId} public sessionDoc ${name} is missing its event emitter port`,
           501,
           { pluginId, name, conversationId },
         );
@@ -306,10 +373,25 @@ export class PluginDocRegistry {
         ...(deleted === true ? { deleted: true } : {}),
       });
     };
-    // not write when fall back archive one initial value; durable layer is JSON string semantics, parse result day however is deep copy.
     const readRaw = (conversationId: number): TState => {
-      const raw = store.get(pluginId, name, conversationId);
+      if (!durable) {
+        const byConv = this.transientSessionDocs.get(pluginId)?.get(name);
+        return byConv?.has(conversationId)
+          ? jsonClone(byConv.get(conversationId) as TState)
+          : jsonClone(initial);
+      }
+      const raw = store!.get(pluginId, name, conversationId);
       return raw === undefined ? jsonClone(initial) : (JSON.parse(raw) as TState);
+    };
+    const writeNext = (conversationId: number, safe: TState): void => {
+      // Enforce payload limit before touching storage/memory or emitting public events.
+      this.assertWithinLimit(pluginId, 'sessionDoc', name, safe, { conversationId });
+      if (durable) {
+        store!.put(pluginId, name, conversationId, JSON.stringify(safe));
+      } else {
+        this.setTransientSessionDoc(pluginId, name, conversationId, safe);
+      }
+      emit(conversationId, jsonClone(safe));
     };
     const assertTupleUsable = (conversationId: number): void => {
       assertUsable();
@@ -323,98 +405,119 @@ export class PluginDocRegistry {
       },
       set: (conversationId, next) => {
         assertTupleUsable(conversationId);
-        const safe = jsonClone(next);
-        // body accumulate guard against line first at durable layer put and event publish: reject when old value keep do not change.
-        this.assertWithinLimit(pluginId, 'sessionDoc', name, safe, { conversationId });
-        store.put(pluginId, name, conversationId, JSON.stringify(safe));
-        emit(conversationId, safe);
+        writeNext(conversationId, jsonClone(next));
       },
       update: (conversationId, fn) => {
         assertTupleUsable(conversationId);
-        const safe = jsonClone(fn(jsonClone(readRaw(conversationId))));
-        this.assertWithinLimit(pluginId, 'sessionDoc', name, safe, { conversationId });
-        store.put(pluginId, name, conversationId, JSON.stringify(safe));
-        emit(conversationId, safe);
+        writeNext(conversationId, jsonClone(fn(jsonClone(readRaw(conversationId)))));
       },
       delete: (conversationId) => {
         assertTupleUsable(conversationId);
-        store.delete(pluginId, name, conversationId);
-        // not write document delete same publish deleted(consumer based on this back to initial state), value constant is initial value.
+        if (durable) {
+          store!.delete(pluginId, name, conversationId);
+        } else {
+          this.deleteTransientSessionDocEntry(pluginId, name, conversationId);
+        }
+        // Deleting an unwritten or existing entry emits `deleted: true` with the initial value.
         emit(conversationId, jsonClone(initial), true);
       },
       listConversationIds: () => {
         assertUsable();
-        return [...store.listConversationIds(pluginId, name)].sort((a, b) => a - b);
+        const ids = durable
+          ? store!.listConversationIds(pluginId, name)
+          : [...(this.transientSessionDocs.get(pluginId)?.get(name)?.keys() ?? [])];
+        return [...ids].sort((a, b) => a - b);
       },
       flush: async () => {
         assertUsable();
-        return store.flush();
+        return durable ? store!.flush() : Promise.resolve();
       },
     };
   }
 
-  /** conversation ID boundary validate: correct security integer (illegal value one rule 400 invalid_conversation_id). */
+  /** Validates that `conversationId` is a positive safe integer (`400 invalid_conversation_id`). */
   private assertSessionDocId(conversationId: number): void {
     if (!Number.isSafeInteger(conversationId) || conversationId <= 0) {
       throw new HelmError(
         'invalid_conversation_id',
-        `conversation document conversationId must be correct security integer, receives:${String(conversationId)}`,
+        `Session doc conversationId must be a positive safe integer, received: ${String(conversationId)}`,
         400,
         { conversationId: String(conversationId) },
       );
     }
   }
 
-  /** doc/sessionDoc option validate: only allows { public?: boolean }. */
+  /** Validates doc/sessionDoc options: only `{ public?: boolean, durable?: boolean }` are allowed. */
   private assertDocOpts(
     pluginId: string,
     kind: 'doc' | 'sessionDoc',
     name: string,
     opts: PluginDocOptions | undefined,
   ): void {
-    if (opts !== undefined && (!isPlainObject(opts) || Object.keys(opts).some((k) => k !== 'public'))) {
-      throw new HelmError('invalid_doc_spec', `plugin ${pluginId} ${kind} ${name} option only allows { public?: boolean }`, 400);
+    if (
+      opts !== undefined &&
+      (!isPlainObject(opts) || Object.keys(opts).some((k) => k !== 'public' && k !== 'durable'))
+    ) {
+      throw new HelmError(
+        'invalid_doc_spec',
+        `Plugin ${pluginId} ${kind} ${name} options may only contain { public?: boolean, durable?: boolean }`,
+        400,
+      );
     }
     if (opts?.public !== undefined && typeof opts.public !== 'boolean') {
-      throw new HelmError('invalid_doc_spec', `plugin ${pluginId} ${kind} ${name}  public option must be boolean value`, 400);
+      throw new HelmError(
+        'invalid_doc_spec',
+        `Plugin ${pluginId} ${kind} ${name} option 'public' must be a boolean`,
+        400,
+      );
+    }
+    if (opts?.durable !== undefined && typeof opts.durable !== 'boolean') {
+      throw new HelmError(
+        'invalid_doc_spec',
+        `Plugin ${pluginId} ${kind} ${name} option 'durable' must be a boolean`,
+        400,
+      );
     }
   }
 
   /**
-   * read plugin public doc snapshot. private doc, not declaration doc, plugin deactivate/missing one rule unify 404
-   * (external without from probe private doc is otherwise store in); not write when return archive one initial value.
-   * name hit public sessionDoc when explicit hint must conversationId(routing ambiguity hint,
-   * without leaking private store in - - private sessionDoc and not declaration name same 404).
+   * Reads a public global `doc` snapshot. Private/undeclared docs and inactive plugins uniformly return 404
+   * without leaking existence; unwritten docs fall back to the normalized initial value. Hitting a public
+   * `sessionDoc` returns `400 session_doc_requires_conversation`.
    */
   getPublicDoc(pluginId: string, name: string, isPluginActive: boolean): PublicPluginDoc {
     if (!isPluginActive) {
-      throw new HelmError('plugin_doc_not_found', `plugin ${pluginId} without public document ${name}`, 404, { pluginId, name });
+      throw new HelmError('plugin_doc_not_found', `Plugin ${pluginId} has no public doc ${name}`, 404, {
+        pluginId,
+        name,
+      });
     }
     const reg = this.pluginDocs.get(pluginId)?.get(name);
     if (!reg || !reg.isPublic) {
       if (this.sessionDocs.get(pluginId)?.get(name)?.isPublic === true) {
         throw new HelmError(
           'session_doc_requires_conversation',
-          `plugin ${pluginId} document ${name} is conversation document, read must carry conversationId query parameter`,
+          `Plugin ${pluginId} document ${name} is a sessionDoc; reading requires a conversationId query parameter`,
           400,
           { pluginId, name },
         );
       }
-      throw new HelmError('plugin_doc_not_found', `plugin ${pluginId} without public document ${name}`, 404, { pluginId, name });
+      throw new HelmError('plugin_doc_not_found', `Plugin ${pluginId} has no public doc ${name}`, 404, {
+        pluginId,
+        name,
+      });
     }
     return {
       pluginId,
       name,
-      value: jsonClone(this.store.get(`${pluginId}:${name}`, reg.initial as never)),
+      value: this.readDocValue(pluginId, name, reg),
     };
   }
 
   /**
-   * read plugin public sessionDoc snapshot (GET /api/plugins/:id/docs/:name?conversationId=N
-   * and dedicated use SSE first frame shared use). private/not declaration/plugin deactivate one rule 404 plugin_doc_not_found
-   * (without leaking store in difference); conversation missing by host port such as throws and original on throw; durable layer port
-   * missing explicit 501, never fall back global doc key. name hit public global doc when explicit hint
-   * do not connect conversationId.
+   * Reads a public `sessionDoc` snapshot (used by HTTP GET and dedicated SSE initial snapshot frames).
+   * Private/undeclared/inactive docs return 404; missing conversations propagate host error; hitting a
+   * public global doc returns `400 global_doc_unexpected_conversation`.
    */
   getPublicSessionDoc(
     pluginId: string,
@@ -424,34 +527,27 @@ export class PluginDocRegistry {
   ): PublicPluginSessionDoc {
     this.assertSessionDocId(conversationId);
     if (!isPluginActive) {
-      throw new HelmError('plugin_doc_not_found', `plugin ${pluginId} without public conversation document ${name}`, 404, {
-        pluginId,
-        name,
-        conversationId,
-      });
+      throw new HelmError(
+        'plugin_doc_not_found',
+        `Plugin ${pluginId} has no public sessionDoc ${name}`,
+        404,
+        { pluginId, name, conversationId },
+      );
     }
     const reg = this.sessionDocs.get(pluginId)?.get(name);
     if (!reg || !reg.isPublic) {
       if (this.pluginDocs.get(pluginId)?.get(name)?.isPublic === true) {
         throw new HelmError(
           'global_doc_unexpected_conversation',
-          `plugin ${pluginId} document ${name} is global document, do not connect conversationId`,
+          `Plugin ${pluginId} document ${name} is a global doc; do not pass conversationId`,
           400,
           { pluginId, name, conversationId },
         );
       }
-      throw new HelmError('plugin_doc_not_found', `plugin ${pluginId} without public conversation document ${name}`, 404, {
-        pluginId,
-        name,
-        conversationId,
-      });
-    }
-    const sessionStore = this.options.sessionStore;
-    if (!sessionStore) {
       throw new HelmError(
-        'session_doc_store_unavailable',
-        `plugin ${pluginId} conversation document ${name} without durable layer port (sessionStore missing)`,
-        501,
+        'plugin_doc_not_found',
+        `Plugin ${pluginId} has no public sessionDoc ${name}`,
+        404,
         { pluginId, name, conversationId },
       );
     }
@@ -459,26 +555,41 @@ export class PluginDocRegistry {
     if (!assertConversationExists) {
       throw new HelmError(
         'session_doc_port_unavailable',
-        `plugin ${pluginId} conversation document ${name} missing conversation store in validate port, reject pretend verify conversation store in`,
+        `Plugin ${pluginId} sessionDoc ${name} is missing conversation existence check port`,
         501,
         { pluginId, name, conversationId },
       );
     }
-    // conversation store in: missing/deleted by host port such as throws and original on throw (original not_found).
+    if (!reg.durable) {
+      assertConversationExists(conversationId);
+      const byConv = this.transientSessionDocs.get(pluginId)?.get(name);
+      return {
+        pluginId,
+        name,
+        conversationId,
+        value: byConv?.has(conversationId) ? jsonClone(byConv.get(conversationId)) : jsonClone(reg.initial),
+      };
+    }
+    const sessionStore = this.options.sessionStore;
+    if (!sessionStore) {
+      throw new HelmError(
+        'session_doc_store_unavailable',
+        `Plugin ${pluginId} durable sessionDoc ${name} is missing durable backing store (sessionStore missing)`,
+        501,
+        { pluginId, name, conversationId },
+      );
+    }
     assertConversationExists(conversationId);
     const raw = sessionStore.get(pluginId, name, conversationId);
     return {
       pluginId,
       name,
       conversationId,
-      value: raw === undefined ? jsonClone(reg.initial) : jsonClone(JSON.parse(raw) as unknown),
+      value: raw === undefined ? jsonClone(reg.initial) : JSON.parse(raw),
     };
   }
 
-  /**
-   * all enabled plugin public document snapshot (SSE HelmSnapshot.pluginDocs first frame direct throw use):
-   * only contains global public doc(conversation document does not enter global first frame).
-   */
+  /** Lists all public global doc snapshots for active plugins (for `HelmSnapshot.pluginDocs`). */
   listPublicDocs(activePluginIds: Iterable<string>): PublicPluginDoc[] {
     const out: PublicPluginDoc[] = [];
     for (const pluginId of activePluginIds) {
@@ -489,47 +600,67 @@ export class PluginDocRegistry {
         out.push({
           pluginId,
           name,
-          value: jsonClone(this.store.get(`${pluginId}:${name}`, reg.initial as never)),
+          value: this.readDocValue(pluginId, name, reg),
         });
       }
     }
     return out;
   }
 
-  /** check a certain plugin is otherwise declaration name is name  public doc. */
+  /** Returns whether `pluginId` declared a public global doc named `name`. */
   hasPublicDoc(pluginId: string, name: string): boolean {
     return this.pluginDocs.get(pluginId)?.get(name)?.isPublic === true;
   }
 
-  /** check a certain plugin is otherwise declaration name is name  public sessionDoc. */
+  /** Returns whether `pluginId` declared a public sessionDoc named `name`. */
   hasPublicSessionDoc(pluginId: string, name: string): boolean {
     return this.sessionDocs.get(pluginId)?.get(name)?.isPublic === true;
   }
 
-  /** empty a certain plugin in this cycle register all doc / sessionDoc handle (does not affect underlying durable data). */
+  /** Returns whether `pluginId` declared any in-memory transient (`durable: false`) sessionDoc. */
+  hasTransientSessionDocs(pluginId: string): boolean {
+    const docs = this.sessionDocs.get(pluginId);
+    if (!docs) return false;
+    for (const reg of docs.values()) {
+      if (!reg.durable) return true;
+    }
+    return false;
+  }
+
+  /** Evicts in-memory transient `sessionDoc` entries for a deleted conversation across all plugins. */
+  deleteConversation(conversationId: number): void {
+    for (const [pluginId, byName] of this.transientSessionDocs) {
+      for (const [name, byConv] of byName) {
+        byConv.delete(conversationId);
+        if (byConv.size === 0) byName.delete(name);
+      }
+      if (byName.size === 0) this.transientSessionDocs.delete(pluginId);
+    }
+  }
+
+  /** Clears all registered `doc` / `sessionDoc` handles and transient entries for `pluginId` (leaves durable rows intact). */
   clear(pluginId: string): void {
     this.pluginDocs.get(pluginId)?.clear();
     this.sessionDocs.get(pluginId)?.clear();
+    this.transientDocs.delete(pluginId);
+    this.transientSessionDocs.delete(pluginId);
   }
 
-  /** unload plugin when remove two document register table item. */
+  /** Removes a plugin's registration tables and transient in-memory entries (called on disable/unregister). */
   removePlugin(pluginId: string): void {
     this.pluginDocs.delete(pluginId);
     this.sessionDocs.delete(pluginId);
+    this.transientDocs.delete(pluginId);
+    this.transientSessionDocs.delete(pluginId);
   }
 
   /**
-   * unload related clean up: delete the plugin persist all document data (global doc + all conversation document).
-   * in plugin instance deregister after invoke (no longer through handle guard); and removePlugin different, this method
-   * truly clear underlying durable data, re- install same ID plugin will not read back old data.sessionStore not
-   * connect line when the plugin cannot can store in conversation document data, skip i.e. without data can delete (non- fall back).
-   *
-   * two deletePlugin all queue after wait for each store flush: any one underlying DELETE on failure
-   * explicit reject(caller based on this block assert delete directory/delete record, keep install record with convenient retry), never
-   * in not before virtual call clean up succeeded. produce connect line in two port shared use the same HelmStore(the same
-   * persist tail chain), two time flush idempotent, produces no extra wait for or double heavy errors.
+   * Deletes all persistent and transient documents for an uninstalled plugin (`doc` + `sessionDoc`).
+   * Called after unregistering the plugin; awaits `flush()` on all backing stores and rejects if any flush fails.
    */
   async purgePlugin(pluginId: string): Promise<void> {
+    this.transientDocs.delete(pluginId);
+    this.transientSessionDocs.delete(pluginId);
     const sessionStore = this.options.sessionStore;
     this.store.deletePlugin(pluginId);
     sessionStore?.deletePlugin(pluginId);

@@ -1,54 +1,14 @@
 /**
- * backend plugin TypeScript module load (external-loader transpile bottom seat).
+ * Backend plugin TypeScript module loader (`external-loader` transpilation foundation).
  *
- * mechanism (Node 24 `module.registerHooks` main thread sync hook + build port inject transpile function):
- * - only transpile registered plugin directory (realpath) inside .ts/.tsx/.mts/.cts source file is ESM;
- *   file URL is exactly real source file URL(do not to cache artifact file), therefore `import.meta.url` /
- *   each other for asset locate forever points to plugin directory inside real source file, do not subject to cache path affect;
- * - module identity by Node ESM cache by URL guarantee: the same path many time import only initialize once,
- *   and host itself module sharing the same register table (never bundle a @helm/protocol / SDK build into
- *   instanceof / registry double);
- * - resolve hook patch complete TypeScript habit each other for import mapping (.js -> .ts/.tsx,.mjs -> .mts,
- *   without extension -> .ts/.tsx / index.ts). retry only in original generate parse throw ERR_MODULE_NOT_FOUND
- *   (choose indeed missing) when enter row; permission etc. other parse error original on throw. hit choose first realpath:
- *   real path exceeds out all registered (symlink escape) do not transpile, such as failed;realpath URL
- *   also guarantee.js mapping import and explicit .ts import is the same module instance (Node original generate for
- *   symlink also return realpath URL, two path day however same URL);
- * - bare note symbol hand over to Node original generate parse:Node inside placement module directly available,npm package by plugin directory to on
- *    node_modules rule parse (plugin this directory install i.e. can takes effect),`@helm/*` host public package via
- *   host itself import.meta.resolve (the same instance);
- * - esbuild will strip ESM import attributes(known not implemented), therefore plugin inside each other for .json import
- *   by load hook patch note `type: 'json'`, plugin source no need to (also cannot) write import attributes;
- * - source code transpile error (language method / type layer side parse error) explicit throw
- *   `HelmError('plugin_load_failed')`, attach file, row column number and esbuild diagnose text.
- *
- * lifecycle: hook lazy register - - first register when registerHooks, all release when deregister
- * (only reverse register this load hook instance, does not affect host process inside other hooks). succeeded register
- * plugin common resident process: plugin run phase motion state import  TS dependency need to transpile available, and module already
- * load URL in ESM cache in keep identity. therefore deactivate / unload plugin do not release,
- * do not unload already load module (same process inside restart/re- register does not repeat initialize); release only occur in
- * failed to load fall back when, only affect after continue parse behavior.
- *
- * subject to control proxy boundary load (hot reload bottom seat):nextPluginGeneration is plugin reserved under one proxy
- * proxy count number; caller in entry URL additional `?helmgen=<n>` i.e. can let the plugin each other for dependency closed package
- * in this process inside re- initialize (new module diagram,definePlugin re- execute), while old proxy count module
- * keep available (old instance continue run). proxy boundary mark record only along plugin inside each other for import pass broadcast;
- * bare note symbol (@helm/* host public package,npm package,node: inside placement) original generate parse and do not carries mark record,
- * and host and old proxy count sharing the same instance, never by proxy boundary load pollute.
- *
- * boundary and honest:
- * - outside code do not via this load transpile, load capability and result by Node original generate decide; outside
- *   .js/.cjs etc. file same pass-through Node- - this load negative duty run can message plugin code, is not
- *   sandbox: can message plugin and host same permission, path boundary is transpile scope convention while non- security promise;
- * - backend .tsx real purpose is and frontend sharing source file form pure logic module (JSX language method can write,
- *   transpile is react/jsx-runtime import, must plugin directory self prepare react or change use pure .ts);React
- *   component still belong frontend client.tsx track path (@helm/plugin-build), this where does not JSX runtime inject.
- *
- * build port: this module only keep load mechanism (resolve policy, proxy boundary pass broadcast,containment,
- * hook lifecycle); source code transpile by PluginBuildProvider.transformBackendTs provide and via
- * registerPluginTsRoot(root, { transform }) explicit inject (produce product in hub connect line by default implement).
- * kernel do not static dependency esbuild; not inject transform when need to transpile load explicit reject
- * (501 unsupported_backend_ts_build), never fall back inside placement transpile.
+ * - Transpiles `.ts`/`.tsx`/`.mts`/`.cts` source files inside registered plugin roots (via realpath)
+ *   using Node `module.registerHooks` + the host build port's `transformBackendTs`;
+ * - Preserves real source URLs so `import.meta.url` points to real files, and ESM cache keeps
+ *   `@helm/*` singleton identity consistent with the host;
+ * - Resolves TS-style relative imports (`.js -> .ts/.tsx`, extensionless -> `.ts/.tsx/index.ts`)
+ *   and patches ESM `.json` imports with `type: 'json'`;
+ * - Rejects symlink/relative escapes outside registered roots (`reject transpile`);
+ * - Fails explicitly (`501 unsupported_backend_ts_build`) when no transpiler is injected.
  */
 import { registerHooks, type ModuleHooks } from 'node:module';
 import { readFileSync, realpathSync, statSync } from 'node:fs';
@@ -170,8 +130,8 @@ function specifierExtension(specifier: string): string {
 }
 
 /**
- * each other for note symbol failed to parse when TypeScript habit choose (tsc --module nodenext mapping sub- collection).
- * only in original generate parse confirm target missing (ERR_MODULE_NOT_FOUND) after one by one probe.
+ * When a relative specifier fails standard ESM resolution (ERR_MODULE_NOT_FOUND),
+ * probe TypeScript candidate extensions matching tsc `--module nodenext` conventions.
  */
 function tsResolutionCandidates(resolvedPath: string): string[] {
   const ext = fileExtension(resolvedPath);
@@ -194,17 +154,17 @@ function isFile(path: string): boolean {
   }
 }
 
-/** .js family note symbol parse out outside TS source: unify reject (do not transpile outside code, never because mapping source different while opening path do not one). */
+/** Reject `.js`-style specifiers that resolve to TypeScript sources outside the plugin root. */
 function rootEscapeError(specifier: string, candidate: string, real: string): HelmError {
   return new HelmError(
     'plugin_load_failed',
-    `external plugin each other for dependency ${specifier} parse to plugin directory outside TypeScript source ${candidate}(real path ${real}), reject transpile; such as indeed must reference outside module, please directly use its real extension note symbol`,
+    `external plugin relative dependency ${specifier} resolved to TypeScript source outside plugin directory ${candidate} (real path ${real}), reject transpile; if an external module is truly required, reference its actual extension explicitly`,
     500,
     { specifier, candidate, real },
   );
 }
 
-/** register process hook (idempotent: registered when re- use the same instance). */
+/** Register process-wide Node module hooks (idempotent). */
 function ensureHooks(): void {
   if (hooks !== undefined) return;
   hooks = registerHooks({
@@ -214,11 +174,10 @@ function ensureHooks(): void {
         return nextResolve(specifier, context);
       }
       if (specifier.startsWith('./') || specifier.startsWith('../')) {
-        // proxy boundary pass broadcast: parent module carry helmgen mark record when, parse result if at plugin inside then additional
-        // the same mark record - - new proxy count each other for dependency closed package whole re- initialize; bare note symbol (@helm/* /
-        // npm / node:) do not away this branch, and host and old proxy count sharing the same instance, never by pollute.
+        // Propagate generation tag from parent across internal relative imports so reloads get a fresh
+        // isolated module graph, while leaving bare specifiers (@helm/* / npm / node:) shared.
         const parentGeneration = generationOfUrl(parent);
-        /** inside file URL additional proxy boundary mark record (outside file do not mark record: sharing module do not duplicate instance). */
+        /** Append generation tag only to URLs inside plugin roots so shared modules are not duplicated. */
         const settle = (url: string): { url: string; shortCircuit?: boolean } =>
           parentGeneration === undefined || !isInsideAnyRoot(url)
             ? { url }
@@ -227,7 +186,7 @@ function ensureHooks(): void {
         try {
           resolved = nextResolve(specifier, context);
         } catch (err) {
-          // only choose indeed missing only then by TS habit retry; permission etc. other parse error original on throw
+          // Only probe TS candidates on ERR_MODULE_NOT_FOUND; preserve permission and other errors.
           if ((err as NodeJS.ErrnoException).code !== 'ERR_MODULE_NOT_FOUND') throw err;
           let target: string;
           try {
@@ -237,8 +196,7 @@ function ensureHooks(): void {
           }
           for (const candidate of tsResolutionCandidates(target)) {
             if (!isFile(candidate)) continue;
-            // realpath: since guarantee and explicit .ts import same URL(the same module instance), again intercept
-            // symlink points to outside choose (exceeds do not transpile, never outside source code edit enter transpile scope)
+            // Resolve symlinks to deduplicate URLs and reject targets escaping the plugin directory.
             let real: string;
             try {
               real = realpathSync(candidate);
@@ -250,13 +208,11 @@ function ensureHooks(): void {
             if (!isInsideAnyRoot(pathToFileURL(real).href)) {
               throw rootEscapeError(specifier, candidate, real);
             }
-              return settle(pathToFileURL(real).href);
+            return settle(pathToFileURL(real).href);
           }
           throw err;
         }
-        // after continue hook (such as development phase tsx) may already in nextResolve inside complete .js -> .ts mapping:
-        // .js family note symbol TS extend result one rule by this load policy re-check (realpath + inside),
-        // guarantee and self shoot fall back the same opening path (identity specification + exceeds reject do not because mapping source while different)
+        // Re-check `.js -> .ts` resolutions handled by downstream hooks (such as tsx) for realpath containment.
         const resolvedUrl = resolved.url;
         if (
           typeof resolvedUrl === 'string' &&
@@ -277,8 +233,8 @@ function ensureHooks(): void {
           }
           return settle(pathToFileURL(real).href);
         }
-        // common rule parse result (contains each other for .json / outside legal target): inside file patch complete proxy boundary mark record
-        //(Node each other for URL parse will discard parent query, guard against defend re- additional).
+        // For regular resolutions (e.g. relative .json or valid external targets), re-attach generation if inside root
+        // because Node's URL resolution drops the parent query string.
         if (
           parentGeneration !== undefined &&
           typeof resolvedUrl === 'string' &&
@@ -289,8 +245,7 @@ function ensureHooks(): void {
         }
         return resolved;
       }
-      // host public package: use host itself parse location, guarantee and host the same module instance (does not double bundle).
-      // limit set @helm/*(this warehouse public contract package); other bare note symbol one rule by plugin directory original generate parse.
+      // Host shared contract packages (`@helm/*`): resolve from host so plugins share singletons without double bundling.
       if (specifier.startsWith('@helm/')) {
         try {
           const url = hostMetaResolve(specifier);
@@ -298,8 +253,7 @@ function ensureHooks(): void {
             return { url, shortCircuit: true };
           }
         } catch {
-          // host side also not installed (such as @helm/web only frontend available): to under way by plugin directory original generate parse,
-          // still failed then such as throw Node original generate ERR_MODULE_NOT_FOUND
+          // If unavailable on host (e.g. frontend-only packages), fall through to plugin directory resolution.
         }
       }
       return nextResolve(specifier, context);
@@ -310,8 +264,7 @@ function ensureHooks(): void {
       }
       // extension by remove query real path compute (proxy boundary URL carry ?helmgen=N mark record).
       const ext = fileExtension(fileURLToPath(url));
-      // plugin inside each other for .json:esbuild transpile will strip import attributes(source file write also will by strip),
-      // by host in load boundary patch note type=json, plugin source `import x from './x.json'` directly available.
+      // Rewrite relative `.json` imports to include `type: 'json'` since esbuild strips ESM import attributes.
       if (ext === '.json') {
         return nextLoad(url, {
           ...context,
@@ -326,15 +279,15 @@ function ensureHooks(): void {
       try {
         source = readFileSync(file, 'utf8');
       } catch (err) {
-        // read source failed (permission / race delete): such as throw Node original generate error, not silently skip
+        // Propagate source read failures (permissions / deleted race) directly.
         throw err;
       }
-      // transpile function by build port inject (by store): missing when explicit reject, never fall back inside placement transpile.
+      // Transpiler must be injected by the build port; never silently fall back.
       const transform = transformOfRoot(url);
       if (transform === undefined) {
         throw new HelmError(
           'unsupported_backend_ts_build',
-          `host not inject plugin build port (PluginHostOptions.buildProvider.transformBackendTs): cannot transpile external plugin TS source ${file}`,
+          `Host has not wired plugin build port (PluginHostOptions.buildProvider.transformBackendTs): cannot transpile external plugin TS source ${file}`,
           501,
           { file },
         );
@@ -355,7 +308,7 @@ function ensureHooks(): void {
   });
 }
 
-/**  esbuild transpile failed wrap into carries file and row column locate explicit HelmError(never static default swallow wrong). */
+/** Wraps an esbuild transpilation failure with file and line/column diagnostics. */
 function transpileError(file: string, err: unknown): HelmError {
   const first = (err as { errors?: Array<{ text?: string; location?: { line: number; column: number } }> }).errors?.[0];
   const location = first?.location;
@@ -363,19 +316,15 @@ function transpileError(file: string, err: unknown): HelmError {
   const detail = first?.text ?? (err instanceof Error ? err.message : String(err));
   return new HelmError(
     'plugin_load_failed',
-    `external plugin source code transpile failed: ${file}${position ? `:${position}` : ''}(${detail})`,
+    `External plugin TypeScript transpilation failed: ${file}${position ? `:${position}` : ''} (${detail})`,
     500,
     { file, line: location?.line, column: location?.column, detail },
   );
 }
 
 /**
- * is plugin directory enable backend TS transpile (reference counter; the same directory duplicate register merge, hook lazy register).
- * options.transform is the transpile function (PluginBuildProvider.transformBackendTs,
- * by external plugin load chain from host build port pass-through); duplicate register when explicit provide transform override
- * old value, not provide when keep since has value (same process the same pure function semantics).
- * return release function: counter reset to zero when directory move out transpile scope and deregister process hook (only reverse register
- * this load hook instance, does not affect host process inside other hooks).
+ * Registers a plugin directory root for backend TypeScript transpilation (reference-counted, lazy hooks).
+ * Returns a release callback that unregisters the loader hooks when the last root is released.
  */
 export function registerPluginTsRoot(
   rootDir: string,

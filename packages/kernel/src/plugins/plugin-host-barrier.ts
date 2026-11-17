@@ -1,5 +1,5 @@
 /**
- * plugin service start screen fault (prepare -> start, contains external fault isolated fall back) and inverse topology stop.
+ * Plugin service start barrier (`prepare -> start`, with fault isolation for external plugins) and reverse-topology shutdown.
  */
 import { HelmError } from '@helm/protocol';
 import {
@@ -20,21 +20,21 @@ export async function activatePluginServices(
   await startServices(state);
 }
 
-/** non- isolated plugin screen fault on failure atomic rollback:stop failed static default, do not mask original diagnose. */
+/** Atomic rollback when a non-isolated barrier step fails; ignores stop errors to preserve original diagnostics. */
 async function rollbackStartBarrier(started: PluginState[]): Promise<void> {
   for (const prev of [...started].reverse()) {
     try {
       await stopServicesQuietly(prev);
     } catch {
-      // rollback failed do not mask original start diagnose
+      // Do not mask the original startup failure during rollback.
     }
   }
 }
 
 /**
- * global service start screen fault: without isolated type plugin when along use atomic screen fault (any one failed all rollback and throws);
- * contains external isolated type plugin when phase start - - external plugin failed fall back is failed do not block assert host,
- * built-in plugin failed still atomic rollback and block assert.
+ * Global service startup barrier: runs atomically when no isolated plugins exist (any failure rolls back all),
+ * or in phased mode when external isolated plugins are present (isolated failures transition to `failed`
+ * without blocking the host, whereas built-in failures still roll back and fail startup).
  */
 export async function runServiceStartBarrier(
   enabledInOrder: PluginState[],
@@ -72,7 +72,7 @@ export async function runServiceStartBarrier(
   }
 }
 
-/** by dependency inverse topology order stop all enabled plugin service, aggregate and on report failed items. */
+/** Stops all enabled plugin services in reverse dependency order and aggregates any errors. */
 export async function stopEnabledPluginServices(enabledInOrder: PluginState[]): Promise<void> {
   const errors: Array<{ pluginId: string; error: JsonSafeErrorInfo }> = [];
   for (const state of [...enabledInOrder].reverse()) {
@@ -86,7 +86,7 @@ export async function stopEnabledPluginServices(enabledInOrder: PluginState[]): 
   if (errors.length > 0) {
     throw new HelmError(
       'plugin_service_stop_failed',
-      `part plugin service stop failed:${errors.map((e) => e.pluginId).join(', ')}`,
+      `Failed to stop plugin services: ${errors.map((e) => e.pluginId).join(', ')}`,
       500,
       { errors },
     );

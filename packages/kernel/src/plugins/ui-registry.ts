@@ -1,18 +1,20 @@
 /**
- * ui-registry.ts: negative duty 7 large all UI frontend extension point collect and validate, combine build port (PluginBuildProvider) module validate and artifact manage.
+ * ui-registry.ts: Collects and validates all frontend UI extension point declarations
+ * across plugins, integrating build-port (PluginBuildProvider) module validation and artifact resolution.
  *
- * responsibility:
- * - collect sidebar, screen, timeline, markdown.codeBlock, tool, composer, workbench,
- *   commandPalette, settingsPanel, profile.runtime, UI action (header/row/entry) and
- *   plugin.slot etc. UI declaration (unify client.tsx track path);
- * - declaration boundary static validate (id uniqueness,priority/order security integer, command slash and host keep term,
- *   UI action target archive one and action/client track at least its one,markdown.codeBlock language table shape,
- *   slot target shape,artifact.previewer  MIME/suffix match declaration,composer.completer 
- *   completion source mutual exclusion and disable track,ConversationScope pure object validate,JSON-safe serialization fidelity);
- * - client.tsx motion state component reference shape validate (assertModuleRefShape) and clientRoot ownership validate;
- * - get already compile client module artifact, and strictly validate lifecycle and epoch state (guard against deactivated/already round rotate plugin return dirty artifact);
- * - enable commit point across plugin uniqueness final inspect (profile.runtime kind and commandPalette slash),
- *   by PluginHost in enable commit chunk invoke; by default deactivate probe register does not occupy global name.
+ * Responsibilities:
+ * - Collect UI declarations for sidebar, screen, timeline, markdown.codeBlock, tool, composer,
+ *   workbench, commandPalette, settingsPanel, profile.runtime, UI actions (header/row/entry),
+ *   and plugin.slot (unified client.tsx track);
+ * - Run static declaration-boundary checks (id uniqueness, finite safe integer priority/order,
+ *   command slash prefix & reserved names, mutually exclusive UI action target & required action/client track,
+ *   markdown.codeBlock language table, slot target shape, artifact.previewer MIME/extension matchers,
+ *   composer.completer exclusion, ConversationScope plain-object validation, JSON-safe fidelity);
+ * - Validate client.tsx dynamic component module references (assertModuleRefShape) and clientRoot containment;
+ * - Resolve compiled client module artifacts with strict lifecycle & epoch verification (preventing stale artifacts
+ *   from deactivated or cycled plugins);
+ * - Enforce cross-plugin uniqueness invariants at enable commit time (profile.runtime kind and commandPalette slash),
+ *   called by PluginHost during enable commit so disabled pre-registrations never occupy global names.
  */
 import {
   HelmError,
@@ -32,7 +34,7 @@ import {
   type UiSpecContext,
 } from './ui-spec-validators.js';
 
-/** UI action three class target to register surface mapping (plugin-context and validate shared use; define see ui-spec-validators.ts). */
+/** Mapping from the three UI action targets to registry surfaces (shared by plugin-context and validation; defined in ui-spec-validators.ts). */
 export { UI_ACTION_SURFACES } from './ui-spec-validators.js';
 
 export interface ClientModuleOptions {
@@ -60,11 +62,11 @@ export class UiRegistry {
 
   registerUi(pluginId: string, surface: string, spec: unknown, fnName: string, clientRoot?: string): void {
     if (!isPlainObject(spec)) {
-      throw new HelmError('invalid_ui_spec', `plugin ${pluginId} ui.${fnName}  spec must be pure object`, 400);
+      throw new HelmError('invalid_ui_spec', `plugin ${pluginId} ui.${fnName} spec must be a plain object`, 400);
     }
     const id = spec.id;
     if (typeof id !== 'string' || id.length === 0) {
-      throw new HelmError('invalid_ui_spec', `plugin ${pluginId} ui.${fnName} declaration missing id`, 400);
+      throw new HelmError('invalid_ui_spec', `plugin ${pluginId} ui.${fnName} declaration is missing id`, 400);
     }
 
     let list = this.ui.get(pluginId);
@@ -73,16 +75,16 @@ export class UiRegistry {
       this.ui.set(pluginId, list);
     }
     if (list.some((u) => u.surface === surface && (u.spec as { id?: string }).id === id)) {
-      throw new HelmError('duplicate_ui', `plugin ${pluginId} in ${surface} duplicate declaration id ${id}`, 409);
+      throw new HelmError('duplicate_ui', `plugin ${pluginId} already declared id ${id} in ${surface}`, 409);
     }
 
-    // priority/sort field: if provide must is finite security integer (illegal value will let trim decide order static default lose control).
+    // priority / order: when provided, must be a finite safe integer (invalid values would silently corrupt sort order).
     for (const field of ['priority', 'order'] as const) {
       const value = spec[field];
       if (value !== undefined && (typeof value !== 'number' || !Number.isSafeInteger(value))) {
         throw new HelmError(
           'invalid_ui_spec',
-          `plugin ${pluginId} ui.${fnName}  ${field} must be security integer (actual:${String(value)})`,
+          `plugin ${pluginId} ui.${fnName} ${field} must be a safe integer (actual: ${String(value)})`,
           400,
           { pluginId, id, field },
         );
@@ -105,9 +107,9 @@ export class UiRegistry {
       }
     }
 
-    // surface dedicated belong validate two phase dispatch (see ui-spec-validators.ts document): early chunk
-    // (UI action / commandPalette / profile.runtime / plugin.slot) first at through use
-    // scope and client reference validate, late phase chunk in its after - - and split before one by one chunk order strictly consistent.
+    // Two-phase surface validation (see ui-spec-validators.ts): early checks
+    // (UI action / commandPalette / profile.runtime / plugin.slot) run before scope
+    // and client-ref validation, while late checks run right after in exact original order.
     const ctx: UiSpecContext = {
       pluginId,
       fnName,
@@ -118,38 +120,36 @@ export class UiRegistry {
     };
     validateUiSpecEarly(surface, spec, id, ctx);
 
-    // scope in register boundary i.e. validate (illegal scope will let render visible static default lose control)
-    assertConversationScope(pluginId, `plugin ${pluginId} ui.${fnName} declaration`, spec.scope);
+    // Validate scope at registration time so invalid scopes cannot slip into rendering.
+    assertConversationScope(pluginId, `Plugin ${pluginId} ui.${fnName}`, spec.scope);
 
-    // client reference: must plugin define provide clientRoot, and module shape legal (each other for .ts/.tsx);
-    // dangling reference (cannot compile) in register boundary reject, never to render phase at static default whitespace.
+    // Client reference: definition must provide `clientRoot` and a valid relative `.ts/.tsx` module.
     const client = spec.client;
     if (client !== undefined) {
       if (clientRoot === undefined) {
         throw new HelmError(
           'invalid_ui_spec',
-          `plugin ${pluginId} ui.${fnName} declaration client reference but plugin define not provide clientRoot`,
+          `Plugin ${pluginId} ui.${fnName} declared a client reference, but definition did not provide clientRoot`,
           400,
           { pluginId },
         );
       }
       if (!isPlainObject(client) || Object.keys(client).some((k) => k !== 'module' && k !== 'export')) {
-        throw new HelmError('invalid_ui_spec', `plugin ${pluginId} ui.${fnName}  client only allows { module, export }`, 400);
+        throw new HelmError('invalid_ui_spec', `Plugin ${pluginId} ui.${fnName} client may only contain { module, export }`, 400);
       }
       assertModuleRefShape(pluginId, String(client.module ?? ''));
       if (typeof client.export !== 'string' || client.export.length === 0 || !/^[A-Za-z0-9_$]+$/.test(client.export)) {
         throw new HelmError(
           'invalid_ui_spec',
-          `plugin ${pluginId} ui.${fnName}  client.export must be non-empty legal export name`,
+          `Plugin ${pluginId} ui.${fnName} client.export must be a valid non-empty export identifier`,
           400,
         );
       }
-      // build port in register boundary final inspect: without provider host cannot compile client.tsx,
-      // explicit reject the whole declaration (plugin enable failed) while non- static default discard UI contribution.
+      // Require build port upfront: fail registration rather than silently discarding client UI.
       if (this.buildProvider === undefined) {
         throw new HelmError(
           'unsupported_client_build',
-          `plugin ${pluginId} ui.${fnName} declaration client reference, but host not inject plugin build port (PluginHostOptions.buildProvider): cannot compile client.tsx, explicit reject while non- static default discard UI`,
+          `Plugin ${pluginId} ui.${fnName} declared a client reference, but host has no build port (PluginHostOptions.buildProvider) to compile client modules`,
           501,
           { pluginId, fnName, module: String(client.module ?? '') },
         );
@@ -160,7 +160,7 @@ export class UiRegistry {
 
     // declaration track path only accept can JSON serialization spec(HTTP/SSE directly JSON output);
     // structuredClone accept Map/Set/Date but JSON.stringify will change shape lose data, must explicit reject.
-    // client.tsx track path by web compiler negative duty (this module do not compile).
+    // The client.tsx pipeline is owned by the web compiler (this module does not compile).
     let normalized: unknown;
     try {
       normalized = jsonClone(spec);
@@ -306,7 +306,7 @@ export class UiRegistry {
    */
   async precompileClientModules(pluginId: string, options: ClientLifecycleLookup): Promise<void> {
     if (options.isDisposed()) {
-      throw new HelmError('plugin_host_disposed', 'PluginHost already dispose', 409);
+      throw new HelmError('plugin_host_disposed', 'PluginHost has already been disposed', 409);
     }
     const modules = this.getDeclaredClientModules(pluginId);
     if (modules.length === 0) {
@@ -320,7 +320,7 @@ export class UiRegistry {
       }),
     );
     if (options.isDisposed()) {
-      throw new HelmError('plugin_host_disposed', 'PluginHost already dispose', 409);
+      throw new HelmError('plugin_host_disposed', 'PluginHost has already been disposed', 409);
     }
     const hashes = new Map<string, string>();
     for (const [moduleRef, contentHash] of compiled) {
@@ -336,7 +336,7 @@ export class UiRegistry {
     allowedPhases: 'idle-only' | 'defining-or-idle',
   ): Promise<PluginClientBundle> {
     if (options.isDisposed()) {
-      throw new HelmError('plugin_host_disposed', 'PluginHost already dispose', 409);
+      throw new HelmError('plugin_host_disposed', 'PluginHost has already been disposed', 409);
     }
     assertModuleRefShape(pluginId, moduleRef);
     const info = options.getPluginLifecycle(pluginId);
@@ -344,29 +344,28 @@ export class UiRegistry {
       info !== undefined &&
       ((info.enabled && info.phase === 'idle') || (allowedPhases === 'defining-or-idle' && info.phase === 'defining'));
     if (!phaseOk) {
-      throw new HelmError('plugin_client_unavailable', `plugin ${pluginId} not enabled, do not provide client module`, 409, {
+      throw new HelmError('plugin_client_unavailable', `Plugin ${pluginId} is not enabled; client module unavailable`, 409, {
         pluginId,
         module: moduleRef,
       });
     }
     const clientRoot = info.clientRoot;
     if (clientRoot === undefined) {
-      throw new HelmError('plugin_client_unavailable', `plugin ${pluginId} not declaration clientRoot`, 404, { pluginId });
+      throw new HelmError('plugin_client_unavailable', `Plugin ${pluginId} did not declare clientRoot`, 404, { pluginId });
     }
     const identity = info.identity;
     const epoch = info.epoch;
-    // build port by PluginHostOptions inject (produce product in hub connect line by default implement); missing when
-    // explicit 501, never static default return empty artifact or fall back inside placement compiler.
+    // Build port is injected via PluginHostOptions; never fabricate empty artifacts when missing.
     const provider = this.buildProvider;
     if (provider === undefined) {
       throw new HelmError(
         'unsupported_client_build',
-        `host not inject plugin build port (PluginHostOptions.buildProvider): cannot provide plugin ${pluginId}  client module ${moduleRef}`,
+        `Host has not wired plugin build port (PluginHostOptions.buildProvider): cannot serve client module ${moduleRef} for plugin ${pluginId}`,
         501,
         { pluginId, module: moduleRef },
       );
     }
-    // subject to control npm dependency: define declaration specifiers -> parse aggregate (and doctor chain the same mapping opening path).
+    // Managed npm dependencies declared in manifest -> resolved relative to plugin directory.
     const npmRoots: PluginClientNpmRoot[] = clientNpmRootsOf(info.npmDependencies);
     const result = await provider.compileClientModule({
       pluginId,
@@ -388,7 +387,7 @@ export class UiRegistry {
     ) {
       throw new HelmError(
         'plugin_client_unavailable',
-        `plugin ${pluginId} in client module compile complete before deactivated or enter new enable cycle, artifact act abandon`,
+        `plugin ${pluginId} was deactivated or entered a new enable cycle before client module compilation completed; discarding artifact`,
         409,
         { pluginId, module: moduleRef },
       );
@@ -410,7 +409,7 @@ export class UiRegistry {
     options: ClientModuleOptions,
   ): Promise<PluginClientBundle> {
     if (options.isDisposed()) {
-      throw new HelmError('plugin_host_disposed', 'PluginHost already dispose', 409);
+      throw new HelmError('plugin_host_disposed', 'PluginHost is already disposed', 409);
     }
     assertModuleRefShape(pluginId, moduleRef);
     if (options.chunk !== undefined) {
@@ -421,7 +420,7 @@ export class UiRegistry {
       ) {
         throw new HelmError(
           'invalid_client_module',
-          `plugin ${pluginId}  chunk module name illegal (must match /^[A-Za-z0-9._-]+\\.js$/ and excludes ..):${String(options.chunk)}`,
+          `plugin ${pluginId} invalid chunk module name (must match /^[A-Za-z0-9._-]+\\.js$/ and exclude ..): ${String(options.chunk)}`,
           400,
           { pluginId, chunk: String(options.chunk) },
         );
@@ -438,14 +437,14 @@ export class UiRegistry {
       if (options.chunk !== undefined) {
         throw new HelmError(
           'client_chunk_stale',
-          `plugin ${pluginId} request chunk hash (${options.hash}) and when before artifact hash (${result.contentHash}) does not match`,
+          `plugin ${pluginId} requested chunk hash (${options.hash}) does not match current artifact hash (${result.contentHash})`,
           409,
           { pluginId, module: moduleRef, chunk: options.chunk, hash: options.hash, currentHash: result.contentHash },
         );
       }
       throw new HelmError(
         'client_module_stale',
-        `plugin ${pluginId} request client module hash (${options.hash}) and current artifact hash (${result.contentHash}) does not match`,
+        `plugin ${pluginId} requested client module hash (${options.hash}) does not match current artifact hash (${result.contentHash})`,
         409,
         { pluginId, module: moduleRef, hash: options.hash, currentHash: result.contentHash },
       );
@@ -456,7 +455,7 @@ export class UiRegistry {
       if (!chunkData) {
         throw new HelmError(
           'client_chunk_not_found',
-          `plugin ${pluginId} module ${moduleRef} not generate chunk: ${options.chunk}`,
+          `plugin ${pluginId} module ${moduleRef} did not generate chunk: ${options.chunk}`,
           404,
           { pluginId, module: moduleRef, chunk: options.chunk },
         );
