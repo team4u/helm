@@ -61,6 +61,8 @@ export interface ManagedSubagentRegistry {
   ): void
   /** 派生前置拒绝（防线二共用入口）：受管会话达到子树上限后不能再派生。 */
   assertCanSpawn(conversationId: number): void
+  /** 会话删除后回收受管子代理深度登记（孤儿条目清理）。 */
+  pruneConversation(conversationId: number): void
 }
 
 /**
@@ -145,5 +147,23 @@ export function createManagedSubagentRegistry(deps: {
     throw depthExceededError(facts.depth, facts.maxSubagentDepth, conversationId)
   }
 
-  return { depthFactsOf, registerManagedSubagent, assertCanSpawn }
+  function pruneConversation(conversationId: number): void {
+    const key = String(conversationId)
+    if (!(key in doc.get())) return
+    doc.update((current) => {
+      if (!(key in current)) return current
+      const next = { ...current }
+      delete next[key]
+      return next
+    })
+    void doc.flush().catch((error: unknown) => {
+      process.stderr.write(
+        `builtin:workflow: 受管子代理会话 ${conversationId} 登记清理落盘失败：${
+          error instanceof Error ? error.message : String(error)
+        }\n`,
+      )
+    })
+  }
+
+  return { depthFactsOf, registerManagedSubagent, assertCanSpawn, pruneConversation }
 }

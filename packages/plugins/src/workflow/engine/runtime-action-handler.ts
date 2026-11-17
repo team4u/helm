@@ -17,7 +17,7 @@ import type { WorkflowActionEntry, WorkflowEntry } from './progress.js'
 import type { JournalReplay } from './replay.js'
 import type { ActionCallPayload, ActionJournalInput, WorkflowHost } from './runtime-types.js'
 import { assertBoundarySafe, preview, readCallScope, redactPlainValue } from './runtime-validation.js'
-import { RuntimeControl, Semaphore } from './runtime-control.js'
+import { Semaphore } from './runtime-control.js'
 
 /** All dependencies of handleActionCall (constructed by runWorkflow; field meanings in runWorkflow). */
 export interface ActionCallContext {
@@ -31,7 +31,6 @@ export interface ActionCallContext {
   openLaunches: Map<number, string>
   replay: JournalReplay
   semaphore: Semaphore
-  control: RuntimeControl
   /** Run-level counters shared with the agent handler (action only touches replayedCount). */
   counters: { replayedCount: number }
   /** The ledger append injected as-is (write failures throw JournalWriteError -> explicitly fatal here). */
@@ -137,20 +136,12 @@ export async function handleActionCall(ctx: ActionCallContext, callId: number, p
     }
 
     // Cache miss: must wait for a concurrency permit before live execution (cache hits do not occupy the semaphore)
-    for (;;) {
-      await ctx.control.actionPauseGate()
-      await ctx.semaphore.acquire()
-      if (ctx.runState.isAborted() || ctx.runState.isSettled()) {
-        ctx.semaphore.release()
-        ctx.openLaunches.delete(callId)
-        ctx.respond(callId, false, undefined, 'Workflow aborted.', true)
-        return
-      }
-      if (ctx.control.isPaused() && !ctx.runState.isAborted() && !ctx.runState.isSettled()) {
-        ctx.semaphore.release()
-        continue
-      }
-      break
+    await ctx.semaphore.acquire()
+    if (ctx.runState.isAborted() || ctx.runState.isSettled()) {
+      ctx.semaphore.release()
+      ctx.openLaunches.delete(callId)
+      ctx.respond(callId, false, undefined, 'Workflow aborted.', true)
+      return
     }
 
     try {

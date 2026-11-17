@@ -150,7 +150,7 @@ export function createWorkflowPlugin(): PluginDefinition {
         emitEvent: (type, payload) => ctx.host.emitEvent(type, payload),
         submitInput: (conversationId, text, opts) => ctx.host.submitInput(conversationId, text, opts),
         isConversationCancelling: (id) => workflows.isConversationCancelling(id),
-        listRuns: () => workflows.listRuns(),
+        listActiveRuns: () => workflows.listActiveRuns(),
       })
 
       // ---- runs conversation-shard projection and global badges (the stopping gate lives inside the projection) ----
@@ -299,7 +299,7 @@ export function createWorkflowPlugin(): PluginDefinition {
         },
         liveTasks() {
           return workflows
-            .listRuns()
+            .listActiveRuns()
             .filter((r) => r.status === 'running')
             .map((r) => `workflow:${r.id}`)
         },
