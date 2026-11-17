@@ -232,22 +232,22 @@ export function registerWorkflowRunActions(
     },
   })
 
-  // ---- 动作 resume_failed：按会话或全局批量续接可恢复的失败任务 ----
+  // ---- Action resume_failed: batch resume recoverable failed runs per conversation or globally ----
   ctx.action({
     id: 'resume_failed',
     description:
-      '批量续接指定会话或全局下所有可恢复的失败（failed）工作流与后台单子代理；不可恢复项（非 failed、缺少句柄/规格、workflow_action_uncertain、[crash_recovery_limit]、secret_grant_expired_on_restart、已被 resumedByRunId 接管或子会话仍活跃）记录于 skipped，绝不伪造续接。',
+      'Batch resume recoverable failed workflows and background subagents for a conversation or across all conversations; non-recoverable items (non-failed, missing handle/spec, workflow_action_uncertain, [crash_recovery_limit], secret_grant_expired_on_restart, already superseded by resumedByRunId, or still-active child conversation) are recorded in skipped without fabricating recovery.',
     inputSchema: {
       type: 'object',
       properties: {
         conversationId: {
           type: 'number',
           minimum: 1,
-          description: '目标会话 ID（CLI 可用 --current 自动注入；与 all 互斥）',
+          description: 'Target conversation ID (CLI supports --current auto-injection; mutually exclusive with all)',
         },
         all: {
           type: 'boolean',
-          description: '全局扫描全部会话下可恢复的失败任务（与 conversationId 互斥）',
+          description: 'Scan recoverable failed tasks across all conversations (mutually exclusive with conversationId)',
         },
       },
       additionalProperties: false,
@@ -274,7 +274,7 @@ export function registerWorkflowRunActions(
     },
     cli: {
       command: ['workflows', 'resume-failed'],
-      description: '批量续接指定会话或全局下可恢复的失败工作流与后台子代理',
+      description: 'Batch resume recoverable failed workflows and background subagents for a conversation or globally',
     },
     async handler(input, context) {
       const { conversationId: requestedConvId, all } = input as {

@@ -43,8 +43,14 @@ export function registerWorkflowConfigSchema(ctx: HelmPluginContext): void {
     },
     autoRecoverOnRestart: {
       type: 'boolean',
-      label: '重启自动恢复任务',
-      description: 'Hub 重启后自动原位恢复或挂起在途工作流与后台子代理；设为 false 时回退重启中止收敛模式（也可设环境变量 HELM_AUTO_RECOVER=0 临时关闭）。',
+      label: {
+        en: 'Auto-recover tasks on restart',
+        'zh-CN': '重启自动恢复任务',
+      },
+      description: {
+        en: 'Automatically suspend and recover in-flight workflows and background subagents in place across Hub restarts; set to false to abort interrupted tasks on shutdown (can also be temporarily disabled via HELM_AUTO_RECOVER=0).',
+        'zh-CN': 'Hub 重启后自动原位恢复或挂起在途工作流与后台子代理；设为 false 时回退重启中止收敛模式（也可设环境变量 HELM_AUTO_RECOVER=0 临时关闭）。',
+      },
       default: true,
     },
   })
