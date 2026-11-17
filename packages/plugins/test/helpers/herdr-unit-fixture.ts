@@ -14,7 +14,7 @@
  *   真实落盘（含父目录创建）、delete 真实删除——生产 readLocalOutput /
  *   removeLocalOutput 在同一路径真实生效。
  */
-import { connect, createServer, type Server, type Socket } from 'node:net'
+import { createServer, type Server, type Socket } from 'node:net'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
@@ -35,6 +35,7 @@ import { PluginHost, type PluginHostBackend } from '../../../kernel/src/plugins/
 import type { WorkflowRunSummary } from '../../src/contracts.js'
 import { createHerdrPlugin } from '../../src/herdr.js'
 import type { HerdrEvent, HerdrPluginDependencies, HerdrTarget, HerdrTransport } from '../../src/herdr/contracts.js'
+import { connectHerdrEndpoint, endpointKindOf, windowsPipeNameOf } from '../../src/herdr/local-node-channel.js'
 import { SEND_KEYS_CAS_CAPABILITY } from '../../src/herdr/rpc.js'
 import { MemoryConfigStore, MemoryDocStore, makeConversationSummary } from './plugin-test-env.js'
 
@@ -196,13 +197,34 @@ export async function serveTransport(
       }
     })
   })
-  await new Promise<void>((resolve) => server.listen(socketPath, resolve))
+  const kind = endpointKindOf(socketPath)
+  const listenEndpoint = kind === 'named-pipe' ? windowsPipeNameOf(socketPath) : socketPath
+  const createsMarkerFile = kind === 'named-pipe' && listenEndpoint !== socketPath.replaceAll('/', '\\')
+  if (createsMarkerFile) {
+    mkdirSync(dirname(socketPath), { recursive: true })
+    writeFileSync(socketPath, '')
+  }
+  await new Promise<void>((resolve, reject) => {
+    const onError = (err: Error): void => reject(err)
+    server.once('error', onError)
+    server.listen(listenEndpoint, () => {
+      server.off('error', onError)
+      resolve()
+    })
+  })
   return {
     socketPath,
     close: async () => {
       for (const entry of socketsWithReleases) entry.socket.destroy()
       for (const socket of sockets) socket.destroy()
       await new Promise<void>((resolve) => server.close(() => resolve()))
+      if (createsMarkerFile) {
+        try {
+          unlinkSync(socketPath)
+        } catch {
+          // 已被清理：幂等。
+        }
+      }
     },
     drain: async () => {
       // FIFO accept-queue barrier: any connection opened before drain() is accepted and has its
@@ -233,7 +255,7 @@ export async function ipcLineCall(
 ): Promise<RpcResult<string>> {
   signal?.throwIfAborted()
   return await new Promise((resolve) => {
-    const socket = connect(socketPath)
+    const socket = connectHerdrEndpoint(socketPath, endpointKindOf(socketPath))
     socket.setNoDelay(true)
     let buffer = ''
     let settled = false
@@ -829,7 +851,7 @@ export async function openHerdrUnitEnv<TTransport extends HerdrTransport = Stand
   const dataDir = options.dataDir ?? mkdtempSync(join(tmpdir(), 'helm-herdr-unit-'))
   const backend = options.backend ?? new HerdrFakeBackend()
   const parentCwd = options.conversationOverrides?.cwd ?? join(dataDir, 'parent')
-  if (isPosixWritablePath(parentCwd)) ensureHelmDir(parentCwd)
+  if (options.conversationOverrides?.cwd === undefined || isPosixWritablePath(parentCwd)) ensureHelmDir(parentCwd)
   const parentConversation = backend.conversations.get(1)
   if (parentConversation !== undefined) {
     Object.assign(parentConversation, options.conversationOverrides, { cwd: parentCwd })

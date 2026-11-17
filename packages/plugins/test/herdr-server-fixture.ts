@@ -7,10 +7,11 @@
  * 观察启停/订阅/快照生命周期（连接计数、订阅请求记录、snapshot 内容）。
  */
 import { createServer, type Server, type Socket } from 'node:net'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import type { TestContext } from 'node:test'
+import { endpointKindOf, windowsPipeNameOf } from '../src/herdr/local-node-channel.js'
 
 /** 受控 snapshot 内容：agents/panes 原样透传（结构由调用方按协议构造）。 */
 export interface ControlledSnapshot {
@@ -88,7 +89,20 @@ export async function herdrServerFixture(
     })
   })
   const sockets = new Set<Socket>()
-  await new Promise<void>((resolve) => server.listen(socketPath, resolve))
+  const kind = endpointKindOf(socketPath)
+  const listenEndpoint = kind === 'named-pipe' ? windowsPipeNameOf(socketPath) : socketPath
+  if (kind === 'named-pipe' && listenEndpoint !== socketPath.replaceAll('/', '\\')) {
+    await mkdir(dirname(socketPath), { recursive: true })
+    await writeFile(socketPath, '')
+  }
+  await new Promise<void>((resolve, reject) => {
+    const onError = (err: Error): void => reject(err)
+    server.once('error', onError)
+    server.listen(listenEndpoint, () => {
+      server.off('error', onError)
+      resolve()
+    })
+  })
   const close = async () => {
     for (const socket of sockets) socket.destroy()
     await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
