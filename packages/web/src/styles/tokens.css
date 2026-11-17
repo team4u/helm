@@ -7,6 +7,11 @@
  * 3. 层次分明：AI 正文无外框气泡，工具调用 26px 单行静音轨迹，业务卡片与审批卡突出。
  * ========================================================================== */
 
+:root {
+  --conversation-max-width: 960px;
+  --conversation-gutter: 24px;
+}
+
 :root,
 :root[data-theme='light'] {
   color-scheme: light;
@@ -80,6 +85,8 @@
   --nav-active-bg: var(--bg-elevated);
   --nav-active-fg: var(--fg);
   --nav-active-muted: var(--fg-muted);
+  --nav-sub-active-bg: #ebecf6;
+  --nav-sub-active-border: rgba(79, 70, 229, 0.22);
 
   /* 主强调色与语义指示色 */
   --accent: #4f46e5;
@@ -186,6 +193,8 @@
   --nav-active-bg: #3c3c45;
   --nav-active-fg: var(--fg);
   --nav-active-muted: var(--fg-muted);
+  --nav-sub-active-bg: #2b2c3b;
+  --nav-sub-active-border: rgba(165, 180, 252, 0.24);
 
   --accent: #a5b4fc;
   --accent-bg: #2b2c47;

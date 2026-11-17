@@ -1325,7 +1325,6 @@ export function ConversationTimeline({
         {(isWorking && !hasLiveTurn) || (sendingPending && !isWorking) ? (
           <div className="msg-ai-block" role="status" aria-live="polite">
             <span className="msg-origin-tag msg-live-waiting" aria-label={t('conv.timeline.generating')}>
-              <HelmIcon name="loader" size={12.5} className="spin-slow" />
               <span className="msg-live-dots" aria-hidden="true">
                 <span />
                 <span />

@@ -503,15 +503,15 @@ test('buildTimelineItems 回归：隔离启用前后 items 锚点序列一致（
 // 7. 移动端容器宽度自适应估高分桶
 // ---------------------------------------------------------------------------
 
-test('resolveCharsPerLine 与窄屏估高：保留无参桌面默认 55，移动端宽度自动收窄避免估高偏矮', { timeout: 60_000 }, () => {
-  assert.equal(resolveCharsPerLine(), 55)
-  assert.equal(resolveCharsPerLine(undefined), 55)
-  assert.equal(resolveCharsPerLine(0), 55)
-  assert.equal(resolveCharsPerLine(1200), 55)
+test('resolveCharsPerLine 与窄屏估高：保留无参桌面默认 64，移动端宽度自动收窄避免估高偏矮', { timeout: 60_000 }, () => {
+  assert.equal(resolveCharsPerLine(), 64)
+  assert.equal(resolveCharsPerLine(undefined), 64)
+  assert.equal(resolveCharsPerLine(0), 64)
+  assert.equal(resolveCharsPerLine(1200), 64)
   assert.equal(resolveCharsPerLine(375), 23)
   assert.equal(resolveCharsPerLine(320), 20)
 
-  // 200 字符在桌面（55/行）只需 4 行（sm），在 375px 移动端折为 9 行（md）
+  // 200 字符在桌面（64/行）只需 4 行（sm），在 375px 移动端折为 9 行（md）
   const mediumHuman = human('m1', 'x'.repeat(200))
   assert.equal(estimateContainmentBucket(mediumHuman), 'sm')
   assert.equal(estimateContainmentBucket(mediumHuman, { containerWidthPx: 375 }), 'md')

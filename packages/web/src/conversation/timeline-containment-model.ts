@@ -39,11 +39,11 @@ export function containmentClassName(bucket: ContainmentBucket): string {
   return `tl-cv-${bucket}`
 }
 
-/** Body height params: ~55 chars per line at 820px desktop width (a CJK/latin compromise), ~23px per line. */
-const DEFAULT_CHARS_PER_LINE = 55
+/** Body height params: ~64 chars per line at 960px desktop width (a CJK/latin compromise), ~23px per line. */
+const DEFAULT_CHARS_PER_LINE = 64
 const MIN_CHARS_PER_LINE = 18
 const AVG_MIXED_CHAR_WIDTH_PX = 14.9
-const MAX_TIMELINE_INNER_PX = 820
+const MAX_TIMELINE_INNER_PX = 960
 const NARROW_CONTAINER_THRESHOLD_PX = 680
 const LINE_HEIGHT_PX = 23
 /** One tool row / folded-group summary row (26px row height + amortized gaps). */
@@ -61,7 +61,7 @@ export interface ContainmentEstimateOptions {
   charsPerLine?: number
 }
 
-/** 按容器宽度自适应每行估算字符数；未传或非法宽度回退桌面默认 55。 */
+/** 按容器宽度自适应每行估算字符数；未传或非法宽度回退桌面默认 64。 */
 export function resolveCharsPerLine(containerWidthPx?: number): number {
   if (containerWidthPx === undefined || !Number.isFinite(containerWidthPx) || containerWidthPx <= 0) {
     return DEFAULT_CHARS_PER_LINE

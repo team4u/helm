@@ -121,7 +121,7 @@
   color: var(--fg);
 }
 
-/* 归属父行弱态：子会话激活而父站位未进入待命态时，仅提亮加粗文字，无卡片底与阴影 */
+/* 归属父行弱态：子会话激活而父站位未进入待命态时，仅提亮文字，无卡片底与阴影 */
 .agent-standing-row-branch {
   color: var(--fg);
 }
@@ -131,7 +131,7 @@
 }
 
 .agent-standing-row-branch .nav-item-label {
-  font-weight: 600;
+  font-weight: 500;
 }
 
 /* 分屏非聚焦在场态：柔和底色 + 1px 内描边 */
@@ -178,6 +178,27 @@
   color: var(--nav-active-muted);
 }
 
+/* 二级会话行选中态：脱离浮雕卡片阴影，改用柔和着色底 + 1px 发丝内描边 + 左侧强调锚点 */
+.sidebar-context .nav-item.nav-item-sub.nav-item-active:hover,
+.sidebar-context .nav-item.nav-item-sub.nav-item-active {
+  --nav-row-bg: var(--nav-sub-active-bg);
+  background: var(--nav-row-bg);
+  color: var(--nav-active-fg);
+  box-shadow: inset 0 0 0 1px var(--nav-sub-active-border);
+}
+
+.sidebar-context .nav-item.nav-item-sub.nav-item-active::before {
+  content: '';
+  position: absolute;
+  left: 2px;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+  pointer-events: none;
+}
+
 /* 分屏焦点刻度与微标：与主舞台面板顶缘焦点条呼应 */
 .nav-item-focused {
   position: relative;
@@ -186,9 +207,9 @@
 .nav-item-focused::before {
   content: '';
   position: absolute;
-  left: 3px;
-  top: 5px;
-  bottom: 5px;
+  left: 2px;
+  top: 6px;
+  bottom: 6px;
   width: 2px;
   border-radius: 1px;
   background: var(--accent);
@@ -289,14 +310,17 @@
   font-weight: 400;
 }
 
-.nav-item-sub.nav-item-active .nav-item-label,
+.nav-item-sub.nav-item-active .nav-item-label {
+  font-weight: 600;
+}
+
 .nav-item-sub.nav-item-split .nav-item-label {
   font-weight: 500;
 }
 
 /* 行级悬停操作（子会话重命名/删除、站位与视图行的分屏按钮与新建按钮）：
- * 桌面端悬停设备下对非激活/非分屏行采用绝对定位叠加渐变，实现零文字重排、零抖动；
- * 激活行、分屏行与触屏设备保持常规流内联，避免与 .nav-pane-tag（主/分）重叠碰撞。 */
+ * 桌面端悬停设备下所有行（含激活/分屏行）统一仅在悬停、键盘焦点或菜单展开时绝对定位浮出，
+ * 避免激活后尾部常驻图标挤压标题宽度；并通过隐藏同位 meta 防止与 .nav-pane-tag 碰撞。 */
 .nav-item-row-actions,
 .sidebar-split-action,
 .agent-new-conv-btn {
@@ -306,8 +330,8 @@
 }
 
 @media (hover: hover) {
-  .nav-item:not(.nav-item-active):not(.nav-item-split) .nav-item-row-actions,
-  .nav-item:not(.nav-item-active):not(.nav-item-split) .sidebar-split-action {
+  .nav-item .nav-item-row-actions,
+  .nav-item .sidebar-split-action {
     position: absolute;
     right: 6px;
     top: 50%;
@@ -323,26 +347,34 @@
     transition: opacity 100ms ease;
   }
 
-  .sidebar-context .nav-item:not(.nav-item-active):not(.nav-item-split):focus-within:not(:hover):not(:has([aria-expanded="true"])) .nav-item-row-actions,
-  .sidebar-context .nav-item:not(.nav-item-active):not(.nav-item-split):focus-within:not(:hover):not(:has([aria-expanded="true"])) .sidebar-split-action {
+  .sidebar-context .nav-item:not(.nav-item-active):not(.nav-item-split):has(:focus-visible):not(:hover):not(:has([aria-expanded="true"])) .nav-item-row-actions,
+  .sidebar-context .nav-item:not(.nav-item-active):not(.nav-item-split):has(:focus-visible):not(:hover):not(:has([aria-expanded="true"])) .sidebar-split-action {
     background: linear-gradient(90deg, transparent 0%, var(--bg-subtle) 38%);
   }
 
-  .nav-item:not(.nav-item-active):not(.nav-item-split):hover .nav-item-row-actions,
-  .nav-item:not(.nav-item-active):not(.nav-item-split):focus-within .nav-item-row-actions,
-  .nav-item:not(.nav-item-active):not(.nav-item-split):has([aria-expanded="true"]) .nav-item-row-actions,
-  .nav-item:not(.nav-item-active):not(.nav-item-split):hover .sidebar-split-action,
-  .nav-item:not(.nav-item-active):not(.nav-item-split):focus-within .sidebar-split-action,
-  .nav-item:not(.nav-item-active):not(.nav-item-split):has([aria-expanded="true"]) .sidebar-split-action {
+  .nav-item:hover .nav-item-row-actions,
+  .nav-item:has(:focus-visible) .nav-item-row-actions,
+  .nav-item:has([aria-expanded="true"]) .nav-item-row-actions,
+  .nav-item:hover .sidebar-split-action,
+  .nav-item:has(:focus-visible) .sidebar-split-action,
+  .nav-item:has([aria-expanded="true"]) .sidebar-split-action {
     opacity: 1;
     pointer-events: auto;
   }
 
-  .nav-item:not(.nav-item-active):not(.nav-item-split) .nav-item-row-actions:empty {
+  .nav-item .nav-item-row-actions:empty {
     display: none;
   }
 
-  .agent-standing-row:has(.agent-new-conv-btn):not(.nav-item-active):not(.nav-item-split) .agent-new-conv-btn {
+  .nav-item:is(:has(.nav-item-row-actions:not(:empty)), :has(.sidebar-split-action)) .nav-item-meta > :not(.nav-item-row-actions):not(.sidebar-split-action) {
+    transition: opacity 100ms ease;
+  }
+
+  .nav-item:is(:has(.nav-item-row-actions:not(:empty)), :has(.sidebar-split-action)):is(:hover, :has(:focus-visible), :has([aria-expanded="true"])) .nav-item-meta > :not(.nav-item-row-actions):not(.sidebar-split-action) {
+    opacity: 0;
+  }
+
+  .agent-standing-row:has(.agent-new-conv-btn) .agent-new-conv-btn {
     position: absolute;
     right: 6px;
     top: 50%;
@@ -353,48 +385,28 @@
     transition: opacity 100ms ease, background 120ms ease, color 120ms ease;
   }
 
-  .agent-standing-row:has(.agent-new-conv-btn):not(.nav-item-active):not(.nav-item-split):hover .agent-new-conv-btn:not(:hover) {
-    background: var(--nav-hover-bg);
+  .agent-standing-row:has(.agent-new-conv-btn):hover .agent-new-conv-btn:not(:hover) {
+    background: var(--nav-row-bg, var(--nav-hover-bg));
   }
 
-  .agent-standing-row:has(.agent-new-conv-btn):not(.nav-item-active):not(.nav-item-split):focus-within:not(:hover) .agent-new-conv-btn:not(:hover) {
+  .agent-standing-row:has(.agent-new-conv-btn):not(.nav-item-active):not(.nav-item-split):has(:focus-visible):not(:hover) .agent-new-conv-btn:not(:hover) {
     background: var(--bg-subtle);
   }
 
-  .agent-standing-row:has(.agent-new-conv-btn):not(.nav-item-active):not(.nav-item-split) .nav-item-meta > :not(.agent-new-conv-btn) {
+  .agent-standing-row:has(.agent-new-conv-btn) .nav-item-meta > :not(.agent-new-conv-btn) {
     transition: opacity 100ms ease;
   }
 
-  .agent-standing-row:has(.agent-new-conv-btn):not(.nav-item-active):not(.nav-item-split):hover .agent-new-conv-btn,
-  .agent-standing-row:has(.agent-new-conv-btn):not(.nav-item-active):not(.nav-item-split):focus-within .agent-new-conv-btn {
+  .agent-standing-row:has(.agent-new-conv-btn):hover .agent-new-conv-btn,
+  .agent-standing-row:has(.agent-new-conv-btn):has(:focus-visible) .agent-new-conv-btn {
     opacity: 1;
     pointer-events: auto;
   }
 
-  .agent-standing-row:has(.agent-new-conv-btn):not(.nav-item-active):not(.nav-item-split):hover .nav-item-meta > :not(.agent-new-conv-btn),
-  .agent-standing-row:has(.agent-new-conv-btn):not(.nav-item-active):not(.nav-item-split):focus-within .nav-item-meta > :not(.agent-new-conv-btn) {
+  .agent-standing-row:has(.agent-new-conv-btn):hover .nav-item-meta > :not(.agent-new-conv-btn),
+  .agent-standing-row:has(.agent-new-conv-btn):has(:focus-visible) .nav-item-meta > :not(.agent-new-conv-btn) {
     opacity: 0;
   }
-}
-
-.nav-item-active .nav-item-row-actions,
-.nav-item-active .sidebar-split-action,
-.nav-item-active .agent-new-conv-btn,
-.nav-item-split .nav-item-row-actions,
-.nav-item-split .sidebar-split-action,
-.nav-item-split .agent-new-conv-btn {
-  position: static;
-  transform: none;
-  display: inline-flex;
-  opacity: 1;
-  pointer-events: auto;
-  background: transparent;
-  padding-left: 0;
-}
-
-.nav-item-active .nav-item-row-actions:empty,
-.nav-item-split .nav-item-row-actions:empty {
-  display: none;
 }
 
 @media (hover: none) {

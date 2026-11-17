@@ -156,7 +156,6 @@ function AssistantTurnContent({ turn, conversation, siblingCalls, isLatestTurn =
       })}
       {turn.live ? (
         <span className="msg-origin-tag msg-live-indicator" aria-label={t('conv.timeline.generating')} role="status">
-          <HelmIcon name="loader" size={12.5} className="spin-slow" />
           <span className="msg-live-dots" aria-hidden="true">
             <span />
             <span />
