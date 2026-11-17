@@ -1,9 +1,12 @@
 /**
  * Pure logic for the builtin:workflow client: unified execution tree
- * ExecutionNode building — conversation chain recursion + whole-run
- * projection placement, DSL claim dedup and Active-First ordering (status
- * mapping and aggregation live in model-execution-status, presentation
- * summaries in model-execution-view; zero React/DOM dependencies).
+ * ExecutionNode building — rooted exclusively in `runs` (`WorkflowRunSummary`),
+ * looking up `convById.get(node.conversationId)` from `conversations` for live
+ * status/title/summary and recursing into child runs `runsByParent.get(convId)`.
+ *
+ * Unclaimed `conversations` (such as human `POST /api/conversations/:id/fork`
+ * branches and `builtin:superagent` resident workers that have no `WorkflowRun`)
+ * never enter the execution tree, workbench panel, or active tray.
  */
 import type { ConversationSummary } from '@helm/protocol'
 import type { WorkflowNodeState, WorkflowRunSummary } from '../../contracts.js'
@@ -15,46 +18,52 @@ import {
   executionRunStatus,
 } from './model-execution-status.ts'
 
-/** Execution tree node kind: native subagent / workflow run / in-run node / external run. */
 export type ExecutionNodeKind = 'conversation' | 'workflow' | 'workflow-node' | 'external'
 
-/** Unified execution tree node: SubagentLiveCard / WorkflowRunCard / WorkflowNodeCard / external run summary share the same recursive shape. */
 export interface ExecutionNode {
   key: string
   kind: ExecutionNodeKind
-  /** Openable native subagent id (workflow / workflow-node / conversation-less external do not carry one). */
   conversationId?: number
-  /** Linked workflow run (for conversation nodes: the claimed background run; for workflow / external nodes: their own run). */
   run?: WorkflowRunSummary
-  /** Raw in-run node (carried by children of workflow nodes). */
   runNode?: WorkflowNodeState
-  /** Display title (distilled from real data only). */
   label?: string
-  /** Live conversation summary (from the conversation list when present, never invented). */
   summary?: ConversationSummary
-  /** Leaf's own status; the whole subtree status lives in aggregated.status. */
   status: ExecutionNodeStatus
-  /** Next-level children. */
   children: ExecutionNode[]
-  /** Bottom-up aggregate (self plus all descendants). */
   aggregated: ExecutionAggregate
-  /** Latest update time for ordering (max of summary / run). */
   updatedAt: number
 }
 
-/** Pick the currently linked run among multiple background runs claiming the same subagent. */
-function pickBackgroundRun(
+function isStrongerRunOwner(
+  candidate: WorkflowRunSummary,
+  current: WorkflowRunSummary,
+  preferredParentToolCallId?: string,
+): boolean {
+  const candidateRunning = candidate.status === 'running'
+  const currentRunning = current.status === 'running'
+  if (candidateRunning !== currentRunning) return candidateRunning
+  if (candidate.createdAt !== current.createdAt) return candidate.createdAt > current.createdAt
+  if (preferredParentToolCallId !== undefined && preferredParentToolCallId !== '') {
+    const candidateMatches = candidate.parentToolCallId === preferredParentToolCallId
+    const currentMatches = current.parentToolCallId === preferredParentToolCallId
+    if (candidateMatches !== currentMatches) return candidateMatches
+  }
+  return candidate.id > current.id
+}
+
+function pickSubagentRun(
   runs: ReadonlyArray<WorkflowRunSummary>,
   parentToolCallId: string | undefined,
 ): WorkflowRunSummary | undefined {
   if (runs.length === 0) return undefined
-  if (parentToolCallId !== undefined && parentToolCallId !== '') {
-    return runs.find((r) => r.parentToolCallId === parentToolCallId)
+  let best = runs[0]!
+  for (let i = 1; i < runs.length; i++) {
+    const candidate = runs[i]!
+    if (isStrongerRunOwner(candidate, best, parentToolCallId)) best = candidate
   }
-  return runs.reduce((latest, r) => (r.createdAt > latest.createdAt ? r : latest))
+  return best
 }
 
-/** Merge the aggregates of a set of nodes (used by card headers aggregating direct subtrees, excluding any "self"). */
 export function aggregateExecutionNodes(nodes: ReadonlyArray<ExecutionNode>): ExecutionAggregate {
   let total = 0
   let done = 0
@@ -74,19 +83,6 @@ export function aggregateExecutionNodes(nodes: ReadonlyArray<ExecutionNode>): Ex
   return { status: aggregateExecutionStatuses(statuses), total, done, running, blocked, error }
 }
 
-/**
- * Compute a node's own aggregate once all children are aggregated
- * (post-order; includes self).
- *
- * - Containers (workflow / external run shells) do not count themselves as
- *   tasks when they have children: one real execution is counted once, a
- *   wrapper is not an independently completed task; an empty run without
- *   children still counts 1 (the run itself is one real execution);
- * - The status synthesizes self and descendants via
- *   aggregateExecutionStatuses: while descendants are active / error /
- *   blocked / unsettled (including running background subtasks and pending
- *   phase nodes) the whole is never marked complete.
- */
 function finalizeExecutionNode(node: Omit<ExecutionNode, 'aggregated'>): ExecutionNode {
   const selfCounts = !(node.children.length > 0 && (node.kind === 'workflow' || node.kind === 'external'))
   let done = 0
@@ -113,7 +109,6 @@ function finalizeExecutionNode(node: Omit<ExecutionNode, 'aggregated'>): Executi
   return { ...node, aggregated: { status: aggregateExecutionStatuses(statuses), total, done, running, blocked, error } }
 }
 
-/** Workbench ordering: blocked > working > error > done/pending (Active-First); same rank by updatedAt descending. */
 const EXECUTION_SORT_ORDER: Record<ExecutionNodeStatus, number> = {
   blocked: 0,
   working: 1,
@@ -130,19 +125,27 @@ function sortExecutionSiblings(nodes: ExecutionNode[]): ExecutionNode[] {
   })
 }
 
-/** Input for building the execution tree. */
 export interface BuildExecutionTreeInput {
   rootConversationId: number
-  /** Full conversation summaries (useConversations); recursion at any depth via parentConversationId. */
   conversations: ReadonlyArray<ConversationSummary>
-  /** Ancestor-aggregated runs projection for the root conversation
-   * (usePluginSessionDoc('runs'), including all descendants; each run keeps
-   * its original conversationId); deep conversations without run data only
-   * recurse via the conversation chain — never invented. */
   runs?: ReadonlyArray<WorkflowRunSummary>
 }
 
-/** Fallback leaf for in-run nodes without a conversation / whose conversation is on the ancestor chain. */
+export function buildLeafNodesForRun(run: WorkflowRunSummary): ExecutionNode[] {
+  return (run.nodes ?? []).map((node) =>
+    finalizeExecutionNode({
+      key: `node:${run.id}:${node.id}`,
+      kind: 'workflow-node',
+      run,
+      runNode: node,
+      label: node.label,
+      status: executionRunNodeStatus(node),
+      updatedAt: run.updatedAt,
+      children: [],
+    }),
+  )
+}
+
 function executionRunLeafNode(run: WorkflowRunSummary, node: WorkflowNodeState): Omit<ExecutionNode, 'aggregated'> {
   return {
     key: `node:${run.id}:${node.id}`,
@@ -156,45 +159,33 @@ function executionRunLeafNode(run: WorkflowRunSummary, node: WorkflowNodeState):
   }
 }
 
-/** DSL reference ownership: a running run wins (after a resume the new run
- * takes over still-running references), then the latest createdAt, then a
- * stable id ordering (independent of shard order). */
-function isStrongerDslConvOwner(candidate: WorkflowRunSummary, current: WorkflowRunSummary): boolean {
-  const candidateRunning = candidate.status === 'running'
-  const currentRunning = current.status === 'running'
-  if (candidateRunning !== currentRunning) return candidateRunning
-  if (candidate.createdAt !== current.createdAt) return candidate.createdAt > current.createdAt
-  return candidate.id > current.id
-}
-
 /**
- * Build the unified execution tree: the next-level execution nodes of
- * rootConversationId (recursive at any depth).
- *
- * - The runs input is the whole projection of "this conversation + all
- *   descendants" (each run keeps its original conversationId, provided by the
- *   backend aggregate shard); a run id arriving twice is deduped — no run is
- *   lost from the tree and none is mounted twice;
- * - Conversation children recurse via parentConversationId; conversations
- *   claimed by a DSL run mount under the run node and do not reappear; when
- *   the same conversation is referenced by multiple historical/resumed DSL
- *   runs it mounts only once (ownership per isStrongerDslConvOwner);
- *   references from other runs stay as plain leaf rows — visible but not
- *   double counted;
- * - Direct subagent conversations claimed by a background single-subagent run
- *   stay conversation nodes carrying the run; when the conversation list is
- *   missing them only the run is carried, no summary invented;
- * - Background runs without any conversation association become external
- *   execution nodes (in-run nodes as leaves);
- * - A parentConversationId cycle is defensively cut along the ancestor chain.
+ * Build the unified execution tree for `rootConversationId`, rooted exclusively
+ * in `runs` (`WorkflowRunSummary`):
+ * - every `subagent` (foreground or background) and `SubagentWorkflow` has a
+ *   `WorkflowRunSummary` in `runs` (ancestor-aggregated shard);
+ * - conversations without a claiming `WorkflowRunSummary` (human forks,
+ *   SuperAgent resident workers, etc.) are never mounted;
+ * - descendant runs initiated by claimed child conversations recurse via
+ *   `runsByParent.get(convId)` with cycle protection along `ancestry`.
  */
 export function buildExecutionTree(input: BuildExecutionTreeInput): ExecutionNode[] {
   const { rootConversationId, conversations, runs = [] } = input
-  const convById = new Map<number, ConversationSummary>()
-  for (const conversation of conversations) convById.set(conversation.id, conversation)
+  if (runs.length === 0) return []
 
-  // Aggregate shards may carry the same run twice (overlapping projections /
-  // incremental events): dedupe by id.
+  const convById = new Map<number, ConversationSummary>()
+  const convByParentAndCallId = new Map<string, ConversationSummary>()
+  for (const conversation of conversations) {
+    convById.set(conversation.id, conversation)
+    if (
+      conversation.parentConversationId !== undefined &&
+      conversation.parentToolCallId !== undefined &&
+      conversation.parentToolCallId !== ''
+    ) {
+      convByParentAndCallId.set(`${conversation.parentConversationId}\0${conversation.parentToolCallId}`, conversation)
+    }
+  }
+
   const uniqueRuns: WorkflowRunSummary[] = []
   const seenRunIds = new Set<string>()
   for (const run of runs) {
@@ -206,22 +197,41 @@ export function buildExecutionTree(input: BuildExecutionTreeInput): ExecutionNod
   const runsByParent = new Map<number, WorkflowRunSummary[]>()
   const dslClaimedByParent = new Map<number, Set<number>>()
   const subagentClaimsByParent = new Map<number, Map<number, WorkflowRunSummary[]>>()
+  const subagentClaimedRunIds = new Set<string>()
   const dslConvOwner = new Map<number, WorkflowRunSummary>()
+
   for (const run of uniqueRuns) {
     const siblings = runsByParent.get(run.conversationId)
     if (siblings !== undefined) siblings.push(run)
     else runsByParent.set(run.conversationId, [run])
+
     if (run.kind === 'subagent') {
-      let claims = subagentClaimsByParent.get(run.conversationId)
-      if (claims === undefined) {
-        claims = new Map()
-        subagentClaimsByParent.set(run.conversationId, claims)
+      const runNodes = run.nodes ?? []
+      const claimedIds: number[] = []
+      for (const node of runNodes) {
+        if (node.conversationId !== undefined) claimedIds.push(node.conversationId)
       }
-      for (const node of run.nodes ?? []) {
-        if (node.conversationId === undefined) continue
-        const list = claims.get(node.conversationId)
-        if (list !== undefined) list.push(run)
-        else claims.set(node.conversationId, [run])
+      if (
+        claimedIds.length === 0 &&
+        runNodes.every((n) => n.executionId === undefined) &&
+        run.parentToolCallId !== undefined &&
+        run.parentToolCallId !== ''
+      ) {
+        const byCall = convByParentAndCallId.get(`${run.conversationId}\0${run.parentToolCallId}`)
+        if (byCall !== undefined) claimedIds.push(byCall.id)
+      }
+      if (claimedIds.length > 0) {
+        subagentClaimedRunIds.add(run.id)
+        let claims = subagentClaimsByParent.get(run.conversationId)
+        if (claims === undefined) {
+          claims = new Map()
+          subagentClaimsByParent.set(run.conversationId, claims)
+        }
+        for (const convId of claimedIds) {
+          const list = claims.get(convId)
+          if (list !== undefined) list.push(run)
+          else claims.set(convId, [run])
+        }
       }
     } else {
       let claimed = dslClaimedByParent.get(run.conversationId)
@@ -233,7 +243,7 @@ export function buildExecutionTree(input: BuildExecutionTreeInput): ExecutionNod
         if (node.conversationId === undefined) continue
         claimed.add(node.conversationId)
         const owner = dslConvOwner.get(node.conversationId)
-        if (owner === undefined || isStrongerDslConvOwner(run, owner)) {
+        if (owner === undefined || isStrongerRunOwner(run, owner)) {
           dslConvOwner.set(node.conversationId, run)
         }
       }
@@ -245,58 +255,36 @@ export function buildExecutionTree(input: BuildExecutionTreeInput): ExecutionNod
     const dslClaimed = dslClaimedByParent.get(conversationId)
     const claims = subagentClaimsByParent.get(conversationId)
 
-    // 1) Direct conversation children: conversations claimed by a DSL run
-    // mount under the run node instead of reappearing here.
-    const directIds = new Set<number>()
-    for (const conversation of conversations) {
-      if (conversation.parentConversationId !== conversationId) continue
-      directIds.add(conversation.id)
-      if (dslClaimed?.has(conversation.id) === true) continue
-      if (ancestry.has(conversation.id)) continue
-      const backgroundRun = claims?.get(conversation.id) !== undefined
-        ? pickBackgroundRun(claims.get(conversation.id) ?? [], conversation.parentToolCallId)
-        : undefined
-      nodes.push(
-        finalizeExecutionNode({
-          key: `conv:${conversation.id}`,
-          kind: 'conversation',
-          conversationId: conversation.id,
-          summary: conversation,
-          ...(backgroundRun !== undefined ? { run: backgroundRun } : {}),
-          status: executionConversationStatus(conversation, backgroundRun),
-          updatedAt: Math.max(conversation.updatedAt, backgroundRun?.updatedAt ?? 0),
-          children: childrenOf(conversation.id, new Set(ancestry).add(conversation.id)),
-        }),
-      )
-    }
-
-    // 2) Conversations visible only via background runs (conversation list
-    // missing their summaries): carry the run honestly, never invent a summary.
+    // 1) Subagent conversations claimed by `kind: 'subagent'` runs of this conversation
+    // (conversations also claimed by a DSL run mount under that DSL run instead).
     if (claims !== undefined) {
       for (const [claimedId, claimedRuns] of claims) {
-        if (directIds.has(claimedId) || dslClaimed?.has(claimedId) === true) continue
-        if (ancestry.has(claimedId)) continue
-        const run = pickBackgroundRun(claimedRuns, undefined)
+        if (dslClaimed?.has(claimedId) === true || ancestry.has(claimedId)) continue
+        const summary = convById.get(claimedId)
+        const subagentRun = pickSubagentRun(claimedRuns, summary?.parentToolCallId)
+        const firstNode = subagentRun?.nodes?.find((n) => n.conversationId === claimedId) ?? subagentRun?.nodes?.[0]
         nodes.push(
           finalizeExecutionNode({
             key: `conv:${claimedId}`,
             kind: 'conversation',
             conversationId: claimedId,
-            ...(run !== undefined ? { run } : {}),
-            status: executionConversationStatus(undefined, run),
-            updatedAt: run?.updatedAt ?? 0,
+            ...(summary !== undefined ? { summary } : {}),
+            ...(subagentRun !== undefined ? { run: subagentRun } : {}),
+            ...(firstNode?.label !== undefined ? { label: firstNode.label } : {}),
+            status: executionConversationStatus(summary, subagentRun),
+            updatedAt: Math.max(summary?.updatedAt ?? 0, subagentRun?.updatedAt ?? 0),
             children: childrenOf(claimedId, new Set(ancestry).add(claimedId)),
           }),
         )
       }
     }
 
-    // 3) Runs started by this conversation: DSL workflows mount their node
-    // subtree; background runs without conversation association are external runs.
+    // 2) Runs started by this conversation: external subagent runs (without a
+    // native conversation) and DSL workflow runs (with in-run nodes + claimed child conversations).
     for (const run of runsByParent.get(conversationId) ?? []) {
       const runNodes = run.nodes ?? []
       if (run.kind === 'subagent') {
-        if (runNodes.some((n) => n.conversationId !== undefined)) continue // conversation-linked runs already mounted in 1/2
+        if (subagentClaimedRunIds.has(run.id)) continue
         nodes.push(
           finalizeExecutionNode({
             key: `run:${run.id}`,
@@ -310,8 +298,6 @@ export function buildExecutionTree(input: BuildExecutionTreeInput): ExecutionNod
         )
         continue
       }
-      // A run referencing the same conversation twice also mounts it once
-      // (later references stay as leaf rows).
       const mountedConvIds = new Set<number>()
       nodes.push(
         finalizeExecutionNode({
@@ -324,8 +310,10 @@ export function buildExecutionTree(input: BuildExecutionTreeInput): ExecutionNod
           children: runNodes.map((node) => {
             const convId = node.conversationId
             if (
-              convId === undefined || ancestry.has(convId) ||
-              dslConvOwner.get(convId) !== run || mountedConvIds.has(convId)
+              convId === undefined ||
+              ancestry.has(convId) ||
+              dslConvOwner.get(convId) !== run ||
+              mountedConvIds.has(convId)
             ) {
               return finalizeExecutionNode(executionRunLeafNode(run, node))
             }
@@ -343,7 +331,7 @@ export function buildExecutionTree(input: BuildExecutionTreeInput): ExecutionNod
               key: `conv:${convId}`,
               kind: 'conversation',
               conversationId: convId,
-              summary,
+              ...(summary !== undefined ? { summary } : {}),
               run,
               runNode: node,
               label: node.label,

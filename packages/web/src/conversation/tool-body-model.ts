@@ -8,7 +8,8 @@
  *   locally complete text, recoverable by expanding, unrelated to server truncation);
  * - key-value normalization of generic tool inputs (multiline strings/nested values as blocks, raw-data entry as fallback);
  * - minimal stats for the 26px single-row summary (edit +N −N / write line counts; running state reports facts, never success);
- * - folded step-group stats (StepGroupSummary: thinking/tool/failure/running counts and duration aggregation).
+ * - folded step-group stats (StepGroupSummary: thinking/tool/failure/running counts and the two
+ *   separately labeled cumulative durations — eligible model-response time and tool execution time).
  */
 
 import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
@@ -271,20 +272,46 @@ export interface StepGroupSummary {
   toolCount: number
   errorCount: number
   runningCount: number
-  totalDurationMs?: number
+  /**
+   * Cumulative model-response time (ms) of the eligible responses folded into this group
+   * (thinking + toolCall, no non-empty visible text; one contribution per assistant message via
+   * structural first-thinking-block attachment). Omitted when nothing attributable is known —
+   * never fabricated. This is a cumulative total, not wall-clock elapsed time.
+   */
+  modelDurationMs?: number
+  /**
+   * Cumulative tool execution time (ms) within this group: concurrently running tools each count
+   * their own execution, so the sum can exceed wall-clock elapsed time — the UI must label it as
+   * cumulative. Omitted when no valid positive duration is known.
+   */
+  toolDurationMs?: number
 }
 
-/** Aggregate thinking/tool counts, failure/running counts, and the sum of valid positive durations within a folded step group (zeros and invalid values excluded). */
+/**
+ * Aggregate thinking/tool counts, failure/running counts, and the two separately labeled
+ * cumulative durations within a folded step group:
+ * - `modelDurationMs` sums eligible model-response durations attached to thinking blocks
+ *   (structural once-per-message allocation in timeline-model; invalid values are dropped here too);
+ * - `toolDurationMs` sums valid positive tool execution durations (a labeled cumulative total —
+ *   the backend's ToolResultMessage.timestamp is settlement time, not execution end, so true
+ *   wall-clock intervals cannot be derived and are never faked).
+ * Zeros, negatives, non-finite and missing durations are excluded from both sums.
+ */
 export function summarizeStepGroup(steps: ReadonlyArray<FoldableStep>): StepGroupSummary {
   let thinkingCount = 0
   let toolCount = 0
   let errorCount = 0
   let runningCount = 0
-  let durationSum = 0
+  let modelDurationSum = 0
+  let toolDurationSum = 0
 
   for (const step of steps) {
     if (step.kind === 'thinking') {
       thinkingCount += 1
+      const m = step.thinking.responseDurationMs
+      if (typeof m === 'number' && Number.isFinite(m) && m > 0) {
+        modelDurationSum += m
+      }
       continue
     }
     toolCount += 1
@@ -296,7 +323,7 @@ export function summarizeStepGroup(steps: ReadonlyArray<FoldableStep>): StepGrou
     }
     const d = step.tool.durationMs
     if (typeof d === 'number' && Number.isFinite(d) && d > 0) {
-      durationSum += d
+      toolDurationSum += d
     }
   }
 
@@ -306,6 +333,7 @@ export function summarizeStepGroup(steps: ReadonlyArray<FoldableStep>): StepGrou
     toolCount,
     errorCount,
     runningCount,
-    ...(durationSum > 0 ? { totalDurationMs: durationSum } : {}),
+    ...(modelDurationSum > 0 ? { modelDurationMs: modelDurationSum } : {}),
+    ...(toolDurationSum > 0 ? { toolDurationMs: toolDurationSum } : {}),
   }
 }

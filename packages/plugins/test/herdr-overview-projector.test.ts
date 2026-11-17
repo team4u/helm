@@ -396,3 +396,48 @@ test('usable 翻转后 close：abort 静默收尾，无通知无写入', { timeo
   assert.equal(h.notifications.length, 0)
   assert.equal(h.docs.length, 1) // 仅第一轮成功写入
 })
+
+test('MetadataProjector：单飞期间的新 token 不丢弃，forget 回收 seq 计数', { timeout: 60_000 }, async () => {
+  const { MetadataProjector } = await import('../src/herdr/metadata.js')
+  const tokens: string[] = []
+  const firstEntered = new Deferred<void>()
+  const firstGate = new Deferred<void>()
+  const secondProjected = new Deferred<void>()
+  let first = true
+  const slow = new MetadataProjector(
+    async (_target, method, params) => {
+      assert.equal(method, 'pane.report_metadata')
+      tokens.push((params['tokens'] as Record<string, string>)['helm']!)
+      if (first) {
+        first = false
+        firstEntered.resolve()
+        await firstGate.promise
+      } else {
+        secondProjected.resolve()
+      }
+      return { type: 'ok' }
+    },
+    () => {},
+  )
+  const inFlight = slow.project(undefined, 'p1', 'run:x')
+  await firstEntered.promise
+  await slow.project(undefined, 'p1', 'ask:y')
+  firstGate.resolve()
+  await inFlight
+  await secondProjected.promise
+  assert.deepEqual(tokens, ['run:x', 'ask:y'], 'inFlight 完成后补投射最新 token')
+
+  const seqs: number[] = []
+  const fast = new MetadataProjector(
+    async (_target, _method, params) => {
+      seqs.push(params['seq'] as number)
+      return { type: 'ok' }
+    },
+    () => {},
+  )
+  await fast.project(undefined, 'pA', 'run:1')
+  await fast.project(undefined, 'pA', 'run:2')
+  fast.forget('pA')
+  await fast.project(undefined, 'pA', 'run:3')
+  assert.deepEqual(seqs, [1, 2, 1], 'forget 同步回收 seqCounters（重登记重新起算）')
+})

@@ -238,7 +238,7 @@ export async function resolveAgentReplayCall(ctx: AgentCallContext, callId: numb
   } else {
     replayed = ctx.replay.match(scope, firstAttemptKey, 'agent', {
       attempt: 1,
-      allowFailure: maxAttempts > 1 || (firstHistory?.type === 'agent' && (firstHistory.retryKind === 'manual' || firstHistory.skipped === true)),
+      allowFailure: maxAttempts > 1 || (firstHistory?.type === 'agent' && firstHistory.skipped === true),
       resumed: payload.resume !== undefined,
     })
   }
@@ -275,9 +275,8 @@ export async function resolveAgentReplayCall(ctx: AgentCallContext, callId: numb
     }])
     const persistedHandle = execution?.executionId ??
       (execution?.conversationId !== undefined ? String(execution.conversationId) : undefined)
-    const manualRetry = failed.retryKind === 'manual'
-    const canRetry = failed.skipped !== true && (manualRetry ||
-      (attempt < attemptLimit && persistedHandle !== undefined && resumeAgent !== undefined))
+    const canRetry = failed.skipped !== true &&
+      attempt < attemptLimit && persistedHandle !== undefined && resumeAgent !== undefined
     if (!canRetry) {
       if (ctx.replay.history(scope, attempt + 1) !== undefined) {
         const conflict = ctx.replay.miss(scope)
@@ -299,13 +298,12 @@ export async function resolveAgentReplayCall(ctx: AgentCallContext, callId: numb
       } : null)
       return { kind: 'responded' }
     }
-    if (!manualRetry) resumeTarget = {
+    resumeTarget = {
       agentId, label, agentType, scopeId, resumeRef: persistedHandle!,
       ...(model !== undefined ? { model } : {}),
       ...(isolation !== undefined ? { isolation } : {}),
     }
-    attemptPrompt = manualRetry ? payload.prompt :
-      agentRetryPrompt(payload.prompt, attempt, failed.error ?? 'Agent failed.')
+    attemptPrompt = agentRetryPrompt(payload.prompt, attempt, failed.error ?? 'Agent failed.')
     attempt++
     attemptIndex = ctx.allocateIndex()
     attemptKey = agentJournalKey({ ...keyInput, prompt: attemptPrompt,

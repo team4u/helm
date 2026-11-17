@@ -22,11 +22,12 @@ import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readdirSync, readFil
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { HelmError } from '@helm/protocol'
+import { HelmError, type PluginPackageRecord } from '@helm/protocol'
 import { parsePluginSource } from '../src/plugins/package-source.js'
-import { PluginPackageManager, type PackageRunner } from '../src/plugins/package-manager.js'
+import { PluginPackageManager, type PackageManagerHost, type PackageRunner } from '../src/plugins/package-manager.js'
 import { PluginPackageManagerStore } from '../src/plugins/package-store.js'
 import { ConfigService } from '../src/services/config.js'
+import { assertRejectsCode } from './helpers.js'
 
 // ---------------------------------------------------------------------------
 // Source parser
@@ -144,10 +145,22 @@ const PLUGIN_SRC = (id: string, version = '0.1.0') => `export default {
 }
 `
 
+/** Package manager store backed by real config.json with toggleable save failure injection. */
+class FaultInjectingStore extends PluginPackageManagerStore {
+  failNextSave = false
+  override async save(
+    record: Omit<PluginPackageRecord, 'id'> & { id?: string },
+  ): Promise<PluginPackageRecord> {
+    if (this.failNextSave) throw new Error('simulated disk write failure')
+    return super.save(record)
+  }
+}
+
 interface TestEnv {
   dataDir: string
   cwd: string
-  store: PluginPackageManagerStore
+  store: FaultInjectingStore
+  host: PackageManagerHost
   manager: PluginPackageManager
   hostCalls: string[]
   registered: Map<string, { enabled: boolean }>
@@ -165,7 +178,7 @@ interface TestEnv {
 function makeEnv(runner?: PackageRunner): TestEnv {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-pkg-mgr-'))
   const cwd = mkdtempSync(join(tmpdir(), 'helm-pkg-cwd-'))
-  const store = new PluginPackageManagerStore(new ConfigService(dataDir))
+  const store = new FaultInjectingStore(new ConfigService(dataDir))
   const hostCalls: string[] = []
   const registered = new Map<string, { enabled: boolean }>()
   const summaries = new Map<string, { id: string; version?: string; enabled: boolean }>()
@@ -173,7 +186,7 @@ function makeEnv(runner?: PackageRunner): TestEnv {
   const registerFailIds = new Set<string>()
   const enableFailIds = new Set<string>()
   const purgeFailIds = new Set<string>()
-  const host = {
+  const host: PackageManagerHost = {
     async registerManagedPlugin(dir: string) {
       hostCalls.push(`register:${dir}`)
       const id = readPluginIdFromDir(dir)
@@ -238,6 +251,7 @@ function makeEnv(runner?: PackageRunner): TestEnv {
     dataDir,
     cwd,
     store,
+    host,
     manager,
     hostCalls,
     registered,
@@ -582,7 +596,10 @@ test('install transaction rolls back and deletes newly copied target directory w
     env.registerFailIds.add('rollback-plugin')
     await assert.rejects(
       env.manager.install(src),
-      (err: unknown) => err instanceof HelmError && err.code === 'plugin_package_install_failed',
+      (err: unknown) =>
+        err instanceof HelmError &&
+        err.code === 'plugin_package_install_failed' &&
+        (err.details as { rolledBack?: boolean } | undefined)?.rolledBack === true,
     )
     const target = join(env.dataDir, 'plugins', 'rollback-plugin')
     assert.ok(!existsSync(target), 'newly copied target must be deleted after registration fails')
@@ -592,6 +609,105 @@ test('install transaction rolls back and deletes newly copied target directory w
     env.registerFailIds.delete('rollback-plugin')
     const ok = await env.manager.install(src)
     assert.equal(ok.record.pluginId, 'rollback-plugin')
+  } finally {
+    env.close()
+  }
+})
+
+test('honest update rollback: failed restore reload no longer falsely reports old version active', { timeout: 60_000 }, async () => {
+  const env = makeEnv()
+  let updateCalls = 0
+  env.host.updateManagedPlugin = async (pluginId: string) => {
+    updateCalls += 1
+    // Both reloads fail: new version switch fails + restore reload fails (instance left unregistered)
+    throw new HelmError('plugin_reload_failed_simulated', `simulated reload failed #${updateCalls}`, 500, { pluginId })
+  }
+  try {
+    const userSrc = writeLocalPlugin(env.cwd, 'honest-rollback', '1.0.0')
+    await env.manager.install(userSrc)
+    writeFileSync(join(userSrc, 'plugin.json'), JSON.stringify({ id: 'honest-rollback', version: '2.0.0', main: 'index.mjs' }, null, 2))
+    writeFileSync(join(userSrc, 'index.mjs'), PLUGIN_SRC('honest-rollback', '2.0.0'))
+
+    const err = (await assertRejectsCode(() => env.manager.update('honest-rollback'), 'plugin_package_update_failed', 500)) as HelmError
+    const details = err.details as { rolledBack?: boolean; rollbackError?: { message: string } }
+    assert.equal(details.rolledBack, false, 'failed restore reload must report rolledBack:false')
+    assert.match(err.message, /old directory already restore, but old instance reload failed/, 'error message must clarify directory restored while instance did not')
+    assert.equal(updateCalls, 2, 'rollback path must genuinely attempt restore reload')
+    // Directory on disk was actually restored to the prior version
+    const manifest = JSON.parse(readFileSync(join(env.dataDir, 'plugins', 'honest-rollback', 'plugin.json'), 'utf8')) as { version: string }
+    assert.equal(manifest.version, '1.0.0')
+  } finally {
+    env.close()
+  }
+})
+
+test('successful update rollback path: restore reload success still reports rolledBack:true', { timeout: 60_000 }, async () => {
+  const env = makeEnv()
+  const original = env.host.updateManagedPlugin
+  let calls = 0
+  env.host.updateManagedPlugin = async (pluginId: string, dir: string, options: { keepEnabled: boolean }) => {
+    calls += 1
+    if (calls === 1) throw new HelmError('plugin_reload_failed_simulated', 'first reload failed', 500, { pluginId })
+    return original(pluginId, dir, options)
+  }
+  try {
+    const userSrc = writeLocalPlugin(env.cwd, 'ok-rollback', '1.0.0')
+    await env.manager.install(userSrc)
+    writeFileSync(join(userSrc, 'plugin.json'), JSON.stringify({ id: 'ok-rollback', version: '2.0.0', main: 'index.mjs' }, null, 2))
+    writeFileSync(join(userSrc, 'index.mjs'), PLUGIN_SRC('ok-rollback', '2.0.0'))
+    const err = (await assertRejectsCode(() => env.manager.update('ok-rollback'), 'plugin_package_update_failed', 500)) as HelmError
+    assert.equal((err.details as { rolledBack?: boolean }).rolledBack, true)
+    assert.match(err.message, /already rollback to update before directory and instance/)
+  } finally {
+    env.close()
+  }
+})
+
+test('install record save fails and rollback deregister fails: keeps directory and instance, rolledBack:false', { timeout: 60_000 }, async () => {
+  const env = makeEnv()
+  env.host.removeManagedPlugin = async () => {
+    // Simulate live task blocking unregister with 409: instance stays registered and running
+    throw new HelmError('plugin_has_live_tasks', 'simulated live task blocks removal', 409, { pluginId: 'keep-dir' })
+  }
+  try {
+    const userSrc = writeLocalPlugin(env.cwd, 'keep-dir', '1.0.0')
+    env.store.failNextSave = true
+    const err = (await assertRejectsCode(() => env.manager.install(userSrc, { enable: true }), 'plugin_package_install_failed', 500)) as HelmError
+    const details = err.details as { rolledBack?: boolean; rollbackError?: { message: string } }
+    assert.equal(details.rolledBack, false, 'failed rollback deregister must report rolledBack:false')
+    assert.match(err.message, /directory and instance already keep/, 'error message must warn that state remains preserved for manual handling')
+    const target = join(env.dataDir, 'plugins', 'keep-dir')
+    assert.ok(existsSync(join(target, 'index.mjs')), 'must not rm directory backing a live registered instance')
+    assert.ok(!env.store.getRecord('keep-dir'), 'install record not persisted')
+  } finally {
+    env.close()
+  }
+})
+
+test('install register fails due to concurrent same-name instance: preserves directory for that instance, rolledBack:false', { timeout: 60_000 }, async () => {
+  const env = makeEnv()
+  let registerAttempted = false
+  env.host.registerManagedPlugin = async (dir: string) => {
+    const manifest = JSON.parse(readFileSync(join(dir, 'plugin.json'), 'utf8')) as { id: string }
+    // Simulate concurrent rescan winning registration from the same directory (409), after which listSummaries sees it
+    registerAttempted = true
+    throw new HelmError('plugin_already_registered', `plugin already registered: ${manifest.id}`, 409, { pluginId: manifest.id })
+  }
+  const originalList = env.host.listSummaries.bind(env.host)
+  env.host.listSummaries = () => {
+    const base = originalList()
+    return registerAttempted && !base.some((s) => s.id === 'raced-plugin')
+      ? [...base, toSummary(new Map([['raced-plugin', { id: 'raced-plugin', enabled: true }]]), 'raced-plugin')]
+      : base
+  }
+  try {
+    const userSrc = writeLocalPlugin(env.cwd, 'raced-plugin', '1.0.0')
+    const err = (await assertRejectsCode(() => env.manager.install(userSrc), 'plugin_package_install_failed', 500)) as HelmError
+    const details = err.details as { rolledBack?: boolean }
+    assert.equal(details.rolledBack, false)
+    assert.match(err.message, /same name plugin registered/)
+    const target = join(env.dataDir, 'plugins', 'raced-plugin')
+    assert.ok(existsSync(join(target, 'index.mjs')), 'directory must remain intact for concurrently registered instance')
   } finally {
     env.close()
   }

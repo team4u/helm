@@ -5,7 +5,8 @@
  * 3. write/read/bash 展示数据提取（字段只做类型收窄，缺失即 undefined；
  *    read spill 不做源码高亮、write 不伪造新建/覆盖判断）；
  * 4. toolRowStats 单行统计：edit 已应用/待执行、write 行数、插件接管不给统计；
- * 5. summarizeStepGroup 折叠步骤组统计：思考/工具计数、错误与运行中计数、正有限耗时聚合。
+ * 5. summarizeStepGroup 折叠步骤组统计：思考/工具计数、错误与运行中计数、模型响应耗时（modelDurationMs）
+ *    与工具执行耗时（toolDurationMs）两个分别标注的累计口径（互不混入、非法值剔除）。
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
@@ -21,7 +22,7 @@ import {
   toolRowStats,
   writeBodyData,
 } from '../src/conversation/tool-body-model.js'
-import type { FoldableStep, ToolTrace } from '../src/conversation/timeline-model.js'
+import type { FoldableStep, ThinkingTrace, ToolTrace } from '../src/conversation/timeline-model.js'
 
 function trace(overrides: Partial<ToolTrace> = {}): ToolTrace {
   return { key: 't', toolName: 'bash', status: 'done', isError: false, ...overrides }
@@ -224,8 +225,8 @@ test('toolRowStats：write 报内容行数；插件 tool.view 接管不给宿主
 // 步骤组聚合摘要
 // ---------------------------------------------------------------------------
 
-function thinkingStep(key: string, text = '思路'): FoldableStep {
-  return { kind: 'thinking', thinking: { key, text } }
+function thinkingStep(key: string, thinking: Partial<ThinkingTrace> = {}): FoldableStep {
+  return { kind: 'thinking', thinking: { key, text: '思路', ...thinking } }
 }
 
 function toolStep(overrides: Partial<ToolTrace> = {}): FoldableStep {
@@ -249,11 +250,11 @@ test('summarizeStepGroup：混合思考与工具计数、isError/status=error �
     toolCount: 5,
     errorCount: 3,
     runningCount: 1,
-    totalDurationMs: 1000,
+    toolDurationMs: 1000,
   })
 })
 
-test('summarizeStepGroup：0 / 负值 / 非有限 / 缺失 durationMs 不计入，总和为 0 时省略 totalDurationMs', { timeout: 60_000 }, () => {
+test('summarizeStepGroup：0 / 负值 / 非有限 / 缺失 durationMs 不计入，总和为 0 时省略 toolDurationMs', { timeout: 60_000 }, () => {
   const noValidDuration = summarizeStepGroup([
     thinkingStep('th1'),
     toolStep({ key: 't1', status: 'done', durationMs: 0 }),
@@ -269,7 +270,8 @@ test('summarizeStepGroup：0 / 负值 / 非有限 / 缺失 durationMs 不计入�
     errorCount: 0,
     runningCount: 0,
   })
-  assert.equal('totalDurationMs' in noValidDuration, false)
+  assert.equal('toolDurationMs' in noValidDuration, false)
+  assert.equal('modelDurationMs' in noValidDuration, false)
 
   // 无效耗时与有效正耗时混排时仅累加有效正数
   const partialDuration = summarizeStepGroup([
@@ -278,9 +280,9 @@ test('summarizeStepGroup：0 / 负值 / 非有限 / 缺失 durationMs 不计入�
     toolStep({ key: 't3', status: 'done', durationMs: 250 }),
     toolStep({ key: 't4', status: 'done', durationMs: 150 }),
   ])
-  assert.equal(partialDuration.totalDurationMs, 400)
+  assert.equal(partialDuration.toolDurationMs, 400)
 
-  // 空步骤列表返回全 0 且无 totalDurationMs
+  // 空步骤列表返回全 0 且无 toolDurationMs
   assert.deepEqual(summarizeStepGroup([]), {
     stepCount: 0,
     thinkingCount: 0,
@@ -288,4 +290,37 @@ test('summarizeStepGroup：0 / 负值 / 非有限 / 缺失 durationMs 不计入�
     errorCount: 0,
     runningCount: 0,
   })
+})
+
+test('summarizeStepGroup：思考块携带的合规模型响应耗时单独累计为 modelDurationMs，与工具累计互不混入', { timeout: 60_000 }, () => {
+  const summary = summarizeStepGroup([
+    thinkingStep('th1', { responseDurationMs: 3200 }),
+    thinkingStep('th2', { responseDurationMs: 1800 }),
+    toolStep({ key: 't1', status: 'done', durationMs: 500 }),
+    toolStep({ key: 't2', status: 'done', durationMs: 700 }),
+  ])
+  assert.equal(summary.modelDurationMs, 5000)
+  assert.equal(summary.toolDurationMs, 1200)
+})
+
+test('summarizeStepGroup：0 / 负值 / 非有限 / 缺失的模型响应耗时不计入，总和为 0 时省略 modelDurationMs', { timeout: 60_000 }, () => {
+  const none = summarizeStepGroup([
+    thinkingStep('th1'),
+    thinkingStep('th2', { responseDurationMs: 0 }),
+    thinkingStep('th3', { responseDurationMs: -100 }),
+    thinkingStep('th4', { responseDurationMs: Number.NaN }),
+    thinkingStep('th5', { responseDurationMs: Number.POSITIVE_INFINITY }),
+    toolStep({ key: 't1', status: 'done', durationMs: 400 }),
+  ])
+  assert.equal('modelDurationMs' in none, false)
+  assert.equal(none.toolDurationMs, 400)
+
+  // 仅混入一个非法值不影响其余合法值的累计
+  const partial = summarizeStepGroup([
+    thinkingStep('th1', { responseDurationMs: 1000 }),
+    thinkingStep('th2', { responseDurationMs: Number.NaN }),
+    thinkingStep('th3', { responseDurationMs: 600 }),
+  ])
+  assert.equal(partial.modelDurationMs, 1600)
+  assert.equal('toolDurationMs' in partial, false)
 })

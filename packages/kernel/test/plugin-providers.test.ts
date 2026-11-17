@@ -17,7 +17,7 @@ import {
 } from '../src/plugins/index.js';
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js';
 import { createPluginBuildProvider } from '@helm/plugin-build';
-import { MemoryDocStore, cleanupDir, makeConversationSummary, makeTempDir } from './helpers.js';
+import { MemoryDocStore, cleanupDir, deferred, makeConversationSummary, makeTempDir } from './helpers.js';
 
 // ---------------------------------------------------------------------------
 // Fake test fixtures
@@ -305,6 +305,43 @@ test('service.start runs after provider mounting finishes so services can depend
       }),
     );
     assert.deepEqual(seen, ['first'], 'own providers must already be mounted when service starts');
+  } finally {
+    await dispose(host, dir);
+  }
+});
+
+test('register: capabilities stay hidden from listings until provider mount finishes (enabled+idle atomic commit)', { timeout: 60_000 }, async () => {
+  const mountGate = deferred<void>();
+  const port: PluginProviderPort = {
+    register: async () => {
+      await mountGate.promise;
+      return async () => {};
+    },
+  };
+  const { host, dir } = await makeHost(port);
+  try {
+    const registering = host.register({
+      id: 'p:late-mount',
+      definePlugin: (ctx) => {
+        ctx.provider(makeProvider('late-provider'));
+        ctx.action({
+          id: 'ping',
+          description: 'probe action',
+          inputSchema: { type: 'object', additionalProperties: false },
+          outputSchema: { type: 'object', properties: { pong: { type: 'boolean' } }, required: ['pong'], additionalProperties: false },
+          handler: () => ({ pong: true }),
+        });
+      },
+    }, { enabled: true });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    // Before mount finishes: capabilities must not be exposed yet
+    assert.deepEqual(host.listActions().filter((a) => a.pluginId === 'p:late-mount'), []);
+    assert.equal(host.get('p:late-mount')?.enabled, false);
+    mountGate.resolve();
+    await registering;
+    assert.equal(host.listActions().filter((a) => a.pluginId === 'p:late-mount').length, 1);
+    const out = await host.invokeAction('p:late-mount', 'ping', {});
+    assert.deepEqual(out, { pong: true });
   } finally {
     await dispose(host, dir);
   }

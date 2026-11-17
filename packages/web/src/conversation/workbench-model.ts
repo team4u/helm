@@ -226,6 +226,27 @@ export function artifactFormatLabel(
   return t('conv.workbench.formatFile')
 }
 
+/**
+ * Whether the visible format label already conveys the raw MIME type: when the
+ * label was derived from the MIME itself (image/*, pdf, markdown, json, csv,
+ * html, yaml, text/*) the monospace MIME string is redundant clutter and is
+ * hidden (the full MIME stays available on the preview modal). Extension-only
+ * labels keep the MIME for disambiguation.
+ */
+export function artifactMimeRedundant(mimeType: string, filename: string): boolean {
+  const mime = mimeType.toLowerCase()
+  if (mime === '') return false
+  if (mime.startsWith('image/')) return true
+  if (mime === 'application/pdf') return true
+  const mimeDerived = ['markdown', 'json', 'csv', 'html', 'xhtml', 'yaml']
+  if (mimeDerived.some((part) => mime.includes(part))) return true
+  if (mime.startsWith('text/')) return true
+  // text/* style labels derived from the filename only (e.g. .md without a
+  // markdown MIME) still benefit from the raw MIME next to them.
+  void filename
+  return false
+}
+
 export function artifactIconName(mimeType: string, kind: ArtifactKind): 'file-code' | 'file-text' | 'file' {
   if (kind === 'spill') return 'file-text'
   const mime = mimeType.toLowerCase()

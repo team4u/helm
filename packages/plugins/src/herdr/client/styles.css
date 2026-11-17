@@ -190,6 +190,18 @@
   font-size: 12.5px;
 }
 
+/* 移动卡轻量化：owner 降为一枚小号弱化文字（不再是 badge），状态交由统一状态灯 */
+.herdr-pane-card-owner {
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--fg-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  padding: 0 4px;
+  line-height: 16px;
+  flex-shrink: 0;
+}
+
 .herdr-pane-card-meta {
   display: flex;
   flex-wrap: wrap;

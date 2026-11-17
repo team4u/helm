@@ -19,6 +19,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test, type TestContext } from 'node:test'
 import { HelmError } from '@helm/protocol'
+import { assertNoUnhandledRejection } from './helpers/plugin-test-env.js'
 import {
   JournalWriter,
   agentJournalKey,
@@ -147,10 +148,15 @@ function makeParentSummary(id: number, cwd: string) {
   }
 }
 
-function makeEnv(t: TestContext, spawnAgent: WorkflowServiceHost['spawnAgent'], hostOverrides?: Partial<WorkflowServiceHost>) {
+function makeEnv(
+  t: TestContext,
+  spawnAgent: WorkflowServiceHost['spawnAgent'],
+  hostOverrides?: Partial<WorkflowServiceHost>,
+  stateOverride?: WorkflowStateStore,
+) {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-wf-service-core-'))
   const docs = new Map<string, unknown>()
-  const state: WorkflowStateStore = {
+  const state: WorkflowStateStore = stateOverride ?? {
     get<T>(key: string, initial: T): T {
       return docs.has(key) ? (docs.get(key) as T) : initial
     },
@@ -927,4 +933,126 @@ test('startWorkflowRun 命名优先级与 label 边界校验，及 invokeAgentSp
   const rScriptPath = await env.service.run({ conversationId: 1, scriptPath: scriptFile })
   assert.equal(rScriptPath.name, 'custom-file-name')
   await env.service.wait(rScriptPath.id)
+})
+
+// ---------------------------------------------------------------------------
+// 并发注册时序 / 停机屏障 / emitEvent 收口
+// ---------------------------------------------------------------------------
+
+function makeGatedSnapshotStore(): {
+  store: WorkflowStateStore
+  capturedRunId(): string
+  release(): void
+} {
+  const map = new Map<string, unknown>()
+  let release: () => void = () => {}
+  const released = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  let firstFlush = true
+  let runId = ''
+  return {
+    capturedRunId: () => runId,
+    release,
+    store: {
+      get<T>(key: string, initial: T): T {
+        return (map.get(key) as T | undefined) ?? initial
+      },
+      set(key, value) {
+        if (runId === '' && key === 'workflow/runs' && Array.isArray(value)) {
+          const last = (value as Array<{ id?: string }>)[value.length - 1]
+          if (typeof last?.id === 'string') runId = last.id
+        }
+        map.set(key, value)
+      },
+      async flush() {
+        if (firstFlush) {
+          firstFlush = false
+          await released
+        }
+      },
+    },
+  }
+}
+
+async function assertPending(promise: Promise<unknown>, ms: number): Promise<void> {
+  const outcome = await Promise.race([
+    promise.then(() => 'settled', () => 'settled'),
+    new Promise((resolve) => setTimeout(() => resolve('pending'), ms)),
+  ])
+  assert.equal(outcome, 'pending', '窗口期内不得提前返回（占位 done 会假完成）')
+}
+
+test('run 注册时序：启动窗口内 wait() 不得假返回，放行 running 快照后才拿真实结果', timeout, async (t) => {
+  const gated = makeGatedSnapshotStore()
+  const env = makeEnv(t, async () => 'ok', undefined, gated.store)
+  const runPromise = env.service.run({
+    conversationId: 1,
+    script: 'export const meta = { name: "wait-gate", description: "test" }\nreturn 42',
+  })
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  const runId = gated.capturedRunId()
+  assert.ok(runId !== '', 'runId 应已随 running 快照写入可捕获')
+
+  const waitPromise = env.service.wait(runId)
+  await assertPending(waitPromise, 80)
+
+  gated.release()
+  const summary = await runPromise
+  assert.equal(summary.status, 'running')
+  assert.equal(await waitPromise, 42, '放行后 wait 拿到真实结果（非占位 undefined）')
+  assert.equal(env.service.getRun(runId).status, 'completed')
+})
+
+test('run 注册时序：启动窗口内 abort() 返回时 run 必已终态（契约与 wait 同一 done 通道）', timeout, async (t) => {
+  const gated = makeGatedSnapshotStore()
+  const env = makeEnv(t, async () => 'ok', undefined, gated.store)
+  const runPromise = env.service.run({
+    conversationId: 1,
+    script: 'export const meta = { name: "abort-gate", description: "test" }\nreturn 7',
+  })
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  const runId = gated.capturedRunId()
+  assert.ok(runId !== '')
+
+  const abortPromise = env.service.abort(runId)
+  await assertPending(abortPromise, 80)
+
+  gated.release()
+  await runPromise
+  await abortPromise
+  const final = env.service.getRun(runId)
+  assert.notEqual(final.status, 'running', 'abort 返回时 run 必已终态')
+  assert.equal(final.status, 'aborted')
+})
+
+test('停机屏障：init 完成后、active.set 前复查 closed，close 与 run 启动并发时越障启动显式拒绝', timeout, async (t) => {
+  const env = makeEnv(t, async () => 'ok')
+  const runPromise = env.service.run({
+    conversationId: 1,
+    script: 'export const meta = { name: "closed-race", description: "test" }\nreturn 1',
+  })
+  const rejection = assert.rejects(runPromise, (err: unknown) => {
+    assert.ok(err instanceof HelmError)
+    assert.equal(err.code, 'closed')
+    return true
+  })
+  await env.service.close()
+  await rejection
+})
+
+test('emitEvent 收口：宿主适配器 async 抛错时 run 生命周期不受影响且不产生 unhandledRejection', timeout, async (t) => {
+  const env = makeEnv(t, async () => 'ok', {
+    emitEvent: async () => {
+      throw new HelmError('workflow_index_corrupt', '读取工作流 run 索引失败（模拟）', 500)
+    },
+  })
+  await assertNoUnhandledRejection(async () => {
+    const summary = await env.service.run({
+      conversationId: 1,
+      script: 'export const meta = { name: "emit-safe", description: "test" }\nreturn 5',
+    })
+    assert.equal(await env.service.wait(summary.id), 5, '事件观察面故障不得影响 run 结果')
+    assert.equal(env.service.getRun(summary.id).status, 'completed')
+  })
 })

@@ -248,6 +248,8 @@ export class KernelRuntime {
     this.init.setCompactionModelResolver(() => ({
       model: this.modelsRegistry.defaultCompactionModel,
       thinkingLevel: this.modelsRegistry.defaultCompactionThinkingLevel,
+      modelThinkingLevel: (providerId, modelId) =>
+        this.modelsRegistry.modelThinkingLevelOf({ provider: providerId, modelId }),
       isDisabled: (providerId, modelId) => this.modelsRegistry.isModelDisabled(providerId, modelId),
     }))
     this.init.setFatalStorageHandler(
@@ -899,6 +901,8 @@ export class KernelRuntime {
     thinkingLevel?: string,
     compactionModel?: string,
     compactionThinkingLevel?: string,
+    modelThinkingLevels?: Record<string, string>,
+    modelThinkingUpdate?: { model: string; level: string },
   ): Promise<void> {
     const validateLevel = (level: string) => {
       if (!THINKING_LEVELS.has(level)) {
@@ -909,7 +913,29 @@ export class KernelRuntime {
         )
       }
     }
-    await this.modelsRegistry.setDefaultModel(model, thinkingLevel, validateLevel, compactionModel, compactionThinkingLevel)
+    await this.modelsRegistry.setDefaultModel(
+      model,
+      thinkingLevel,
+      validateLevel,
+      compactionModel,
+      compactionThinkingLevel,
+      modelThinkingLevels,
+      modelThinkingUpdate,
+    )
+  }
+
+  /** Set or clear one per-model thinking default (`config.json.modelThinkingLevels`); empty level clears the entry. */
+  async setModelThinkingDefault(model: string, level: string): Promise<void> {
+    const validateLevel = (value: string) => {
+      if (!THINKING_LEVELS.has(value)) {
+        throw new HelmError(
+          'validation_error',
+          `Invalid thinking level '${value}'; valid values: ${[...THINKING_LEVELS].join(' | ')}`,
+          400,
+        )
+      }
+    }
+    await this.modelsRegistry.setModelThinkingDefault(model, level, validateLevel)
   }
 
   listModelProviders() {

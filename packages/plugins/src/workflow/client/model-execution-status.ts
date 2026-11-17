@@ -90,6 +90,29 @@ export function executionRunStatus(run: Pick<WorkflowRunSummary, 'status'>): Exe
   return 'done'
 }
 
+/**
+ * Honest status-light word for an aggregated execution status: the five-value
+ * aggregation collapses aborted runs into `error`, but the status light keeps
+ * the dedicated `aborted` tone (hollow warn diamond) — aborted must never pose
+ * as a plain failure or a neutral gray.
+ *
+ * Precision rule: the aborted diamond is shown ONLY when the error verdict
+ * stems from the run's own abort. When the subtree has real failures of its
+ * own (`descendantError`), those errors keep the plain `error` light even if
+ * the backing run was also aborted — a real child failure must never be masked
+ * by the run-level abort. Non-error verdicts pass through untouched.
+ */
+export function executionLightStatus(
+  status: ExecutionNodeStatus,
+  run: Pick<WorkflowRunSummary, 'status'> | undefined,
+  descendantError?: boolean,
+): string {
+  if (status === 'error' && run?.status === 'aborted' && descendantError !== true) {
+    return 'aborted'
+  }
+  return status
+}
+
 /** In-run node status mapping (skipped counts as settled-done). */
 export function executionRunNodeStatus(node: Pick<WorkflowNodeState, 'status'>): ExecutionNodeStatus {
   if (node.status === 'running') return 'working'

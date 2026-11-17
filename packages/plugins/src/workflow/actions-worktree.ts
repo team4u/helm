@@ -1,12 +1,6 @@
 /**
- * builtin:workflow 受管 Worktree 动作（自 actions.ts 按域拆出）。
- *
- * - 公开动作（3 个）：cleanup_worktree / list_worktrees / inspect_worktree——
- *   与 tools.ts 的 cleanup_worktree 工具同款选择器语义（显式 conversationId
- *   与调用上下文冲突拒绝；无显式选择器时以 --current 上下文会话兜底）；
- * - 隐藏内部动作（2 个，cli.hidden=true, exposeAsTool=false）：
- *   acquire_worktree / release_worktree_hold——供显式依赖本插件的上层编排插件
- *   （如 builtin:superagent）分配与释放跨回合持久持有锁。
+ * builtin:workflow 受管 Worktree 动作（cleanup_worktree / list_worktrees / inspect_worktree，
+ * 以及内部隐藏动作 acquire_worktree / release_worktree_hold）。
  */
 import { HelmError, type HelmPluginContext } from '@helm/protocol'
 import type { WorkflowActionDeps } from './actions.js'
@@ -49,8 +43,6 @@ export function registerWorktreeActions(
     cli: { command: ['worktrees', 'cleanup'], description: 'Clean up a managed Git worktree' },
     async handler(input, context) {
       const a = input as Record<string, unknown>
-      // 与工具同款语义：显式 conversationId 与上下文冲突拒绝；无任何显式
-      // 选择器时（--current）以调用上下文会话为选择器；显式选择器不覆盖。
       if (
         a['conversationId'] !== undefined &&
         context.conversationId !== undefined &&
@@ -75,7 +67,7 @@ export function registerWorktreeActions(
           ...(a['deleteBranch'] !== undefined ? { deleteBranch: a['deleteBranch'] === true } : {}),
           ...(a['mergedInto'] !== undefined ? { mergedInto: String(a['mergedInto']) } : {}),
           ...(a['force'] !== undefined ? { force: a['force'] === true } : {}),
-        } as Record<string, never>,
+        },
         context.signal,
       )
     },

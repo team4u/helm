@@ -1,8 +1,10 @@
 /**
- * Shared Hub integration test environment and fixture helpers, reusing `@helm/test-kit` primitives.
+ * Hub 集成测试共享环境与 fixture 辅助，复用 `@helm/test-kit` 原语。
  */
+import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { createModels } from '@earendil-works/pi-ai/models'
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
+import type { Harness } from '@earendil-works/pi-durable'
 import { createPluginBuildProvider } from '@helm/plugin-build'
 import {
   makeConversationSummary,
@@ -11,9 +13,11 @@ import {
 } from '@helm/test-kit'
 import { createGitTemplate, type GitTemplate } from '@helm/test-kit/git'
 import { cleanupDir, makeTempDir, useTempDir } from '@helm/test-kit/node'
+import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { createHubHandler, startHub } from '../../../kernel/src/http/index.js'
 import type { PluginConfigStore, PluginDocStore } from '../../../kernel/src/plugins/index.js'
 import { createHelm, type HelmOptions } from '../../src/app.js'
 
@@ -32,12 +36,12 @@ export type FauxProviderOptions = Parameters<typeof fauxProvider>[0]
 export type FauxProviderHandle = ReturnType<typeof fauxProvider>
 export type ModelsRegistry = ReturnType<typeof createModels>
 
-/** Creates and returns an official faux provider handle (`KernelRuntimeOptions.providers`). */
+/** 创建并返回官方 faux provider 句柄（`KernelRuntimeOptions.providers`）。 */
 export function makeFauxProvider(options?: FauxProviderOptions): FauxProviderHandle {
   return fauxProvider(options)
 }
 
-/** Creates a `Models` registry populated with an official faux provider. */
+/** 创建并注册官方 faux provider 的 Models 实例。 */
 export function makeFauxModels(options?: FauxProviderOptions): {
   models: ModelsRegistry
   faux: FauxProviderHandle
@@ -54,7 +58,7 @@ export interface CreateHubTestAppOptions extends HelmOptions {
   fauxOptions?: FauxProviderOptions
 }
 
-/** Launches a real `createHelm` instance mounted with a faux provider (defaults to `providers`; explicit `models` opts into external ownership). */
+/** 启动挂载 faux provider 的真实 `createHelm` 实例（默认使用 `providers`，传 `models` 时回退外部 Models 实例）。 */
 export async function createHubTestApp(options: CreateHubTestAppOptions = {}): Promise<{
   app: HubTestApp
   kernel: HubTestApp['kernel']
@@ -90,15 +94,15 @@ export interface HubTestEnv {
 }
 
 export interface OpenHubTestEnvOptions extends CreateHubTestAppOptions {
-  /** Temporary directory prefix (only used when `dataDir` is omitted). */
+  /** 临时目录前缀（仅在未传 dataDir 时生效）。 */
   prefix?: string
-  /** Whether to ignore errors from `app.close()` (only for tests explicitly exercising teardown defects). */
+  /** 是否忽略 app.close() 异常（少数测试在已有已知底座关闭缺陷痕迹时显式开启）。 */
   swallowCloseError?: boolean
 }
 
 /**
- * Creates a real `createHelm` environment with a temporary `dataDir` (when omitted).
- * `close()` recursively removes `dataDir` only if this helper created it.
+ * 创建自带临时 `dataDir`（若未显式提供）的真实 `createHelm` 环境。
+ * 仅当目录由本函数自建时，`close` 才会递归清理该目录。
  */
 export async function openHubTestEnv(options: OpenHubTestEnvOptions = {}): Promise<HubTestEnv> {
   const {
@@ -140,7 +144,229 @@ export async function openHubTestEnv(options: OpenHubTestEnvOptions = {}): Promi
   }
 }
 
-/** In-memory plugin document store fixture (for SQLite-free `PluginHost` governance unit tests). */
+export interface HttpCallOptions {
+  auth?: boolean
+  token?: string
+  rawBody?: string
+  headers?: Record<string, string>
+  signal?: AbortSignal
+}
+
+export interface HttpCallResult<T = any> {
+  status: number
+  body: T
+  raw: string
+  headers: Headers
+}
+
+async function parseHttpResponse<T = any>(response: Response): Promise<HttpCallResult<T>> {
+  const raw = await response.text()
+  let parsed: any = null
+  if (raw.length > 0) {
+    try {
+      parsed = JSON.parse(raw)
+    } catch {
+      parsed = raw
+    }
+  }
+  return { status: response.status, body: parsed as T, raw, headers: response.headers }
+}
+
+export interface HubHandlerTestEnv extends HubTestEnv {
+  handler: (req: Request) => Promise<Response>
+  token: string
+  call: <T = any>(method: string, path: string, body?: unknown, opts?: HttpCallOptions) => Promise<HttpCallResult<T>>
+}
+
+/**
+ * 内存级 `createHubHandler` 集成环境（免 TCP 监听开销，默认使用 `createProcessToken` 免 scrypt 开销）。
+ */
+export async function openHubHandlerEnv(
+  options: OpenHubTestEnvOptions & { password?: string } = {},
+): Promise<HubHandlerTestEnv> {
+  const { password, ...baseOpts } = options
+  const env = await openHubTestEnv(baseOpts)
+  try {
+    const handler = createHubHandler(env.kernel as never)
+    let token: string
+    let disposeProcessToken: (() => void) | undefined
+    if (password !== undefined) {
+      const setup = await handler(
+        new Request('http://127.0.0.1:3202/api/auth/setup', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ password }),
+        }),
+      )
+      assert.equal(setup.status, 200, `auth setup failed: ${setup.status}`)
+      token = ((await setup.json()) as { token: string }).token
+    } else {
+      const managed = env.kernel.auth.createProcessToken()
+      token = managed.token
+      disposeProcessToken = () => managed.dispose()
+    }
+    return {
+      ...env,
+      handler,
+      token,
+      async call<T = any>(method: string, path: string, body?: unknown, opts?: HttpCallOptions) {
+        const useToken = opts?.auth === false ? undefined : (opts?.token ?? token)
+        const payload = opts?.rawBody ?? (body !== undefined ? JSON.stringify(body) : undefined)
+        const response = await handler(
+          new Request(`http://127.0.0.1:3202${path}`, {
+            method,
+            headers: {
+              ...(payload !== undefined ? { 'content-type': 'application/json' } : {}),
+              ...(useToken !== undefined ? { authorization: `Bearer ${useToken}` } : {}),
+              ...(opts?.headers ?? {}),
+            },
+            ...(payload !== undefined ? { body: payload } : {}),
+            ...(opts?.signal !== undefined ? { signal: opts.signal } : {}),
+          }),
+        )
+        return parseHttpResponse<T>(response)
+      },
+      async close() {
+        disposeProcessToken?.()
+        await env.close()
+      },
+    }
+  } catch (error) {
+    await env.close()
+    throw error
+  }
+}
+
+export interface HubHttpTestEnv extends HubTestEnv {
+  hub: Awaited<ReturnType<typeof startHub>>
+  hubUrl: string
+  token: string
+  call: <T = any>(method: string, path: string, body?: unknown, opts?: HttpCallOptions) => Promise<HttpCallResult<T>>
+}
+
+/**
+ * 真实 `startHub(port: 0)` HTTP/WS 集成环境（默认使用 `createProcessToken` 免 scrypt 开销）。
+ */
+export async function openHubHttpEnv(
+  options: OpenHubTestEnvOptions & { password?: string } = {},
+): Promise<HubHttpTestEnv> {
+  const { password, ...baseOpts } = options
+  const env = await openHubTestEnv(baseOpts)
+  let hub: Awaited<ReturnType<typeof startHub>> | undefined
+  let disposeProcessToken: (() => void) | undefined
+  try {
+    hub = await startHub({ kernel: env.kernel as never, port: 0 })
+    let token: string
+    if (password !== undefined) {
+      const setup = await fetch(`${hub.url}/api/auth/setup`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ password }),
+      })
+      assert.equal(setup.status, 200, `auth setup failed: ${setup.status}`)
+      token = ((await setup.json()) as { token: string }).token
+    } else {
+      const managed = env.kernel.auth.createProcessToken()
+      token = managed.token
+      disposeProcessToken = () => managed.dispose()
+    }
+    const hubInstance = hub
+    return {
+      ...env,
+      hub: hubInstance,
+      hubUrl: hubInstance.url,
+      token,
+      async call<T = any>(method: string, path: string, body?: unknown, opts?: HttpCallOptions) {
+        const useToken = opts?.auth === false ? undefined : (opts?.token ?? token)
+        const payload = opts?.rawBody ?? (body !== undefined ? JSON.stringify(body) : undefined)
+        const response = await fetch(`${hubInstance.url}${path}`, {
+          method,
+          headers: {
+            ...(payload !== undefined ? { 'content-type': 'application/json' } : {}),
+            ...(useToken !== undefined ? { authorization: `Bearer ${useToken}` } : {}),
+            ...(opts?.headers ?? {}),
+          },
+          ...(payload !== undefined ? { body: payload } : {}),
+          ...(opts?.signal !== undefined ? { signal: opts.signal } : {}),
+        })
+        return parseHttpResponse<T>(response)
+      },
+      async close() {
+        try {
+          await hubInstance.close().catch(() => {})
+        } finally {
+          disposeProcessToken?.()
+          await env.close()
+        }
+      },
+    }
+  } catch (error) {
+    await hub?.close().catch(() => {})
+    disposeProcessToken?.()
+    await env.close()
+    throw error
+  }
+}
+
+export interface SdkTurnEntrySummary {
+  id: number
+  kind: string
+  text: string
+  data?: unknown
+}
+
+/** 提取模型消息列表中全部文本块（供 context / provider transcript 断言共用）。 */
+export function messageTextsOf(messages: ReadonlyArray<{ role: string; content: unknown }>): string[] {
+  const out: string[] = []
+  for (const m of messages) {
+    if (typeof m.content === 'string') {
+      out.push(m.content)
+      continue
+    }
+    if (!Array.isArray(m.content)) continue
+    for (const block of m.content as Array<{ type?: string; text?: string }>) {
+      if (block?.type === 'text' && typeof block.text === 'string') out.push(block.text)
+    }
+  }
+  return out
+}
+
+/** 读取 SDK 底层会话的原始 entries 摘要（验证 rewind 逻辑隐藏而非物理删除等契约）。 */
+export async function sdkEntrySummaries(
+  kernel: HubTestApp['kernel'],
+  convId: number,
+): Promise<SdkTurnEntrySummary[]> {
+  const harness = (kernel as unknown as { harness: Harness }).harness
+  const conv = await harness.conversation(convId as never, BACKGROUND_CONTEXT)
+  assert.ok(conv)
+  const out: SdkTurnEntrySummary[] = []
+  let cursor: unknown = undefined
+  for (;;) {
+    const page = await conv.entries({ order: 'ascending' }, 100, cursor as never, BACKGROUND_CONTEXT)
+    for (const raw of page.items as never as Array<{ id: number; kind: string; model?: unknown[]; data?: unknown }>) {
+      let text = ''
+      const model = raw.model as Array<{ content?: unknown }> | undefined
+      const content = model?.[0]?.content
+      if (typeof content === 'string') text = content
+      else if (Array.isArray(content)) {
+        text = (content as Array<{ type?: string; text?: string }>)
+          .filter((b) => b?.type === 'text' && typeof b.text === 'string')
+          .map((b) => b.text as string)
+          .join('\n')
+      }
+      if (raw.kind === 'helm.input') {
+        const data = raw.data as { text?: unknown } | undefined
+        if (typeof data?.text === 'string') text = data.text
+      }
+      out.push({ id: Number(raw.id), kind: raw.kind, text, data: raw.data })
+    }
+    if (!page.next) break
+    cursor = page.next
+  }
+  return out
+}
+
+/** 内存插件文档存储桩（供无 SQLite 的 PluginHost 治理单测使用）。 */
 export class MemoryDocStore implements PluginDocStore {
   store = new Map<string, unknown>()
   get<T>(key: string, initial: T): T {
@@ -158,7 +384,7 @@ export class MemoryDocStore implements PluginDocStore {
   async flush(): Promise<void> {}
 }
 
-/** In-memory plugin config store fixture (supports `null` deletion semantics matching `HelmPluginConfigStore`). */
+/** 内存插件配置存储桩（支持 null 删除语义，与 `HelmPluginConfigStore` 一致）。 */
 export class MemoryConfigStore implements PluginConfigStore {
   store = new Map<string, Record<string, unknown>>()
   get(pluginId: string): Record<string, unknown> {

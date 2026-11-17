@@ -80,6 +80,8 @@ export interface RunRecord {
   updatedAt: number
   result?: unknown
   error?: string
+  /** 结构化失败错误码（如 validation_error / workflow_action_uncertain / crash_recovery_limit 等）。 */
+  errorCode?: string
   nodes?: WorkflowRunSummary['nodes']
   progress?: WorkflowProgressEntry[]
   /** The script source for resume (inline script or file path, exactly one). */
@@ -218,16 +220,6 @@ function runIndexProblem(raw: unknown): { problem: string; runId: string } | und
 
 const RUN_STATUSES: readonly WorkflowRunStatus[] = ['running', 'completed', 'failed', 'aborted']
 
-export function isNonRetryableWorkflowError(error: string | undefined): boolean {
-  if (error === undefined) return false
-  const normalized = error.toLowerCase()
-  return normalized.includes('workflow_action_uncertain') ||
-    normalized.includes('[validation_error]') ||
-    normalized.includes('workflow script has a syntax error') ||
-    normalized.includes('[crash_recovery_limit]') ||
-    normalized.includes('secret_grant_expired_on_restart')
-}
-
 /**
  * Minimal shape validation of persisted records: checks only the required fields of the current
  * RunRecord contract (what the summary face needs), with no old-format adaptation and no deep
@@ -257,6 +249,7 @@ function runRecordProblem(record: unknown): string | undefined {
     return 'childConversationIds is invalid (expected a positive-integer array)'
   }
   if (r['error'] !== undefined && typeof r['error'] !== 'string') return 'error is not a string'
+  if (r['errorCode'] !== undefined && typeof r['errorCode'] !== 'string') return 'errorCode is not a string'
   if (r['syncForeground'] !== undefined && typeof r['syncForeground'] !== 'boolean') {
     return 'syncForeground is not a boolean'
   }
@@ -274,15 +267,6 @@ function runRecordProblem(record: unknown): string | undefined {
   }
   if (r['resumedByRunId'] !== undefined && (typeof r['resumedByRunId'] !== 'string' || r['resumedByRunId'] === '')) {
     return 'resumedByRunId is not a non-empty string'
-  }
-  if (r['syncForeground'] !== undefined && typeof r['syncForeground'] !== 'boolean') {
-    return 'syncForeground is not a boolean'
-  }
-  if (
-    r['detachedAt'] !== undefined &&
-    (typeof r['detachedAt'] !== 'number' || !Number.isFinite(r['detachedAt'] as number))
-  ) {
-    return 'detachedAt is not a finite number'
   }
   if (r['pendingChildCleanup'] !== undefined && typeof r['pendingChildCleanup'] !== 'boolean') {
     return 'pendingChildCleanup is not a boolean'
@@ -462,27 +446,11 @@ export class RunStore {
     }
   }
 
-  load(runId: string): RunRecord {
-    // The index is the single entry point (dev period has no migration: no old per-run doc reads);
-    // index-level failures are uniformly workflow_index_corrupt (same contract as all other index
-    let index: RunIndexEntry[]
-    try {
-      index = this.readIndex()
-    } catch (error) {
-      if (error instanceof HelmError && error.code === 'workflow_index_corrupt') {
-        throw new HelmError(
-          error.code,
-          `failed to read the run index needed for workflow run ${runId}: ${error.message}`,
-          500,
-          { runId, key: INDEX_KEY },
-        )
-      }
-      throw error
-    }
-    const entry = index.find((candidate) => candidate.id === runId)
-    if (entry === undefined) {
-      throw new HelmError('not_found', `workflow run ${runId} does not exist`, 404, { runId })
-    }
+  /**
+   * 按已校验的索引项直接读取并校验持久化 RunRecord（零二次 readIndex，消除批量读取 O(N^2) 索引克隆与校验）。
+   */
+  loadByEntry(entry: RunIndexEntry): RunRecord {
+    const runId = entry.id
     const path = this.recordPathFor(entry.conversationId, runId)
     let record: unknown
     try {
@@ -539,6 +507,30 @@ export class RunStore {
       )
     }
     return record as RunRecord
+  }
+
+  load(runId: string): RunRecord {
+    // The index is the single entry point (dev period has no migration: no old per-run doc reads);
+    // index-level failures are uniformly workflow_index_corrupt (same contract as all other index
+    let index: RunIndexEntry[]
+    try {
+      index = this.readIndex()
+    } catch (error) {
+      if (error instanceof HelmError && error.code === 'workflow_index_corrupt') {
+        throw new HelmError(
+          error.code,
+          `failed to read the run index needed for workflow run ${runId}: ${error.message}`,
+          500,
+          { runId, key: INDEX_KEY },
+        )
+      }
+      throw error
+    }
+    const entry = index.find((candidate) => candidate.id === runId)
+    if (entry === undefined) {
+      throw new HelmError('not_found', `workflow run ${runId} does not exist`, 404, { runId })
+    }
+    return this.loadByEntry(entry)
   }
 
   /**

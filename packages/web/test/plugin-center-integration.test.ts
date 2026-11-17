@@ -146,10 +146,10 @@ test('PluginCenter SSR：存在 failed 故障态插件时顶栏统计追加异�
 
   // 1. 顶栏统计追加异常计数（failed 插件 enabled: false，不计入已启用）
 
-  // 2. 故障卡片标记 is-failed 并渲染异常徽章
+  // 2. 故障卡片标记 is-failed 并渲染异常状态灯（failed 实心红点 + 可见 Error 文案）
   assert.match(html, /data-plugin-id="external:broken"/)
   assert.match(html, /is-failed/)
-  assert.match(html, /<span>Error<\/span>/)
+  assert.match(html, /helm-status-light-failed[\s\S]*?status-dot-error[\s\S]*?Error/)
 })
 
 // ---------------------------------------------------------------------------

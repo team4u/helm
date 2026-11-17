@@ -7,15 +7,14 @@
  * Pure presentational components: data decisions live in the model-* pure
  * logic modules; this file only handles slot layout.
  */
-import { useRef, useState } from 'react'
+import { useId, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { formatCompactTimestamp, resolveLocalizedText, usePluginContext, usePluginLocale, usePluginTranslator } from '@helm/plugin-client'
+import { StatusLight, formatCompactTimestamp, resolveLocalizedText, usePluginContext, usePluginLocale, usePluginTranslator } from '@helm/plugin-client'
 import type { WorkflowRunSummary } from '../../contracts.js'
-import { SPIN, EXECUTION_BADGE } from './presentation.ts'
 import { Icon } from './WorkflowIcon.tsx'
 import { buildWorktreeSelector } from './model-worktree.ts'
 import { canDetachForegroundRun, canResumeSubagentRun, type DetachViewerScope } from './model-run.ts'
-import type { ExecutionAggregate, ExecutionNodeStatus } from './model-execution-status.ts'
+import { executionLightStatus, type ExecutionAggregate, type ExecutionNodeStatus } from './model-execution-status.ts'
 import type { SubagentBadge, SubagentHeaderSnippet } from './model-subagent-card.ts'
 import type { ExecutionApprovalItem, ExecutionFrontlineItem } from './model-execution-view.ts'
 import {
@@ -44,16 +43,21 @@ import {
   BADGE_CACHED,
   cardSubagentHeading,
   executionStatusLabel,
-  runCardSelfStateTitle,
   selfAggregateTitle,
-  selfStatusLabel,
+  SPIN,
   subtreeBadge,
   subtreeProgressTitle,
+  META_KV_CREATED,
+  META_KV_LOCATION,
+  META_KV_RUN_ID,
+  META_KV_SELF_STATUS,
+  META_TOGGLE_ARIA,
+  META_TOGGLE_LABEL,
   SUBLINE_FRONTLINE_TAG,
   worktreeBadgeTitle,
 } from './copy.ts'
 
-/** First-layer header badge area: left icon + title + badges + subtree stats + total duration suffix. */
+/** First-layer header badge area: leading status light + title + badges + subtree stats + total duration suffix. */
 export function SubagentCardHeading(props: {
   childConversationId: number
   profileId: string | undefined
@@ -63,21 +67,23 @@ export function SubagentCardHeading(props: {
   detailError: string | undefined
   effectiveStatus: ExecutionNodeStatus
   selfBadge: SubagentBadge
+  /** The backing run was aborted: error verdicts keep the dedicated aborted light tone. */
+  abortedRun: boolean | undefined
   descendants: ExecutionAggregate
   approvals: ExecutionApprovalItem[]
   statSegments: string[]
   elapsedText: string | undefined
 }): ReactNode {
-  const { childConversationId, profileId, taskTitle, worktree, detailError, effectiveStatus, selfBadge, descendants, approvals, statSegments, elapsedText } = props
+  const { childConversationId, profileId, taskTitle, worktree, effectiveStatus, selfBadge, abortedRun, descendants, approvals, statSegments, elapsedText } = props
   const locale = usePluginLocale()
+  const abortedRunRef = abortedRun === true ? ({ status: 'aborted' } as const) : undefined
+  // 后代真实失败不得被 run 级中止掩盖：descendantError 时聚合灯保持 error。
+  const effectiveLightStatus = executionLightStatus(effectiveStatus, abortedRunRef, descendants.error > 0)
+  const selfLightStatus = executionLightStatus(selfBadge.status, abortedRunRef)
   const primaryTitle = taskTitle ?? cardSubagentHeading(childConversationId, locale)
   return (
     <>
-      <Icon
-        name={detailError !== undefined ? 'x' : effectiveStatus === 'working' ? 'loader' : effectiveStatus === 'error' ? 'x' : 'bot'}
-        size={13}
-        className={effectiveStatus === 'working' && detailError === undefined ? SPIN : undefined}
-      />
+      <Icon name="bot" size={13} />
       <span className="subagent-live-title" title={primaryTitle}>
         <span className="subagent-live-title-text">{primaryTitle}</span>
         {taskTitle !== undefined ? (
@@ -95,24 +101,13 @@ export function SubagentCardHeading(props: {
       ) : null}
       {props.cached === true ? <span className="badge badge-warn">{resolveLocalizedText(BADGE_CACHED, locale)}</span> : null}
       {effectiveStatus !== selfBadge.status ? (
-        <>
-          <span
-            className={`badge ${EXECUTION_BADGE[effectiveStatus] ?? 'badge-neutral'}`}
-            title={
-              [
-                selfAggregateTitle(selfBadge.label, executionStatusLabel(effectiveStatus, locale), locale),
-                approvals.length > 0 ? approvalsTitle(approvals.map((item) => item.text), locale) : undefined,
-              ]
-                .filter(Boolean)
-                .join('\n')
-            }
-          >
-            {executionStatusLabel(effectiveStatus, locale)}
-          </span>
-          <span className="badge badge-neutral" title={runCardSelfStateTitle(selfBadge.label, locale)}>{selfStatusLabel(selfBadge.label, locale)}</span>
-        </>
+        /* 主头部只保留一盏聚合灯；自身状态经可访问名称交代，事实完整保存在元数据披露中。 */
+        <StatusLight
+          status={effectiveLightStatus}
+          label={selfAggregateTitle(selfBadge.label, executionStatusLabel(effectiveLightStatus, locale), locale)}
+        />
       ) : (
-        <span className={`badge ${selfBadge.badge}`}>{selfBadge.label}</span>
+        <StatusLight status={selfLightStatus} label={selfBadge.label} />
       )}
       {descendants.total > 0 ? (
         <span
@@ -274,9 +269,13 @@ export function SubagentCardSublines(props: {
   cwd?: string
   createdAt?: number
   runId?: string
+  /** Self status fact (only when it differs from the aggregate light); kept in the metadata disclosure. */
+  selfStatus?: string
 }): ReactNode {
-  const { snippet, frontline, nodeId, cwd, createdAt, runId } = props
+  const { snippet, frontline, nodeId, cwd, createdAt, runId, selfStatus } = props
   const locale = usePluginLocale()
+  const [metaOpen, setMetaOpen] = useState(false)
+  const metaId = useId()
   const coord =
     nodeId !== undefined && nodeId !== '' && cwd !== undefined && cwd !== ''
       ? `${nodeId}:${cwd}`
@@ -285,7 +284,11 @@ export function SubagentCardSublines(props: {
         : nodeId !== undefined && nodeId !== ''
           ? nodeId
           : undefined
-  const hasMeta = coord !== undefined || (createdAt !== undefined && Number.isFinite(createdAt)) || runId !== undefined
+  const hasMeta =
+    coord !== undefined ||
+    (createdAt !== undefined && Number.isFinite(createdAt)) ||
+    runId !== undefined ||
+    selfStatus !== undefined
   if (snippet === undefined && frontline.length === 0 && !hasMeta) return undefined
   return (
     <>
@@ -307,12 +310,47 @@ export function SubagentCardSublines(props: {
         </div>
       ) : null}
       {hasMeta ? (
-        <div className="subagent-live-meta-row">
-          {coord !== undefined ? <span className="subagent-live-meta-item mono">{coord}</span> : null}
-          {createdAt !== undefined && Number.isFinite(createdAt) ? (
-            <span className="subagent-live-meta-item tabular-nums">{formatCompactTimestamp(createdAt)}</span>
-          ) : null}
-          {runId !== undefined ? <span className="subagent-live-meta-item mono">{runId}</span> : null}
+        /* 机器元数据（node:cwd / 创建时间 / runId）收进原地展开：真实按钮 + aria-expanded，
+           点击不冒泡进整卡导航，标题不再是唯一信息渠道。 */
+        <div className="subagent-live-meta">
+          <button
+            type="button"
+            className="btn btn-ghost btn-xs subagent-live-meta-toggle"
+            aria-expanded={metaOpen}
+            aria-controls={metaId}
+            aria-label={resolveLocalizedText(META_TOGGLE_ARIA, locale)}
+            title={resolveLocalizedText(META_TOGGLE_LABEL, locale)}
+            onClick={() => setMetaOpen((v) => !v)}
+          >
+            <Icon name={metaOpen ? 'chevron-down' : 'chevron-right'} size={11} />
+            <Icon name="info" size={11} />
+          </button>
+          <div id={metaId} hidden={!metaOpen} className="subagent-live-meta-row">
+            {selfStatus !== undefined ? (
+              <span className="subagent-live-meta-item">
+                <span className="subagent-live-meta-key">{resolveLocalizedText(META_KV_SELF_STATUS, locale)}</span>
+                {selfStatus}
+              </span>
+            ) : null}
+            {coord !== undefined ? (
+              <span className="subagent-live-meta-item mono">
+                <span className="subagent-live-meta-key">{resolveLocalizedText(META_KV_LOCATION, locale)}</span>
+                {coord}
+              </span>
+            ) : null}
+            {createdAt !== undefined && Number.isFinite(createdAt) ? (
+              <span className="subagent-live-meta-item tabular-nums">
+                <span className="subagent-live-meta-key">{resolveLocalizedText(META_KV_CREATED, locale)}</span>
+                {formatCompactTimestamp(createdAt)}
+              </span>
+            ) : null}
+            {runId !== undefined ? (
+              <span className="subagent-live-meta-item mono">
+                <span className="subagent-live-meta-key">{resolveLocalizedText(META_KV_RUN_ID, locale)}</span>
+                {runId}
+              </span>
+            ) : null}
+          </div>
         </div>
       ) : null}
     </>

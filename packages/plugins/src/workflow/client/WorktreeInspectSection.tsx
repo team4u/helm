@@ -11,11 +11,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { CopyButton, resolveLocalizedText, usePluginContext, usePluginLocale } from '@helm/plugin-client'
-import { SPIN } from './presentation.ts'
 import { Icon } from './WorkflowIcon.tsx'
 import { buildWorktreeReviewRequest, buildWorktreeSelector, parseWorktreeInspectResult } from './model-worktree.ts'
 import type { WorktreeInspectView } from './model-worktree.ts'
 import {
+  SPIN,
   WT_BRANCH_MISMATCH,
   WT_COLLAPSE_TITLE,
   WT_COPY_REVIEW,

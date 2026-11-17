@@ -1,14 +1,5 @@
 /**
  * runtime-types.ts -- the type contracts of the workflow runtime (pure types, zero runtime code).
- *
- * Split out of runtime.ts (zero behavior change): public seam types (WorkflowHost /
- * WorkflowControl / RunWorkflowOptions etc.) and the runtime's internal message-surface types
- * (worker -> host call payloads, resume registration shapes). runtime.ts re-exports the
- * public types as-is; existing import paths (runtime.js / index.js) and shapes are fully unchanged.
- *
- * Split motivation: internal modules like handler / control / recorder share these shapes;
- * centralizing them in a single type module keeps them independent of each other, depending only
- * on lower-level modules like journal/replay/progress, keeping engine-internal dependencies acyclic.
  */
 
 import type { AgentExecutionInfo, AgentGateResult, AgentSpawnRequest } from '@helm/protocol'
@@ -178,15 +169,6 @@ export interface ResumeAgentOptions {
   onGateResult?: WorkflowSpawnRequest['onGateResult']
 }
 
-/** Controls that can be applied while a run is in progress (pause/skip/retry), all idempotent best-effort. */
-export interface WorkflowControl {
-  pause(): void
-  resume(): void
-  isPaused(): boolean
-  skip(index: number): boolean
-  retry(index: number): boolean
-}
-
 /** Ledger append input -- see journal.ts for the authoritative definition (legacy alias for engine-internal reference compatibility). */
 export type JournalAppendInput = JournalWriteInput
 
@@ -209,7 +191,6 @@ export interface RunWorkflowOptions {
   concurrency?: number
   agentCap?: number
   itemCap?: number
-  onControl?(control: WorkflowControl): void
   nestedCap?: number
   /**
    * Replay and accounting (fs injected by the caller; runtime tests need no filesystem).

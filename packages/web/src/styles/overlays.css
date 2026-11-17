@@ -89,8 +89,10 @@
  * 视觉规范：1px 发丝边框、--bg-elevated 背景、var(--radius-sm, 7px) 微圆角、极简低饱和
  * ========================================================================== */
 
+/* 高于移动端侧边栏抽屉（.helm-sidebar: 72 / .sidebar-backdrop: 71）与连接横幅（65），
+ * 低于 Toast（90）与 Modal（100），确保从侧栏触发的下拉菜单/气泡/提示不被抽屉遮挡。 */
 [data-radix-popper-content-wrapper] {
-  z-index: 60;
+  z-index: 80;
 }
 
 /* Popover Content */
@@ -123,7 +125,7 @@
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  z-index: 60;
+  z-index: 80;
 }
 
 .locale-menu-popover {
@@ -433,6 +435,58 @@
 .model-defaults-panel .composer-model-button .composer-model-label {
   margin-right: auto;
   text-align: left;
+}
+
+/* 按模型思考默认条目（设置 -> 模型 -> 全局默认） */
+.model-defaults-permodel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.model-defaults-permodel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.model-defaults-permodel-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.model-defaults-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.model-defaults-row .composer-picker-root {
+  flex: 1;
+  min-width: 0;
+}
+
+.model-defaults-row-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+
+.model-defaults-row-remove:hover:not(:disabled) {
+  border-color: var(--border);
+  background: var(--bg-subtle);
+  color: var(--fg);
 }
 
 /* 供应商 Tab 内部工具栏（位于滚动区内，去边框） */

@@ -35,7 +35,8 @@ export interface ActiveRun {
   settleError?: unknown
   summary: WorkflowRunSummary
   journalPath: string
-  writer: JournalWriter
+  /** DSL 工作流账本追加器；单子代理运行不写 JSONL 账本，保持 undefined 免开空句柄。 */
+  writer?: JournalWriter
   progress: WorkflowEntry[]
   timeline: WorkflowProgressEntry[]
   /** 在途子会话的中止 promise（close/abort 需 await 后才算真正结束）。 */

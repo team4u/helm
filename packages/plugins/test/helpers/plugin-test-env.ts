@@ -6,6 +6,7 @@
  * 消除各测试文件重复定义样板。
  */
 
+import assert from 'node:assert/strict'
 import { createModels } from '@earendil-works/pi-ai/models'
 import {
   fauxProvider,
@@ -139,4 +140,20 @@ export function makeFauxModels(options?: RegisterFauxProviderOptions): {
   const faux = fauxProvider(options)
   models.setProvider(faux.provider)
   return { models, faux }
+}
+
+/** 断言异步过程不会产生逃逸 `unhandledRejection`（观察面故障须就地诊断）。 */
+export async function assertNoUnhandledRejection(body: () => Promise<void>): Promise<void> {
+  const unhandled: unknown[] = []
+  const onUnhandled = (reason: unknown): void => {
+    unhandled.push(reason)
+  }
+  process.on('unhandledRejection', onUnhandled)
+  try {
+    await body()
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    assert.deepEqual(unhandled, [], '不得产生 unhandledRejection（观察面故障须就地诊断）')
+  } finally {
+    process.off('unhandledRejection', onUnhandled)
+  }
 }

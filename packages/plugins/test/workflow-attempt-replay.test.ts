@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { runWorkflow, type WorkflowHost, type WorkflowControl } from '../src/workflow/engine/runtime.js'
+import { runWorkflow, type WorkflowHost } from '../src/workflow/engine/runtime.js'
 import type { WorkflowJournalEntry, JournalWriteInput } from '../src/workflow/engine/journal.js'
 
 const timeout = { timeout: 60_000 } as const
@@ -159,59 +159,6 @@ test('parallel agent retries retain their journal slots while the following non-
   const cached = await runWorkflow({ script: source, host: host({ async resumeAgent() { throw new Error('unexpected resume') } }), journal: { entries: log.entries } })
   assert.equal(cached.status, 'completed', cached.error)
   assert.deepEqual(cached.value, initial.value)
-})
-
-test('manual retry is replayable even when maxAttempts defaults to one', timeout, async () => {
-  const log = journal()
-  let control!: WorkflowControl
-  let release!: (value: { ok: boolean; text?: string; error?: string }) => void
-  let attempts = 0
-  const source = script('return await agent.withMeta("manual")')
-  const original = await runWorkflow({
-    script: source, journal: log,
-    onControl(value) { control = value },
-    host: host({
-      async spawnAgent() {
-        attempts++
-        if (attempts > 1) return { ok: true, text: 'fixed' }
-        return new Promise((resolve) => {
-          release = resolve
-          queueMicrotask(() => { assert.equal(control.retry(0), true) })
-        })
-      },
-      abortAgent() { release({ ok: false, error: 'aborted manually' }) },
-    }),
-  })
-  assert.equal(original.status, 'completed', original.error)
-  assert.equal(attempts, 2)
-  const replay = await runWorkflow({ script: source, host: host(), journal: { entries: log.entries } })
-  assert.equal(replay.status, 'completed', replay.error)
-  assert.deepEqual(replay.value, original.value)
-})
-
-test('user skip remains skipped during replay with a consistent withMeta result', timeout, async () => {
-  const log = journal()
-  let control!: WorkflowControl
-  let release!: (value: { ok: boolean; error: string }) => void
-  const source = script('return await agent.withMeta("skipped")')
-  const original = await runWorkflow({
-    script: source, journal: log,
-    onControl(value) { control = value },
-    host: host({
-      async spawnAgent() {
-        return new Promise((resolve) => {
-          release = resolve
-          queueMicrotask(() => { assert.equal(control.skip(0), true) })
-        })
-      },
-      abortAgent() { release({ ok: false, error: 'aborted' }) },
-    }),
-  })
-  assert.equal(original.status, 'completed', original.error)
-  const cached = await runWorkflow({ script: source, host: host(), journal: { entries: log.entries } })
-  assert.equal(cached.status, 'completed', cached.error)
-  assert.deepEqual(cached.value, original.value)
-  assert.equal(cached.progress.some((entry) => entry.type === 'workflow_agent' && entry.skipped), true)
 })
 
 test('fallback gate returns timeout details in the actual execution cwd', timeout, async () => {

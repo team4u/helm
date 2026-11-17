@@ -67,6 +67,6 @@ jobs:
           packages/kernel/test/target-cwd.test.ts
           packages/kernel/test/target-platform-paths.test.ts
           packages/kernel/test/spawn-cwd-normalize.test.ts
-          packages/hub/test/conversation-cwd-normalize.test.ts
+          packages/hub/test/conversation-context.test.ts
           packages/plugins/test/herdr-spawn-cwd.test.ts
           packages/node/test/node-local-env-win32-path.test.ts

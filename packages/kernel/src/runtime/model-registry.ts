@@ -58,6 +58,31 @@ function parseDisabledModelsConfig(raw: unknown): Record<string, string[]> {
   return result
 }
 
+/**
+ * Parse `config.json.modelThinkingLevels` (`'provider/modelId' -> thinking level`); defaults to `{}` and throws
+ * `config_corrupt` explicitly on malformed structure (never silently discarded). Keys keep the full reference
+ * verbatim (model IDs may themselves contain `/`, e.g. aggregate gateways), so lookups rebuild the key from
+ * `provider + '/' + modelId` instead of re-parsing. Synchronous (used inside `configSvc.updateBy` locks);
+ * level enum validation happens at the load boundary.
+ */
+function parseModelThinkingLevelsConfig(raw: unknown): Record<string, string> {
+  if (raw === undefined || raw === null) return {}
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new HelmError('config_corrupt', 'config.json.modelThinkingLevels must be an object (model reference -> thinking level)', 500)
+  }
+  const result: Record<string, string> = {}
+  for (const [ref, level] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof ref !== 'string' || !/^[^/\s]+\/[^\s]+$/.test(ref)) {
+      throw new HelmError('config_corrupt', `config.json.modelThinkingLevels key must be a 'provider/model' reference: ${ref}`, 500)
+    }
+    if (typeof level !== 'string' || level.trim() === '') {
+      throw new HelmError('config_corrupt', `config.json.modelThinkingLevels['${ref}'] must be a non-empty thinking level`, 500)
+    }
+    result[ref] = level
+  }
+  return result
+}
+
 export interface ModelRegistryOptions {
   readonly dataDir: string
   readonly providersSvc: ProviderService
@@ -107,6 +132,8 @@ export class ModelRegistry {
   private modelsCurrent: Models
   defaultModel: string | undefined
   defaultThinkingLevel: string | undefined
+  /** Per-model thinking defaults keyed by full `'provider/modelId'` reference (`config.json.modelThinkingLevels`). */
+  modelThinkingLevels: Record<string, string> = {}
   defaultCompactionModel: string | undefined
   defaultCompactionThinkingLevel: string | undefined
   /** Placeholder used in hook payloads when no model is configured (submissions still reject via `requireModelRef`). */
@@ -159,6 +186,7 @@ export class ModelRegistry {
     return listModelCatalog(this.modelsCurrent, {
       model: this.defaultModel,
       thinkingLevel: this.defaultThinkingLevel,
+      modelThinkingLevels: this.modelThinkingLevels,
       compactionModel: this.defaultCompactionModel,
       compactionThinkingLevel: this.defaultCompactionThinkingLevel,
       disabledModels: this.disabledModels,
@@ -205,6 +233,10 @@ export class ModelRegistry {
         this.defaultCompactionThinkingLevel = configuredCompactionLevel as string
       }
     }
+    this.modelThinkingLevels = parseModelThinkingLevelsConfig(raw['modelThinkingLevels'])
+    for (const level of new Set(Object.values(this.modelThinkingLevels))) {
+      await this.configuredThinkingLevelValidated(level)
+    }
     this.disabledModels = parseDisabledModelsConfig(raw['disabledModels'])
     this.modelPlaceholder = this.defaultModel ?? 'unconfigured'
   }
@@ -226,6 +258,8 @@ export class ModelRegistry {
     validateThinkingLevel: (level: string) => void,
     compactionModel?: string | undefined,
     compactionThinkingLevel?: string | undefined,
+    modelThinkingLevels?: Record<string, string>,
+    modelThinkingUpdate?: { model: string; level: string },
   ): Promise<void> {
     const trimmed = model?.trim()
     if (trimmed !== undefined && trimmed !== '') {
@@ -245,6 +279,14 @@ export class ModelRegistry {
     }
     const nextLevel = normalizeLevel(thinkingLevel)
     const nextCompactionLevel = normalizeLevel(compactionThinkingLevel)
+    const nextModelThinkingLevels = modelThinkingLevels === undefined
+      ? undefined
+      : this.validateModelThinkingLevels(modelThinkingLevels, validateThinkingLevel)
+    const nextModelThinkingUpdate = modelThinkingUpdate === undefined
+      ? undefined
+      : this.validateModelThinkingUpdate(modelThinkingUpdate, validateThinkingLevel)
+    const updatedModelThinkingLevels = nextModelThinkingLevels !== undefined || nextModelThinkingUpdate !== undefined
+    let nextResolvedModelThinkingLevels: Record<string, string> | undefined
     await this.configSvc.updateBy((current) => {
       const next = { ...current }
       if (trimmed === '') delete next.model
@@ -265,6 +307,18 @@ export class ModelRegistry {
       } else {
         next.compactionThinkingLevel = nextCompactionLevel
       }
+      if (updatedModelThinkingLevels) {
+        const resolved = nextModelThinkingLevels !== undefined
+          ? { ...nextModelThinkingLevels }
+          : parseModelThinkingLevelsConfig(next['modelThinkingLevels'])
+        if (nextModelThinkingUpdate !== undefined) {
+          if (nextModelThinkingUpdate.level === '') delete resolved[nextModelThinkingUpdate.model]
+          else resolved[nextModelThinkingUpdate.model] = nextModelThinkingUpdate.level
+        }
+        nextResolvedModelThinkingLevels = resolved
+        if (Object.keys(resolved).length === 0) delete next.modelThinkingLevels
+        else next.modelThinkingLevels = resolved
+      }
       return next
     })
     if (trimmed !== undefined) this.defaultModel = trimmed === '' ? undefined : trimmed
@@ -275,11 +329,48 @@ export class ModelRegistry {
     if (compactionThinkingLevel !== undefined) {
       this.defaultCompactionThinkingLevel = nextCompactionLevel
     }
+    if (nextResolvedModelThinkingLevels !== undefined) this.modelThinkingLevels = nextResolvedModelThinkingLevels
     this.modelPlaceholder = this.defaultModel ?? 'unconfigured'
     // Independent override fields: conversations with a model override still inherit the global reasoning effort.
-    if (trimmed !== undefined || thinkingLevel !== undefined) {
+    if (trimmed !== undefined || thinkingLevel !== undefined || updatedModelThinkingLevels) {
       await this.alignAllConversations()
     }
+  }
+
+  private validateModelThinkingLevels(
+    levels: Record<string, string>,
+    validateThinkingLevel: (level: string) => void,
+  ): Record<string, string> {
+    if (levels === null || typeof levels !== 'object' || Array.isArray(levels)) {
+      throw new HelmError('validation_error', 'modelThinkingLevels must be an object mapping model references to thinking levels', 400)
+    }
+    const validated: Record<string, string> = {}
+    for (const [model, rawLevel] of Object.entries(levels)) {
+      if (!/^[^/\s]+\/[^\s]+$/.test(model)) {
+        throw new HelmError('validation_error', `modelThinkingLevels key must be a 'provider/model' reference: ${model}`, 400)
+      }
+      this.parseModelRefOrThrow(model)
+      if (typeof rawLevel !== 'string' || rawLevel.trim() === '') {
+        throw new HelmError('validation_error', `modelThinkingLevels['${model}'] must be a non-empty thinking level`, 400)
+      }
+      const level = rawLevel.trim()
+      validateThinkingLevel(level)
+      validated[model] = level
+    }
+    return validated
+  }
+
+  private validateModelThinkingUpdate(
+    update: { model: string; level: string },
+    validateThinkingLevel: (level: string) => void,
+  ): { model: string; level: string } {
+    if (!/^[^/\s]+\/[^\s]+$/.test(update.model)) {
+      throw new HelmError('validation_error', `modelThinking key must be a 'provider/model' reference: ${update.model}`, 400)
+    }
+    this.parseModelRefOrThrow(update.model)
+    const level = update.level.trim()
+    if (level !== '') validateThinkingLevel(level)
+    return { model: update.model, level }
   }
 
   /** Validate `'provider/model'` reference (shared by create/update). */
@@ -289,6 +380,43 @@ export class ModelRegistry {
       throw new HelmError('validation_error', `Model reference must be in 'provider/model' format: ${ref}`)
     }
     return { provider: ref.slice(0, slash), modelId: ref.slice(slash + 1) }
+  }
+
+  /** Look up the per-model thinking default for a resolved reference (keyed by the full `'provider/modelId'` string). */
+  modelThinkingLevelOf(ref: { provider: string; modelId: string }): string | undefined {
+    return this.modelThinkingLevels[`${ref.provider}/${ref.modelId}`]
+  }
+
+  /**
+   * Set or clear one per-model thinking default (`config.json.modelThinkingLevels`): empty `level` clears the
+   * single entry, and the field itself is removed once the map becomes empty. Alignment then refreshes every
+   * conversation whose effective model matches, so the new default takes effect without touching explicit
+   * conversation overrides (which keep ranking above per-model defaults).
+   */
+  async setModelThinkingDefault(
+    model: string,
+    level: string,
+    validateThinkingLevel: (level: string) => void,
+  ): Promise<void> {
+    const trimmedModel = model.trim()
+    if (trimmedModel === '') {
+      throw new HelmError('validation_error', 'Per-model thinking default requires a model reference', 400)
+    }
+    const ref = this.parseModelRefOrThrow(trimmedModel)
+    this.assertModelEnabled(ref.provider, ref.modelId)
+    const trimmedLevel = level.trim()
+    if (trimmedLevel !== '') validateThinkingLevel(trimmedLevel)
+    const next = await this.configSvc.updateBy((current) => {
+      const merged: Record<string, unknown> = { ...current }
+      const existing = parseModelThinkingLevelsConfig(merged['modelThinkingLevels'])
+      if (trimmedLevel === '') delete existing[trimmedModel]
+      else existing[trimmedModel] = trimmedLevel
+      if (Object.keys(existing).length === 0) delete merged['modelThinkingLevels']
+      else merged['modelThinkingLevels'] = existing
+      return merged
+    })
+    this.modelThinkingLevels = parseModelThinkingLevelsConfig(next['modelThinkingLevels'])
+    await this.alignAllConversations()
   }
 
   /** Synchronously check whether a model is explicitly disabled by the user (used for conversation resolution filtering). */

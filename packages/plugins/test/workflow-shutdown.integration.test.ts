@@ -13,6 +13,7 @@ async function verifyShutdownPersistence(options: { autoRecover: boolean }): Pro
   const dataDir = await mkdtemp(join(tmpdir(), 'helm-workflow-shutdown-'))
   let app: Awaited<ReturnType<typeof createHelm>> | undefined
   let reopened: KernelRuntime | undefined
+  let reopenedApp: Awaited<ReturnType<typeof createHelm>> | undefined
   const expectedStatus = options.autoRecover ? 'running' : 'aborted'
   try {
     app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir })
@@ -28,12 +29,9 @@ async function verifyShutdownPersistence(options: { autoRecover: boolean }): Pro
     await app.close()
     app = undefined
 
-    // 不注册 workflow，防止其 start() 重算 runs 投影后掩盖停止阶段的漏写。
+    // 不注册 workflow，直接校验持久层 records 与 .record.json。
     reopened = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, autoResume: false })
     assert.equal(reopened.plugins.list().some((plugin) => plugin.id === 'builtin:workflow'), false)
-    // 新契约：records doc 只存 workflow/runs 轻量索引（从 SQLite 读回）；完整
-    // RunRecord 在插件私有record file dataDir/plugins/builtin%3Aworkflow/
-    // artifacts/<convId>/workflow-<runId>.record.json。
     const records = reopened.documentStore.get<Record<string, unknown>>('builtin:workflow:records', {})
     const index = (records['workflow/runs'] as Array<Partial<WorkflowRunSummary>> | undefined) ?? []
     const entry = index.find((item) => item?.id === run.id)
@@ -51,6 +49,7 @@ async function verifyShutdownPersistence(options: { autoRecover: boolean }): Pro
     await reopened.close()
     reopened = undefined
 
+    // durable: false 契约：runs 与 run-badges 为纯内存瞬态投影，SQLite 零落库、零写放大。
     const db = await openHelmDatabase(dataDir)
     try {
       const sessionRows = await db.db.all<{ plugin_id: string; name: string; conversation_id: number; value: string }>(
@@ -58,32 +57,41 @@ async function verifyShutdownPersistence(options: { autoRecover: boolean }): Pro
         'builtin:workflow',
         'runs',
       )
-      assert.equal(sessionRows.length, 1, `runs 会话分片恰有一条（会话 1；实际 ${JSON.stringify(sessionRows)}）`)
-      assert.equal(sessionRows[0]!.conversation_id, 1)
-      const projection = JSON.parse(sessionRows[0]!.value) as { runs: Array<{ id: string; status: string }> }
-      assert.equal(
-        projection.runs.find((item) => item.id === run.id)?.status,
-        expectedStatus,
-        `最终 runs 会话分片必须含该 run 的 ${expectedStatus} 状态`,
-      )
+      assert.equal(sessionRows.length, 0, `runs 瞬态分片不得写入 SQLite（实际 ${JSON.stringify(sessionRows)}）`)
       const badgeRows = await db.db.all<{ value: string }>(
         'SELECT value FROM helm_plugin_docs WHERE plugin_id = ? AND name = ?',
         '__global',
         'builtin:workflow:run-badges',
       )
-      assert.equal(badgeRows.length, 1, `run-badges 全局角标已落库（实际 ${JSON.stringify(badgeRows)}）`)
-      const badges = JSON.parse(badgeRows[0]!.value) as { byConversation: Record<string, { count: number }> }
-      assert.equal(badges.byConversation['1']?.count ?? 0, 1, `角标含会话 1 计数（实际 ${JSON.stringify(badges)}）`)
-      const badgeEntry = badges.byConversation['1'] as Record<string, unknown>
-      for (const key of Object.keys(badgeEntry)) {
-        assert.ok(
-          key === 'count' || key === 'tone' || key === 'footerText',
-          `run-badges 条目只允许 count/tone/footerText，发现 ${key}`,
-        )
-      }
+      assert.equal(badgeRows.length, 0, `run-badges 瞬态角标不得写入 SQLite（实际 ${JSON.stringify(badgeRows)}）`)
     } finally {
       await db.close()
     }
+
+    // 经 createHelm 完整重开：start() 从私有持久层恢复并在内存中干净重投影 runs 与 run-badges。
+    reopenedApp = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir })
+    const projection = reopenedApp.kernel.plugins.getPublicSessionDoc('builtin:workflow', 'runs', 1).value as {
+      runs: Array<{ id: string; status: string }>
+    }
+    assert.equal(
+      projection.runs.find((item) => item.id === run.id)?.status,
+      expectedStatus,
+      `重开后内存 runs 分片必须含该 run 的 ${expectedStatus} 状态`,
+    )
+    const badges = reopenedApp.kernel.plugins.getPublicDoc('builtin:workflow', 'run-badges').value as {
+      byConversation: Record<string, Record<string, unknown>>
+    }
+    const badgeEntry = badges.byConversation['1']
+    assert.ok(badgeEntry, `重开后内存 run-badges 应含会话 1 角标（实际 ${JSON.stringify(badges)}）`)
+    assert.equal(badgeEntry['count'], 1)
+    for (const key of Object.keys(badgeEntry)) {
+      assert.ok(
+        key === 'count' || key === 'tone' || key === 'footerText',
+        `run-badges 条目只允许 count/tone/footerText，发现 ${key}`,
+      )
+    }
+    await reopenedApp.close()
+    reopenedApp = undefined
   } finally {
     try {
       await app?.close()
@@ -91,7 +99,11 @@ async function verifyShutdownPersistence(options: { autoRecover: boolean }): Pro
       try {
         await reopened?.close()
       } finally {
-        await rm(dataDir, { recursive: true, force: true })
+        try {
+          await reopenedApp?.close()
+        } finally {
+          await rm(dataDir, { recursive: true, force: true })
+        }
       }
     }
   }

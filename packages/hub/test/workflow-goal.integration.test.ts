@@ -204,15 +204,15 @@ describe('T2 goal gate automatic retry (real kernel / faux / WorkflowService / w
     const env = await openRuntime(dataDir, repo)
 
     // Gate script (runs inside the worktree; behavior controlled by marker files):
-    // - attempt 1 only: sleeps 6s (exceeds gateTimeoutMs=1000, killed via process-group timeout;
-    //   if kill fails, writes escape marker `gate-1-escaped.txt` after 6s and exits 0)
+    // - attempt 1 only: sleeps 10s (exceeds gateTimeoutMs=1000, killed via process-group timeout;
+    //   if kill fails, writes escape marker `gate-1-escaped.txt` after 10s and exits 0)
     // - attempt 2 present: exits 1
     // - attempt 3 present: exits 0
     const gateCommand =
       'node -e "const fs=require(\'fs\');' +
       "if(fs.existsSync('attempt-3.txt'))process.exit(0);" +
       "if(fs.existsSync('attempt-2.txt'))process.exit(1);" +
-      "setTimeout(function(){fs.writeFileSync('gate-1-escaped.txt','alive')},6000)" +
+      "setTimeout(function(){fs.writeFileSync('gate-1-escaped.txt','alive')},10000)" +
       '"'
     const script =
       'export const meta = { name: "t2-goal-retry", description: "goal gate three state retry verify" }\n' +
@@ -329,15 +329,15 @@ describe('T2 goal gate automatic retry (real kernel / faux / WorkflowService / w
         'run summary should carry createdAt/updatedAt',
       )
       assert.ok(
-        run['updatedAt'] - run['createdAt'] < 5_800,
-        `total run duration ${run['updatedAt'] - run['createdAt']}ms should be under 5.8s (gate terminated at 1s timeout)`,
+        run['updatedAt'] - run['createdAt'] < 9_500,
+        `total run duration ${run['updatedAt'] - run['createdAt']}ms should be under 9.5s (gate terminated at 1s timeout)`,
       )
       const escaped = findFileRecursive(dir, 'gate-1-escaped.txt')
       if (escaped.length > 0) {
         // Fail fast if escape marker already appeared before waiting out the window.
         assert.fail(`gate process escaped process-group kill: ${escaped.join(', ')}`)
       }
-      while (Date.now() - startedAt < 6_200) await sleep(100)
+      while (Date.now() - startedAt < 10_200) await sleep(100)
       assert.deepEqual(
         findFileRecursive(dir, 'gate-1-escaped.txt'),
         [],

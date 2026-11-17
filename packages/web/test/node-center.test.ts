@@ -246,7 +246,7 @@ test('NodeCard: SSR renders node name, architecture badge, online indicator with
   assert.match(localHtml, /本机开发微内核/)
   assert.match(localHtml, /local/)
   assert.match(localHtml, /linux \/ x64/)
-  assert.match(localHtml, /status-dot-done status-dot-working/)
+  assert.match(localHtml, /helm-status-light-done[\s\S]*?Online/, '在线状态为单盏可见状态灯')
   assert.match(localHtml, /Online/)
   assert.match(localHtml, /bash/)
   assert.match(localHtml, /read/)

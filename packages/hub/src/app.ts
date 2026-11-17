@@ -1,19 +1,19 @@
 import { KernelRuntime, loadExternalPlugins } from '@helm/kernel';
 import { createPluginBuildProvider } from '@helm/plugin-build';
-import {
-  createProfilePlugin,
-  createWorkflowPlugin,
-  createSwarmPlugin,
-  createMemoryPlugin,
-  createJsonRenderPlugin,
-  createMermaidPlugin,
-  createHerdrPlugin,
-  createSuperAgentPlugin,
-  createTriggersPlugin,
-  createMagpiePlugin,
-  createAppsPlugin,
-  createTokenSpeedPlugin,
-} from '@helm/plugins';
+import { KernelRuntime, loadExternalPlugins } from '@helm/kernel';
+import { createPluginBuildProvider } from '@helm/plugin-build';
+import { createProfilePlugin } from '@helm/plugins/profile';
+import { createWorkflowPlugin } from '@helm/plugins/workflow';
+import { createSwarmPlugin } from '@helm/plugins/swarm';
+import { createMemoryPlugin } from '@helm/plugins/memory';
+import { createJsonRenderPlugin } from '@helm/plugins/json-render';
+import { createMermaidPlugin } from '@helm/plugins/mermaid';
+import { createHerdrPlugin } from '@helm/plugins/herdr';
+import { createSuperAgentPlugin } from '@helm/plugins/superagent';
+import { createTriggersPlugin } from '@helm/plugins/triggers';
+import { createMagpiePlugin } from '@helm/plugins/magpie';
+import { createAppsPlugin } from '@helm/plugins/apps';
+import { createTokenSpeedPlugin } from '@helm/plugins/token-speed';
 
 export type HelmOptions = Omit<NonNullable<Parameters<typeof KernelRuntime.open>[0]>, 'autoResume'>;
 

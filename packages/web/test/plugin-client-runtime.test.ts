@@ -22,7 +22,7 @@ import {
 } from '../src/lib/plugin-client.js'
 import { makeTestStore } from './helpers/store.js'
 import { HostStoreProviders } from './helpers/host-store.js'
-import { mountSharedPluginNamespaces } from './helpers/workflow-client.js'
+import { mountSharedPluginNamespaces } from './helpers/builtin-clients.js'
 
 GlobalRegistrator.register()
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })

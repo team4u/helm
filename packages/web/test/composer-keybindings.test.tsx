@@ -691,7 +691,10 @@ test('Standby pane: inherits the global default model glm-5.3·max; supports Shi
   assert.equal(resolveStandbyEffectiveModel(undefined, undefined, 'magpie/auto/glm-5.3'), 'magpie/auto/glm-5.3')
   assert.equal(resolveStandbyEffectiveModel(undefined, 'p/m1', 'magpie/auto/glm-5.3'), 'p/m1')
   assert.equal(resolveStandbyEffectiveModel('d/m2', 'p/m1', 'magpie/auto/glm-5.3'), 'd/m2')
-  assert.equal(resolveStandbyThinkingLevel(['off', 'high', 'max'], undefined, undefined, 'max'), 'max')
+  assert.equal(resolveStandbyThinkingLevel(['off', 'high', 'max'], undefined, undefined, undefined, 'max'), 'max')
+  // Per-model default ranks between the explicit draft override and the Profile level.
+  assert.equal(resolveStandbyThinkingLevel(['off', 'high', 'max'], undefined, 'high', 'max', 'low'), 'high')
+  assert.equal(resolveStandbyThinkingLevel(['off', 'high', 'max'], 'max', 'high', 'low', 'off'), 'max')
 
   const profile: Profile = { id: 'assistant', name: '个人助理' }
   const skills: SkillSummary[] = [

@@ -22,7 +22,7 @@ import process from 'node:process'
 import type { ProviderConfig } from '@helm/protocol'
 import type { ApiKeyAuth, MutableModels, Models, Provider } from '@earendil-works/pi-ai'
 import { builtinProviders } from '@earendil-works/pi-ai/providers/all'
-import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
+import { fauxAssistantMessage, fauxProvider } from '@earendil-works/pi-ai/providers/faux'
 import { createModels } from '@earendil-works/pi-ai/models'
 import {
   buildModels,
@@ -31,6 +31,7 @@ import {
   listModelProviders,
   parseModelRef,
   requireModelRef,
+  wrapModelsForCompaction,
   type HelmModelSourceMeta,
   type ModelCatalogEntry,
 } from '../src/runtime/models.js'
@@ -607,5 +608,93 @@ describe('model references', { timeout: 60_000 }, () => {
       return true
     })
     assert.throws(() => requireModelRef('  '), HelmError)
+  })
+})
+
+describe('compaction thinking resolution (wrapModelsForCompaction)', { timeout: 60_000 }, () => {
+  interface CapturedCall {
+    provider: string
+    modelId: string
+    reasoning: string | undefined
+  }
+
+  /** Models set with two faux providers; a response factory records the effective model + reasoning per call. */
+  async function fixtureCompaction() {
+    const models = createModels()
+    // Reasoning-capable faux models so SDK thinking-level clamping keeps levels like 'high' intact.
+    const main = fauxProvider({ provider: 'fx-main', models: [{ id: 'main-model', reasoning: true }] })
+    const compaction = fauxProvider({ provider: 'fx-sum', models: [{ id: 'sum-model', reasoning: true }] })
+    models.setProvider(main.provider)
+    models.setProvider(compaction.provider)
+    const captured: CapturedCall[] = []
+    const respond = (text: string): import('@earendil-works/pi-ai/providers/faux').FauxResponseFactory => (
+      (_context, options, _state, model) => {
+        captured.push({
+          provider: model.provider,
+          modelId: model.id,
+          reasoning: (options as { reasoning?: string } | undefined)?.reasoning,
+        })
+        return fauxAssistantMessage(text)
+      }
+    )
+    return { models, main, compaction, captured, respond }
+  }
+
+  const compactionContext = () => ({
+    messages: [
+      { role: 'system' as const, content: 'You are a context summarization assistant. Be concise.', timestamp: Date.now() },
+      { role: 'user' as const, content: 'summarize the conversation', timestamp: Date.now() },
+    ],
+  })
+
+  test('per-model default applies when no explicit compaction level is set; explicit level still wins', { timeout: 60_000 }, async () => {
+    const { models, main, compaction, captured, respond } = await fixtureCompaction()
+    main.setResponses([respond('main passthrough')])
+    compaction.setResponses([respond('summary'), respond('summary'), respond('summary')])
+
+    const summarize = async (
+      resolution: { model?: string; thinkingLevel?: string; modelThinkingLevel?: (p: string, m: string) => string | undefined },
+    ) => {
+      const wrapped = wrapModelsForCompaction(models, () => ({
+        model: resolution.model,
+        thinkingLevel: resolution.thinkingLevel,
+        modelThinkingLevel: resolution.modelThinkingLevel,
+        isDisabled: () => false,
+      }))
+      return wrapped.completeSimple(
+        models.getModel('fx-main', 'main-model')!,
+        compactionContext(),
+        { cacheRetention: 'none', reasoning: 'low', maxTokens: 4096 },
+      )
+    }
+
+    // 1. Per-model default for the compaction model outranks the conversation-carried reasoning.
+    await summarize({ model: 'fx-sum/sum-model', modelThinkingLevel: () => 'high' })
+    assert.deepEqual(captured.at(-1), { provider: 'fx-sum', modelId: 'sum-model', reasoning: 'high' })
+
+    // 2. No per-model entry: the caller reasoning passes through unchanged (compaction on the current model).
+    await summarize({ model: 'fx-sum/sum-model', modelThinkingLevel: () => undefined })
+    assert.deepEqual(captured.at(-1), { provider: 'fx-sum', modelId: 'sum-model', reasoning: 'low' })
+
+    // 3. Explicit compaction thinking level outranks the per-model default.
+    await summarize({ model: 'fx-sum/sum-model', thinkingLevel: 'minimal', modelThinkingLevel: () => 'high' })
+    assert.deepEqual(captured.at(-1), { provider: 'fx-sum', modelId: 'sum-model', reasoning: 'minimal' })
+  })
+
+  test('without a compaction model the conversation request passes through untouched', { timeout: 60_000 }, async () => {
+    const { models, main, captured, respond } = await fixtureCompaction()
+    main.setResponses([respond('main passthrough')])
+    const wrapped = wrapModelsForCompaction(models, () => ({
+      model: undefined,
+      modelThinkingLevel: (p, m) => (p === 'fx-main' && m === 'main-model' ? 'max' : undefined),
+      isDisabled: () => false,
+    }))
+    await wrapped.completeSimple(
+      models.getModel('fx-main', 'main-model')!,
+      compactionContext(),
+      { cacheRetention: 'none', reasoning: 'low' },
+    )
+    // Per-model lookup must not fire for the conversation model: its level already flowed through conversation resolution.
+    assert.deepEqual(captured, [{ provider: 'fx-main', modelId: 'main-model', reasoning: 'low' }])
   })
 })

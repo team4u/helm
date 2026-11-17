@@ -199,6 +199,15 @@ describe('HerdrOverviewScreen 双端适配与 human 只读红线', () => {
       // 2. 桌面表格：human 行操作列没有任何 <button>，仅含「只读」诊断徽章（默认 en locale）
       const desktopRows = [...mounted.container.querySelectorAll('.herdr-desktop-table tbody tr')]
       assert.equal(desktopRows.length, 2)
+      // 表格语义保留：Status 列渲染可见状态文字徽章（不依赖列标题或颜色解释）；移动卡仍为纯灯。
+      for (const tr of desktopRows) {
+        const statusBadge = tr.querySelector('.badge[class*="badge-"]')
+        assert.ok(statusBadge !== null && (statusBadge.textContent ?? '').length > 0, '桌面状态列为可见文字徽章')
+      }
+      const desktopStatusCell = desktopRows[0]!.querySelector('td:nth-child(5)')
+      assert.ok(desktopStatusCell?.querySelector('.badge') !== null, 'Status 列为徽章而非仅指示灯')
+      const mobileLight = mounted.container.querySelector('.herdr-mobile-cards .helm-status-light')
+      assert.ok(mobileLight !== null && (mobileLight.textContent ?? '').length > 0, '移动卡状态为纯灯（可访问名称）')
       const humanDesktopRow = desktopRows.find((tr) => tr.textContent?.includes('%1') && !tr.textContent?.includes('%10'))!
       assert.equal(humanDesktopRow.querySelectorAll('button').length, 0, 'human 桌面行严禁渲染任何操作按钮')
       assert.ok(humanDesktopRow.textContent?.includes('Read-only'))

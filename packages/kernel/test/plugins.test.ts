@@ -26,6 +26,7 @@ import {
   type PluginHostBackend,
   type PluginSessionDocStore,
 } from '../src/plugins/index.js';
+import { HookPipeline } from '../src/plugins/hooks.js';
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js';
 import { pluginDataDirName } from '../src/plugins/plugin-dir-name.js';
 
@@ -36,6 +37,7 @@ import {
   MemoryDocStore,
   assertRejectsCode,
   cleanupDir,
+  deferred,
   makeConversationSummary,
   makeTempDir,
 } from './helpers.js';
@@ -387,6 +389,34 @@ test('hook execute throw exception: wrap hook_execution_failed and not silently'
       return true;
     },
   );
+});
+
+test('HookPipeline: concurrent add+sort during run() never re-orders active iteration array (no skip/duplicate)', { timeout: 60_000 }, async () => {
+  const pipeline = new HookPipeline('input');
+  const calls: string[] = [];
+  const payload = {
+    conversationId: 1,
+    input: { id: 'i1', text: 'x', origin: 'human' as const, createdAt: 1 },
+  };
+
+  pipeline.add('p:a', async () => {
+    calls.push('a');
+    // Register a higher-priority hook mid-iteration and trigger sort path (simulates another runHook calling entries())
+    pipeline.add('p:c', () => { calls.push('c'); }, 10);
+    pipeline.entries();
+    return { action: 'continue' as const };
+  });
+  pipeline.add('p:b', () => {
+    calls.push('b');
+    return { action: 'continue' as const };
+  });
+
+  await pipeline.run(payload);
+  assert.deepEqual(calls, ['a', 'b']);
+
+  // Next round: high-priority hook c runs first
+  await pipeline.run(payload);
+  assert.deepEqual(calls, ['a', 'b', 'c', 'a', 'b']);
 });
 
 // ---------------------------------------------------------------------------
@@ -1276,6 +1306,43 @@ test('runHook in disable await during do not by execute: not enabled plugin hand
   assert.equal(hookRan, false);
   releaseStop();
   await disabling;
+});
+
+test('teardown phase hides plugin from action listings immediately even while enabled remains true', { timeout: 60_000 }, async () => {
+  const host = makeHost();
+  try {
+    const stopGate = deferred<void>();
+    await host.register({
+      id: 'p:tearing-down',
+      definePlugin: (ctx) => {
+        ctx.service({
+          id: 'svc',
+          start() {},
+          // Pause stop to hold open the teardown window (enabled still true, phase=deactivating)
+          stop: () => stopGate.promise,
+        });
+        ctx.action({
+          id: 'ping',
+          description: 'probe action',
+          inputSchema: { type: 'object', additionalProperties: false },
+          outputSchema: { type: 'object', properties: { pong: { type: 'boolean' } }, required: ['pong'], additionalProperties: false },
+          handler: () => ({ pong: true }),
+        });
+      },
+    }, { enabled: true });
+
+    assert.equal(host.listActions().filter((a) => a.pluginId === 'p:tearing-down').length, 1);
+    const disabling = host.disable('p:tearing-down', { force: true });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    // Inside teardown window: enabled stays true while stop finishes, yet listings clear immediately so stopping services receive no new calls
+    assert.equal(host.get('p:tearing-down')?.enabled, true, 'enabled stays true during teardown window');
+    assert.deepEqual(host.listActions().filter((a) => a.pluginId === 'p:tearing-down'), [], 'listings clear immediately on teardown entry');
+    stopGate.resolve();
+    await disabling;
+    assert.equal(host.get('p:tearing-down')?.enabled, false);
+  } finally {
+    await host.dispose();
+  }
 });
 
 test('register route in (definePlugin await suspended)runHook do not execute not enabled plugin handler', { timeout: 60_000 }, async () => {

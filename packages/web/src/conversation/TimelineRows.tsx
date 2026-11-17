@@ -151,7 +151,12 @@ export function StepGroup({
   shortcutToggle?: ProcessShortcutCommand
 }) {
   const firstStep = steps[0]
-  if (steps.length === 1 && firstStep !== undefined && firstStep.kind === 'thinking') {
+  if (
+    steps.length === 1 &&
+    firstStep !== undefined &&
+    firstStep.kind === 'thinking' &&
+    firstStep.thinking.responseDurationMs === undefined
+  ) {
     return (
       <ThinkingRow
         text={firstStep.thinking.text}
@@ -219,7 +224,12 @@ function MultiStepGroup({
       ? t('conv.thinking.execActive', { count: steps.length })
       : t('conv.thinking.exec', { count: steps.length })
   const showErrorBadge = !open && summary.errorCount > 0
-  const showDuration = !active && summary.totalDurationMs !== undefined
+  // Two separately labeled cumulative totals (honest accounting): eligible model-response time and
+  // tool execution time. Never merged into one wall-clock figure — the backend timestamps cannot
+  // support exact intervals (result timestamp is settlement time, not execution end), and an
+  // unlabeled sum would overstate parallel execution as elapsed time.
+  const showModelTime = !active && summary.modelDurationMs !== undefined
+  const showToolsTime = !active && summary.toolDurationMs !== undefined
 
   return (
     <div className="trace-group">
@@ -240,8 +250,15 @@ function MultiStepGroup({
         {showErrorBadge ? (
           <span className="trace-group-badge trace-group-badge-error">{t('conv.thinking.errorCount', { count: summary.errorCount })}</span>
         ) : null}
-        {showDuration ? (
-          <span className="trace-group-meta tabular-nums">{formatDurationMs(summary.totalDurationMs)}</span>
+        {showModelTime ? (
+          <span className="trace-group-meta tabular-nums" title={t('conv.thinking.modelTimeTitle')}>
+            {t('conv.thinking.modelTime', { duration: formatDurationMs(summary.modelDurationMs) })}
+          </span>
+        ) : null}
+        {showToolsTime ? (
+          <span className="trace-group-meta tabular-nums" title={t('conv.thinking.toolsTimeTitle')}>
+            {t('conv.thinking.toolsTime', { duration: formatDurationMs(summary.toolDurationMs) })}
+          </span>
         ) : null}
       </button>
       {open ? (

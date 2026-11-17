@@ -10,7 +10,7 @@ import { HostStoreProviders } from './helpers/host-store.js'
 const e = React.createElement
 ;(globalThis as Record<string, unknown>).React = React
 const { ConversationTimeline } = await import('../src/conversation/ConversationTimeline.js')
-const { ThinkingRow } = await import('../src/conversation/TimelineRows.js')
+const { StepGroup, ThinkingRow } = await import('../src/conversation/TimelineRows.js')
 const stylesCss = readHostStyles()
 
 test('思考样式契约：.thinking-expanded-body 100% 宽度撑满，段落与列表解除 74ch 限制', { timeout: 60_000 }, () => {
@@ -213,3 +213,95 @@ test('会话时间线思考生命周期契约：思考中展开，思考完后�
 })
 
 
+
+// ---------------------------------------------------------------------------
+// 折叠组过程耗时展示契约（诚实口径：不冒充墙钟、不把整段响应标成思考耗时）
+// ---------------------------------------------------------------------------
+
+test('ThinkingRow 耗时契约：思考单行不显示模型响应耗时，已知耗时由组头单独标注', { timeout: 60_000 }, () => {
+  // 已知模型耗时时，单思考步骤也使用组头显示 Model 标注；耗时不冒充 ThinkingRow 的思考耗时。
+  const html = renderToString(
+    e(
+      HostStoreProviders,
+      { value: makeMockStore() },
+      e(StepGroup, {
+        steps: [{ kind: 'thinking', thinking: { key: 'think:1:0:0', text: '决策过程', responseDurationMs: 3200 } }],
+        active: false,
+        conversationId: 1,
+        siblingCalls: [],
+      }),
+    ),
+  )
+  assert.match(html, /Thinking \(1 steps\)/)
+  assert.match(html, /Model 3\.2s/)
+  assert.match(html, /trace-group-meta/)
+  assert.doesNotMatch(html, /Thinking3\.2s/)
+})
+
+test('折叠组耗时契约：合格模型响应耗时与工具累计耗时以两个分别标注的徽标展示', { timeout: 60_000 }, () => {
+  // 思考（归属 3.2s）+ 两个并行 5s 工具：Model 3.2s 与 Tools 10.0s 分别标注，且带说明性 tooltip
+  const html = renderToString(
+    e(
+      HostStoreProviders,
+      { value: makeMockStore() },
+      e(StepGroup, {
+        steps: [
+          { kind: 'thinking', thinking: { key: 'think:1:0:0', text: '决策过程', responseDurationMs: 3200 } },
+          { kind: 'tool', tool: { key: 'tool:c1', toolName: 'bash', status: 'done', isError: false, durationMs: 5000 } },
+          { kind: 'tool', tool: { key: 'tool:c2', toolName: 'read', status: 'done', isError: false, durationMs: 5000 } },
+        ],
+        active: false,
+        conversationId: 1,
+        siblingCalls: [],
+      }),
+    ),
+  )
+  assert.match(html, /Model 3\.2s/)
+  assert.match(html, /Tools 10\.0s/)
+  // 徽标必须带语义说明（累计口径、并行各计自身、非墙钟流逝）
+  assert.match(html, /title="Cumulative model response time[^"]*not wall-clock elapsed time"/)
+  assert.match(html, /title="Cumulative tool execution time[^"]*parallel tools each count their own execution/)
+  // 不允许退回无标注的裸耗时徽标（会把并行累计冒充为流逝时间）
+  assert.doesNotMatch(html, /trace-group-meta[^>]*>\s*[\d.]+m?s\s*</)
+})
+
+test('折叠组耗时契约：进行中（active）不展示耗时徽标；缺耗时不伪造', { timeout: 60_000 }, () => {
+  const activeHtml = renderToString(
+    e(
+      HostStoreProviders,
+      { value: makeMockStore() },
+      e(StepGroup, {
+        steps: [
+          { kind: 'thinking', thinking: { key: 'think:1:0:0', text: '进行中思考' } },
+          { kind: 'tool', tool: { key: 'tool:c1', toolName: 'bash', status: 'running', isError: false } },
+        ],
+        active: true,
+        conversationId: 1,
+        siblingCalls: [],
+      }),
+    ),
+  )
+  assert.doesNotMatch(activeHtml, /Model /)
+  assert.doesNotMatch(activeHtml, /Tools /)
+  assert.doesNotMatch(activeHtml, /trace-group-meta/)
+
+  // 无任何已知耗时：不显示徽标，也不显示占位
+  const idleHtml = renderToString(
+    e(
+      HostStoreProviders,
+      { value: makeMockStore() },
+      e(StepGroup, {
+        steps: [
+          { kind: 'thinking', thinking: { key: 'think:1:0:0', text: '无耗时数据的历史思考' } },
+          { kind: 'tool', tool: { key: 'tool:c1', toolName: 'bash', status: 'done', isError: false } },
+        ],
+        active: false,
+        conversationId: 1,
+        siblingCalls: [],
+      }),
+    ),
+  )
+  assert.doesNotMatch(idleHtml, /Model /)
+  assert.doesNotMatch(idleHtml, /Tools /)
+  assert.doesNotMatch(idleHtml, /trace-group-meta/)
+})

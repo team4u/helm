@@ -1,20 +1,19 @@
 /**
- * Real line-level diff result tests for the edit tool (runtime/tool-edit-diff.ts).
+ * edit tool real difference result (runtime/tool-edit-diff.ts) test.
  *
- * Covers:
- * 1. Pure computeEditDiff: exact line numbers (real scan), +/-3 context lines, inline/multi-line/
- *    pure-deletion, CRLF, missing trailing newline, trailing empty lines, duplicate context, long line and row/text budget
- *    truncation (counts still reflect full diff), and no-op;
- * 2. Redaction safety: whole-text line-level redaction first (single-line secrets become placeholders); multi-line and
- *    window-spanning secrets (where per-window redaction would leak fragments) fall back to rows=[]/truncated=true with
- *    zero secret substrings in serialized output; line numbers/counts always reflect the original text;
- * 3. Tool level: local and remote share the same pure function (identical content produces identical diffs), structured
- *    output conforms to @helm/protocol EDIT_TOOL_RESULT_SCHEMA (validated via Ajv), literal
- *    replacement ($& is not interpreted), and failures (missing/duplicate match) never produce diffs or mutate files.
+ * override:
+ * 1. pure function computeEditDiff: precise row number (real scan),±3 context window, row inside/many row/
+ *    pure increase delete,CRLF, tail without newline, tail part empty row, duplicate context, huge long row and row count/text pre- compute
+ *    truncate (count still override complete difference),no-op;
+ * 2. redaction security: all text first row redaction (single row secret hit placeholder); across row secret and horizontal across window boundary
+ *    secret (window cut piece redaction will leak leak form) must fall back rows=[]/truncated=true and
+ *    serialization result without any secret leftover segment; row number/count always reverse reflect original text;
+ * 3. tool level:local and remote sharing the same pure function (same content produce out fully consistent diff), structure
+ *    output conforms to @helm/protocol EDIT_TOOL_RESULT_SCHEMA(Ajv real validate), literal
+ *    replace ($& do not explain), failed (missing/many time) never produce succeeded diff and file do not change.
  */
 
-import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
-import { Ajv } from 'ajv'
+import { BACKGROUND_CONTEXT, type Context } from '@earendil-works/chord/context'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -25,6 +24,7 @@ import {
   TOOL_DIFF_MAX_ROW_CHARS,
   TOOL_DIFF_MAX_ROWS,
   TOOL_DIFF_MAX_TEXT_CHARS,
+  validateOrThrow,
   type EditToolResult,
   type ToolDiffRow,
 } from '@helm/protocol'
@@ -41,15 +41,15 @@ import type { EnvFabric } from '../src/env/index.js'
 
 const identityRedact = (text: string): string => text
 
-/** n lines 'l1..ln' with trailing newline. */
+/** n row 'l1..ln', end row carries newline. */
 function numberedLines(n: number): string {
   return Array.from({ length: n }, (_, i) => `l${i + 1}`).join('\n') + '\n'
 }
 
-/** Perform unique exact replacement for (original, oldText, newText) across full text. */
+/** for (original, oldText, newText) do unique precise replace after all text. */
 function applyEdit(original: string, oldText: string, newText: string): string {
   const offset = original.indexOf(oldText)
-  assert.ok(offset >= 0, `test precondition: oldText must exist (${JSON.stringify(oldText.slice(0, 20))})`)
+  assert.ok(offset >= 0, `test pre-:oldText should store in (${JSON.stringify(oldText.slice(0, 20))})`)
   return original.slice(0, offset) + newText + original.slice(offset + oldText.length)
 }
 
@@ -62,7 +62,7 @@ function rowTexts(rows: ToolDiffRow[]): string[] {
   return rows.map((row) => row.text)
 }
 
-/** Line-by-line assertion helper: verifies kind + line numbers + text for each row. */
+/** all row level assertion auxiliary: one by one row kind + row number + text. */
 function assertRows(actual: ToolDiffRow[], expected: ToolDiffRow[]): void {
   assert.deepEqual(actual, expected)
 }
@@ -77,8 +77,8 @@ after(async () => {
   rmSync(rootDir, { recursive: true, force: true })
 })
 
-describe('computeEditDiff pure function: line numbers and context window', { timeout: 60_000 }, () => {
-  it('mid-file inline replacement: exact line numbers, +/-3 context window, line counts', { timeout: 60_000 }, () => {
+describe('computeEditDiff pure function: row number and window', { timeout: 60_000 }, () => {
+  it('row inside replace: precise row number,±3 context window, row level count', { timeout: 60_000 }, () => {
     const original = numberedLines(12)
     const diff = diffOf(original, 'l7', 'L7')
     assert.equal(diff.truncated, false)
@@ -97,7 +97,7 @@ describe('computeEditDiff pure function: line numbers and context window', { tim
     ])
   })
 
-  it('deep prefix computes real line numbers from scan (line 100 edit -> window 97-103)', { timeout: 60_000 }, () => {
+  it('large prefix under row number from real scan ( 100 row edit, window 97-103)', { timeout: 60_000 }, () => {
     const original = numberedLines(120)
     const diff = diffOf(original, 'l100', 'CHANGED')
     assert.equal(diff.firstChangedLine, 100)
@@ -106,23 +106,23 @@ describe('computeEditDiff pure function: line numbers and context window', { tim
     const last = diff.rows[diff.rows.length - 1]!
     assert.equal(last.kind, 'context')
     assert.equal((last as { oldLine: number }).oldLine, 103)
-    assert.ok(diff.rows.every((row) => row.text.length <= 7), 'window only covers lines 97-103 rather than diffing full file')
-    // Context line numbers stay contiguous and oldLine === newLine (equal line counts in unchanged region).
+    assert.ok(diff.rows.every((row) => row.text.length <= 7), 'window only override 97-103 row (do not diff all file)')
+    // context row number connect continue and oldLine === newLine(not change zone between row number consistent).
     const contexts = diff.rows.filter((row) => row.kind === 'context') as Array<{ oldLine: number; newLine: number }>
     assert.ok(contexts.every((row) => row.oldLine === row.newLine))
   })
 
-  it('beginning-of-file edit: window starts at line 1 without underflowing', { timeout: 60_000 }, () => {
+  it('file open head edit: window from 1 row start (do not out of bounds)', { timeout: 60_000 }, () => {
     const original = numberedLines(8)
     const diff = diffOf(original, 'l1', 'FIRST')
     assert.equal(diff.firstChangedLine, 1)
     assert.equal((diff.rows[0] as { oldLine: number }).oldLine, 1)
-    // Window covers changed line (line 1) +/-3: ends at line 4, not EOF.
+    // window is involves row ( 1 row)±3: end row is 4 row, while non- file tail.
     const last = diff.rows[diff.rows.length - 1] as { oldLine: number }
     assert.equal(last.oldLine, 4)
   })
 
-  it('multi-line replacement: firstChangedLine and add/remove counts', { timeout: 60_000 }, () => {
+  it('many row replace: first change row and increase delete count', { timeout: 60_000 }, () => {
     const original = numberedLines(12)
     const diff = diffOf(original, 'l5\nl6\n', 'n1\nn2\nn3\n')
     assert.equal(diff.addedLines, 3)
@@ -132,7 +132,7 @@ describe('computeEditDiff pure function: line numbers and context window', { tim
     assert.deepEqual(removes.map((r) => r.oldLine), [5, 6])
     const adds = diff.rows.filter((r) => r.kind === 'add') as Array<{ newLine: number }>
     assert.deepEqual(adds.map((r) => r.newLine), [5, 6, 7])
-    // Trailing context reflects line shift: old 7-9 <-> new 8-10.
+    // change after context row number wrong:old 7-9 ↔ new 8-10(row number jump real).
     const tail = diff.rows.filter((r) => r.kind === 'context') as Array<{ oldLine: number; newLine: number }>
     const after = tail.filter((r) => r.oldLine >= 7)
     assert.deepEqual(
@@ -145,7 +145,7 @@ describe('computeEditDiff pure function: line numbers and context window', { tim
     )
   })
 
-  it('pure deletion (middle): firstChangedLine equals new line number at deletion point', { timeout: 60_000 }, () => {
+  it('pure delete (in part):firstChangedLine is delete point new row number', { timeout: 60_000 }, () => {
     const original = '1\n2\n3\n4\n5\n'
     const diff = diffOf(original, '3\n', '')
     assert.equal(diff.addedLines, 0)
@@ -160,21 +160,21 @@ describe('computeEditDiff pure function: line numbers and context window', { tim
     ])
   })
 
-  it('pure deletion (EOF): firstChangedLine clamps to final line of new file', { timeout: 60_000 }, () => {
+  it('pure delete (EOF):firstChangedLine clamp to new file end row', { timeout: 60_000 }, () => {
     const diff = diffOf('a\nb\nc\n', 'c\n', '')
     assert.equal(diff.removedLines, 1)
-    assert.equal(diff.firstChangedLine, 2, 'new file has 2 lines total; EOF deletion selects final line')
+    assert.equal(diff.firstChangedLine, 2, 'new file shared 2 row,EOF delete take end row')
   })
 
-  it('deleting entire file: firstChangedLine clamps to 1 (Schema minimum)', { timeout: 60_000 }, () => {
+  it('whole file delete empty:firstChangedLine clamp to 1(Schema most small value)', { timeout: 60_000 }, () => {
     const diff = diffOf('a\nb\n', 'a\nb\n', '')
     assert.equal(diff.removedLines, 2)
     assert.equal(diff.firstChangedLine, 1)
   })
 })
 
-describe('computeEditDiff pure function: line endings & edge cases', { timeout: 60_000 }, () => {
-  it('CRLF: strips \\r from row text while preserving accurate line numbers and counts', { timeout: 60_000 }, () => {
+describe('computeEditDiff pure function: row boundary form', { timeout: 60_000 }, () => {
+  it('CRLF: row text strip \r, row number and count correct', { timeout: 60_000 }, () => {
     const original = 'a\r\nb\r\nc\r\n'
     const diff = diffOf(original, 'b', 'B')
     assert.equal(diff.addedLines, 1)
@@ -189,7 +189,7 @@ describe('computeEditDiff pure function: line endings & edge cases', { timeout: 
     ])
   })
 
-  it('mixed CRLF and LF around modified CRLF line', { timeout: 60_000 }, () => {
+  it('CRLF and LF mixed and change contains CRLF row', { timeout: 60_000 }, () => {
     const original = 'x\r\ny\nz'
     const diff = diffOf(original, 'x', 'X')
     assert.equal(diff.firstChangedLine, 1)
@@ -201,7 +201,7 @@ describe('computeEditDiff pure function: line endings & edge cases', { timeout: 
     ])
   })
 
-  it('no trailing newline: final-line edit keeps accurate text and counters', { timeout: 60_000 }, () => {
+  it('tail without newline: end row edit row text without newline and counter correct', { timeout: 60_000 }, () => {
     const original = 'a\nb\nc'
     const diff = diffOf(original, 'c', 'C')
     assert.equal(diff.addedLines, 1)
@@ -215,14 +215,14 @@ describe('computeEditDiff pure function: line endings & edge cases', { timeout: 
     ])
   })
 
-  it('replacement introducing trailing newline (c -> c\\n): accurate line-level diff', { timeout: 60_000 }, () => {
+  it('replace introduce tail newline (c -> c\n): real row level difference', { timeout: 60_000 }, () => {
     const diff = diffOf('a\nb\nc', 'c', 'c\n')
-    // Replacing old final line 'c' (no newline) with 'c\n': line diff records 1 removed / >=1 added (includes newline transition).
+    // old end row 'c'(without newline) by 'c\n' replace: row level difference table now is delete 1 increase 1(contains end row newline change).
     assert.equal(diff.removedLines, 1)
     assert.equal(diff.addedLines >= 1, true)
   })
 
-  it('trailing blank lines edited and replaced: blank lines have real line numbers', { timeout: 60_000 }, () => {
+  it('tail part empty row reference and replace: empty row row number real', { timeout: 60_000 }, () => {
     const original = 'a\nb\n\n\n'
     const diff = diffOf(original, 'b\n\n\n', 'B\n')
     assert.equal(diff.addedLines, 1)
@@ -237,7 +237,7 @@ describe('computeEditDiff pure function: line endings & edge cases', { timeout: 
     ])
   })
 
-  it('duplicate context lines keep distinct real line numbers without collapsing', { timeout: 60_000 }, () => {
+  it('duplicate context: same text different row number (row number real do not collapse)', { timeout: 60_000 }, () => {
     const original = 'r\nr\nr\nTARGET\nr\nr\nr\n'
     const diff = diffOf(original, 'TARGET', 'DONE')
     const contexts = diff.rows.filter((r) => r.kind === 'context')
@@ -245,7 +245,7 @@ describe('computeEditDiff pure function: line endings & edge cases', { timeout: 
     assert.deepEqual(rowTexts(contexts), ['r', 'r', 'r', 'r', 'r', 'r'])
   })
 
-  it('intra-line insertion without adding/removing lines still produces remove old + add new line', { timeout: 60_000 }, () => {
+  it('row inside pure insert (without whole row increase delete): still is delete old row increase new row', { timeout: 60_000 }, () => {
     const diff = diffOf('alpha\nbeta\n', 'beta', 'bbeta')
     assert.equal(diff.addedLines, 1)
     assert.equal(diff.removedLines, 1)
@@ -253,8 +253,8 @@ describe('computeEditDiff pure function: line endings & edge cases', { timeout: 
   })
 })
 
-describe('computeEditDiff pure function: budgets and truncation', { timeout: 60_000 }, () => {
-  it('very long line: single row text caps at limit while counts cover full diff without echoing full line', { timeout: 60_000 }, () => {
+describe('computeEditDiff pure function: pre- compute and truncate', { timeout: 60_000 }, () => {
+  it('huge long row: single row text truncate to cap, count override complete difference, does not huge long row pass back', { timeout: 60_000 }, () => {
     const long = 'x'.repeat(9_000)
     const original = `head\n${long}\ntail\n`
     const diff = diffOf(original, long, long.replace(/^x/, 'y'))
@@ -264,38 +264,38 @@ describe('computeEditDiff pure function: budgets and truncation', { timeout: 60_
     const changed = diff.rows.filter((r) => r.kind !== 'context')
     assert.equal(changed.length, 2)
     for (const row of changed) {
-      assert.ok(row.text.length <= TOOL_DIFF_MAX_ROW_CHARS, `single line text <= ${TOOL_DIFF_MAX_ROW_CHARS}`)
+      assert.ok(row.text.length <= TOOL_DIFF_MAX_ROW_CHARS, `single row text ≤ ${TOOL_DIFF_MAX_ROW_CHARS}`)
       assert.ok(!row.text.includes('\n'))
     }
   })
 
-  it('long-line truncation never splits UTF-16 surrogate pairs (no broken characters)', { timeout: 60_000 }, () => {
-    // 1 BMP char + 3000 emoji (each 2 code units): truncation boundary lands mid-surrogate.
+  it('huge long row truncate avoid open UTF-16 proxy for (produces no half character)', { timeout: 60_000 }, () => {
+    // 1  BMP character + 3000  emoji(each 2 code unit): truncate point in high proxy items on.
     const line = 'x' + '😊'.repeat(3_000)
     const original = `${line}\n`
     const diff = diffOf(original, 'x😊', 'x🚀')
     assert.equal(diff.truncated, true)
     for (const row of diff.rows.filter((r) => r.kind !== 'context')) {
       const last = row.text.charCodeAt(row.text.length - 1)
-      assert.ok(!(last >= 0xd800 && last <= 0xdbff), 'trailing char must never be an unpaired high surrogate')
+      assert.ok(!(last >= 0xd800 && last <= 0xdbff), 'end character must not is isolated high proxy items')
     }
   })
 
-  it('row count budget: rows <= 160, truncated=true, counts reflect full change', { timeout: 60_000 }, () => {
+  it('row count pre- compute:rows ≤ 160,truncated=true, count override complete difference', { timeout: 60_000 }, () => {
     const oldBlock = Array.from({ length: 200 }, (_, i) => `old-${i}`).join('\n') + '\n'
     const newBlock = Array.from({ length: 200 }, (_, i) => `new-${i}`).join('\n') + '\n'
     const original = `before\n${oldBlock}after\n`
     const diff = diffOf(original, oldBlock, newBlock)
     assert.equal(diff.truncated, true)
     assert.ok(diff.rows.length <= TOOL_DIFF_MAX_ROWS)
-    assert.equal(diff.rows.length, TOOL_DIFF_MAX_ROWS, 'fixture far exceeds budget so rows should clamp exactly to max')
-    // Counts are unaffected by row truncation.
+    assert.equal(diff.rows.length, TOOL_DIFF_MAX_ROWS, 'this example skeleton far over pre- compute, should exactly trim to cap')
+    // count do not subject to rows truncate affect.
     assert.equal(diff.removedLines, 200)
     assert.equal(diff.addedLines, 200)
     assert.equal(diff.firstChangedLine, 2)
   })
 
-  it('cumulative text budget counts post-redaction text, caps total text, and sets truncated=true', { timeout: 60_000 }, () => {
+  it('cumulative text pre- compute: with redaction after text count, total text do not over limit and truncated=true', { timeout: 60_000 }, () => {
     const line = 'c'.repeat(1_000)
     const oldBlock = Array.from({ length: 60 }, (_, i) => `${line}-old-${i}`).join('\n') + '\n'
     const newBlock = Array.from({ length: 60 }, (_, i) => `${line}-new-${i}`).join('\n') + '\n'
@@ -305,11 +305,11 @@ describe('computeEditDiff pure function: budgets and truncation', { timeout: 60_
     assert.equal(diff.addedLines, 60)
     assert.equal(diff.removedLines, 60)
     const total = rowTexts(diff.rows).reduce((sum, text) => sum + text.length, 0)
-    assert.ok(total <= TOOL_DIFF_MAX_TEXT_CHARS, `cumulative text <= ${TOOL_DIFF_MAX_TEXT_CHARS}, actual ${total}`)
-    assert.ok(diff.rows.length < 60, 'text budget should truncate before hitting row count budget')
+    assert.ok(total <= TOOL_DIFF_MAX_TEXT_CHARS, `cumulative text ≤ ${TOOL_DIFF_MAX_TEXT_CHARS}, actual ${total}`)
+    assert.ok(diff.rows.length < 60, 'text pre- compute should first at row count pre- compute truncate')
   })
 
-  it('no-op (oldText === newText): rows=[], counts=0, firstChangedLine=target line', { timeout: 60_000 }, () => {
+  it('no-op(oldText === newText):rows=[] counts=0 firstChangedLine=replace which in row', { timeout: 60_000 }, () => {
     const original = numberedLines(10)
     const diff = diffOf(original, 'l4', 'l4')
     assert.deepEqual(diff, {
@@ -321,35 +321,36 @@ describe('computeEditDiff pure function: budgets and truncation', { timeout: 60_
     })
   })
 
-  it('out-of-bounds replaced range: precondition throws immediately before writing', { timeout: 60_000 }, () => {
+  it('replace zone between out of bounds: precondition throws immediately before writing', { timeout: 60_000 }, () => {
     assert.throws(() => computeEditDiff('abc', 'abc', 3, 2, identityRedact), /Edit diff precondition failed/)
     assert.throws(() => computeEditDiff('abc', 'abc', -1, 1, identityRedact), /Edit diff precondition failed/)
     assert.throws(() => computeEditDiff('abc', 'abc', 0, 0, identityRedact), /Edit diff precondition failed/)
   })
 
-  it('algorithm budget (maxEditLength) exceeded: falls back to block replacement, preserves common affixes and exact counts, truncated=true', { timeout: 60_000 }, () => {
-    // Replacing 2100 old lines with 2100 new lines exceeds maxEditLength 2000 so diffLines stops short.
+  it('algorithm pre- compute (maxEditLength) over limit: whole segment replace means, public before suffix keep, count consistent,truncated=true', { timeout: 60_000 }, () => {
+    // 2100 row old chunk replace is 2100 row all new new chunk: edit length far over pre- compute 2000,diffLines over limit.
     const oldBlock = Array.from({ length: 2_100 }, (_, i) => `old-${i}`).join('\n') + '\n'
     const newBlock = Array.from({ length: 2_100 }, (_, i) => `new-${i}`).join('\n') + '\n'
     const original = `head\n${oldBlock}tail\n`
     const diff = diffOf(original, oldBlock, newBlock)
-    // Block replacement fallback: explicitly flags truncated=true with counts matching block representation.
+    // whole segment replace means:truncated explicit mark record (non- most small difference), count and the means consistent.
     assert.equal(diff.truncated, true)
     assert.equal(diff.removedLines, 2_100)
     assert.equal(diff.addedLines, 2_100)
-    assert.equal(diff.firstChangedLine, 2, 'first change after common prefix (head) is at new line 2')
-    assert.equal(diff.rows.length, TOOL_DIFF_MAX_ROWS, 'trimmed by row budget')
-    // Preserves common prefix context: row 0 is head (line 1).
+    assert.equal(diff.firstChangedLine, 2, 'public prefix (head) after one where change in new file 2 row')
+    assert.equal(diff.rows.length, TOOL_DIFF_MAX_ROWS, 'row pre- compute trim')
+    // skeleton keep public before suffix context: first row is head( 1 row).
     assert.equal(diff.rows[0]!.kind, 'context')
     assert.equal((diff.rows[0] as { oldLine: number }).oldLine, 1)
-    // Removed lines in block representation start contiguously at old line 2.
+    // whole segment means remove row connect continue from old window 2 row start.
     const firstRemove = diff.rows.find((r) => r.kind === 'remove') as { oldLine: number; text: string }
     assert.equal(firstRemove.oldLine, 2)
     assert.equal(firstRemove.text, 'old-0')
   })
 
-  it('within-budget window at same scale avoids block fallback and emits minimal diff normally', { timeout: 60_000 }, () => {
-    // Swapping 800 lines (edit length < 2000) produces a minimal diff rather than block fallback, proving the limit drives the branch.
+  it('algorithm pre- compute inside same rule mode window does not trigger whole segment means (most small difference normal produce out)', { timeout: 60_000 }, () => {
+    // 800 row mutual swap (edit length < 2000): produce out most small difference while non- whole segment replace; same rule mode guarantee
+    // two branch rule mode fairly, over limit behavior indeed by edit length drive.
     const oldBlock = Array.from({ length: 800 }, (_, i) => `old-${i}`).join('\n') + '\n'
     const newBlock = Array.from({ length: 800 }, (_, i) => `new-${i}`).join('\n') + '\n'
     const original = `head\n${oldBlock}tail\n`
@@ -357,12 +358,13 @@ describe('computeEditDiff pure function: budgets and truncation', { timeout: 60_
     assert.equal(diff.removedLines, 800)
     assert.equal(diff.addedLines, 800)
     assert.equal(diff.rows.length, TOOL_DIFF_MAX_ROWS)
-    assert.equal(diff.truncated, true, 'row budget truncation is still marked')
-    // Minimal diff and block representation happen to share counts here; verify consistent counts and firstChangedLine.
+    assert.equal(diff.truncated, true, 'row pre- compute truncate still such as mark record')
+    // most small difference and whole segment means in this construct under skeleton etc. price (all amount delete/all amount increase), difference in over limit branch
+    // by pre- compute drive; this in verify count consistent and first change row identical.
     assert.equal(diff.firstChangedLine, 2)
   })
 
-  it('sparse changes retain context only around each hunk without discarding later hunks', { timeout: 60_000 }, () => {
+  it('sparse change only keep each change surrounding context, row count pre- compute do not swallow after continue change', { timeout: 60_000 }, () => {
     const original = Array.from({ length: 400 }, (_, i) => `line-${i + 1}`).join('\n') + '\n'
     const updated = original.replace('line-20\n', 'changed-20\n').replace('line-380\n', 'changed-380\n')
     const diff = computeEditDiff(original, updated, 0, original.length, (text) => text)
@@ -379,7 +381,7 @@ describe('computeEditDiff pure function: budgets and truncation', { timeout: 60_
 })
 
 describe('computeEditDiff pure function: redaction', { timeout: 60_000 }, () => {
-  it('single-line secret: row text shows placeholder while line numbers and counts match unredacted output', { timeout: 60_000 }, () => {
+  it('single row secret: row text replace is placeholder, row number/count and not redaction consistent', { timeout: 60_000 }, () => {
     const original = 'l1\nl2 token=s3cret-value\nl3\n'
     const redact = (text: string): string => text.split('s3cret-value').join('[REDACTED]')
     const plain = diffOf(original, 'l2', 'L2')
@@ -389,23 +391,23 @@ describe('computeEditDiff pure function: redaction', { timeout: 60_000 }, () => 
     assert.equal(masked.removedLines, plain.removedLines)
     assert.equal(masked.firstChangedLine, plain.firstChangedLine)
     const serialized = JSON.stringify(masked)
-    assert.ok(!serialized.includes('s3cret-value'), 'serialized output must not contain secret')
-    assert.ok(serialized.includes('[REDACTED]'), 'line containing secret shows placeholder')
-    // Line numbers match true source lines consistently with unredacted pass.
+    assert.ok(!serialized.includes('s3cret-value'), 'serialization result must not contains secret')
+    assert.ok(serialized.includes('[REDACTED]'), 'hit secret row show placeholder')
+    // row number still is real row number (and not redaction run consistent).
     assert.deepEqual(
       masked.rows.map((r) => r.kind),
       plain.rows.map((r) => r.kind),
     )
   })
 
-  it('multi-line secret (containing newline): line count shifts so falls back to rows=[]/truncated=true while counts match original text', { timeout: 60_000 }, () => {
+  it('across row secret (contains newline): row count change, fall back rows=[]/truncated=true, count keep original text', { timeout: 60_000 }, () => {
     const original = 'a\nHEAD\nTAIL\nb\n'
-    // Secret 'HEAD\nTAIL' spans lines 2 and 3; full redaction reduces 4 lines to 3.
+    // secret 'HEAD\nTAIL' horizontal across 2,3 row; whole value redaction after row count 4 -> 3.
     const redact = (text: string): string => text.split('HEAD\nTAIL').join('[X]')
     const diff = diffOf(original, 'b', 'B', redact)
     assert.equal(diff.truncated, true)
-    assert.deepEqual(diff.rows, [], 'must not emit rows when redaction changes line count (cannot align real line numbers)')
-    // Counts and firstChangedLine reflect actual edit in unredacted text (b -> B on line 4).
+    assert.deepEqual(diff.rows, [], 'row count by redaction change when never render row (cannot for should real row number)')
+    // count and first change row still is original text real difference (b -> B in 4 row).
     assert.equal(diff.addedLines, 1)
     assert.equal(diff.removedLines, 1)
     assert.equal(diff.firstChangedLine, 4)
@@ -413,9 +415,9 @@ describe('computeEditDiff pure function: redaction', { timeout: 60_000 }, () => 
     assert.ok(!serialized.includes('HEAD') && !serialized.includes('TAIL'))
   })
 
-  it('window-boundary-spanning multi-line secret: redacting full text first prevents leftover fragment leakage', { timeout: 60_000 }, () => {
-    // Window covers lines 3-9 (editing line 6); secret spans lines 2/3 across window boundary.
-    // Trimming window before redacting would leave 'BOUNDARY-TAIL' inside window unmatched and leaked.
+  it('horizontal across window boundary many row secret: all text first row redaction, window inside leftover segment never leak leak', { timeout: 60_000 }, () => {
+    // window is 3-9 row (edit 6 row); secret horizontal across 2/3 row (window boundary).
+    // if first trim window again redaction, window inside 'BOUNDARY-TAIL' leftover segment hit do not whole value secret while leak leak.
     const original =
       'l1\npre BOUNDARY-HEAD\nBOUNDARY-TAIL l3\nl4\nl5\nl6\nl7\nl8\nl9\nl10\nl11\nl12\n'
     const secret = 'BOUNDARY-HEAD\nBOUNDARY-TAIL'
@@ -424,30 +426,30 @@ describe('computeEditDiff pure function: redaction', { timeout: 60_000 }, () => 
     assert.equal(diff.truncated, true)
     assert.deepEqual(diff.rows, [])
     const serialized = JSON.stringify(diff)
-    assert.ok(!serialized.includes('BOUNDARY-TAIL'), 'secret fragment inside window must never leak')
+    assert.ok(!serialized.includes('BOUNDARY-TAIL'), 'window inside secret leftover segment must not leak leak')
     assert.ok(!serialized.includes('BOUNDARY-HEAD'))
-    // Counts still match the original diff.
+    // count still is original text real difference.
     assert.equal(diff.addedLines, 1)
     assert.equal(diff.removedLines, 1)
     assert.equal(diff.firstChangedLine, 6)
   })
 
-  it('secret only outside window: full-text redaction keeps line count invariant, window renders cleanly without secret', { timeout: 60_000 }, () => {
+  it('secret only in window outside row: all text redaction row count do not change, window row per common render and without secret', { timeout: 60_000 }, () => {
     const original = 'secret-line=s3cret\nl2\nl3\nl4\nl5\nl6\nl7\nl8\n'
     const redact = (text: string): string => text.split('s3cret').join('[R]')
     const diff = diffOf(original, 'l5', 'L5', redact)
     assert.equal(diff.truncated, false)
     assert.equal(diff.firstChangedLine, 5)
-    assert.ok(!JSON.stringify(diff).includes('s3cret'), 'serialized output must not contain secret')
-    // Window starts at line 2 (5 - 3): secret on line 1 stays outside window and never appears in rows.
+    assert.ok(!JSON.stringify(diff).includes('s3cret'), 'serialization result must not contains secret')
+    // window from 2 row start ( 5 row - 3): contains secret 1 row do not in window inside, also do not appear in any row text.
     const contexts = diff.rows.filter((r) => r.kind === 'context') as Array<{ oldLine: number; text: string }>
-    assert.equal(contexts[0]!.oldLine, 2, 'window starts at line 2')
-    assert.ok(rowTexts(diff.rows).every((text) => !text.includes('[R]')), 'window rows exclude redaction placeholders when secret is outside window')
+    assert.equal(contexts[0]!.oldLine, 2, 'window first row is 2 row')
+    assert.ok(rowTexts(diff.rows).every((text) => !text.includes('[R]')), 'window row excludes redaction placeholder (secret do not in window inside)')
   })
 })
 
 // ---------------------------------------------------------------------------
-// Tool level (real execution)
+// tool level (real execute)
 // ---------------------------------------------------------------------------
 
 function makeApi(cwd: string, conversationId = 1) {
@@ -468,15 +470,15 @@ function makeApi(cwd: string, conversationId = 1) {
     commit: async (change: () => unknown) => change(),
     memo: async () => undefined,
     createTask: async () => {
-      throw new Error('not used in test')
+      throw new Error('test does not use')
     },
     getTask: () => undefined,
     waitForTask: async () => {
-      throw new Error('not used in test')
+      throw new Error('test does not use')
     },
     conversation: async () => undefined,
     executeTool: async () => {
-      throw new Error('not used in test')
+      throw new Error('test does not use')
     },
   } as never
 }
@@ -494,15 +496,12 @@ async function makeRealDeps(dir: string, stash = new SecretStash()): Promise<Hel
   }
 }
 
-const ajv = new Ajv({ allErrors: true, strict: false })
-const validateEditResult = ajv.compile<EditToolResult>(EDIT_TOOL_RESULT_SCHEMA)
-
 function assertSchemaValid(structured: unknown): EditToolResult {
-  assert.ok(validateEditResult(structured), `structuredOutput must satisfy EDIT_TOOL_RESULT_SCHEMA: ${JSON.stringify(validateEditResult.errors)}`)
-  return structured
+  validateOrThrow(EDIT_TOOL_RESULT_SCHEMA, structured, 'structure output should conforms to EDIT_TOOL_RESULT_SCHEMA')
+  return structured as EditToolResult
 }
 
-/** Controlled remote env backed by an in-memory file map (aligned with file-mutation-queue.test.ts). */
+/** subject to control remote env: real memory file table (align file-mutation-queue.test.ts pattern). */
 function makeRemoteEnv(files: Map<string, string>) {
   return {
     id: 'remote:test-node',
@@ -549,8 +548,8 @@ function makeStubFabric(env: ReturnType<typeof makeRemoteEnv>): EnvFabric {
   } as never
 }
 
-describe('edit tool: real local diff structured output', { timeout: 60_000 }, () => {
-  it('local: structured output satisfies protocol Schema with exact diff rows/counts; newText written literally ($& unexpanded)', { timeout: 60_000 }, async () => {
+describe('edit tool:local real difference structure output', { timeout: 60_000 }, () => {
+  it('local: structure output conforms to protocol Schema,diff row number/text/count real;newText literal write ($& do not explain)', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'tool-local')
     mkdirSync(dir, { recursive: true })
     const deps = await makeRealDeps(dir)
@@ -563,7 +562,8 @@ describe('edit tool: real local diff structured output', { timeout: 60_000 }, ()
     )
     assert.equal(!!result.isError, false)
     const structured = assertSchemaValid(result.structuredOutput)
-    // details drives persistent UI diff rendering and must match structuredOutput and satisfy Schema.
+    // details is persist UI channel (Web difference render read it), must and structuredOutput
+    // same value and same conforms to protocol Schema.
     assert.deepEqual(assertSchemaValid(result.details), structured)
     assert.equal(structured.path, file)
     assert.equal(structured.nodeId, 'local')
@@ -578,11 +578,11 @@ describe('edit tool: real local diff structured output', { timeout: 60_000 }, ()
       { kind: 'add', newLine: 2, text: 'BETA $& \\1' },
       { kind: 'context', oldLine: 3, newLine: 3, text: 'omega' },
     ])
-    // Content and diff share the same literal substitution ($& is never treated as a backreference).
+    // content and diff same source:newText literal write,$& never by explain is reverse reference.
     assert.equal(readFileSync(file, 'utf8'), 'alpha\nBETA $& \\1\nomega\n')
   })
 
-  it('failures (missing / multiple matches): returns isError without structured diff and leaves file bytes untouched', { timeout: 60_000 }, async () => {
+  it('failed (missing/many time appear):isError and never produce succeeded diff, file byte do not change', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'tool-fail')
     mkdirSync(dir, { recursive: true })
     const deps = await makeRealDeps(dir)
@@ -596,10 +596,10 @@ describe('edit tool: real local diff structured output', { timeout: 60_000 }, ()
     assert.equal(dup.isError, true)
     assert.equal(dup.structuredOutput, undefined)
     assert.ok((dup.output as Array<{ text: string }>)[0]!.text.includes('appeared 2 times'))
-    assert.equal(readFileSync(file, 'utf8'), 'a\nsame\nb\nsame\nc\n', 'failed edit path must preserve original file')
+    assert.equal(readFileSync(file, 'utf8'), 'a\nsame\nb\nsame\nc\n', 'failed path file must keep original')
   })
 
-  it('real SecretStash redaction flows through structured output (no leakage even on truncated long lines)', { timeout: 60_000 }, async () => {
+  it('real SecretStash redaction throughout structure output (huge long row truncate still without leaking)', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'tool-redact')
     mkdirSync(dir, { recursive: true })
     const stash = new SecretStash()
@@ -616,11 +616,11 @@ describe('edit tool: real local diff structured output', { timeout: 60_000 }, ()
     assert.equal(!!result.isError, false)
     const structured = assertSchemaValid(result.structuredOutput)
     const serialized = JSON.stringify(structured)
-    assert.ok(!serialized.includes('hunter2-super-secret'), 'serialized output must not contain secret')
+    assert.ok(!serialized.includes('hunter2-super-secret'), 'serialization result must not contains secret')
     assert.ok(serialized.includes('[REDACTED]'))
-    // details mirrors the redacted object so persisted UI channel never leaks secrets either.
-    assert.ok(!JSON.stringify(result.details).includes('hunter2-super-secret'), 'details must not contain secret')
-    // Very long line containing secret gets truncated cleanly while budgets and counts remain intact.
+    // details mirror the same redaction after object: persist UI channel same without leaking.
+    assert.ok(!JSON.stringify(result.details).includes('hunter2-super-secret'), 'details must not contains secret')
+    // contains secret huge long row by truncate show: pre- compute takes effect and count complete.
     assert.equal(structured.diff.truncated, true)
     assert.equal(structured.diff.removedLines, 1)
     assert.equal(structured.diff.addedLines, 1)
@@ -630,9 +630,9 @@ describe('edit tool: real local diff structured output', { timeout: 60_000 }, ()
   })
 })
 
-describe('edit tool: remote shares identical pure diff function', { timeout: 60_000 }, () => {
-  it('remote and local emit identical diffs for identical content and write back to remote file map', { timeout: 60_000 }, async () => {
-    // Local side (real disk)
+describe('edit tool: remote sharing the same pure function', { timeout: 60_000 }, () => {
+  it('remote and local for same content produce out fully consistent diff; file write back remote memory file table', { timeout: 60_000 }, async () => {
+    // local side (real disk).
     const localDir = join(rootDir, 'share-local')
     mkdirSync(localDir, { recursive: true })
     const content = 'one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\n'
@@ -645,7 +645,7 @@ describe('edit tool: remote shares identical pure diff function', { timeout: 60_
     )
     assert.equal(!!localResult.isError, false)
 
-    // Remote side (in-memory file map + stub fabric)
+    // remote side (subject to control memory file table + stub fabric).
     const remoteDir = join(rootDir, 'share-remote')
     const remoteDeps = await makeRealDeps(remoteDir)
     const files = new Map<string, string>([['/workspace/same.txt', content]])
@@ -661,13 +661,13 @@ describe('edit tool: remote shares identical pure diff function', { timeout: 60_
     const remoteStructured = assertSchemaValid(remoteResult.structuredOutput)
     assert.equal(remoteStructured.nodeId, 'test-node')
     assert.equal(remoteStructured.path, '/workspace/same.txt')
-    // Both paths share the exact same pure diff computation (all fields match except nodeId/path).
+    // two path must re- use the same pure function:diff one by one field consistent (nodeId/path except outside).
     const localStructured = assertSchemaValid(localResult.structuredOutput)
     assert.deepEqual(remoteStructured.diff, localStructured.diff)
     assert.equal(files.get('/workspace/same.txt'), content.replace('five', 'FIVE'))
   })
 
-  it('remote oldText missing: fails cleanly without altering remote file map or emitting structured output', { timeout: 60_000 }, async () => {
+  it('remote oldText missing: failed and remote file table do not change, without structure output', { timeout: 60_000 }, async () => {
     const remoteDir = join(rootDir, 'remote-fail')
     const remoteDeps = await makeRealDeps(remoteDir)
     const files = new Map<string, string>([['/workspace/x.txt', 'a\nb\n']])

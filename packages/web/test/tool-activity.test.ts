@@ -17,7 +17,7 @@ import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
 import { resetPluginClientCache, seedPluginClientModule } from '../src/lib/plugin-client.js'
 import { makeTestStore } from './helpers/store.js'
 import { HostStoreProviders } from './helpers/host-store.js'
-import { mountSharedPluginNamespaces } from './helpers/workflow-client.js'
+import { mountSharedPluginNamespaces } from './helpers/builtin-clients.js'
 import * as SDK from '@helm/plugin-client'
 
 GlobalRegistrator.register()
@@ -174,6 +174,7 @@ test('非 workflow 插件真实编译产物报告活动：done 工具仍隐藏�
   const bars = () => [...ui.host.querySelectorAll('.msg-ai-block')].map((turn) => turn.querySelector('.msg-hover-bar') !== null)
   try {
     await ui.render(timeline, store({ 'call-a': true, 'call-b': false }))
+    assert.equal(ui.host.querySelectorAll('div.trace-row').length, 0, 'replaceRow: true 接管后不得同时渲染宿主默认 div.trace-row')
     assert.deepEqual(bars(), [false, true], '后台工具 done 后，只有报告活动的回合仍隐藏操作条')
     for (let n = 0; n < 5; n++) await ui.render(timeline, store({ 'call-a': true, 'call-b': false }))
     assert.deepEqual(bars(), [false, true], '相同 SSE 业务值不应清掉或重复累积登记')

@@ -8,8 +8,6 @@
  * - detach：前台同步 run 转后台（授权与状态纪律见 ./detach.ts）。
  */
 import { HelmError, type HelmPluginContext } from '@helm/protocol'
-import { readJournal } from './engine/journal.js'
-import { isNonRetryableWorkflowError } from './engine/run-store.js'
 import { steerBackgroundSubagent } from './steer.js'
 import { detachForegroundSyncRun } from './detach.js'
 import type { WorkflowActionDeps } from './actions.js'
@@ -333,39 +331,10 @@ export function registerWorkflowRunActions(
 
       for (const item of summaries) {
         const record = workflows.loadRunRecord(item.id)
-        if (record.status !== 'failed') {
-          skipped.push({ runId: record.id, reason: `状态为 ${record.status}（非 failed）` })
+        const verdict = workflows.inspectResumability(record)
+        if (!verdict.resumable) {
+          skipped.push({ runId: record.id, reason: verdict.reason })
           continue
-        }
-        if (record.resumedByRunId !== undefined && workflows.isTakeoverActive(record.resumedByRunId, record.conversationId)) {
-          skipped.push({ runId: record.id, reason: `已被 ${record.resumedByRunId} 接管续跑` })
-          continue
-        }
-        if (isNonRetryableWorkflowError(record.error)) {
-          skipped.push({ runId: record.id, reason: `不可自动恢复错误：${record.error ?? ''}` })
-          continue
-        }
-        if (record.kind === 'subagent') {
-          const exec = record.subagentMeta?.execution
-          const hasHandle = exec?.conversationId !== undefined || exec?.executionId !== undefined
-          if (record.subagentSpec === undefined || !hasHandle) {
-            skipped.push({ runId: record.id, reason: '缺少可续接执行句柄或持久化规格 subagentSpec' })
-            continue
-          }
-        } else {
-          if (record.script === undefined && record.scriptPath === undefined) {
-            skipped.push({ runId: record.id, reason: '未持久化脚本源' })
-            continue
-          }
-          const journal = readJournal(record.journalPath)
-          if (journal.readFailed !== undefined) {
-            skipped.push({ runId: record.id, reason: `journal_read_failed: ${journal.readFailed.code}` })
-            continue
-          }
-          if (journal.actionUncertain) {
-            skipped.push({ runId: record.id, reason: 'workflow_action_uncertain: 账本存在不确定副作用' })
-            continue
-          }
         }
         try {
           assertCanSpawn(record.conversationId)

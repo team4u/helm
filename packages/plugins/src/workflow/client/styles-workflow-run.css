@@ -64,6 +64,40 @@
   flex-wrap: wrap;
 }
 
+/* 整块非动作头部即展开开关：真实 button 覆盖主信息位（chevron/灯/名称/统计），
+   动作按钮为右侧同级 sibling；名称可缩省略，避免移动端挤压。 */
+.workflow-run-header-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px;
+  border: none;
+  border-radius: var(--radius-xs);
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.workflow-run-header-main:hover {
+  background: var(--bg-hover);
+}
+
+.workflow-run-header-main:focus-visible {
+  outline: 1.5px solid var(--accent);
+  outline-offset: -1.5px;
+}
+
+.workflow-run-header-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 @container workflow-card (max-width: 420px) {
   .workflow-node-stats { display: none; }
   .workflow-node-label { flex-shrink: 0; max-width: 38%; }

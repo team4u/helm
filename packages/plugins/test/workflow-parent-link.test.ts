@@ -202,7 +202,7 @@ test('run 动作 inputSchema 不得注入 parentToolCallId（additionalPropertie
     // 语义冒充（同名写入 input）被动作输入校验拒绝。
     await assert.rejects(
       () => app.kernel.plugins.invokeAction('builtin:workflow', 'run', { script: FAST_SCRIPT, parentToolCallId: 'call-forged' } as never),
-      (e: unknown) => e instanceof Error && e.message.includes('must NOT have additional properties'),
+      (e: unknown) => e instanceof Error && /must not have additional properties/i.test(e.message),
     )
   } finally {
     await app.close().catch(() => {})

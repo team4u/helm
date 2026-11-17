@@ -40,6 +40,7 @@ test('@helm/protocol/browser: export declarations aligned with the root entry\'s
     'COMPOSER_DOCK_SLOT',
     'matchesConversationScope',
     'isSkillAvailable',
+    'assertSchemaCompilable',
     'validateOrThrow',
     'isAbsoluteAgentPath',
     'sanitizeAgentExecutionInfo',

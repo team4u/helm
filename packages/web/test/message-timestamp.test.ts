@@ -6,7 +6,8 @@ import { renderToString } from 'react-dom/server'
 import type { ConversationEntry, ConversationSummary } from '@helm/protocol'
 import { formatFullTimestamp, formatMessageTime } from '../src/lib/format.js'
 import { buildTimelineItems } from '../src/conversation/timeline-model.js'
-import type { AssistantTurn, HumanInputItem } from '../src/conversation/timeline-model.js'
+import type { AssistantTurn, FoldableStep, HumanInputItem } from '../src/conversation/timeline-model.js'
+import { summarizeStepGroup } from '../src/conversation/tool-body-model.js'
 import { makeTestStore as makeMockStore } from './helpers/store.js'
 import { HostStoreProviders } from './helpers/host-store.js'
 
@@ -245,6 +246,308 @@ test('timeline-model：无显式 durationMs 但有跨度 timestamp 时得出 dur
   assert.equal(turn.startedAt, step1Start)
   assert.equal(turn.settledAt, step2Start)
   assert.equal(turn.durationMs, step2Start - step1Start)
+})
+
+// ---------------------------------------------------------------------------
+// 2.5 折叠组过程耗时归属（合格响应 = 思考 + 工具调用且无非空正文）
+// ---------------------------------------------------------------------------
+
+interface AssistantMsgSpec {
+  id: string
+  content: unknown[]
+  durationMs?: number
+}
+
+function processEntry(spec: AssistantMsgSpec): ConversationEntry {
+  return {
+    id: spec.id,
+    kind: 'pi.assistant',
+    model: [
+      {
+        role: 'assistant',
+        timestamp: 1731234510000,
+        ...(spec.durationMs !== undefined ? { durationMs: spec.durationMs } : {}),
+        content: spec.content,
+        stopReason: 'stop',
+      },
+    ],
+  }
+}
+
+function resultEntry(id: string, callId: string, durationMs?: number): ConversationEntry {
+  return {
+    id,
+    kind: 'pi.tool-result',
+    model: [
+      {
+        role: 'toolResult',
+        toolCallId: callId,
+        toolName: 'bash',
+        content: 'ok',
+        isError: false,
+        ...(durationMs !== undefined ? { durationMs } : {}),
+      },
+    ],
+  }
+}
+
+function firstGroup(turn: AssistantTurn): Extract<AssistantTurn['segments'][number], { kind: 'step-group' }> {
+  const seg = turn.segments.find((s) => s.kind === 'step-group')
+  assert.ok(seg !== undefined && seg.kind === 'step-group', 'expected a step-group segment')
+  return seg
+}
+
+test('timeline-model：合格响应（思考+工具调用、无正文）的模型耗时归属到首个思考块，组内各计一次', { timeout: 60_000 }, () => {
+  const entries: ConversationEntry[] = [
+    processEntry({
+      id: '1',
+      durationMs: 3200,
+      content: [
+        { type: 'thinking', thinking: '先看文件' },
+        { type: 'toolCall', id: 'c1', name: 'bash', arguments: { command: 'ls' } },
+      ],
+    }),
+    resultEntry('2', 'c1', 500),
+  ]
+
+  const items = buildTimelineItems(entries)
+  const turn = items[0] as AssistantTurn
+  const group = firstGroup(turn)
+  assert.equal(group.steps.length, 2)
+  assert.equal(group.steps[0]!.kind, 'thinking')
+  assert.equal((group.steps[0] as { thinking: { responseDurationMs?: number } }).thinking.responseDurationMs, 3200)
+  assert.equal(group.steps[1]!.kind, 'tool')
+  assert.equal((group.steps[1] as { tool: { durationMs?: number } }).tool.durationMs, 500)
+
+  // 折叠组两个分别标注的累计口径：模型响应 3.2s、工具执行 0.5s
+  const summary = summarizeStepGroup(group.steps)
+  assert.equal(summary.modelDurationMs, 3200)
+  assert.equal(summary.toolDurationMs, 500)
+  // footer 回合耗时语义不变：仍是本回合全部 assistant duration 之和
+  assert.equal(turn.durationMs, 3200)
+})
+
+test('timeline-model：含非空可见正文的响应不进入过程统计，footer 回合耗时保持原语义', { timeout: 60_000 }, () => {
+  const entries: ConversationEntry[] = [
+    processEntry({
+      id: '1',
+      durationMs: 3200,
+      content: [
+        { type: 'thinking', thinking: '想想' },
+        { type: 'toolCall', id: 'c1', name: 'bash', arguments: { command: 'ls' } },
+        { type: 'text', text: '这是给用户的回答正文。' },
+      ],
+    }),
+    resultEntry('2', 'c1', 500),
+  ]
+
+  const items = buildTimelineItems(entries)
+  const turn = items[0] as AssistantTurn
+  const group = firstGroup(turn)
+  assert.equal(group.steps[0]!.kind, 'thinking')
+  assert.equal((group.steps[0] as { thinking: { responseDurationMs?: number } }).thinking.responseDurationMs, undefined)
+  const summary = summarizeStepGroup(group.steps)
+  assert.equal('modelDurationMs' in summary, false)
+  assert.equal(summary.toolDurationMs, 500)
+  // footer 仍计完整回合（不因正文而清零）
+  assert.equal(turn.durationMs, 3200)
+})
+
+test('timeline-model：同一响应含多个思考块时耗时只归属一次（首个思考块）', { timeout: 60_000 }, () => {
+  const entries: ConversationEntry[] = [
+    processEntry({
+      id: '1',
+      durationMs: 2000,
+      content: [
+        { type: 'thinking', thinking: '第一段思考' },
+        { type: 'thinking', thinking: '第二段思考' },
+        { type: 'toolCall', id: 'c1', name: 'bash', arguments: {} },
+      ],
+    }),
+    resultEntry('2', 'c1', 100),
+  ]
+
+  const items = buildTimelineItems(entries)
+  const turn = items[0] as AssistantTurn
+  const group = firstGroup(turn)
+  const think1 = group.steps[0] as { thinking: { responseDurationMs?: number } }
+  const think2 = group.steps[1] as { thinking: { responseDurationMs?: number } }
+  assert.equal(think1.thinking.responseDurationMs, 2000)
+  assert.equal(think2.thinking.responseDurationMs, undefined)
+  assert.equal(summarizeStepGroup(group.steps).modelDurationMs, 2000)
+})
+
+test('timeline-model：正文把回合拆成多个折叠组时，每条响应耗时只进入其所在组（跨组去重）', { timeout: 60_000 }, () => {
+  const entries: ConversationEntry[] = [
+    processEntry({
+      id: '1',
+      durationMs: 1000,
+      content: [
+        { type: 'thinking', thinking: '第一轮' },
+        { type: 'toolCall', id: 'c1', name: 'bash', arguments: {} },
+      ],
+    }),
+    resultEntry('2', 'c1', 500),
+    processEntry({
+      id: '3',
+      durationMs: 800,
+      content: [{ type: 'text', text: '中间一段说明文字。' }],
+    }),
+    processEntry({
+      id: '4',
+      durationMs: 2000,
+      content: [
+        { type: 'thinking', thinking: '第二轮' },
+        { type: 'toolCall', id: 'c2', name: 'bash', arguments: {} },
+      ],
+    }),
+    resultEntry('5', 'c2', 700),
+  ]
+
+  const items = buildTimelineItems(entries)
+  assert.equal(items.length, 1)
+  const turn = items[0] as AssistantTurn
+  const groups = turn.segments.filter((s) => s.kind === 'step-group')
+  assert.equal(groups.length, 2)
+  const summary1 = summarizeStepGroup((groups[0] as { steps: FoldableStep[] }).steps)
+  const summary2 = summarizeStepGroup((groups[1] as { steps: FoldableStep[] }).steps)
+  assert.equal(summary1.modelDurationMs, 1000)
+  assert.equal(summary1.toolDurationMs, 500)
+  assert.equal(summary2.modelDurationMs, 2000)
+  assert.equal(summary2.toolDurationMs, 700)
+  // 跨组合计恰为两条合格响应各一次（1000 + 2000），无重复计入
+  assert.equal(summary1.modelDurationMs! + summary2.modelDurationMs!, 3000)
+  // footer 回合耗时 = 全部 assistant duration 之和（1000 + 800 + 2000），语义不变
+  assert.equal(turn.durationMs, 3800)
+})
+
+test('timeline-model：toolView 特殊卡把工具行拆出折叠组后，响应耗时仍只随思考块归属一次', { timeout: 60_000 }, () => {
+  const entries: ConversationEntry[] = [
+    processEntry({
+      id: '1',
+      durationMs: 1500,
+      content: [
+        { type: 'thinking', thinking: '派发子任务' },
+        { type: 'toolCall', id: 'c1', name: 'special', arguments: {} },
+      ],
+    }),
+    resultEntry('2', 'c1', 300),
+  ]
+
+  const items = buildTimelineItems(entries, {
+    toolViews: [{ pluginId: 'builtin:test', spec: { id: 'special-view', toolNames: ['special'] } }],
+  })
+  const turn = items[0] as AssistantTurn
+  // 思考块独占折叠组（后续渲染为 ThinkingRow，不显示耗时），特殊卡独立成段
+  const group = firstGroup(turn)
+  assert.equal(group.steps.length, 1)
+  assert.equal(group.steps[0]!.kind, 'thinking')
+  assert.equal((group.steps[0] as { thinking: { responseDurationMs?: number } }).thinking.responseDurationMs, 1500)
+  const standalone = turn.segments.find((s) => s.kind === 'tool')
+  assert.ok(standalone !== undefined, 'toolView card stays a standalone segment')
+})
+
+test('timeline-model：非法（NaN/负数/Infinity）与缺失的 durationMs 不伪造归属，边界处剔除负的工具耗时', { timeout: 60_000 }, () => {
+  for (const bad of [Number.NaN, -5, 0, Number.POSITIVE_INFINITY]) {
+    const entries: ConversationEntry[] = [
+      processEntry({
+        id: '1',
+        durationMs: bad,
+        content: [
+          { type: 'thinking', thinking: '思考' },
+          { type: 'toolCall', id: 'c1', name: 'bash', arguments: {} },
+        ],
+      }),
+      resultEntry('2', 'c1', 100),
+    ]
+    const turn = buildTimelineItems(entries)[0] as AssistantTurn
+    const group = firstGroup(turn)
+    const think = group.steps[0] as { thinking: { responseDurationMs?: number } }
+    assert.equal(think.thinking.responseDurationMs, undefined, `durationMs=${bad} must not be attributed`)
+  }
+
+  // 缺失 durationMs 的旧 assistant 条目：不归属
+  const legacyEntries: ConversationEntry[] = [
+    processEntry({
+      id: '1',
+      content: [
+        { type: 'thinking', thinking: '旧数据思考' },
+        { type: 'toolCall', id: 'c1', name: 'bash', arguments: {} },
+      ],
+    }),
+    resultEntry('2', 'c1', 100),
+  ]
+  const legacyTurn = buildTimelineItems(legacyEntries)[0] as AssistantTurn
+  const legacyGroup = firstGroup(legacyTurn)
+  const legacyThink = legacyGroup.steps[0] as { thinking: { responseDurationMs?: number } }
+  assert.equal(legacyThink.thinking.responseDurationMs, undefined)
+  // 工具侧不受影响
+  assert.equal(summarizeStepGroup(legacyGroup.steps).toolDurationMs, 100)
+
+  // 工具结果 durationMs 为负：入口边界剔除，不进入累计也不展示
+  const negativeEntries: ConversationEntry[] = [
+    processEntry({
+      id: '1',
+      durationMs: 900,
+      content: [
+        { type: 'thinking', thinking: '思考' },
+        { type: 'toolCall', id: 'c1', name: 'bash', arguments: {} },
+      ],
+    }),
+    resultEntry('2', 'c1', -50),
+  ]
+  const negativeTurn = buildTimelineItems(negativeEntries)[0] as AssistantTurn
+  const negativeGroup = firstGroup(negativeTurn)
+  const toolStep = negativeGroup.steps[1] as { tool: { durationMs?: number } }
+  assert.equal(toolStep.tool.durationMs, undefined)
+  assert.equal('toolDurationMs' in summarizeStepGroup(negativeGroup.steps), false)
+})
+
+test('timeline-model：并行工具与顺序工具在累计口径下如实求和，缺失耗时的旧工具不贡献', { timeout: 60_000 }, () => {
+  // 两个并行工具各 5s：累计口径为 10s（UI 端以「工具累计」标注，不冒充墙钟流逝）
+  const parallel: ConversationEntry[] = [
+    processEntry({
+      id: '1',
+      durationMs: 800,
+      content: [
+        { type: 'thinking', thinking: '并行执行' },
+        { type: 'toolCall', id: 'c1', name: 'bash', arguments: {} },
+        { type: 'toolCall', id: 'c2', name: 'bash', arguments: {} },
+      ],
+    }),
+    resultEntry('2', 'c1', 5000),
+    resultEntry('3', 'c2', 5000),
+  ]
+  const parallelTurn = buildTimelineItems(parallel)[0] as AssistantTurn
+  const parallelSummary = summarizeStepGroup(firstGroup(parallelTurn).steps)
+  assert.equal(parallelSummary.modelDurationMs, 800)
+  assert.equal(parallelSummary.toolDurationMs, 10000)
+
+  // 顺序工具同样如实累计；缺失 durationMs 的旧结果不贡献也不阻断
+  const sequential: ConversationEntry[] = [
+    processEntry({
+      id: '1',
+      durationMs: 800,
+      content: [
+        { type: 'thinking', thinking: '顺序执行' },
+        { type: 'toolCall', id: 'c1', name: 'bash', arguments: {} },
+      ],
+    }),
+    resultEntry('2', 'c1'),
+    processEntry({
+      id: '3',
+      durationMs: 400,
+      content: [
+        { type: 'thinking', thinking: '继续' },
+        { type: 'toolCall', id: 'c2', name: 'bash', arguments: {} },
+      ],
+    }),
+    resultEntry('4', 'c2', 1200),
+  ]
+  const sequentialTurn = buildTimelineItems(sequential)[0] as AssistantTurn
+  const sequentialSummary = summarizeStepGroup(firstGroup(sequentialTurn).steps)
+  assert.equal(sequentialSummary.modelDurationMs, 1200)
+  assert.equal(sequentialSummary.toolDurationMs, 1200)
 })
 
 // ---------------------------------------------------------------------------

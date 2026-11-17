@@ -11,7 +11,7 @@ import {
   HARD_MAX_SUBAGENT_DEPTH,
   withWorkflowSpawnMeta,
 } from '../contracts.js'
-import { executionOf, subagentFooter } from './tool-result.js'
+import { executionOf } from './tool-result.js'
 import type { WorkflowService } from './engine/index.js'
 import type { BackgroundPolicy } from './background.js'
 import type { WorkflowToolDeps } from './tools.js'
@@ -30,6 +30,7 @@ const subagentOutputSchema = {
     execution: {
       type: 'object',
       properties: {
+        nodeId: { type: 'string' },
         conversationId: { type: 'number' },
         executionId: { type: 'string' },
         effectiveCwd: { type: 'string' },
@@ -178,7 +179,6 @@ export function registerSubagentTool(
         return envelopeError(`subagent_failed: ${backgroundChoice.message}`, backgroundChoice.reason)
       }
       let resolved: AgentExecutionInfo | undefined
-      const resumeRef = a['resume'] !== undefined ? String(a['resume']) : undefined
 
       const formatBackgroundHandle = (runId: string, exec?: AgentExecutionInfo) => {
         const summary = workflows.getRun(runId)
@@ -190,9 +190,8 @@ export function registerSubagentTool(
           status: summary.status,
           ...(effectiveExec !== undefined ? { execution: executionOf(effectiveExec) } : {}),
         }
-        const footer = subagentFooter(undefined, effectiveExec)
         return {
-          output: [{ type: 'text', text: `${safeResultText(payload)}${footer === '' ? '' : `\n${footer}`}` }],
+          output: [{ type: 'text', text: safeResultText(payload) }],
           structuredOutput: payload,
         }
       }
@@ -200,7 +199,6 @@ export function registerSubagentTool(
       const formatTerminalResult = (runId: string, initialExec?: AgentExecutionInfo) => {
         const final = workflows.getRun(runId)
         const resolvedInfo = resolved ?? initialExec ?? workflows.loadRunRecord(runId).subagentMeta?.execution
-        const footer = subagentFooter(resumeRef, resolvedInfo)
         if (final.status === 'completed') {
           const payload = {
             ok: true,
@@ -208,13 +206,13 @@ export function registerSubagentTool(
             ...(resolvedInfo !== undefined ? { execution: executionOf(resolvedInfo) } : {}),
           }
           return {
-            output: [{ type: 'text', text: footer === '' ? safeResultText(payload) : `${safeResultText(payload)}\n${footer}` }],
+            output: [{ type: 'text', text: safeResultText(payload) }],
             structuredOutput: payload,
           }
         }
         const message = final.error ?? `子代理运行 ${runId} 终态为 ${final.status}`
         return {
-          output: [{ type: 'text', text: footer === '' ? `subagent_failed: ${message}` : `subagent_failed: ${message}\n${footer}` }],
+          output: [{ type: 'text', text: `subagent_failed: ${message}` }],
           isError: true,
           structuredOutput: {
             ok: false,
@@ -329,9 +327,8 @@ export function registerSubagentTool(
           throw error
         }
         const message = error instanceof Error ? error.message : String(error)
-        const footer = subagentFooter(resumeRef, resolved)
         return {
-          output: [{ type: 'text', text: footer === '' ? `subagent_failed: ${message}` : `subagent_failed: ${message}\n${footer}` }],
+          output: [{ type: 'text', text: `subagent_failed: ${message}` }],
           isError: true,
           structuredOutput: {
             ok: false,
