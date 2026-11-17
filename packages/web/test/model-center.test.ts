@@ -412,7 +412,9 @@ test('model-center-model zh-CN: preset builders resolve descriptions, tags and o
   assert.deepEqual(merged.find((p) => p.id === 'magpie')?.models?.[0]?.tags, ['思考模型', '200k 上下文'])
 
   // Catalog fallback descriptions localize too
-  const catalog: ModelProviderSummary[] = [{ id: 'dyn-x', name: 'DynX', modelCount: 0, dynamic: true }]
+  const catalog: ModelProviderSummary[] = [
+    { id: 'dyn-x', name: 'DynX', modelCount: 0, dynamic: true, authMethods: [] },
+  ]
   const mergedDyn = buildMergedProviders([], [], [], [], catalog, zh)
   assert.equal(mergedDyn.find((p) => p.id === 'dyn-x')?.description, '支持动态模型目录刷新的大语言模型供应商。')
 })
