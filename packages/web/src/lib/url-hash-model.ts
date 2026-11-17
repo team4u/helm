@@ -47,22 +47,12 @@ const DEFAULT_PRIMARY: ResolvedTarget = { kind: 'profiles' }
 const DEFAULT_WORKBENCH_TAB = 'artifacts'
 
 const MODAL_KIND_TO_KEY = {
-  'profile-editor': 'profiles',
-  'provider-auth': 'providers',
-  'skill-viewer': 'skills',
-  'plugin-settings': 'plugins',
-  nodes: 'nodes',
   'artifact-preview': 'artifact',
   'workspace-file': 'file',
   'conversation-drawer': 'drawer',
 } as const
 
 const MODAL_KEY_TO_KIND = {
-  profiles: 'profile-editor',
-  providers: 'provider-auth',
-  skills: 'skill-viewer',
-  plugins: 'plugin-settings',
-  nodes: 'nodes',
   artifact: 'artifact-preview',
   file: 'workspace-file',
   drawer: 'conversation-drawer',
@@ -341,18 +331,6 @@ function formatSplitTarget(target: ResolvedTarget): string {
   return `${base}?${env}`
 }
 
-/** Sub-item id of list modals (profileId / skillId / pluginId / nodeId) or the drawer conversation id. */
-const modalSubId = (modal: PersistedModal): string | undefined => {
-  switch (modal.kind) {
-    case 'profile-editor': return modal.profileId
-    case 'skill-viewer': return modal.skillId
-    case 'plugin-settings': return modal.pluginId
-    case 'nodes': return modal.nodeId
-    case 'conversation-drawer': return String(modal.conversationId)
-    default: return undefined
-  }
-}
-
 function parseActiveModal(params: URLSearchParams): ActiveModal {
   const key = params.get('modal')
   if (key === null || key === '') return null
@@ -361,8 +339,6 @@ function parseActiveModal(params: URLSearchParams): ActiveModal {
   const id = params.get('id')
   const subId = id !== null && id !== '' ? id : undefined
   switch (kind) {
-    case 'provider-auth':
-      return { kind: 'provider-auth' }
     case 'artifact-preview':
       // The artifact deep-link id is required: a missing one means an invalid modal.
       if (subId === undefined) return null
@@ -380,14 +356,6 @@ function parseActiveModal(params: URLSearchParams): ActiveModal {
       const lineRange = parseHashLineRange(params.get('line'))
       return { kind: 'workspace-file', conversationId: fileConvId, path, ...lineRange }
     }
-    case 'profile-editor':
-      return subId === undefined ? { kind: 'profile-editor' } : { kind: 'profile-editor', profileId: subId }
-    case 'skill-viewer':
-      return subId === undefined ? { kind: 'skill-viewer' } : { kind: 'skill-viewer', skillId: subId }
-    case 'plugin-settings':
-      return subId === undefined ? { kind: 'plugin-settings' } : { kind: 'plugin-settings', pluginId: subId }
-    case 'nodes':
-      return subId === undefined ? { kind: 'nodes' } : { kind: 'nodes', nodeId: subId }
     case 'conversation-drawer': {
       if (subId === undefined) return null
       const convId = parsePositiveInt(subId)
@@ -499,8 +467,7 @@ export function formatLocationHash(state: WorkspaceLocationState): string {
         query.push(['line', lineStr])
       }
     } else {
-      const subId = modalSubId(modal)
-      if (subId !== undefined && subId !== '') query.push(['id', subId])
+      query.push(['id', String(modal.conversationId)])
     }
   }
   const search = new URLSearchParams(query).toString()
@@ -532,7 +499,10 @@ export function isSameLocationState(a: WorkspaceLocationState, b: WorkspaceLocat
       && (modalA.startLine ?? undefined) === (modalB.startLine ?? undefined)
       && (modalA.endLine ?? undefined) === (modalB.endLine ?? undefined)
   }
-  return modalSubId(modalA) === modalSubId(modalB)
+  if (modalA.kind === 'conversation-drawer' && modalB.kind === 'conversation-drawer') {
+    return modalA.conversationId === modalB.conversationId
+  }
+  return true
 }
 
 /** Same screen coordinate (identical kind/pluginId/screenId) counts as the same location; param differences are not coordinate changes. */
@@ -672,7 +642,3 @@ export function serializeHash(input: HashSerializable): string {
     activeModal: input.activeModal ?? null,
   })
 }
-
-/** Reverse parse contract alias, pointing at parseLocationHash. */
-export const parseHash = parseLocationHash
-

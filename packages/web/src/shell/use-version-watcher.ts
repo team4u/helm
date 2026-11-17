@@ -15,7 +15,7 @@
  *   Composer/standby 之外的未提交输入，如各中心检索框；仅作额外 guard，
  *   不是唯一来源，文案并入「未提交内容」）；
  *   ③ 任意打开中的弹窗（activeModal 非空即挂起——弹窗是聚焦交互现场，
- *   skill-viewer/artifact-preview 等只读弹窗同样不在自动刷新下冒险，
+ *   artifact-preview/workspace-file 等只读弹窗同样不在自动刷新下冒险，
  *   且 ActiveModal 无稳定的「只读」标记可依赖，按类型枚举会随形态演化腐烂）。
  *   服务端已持久化的会话流不构成挂起条件；
  * - 刷新策略：clean 时检测到新版本立即刷新；挂起时显示持久横幅（非自动

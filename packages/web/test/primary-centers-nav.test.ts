@@ -4,7 +4,6 @@ const ROOT_CONVERSATION_ID = 1 as const // the initial conversation id (SDK rese
 import {
   formatLocationHash,
   isSameLocationState,
-  parseHash,
   parseLocationHash,
   serializeHash,
   shouldPushLocationHistory,
@@ -96,54 +95,54 @@ test('serializeHash: the four centers as the main screen compose orthogonally wi
 })
 
 // ---------------------------------------------------------------------------
-// 2. parseHash and parseLocationHash reverse-parsing contract
+// 2. parseLocationHash reverse-parsing contract
 // ---------------------------------------------------------------------------
 
-test('parseHash: base routes restore each center target correctly', { timeout: 60_000 }, () => {
-  assert.deepEqual(parseHash('#/settings/profiles').primaryTarget, { kind: 'profiles' })
-  assert.deepEqual(parseHash('#/settings/skills').primaryTarget, { kind: 'skills' })
-  assert.deepEqual(parseHash('#/settings/nodes').primaryTarget, { kind: 'nodes' })
-  assert.deepEqual(parseHash('#/settings/models').primaryTarget, { kind: 'models' })
+test('parseLocationHash: base routes restore each center target correctly', { timeout: 60_000 }, () => {
+  assert.deepEqual(parseLocationHash('#/settings/profiles').primaryTarget, { kind: 'profiles' })
+  assert.deepEqual(parseLocationHash('#/settings/skills').primaryTarget, { kind: 'skills' })
+  assert.deepEqual(parseLocationHash('#/settings/nodes').primaryTarget, { kind: 'nodes' })
+  assert.deepEqual(parseLocationHash('#/settings/models').primaryTarget, { kind: 'models' })
   // Legacy top-level path shapes (e.g. #/providers) are wholly invalid and fall back to the default main screen (profile center)
-  assert.deepEqual(parseHash('#/providers').primaryTarget, { kind: 'profiles' })
-  assert.deepEqual(parseHash('#/profiles').primaryTarget, { kind: 'profiles' })
+  assert.deepEqual(parseLocationHash('#/providers').primaryTarget, { kind: 'profiles' })
+  assert.deepEqual(parseLocationHash('#/profiles').primaryTarget, { kind: 'profiles' })
 
   // Tolerate trailing slashes
   assert.deepEqual(parseLocationHash('#/settings/profiles/').primaryTarget, { kind: 'profiles' })
   assert.deepEqual(parseLocationHash('#/settings/skills/').primaryTarget, { kind: 'skills' })
 })
 
-test('parseHash: #/settings/<center>/<id> restores the target carrying the matching ID', { timeout: 60_000 }, () => {
+test('parseLocationHash: #/settings/<center>/<id> restores the target carrying the matching ID', { timeout: 60_000 }, () => {
   assert.deepEqual(
-    parseHash('#/settings/profiles/superagent').primaryTarget,
+    parseLocationHash('#/settings/profiles/superagent').primaryTarget,
     { kind: 'profiles', profileId: 'superagent' },
   )
   assert.deepEqual(
-    parseHash('#/settings/skills/git-commit').primaryTarget,
+    parseLocationHash('#/settings/skills/git-commit').primaryTarget,
     { kind: 'skills', skillId: 'git-commit' },
   )
   assert.deepEqual(
-    parseHash('#/settings/nodes/local').primaryTarget,
+    parseLocationHash('#/settings/nodes/local').primaryTarget,
     { kind: 'nodes', nodeId: 'local' },
   )
   assert.deepEqual(
-    parseHash('#/settings/models/openai').primaryTarget,
+    parseLocationHash('#/settings/models/openai').primaryTarget,
     { kind: 'models', providerId: 'openai' },
   )
   // Tolerate percent-encoded colon forms
   assert.deepEqual(
-    parseHash('#/settings/profiles/worker%3Aanalysis').primaryTarget,
+    parseLocationHash('#/settings/profiles/worker%3Aanalysis').primaryTarget,
     { kind: 'profiles', profileId: 'worker:analysis' },
   )
 })
 
-test('parseHash: the models reserved segment defaults restores the global defaults tab and the combined shape', { timeout: 60_000 }, () => {
+test('parseLocationHash: the models reserved segment defaults restores the global defaults tab and the combined shape', { timeout: 60_000 }, () => {
   assert.deepEqual(
-    parseHash('#/settings/models/defaults').primaryTarget,
+    parseLocationHash('#/settings/models/defaults').primaryTarget,
     { kind: 'models', tab: 'defaults' },
   )
   assert.deepEqual(
-    parseHash('#/settings/models/anthropic/defaults').primaryTarget,
+    parseLocationHash('#/settings/models/anthropic/defaults').primaryTarget,
     { kind: 'models', providerId: 'anthropic', tab: 'defaults' },
   )
 })

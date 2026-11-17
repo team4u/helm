@@ -182,7 +182,7 @@ function HelmShellInner() {
   const sidebarCollapsed = useSidebarCollapsed()
   const { workbenchOpen, workbenchTab } = useWorkbenchState()
   const activeModal = useActiveModal()
-  const { setActiveModal, setFocusedPanel, checkAuth, openTarget, closeSplit } = useStoreActions()
+  const { setActiveModal, setFocusedPanel, checkAuth, closeSplit } = useStoreActions()
   const { t } = useWebLocale()
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [showConnectionBanner, setShowConnectionBanner] = useState(false)
@@ -228,14 +228,6 @@ function HelmShellInner() {
       setSidebarOpen(false)
     }
   }, [activeModal])
-
-  useEffect(() => {
-    if (activeModal?.kind === 'plugin-settings') {
-      const pluginId = activeModal.pluginId
-      closeModal()
-      openTarget({ kind: 'plugins', pluginId })
-    }
-  }, [activeModal, closeModal, openTarget])
 
   if (!authReady) {
     return (

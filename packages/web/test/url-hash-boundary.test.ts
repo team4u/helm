@@ -26,7 +26,7 @@ test('Hash 边界：所有路径段、查询值都按各自层级编解码', { t
       splitTarget: target,
       workbenchOpen: true,
       workbenchTab: id,
-      activeModal: { kind: 'skill-viewer', skillId: id },
+      activeModal: { kind: 'artifact-preview', artifactId: id },
     }
     assert.deepEqual(parseLocationHash(formatLocationHash(state)), state, id)
   }

@@ -4,7 +4,6 @@ const ROOT_CONVERSATION_ID = 1 as const // 初始会话 id（SDK 保留 #1 承�
 import {
   formatLocationHash,
   isSameLocationState,
-  parseHash,
   parseLocationHash,
   serializeHash,
   shouldPushLocationHistory,
@@ -75,22 +74,23 @@ test('serializeHash: 插件中心作为主屏时与分屏、工作台、弹窗�
     splitTarget: { kind: 'conversation', conversationId: 10 },
     workbenchOpen: true,
     workbenchTab: 'artifacts',
-    activeModal: { kind: 'provider-auth' },
+    activeModal: { kind: 'conversation-drawer', conversationId: 11 },
   }
   const hash = formatLocationHash(state)
   const search = new URLSearchParams(hash.slice(hash.indexOf('?') + 1))
   assert.equal(hash.startsWith('#/settings/plugins/builtin:herdr?'), true)
   assert.equal(search.get('split'), 'c/10')
   assert.equal(search.get('wb'), 'artifacts')
-  assert.equal(search.get('modal'), 'providers')
+  assert.equal(search.get('modal'), 'drawer')
+  assert.equal(search.get('id'), '11')
 })
 
 // ---------------------------------------------------------------------------
-// 2. parseHash 与 parseLocationHash 反向解析契约
+// 2. parseLocationHash 反向解析契约
 // ---------------------------------------------------------------------------
 
-test('parseHash: #/settings/plugins 正确还原为 plugins 目标', { timeout: 60_000 }, () => {
-  const parsed = parseHash('#/settings/plugins')
+test('parseLocationHash: #/settings/plugins 正确还原为 plugins 目标', { timeout: 60_000 }, () => {
+  const parsed = parseLocationHash('#/settings/plugins')
   assert.deepEqual(parsed.primaryTarget, { kind: 'plugins' })
   assert.deepEqual(parsed.target, { kind: 'plugins' })
   assert.equal(parsed.splitTarget, null)
@@ -101,8 +101,8 @@ test('parseHash: #/settings/plugins 正确还原为 plugins 目标', { timeout: 
   assert.deepEqual(parsedSlash.primaryTarget, { kind: 'plugins' })
 })
 
-test('parseHash: #/settings/plugins/<pluginId> 正确还原携带 pluginId 的目标', { timeout: 60_000 }, () => {
-  const parsed = parseHash('#/settings/plugins/builtin:workflow')
+test('parseLocationHash: #/settings/plugins/<pluginId> 正确还原携带 pluginId 的目标', { timeout: 60_000 }, () => {
+  const parsed = parseLocationHash('#/settings/plugins/builtin:workflow')
   assert.deepEqual(parsed.primaryTarget, { kind: 'plugins', pluginId: 'builtin:workflow' })
   assert.deepEqual(parsed.target, { kind: 'plugins', pluginId: 'builtin:workflow' })
 
@@ -111,9 +111,9 @@ test('parseHash: #/settings/plugins/<pluginId> 正确还原携带 pluginId 的�
   assert.deepEqual(parsedColon.primaryTarget, { kind: 'plugins', pluginId: 'builtin:workflow' })
 })
 
-test('parseHash: 旧 ?p 查询参数不再参与解码，目标只来自路径段', { timeout: 60_000 }, () => {
+test('parseLocationHash: 旧 ?p 查询参数不再参与解码，目标只来自路径段', { timeout: 60_000 }, () => {
   // 旧 ?p 参数被静默忽略，路径段本身无子项
-  const parsed = parseHash('#/settings/plugins?p=builtin:workflow')
+  const parsed = parseLocationHash('#/settings/plugins?p=builtin:workflow')
   assert.deepEqual(parsed.primaryTarget, { kind: 'plugins' })
 
   // 旧顶层 #/plugins 路径形态整体非法，回退默认主屏（角色中心）
@@ -231,17 +231,17 @@ test('shouldPushLocationHistory: 插件中心主屏下打开弹窗、工作台�
 
   // 1. 列表态下打开弹窗（activeModal）走 push
   assert.equal(
-    shouldPushLocationHistory(pluginsState, { ...pluginsState, activeModal: { kind: 'provider-auth' } }),
+    shouldPushLocationHistory(pluginsState, { ...pluginsState, activeModal: { kind: 'conversation-drawer', conversationId: 1 } }),
     true,
   )
   assert.equal(
-    shouldPushLocationHistory(pluginsState, { ...pluginsState, activeModal: { kind: 'profile-editor' } }),
+    shouldPushLocationHistory(pluginsState, { ...pluginsState, activeModal: { kind: 'artifact-preview', artifactId: 'a1' } }),
     true,
   )
 
   // 2. 抽屉打开态下打开弹窗走 push
   assert.equal(
-    shouldPushLocationHistory(drawerOpenState, { ...drawerOpenState, activeModal: { kind: 'nodes' } }),
+    shouldPushLocationHistory(drawerOpenState, { ...drawerOpenState, activeModal: { kind: 'workspace-file', conversationId: 1, path: 'README.md' } }),
     true,
   )
 

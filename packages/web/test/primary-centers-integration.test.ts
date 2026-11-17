@@ -10,11 +10,11 @@
  *      aria-current="page";
  * 2. Command palette (CommandPaletteModal) direct navigation to primary centers:
  *    - clicking the four quick items runs openTarget and closes the palette;
- * 3. Routing contract and legacy URL smooth upgrades:
+ * 3. Routing contract:
  *    - round-trip encoding supports settings/<center>/<id> path-segment deep
  *      links and split combinations;
- *    - legacy modal=profiles|providers|skills|nodes auto-upgrades to the
- *      matching full-screen primary view;
+ *    - legacy modal= keys (profiles/providers/skills/plugins/nodes) parse to
+ *      no modal (dev-phase no-compat, silently dropped);
  * 4. The four center component groups mounting and drawer wiring:
  *    - ProfileCenter, SkillCenter, NodeCenter, ModelCenter rendering, card
  *      grids and drawer interactions;
@@ -151,7 +151,7 @@ test('CommandPaletteModal: the four quick items dispatch primary routes uniforml
 })
 
 // ---------------------------------------------------------------------------
-// 4. URL hash encoding/decoding and legacy URL smooth upgrades
+// 4. URL hash encoding/decoding
 // ---------------------------------------------------------------------------
 
 test('URL hash contract: four-center round-trip encoding and sub-item deep links', { timeout: 60_000 }, () => {
