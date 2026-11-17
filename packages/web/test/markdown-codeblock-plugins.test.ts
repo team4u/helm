@@ -223,6 +223,62 @@ test('CodeBlockRenderer：加载失败显式诊断 + 源码可复制（诚实性
   act(() => { root!.unmount() })
 })
 
+test('CodeBlockRenderer 从 store.plugins 读取 clientHashes：命中 O(1) 缓存零请求，未命中携带 &hash=', { timeout: 60_000 }, async () => {
+  const { resetPluginClientCache } = await import('../src/lib/plugin-client.js')
+  resetPluginClientCache()
+  const origFetch = globalThis.fetch
+  const requestedUrls: string[] = []
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    requestedUrls.push(String(input))
+    return new Response(JSON.stringify({ error: { message: 'miss' } }), { status: 404 })
+  }) as typeof fetch
+
+  const host = document.createElement('div')
+  let root: ReturnType<typeof createRoot> | undefined
+  try {
+    const CustomBlock = (props: { code: string }) => e('div', { className: 'custom-hash-cb' }, props.code)
+    seedPluginClientModule('cb-hash-plugin', 'index.tsx', { CustomBlock }, 'cb-hash-1')
+    const cbContribs = [cbContribution('cb-hash-plugin', 'custom', ['customlang'], {
+      client: { module: 'index.tsx', export: 'CustomBlock' },
+    })]
+    const storeHit = makeTestStore({
+      uiContributions: cbContribs,
+      plugins: [{
+        id: 'cb-hash-plugin',
+        name: 'CB',
+        locked: false,
+        enabled: true,
+        status: 'active',
+        hooks: [],
+        actions: [],
+        tools: [],
+        clientHashes: { 'index.tsx': 'cb-hash-1' },
+      }],
+    })
+    await act(async () => {
+      root = createRoot(host)
+      root.render(e(HostStoreProviders, { value: storeHit }, e(CodeBlockRenderer, { language: 'customlang', code: 'ok' })))
+    })
+    assert.equal(host.querySelector('.custom-hash-cb')?.textContent, 'ok')
+    assert.equal(requestedUrls.length, 0, 'expectedHash 命中时不得发网络请求')
+
+    // 未命中新 hash 时，发起请求必须附带 &hash=cb-hash-2
+    const storeMiss = {
+      ...storeHit,
+      plugins: [{ ...storeHit.plugins[0]!, clientHashes: { 'index.tsx': 'cb-hash-2' } }],
+    }
+    await act(async () => {
+      root!.render(e(HostStoreProviders, { value: storeMiss }, e(CodeBlockRenderer, { language: 'customlang', code: 'ok' })))
+    })
+    await new Promise((r) => setTimeout(r, 30))
+    assert.ok(requestedUrls.some((u) => u.includes('module=index.tsx&hash=cb-hash-2')), `未命中应携带 &hash=：${JSON.stringify(requestedUrls)}`)
+  } finally {
+    if (root !== undefined) await act(async () => root!.unmount())
+    globalThis.fetch = origFetch
+    resetPluginClientCache()
+  }
+})
+
 // ---------------------------------------------------------------------------
 // 5. 缓存清单验证
 // ---------------------------------------------------------------------------

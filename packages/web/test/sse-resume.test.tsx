@@ -19,7 +19,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { sseClientTimings } from '../src/lib/live-state.js'
-import { getPluginClientCacheRevision } from '../src/lib/plugin-client.js'
+import { getCachedClientComponent, getPluginClientCacheRevision, resetPluginClientCache, seedPluginClientModule } from '../src/lib/plugin-client.js'
 import type { HelmStoreValue } from '../src/lib/types.js'
 
 GlobalRegistrator.register()
@@ -142,7 +142,13 @@ interface Harness {
   close: () => Promise<void>
 }
 
-async function mountProvider(): Promise<Harness> {
+async function mountProvider(options?: {
+  hash?: string
+  onFetch?: (path: string, init?: RequestInit) => Response | Promise<Response> | undefined
+}): Promise<Harness> {
+  if (options?.hash !== undefined) {
+    window.history.replaceState(null, '', options.hash)
+  }
   const { HelmStoreProvider } = await import('../src/lib/HelmStoreProvider.js')
   const { useHelmStore } = await import('../src/lib/store-context.js')
   const observed: Observed = { authenticated: false, sseConnected: false, connectionError: null, conversations: 0 }
@@ -177,6 +183,10 @@ async function mountProvider(): Promise<Harness> {
       eventsUrls.push(path)
       const { stream } = await takeStream(path, init?.signal ?? null)
       return new Response(stream, { status: 200, headers: { 'content-type': 'text/event-stream' } })
+    }
+    if (options?.onFetch !== undefined) {
+      const custom = await options.onFetch(path, init)
+      if (custom !== undefined) return custom
     }
     return new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } })
   }) as typeof fetch
@@ -225,6 +235,8 @@ async function mountProvider(): Promise<Harness> {
       host.remove()
       globalThis.fetch = originalFetch
       localStorage.removeItem('helm:token')
+      window.history.replaceState(null, '', '#/')
+      resetPluginClientCache()
     },
   }
 }
@@ -544,3 +556,256 @@ for (const scenario of scenarios) {
     }
   })
 }
+
+test('瞬态 conversation.live 不消耗 seq/afterSeq，resumed.conversationLives 对账实时视图', { timeout: 60_000 }, async () => {
+  localStorage.setItem('helm:token', 't1')
+  const h = await mountProvider()
+  try {
+    const first = snapshotConnection(h, {
+      bootId: 'b1',
+      seq: 5,
+      conversations: [{ ...conv(1, '流式会话'), status: 'working' }],
+      pendingAsks: [],
+      plugins: [],
+      ui: [],
+    })
+    await h.waitFor((o) => o.sseConnected === true)
+
+    // 发送瞬态 conversation.live（无 seq）：直接更新 conversationLives，不推进 seq
+    first.send(`event: conversation.live\ndata: ${JSON.stringify({ live: { conversationId: 1, text: '瞬态流式', tools: [], updatedAt: 100 } })}\n\n`)
+    await h.waitFor(() => h.store().conversationLives[1]?.text === '瞬态流式')
+    // 紧接着 seq=6 持久帧无缝衔接（绝不报 sequence gap）
+    first.send(eventFrame(6, { type: 'conversation.upsert', conversation: { ...conv(1, '流式会话'), status: 'working', stateChangeSeq: 2 } }))
+    await h.waitFor(() => h.store().conversations[0]?.stateChangeSeq === 2)
+
+    let secondUrl = ''
+    let second: ControlledStream | undefined
+    h.nextEvents((url, signal) => {
+      secondUrl = url
+      const c = controlledStream(signal)
+      second = c
+      return c
+    })
+    first.end()
+    await h.waitFor(() => h.eventsUrls.length >= 2 && second !== undefined)
+    assert.equal(secondUrl, '/api/events?afterSeq=6&bootId=b1', '瞬态 live 不消耗 durable seq 水位')
+
+    // resumed 携带 conversationLives 对账断线期间更新的实时视图
+    second!.send(resumedFrame({
+      bootId: 'b1',
+      seq: 6,
+      headSeq: 6,
+      conversationLives: [{ conversationId: 1, text: '断线重连后最新', tools: [], updatedAt: 200 }],
+    }))
+    await h.waitFor(() => h.store().sseConnected === true && h.store().conversationLives[1]?.text === '断线重连后最新')
+    second!.end()
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 30)) })
+  } finally {
+    await h.close()
+  }
+})
+
+test('snapshot 重连增量对账插件缓存与 loadErrors：保留未变更插件模块和样式，仅清变更/停用插件错误', { timeout: 60_000 }, async () => {
+  localStorage.setItem('helm:token', 't1')
+  const KeepPanel = () => null
+  const ChangePanel = () => null
+  seedPluginClientModule('keep:p', 'index.tsx', { Panel: KeepPanel, __helmClientCss: '.keep{}' }, 'hash-keep')
+  seedPluginClientModule('chg:p', 'index.tsx', { Panel: ChangePanel, __helmClientCss: '.old{}' }, 'hash-old')
+  const keepRev0 = getPluginClientCacheRevision('keep:p')
+  const chgRev0 = getPluginClientCacheRevision('chg:p')
+
+  const h = await mountProvider({
+    onFetch: (path) => {
+      if (path.includes('/docs/info')) {
+        return new Response(JSON.stringify({ error: { message: 'doc error' } }), { status: 404, headers: { 'content-type': 'application/json' } })
+      }
+      return undefined
+    },
+  })
+  try {
+    const first = snapshotConnection(h, {
+      bootId: 'b1',
+      seq: 1,
+      conversations: [],
+      pendingAsks: [],
+      plugins: [
+        { ...pluginSummary('keep:p'), status: 'active', clientHashes: { 'index.tsx': 'hash-keep' } },
+        { ...pluginSummary('chg:p'), status: 'active', clientHashes: { 'index.tsx': 'hash-old' } },
+      ],
+      ui: [],
+    })
+    await h.waitFor((o) => o.sseConnected === true)
+    // 触发两个插件的 doc loadErrors
+    await act(async () => {
+      await h.store().ensurePluginDoc('keep:p', 'info')
+      await h.store().ensurePluginDoc('chg:p', 'info')
+    })
+    assert.ok(h.store().loadErrors['doc:keep:p/info'] !== undefined)
+    assert.ok(h.store().loadErrors['doc:chg:p/info'] !== undefined)
+
+    // 断线重连收到新 snapshot：keep:p hash 不变，chg:p hash 变更为 hash-new
+    let second: ControlledStream | undefined
+    h.nextEvents((_url, signal) => {
+      const c = controlledStream(signal)
+      second = c
+      return c
+    })
+    // 作废游标以触发全量 snapshot
+    first.send('event: notification\ndata: {"seq":99,"event":{"type":"notification","level":"info","title":"gap"}}\n\n')
+    await h.waitFor(() => h.eventsUrls.length >= 2 && second !== undefined)
+    second!.send(snapshotFrame({
+      bootId: 'b2',
+      seq: 1,
+      conversations: [],
+      pendingAsks: [],
+      plugins: [
+        { ...pluginSummary('keep:p'), status: 'active', clientHashes: { 'index.tsx': 'hash-keep' } },
+        { ...pluginSummary('chg:p'), status: 'active', clientHashes: { 'index.tsx': 'hash-new' } },
+      ],
+      ui: [],
+    }))
+    await h.waitFor((o) => o.sseConnected === true && h.store().kernelBootId === 'b2')
+
+    assert.equal(getCachedClientComponent('keep:p', 'index.tsx', 'Panel', 'hash-keep'), KeepPanel, '未变更插件缓存必须保留')
+    assert.ok(document.querySelector('style[data-helm-plugin-css="keep:p::index.tsx"]') !== null, '未变更插件样式必须保留')
+    assert.equal(getPluginClientCacheRevision('keep:p'), keepRev0, '未变更插件 revision 不变')
+    assert.ok(h.store().loadErrors['doc:keep:p/info'] !== undefined, '未变更插件的既有错误不得被清空')
+
+    assert.equal(getCachedClientComponent('chg:p', 'index.tsx', 'Panel'), undefined, 'hash 变更插件缓存必须逐出')
+    assert.ok(document.querySelector('style[data-helm-plugin-css="chg:p::index.tsx"]') === null, 'hash 变更插件样式必须逐出')
+    assert.notEqual(getPluginClientCacheRevision('chg:p'), chgRev0, 'hash 变更插件 revision 必须递增')
+    assert.equal(h.store().loadErrors['doc:chg:p/info'], undefined, 'hash 变更插件的旧 doc 错误必须被清理')
+    second!.end()
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 30)) })
+  } finally {
+    await h.close()
+  }
+})
+
+test('snapshot 重连 SWR 保活：未变更可见会话跳过详情/产物 GET；变更会话后台静默刷新不清空时间线', { timeout: 60_000 }, async () => {
+  localStorage.setItem('helm:token', 't1')
+  let detailCalls = 0
+  let artifactCalls = 0
+  let failNextDetail = false
+  let serverLastEntryId = 10
+  let serverStateChangeSeq = 2
+  const makeDetail = () => ({
+    ...conv(1, 'SWR 会话'),
+    stateChangeSeq: serverStateChangeSeq,
+    lastEntryId: serverLastEntryId,
+    entries: [
+      { id: '1', kind: 'helm.input', data: { text: 'hello' } },
+      ...(serverLastEntryId > 10 ? [{ id: String(serverLastEntryId), kind: 'pi.assistant' }] : []),
+    ],
+  })
+
+  const h = await mountProvider({
+    hash: '#/c/1',
+    onFetch: (path) => {
+      if (/^\/api\/conversations\/1(\?.*)?$/.test(path)) {
+        detailCalls++
+        if (failNextDetail) {
+          return new Response(JSON.stringify({ error: { message: 'transient 500' } }), { status: 500, headers: { 'content-type': 'application/json' } })
+        }
+        return new Response(JSON.stringify(makeDetail()), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      if (path === '/api/conversations/1/artifacts') {
+        artifactCalls++
+        return new Response(JSON.stringify([{ id: 'art-1', conversationId: 1, name: 'a.txt', mimeType: 'text/plain', size: 1, createdAt: 1 }]), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      return undefined
+    },
+  })
+
+  try {
+    const first = snapshotConnection(h, {
+      bootId: 'b1',
+      seq: 1,
+      conversations: [{ ...conv(1, 'SWR 会话'), stateChangeSeq: 2, lastEntryId: 10 }],
+      pendingAsks: [],
+      plugins: [],
+      ui: [],
+    })
+    await h.waitFor(() => h.store().sseConnected === true && h.store().conversationDetails[1]?.entries.length === 1 && (h.store().conversationArtifacts[1]?.length ?? 0) === 1)
+    assert.equal(detailCalls, 1)
+    assert.equal(artifactCalls, 1)
+
+    // 场景 A：断线重连后 snapshot 中会话 1 状态未变（status!='working'，stateChangeSeq=2，lastEntryId=10）→ 跳过 GET
+    let second: ControlledStream | undefined
+    h.nextEvents((_url, signal) => {
+      const c = controlledStream(signal)
+      second = c
+      return c
+    })
+    first.send('event: notification\ndata: {"seq":99,"event":{"type":"notification","level":"info","title":"gap"}}\n\n')
+    await h.waitFor(() => h.eventsUrls.length >= 2 && second !== undefined)
+    second!.send(snapshotFrame({
+      bootId: 'b2',
+      seq: 1,
+      conversations: [{ ...conv(1, 'SWR 会话'), stateChangeSeq: 2, lastEntryId: 10 }],
+      pendingAsks: [],
+      plugins: [],
+      ui: [],
+    }))
+    await h.waitFor(() => h.store().sseConnected === true && h.store().kernelBootId === 'b2')
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)) })
+    assert.equal(detailCalls, 1, '未变更可见会话重连 snapshot 必须跳过重复 detail GET')
+    assert.equal(artifactCalls, 1, '未变更可见会话重连 snapshot 必须跳过重复 artifacts GET')
+    assert.equal(h.store().conversationDetails[1]?.entries.length, 1)
+    assert.equal(h.store().conversationArtifacts[1]?.length, 1)
+
+    // 场景 B：lastEntryId 变更且后台静默刷新遇到 500 失败 → 仍保留原有时间线，绝不置错白屏
+    serverStateChangeSeq = 3
+    serverLastEntryId = 11
+    failNextDetail = true
+    let third: ControlledStream | undefined
+    h.nextEvents((_url, signal) => {
+      const c = controlledStream(signal)
+      third = c
+      return c
+    })
+    second!.send('event: notification\ndata: {"seq":99,"event":{"type":"notification","level":"info","title":"gap"}}\n\n')
+    await h.waitFor(() => h.eventsUrls.length >= 3 && third !== undefined)
+    third!.send(snapshotFrame({
+      bootId: 'b3',
+      seq: 1,
+      conversations: [{ ...conv(1, 'SWR 会话'), stateChangeSeq: 3, lastEntryId: 11 }],
+      pendingAsks: [],
+      plugins: [],
+      ui: [],
+    }))
+    await h.waitFor(() => h.store().sseConnected === true && h.store().kernelBootId === 'b3' && detailCalls === 2)
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)) })
+    assert.equal(h.store().conversationDetails[1]?.entries.length, 1, 'SWR 静默刷新失败不得清空原有时间线')
+    assert.equal(h.store().loadErrors['conversation:1'], undefined, 'silent 后台刷新失败不得触发 error 遮罩')
+
+    // 场景 C：再次 snapshot 且服务端恢复正常 → 静默补齐最新 entry
+    failNextDetail = false
+    let fourth: ControlledStream | undefined
+    h.nextEvents((_url, signal) => {
+      const c = controlledStream(signal)
+      fourth = c
+      return c
+    })
+    third!.send('event: notification\ndata: {"seq":99,"event":{"type":"notification","level":"info","title":"gap"}}\n\n')
+    await h.waitFor(() => h.eventsUrls.length >= 4 && fourth !== undefined)
+    fourth!.send(snapshotFrame({
+      bootId: 'b4',
+      seq: 1,
+      conversations: [{ ...conv(1, 'SWR 会话'), stateChangeSeq: 3, lastEntryId: 11 }],
+      pendingAsks: [],
+      plugins: [],
+      ui: [],
+    }))
+    await h.waitFor(() => h.store().conversationDetails[1]?.entries.length === 2)
+    assert.equal(detailCalls, 3)
+    assert.equal(h.store().conversationDetails[1]?.entries[1]?.id, '11')
+    fourth!.end()
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 30)) })
+  } finally {
+    await h.close()
+  }
+})

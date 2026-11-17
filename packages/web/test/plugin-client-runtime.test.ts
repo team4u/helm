@@ -9,7 +9,17 @@ import { createRoot } from 'react-dom/client'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { compilePluginClientModule } from '@helm/plugin-build'
 import { PluginUiView } from '../src/ui/PluginUiView.js'
-import { getCachedClientComponent, seedPluginClientModule, evictPluginClientCache, resetPluginClientCache, loadPluginClientModule, PluginClientError } from '../src/lib/plugin-client.js'
+import {
+  getCachedClientComponent,
+  getPluginClientCacheRevision,
+  seedPluginClientModule,
+  evictPluginClientCache,
+  reconcilePluginClientCache,
+  resetPluginClientCache,
+  loadPluginClientModule,
+  subscribePluginClientCacheInvalidation,
+  PluginClientError,
+} from '../src/lib/plugin-client.js'
 import { makeTestStore } from './helpers/store.js'
 import { HostStoreProviders } from './helpers/host-store.js'
 import { mountSharedPluginNamespaces } from './helpers/workflow-client.js'
@@ -181,5 +191,189 @@ test('并发加载同一插件模块合并为单次 fetch（in-flight 复用）'
   } finally {
     URL.createObjectURL = createObjectURL
     URL.revokeObjectURL = revokeObjectURL
+  }
+})
+
+test('O(1) expectedHash 内存命中零 fetch；缺失时请求携带 &hash=，409 或 hash 不匹配显式逐出不写脏缓存', { timeout: 60_000 }, async () => {
+  const createObjectURL = URL.createObjectURL
+  const revokeObjectURL = URL.revokeObjectURL
+  const urls: string[] = []
+  let seq = 0
+  URL.createObjectURL = () => `data:text/javascript,export%20const%20__helmClientCss%3D%22.h%7Bcolor%3Ared%7D%22%3Bexport%20function%20Panel()%7Breturn%20null%7D#${++seq}`
+  URL.revokeObjectURL = () => {}
+  globalThis.fetch = async (input) => {
+    const url = String(input)
+    urls.push(url)
+    if (url.includes('hash=h-ok')) {
+      return new Response('export function Panel() {}', { headers: { 'x-helm-client-hash': 'h-ok' } })
+    }
+    if (url.includes('hash=h-409')) {
+      return new Response(JSON.stringify({ error: { code: 'client_module_stale', message: 'module hash stale' } }), {
+        status: 409,
+        headers: { 'content-type': 'application/json' },
+      })
+    }
+    if (url.includes('hash=h-mismatch')) {
+      return new Response('export function Panel() {}', { headers: { 'x-helm-client-hash': 'h-old' } })
+    }
+    return new Response('not found', { status: 404 })
+  }
+  try {
+    const loaded = await loadPluginClientModule('p-hash', 'index.tsx', 'h-ok')
+    assert.equal(loaded.contentHash, 'h-ok')
+    assert.equal(urls.length, 1)
+    assert.ok(urls[0]!.endsWith('module=index.tsx&hash=h-ok'), `URL 应携带 &hash=：${urls[0]}`)
+
+    // 同 expectedHash 再次加载：直接命中内存缓存，0 fetch
+    const hit = await loadPluginClientModule('p-hash', 'index.tsx', 'h-ok')
+    assert.equal(hit.module, loaded.module)
+    assert.equal(urls.length, 1, '命中 expectedHash 不得发起任何网络请求')
+
+    // 409 client_module_stale：显式逐出旧缓存与样式并抛错
+    await assert.rejects(
+      loadPluginClientModule('p-hash', 'index.tsx', 'h-409'),
+      (err) => err instanceof PluginClientError && err.code === 'client_module_stale' && err.status === 409,
+    )
+    assert.equal(getCachedClientComponent('p-hash', 'index.tsx', 'Panel'), undefined, '409 后旧缓存必须被逐出')
+    assert.ok(document.querySelector('style[data-helm-plugin-css="p-hash::index.tsx"]') === null, '409 后旧样式必须移除')
+
+    // 重新种子缓存后遇到响应 x-helm-client-hash 不匹配：逐出缓存、不把陈旧模块按 expectedHash 写入
+    seedPluginClientModule('p-hash', 'index.tsx', { Panel: () => null, __helmClientCss: '.old{}' }, 'h-seed')
+    await assert.rejects(
+      loadPluginClientModule('p-hash', 'index.tsx', 'h-mismatch'),
+      (err) => err instanceof PluginClientError && err.code === 'client_module_stale',
+    )
+    assert.equal(getCachedClientComponent('p-hash', 'index.tsx', 'Panel'), undefined)
+    assert.ok(document.querySelector('style[data-helm-plugin-css="p-hash::index.tsx"]') === null)
+  } finally {
+    URL.createObjectURL = createObjectURL
+    URL.revokeObjectURL = revokeObjectURL
+  }
+})
+
+test('不同 expectedHash 在途请求竞争：新 hash 独立拉取并淘汰旧在途，绝不互相污染', { timeout: 60_000 }, async () => {
+  const createObjectURL = URL.createObjectURL
+  const revokeObjectURL = URL.revokeObjectURL
+  const urls: string[] = []
+  let resolveOldFetch!: (res: Response) => void
+  URL.createObjectURL = ((blob: Blob) => {
+    const marker = urls.length
+    return blob.size > 30
+      ? `data:text/javascript,export%20const%20v%3D%22v2%22%3Bexport%20const%20__helmClientCss%3D%22.v2%7Bcolor%3Ablue%7D%22%3Bexport%20function%20Panel()%7Breturn%20%22v2%22%7D#${marker}`
+      : `data:text/javascript,export%20const%20v%3D%22v1%22%3Bexport%20const%20__helmClientCss%3D%22.v1%7Bcolor%3Ared%7D%22%3Bexport%20function%20Panel()%7Breturn%20%22v1%22%7D#${marker}`
+  }) as typeof URL.createObjectURL
+  URL.revokeObjectURL = () => {}
+  globalThis.fetch = async (input) => {
+    const url = String(input)
+    urls.push(url)
+    if (url.includes('hash=h1')) {
+      return await new Promise<Response>((resolve) => { resolveOldFetch = resolve })
+    }
+    return new Response('export const v = "v2"; export function Panel() { return "v2" } // padded-for-v2', {
+      headers: { 'x-helm-client-hash': 'h2' },
+    })
+  }
+  try {
+    const p1 = loadPluginClientModule('p-race', 'index.tsx', 'h1')
+    const p2 = loadPluginClientModule('p-race', 'index.tsx', 'h2')
+    assert.equal(urls.length, 2, '不同 expectedHash 不得复用旧在途 Promise')
+    const r2 = await p2
+    assert.equal(r2.contentHash, 'h2')
+    assert.equal(r2.module.v, 'v2')
+
+    // 旧请求迟到返回 h1：必须失效，不得覆盖 h2 缓存与样式
+    resolveOldFetch(new Response('export const v = "v1"', { headers: { 'x-helm-client-hash': 'h1' } }))
+    await assert.rejects(p1, (err) => err instanceof PluginClientError && err.code === 'client_module_invalidated')
+    const hit = await loadPluginClientModule('p-race', 'index.tsx', 'h2')
+    assert.equal(hit.module.v, 'v2')
+    assert.equal(document.querySelector('style[data-helm-plugin-css="p-race::index.tsx"]')?.getAttribute('data-helm-plugin-css-hash'), 'h2')
+  } finally {
+    URL.createObjectURL = createObjectURL
+    URL.revokeObjectURL = revokeObjectURL
+  }
+})
+
+test('reconcilePluginClientCache 增量对账：保留未变更启用插件，逐出停用/变更项并精确通知', { timeout: 60_000 }, async () => {
+  const PanelA = () => null
+  const PanelB = () => null
+  const PanelC = () => null
+  seedPluginClientModule('keep-p', 'index.tsx', { Panel: PanelA, __helmClientCss: '.keep{}' }, 'hash-keep')
+  seedPluginClientModule('change-p', 'index.tsx', { Panel: PanelB, __helmClientCss: '.chg{}' }, 'hash-old')
+  seedPluginClientModule('disable-p', 'index.tsx', { Panel: PanelC, __helmClientCss: '.dis{}' }, 'hash-dis')
+
+  let notifications = 0
+  const unsub = subscribePluginClientCacheInvalidation(() => { notifications++ })
+  const revKeep0 = getPluginClientCacheRevision('keep-p')
+  const revChange0 = getPluginClientCacheRevision('change-p')
+  const revDisable0 = getPluginClientCacheRevision('disable-p')
+
+  try {
+    // 1. 全部匹配且启用：0 逐出，不递增 revision，不通知
+    const zero = reconcilePluginClientCache([
+      { id: 'keep-p', name: 'K', locked: false, enabled: true, status: 'active', hooks: [], actions: [], tools: [], clientHashes: { 'index.tsx': 'hash-keep' } },
+      { id: 'change-p', name: 'C', locked: false, enabled: true, status: 'active', hooks: [], actions: [], tools: [], clientHashes: { 'index.tsx': 'hash-old' } },
+      { id: 'disable-p', name: 'D', locked: false, enabled: true, status: 'active', hooks: [], actions: [], tools: [], clientHashes: { 'index.tsx': 'hash-dis' } },
+    ])
+    assert.equal(zero, 0)
+    assert.equal(notifications, 0)
+    assert.equal(getPluginClientCacheRevision('keep-p'), revKeep0)
+
+    // 2. keep-p 不变，change-p 换 hash，disable-p 停用：仅逐出后两者
+    const evicted = reconcilePluginClientCache([
+      { id: 'keep-p', name: 'K', locked: false, enabled: true, status: 'active', hooks: [], actions: [], tools: [], clientHashes: { 'index.tsx': 'hash-keep' } },
+      { id: 'change-p', name: 'C', locked: false, enabled: true, status: 'active', hooks: [], actions: [], tools: [], clientHashes: { 'index.tsx': 'hash-new' } },
+      { id: 'disable-p', name: 'D', locked: false, enabled: false, status: 'disabled', hooks: [], actions: [], tools: [] },
+    ])
+    assert.equal(evicted, 2)
+    assert.equal(notifications, 1)
+    assert.equal(getPluginClientCacheRevision('keep-p'), revKeep0, '未变更插件 revision 不变')
+    assert.notEqual(getPluginClientCacheRevision('change-p'), revChange0)
+    assert.notEqual(getPluginClientCacheRevision('disable-p'), revDisable0)
+    assert.equal(getCachedClientComponent('keep-p', 'index.tsx', 'Panel', 'hash-keep'), PanelA)
+    assert.ok(document.querySelector('style[data-helm-plugin-css="keep-p::index.tsx"]') !== null)
+    assert.equal(getCachedClientComponent('change-p', 'index.tsx', 'Panel'), undefined)
+    assert.equal(getCachedClientComponent('disable-p', 'index.tsx', 'Panel'), undefined)
+    assert.ok(document.querySelector('style[data-helm-plugin-css="change-p::index.tsx"]') === null)
+    assert.ok(document.querySelector('style[data-helm-plugin-css="disable-p::index.tsx"]') === null)
+  } finally {
+    unsub()
+  }
+})
+
+test('PluginUiView 从 store.plugins 读取 clientHashes 传入 loader，切页重挂载零 fetch', { timeout: 60_000 }, async () => {
+  let fetches = 0
+  const Panel = () => React.createElement('div', null, 'cached-ui-panel')
+  seedPluginClientModule('ui-hash-p', 'index.tsx', { Panel }, 'hash-ui-1')
+  globalThis.fetch = async () => {
+    fetches++
+    return new Response('', { status: 500 })
+  }
+  const store = makeTestStore({
+    plugins: [{
+      id: 'ui-hash-p',
+      name: 'UI Hash P',
+      locked: false,
+      enabled: true,
+      status: 'active',
+      hooks: [],
+      actions: [],
+      tools: [],
+      clientHashes: { 'index.tsx': 'hash-ui-1' },
+    }],
+  })
+  const host = document.createElement('div')
+  const root = createRoot(host)
+  try {
+    await act(async () => root.render(e(HostStoreProviders, { value: store },
+      e(PluginUiView, { pluginId: 'ui-hash-p', spec: { client: { module: 'index.tsx', export: 'Panel' } } }))))
+    assert.equal(host.textContent, 'cached-ui-panel')
+    // 卸载再重新挂载（模拟切换页面/会话）：依然零 fetch
+    await act(async () => root.render(e(HostStoreProviders, { value: store }, null)))
+    await act(async () => root.render(e(HostStoreProviders, { value: store },
+      e(PluginUiView, { pluginId: 'ui-hash-p', spec: { client: { module: 'index.tsx', export: 'Panel' } } }))))
+    assert.equal(host.textContent, 'cached-ui-panel')
+    assert.equal(fetches, 0, 'expectedHash 命中内存缓存时重挂载绝不发网络请求')
+  } finally {
+    await act(async () => root.unmount())
   }
 })

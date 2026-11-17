@@ -170,23 +170,23 @@ export interface ConversationListFilter {
 }
 
 export const conversationsApi = {
-  list(filter?: ConversationListFilter): Promise<ConversationSummary[]> {
+  list(filter?: ConversationListFilter, opts?: { signal?: AbortSignal }): Promise<ConversationSummary[]> {
     const params = new URLSearchParams()
     if (filter?.profileId) params.set('profileId', filter.profileId)
     if (filter?.tag) params.set('tag', filter.tag)
     if (filter?.status) params.set('status', filter.status)
     const qs = params.toString()
-    return apiRequest<ConversationSummary[]>('GET', `/api/conversations${qs ? `?${qs}` : ''}`)
+    return apiRequest<ConversationSummary[]>('GET', `/api/conversations${qs ? `?${qs}` : ''}`, undefined, opts?.signal)
   },
-  getDetail(id: number, opts?: { limit?: number; cursor?: string }): Promise<ConversationDetail> {
+  getDetail(id: number, opts?: { limit?: number; cursor?: string; signal?: AbortSignal }): Promise<ConversationDetail> {
     const params = new URLSearchParams()
     if (opts?.limit !== undefined) params.set('limit', String(opts.limit))
     if (opts?.cursor) params.set('cursor', opts.cursor)
     const qs = params.toString()
-    return apiRequest<ConversationDetail>('GET', `/api/conversations/${id}${qs ? `?${qs}` : ''}`)
+    return apiRequest<ConversationDetail>('GET', `/api/conversations/${id}${qs ? `?${qs}` : ''}`, undefined, opts?.signal)
   },
   /** 单条目全文取回（服务端时间线预览截断时；返回完整 ConversationEntry）。 */
-  getEntry(id: number, entryId: string | number): Promise<ConversationEntry> {
+  getEntry(id: number, entryId: string | number, opts?: { signal?: AbortSignal }): Promise<ConversationEntry> {
     // entryId 是与 ConversationEntry.id 对应的安全正整数（数字字符串）；
     // 严格整数字符串校验与 fork/withdraw 同一防错锚点，绝不容忍 '3oops' 锚定 3。
     const raw = String(entryId)
@@ -199,7 +199,7 @@ export const conversationsApi = {
         { entryId },
       )
     }
-    return apiRequest<ConversationEntry>('GET', `/api/conversations/${id}/entries/${numericEntryId}`)
+    return apiRequest<ConversationEntry>('GET', `/api/conversations/${id}/entries/${numericEntryId}`, undefined, opts?.signal)
   },
   create(init?: ConversationInit): Promise<ConversationSummary> {
     return apiRequest<ConversationSummary>('POST', '/api/conversations', init ?? {})
@@ -273,8 +273,8 @@ export const conversationsApi = {
     const body: ConversationWithdrawRequest = { submissionId: numericId }
     return apiRequest<ConversationWithdrawResponse>('POST', `/api/conversations/${id}/withdraw`, body)
   },
-  listArtifacts(id: number): Promise<ArtifactMetadata[]> {
-    return apiRequest<ArtifactMetadata[]>('GET', `/api/conversations/${id}/artifacts`)
+  listArtifacts(id: number, opts?: { signal?: AbortSignal }): Promise<ArtifactMetadata[]> {
+    return apiRequest<ArtifactMetadata[]>('GET', `/api/conversations/${id}/artifacts`, undefined, opts?.signal)
   },
   async uploadArtifact(id: number, file: File): Promise<ArtifactMetadata> {
     const bytes = await file.arrayBuffer()
@@ -335,7 +335,7 @@ export const artifactsApi = {
 // ---------------------------------------------------------------------------
 
 export const nodesApi = {
-  list: () => apiRequest<NodeInfo[]>('GET', '/api/nodes'),
+  list: (opts?: { signal?: AbortSignal }) => apiRequest<NodeInfo[]>('GET', '/api/nodes', undefined, opts?.signal),
   issueToken: (nodeId: string) =>
     apiRequest<NodeIssuedToken>('POST', '/api/nodes/issue', { nodeId }),
   remove: (nodeId: string) =>
@@ -357,7 +357,7 @@ export const nodesApi = {
 // ---------------------------------------------------------------------------
 
 export const asksApi = {
-  list: () => apiRequest<AskSpec[]>('GET', '/api/asks'),
+  list: (opts?: { signal?: AbortSignal }) => apiRequest<AskSpec[]>('GET', '/api/asks', undefined, opts?.signal),
   answer: (askId: string, answers: Record<string, string>, expectedStateSeq?: number) =>
     apiRequest<{ ok: boolean }>('POST', `/api/asks/${encodeURIComponent(askId)}/answer`, {
       answers,
@@ -439,41 +439,45 @@ export function normalizeModelCatalogInfo(raw: unknown): ModelCatalogInfo {
 }
 
 export const assetsApi = {
-  listProfiles: () => apiRequest<Profile[]>('GET', '/api/profiles'),
-  getProfile: (id: string) => apiRequest<Profile>('GET', `/api/profiles/${encodeURIComponent(id)}`),
+  listProfiles: (opts?: { signal?: AbortSignal }) => apiRequest<Profile[]>('GET', '/api/profiles', undefined, opts?.signal),
+  getProfile: (id: string, opts?: { signal?: AbortSignal }) =>
+    apiRequest<Profile>('GET', `/api/profiles/${encodeURIComponent(id)}`, undefined, opts?.signal),
   createProfile: (profile: Profile) => apiRequest<Profile>('POST', '/api/profiles', profile),
   updateProfile: (id: string, profile: Omit<Profile, 'id'> & { id?: string }) =>
     apiRequest<Profile>('PUT', `/api/profiles/${encodeURIComponent(id)}`, profile),
   deleteProfile: (id: string) =>
     apiRequest<{ ok: boolean }>('DELETE', `/api/profiles/${encodeURIComponent(id)}`),
 
-  listProviders: () => apiRequest<ProviderConfig[]>('GET', '/api/providers'),
+  listProviders: (opts?: { signal?: AbortSignal }) => apiRequest<ProviderConfig[]>('GET', '/api/providers', undefined, opts?.signal),
   saveProviders: (providers: ProviderConfig[]) =>
     apiRequest<ProviderConfig[]>('PUT', '/api/providers', { providers }),
 
-  listCredentials: () => apiRequest<CredentialSummary[]>('GET', '/api/credentials'),
+  listCredentials: (opts?: { signal?: AbortSignal }) => apiRequest<CredentialSummary[]>('GET', '/api/credentials', undefined, opts?.signal),
   setCredential: (id: string, value: string) =>
     apiRequest<{ ok: boolean }>('PUT', `/api/credentials/${encodeURIComponent(id)}`, { value }),
   deleteCredential: (id: string) =>
     apiRequest<{ ok: boolean }>('DELETE', `/api/credentials/${encodeURIComponent(id)}`),
 
-  listModels: async () => normalizeModelCatalogInfo(await apiRequest<unknown>('GET', '/api/models')).models,
-  getDefaultModel: () => apiRequest<{ defaultModel: string; defaultThinkingLevel: string }>('GET', '/api/models/default'),
+  listModels: async (opts?: { signal?: AbortSignal }) =>
+    normalizeModelCatalogInfo(await apiRequest<unknown>('GET', '/api/models', undefined, opts?.signal)).models,
+  getDefaultModel: (opts?: { signal?: AbortSignal }) =>
+    apiRequest<{ defaultModel: string; defaultThinkingLevel: string }>('GET', '/api/models/default', undefined, opts?.signal),
   setDefaultModel: (model: string, thinkingLevel?: string) =>
     apiRequest<{ ok: boolean; defaultModel: string; defaultThinkingLevel: string }>('PUT', '/api/models/default', {
       model,
       ...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
     }),
-  listModelProviders: () => apiRequest<ModelProviderSummary[]>('GET', '/api/models/providers'),
+  listModelProviders: (opts?: { signal?: AbortSignal }) =>
+    apiRequest<ModelProviderSummary[]>('GET', '/api/models/providers', undefined, opts?.signal),
   refreshModels: (providers?: string[]) =>
     apiRequest<ModelProvidersRefreshResult>('POST', '/api/models/refresh', providers && providers.length > 0 ? { providers } : {}),
   setModelFilter: (body: SetModelFilterBody) =>
     apiRequest<{ ok: boolean; catalog: ModelCatalogInfo }>('PUT', '/api/models/filter', body),
 
-  listSkills: () => apiRequest<SkillSummary[]>('GET', '/api/skills'),
-  readSkill: (id: string, path?: string) => {
+  listSkills: (opts?: { signal?: AbortSignal }) => apiRequest<SkillSummary[]>('GET', '/api/skills', undefined, opts?.signal),
+  readSkill: (id: string, path?: string, opts?: { signal?: AbortSignal }) => {
     const qs = path ? `?path=${encodeURIComponent(path)}` : ''
-    return apiRequest<{ text: string }>('GET', `/api/skills/${encodeURIComponent(id)}${qs}`)
+    return apiRequest<{ text: string }>('GET', `/api/skills/${encodeURIComponent(id)}${qs}`, undefined, opts?.signal)
   },
 }
 
@@ -489,7 +493,7 @@ export interface PluginConfigResponse {
 }
 
 export const pluginsApi = {
-  list: () => apiRequest<PluginSummary[]>('GET', '/api/plugins'),
+  list: (opts?: { signal?: AbortSignal }) => apiRequest<PluginSummary[]>('GET', '/api/plugins', undefined, opts?.signal),
   enable: (id: string) =>
     apiRequest<PluginSummary[]>('POST', `/api/plugins/${encodeURIComponent(id)}/enable`),
   /** 停用插件；force: true 用于在知情前提下越过 409 plugin_in_use 占用拦截。 */
@@ -499,8 +503,8 @@ export const pluginsApi = {
       `/api/plugins/${encodeURIComponent(id)}/disable`,
       opts?.force === true ? { force: true } : undefined,
     ),
-  getConfig: (id: string) =>
-    apiRequest<PluginConfigResponse>('GET', `/api/plugins/${encodeURIComponent(id)}/config`),
+  getConfig: (id: string, opts?: { signal?: AbortSignal }) =>
+    apiRequest<PluginConfigResponse>('GET', `/api/plugins/${encodeURIComponent(id)}/config`, undefined, opts?.signal),
   setConfig: (id: string, values: Record<string, unknown>) =>
     apiRequest<{ ok: boolean }>('PUT', `/api/plugins/${encodeURIComponent(id)}/config`, { values }),
   /** 外部插件源码静态自检（POST /api/plugins/doctor）；body 为 { id } 或 { path }。 */
@@ -518,22 +522,28 @@ export const pluginsApi = {
   /** 移除已安装的外部插件包（POST /api/plugins/:id/remove）。 */
   remove: (id: string) =>
     apiRequest<PluginRemoveResult>('POST', `/api/plugins/${encodeURIComponent(id)}/remove`),
-  getPublicDoc: (pluginId: string, name: string) =>
+  getPublicDoc: (pluginId: string, name: string, opts?: { signal?: AbortSignal }) =>
     apiRequest<PublicPluginDoc>(
       'GET',
       `/api/plugins/${encodeURIComponent(pluginId)}/docs/${encodeURIComponent(name)}`,
+      undefined,
+      opts?.signal,
     ),
   /** 会话级文档一次性读取（扩展同一路径 ?conversationId=；订阅式更新用 usePluginSessionDoc）。 */
   getPublicSessionDoc: (
     pluginId: string,
     name: string,
     conversationId: number,
+    opts?: { signal?: AbortSignal },
   ) =>
     apiRequest<PublicPluginSessionDoc>(
       'GET',
       `/api/plugins/${encodeURIComponent(pluginId)}/docs/${encodeURIComponent(name)}?conversationId=${conversationId}`,
+      undefined,
+      opts?.signal,
     ),
-  listActions: () => apiRequest<ActionManifest[]>('GET', '/api/actions'),
+  listActions: (opts?: { signal?: AbortSignal }) =>
+    apiRequest<ActionManifest[]>('GET', '/api/actions', undefined, opts?.signal),
   invokeAction: <T = unknown>(
     pluginId: string,
     actionId: string,
@@ -555,6 +565,6 @@ export const pluginsApi = {
 // ---------------------------------------------------------------------------
 
 export const searchApi = {
-  query: (q: string) =>
-    apiRequest<SearchHit[]>('GET', `/api/search?q=${encodeURIComponent(q)}`),
+  query: (q: string, opts?: { signal?: AbortSignal }) =>
+    apiRequest<SearchHit[]>('GET', `/api/search?q=${encodeURIComponent(q)}`, undefined, opts?.signal),
 }

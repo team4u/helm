@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict'
-import { afterEach, test } from 'node:test'
+import { after, afterEach, before, test } from 'node:test'
 import * as React from 'react'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
-import type { ConversationEntry, ConversationSummary, PluginSummary, PluginUiContribution } from '@helm/protocol'
+import { parseSessionDocSubParam, type ConversationEntry, type ConversationSummary, type PluginSummary, type PluginUiContribution, type SessionDocSubscription } from '@helm/protocol'
 // 类型引用（test-only）：workflow/herdr 共享契约已自 @helm/protocol 迁至 kernel 插件层；
 // 与既有 web 测试引用 kernel 私有源码的约定一致（如 mermaid-theme.test.ts），纯类型零运行时耦合，不放宽生产包边界。
 import type { WorkflowRunSummary } from '@helm/plugins/contracts'
@@ -14,7 +14,7 @@ import { WorkbenchDrawer } from '../src/conversation/WorkbenchDrawer.js'
 import { applySnapshot, applyEventFrame, emptyLiveState } from '../src/lib/live-state.js'
 import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
 import { seedPluginClientModule, resetPluginClientCache } from '../src/lib/plugin-client.js'
-import { resetSessionDocSubscriptions } from '../src/lib/session-docs.js'
+import { resetSessionDocSubscriptions, sessionDocTimings } from '../src/lib/session-docs.js'
 import { importWorkflowClientModule, mountSharedPluginNamespaces } from './helpers/workflow-client.js'
 import { makeTestStore } from './helpers/store.js'
 import { HostStoreProviders } from './helpers/host-store.js'
@@ -26,6 +26,9 @@ mountSharedPluginNamespaces({ realHooks: true })
 const e = React.createElement
 const module = await importWorkflowClientModule()
 const originalFetch = globalThis.fetch
+const originalDebounceMs = sessionDocTimings.subscribeDebounceMs
+before(() => { sessionDocTimings.subscribeDebounceMs = 0 })
+after(() => { sessionDocTimings.subscribeDebounceMs = originalDebounceMs })
 afterEach(() => { resetSessionDocSubscriptions(); globalThis.fetch = originalFetch; resetPluginClientCache() })
 
 function conversation(id: number, status: ConversationSummary['status'] = 'idle'): ConversationSummary {
@@ -41,30 +44,45 @@ function seed() {
 
 let publishSessionRuns = (): void => {}
 
-/** 与正式端点同契约：SSE 首帧 snapshot，后续增量不依赖全局 store 引用变化重连。 */
+/** 与正式端点同契约：多路复用 SSE 首帧 snapshot，后续增量不依赖全局 store 引用变化重连。 */
 function seedSessionRuns(runs: () => unknown): void {
   seedPluginClientModule('builtin:workflow', 'index.tsx', module)
-  const streams = new Set<{ controller: ReadableStreamDefaultController<Uint8Array>; conversationId: number }>()
+  const streams = new Set<{ controller: ReadableStreamDefaultController<Uint8Array>; subs: SessionDocSubscription[] }>()
   const encoder = new TextEncoder()
   let seq = 0
-  const doc = (conversationId: number) => ({ pluginId: 'builtin:workflow', name: 'runs', conversationId, value: { runs: runs() } })
-  const encode = (event: string, data: unknown) => encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
+  const doc = (sub: SessionDocSubscription) => ({
+    pluginId: sub.pluginId,
+    name: sub.name,
+    conversationId: sub.conversationId,
+    value: sub.name === 'runs' ? { runs: runs() } : {},
+  })
+  const encode = (action: 'snapshot' | 'updated', frameSeq: number, sub: SessionDocSubscription) =>
+    encoder.encode(`event: ${action}\ndata: ${JSON.stringify({
+      action,
+      pluginId: sub.pluginId,
+      name: sub.name,
+      conversationId: sub.conversationId,
+      seq: frameSeq,
+      doc: doc(sub),
+    })}\n\n`)
   publishSessionRuns = () => {
     seq++
-    for (const stream of streams) stream.controller.enqueue(encode('plugin.session_doc.updated', {
-      seq, event: { type: 'plugin.session_doc.updated', doc: doc(stream.conversationId) },
-    }))
+    for (const stream of streams) {
+      for (const sub of stream.subs) {
+        stream.controller.enqueue(encode('updated', seq, sub))
+      }
+    }
   }
   globalThis.fetch = async (input: RequestInfo | URL) => {
     const url = String(input)
-    if (url.includes('/docs/runs/events?conversationId=')) {
-      const conversationId = Number(new URL(url, 'http://localhost').searchParams.get('conversationId'))
-      let entry: { controller: ReadableStreamDefaultController<Uint8Array>; conversationId: number }
+    if (url.includes('/api/session-docs/events')) {
+      const subs = new URL(url, 'http://localhost').searchParams.getAll('sub').map((raw) => parseSessionDocSubParam(raw))
+      let entry: { controller: ReadableStreamDefaultController<Uint8Array>; subs: SessionDocSubscription[] }
       return new Response(new ReadableStream<Uint8Array>({
         start(controller) {
-          entry = { controller, conversationId }
+          entry = { controller, subs }
           streams.add(entry)
-          controller.enqueue(encode('snapshot', { seq, doc: doc(conversationId) }))
+          for (const sub of subs) controller.enqueue(encode('snapshot', seq, sub))
         },
         cancel() { streams.delete(entry) },
       }), { headers: { 'content-type': 'text/event-stream' } })

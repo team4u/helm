@@ -1,35 +1,32 @@
 /**
- * 插件会话级文档（sessionDoc）专用订阅通道（P4）。
+ * 插件会话级文档（sessionDoc）单流多路复用订阅通道：
  *
- * 与全局 ctx.doc 不同，sessionDoc 绝不进全局 /api/events 广播与首帧快照，
- * 每个 (pluginId, docName, conversationId) 元组独立开一条
- * /api/plugins/:id/docs/:name/events?conversationId=N SSE 订阅流（初始值也来自
- * 该流的首帧 snapshot，不再另发初始 GET，从根上消除 GET/SSE 双通道竞态）：
- * - ref-count：仅当存在实际挂载的订阅者时才连接；归零立即 abort 流、清缓存
- *   与重试定时器，条目彻底移除（下次挂载全新开始）；
- * - 鉴权：所有出站请求统一携带 Authorization: Bearer（token 经 api.ts
- *   getStoredToken 读取；api.ts 不依赖本模块，无循环 import）；测试经
- *   bindSessionDocRuntime 注入 fetch/token，返回恢复函数作用域隔离；
- * - 连接代际：每条目独立 connEpoch，abort/retry/重连/evict 均推进代际，
- *   旧连接的任何异步续写（迟到帧/迟到响应）必须校验条目仍存活且代际一致，
- *   不一致直接丢弃，杜绝旧连接写坏新条目；
- * - 帧序：单一连接内 update 帧按 seq 单调裁决——snapshot 首帧无条件以服务端
- *   为准，其后仅应用 seq 更大的帧（迟到旧帧丢弃）；跨连接 seq 不比较
- *   （专用 hub 文档可重建复位）；seq 必须为非负安全整数；
- * - delete 帧契约：doc.deleted=true 且 value=initial（reset 语义），如实暴露
- *   该初始值而非清空；只有不存在/未初始化/出错才是空态；
- * - 断流按有界指数退避重连；401 发 helm:unauthorized 并停止；非重试 4xx
- *   （400/403/404 等，429 除外）置终态错误不再重连；5xx/网络错误持续退避；
- * - evict（插件停用/会话删除）：先向仍挂载的订阅者显式报错（条目保留至
- *   全部退订，订阅者可读到错误）并中止流，永不重连；
- * - 错误显式暴露给订阅者（getSessionDocState().error），绝不静默降级。
- *
- * 本模块纯逻辑 + 模块级共享状态（不依赖 React），供 store hook 与
- * HelmStoreProvider 集成消费；Node 单测经 bindSessionDocRuntime 注入 fetch。
+ * 与全局 ctx.doc 不同，sessionDoc 绝不进全局 /api/events 广播与首帧快照；
+ * 浏览器内所有活跃的 `(pluginId, docName, conversationId)` 订阅经过短防抖
+ * （默认 50ms，可通过 `sessionDocTimings.subscribeDebounceMs` 注入）聚合成
+ * 单条共享 SSE 连接 `GET /api/session-docs/events?sub=...&sub=...`（使用
+ * `@helm/protocol/browser` 的 `encodeSessionDocSubParam`）：
+ * - ref-count：首个订阅者触发建流（初始值由首帧 `action: 'snapshot'` 下发），
+ *   订阅集合不变时不重建流，活跃集合归零时立即关闭流并清缓存；
+ * - 鉴权：所有出站请求统一携带 `Authorization: Bearer`（token 经 api.ts
+ *   `getStoredToken` 读取）；测试经 `bindSessionDocRuntime` 注入 fetch/token；
+ * - 连接代际：全局 `generation` + 流 `connEpoch`，abort / retry / 重连 /
+ *   集合变更 / reset 均推进代际，旧连接迟到帧或迟到响应一律丢弃；
+ * - 多路隔离与帧序：按 `(pluginId, name, conversationId)` 独立维护 `lastSeq`
+ *   水位与状态；`snapshot` 重置该 tuple 的 `lastSeq` 基线，`updated` / `deleted`
+ *   按 `seq` 单调递增（迟到旧帧丢弃），`deleted` 携带初始值（reset 语义）；
+ * - 空闲看门狗：`readSseChunkWithDeadline(..., 30_000)` 对齐内核 15s keepalive，
+ *   防止半开僵尸流；断流按有界指数退避重连，401 发 `helm:unauthorized`，
+ *   非重试 4xx 置错停止自动重试（可经 `retrySessionDoc` 显式重试）；
+ * - evict（插件停用/会话删除）：向仍挂载订阅者显式报错，保留错误至退订。
  */
-import type { HelmEventFrame, PluginSessionDocSnapshot, PublicPluginSessionDoc } from '@helm/protocol/browser'
+import {
+  encodeSessionDocSubParam,
+  type PublicPluginSessionDoc,
+  type SessionDocMultiplexFrame,
+} from '@helm/protocol/browser'
 import { getStoredToken } from './api.js'
-import { SseParser } from './live-state.js'
+import { readSseChunkWithDeadline, SseParser } from './live-state.js'
 
 export interface SessionDocKey {
   pluginId: string
@@ -51,16 +48,13 @@ interface EntryState {
   hasValue: boolean
   /** 已收到 deleted:true。 */
   deleted: boolean
-  /** 连接代际：每次新建连接自增；旧连接的异步写入据此作废。 */
-  connEpoch: number
-  /** 当前连接内最新已应用帧的 seq；新连接由 snapshot 重置，跨连接不比较。 */
+  /** 当前连接内该 tuple 最新已应用帧的 seq；每次收到 snapshot 重置。 */
   lastSeq: number
-  controller?: AbortController
   connected: boolean
-  retry: number
-  retryTimer?: ReturnType<typeof setTimeout>
   error?: string
-  /** 终态原因（插件停用/会话删除/非重试 4xx）：置位后永不重连。 */
+  /** 非重试 4xx 标记（停止自动重试，直到显式 retrySessionDoc）。 */
+  permanentError?: boolean
+  /** 终态原因（插件停用/会话删除/非法订阅键）：置位后永不重连。 */
   terminated?: string
   /** getSnapshot 缓存（引用稳定，值未变时复用）。 */
   snapshot?: { value?: unknown; hasValue: boolean; deleted: boolean; error?: string; connected: boolean }
@@ -71,10 +65,41 @@ interface ListenerEntry {
   entry: EntryState
 }
 
+/** 共享多路复用 SSE 流状态。 */
+interface MultiplexStreamState {
+  activeSignature: string
+  streamKeys: Set<string>
+  connEpoch: number
+  controller?: AbortController
+  retry: number
+  retryTimer?: ReturnType<typeof setTimeout>
+  debounceTimer?: ReturnType<typeof setTimeout>
+  debounceMicrotaskPending: boolean
+  haltedSignature?: string
+}
+
 const entries = new Map<string, EntryState>()
 const listeners = new Set<ListenerEntry>()
 /** 全局代际：登出清理时 ++，所有在途请求携带旧代际结果直接丢弃。 */
 let generation = 0
+
+const stream: MultiplexStreamState = {
+  activeSignature: '',
+  streamKeys: new Set(),
+  connEpoch: 0,
+  retry: 0,
+  debounceMicrotaskPending: false,
+}
+
+/** 会话文档 SSE 时序参数（集中定义；对象引用共享，测试可临时改写后复原）。 */
+export const sessionDocTimings = {
+  reconnectBaseMs: 1_000,
+  reconnectCapMs: 15_000,
+  /** 订阅集合变更聚合防抖延迟（毫秒）；为 0 时以微任务合并同批挂载，测试无慢 sleep。 */
+  subscribeDebounceMs: 50,
+  /** 多路复用 SSE 空闲看门狗阈值（毫秒），对齐内核 15s keepalive。 */
+  idleTimeoutMs: 30_000,
+}
 
 function notify(entry: EntryState): void {
   for (const item of [...listeners]) {
@@ -83,20 +108,10 @@ function notify(entry: EntryState): void {
 }
 
 function newEntry(key: SessionDocKey): EntryState {
-  return { key, refs: 0, alive: true, hasValue: false, deleted: false, connEpoch: 0, lastSeq: -1, connected: false, retry: 0 }
+  return { key, refs: 0, alive: true, hasValue: false, deleted: false, lastSeq: -1, connected: false }
 }
 
-function ensureEntry(key: SessionDocKey): EntryState {
-  const id = keyString(key)
-  let entry = entries.get(id)
-  if (entry === undefined) {
-    entry = newEntry(key)
-    entries.set(id, entry)
-  }
-  return entry
-}
-
-/** 边界校验文档帧/快照：形状或目标不匹配抛显式错误（诚实性纪律，不静默吞帧）。 */
+/** 边界校验文档形状或目标不匹配抛显式错误（诚实性纪律，不静默吞帧）。 */
 function assertSessionDocShape(doc: unknown, expected: SessionDocKey): PublicPluginSessionDoc {
   if (doc === null || typeof doc !== 'object') throw new Error('Invalid conversation document frame format')
   const d = doc as Record<string, unknown>
@@ -121,6 +136,7 @@ function assertSessionDocShape(doc: unknown, expected: SessionDocKey): PublicPlu
 /** 写入文档状态；delete 帧 value=initial（reset 语义）照常落值。 */
 function applyDoc(entry: EntryState, doc: PublicPluginSessionDoc): void {
   entry.error = undefined
+  entry.permanentError = undefined
   entry.deleted = doc.deleted === true
   entry.value = doc.value
   entry.hasValue = true
@@ -135,172 +151,311 @@ async function responseErrorMessage(res: Response): Promise<string> {
   return message
 }
 
-/** 打开（或复用）一条元组专用 SSE 订阅流；断流按有界退避重连。 */
-function connectStream(entry: EntryState, gen: number): void {
-  if (!entry.alive || entry.refs <= 0 || gen !== generation || entry.terminated !== undefined) return
-  const { pluginId, docName, conversationId } = entry.key
-  const label = `${pluginId}/${docName}#${conversationId}`
-  const myConn = ++entry.connEpoch
+interface SubscribedEntryItem {
+  id: string
+  entry: EntryState
+  param: string
+}
+
+function collectActiveSubscriptions(): SubscribedEntryItem[] {
+  const items: SubscribedEntryItem[] = []
+  for (const [id, entry] of [...entries.entries()]) {
+    if (!entry.alive || entry.refs <= 0 || entry.terminated !== undefined || entry.permanentError === true) {
+      continue
+    }
+    try {
+      const param = encodeSessionDocSubParam({
+        pluginId: entry.key.pluginId,
+        name: entry.key.docName,
+        conversationId: entry.key.conversationId,
+      })
+      items.push({ id, entry, param })
+    } catch (err) {
+      terminateEntry(entry, err instanceof Error ? err.message : String(err))
+    }
+  }
+  items.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+  return items
+}
+
+function abortMultiplexStream(): void {
+  if (stream.debounceTimer !== undefined) {
+    clearTimeout(stream.debounceTimer)
+    stream.debounceTimer = undefined
+  }
+  stream.debounceMicrotaskPending = false
+  if (stream.retryTimer !== undefined) {
+    clearTimeout(stream.retryTimer)
+    stream.retryTimer = undefined
+  }
+  stream.controller?.abort()
+  stream.controller = undefined
+  stream.connEpoch++
+  stream.activeSignature = ''
+  stream.streamKeys = new Set()
+  stream.haltedSignature = undefined
+  stream.retry = 0
+}
+
+function scheduleStreamSync(): void {
+  if (stream.debounceTimer !== undefined) {
+    clearTimeout(stream.debounceTimer)
+    stream.debounceTimer = undefined
+  }
+  const gen = generation
+  if (sessionDocTimings.subscribeDebounceMs <= 0) {
+    if (stream.debounceMicrotaskPending) return
+    stream.debounceMicrotaskPending = true
+    queueMicrotask(() => {
+      stream.debounceMicrotaskPending = false
+      if (gen === generation) syncMultiplexStream(gen)
+    })
+    return
+  }
+  stream.debounceTimer = setTimeout(() => {
+    stream.debounceTimer = undefined
+    if (gen === generation) syncMultiplexStream(gen)
+  }, sessionDocTimings.subscribeDebounceMs)
+}
+
+function syncMultiplexStream(gen: number): void {
+  if (gen !== generation) return
+  const items = collectActiveSubscriptions()
+  if (items.length === 0) {
+    abortMultiplexStream()
+    return
+  }
+  const signature = items.map((item) => item.param).join('\0')
+  if (
+    signature === stream.activeSignature &&
+    (stream.controller !== undefined || stream.retryTimer !== undefined || stream.haltedSignature === signature)
+  ) {
+    return
+  }
+  if (stream.retryTimer !== undefined) {
+    clearTimeout(stream.retryTimer)
+    stream.retryTimer = undefined
+  }
+  stream.haltedSignature = undefined
+  stream.retry = 0
+  stream.controller?.abort()
+  stream.controller = undefined
+  stream.connEpoch++
+  stream.activeSignature = signature
+  stream.streamKeys = new Set(items.map((item) => item.id))
+  connectMultiplexStream(items, signature, gen)
+}
+
+function connectMultiplexStream(items: SubscribedEntryItem[], signature: string, gen: number): void {
+  if (gen !== generation || stream.activeSignature !== signature || items.length === 0) return
+  const myConn = stream.connEpoch
   const controller = new AbortController()
-  entry.controller = controller
+  stream.controller = controller
+
+  const params = new URLSearchParams()
+  for (const item of items) params.append('sub', item.param)
+  const url = `/api/session-docs/events?${params.toString()}`
+  const streamLabel = items.map((item) => `${item.entry.key.pluginId}/${item.entry.key.docName}#${item.entry.key.conversationId}`).join(', ')
+
+  const isStreamActive = (): boolean =>
+    gen === generation &&
+    stream.connEpoch === myConn &&
+    stream.activeSignature === signature &&
+    !controller.signal.aborted
+
+  const reportStreamError = (message: string): void => {
+    for (const item of items) {
+      if (!item.entry.alive || item.entry.refs <= 0 || item.entry.terminated !== undefined) continue
+      item.entry.error = message
+      notify(item.entry)
+    }
+  }
+
   const run = async (): Promise<void> => {
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
     // Node fetch 语义：signal abort 不一定传递到底层流 cancel，
-    // 这里显式监听并 cancel reader；仅当仍是当前连接时才清 entry.controller，
-    // 避免 retry 后旧连接的 onAbort 误清新连接的 controller。
+    // 显式监听并 cancel reader；仅当仍是当前流 controller 时才置空，防止误清新连接。
     const onAbort = (): void => {
-      if (entry.controller === controller) entry.controller = undefined
+      if (stream.controller === controller) stream.controller = undefined
       void reader?.cancel().catch(() => {})
     }
     controller.signal.addEventListener('abort', onAbort, { once: true })
-    // 连接有效性：旧连接（代际不匹配）、已 teardown（不存活）、终态、登出代际
-    // 推进、归零退订的任何异步续写一律丢弃。
-    const isActive = (): boolean =>
-      entry.alive && entry.connEpoch === myConn && gen === generation && entry.refs > 0 && entry.terminated === undefined
+
     try {
       const token = tokenProvider()
-      const res = await resolvedFetch(
-        `/api/plugins/${encodeURIComponent(pluginId)}/docs/${encodeURIComponent(docName)}/events?conversationId=${conversationId}`,
-        { headers: token ? { Authorization: `Bearer ${token}` } : {}, signal: controller.signal },
-      )
-      if (!isActive()) {
-        // 连接已作废：迟到响应的底层流也必须显式关闭，不留悬挂资源。
+      const res = await resolvedFetch(url, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        signal: controller.signal,
+      })
+      if (!isStreamActive()) {
         void res.body?.cancel().catch(() => {})
         return
       }
       if (res.status === 401) {
+        stream.haltedSignature = signature
+        for (const item of items) {
+          if (!item.entry.alive || item.entry.refs <= 0 || item.entry.terminated !== undefined) continue
+          if (item.entry.connected) {
+            item.entry.connected = false
+            notify(item.entry)
+          }
+        }
         if (typeof window !== 'undefined') window.dispatchEvent(new Event('helm:unauthorized'))
         return
       }
       if (res.status >= 400 && res.status < 500 && res.status !== 429) {
-        // 非重试 4xx（404 文档/插件不存在、403 未授权、400 畸形请求）：
-        // 显式终态报错，绝不无穷重连隐藏故障。
-        entry.error = `Conversation document subscription unavailable (${label}): ${await responseErrorMessage(res)}`
-        entry.connected = false
-        notify(entry)
+        const msg = await responseErrorMessage(res)
+        if (!isStreamActive()) return
+        stream.haltedSignature = signature
+        for (const item of items) {
+          if (!item.entry.alive || item.entry.refs <= 0 || item.entry.terminated !== undefined) continue
+          const label = `${item.entry.key.pluginId}/${item.entry.key.docName}#${item.entry.key.conversationId}`
+          item.entry.error = `Conversation document subscription unavailable (${label}): ${msg}`
+          item.entry.connected = false
+          item.entry.permanentError = true
+          notify(item.entry)
+        }
         return
       }
       if (!res.ok || !res.body) throw new Error(await responseErrorMessage(res))
-      entry.error = undefined
-      entry.connected = true
-      entry.retry = 0
-      notify(entry)
+
+      stream.retry = 0
+      for (const item of items) {
+        if (!item.entry.alive || item.entry.refs <= 0 || item.entry.terminated !== undefined) continue
+        const changed = item.entry.error !== undefined || !item.entry.connected
+        item.entry.error = undefined
+        item.entry.permanentError = undefined
+        item.entry.connected = true
+        if (changed) notify(item.entry)
+      }
+
       const parser = new SseParser((message) => {
-        if (!isActive()) return
+        if (!isStreamActive()) return
         let payload: unknown
         try {
           payload = JSON.parse(message.data)
         } catch {
-          entry.error = `Conversation document subscription stream invalid (${label})`
+          reportStreamError(`Conversation document subscription stream invalid (${streamLabel})`)
+          return
+        }
+        const frame = payload as Partial<SessionDocMultiplexFrame> | null
+        if (
+          frame === null ||
+          typeof frame !== 'object' ||
+          (frame.action !== 'snapshot' && frame.action !== 'updated' && frame.action !== 'deleted') ||
+          typeof frame.pluginId !== 'string' ||
+          typeof frame.name !== 'string' ||
+          !Number.isSafeInteger(frame.conversationId) ||
+          !Number.isSafeInteger(frame.seq) ||
+          (frame.seq as number) < 0 ||
+          !('doc' in frame)
+        ) {
+          reportStreamError(`Conversation document subscription frame invalid (${streamLabel})`)
+          return
+        }
+        const tupleKey: SessionDocKey = {
+          pluginId: frame.pluginId,
+          docName: frame.name,
+          conversationId: frame.conversationId as number,
+        }
+        const tupleId = keyString(tupleKey)
+        if (!stream.streamKeys.has(tupleId)) {
+          reportStreamError(`Conversation document frame target mismatch: ${frame.pluginId}/${frame.name}#${frame.conversationId}`)
+          return
+        }
+        const entry = entries.get(tupleId)
+        if (entry === undefined || !entry.alive || entry.refs <= 0 || entry.terminated !== undefined) {
+          return
+        }
+        const label = `${entry.key.pluginId}/${entry.key.docName}#${entry.key.conversationId}`
+        let doc: PublicPluginSessionDoc
+        try {
+          doc = assertSessionDocShape(frame.doc, entry.key)
+        } catch (err) {
+          entry.error = `Conversation document frame invalid (${label}): ${err instanceof Error ? err.message : String(err)}`
           notify(entry)
           return
         }
-        if (message.event === 'snapshot') {
-          if (payload === null || typeof payload !== 'object' || !('doc' in payload)) {
-            entry.error = `Conversation document subscription first frame invalid (${label})`
-            notify(entry)
-            return
-          }
-          const snap = payload as PluginSessionDocSnapshot
-          if (!Number.isSafeInteger(snap.seq) || snap.seq < 0) {
-            entry.error = `Conversation document subscription first frame seq invalid (${label})`
-            notify(entry)
-            return
-          }
-          let doc: PublicPluginSessionDoc
-          try {
-            doc = assertSessionDocShape(snap.doc, entry.key)
-          } catch (err) {
-            entry.error = `Conversation document subscription first frame invalid (${label}): ${err instanceof Error ? err.message : String(err)}`
-            notify(entry)
-            return
-          }
-          // 重连对齐：无条件以服务端 snapshot 为准，并重置本连接的 seq 基准。
-          entry.lastSeq = snap.seq
+        if (frame.action === 'snapshot') {
+          // 重连/建流对齐：按 tuple 重置 seq 基线并无条件应用快照。
+          entry.lastSeq = frame.seq as number
           applyDoc(entry, doc)
           notify(entry)
           return
         }
-        const frame = payload as HelmEventFrame
-        if (
-          frame === null ||
-          typeof frame !== 'object' ||
-          !Number.isSafeInteger(frame.seq) ||
-          frame.seq < 0 ||
-          !frame.event ||
-          typeof frame.event.type !== 'string'
-        ) {
-          entry.error = `Conversation document update frame invalid (${label})`
-          notify(entry)
-          return
-        }
-        if (frame.event.type !== 'plugin.session_doc.updated' || !('doc' in frame.event)) {
-          entry.error = `Conversation document subscription stream received unexpected event ${String(frame.event.type)}`
-          notify(entry)
-          return
-        }
-        let doc: PublicPluginSessionDoc
-        try {
-          doc = assertSessionDocShape(frame.event.doc, entry.key)
-        } catch (err) {
-          entry.error = `Conversation document update frame invalid (${label}): ${err instanceof Error ? err.message : String(err)}`
-          notify(entry)
-          return
-        }
-        // 同一连接内 seq 单调：迟到旧帧（<= 当前值）直接丢弃（已有更新状态，
-        // 不必报错）；seq 跨文档/tuple 不保证连续，只要求不回退。
-        if (frame.seq <= entry.lastSeq) return
-        entry.lastSeq = frame.seq
-        applyDoc(entry, doc)
+        // updated / deleted：按 tuple 隔离单调递增（迟到旧帧 <= lastSeq 静默丢弃）。
+        if ((frame.seq as number) <= entry.lastSeq) return
+        entry.lastSeq = frame.seq as number
+        applyDoc(entry, frame.action === 'deleted' ? { ...doc, deleted: true } : doc)
         notify(entry)
       })
+
       reader = res.body.getReader()
       const decoder = new TextDecoder()
       for (;;) {
-        const chunk = await reader.read()
-        if (chunk.done) break
-        parser.push(decoder.decode(chunk.value, { stream: true }))
-        if (!isActive()) return
+        const read = await readSseChunkWithDeadline(reader, sessionDocTimings.idleTimeoutMs, controller.signal)
+        if (read.kind === 'idle') {
+          throw new Error('Subscription stream idle timeout; reconnecting')
+        }
+        if (read.chunk.done) break
+        parser.push(decoder.decode(read.chunk.value, { stream: true }))
+        if (!isStreamActive()) return
       }
       throw new Error('Subscription stream closed')
     } catch (error) {
-      if (controller.signal.aborted || !isActive()) return
-      entry.error = `Conversation document subscription interrupted (${label}): ${error instanceof Error ? error.message : String(error)}`
-      entry.connected = false
-      notify(entry)
-      scheduleReconnect(entry, gen)
+      if (controller.signal.aborted || !isStreamActive()) return
+      const errMsg = error instanceof Error ? error.message : String(error)
+      for (const item of items) {
+        if (!item.entry.alive || item.entry.refs <= 0 || item.entry.terminated !== undefined) continue
+        const label = `${item.entry.key.pluginId}/${item.entry.key.docName}#${item.entry.key.conversationId}`
+        item.entry.error = `Conversation document subscription interrupted (${label}): ${errMsg}`
+        item.entry.connected = false
+        notify(item.entry)
+      }
+      if (stream.controller === controller) stream.controller = undefined
+      controller.abort()
+      scheduleStreamReconnect(signature, gen)
     } finally {
       controller.signal.removeEventListener('abort', onAbort)
       if (reader !== undefined) {
         await reader.cancel().catch(() => {})
         reader.releaseLock()
       }
+      if (stream.controller === controller) stream.controller = undefined
     }
   }
   void run()
 }
 
-/** 会话文档 SSE 重连退避时序（集中定义；对象引用共享，测试可临时改写后复原）。 */
-export const sessionDocTimings = {
-  reconnectBaseMs: 1_000,
-  reconnectCapMs: 15_000,
-}
-
-function scheduleReconnect(entry: EntryState, gen: number): void {
-  if (entry.retryTimer !== undefined || entry.terminated !== undefined) return
-  // 有界指数退避：1s 起步、上限 15s。
-  const delay = Math.min(sessionDocTimings.reconnectBaseMs * 2 ** Math.min(entry.retry++, 4), sessionDocTimings.reconnectCapMs)
-  entry.retryTimer = setTimeout(() => {
-    entry.retryTimer = undefined
-    if (!entry.alive || entry.refs <= 0 || gen !== generation || entry.terminated !== undefined) return
-    entry.controller = undefined
-    connectStream(entry, gen)
+function scheduleStreamReconnect(signature: string, gen: number): void {
+  if (gen !== generation || stream.activeSignature !== signature || stream.retryTimer !== undefined) return
+  const delay = Math.min(
+    sessionDocTimings.reconnectBaseMs * 2 ** Math.min(stream.retry++, 4),
+    sessionDocTimings.reconnectCapMs,
+  )
+  stream.retryTimer = setTimeout(() => {
+    stream.retryTimer = undefined
+    if (gen !== generation || stream.activeSignature !== signature) return
+    const items = collectActiveSubscriptions()
+    if (items.length === 0) {
+      abortMultiplexStream()
+      return
+    }
+    const nextSignature = items.map((item) => item.param).join('\0')
+    if (nextSignature !== signature) {
+      syncMultiplexStream(gen)
+      return
+    }
+    stream.connEpoch++
+    stream.streamKeys = new Set(items.map((item) => item.id))
+    connectMultiplexStream(items, signature, gen)
   }, delay)
 }
 
 /**
  * 订阅一个 (pluginId, docName, conversationId) 元组；返回退订函数。
- * 首个订阅者建立 SSE 流；最后一个退订中止一切并清缓存。
+ * 同批/短窗口内的订阅聚合到同一条 `/api/session-docs/events` 多路复用流；
+ * 最后一个退订关闭流并清缓存。
  */
 export function subscribeSessionDoc(key: SessionDocKey, listener: () => void): () => void {
   const id = keyString(key)
@@ -313,52 +468,58 @@ export function subscribeSessionDoc(key: SessionDocKey, listener: () => void): (
   listeners.add(item)
   const firstRef = entry.refs === 0
   entry.refs++
-  if (firstRef && entry.terminated === undefined) connectStream(entry, generation)
+  if (firstRef && entry.terminated === undefined) {
+    stream.haltedSignature = undefined
+    try {
+      encodeSessionDocSubParam({
+        pluginId: key.pluginId,
+        name: key.docName,
+        conversationId: key.conversationId,
+      })
+      scheduleStreamSync()
+    } catch (err) {
+      terminateEntry(entry, err instanceof Error ? err.message : String(err))
+    }
+  }
   return () => {
     listeners.delete(item)
     // 条目可能已被 reset 全局移除：不再重复扣减 refs（防负数）或二次 teardown。
     if (entries.get(id) !== entry) return
     entry.refs--
-    if (entry.refs <= 0) teardownEntry(entry)
+    if (entry.refs <= 0) {
+      teardownEntry(entry)
+      scheduleStreamSync()
+    }
   }
 }
 
-/** 卸载归零：中止流、清缓存与重试定时器，条目彻底移除。 */
+/** 卸载归零：清缓存与条目，若该条目曾属于当前共享流则使 activeSignature 失效以便重订触发建流。 */
 function teardownEntry(entry: EntryState): void {
+  const id = keyString(entry.key)
   entry.alive = false
   entry.refs = 0
-  if (entry.retryTimer !== undefined) {
-    clearTimeout(entry.retryTimer)
-    entry.retryTimer = undefined
-  }
-  entry.controller?.abort()
-  entry.controller = undefined
   entry.connected = false
   entry.error = undefined
+  entry.permanentError = undefined
   entry.value = undefined
   entry.hasValue = false
   entry.deleted = false
-  entry.connEpoch++
   entry.lastSeq = -1
-  entry.retry = 0
   entry.terminated = undefined
   entry.snapshot = undefined
-  entries.delete(keyString(entry.key))
+  entries.delete(id)
+  if (stream.streamKeys.has(id)) {
+    stream.activeSignature = ''
+    stream.haltedSignature = undefined
+  }
 }
 
-/** 终止一个条目：显式报错给仍挂载的订阅者（保留至全部退订），中止且永不重连。 */
+/** 终止一个条目：显式报错给仍挂载的订阅者（保留至全部退订），永不重连。 */
 function terminateEntry(entry: EntryState, message: string): void {
   if (entry.refs <= 0) {
     teardownEntry(entry)
     return
   }
-  if (entry.retryTimer !== undefined) {
-    clearTimeout(entry.retryTimer)
-    entry.retryTimer = undefined
-  }
-  entry.controller?.abort()
-  entry.controller = undefined
-  entry.connEpoch++
   entry.connected = false
   entry.terminated = message
   entry.error = message
@@ -369,26 +530,39 @@ function terminateEntry(entry: EntryState, message: string): void {
   notify(entry)
 }
 
-/** 全局中止（登出）：清全部条目并推进代际，在途请求结果全部作废。 */
+/** 全局中止（登出）：立即中止共享流、清全部条目并推进代际，在途请求结果全部作废。 */
 export function resetSessionDocSubscriptions(): void {
   generation++
+  abortMultiplexStream()
   for (const entry of [...entries.values()]) teardownEntry(entry)
 }
 
 /** 插件停用/卸载：向仍挂载的订阅者显式报错，中止其全部订阅且不再重连。 */
 export function evictSessionDocSubscriptions(pluginId: string): void {
+  let changed = false
   for (const entry of [...entries.values()]) {
     if (entry.key.pluginId !== pluginId) continue
     terminateEntry(entry, `Plugin ${pluginId} disabled; conversation document subscription aborted`)
+    changed = true
+  }
+  if (changed) {
+    if (collectActiveSubscriptions().length === 0) abortMultiplexStream()
+    else scheduleStreamSync()
   }
 }
 
 /** 会话删除：显式报错并中止该会话全部订阅缓存。 */
 export function evictSessionDocsOfConversation(conversationId: number): void {
+  let changed = false
   for (const entry of [...entries.values()]) {
     if (entry.key.conversationId === conversationId) {
       terminateEntry(entry, `Conversation ${conversationId} deleted; conversation document subscription aborted`)
+      changed = true
     }
+  }
+  if (changed) {
+    if (collectActiveSubscriptions().length === 0) abortMultiplexStream()
+    else scheduleStreamSync()
   }
 }
 
@@ -426,21 +600,15 @@ function snapshotUnchanged(
   )
 }
 
-/** 订阅者显式重试：清除错误态并重建订阅流（旧连接因代际推进全部作废）。 */
+/** 订阅者显式重试：清除错误态并立即重建共享流（旧连接因代际推进全部作废）。 */
 export function retrySessionDoc(key: SessionDocKey): void {
   const entry = entries.get(keyString(key))
   if (entry === undefined || entry.refs <= 0 || entry.terminated !== undefined) return
-  const gen = generation
-  entry.retry = 0
   entry.error = undefined
-  if (entry.retryTimer !== undefined) {
-    clearTimeout(entry.retryTimer)
-    entry.retryTimer = undefined
-  }
-  entry.controller?.abort()
-  entry.controller = undefined
-  connectStream(entry, gen)
+  entry.permanentError = undefined
   notify(entry)
+  abortMultiplexStream()
+  syncMultiplexStream(generation)
 }
 
 // ---------------------------------------------------------------------------

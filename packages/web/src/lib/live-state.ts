@@ -1,4 +1,4 @@
-import type { AskSpec, ConversationDetail, ConversationEntry, ConversationLive, ConversationSummary, HelmEventFrame, HelmSnapshot, NodeInfo, PluginSummary, PluginUiContribution } from '@helm/protocol/browser'
+import type { AskSpec, ConversationDetail, ConversationEntry, ConversationLive, ConversationSummary, HelmEventFrame, HelmResumedFrame, HelmSnapshot, HelmTransientLiveFrame, NodeInfo, PluginSummary, PluginUiContribution } from '@helm/protocol/browser'
 
 export interface LiveState {
   seq: number
@@ -52,7 +52,10 @@ function queueOnlyLive(live: ConversationLive): ConversationLive {
   return { conversationId: live.conversationId, text: '', tools: [], ...(live.queuedInputs !== undefined ? { queuedInputs: live.queuedInputs } : {}), updatedAt: live.updatedAt }
 }
 
-/** 新连接必须重新加载详情和未随快照提供的 public docs：快照只含 pluginDocs 直投部分。 */
+/**
+ * 应用全量快照并做 SWR 保活：保留仍存在于 snapshot.conversations 中的
+ * previous.conversationDetails（合并最新摘要字段），仅清理已删除会话的详情缓存。
+ */
 export function applySnapshot(previous: LiveState, snapshot: HelmSnapshot): LiveState {
   if (typeof snapshot.bootId !== 'string' || snapshot.bootId === '' || !Number.isSafeInteger(snapshot.seq) || snapshot.seq < 0 || !Array.isArray(snapshot.conversations) || !Array.isArray(snapshot.pendingAsks) || !Array.isArray(snapshot.plugins) || !Array.isArray(snapshot.ui)) {
     throw new Error('Invalid kernel live snapshot format')
@@ -64,6 +67,22 @@ export function applySnapshot(previous: LiveState, snapshot: HelmSnapshot): Live
     if (!isLiveShape(live)) throw new Error('Invalid kernel live snapshot format')
     conversationLives[live.conversationId] = live
   }
+  const conversationDetails: Record<number, ConversationDetail> = {}
+  for (const conv of snapshot.conversations) {
+    const prevDetail = previous.conversationDetails[conv.id]
+    if (prevDetail !== undefined) {
+      conversationDetails[conv.id] = {
+        ...prevDetail,
+        ...conv,
+        // 保留 prevDetail 已实际同步的条目水位，避免后台静默刷新失败后误以为详情已追平。
+        stateChangeSeq: prevDetail.stateChangeSeq,
+        lastEntryId: prevDetail.lastEntryId,
+        ...(conv.contextUsage === undefined && prevDetail.contextUsage !== undefined
+          ? { contextUsage: prevDetail.contextUsage }
+          : {}),
+      }
+    }
+  }
   // 快照 pluginDocs 直投：免额外拉取，键与 ensurePluginDoc 一致（`${pluginId}/${docName}`）。
   const pluginDocs: Record<string, unknown> = {}
   if (Array.isArray(snapshot.pluginDocs)) {
@@ -73,7 +92,7 @@ export function applySnapshot(previous: LiveState, snapshot: HelmSnapshot): Live
       pluginDocs[`${doc.pluginId}/${doc.name}`] = doc.value
     }
   }
-  return { ...emptyLiveState(), seq: snapshot.seq, conversations: sortConversations(snapshot.conversations), conversationLives, pendingAsks: snapshot.pendingAsks, plugins: snapshot.plugins, uiContributions: snapshot.ui, pluginDocs, nodes: Array.isArray(snapshot.nodes) ? sortNodes(snapshot.nodes) : [], resolvedAsksByConv: previous.resolvedAsksByConv }
+  return { ...emptyLiveState(), seq: snapshot.seq, conversations: sortConversations(snapshot.conversations), conversationDetails, conversationLives, pendingAsks: snapshot.pendingAsks, plugins: snapshot.plugins, uiContributions: snapshot.ui, pluginDocs, nodes: Array.isArray(snapshot.nodes) ? sortNodes(snapshot.nodes) : [], resolvedAsksByConv: previous.resolvedAsksByConv }
 }
 
 export function entryMatchesReference(entry: ConversationEntry, reference: string): boolean {
@@ -104,7 +123,18 @@ export function mergeConversationDetail(state: LiveState, detail: ConversationDe
     ...state,
     conversations,
     pendingEntries: omit(state.pendingEntries, String(detail.id)),
-    conversationDetails: { ...state.conversationDetails, [detail.id]: { ...detail, ...(summary ?? {}), ...(usage !== undefined ? { contextUsage: usage } : {}), entries: sorted, nextCursor: olderPage || !current ? detail.nextCursor : current.nextCursor } },
+    conversationDetails: {
+      ...state.conversationDetails,
+      [detail.id]: {
+        ...detail,
+        ...(summary ?? {}),
+        stateChangeSeq: olderPage && current ? current.stateChangeSeq : detail.stateChangeSeq,
+        lastEntryId: olderPage && current ? current.lastEntryId : detail.lastEntryId,
+        ...(usage !== undefined ? { contextUsage: usage } : {}),
+        entries: sorted,
+        nextCursor: olderPage || !current ? detail.nextCursor : current.nextCursor,
+      },
+    },
   }
 }
 
@@ -146,6 +176,43 @@ export function applyConversationEntry(state: LiveState, conversationId: number,
   return { ...state, pendingEntries: { ...state.pendingEntries, [conversationId]: [entry] } }
 }
 
+/**
+ * 应用非顺序瞬态 `conversation.live` 帧：不检查也不推进 `seq`，
+ * 仅更新对应会话的实时视图。
+ */
+export function applyTransientLiveFrame(state: LiveState, frame: HelmTransientLiveFrame): LiveState {
+  if (frame === null || typeof frame !== 'object' || !isLiveShape((frame as { live?: unknown }).live)) {
+    throw new Error('Invalid transient conversation.live frame format')
+  }
+  return {
+    ...state,
+    conversationLives: { ...state.conversationLives, [frame.live.conversationId]: frame.live },
+  }
+}
+
+/**
+ * 应用 `resumed` 控制帧携带的活跃会话实时视图集合，对账断线期间未进入
+ * 持久回放环形缓冲区的瞬态 `conversation.live` 状态。
+ */
+export function applyResumedFrame(state: LiveState, frame: HelmResumedFrame): LiveState {
+  if (frame === null || typeof frame !== 'object') {
+    throw new Error('Invalid kernel live resumed format')
+  }
+  if (frame.conversationLives === undefined) return state
+  if (!Array.isArray(frame.conversationLives)) {
+    throw new Error('Invalid kernel live resumed format')
+  }
+  const conversationLives: Record<number, ConversationLive> = {}
+  for (const live of frame.conversationLives) {
+    if (!isLiveShape(live)) throw new Error('Invalid kernel live resumed format')
+    conversationLives[live.conversationId] = live
+  }
+  if (frame.conversationLives.length === 0 && Object.keys(state.conversationLives).length === 0) {
+    return state
+  }
+  return { ...state, conversationLives }
+}
+
 /** 任何序号缺口都重连取快照，不能继续显示缺帧的“最新状态”。 */
 export function applyEventFrame(state: LiveState, frame: HelmEventFrame): LiveState {
   if (!Number.isSafeInteger(frame.seq) || !frame.event || typeof frame.event.type !== 'string') throw new Error('Invalid live event format')
@@ -159,7 +226,18 @@ export function applyEventFrame(state: LiveState, frame: HelmEventFrame): LiveSt
       if ('conversation' in event) {
         const conv = event.conversation
         next.conversations = sortConversations(upsert(state.conversations, conv))
-        if (state.conversationDetails[conv.id]) next.conversationDetails = { ...state.conversationDetails, [conv.id]: { ...state.conversationDetails[conv.id]!, ...conv } }
+        if (state.conversationDetails[conv.id]) {
+          const existingDetail = state.conversationDetails[conv.id]!
+          next.conversationDetails = {
+            ...state.conversationDetails,
+            [conv.id]: {
+              ...existingDetail,
+              ...conv,
+              stateChangeSeq: existingDetail.stateChangeSeq,
+              lastEntryId: existingDetail.lastEntryId,
+            },
+          }
+        }
         if (conv.status !== 'working' && conv.status !== 'blocked') {
           // 终态交接边界：若权威 live 快照仍带 queuedInputs（失败后 afterFailedRun
           // 保留排队等场景），保留 queue-only live 等真实出队帧清理，不在 web
@@ -182,9 +260,6 @@ export function applyEventFrame(state: LiveState, frame: HelmEventFrame): LiveSt
       break
     case 'conversation.entry':
       if ('entry' in event) return applyConversationEntry(next, event.conversationId, event.entry)
-      break
-    case 'conversation.live':
-      if ('live' in event) next.conversationLives = { ...state.conversationLives, [event.live.conversationId]: event.live }
       break
     case 'ask.upsert':
       if ('ask' in event) next.pendingAsks = event.ask.status === 'pending' ? upsert(state.pendingAsks, event.ask) : state.pendingAsks.filter((ask) => ask.id !== event.ask.id)
@@ -256,10 +331,11 @@ export class SseParser {
 export const sseClientTimings = {
   /**
    * 连接建立后持续未收到任何字节（含服务端 `: keepalive` 心跳注释行）即判定
-   * 连接卡死，中止当前连接并走既有重连路径；须显著大于内核心跳间隔
-   * （EventHub 默认 15s），避免误杀正常空闲连接。
+   * 连接卡死，中止当前连接并走既有重连路径；对齐内核 15s keepalive。
    */
-  idleTimeoutMs: 60_000,
+  idleTimeoutMs: 30_000,
+  /** `online`/`visibilitychange` 唤醒时判定活跃连接疑似半开陈旧的静默阈值（毫秒）。 */
+  staleWakeupMs: 20_000,
   /** 重连指数退避基础间隔（毫秒）。 */
   reconnectBaseMs: 1_000,
   /** 重连指数退避上限（毫秒）。 */

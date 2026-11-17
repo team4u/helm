@@ -39,7 +39,7 @@ function makeStore(conversation: ConversationSummary): HelmStoreValue {
     connectionError: null, loadErrors: {}, sseConnected: true, theme: 'dark' as const, themePreference: 'system' as const,
     conversations: [conversation], conversationDetails: {}, conversationLives: {}, conversationArtifacts: {},
     pendingAsks: [], resolvedAsksByConv: {}, plugins: [], uiContributions: [],
-    groupedUi: groupUiContributions([]), pluginDocs: {}, nodes: [], profiles: [],
+    groupedUi: groupUiContributions([]), pluginDocs: {}, nodes: [], profiles: [], profilesLoaded: true, assetsLoaded: true,
     models: [
       // 目录明确 B 仅支持到 high（与内核收敛结果一致）。
       { id: 'faux-cap-b/model-b', provider: 'faux-cap-b', modelId: 'model-b', available: true, thinkingLevels: ['minimal', 'low', 'medium', 'high'] },

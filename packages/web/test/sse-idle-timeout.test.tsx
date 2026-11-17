@@ -115,6 +115,7 @@ function hangingEventStream(): ReadableStream<Uint8Array> {
 }
 
 test('挂起流idle timeout中止并重连，重连 401 必须登出且不再无限重连', { timeout: 60_000 }, async () => {
+  assert.equal(sseClientTimings.idleTimeoutMs, 30_000, '默认 SSE 空闲超时必须收敛至 30_000ms')
   const { HelmStoreProvider } = await import('../src/lib/HelmStoreProvider.js')
   const { useHelmStore } = await import('../src/lib/store-context.js')
   const originalTimings = { ...sseClientTimings }
@@ -187,6 +188,121 @@ test('挂起流idle timeout中止并重连，重连 401 必须登出且不再无
     localStorage.removeItem('helm:token')
     const r = root
     if (r !== undefined) await act(async () => { r.unmount() })
+    host.remove()
+  }
+})
+
+test('online 与 visibilitychange 秒醒：取消退避立即重连、陈旧流重连、健康流不误杀', { timeout: 60_000 }, async () => {
+  const { HelmStoreProvider } = await import('../src/lib/HelmStoreProvider.js')
+  const { useHelmStore } = await import('../src/lib/store-context.js')
+  const originalTimings = { ...sseClientTimings }
+  const originalFetch = globalThis.fetch
+  const originalHiddenDescriptor = Object.getOwnPropertyDescriptor(document, 'hidden')
+  let hidden = false
+  Object.defineProperty(document, 'hidden', { configurable: true, get: () => hidden })
+
+  Object.assign(sseClientTimings, {
+    idleTimeoutMs: 30_000,
+    staleWakeupMs: 80,
+    reconnectBaseMs: 10_000,
+    reconnectCapMs: 10_000,
+    reconnectJitterMs: 0,
+  })
+  localStorage.setItem('helm:token', 'tok-wake')
+
+  let eventsCalls = 0
+  const streams: Array<{ abortable: boolean }> = []
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input)
+    if (path === '/api/auth/status') {
+      return new Response(JSON.stringify({ configured: true, authenticated: true }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }
+    if (path === '/api/events' || path.startsWith('/api/events?')) {
+      eventsCalls += 1
+      if (eventsCalls === 1) {
+        // 首次连接立即失败：进入 10s 长退避
+        return new Response('unavailable', { status: 503 })
+      }
+      if (eventsCalls === 2) {
+        // 第二次连接（online 唤醒）先断开再进入 10s 退避，测试 visibilitychange 唤醒
+        return new Response('unavailable', { status: 503 })
+      }
+      const entry = { abortable: false }
+      streams.push(entry)
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(`event: snapshot\ndata: ${JSON.stringify(snapshotPayload)}\n\n`))
+          init?.signal?.addEventListener('abort', () => {
+            entry.abortable = true
+            try { controller.close() } catch { /* noop */ }
+          }, { once: true })
+        },
+      })
+      return new Response(stream, { status: 200, headers: { 'content-type': 'text/event-stream' } })
+    }
+    return new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } })
+  }) as typeof fetch
+
+  let sseConnected = false
+  const Probe = (): React.ReactNode => {
+    sseConnected = useHelmStore().sseConnected
+    return null
+  }
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  let root: Root | undefined
+  const waitUntil = async (pred: () => boolean, ms = 5_000): Promise<void> => {
+    const deadline = Date.now() + ms
+    while (!pred()) {
+      if (Date.now() > deadline) throw new Error(`waitUntil 超时 eventsCalls=${eventsCalls} sseConnected=${sseConnected}`)
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 15)) })
+    }
+  }
+
+  try {
+    await act(async () => {
+      root = createRoot(host)
+      root.render(React.createElement(HelmStoreProvider, null, React.createElement(Probe)))
+    })
+    await waitUntil(() => eventsCalls === 1)
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 25)) })
+    assert.equal(eventsCalls, 1, '10s 退避期间不得自行重连')
+
+    // 1. online 事件立即取消退避重连
+    await act(async () => {
+      window.dispatchEvent(new Event('online'))
+    })
+    await waitUntil(() => eventsCalls === 2)
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 25)) })
+
+    // 2. visibilitychange 切回前台立即取消退避重连
+    hidden = true
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')) })
+    assert.equal(eventsCalls, 2, '切入后台不得重连')
+    hidden = false
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')) })
+    await waitUntil(() => sseConnected === true && eventsCalls === 3)
+
+    // 3. 刚建立的健康连接（< staleWakeupMs）：visibilitychange 不得误杀
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')) })
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)) })
+    assert.equal(eventsCalls, 3, '健康连接不得被误杀重建')
+
+    // 4. 超过 staleWakeupMs（80ms）未收任何帧后切回前台：判定陈旧流立即中止重连
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 100)) })
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')) })
+    await waitUntil(() => eventsCalls === 4 && sseConnected === true)
+    assert.equal(streams[0]?.abortable, true, '陈旧连接必须被中止')
+  } finally {
+    Object.assign(sseClientTimings, originalTimings)
+    globalThis.fetch = originalFetch
+    localStorage.removeItem('helm:token')
+    if (originalHiddenDescriptor !== undefined) {
+      Object.defineProperty(document, 'hidden', originalHiddenDescriptor)
+    } else {
+      delete (document as unknown as Record<string, unknown>).hidden
+    }
+    if (root !== undefined) await act(async () => { root!.unmount() })
     host.remove()
   }
 })

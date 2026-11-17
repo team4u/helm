@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { ConversationDetail, ConversationLive, ConversationSummary, HelmSnapshot } from '@helm/protocol'
-import { applyConversationEntry, applyEventFrame, applySnapshot, emptyLiveState, entryMatchesReference, mergeConversationDetail, sortNodes, SseParser } from '../src/lib/live-state.js'
+import { applyConversationEntry, applyEventFrame, applyResumedFrame, applySnapshot, applyTransientLiveFrame, emptyLiveState, entryMatchesReference, mergeConversationDetail, sortNodes, sseClientTimings, SseParser } from '../src/lib/live-state.js'
 import { normalizeModelCatalogInfo } from '../src/lib/api.js'
 import type { NodeInfo } from '@helm/protocol'
 
@@ -18,11 +18,32 @@ test('SSE 分段 CRLF、多 data 行与注释不能丢帧', { timeout: 60_000 },
   assert.deepEqual(messages, [{ event: 'snapshot', data: '{"seq":\n10}' }, { event: 'notification', data: '{"text":"中文"}' }])
 })
 
-test('重连快照撤下过时插件文档和详情，重复帧忽略而缺帧要求重新同步', { timeout: 60_000 }, () => {
-  const before = { ...emptyLiveState(), pluginDocs: { 'p/index': { old: true } }, conversationDetails: { 1: { ...conv, entries: [] } } }
-  const next = applySnapshot(before, snapshot)
+test('重连快照 SWR 保活存在会话的详情并清理已删会话与过时插件文档，重复帧忽略而缺帧要求重新同步', { timeout: 60_000 }, () => {
+  const existingDetail: ConversationDetail = {
+    ...conv,
+    entries: [{ id: '1', kind: 'helm.input', data: { text: 'hi' } }],
+    nextCursor: 'cur-1',
+    contextUsage: { tokens: 1200, contextWindow: 8000 },
+  }
+  const deletedConv: ConversationSummary = { ...conv, id: 99, title: '已删会话' }
+  const before = {
+    ...emptyLiveState(),
+    pluginDocs: { 'p/index': { old: true } },
+    conversationDetails: {
+      1: existingDetail,
+      99: { ...deletedConv, entries: [{ id: '2', kind: 'pi.assistant' }] },
+    },
+  }
+  const next = applySnapshot(before, {
+    ...snapshot,
+    conversations: [{ ...conv, title: '新标题' }],
+  })
   assert.deepEqual(next.pluginDocs, {})
-  assert.deepEqual(next.conversationDetails, {})
+  assert.equal(next.conversationDetails[99], undefined, '已删除会话的 detail 必须清理')
+  assert.equal(next.conversationDetails[1]?.entries.length, 1, '仍存在会话的 detail 条目必须 SWR 保活')
+  assert.equal(next.conversationDetails[1]?.nextCursor, 'cur-1')
+  assert.equal(next.conversationDetails[1]?.title, '新标题', '同步合并最新摘要字段')
+  assert.deepEqual(next.conversationDetails[1]?.contextUsage, { tokens: 1200, contextWindow: 8000 })
   assert.equal(applyEventFrame(next, { seq: 10, event: { type: 'conversation.deleted', conversationId: 1 } }), next)
   assert.throws(() => applyEventFrame(next, { seq: 12, event: { type: 'notification', level: 'info', title: 'lost' } }), /sequence gap/)
   assert.equal(applyEventFrame(next, { seq: 11, event: { type: 'custom', payload: 1 } }).seq, 11)
@@ -217,21 +238,41 @@ const queuedLive: ConversationLive = {
   updatedAt: 50,
 }
 
-test('快照 conversationLives 重建 live/queue，旧项清理不残留，后续增量一致', { timeout: 60_000 }, () => {
+test('快照 conversationLives 重建 live/queue，旧项清理不残留，后续瞬态增量一致', { timeout: 60_000 }, () => {
   // 旧状态带残留 live（会话 2），新快照不含它：重建后清旧不残留。
   const before = { ...emptyLiveState(), conversationLives: { 2: { ...queuedLive, conversationId: 2 } } }
   const restored = applySnapshot(before, { ...snapshot, conversationLives: [queuedLive] })
   assert.deepEqual(Object.keys(restored.conversationLives), ['1'])
   assert.equal(restored.conversationLives[1]?.queuedInputs?.[0]?.id, 'req-1')
-  // 随后 conversation.live 增量正常覆盖（与快照重建衔接一致）。
-  const next = applyEventFrame(restored, {
-    seq: 11,
-    event: { type: 'conversation.live', live: { ...queuedLive, queuedInputs: [], updatedAt: 90 } },
+  // 随后瞬态 conversation.live 帧正常覆盖，且不推进 seq。
+  const next = applyTransientLiveFrame(restored, {
+    live: { ...queuedLive, queuedInputs: [], updatedAt: 90 },
   })
+  assert.equal(next.seq, restored.seq, '瞬态 live 帧不改变 seq')
   assert.deepEqual(next.conversationLives[1]?.queuedInputs, [])
   // conversation.deleted 仍移除 live。
-  const removed = applyEventFrame(next, { seq: 12, event: { type: 'conversation.deleted', conversationId: 1 } })
+  const removed = applyEventFrame(next, { seq: 11, event: { type: 'conversation.deleted', conversationId: 1 } })
   assert.deepEqual(removed.conversationLives, {})
+})
+
+test('applyTransientLiveFrame 与 applyResumedFrame：瞬态更新校验与 resumed live 对账', { timeout: 60_000 }, () => {
+  assert.equal(sseClientTimings.idleTimeoutMs, 30_000, 'SSE 默认空闲超时对齐后端 15s keepalive 收敛至 30s')
+  const base = applySnapshot(emptyLiveState(), { ...snapshot, conversationLives: [queuedLive] })
+  assert.throws(() => applyTransientLiveFrame(base, { live: { conversationId: 'bad' } } as never), /[Ii]nvalid/)
+
+  const live2: ConversationLive = { conversationId: 2, text: '恢复中的流', tools: [], updatedAt: 120 }
+  // resumed 未携带 conversationLives 时保留已有状态
+  assert.equal(applyResumedFrame(base, { bootId: 'test-boot', seq: 10, headSeq: 10 }), base)
+  // resumed 携带 conversationLives 时对账替换，清理已结束的旧瞬态视图
+  const reconciled = applyResumedFrame(base, {
+    bootId: 'test-boot',
+    seq: 10,
+    headSeq: 11,
+    conversationLives: [live2],
+  })
+  assert.equal(reconciled.conversationLives[1], undefined)
+  assert.equal(reconciled.conversationLives[2]?.text, '恢复中的流')
+  assert.throws(() => applyResumedFrame(base, { bootId: 'test-boot', seq: 10, headSeq: 10, conversationLives: 'bad' as never }), /[Ii]nvalid/)
 })
 
 test('快照 conversationLives 缺省时回退为空，非法形状显式拒绝', { timeout: 60_000 }, () => {
@@ -261,10 +302,9 @@ test('终态交接：live 含 queue -> upsert done 保留 queue-only live，等�
   assert.equal(afterSettled!.thinking, undefined)
   assert.deepEqual(afterSettled!.tools, [])
   assert.equal(afterSettled!.queuedInputs?.[0]?.id, 'req-1')
-  // 后续 queued 输入被消费（新 run 或 queue 清空帧）：live 被真实帧替换/清理。
-  state = applyEventFrame(state, {
-    seq: 12,
-    event: { type: 'conversation.live', live: { conversationId: 1, text: '下一轮', tools: [], updatedAt: 100 } },
+  // 后续 queued 输入被消费（新 run 或 queue 清空帧）：瞬态 live 被真实帧替换/清理。
+  state = applyTransientLiveFrame(state, {
+    live: { conversationId: 1, text: '下一轮', tools: [], updatedAt: 100 },
   })
   assert.equal(state.conversationLives[1]?.text, '下一轮')
   assert.equal(state.conversationLives[1]?.queuedInputs, undefined)

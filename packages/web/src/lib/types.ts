@@ -399,6 +399,24 @@ export function spaceForTarget(target: ResolvedTarget): SidebarSpace {
   return 'conversations'
 }
 
+export const COMPACT_MOBILE_MAX_WIDTH = 680
+export const COMPACT_MOBILE_DETAIL_LIMIT = 40
+export const DESKTOP_DETAIL_LIMIT = 150
+
+/** Whether the current viewport is a compact mobile layout (`<= 680px`). */
+export function isCompactMobileViewport(): boolean {
+  if (typeof window === 'undefined') return false
+  if (typeof window.matchMedia === 'function') {
+    return window.matchMedia(`(max-width: ${COMPACT_MOBILE_MAX_WIDTH}px)`).matches
+  }
+  return typeof window.innerWidth === 'number' && window.innerWidth > 0 && window.innerWidth <= COMPACT_MOBILE_MAX_WIDTH
+}
+
+/** Default entry limit for conversation detail requests based on current viewport width. */
+export function defaultConversationDetailLimit(): number {
+  return isCompactMobileViewport() ? COMPACT_MOBILE_DETAIL_LIMIT : DESKTOP_DETAIL_LIMIT
+}
+
 export interface HelmStoreValue {
   // Auth & connection state
   authReady: boolean
@@ -435,6 +453,8 @@ export interface HelmStoreValue {
 
   // Static config assets
   profiles: Profile[]
+  /** Whether profiles finished loading independently of slower assets (models/skills/actions); releases home landing early. */
+  profilesLoaded: boolean
   /** Whether static assets (profiles/models/skills/...) finished their first load this session (standby page distinguishes loading from non-existent). */
   assetsLoaded: boolean
   models: ModelDescriptor[]
@@ -474,7 +494,11 @@ export interface HelmStoreValue {
   /** Fully recalibrates the plugin list (after package install/update/remove; SSE plugin.changed remains the incremental truth, merged idempotently). Test doubles may omit it. */
   syncPlugins?(plugins: PluginSummary[]): void
   refreshNodes(): Promise<NodeInfo[] | undefined>
-  loadConversationDetail(conversationId: number, force?: boolean): Promise<ConversationDetail | undefined>
+  loadConversationDetail(
+    conversationId: number,
+    force?: boolean,
+    opts?: { silent?: boolean; limit?: number },
+  ): Promise<ConversationDetail | undefined>
   loadEarlierEntries(conversationId: number): Promise<void>
   /** Backfills a single entry's full text (fetched on demand after server-side
    * timeline preview truncation): same upsert semantics as the
@@ -483,7 +507,7 @@ export interface HelmStoreValue {
    * always provides it; test doubles may omit it (the truncation-fetch hook
    * then errors explicitly instead of degrading silently). */
   backfillConversationEntry?(conversationId: number, entry: ConversationEntry): void
-  loadConversationArtifacts(conversationId: number): Promise<ArtifactMetadata[] | undefined>
+  loadConversationArtifacts(conversationId: number, opts?: { silent?: boolean }): Promise<ArtifactMetadata[] | undefined>
   ensurePluginDoc(pluginId: string, docName: string): Promise<unknown>
   /** Subscribes to a conversation-scoped doc tuple (ref-counted dedicated SSE stream; see lib/session-docs.ts). */
   subscribeSessionDoc(key: SessionDocKey, listener: () => void): () => void

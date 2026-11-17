@@ -23,10 +23,12 @@ export interface UseLocationNavigationOptions {
   initialLocation: WorkspaceLocationState
   needsHomeLanding: boolean
   authenticated: boolean
+  profilesLoaded: boolean
   assetsLoaded: boolean
   sseConnected: boolean
   liveRef: MutableRefObject<LiveState>
   profilesRef: MutableRefObject<Profile[]>
+  profilesLoadedRef: MutableRefObject<boolean>
   assetsLoadedRef: MutableRefObject<boolean>
   conversationDetails: Record<number, ConversationDetail>
   loadErrors: Record<string, string>
@@ -70,10 +72,12 @@ export function useLocationNavigation({
   initialLocation,
   needsHomeLanding,
   authenticated,
+  profilesLoaded,
   assetsLoaded,
   sseConnected,
   liveRef,
   profilesRef,
+  profilesLoadedRef,
   assetsLoadedRef,
   conversationDetails,
   loadErrors,
@@ -161,7 +165,7 @@ export function useLocationNavigation({
       conversations: liveRef.current.conversations,
       profiles: profilesRef.current,
       plugins: liveRef.current.plugins,
-      assetsLoaded: assetsLoadedRef.current,
+      assetsLoaded: profilesLoadedRef.current || assetsLoadedRef.current,
       grouped: groupUiContributions(liveRef.current.uiContributions),
     }
     const resolution = resolveSpaceSwitch(space, targets.current.primaryTarget, spaceMemory.current, input)
@@ -182,7 +186,7 @@ export function useLocationNavigation({
       return
     }
     openTarget(resolution.target, { history: 'push' })
-  }, [assetsLoadedRef, liveRef, openTarget, profilesRef, pushNotice])
+  }, [assetsLoadedRef, profilesLoadedRef, liveRef, openTarget, profilesRef, pushNotice])
 
   const applyExternalLocation = useCallback((parsed: WorkspaceLocationState) => {
     // 外部 Hash 事件优先级高于尚未消费的组件导航标记，避免 push/replace 标记泄漏到下一次导航。
@@ -214,13 +218,12 @@ export function useLocationNavigation({
     [primaryTarget, splitTarget, workbenchOpen, workbenchTab, activeModal],
   )
 
-  // 首页落地：空 Hash（无显式主屏目标且无弹窗）进入不是导航意图——认证、会话快照与
-  // 静态资产全部就绪后，主屏以 replace 落到对话空间缺省目标（最新根会话所属角色的
-  // 待命页，无会话时首个可用角色）；期间位置被移动（用户点击 / 外部前进后退 / 程序
-  // 导航）则既有意图优先取消落地；无任何可用角色时保持解析缺省（角色中心）。
+  // 首页落地：空 Hash（无显式主屏目标且无弹窗）进入不是导航意图——认证、角色资产与
+  // 会话快照就绪后（不等待慢模型/技能列表），主屏以 replace 落到对话空间缺省目标；
+  // 期间位置被移动则既有意图优先取消落地；无任何可用角色时保持解析缺省（角色中心）。
   useEffect(() => {
     if (!homeLandingPending.current) return
-    if (!authenticated || !assetsLoaded || !sseConnected) return
+    if (!authenticated || !profilesLoaded || !sseConnected) return
     homeLandingPending.current = false
     // 数据就绪前位置已被移动（用户点击 / 外部前进后退 / 程序导航）：既有意图优先，取消落地。
     if (!isSameLocationState(locationState, initialLocation)) return
@@ -228,13 +231,13 @@ export function useLocationNavigation({
       conversations: liveRef.current.conversations,
       profiles: profilesRef.current,
       plugins: liveRef.current.plugins,
-      assetsLoaded: assetsLoadedRef.current,
+      assetsLoaded: profilesLoadedRef.current || assetsLoadedRef.current,
       grouped: groupUiContributions(liveRef.current.uiContributions),
     })
     if (home === null) return // No profiles available: keep the resolution default (profile center); never fabricate a target
     // 落地是初始位置解析的延续而非用户导航：replace 不产生历史项，后退不回到角色中心。
     openTarget(home, { history: 'replace' })
-  }, [authenticated, assetsLoaded, sseConnected, locationState, initialLocation, openTarget, liveRef, profilesRef, assetsLoadedRef])
+  }, [authenticated, profilesLoaded, sseConnected, locationState, initialLocation, openTarget, liveRef, profilesRef, profilesLoadedRef, assetsLoadedRef])
 
   // 命中老消息时逐页取历史，直至 entry 可见或游标耗尽。
   useEffect(() => {

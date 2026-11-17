@@ -47,7 +47,7 @@ function makeStore(opts?: { detail?: boolean }): { store: HelmStoreValue; notice
     conversationLives: {},
     conversationArtifacts: { 1: [], 2: [] }, pendingAsks: [], resolvedAsksByConv: {},
     plugins: [], uiContributions: [], groupedUi: groupUiContributions([]), pluginDocs: {},
-    nodes: [], profiles: [], assetsLoaded: true, models: [], providers: [], credentials: [],
+    nodes: [], profiles: [], profilesLoaded: true, assetsLoaded: true, models: [], providers: [], credentials: [],
     skills: [], actions: [],
     primaryTarget: { kind: 'conversation' as const, conversationId: 1 }, splitTarget: null,
     workbenchOpen: false, workbenchTab: 'artifacts' as const, activeModal: null,

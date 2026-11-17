@@ -910,6 +910,7 @@ function makeTestStore(partial: Partial<HelmStoreValue> = {}): HelmStoreValue {
     pluginDocs: {},
     nodes: [],
     profiles: [{ id: 'assistant', name: '个人助理' }],
+    profilesLoaded: true,
     assetsLoaded: true,
     models: [
       {

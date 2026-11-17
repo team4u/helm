@@ -70,10 +70,15 @@ interface FetchStub {
  * fetch 桩：`profilesResponse` 可控（默认立即返回 assistant）；
  * 挂起它即可把 assetsLoaded 钉在 false（首页落地的就绪前提），实现「就绪前导航」。
  */
-function stubFetch(options: { snapshotPayload: object; profilesResponse?: () => Promise<unknown> }): FetchStub {
+function stubFetch(options: {
+  snapshotPayload: object
+  profilesResponse?: () => Promise<unknown>
+  modelsResponse?: () => Promise<unknown>
+}): FetchStub {
   const originalFetch = globalThis.fetch
   const encoder = new TextEncoder()
   const profilesResponse = options.profilesResponse ?? (async () => [{ id: 'assistant', name: 'Assistant' }])
+  const modelsResponse = options.modelsResponse ?? (async () => [])
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input)
     if (path === '/api/auth/status') {
@@ -87,6 +92,9 @@ function stubFetch(options: { snapshotPayload: object; profilesResponse?: () => 
     if (path === '/api/profiles') {
       return jsonResponse(await profilesResponse())
     }
+    if (path === '/api/models' || path.startsWith('/api/models?')) {
+      return jsonResponse(await modelsResponse())
+    }
     return jsonResponse([])
   }) as typeof fetch
   return { restore: () => { globalThis.fetch = originalFetch } }
@@ -99,6 +107,7 @@ function stubFetch(options: { snapshotPayload: object; profilesResponse?: () => 
 interface Observed {
   target: string
   authenticated: boolean
+  profilesLoaded: boolean
   assetsLoaded: boolean
   sseConnected: boolean
   historyLength: number
@@ -130,7 +139,14 @@ function describeTarget(target: ResolvedTarget): string {
 const allReady = (o: Observed): boolean => o.authenticated && o.assetsLoaded && o.sseConnected
 
 function mountApp(): Mount {
-  let observed: Observed = { target: '', authenticated: false, assetsLoaded: false, sseConnected: false, historyLength: 0 }
+  let observed: Observed = {
+    target: '',
+    authenticated: false,
+    profilesLoaded: false,
+    assetsLoaded: false,
+    sseConnected: false,
+    historyLength: 0,
+  }
   let openTargetFn: ((target: ResolvedTarget) => void) | undefined
 
   function App(): React.ReactNode {
@@ -138,6 +154,7 @@ function mountApp(): Mount {
     observed = {
       target: describeTarget(store.primaryTarget),
       authenticated: store.authenticated,
+      profilesLoaded: store.profilesLoaded,
       assetsLoaded: store.assetsLoaded,
       sseConnected: store.sseConnected,
       historyLength: window.history.length,
@@ -475,5 +492,32 @@ test('App 懒加载中心路由（#/settings/models）：Suspense 后渲染 Mode
   } finally {
     act(() => root.unmount())
     host.remove()
+  }
+})
+
+test('慢资产接口阻塞 assetsLoaded 时，只要 profilesLoaded 就绪即立即完成首页落地', { timeout: 60_000 }, async (t) => {
+  let releaseModels!: () => void
+  const modelsGate = new Promise<void>((resolve) => { releaseModels = resolve })
+  const stub = stubFetch({
+    snapshotPayload: snapshotOf([CONV_ROOT]),
+    modelsResponse: async () => { await modelsGate; return [] },
+  })
+  t.after(() => stub.restore())
+  resetEmptyHash()
+  const app = mountApp()
+  const historyLengthAtBoot = window.history.length
+  try {
+    await app.waitFor((o) => o.authenticated && o.profilesLoaded && o.sseConnected)
+    await app.waitFor((o) => o.target === 'a/assistant')
+    await app.settle()
+    const current = app.probe()
+    assert.equal(current.profilesLoaded, true, 'profiles 接口返回即置位 profilesLoaded')
+    assert.equal(current.assetsLoaded, false, 'models 仍未返回时 assetsLoaded 保持 false，不得阻塞落地')
+    assert.equal(current.target, 'a/assistant')
+    assert.equal(window.location.hash, '#/a/assistant')
+    assert.equal(current.historyLength, historyLengthAtBoot)
+  } finally {
+    releaseModels()
+    app.unmount()
   }
 })

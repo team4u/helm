@@ -10,6 +10,7 @@ import type { ComponentType, ReactNode } from 'react'
 import type { ClientComponentRef, ComposerController } from '@helm/protocol/browser'
 import { HelmIcon, createPluginClientContext, PluginClientContext, usePluginClientHost, ViewBoundary } from '@helm/plugin-client'
 import { getCachedClientComponent, getPluginClientCacheRevision, loadPluginClientModule, PluginClientError, requireClientExport, subscribePluginClientCacheInvalidation } from '../lib/plugin-client.js'
+import { useHelmStore } from '../lib/store-context.js'
 
 export interface PluginUiViewProps {
   pluginId: string
@@ -31,7 +32,8 @@ type ClientState =
   | { phase: 'ready'; Component: ComponentType<Record<string, unknown>> }
 
 export function PluginUiView(props: PluginUiViewProps): ReactNode {
-  const { pluginId, spec, conversationId, composer, label } = props
+  const { pluginId, spec } = props
+  const { plugins } = useHelmStore()
   const revision = useSyncExternalStore(
     subscribePluginClientCacheInvalidation,
     () => getPluginClientCacheRevision(pluginId),
@@ -41,23 +43,46 @@ export function PluginUiView(props: PluginUiViewProps): ReactNode {
   if (clientRef === undefined) {
     return <MissingTrackError pluginId={pluginId} />
   }
-  // 快照重建也会失效缓存，已挂载视图必须重载，不能继续显示旧组件或丢失样式。
-  return <ClientPluginUiView key={JSON.stringify([pluginId, clientRef.module, clientRef.export, revision])} {...props} clientRef={clientRef} />
+  const plugin = plugins.find((p) => p.id === pluginId)
+  const expectedHash =
+    plugin !== undefined && plugin.enabled && (plugin.status === undefined || plugin.status === 'active')
+      ? plugin.clientHashes?.[clientRef.module]
+      : undefined
+  // 快照重建或按插件对账失效缓存后，已挂载视图必须重载，不能继续显示旧组件或丢失样式。
+  return (
+    <ClientPluginUiView
+      key={JSON.stringify([pluginId, clientRef.module, clientRef.export, revision])}
+      {...props}
+      clientRef={clientRef}
+      expectedHash={expectedHash}
+    />
+  )
 }
 
-function ClientPluginUiView({ pluginId, clientRef, slotProps, conversationId, composer, label }: PluginUiViewProps & { clientRef: ClientComponentRef }): ReactNode {
+function ClientPluginUiView({
+  pluginId,
+  clientRef,
+  expectedHash,
+  slotProps,
+  conversationId,
+  composer,
+  label,
+}: PluginUiViewProps & { clientRef: ClientComponentRef; expectedHash?: string }): ReactNode {
   const port = usePluginClientHost()
   const [retry, setRetry] = useState(0)
   const [client, setClient] = useState<ClientState>(() => {
-    const cached = getCachedClientComponent(pluginId, clientRef.module, clientRef.export)
+    const cached = getCachedClientComponent(pluginId, clientRef.module, clientRef.export, expectedHash)
     return cached !== undefined ? { phase: 'ready', Component: cached } : { phase: 'loading' }
   })
 
   useEffect(() => {
     let cancelled = false
+    if (getCachedClientComponent(pluginId, clientRef.module, clientRef.export, expectedHash) === undefined) {
+      setClient((prev) => (prev.phase === 'loading' ? prev : { phase: 'loading' }))
+    }
     void (async () => {
       try {
-        const loaded = await loadPluginClientModule(pluginId, clientRef.module)
+        const loaded = await loadPluginClientModule(pluginId, clientRef.module, expectedHash)
         const exported = requireClientExport(pluginId, clientRef.module, clientRef.export, loaded.module)
         if (typeof exported !== 'function') {
           throw new PluginClientError(
@@ -66,7 +91,10 @@ function ClientPluginUiView({ pluginId, clientRef, slotProps, conversationId, co
             0,
           )
         }
-        if (!cancelled) setClient({ phase: 'ready', Component: exported as ComponentType<Record<string, unknown>> })
+        if (!cancelled) {
+          const Component = exported as ComponentType<Record<string, unknown>>
+          setClient((prev) => (prev.phase === 'ready' && prev.Component === Component ? prev : { phase: 'ready', Component }))
+        }
       } catch (err) {
         if (!cancelled) {
           setClient({
@@ -79,7 +107,7 @@ function ClientPluginUiView({ pluginId, clientRef, slotProps, conversationId, co
     return () => {
       cancelled = true
     }
-  }, [pluginId, clientRef.module, clientRef.export, retry])
+  }, [pluginId, clientRef.module, clientRef.export, expectedHash, retry])
 
   if (client.phase === 'loading') {
     return (

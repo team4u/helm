@@ -9,6 +9,11 @@ import { errorText } from './format.js'
 import type { LiveState } from './live-state.js'
 import type { ResolvedTarget, ToastNotice } from './types.js'
 
+export interface ArtifactsSyncWatermark {
+  stateChangeSeq: number
+  lastEntryId: number | undefined
+}
+
 export interface UseUnreadSyncOptions {
   authenticated: boolean
   authenticatedRef: MutableRefObject<boolean>
@@ -16,9 +21,15 @@ export interface UseUnreadSyncOptions {
   splitTarget: ResolvedTarget | null
   targets: MutableRefObject<{ primaryTarget: ResolvedTarget; splitTarget: ResolvedTarget | null }>
   liveRef: MutableRefObject<LiveState>
+  conversationArtifactsRef?: MutableRefObject<Record<number, ArtifactMetadata[]>>
+  artifactsWatermarksRef?: MutableRefObject<Map<number, ArtifactsSyncWatermark>>
   session: MutableRefObject<number>
-  loadConversationDetail: (conversationId: number, force?: boolean) => Promise<ConversationDetail | undefined>
-  loadConversationArtifacts: (conversationId: number) => Promise<ArtifactMetadata[] | undefined>
+  loadConversationDetail: (
+    conversationId: number,
+    force?: boolean,
+    opts?: { silent?: boolean; limit?: number },
+  ) => Promise<ConversationDetail | undefined>
+  loadConversationArtifacts: (conversationId: number, opts?: { silent?: boolean }) => Promise<ArtifactMetadata[] | undefined>
   pushNotice: (notice: Omit<ToastNotice, 'id' | 'createdAt'>) => void
 }
 
@@ -37,6 +48,8 @@ export function useUnreadSync({
   splitTarget,
   targets,
   liveRef,
+  conversationArtifactsRef,
+  artifactsWatermarksRef,
   session,
   loadConversationDetail,
   loadConversationArtifacts,
@@ -128,13 +141,30 @@ export function useUnreadSync({
     if (!authenticated) return
     for (const id of visibleConversationIds()) {
       void loadConversationDetail(id)
-      void loadConversationArtifacts(id)
+      const cachedArtifacts = conversationArtifactsRef?.current[id]
+      const summary = liveRef.current.conversations.find((conv) => conv.id === id)
+      const wm = artifactsWatermarksRef?.current.get(id)
+      const artifactsUnchanged =
+        cachedArtifacts !== undefined &&
+        summary !== undefined &&
+        summary.status !== 'working' &&
+        wm !== undefined &&
+        wm.stateChangeSeq === summary.stateChangeSeq &&
+        wm.lastEntryId !== undefined &&
+        summary.lastEntryId !== undefined &&
+        wm.lastEntryId === summary.lastEntryId
+      if (!artifactsUnchanged) {
+        void loadConversationArtifacts(id)
+      }
       clearVisibleConversationUnread(id)
     }
   }, [
     authenticated,
     primaryTarget,
     splitTarget,
+    liveRef,
+    conversationArtifactsRef,
+    artifactsWatermarksRef,
     loadConversationDetail,
     loadConversationArtifacts,
     visibleConversationIds,

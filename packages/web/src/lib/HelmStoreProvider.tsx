@@ -16,16 +16,20 @@ import { resetPluginClientCache } from './plugin-client.js'
 import { getSessionDocState, resetSessionDocSubscriptions, retrySessionDoc, subscribeSessionDoc } from './session-docs.js'
 import { applyScreenParamsPatch, partitionScreenParamsPatch } from './space-navigation.js'
 import { HelmStoreContext, useHelmStore } from './store-context.js'
-import { groupUiContributions, type HelmStoreValue, type ToastNotice } from './types.js'
+import { groupUiContributions, defaultConversationDetailLimit, type HelmStoreValue, type ToastNotice } from './types.js'
 import { formatLocationHash, hashHasPrimaryTarget, isSameLocationState, parseLocationHash, shouldPushLocationHistory, upgradeLegacyLocationState } from './url-hash-model.js'
 import { useEscAbort } from './use-esc-abort.js'
 import { useGlobalShortcuts } from './use-global-shortcuts.js'
 import { useLocationNavigation } from './use-location-navigation.js'
 import { useSseEvents, type SseCursor } from './use-sse-events.js'
 import { useThemePreferences } from './use-theme-preferences.js'
-import { useUnreadSync } from './use-unread-sync.js'
+import { useUnreadSync, type ArtifactsSyncWatermark } from './use-unread-sync.js'
 import { resetStandbyDrafts } from '../conversation/standby-model.js'
 import { getStoredSidebarCollapsed, persistSidebarCollapsed } from '../shell/shortcuts-model.js'
+
+function isAbortError(error: unknown): boolean {
+  return error !== null && typeof error === 'object' && (error as { name?: string }).name === 'AbortError'
+}
 
 export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
   const [authReady, setAuthReady] = useState(false)
@@ -37,12 +41,17 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
   const [live, setLive] = useState<LiveState>(emptyLiveState)
   const liveRef = useRef(live)
   const [conversationArtifacts, setConversationArtifacts] = useState<Record<number, ArtifactMetadata[]>>({})
+  const conversationArtifactsRef = useRef(conversationArtifacts)
+  conversationArtifactsRef.current = conversationArtifacts
+  const artifactsWatermarksRef = useRef(new Map<number, ArtifactsSyncWatermark>())
   const [loadErrors, setLoadErrors] = useState<Record<string, string>>({})
   // Current kernel boot generation (SSE snapshot bootId): a read-only fact
   // exposed to consumers such as version watching; not part of the SSE resume
   // state machine itself (resume credentials stay owned by sseCursorRef).
   const [kernelBootId, setKernelBootId] = useState<string | null>(null)
   const [profiles, setProfiles] = useState<Profile[]>([])
+  /** Whether profiles finished loading independently of slower assets (releases home landing early). */
+  const [profilesLoaded, setProfilesLoaded] = useState(false)
   /** Whether static assets finished their first load this session (the standby page distinguishes "loading" from "profile missing"). */
   const [assetsLoaded, setAssetsLoaded] = useState(false)
   const [models, setModels] = useState<ModelDescriptor[]>([])
@@ -78,6 +87,10 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
   // identity reuse the old authorization's client cache.
   const sseCursorRef = useRef<SseCursor | null>(null)
   const requests = useRef(new Map<string, Promise<unknown>>())
+  const inFlightControllers = useRef(new Map<string, AbortController>())
+  const requestEpochs = useRef(new Map<string, number>())
+  const assetsControllerRef = useRef<AbortController | null>(null)
+  const prevVisibleConversationIdsRef = useRef<Set<number>>(new Set())
   const failedDocs = useRef(new Set<string>())
   const pluginEpoch = useRef(new Map<string, number>())
   const timers = useRef(new Set<ReturnType<typeof setTimeout>>())
@@ -85,9 +98,37 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
   authenticatedRef.current = authenticated
   const profilesRef = useRef(profiles)
   profilesRef.current = profiles
+  const profilesLoadedRef = useRef(profilesLoaded)
+  profilesLoadedRef.current = profilesLoaded
   const assetsLoadedRef = useRef(assetsLoaded)
   assetsLoadedRef.current = assetsLoaded
   const assetGeneration = useRef(0)
+
+  const abortRequestKey = useCallback((key: string): void => {
+    requestEpochs.current.set(key, (requestEpochs.current.get(key) ?? 0) + 1)
+    const ctrl = inFlightControllers.current.get(key)
+    if (ctrl !== undefined) {
+      inFlightControllers.current.delete(key)
+      ctrl.abort()
+    }
+    requests.current.delete(key)
+  }, [])
+
+  const abortInFlightConversationRequests = useCallback((): void => {
+    const keys = new Set<string>([...inFlightControllers.current.keys(), ...requests.current.keys()])
+    for (const key of keys) {
+      if (key.startsWith('conversation:') || key.startsWith('history:') || key.startsWith('artifacts:')) {
+        abortRequestKey(key)
+      }
+    }
+  }, [abortRequestKey])
+
+  const abortAllInFlight = useCallback((): void => {
+    const keys = new Set<string>([...inFlightControllers.current.keys(), ...requests.current.keys()])
+    for (const key of keys) abortRequestKey(key)
+    assetsControllerRef.current?.abort()
+    assetsControllerRef.current = null
+  }, [abortRequestKey])
 
   const updateLive = useCallback((update: (state: LiveState) => LiveState) => {
     const next = update(liveRef.current)
@@ -100,8 +141,9 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
   }, [])
   useEffect(() => () => {
     session.current++
+    abortAllInFlight()
     for (const timer of timers.current) clearTimeout(timer)
-  }, [])
+  }, [abortAllInFlight])
 
   const dismissNotice = useCallback((id: string) => setNotices((prev) => prev.filter((notice) => notice.id !== id)), [])
   const pushNotice = useCallback((notice: Omit<ToastNotice, 'id' | 'createdAt'>) => {
@@ -132,25 +174,57 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
 
   const refreshAssets = useCallback(async () => {
     const generation = ++assetGeneration.current
-    const results = await Promise.allSettled([assetsApi.listProfiles(), assetsApi.listModels(), assetsApi.listProviders(), assetsApi.listCredentials(), assetsApi.listSkills(), pluginsApi.listActions()])
-    if (generation !== assetGeneration.current) return
-    if (results[0].status === 'fulfilled') setProfiles(results[0].value)
-    if (results[1].status === 'fulfilled') setModels(results[1].value)
-    if (results[2].status === 'fulfilled') setProviders(results[2].value)
-    if (results[3].status === 'fulfilled') setCredentials(results[3].value)
-    if (results[4].status === 'fulfilled') setSkills(results[4].value)
-    if (results[5].status === 'fulfilled') setActions(results[5].value)
-    // Profile asset success/failure is tracked separately: the standby page
-    // distinguishes "load failed (retryable)" from "really missing"; never use
-    // the all-assets completion signal to fake a successful Profile load.
-    reportLoad('assets:profiles', results[0].status === 'rejected' ? results[0].reason : undefined)
+    assetsControllerRef.current?.abort()
+    const controller = new AbortController()
+    assetsControllerRef.current = controller
+    const signal = controller.signal
+
+    const profilesTask = assetsApi.listProfiles({ signal }).then(
+      (list) => {
+        if (generation !== assetGeneration.current || signal.aborted) return
+        setProfiles(list)
+        reportLoad('assets:profiles', undefined)
+        profilesLoadedRef.current = true
+        setProfilesLoaded(true)
+      },
+      (reason: unknown) => {
+        if (isAbortError(reason) || signal.aborted || generation !== assetGeneration.current) return
+        // Profile asset success/failure is tracked separately: the standby page
+        // distinguishes "load failed (retryable)" from "really missing".
+        reportLoad('assets:profiles', reason)
+        profilesLoadedRef.current = true
+        setProfilesLoaded(true)
+        pushNotice({ type: 'notification', level: 'error', title: '角色加载失败', body: errorText(reason) })
+      },
+    )
+
+    const otherTasks = Promise.allSettled([
+      assetsApi.listModels({ signal }),
+      assetsApi.listProviders({ signal }),
+      assetsApi.listCredentials({ signal }),
+      assetsApi.listSkills({ signal }),
+      pluginsApi.listActions({ signal }),
+    ]).then((results) => {
+      if (generation !== assetGeneration.current || signal.aborted) return
+      if (results[0].status === 'fulfilled') setModels(results[0].value)
+      if (results[1].status === 'fulfilled') setProviders(results[1].value)
+      if (results[2].status === 'fulfilled') setCredentials(results[2].value)
+      if (results[3].status === 'fulfilled') setSkills(results[3].value)
+      if (results[4].status === 'fulfilled') setActions(results[4].value)
+      const labels = ['模型', '网关', '凭据', '技能', '插件动作']
+      results.forEach((result, index) => {
+        if (result.status === 'rejected' && !isAbortError(result.reason)) {
+          pushNotice({ type: 'notification', level: 'error', title: `${labels[index]}加载失败`, body: errorText(result.reason) })
+        }
+      })
+    })
+
+    await Promise.all([profilesTask, otherTasks])
+    if (generation !== assetGeneration.current || signal.aborted) return
+    if (assetsControllerRef.current === controller) assetsControllerRef.current = null
     // Regardless of per-item outcomes, a completed round distinguishes
     // "loading" from "missing" (per-item failures get their own notices).
     setAssetsLoaded(true)
-    const labels = ['角色', '模型', '网关', '凭据', '技能', '插件动作']
-    results.forEach((result, index) => {
-      if (result.status === 'rejected') pushNotice({ type: 'notification', level: 'error', title: `${labels[index]}加载失败`, body: errorText(result.reason) })
-    })
   }, [pushNotice, reportLoad])
 
   // Fully recalibrates the plugin list: merges local live state against the
@@ -188,21 +262,48 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     }
   }, [pushNotice, updateLive])
 
-  const loadConversationDetail = useCallback(async (id: number, force = false): Promise<ConversationDetail | undefined> => {
+  const loadConversationDetail = useCallback(async (
+    id: number,
+    force = false,
+    opts?: { silent?: boolean; limit?: number },
+  ): Promise<ConversationDetail | undefined> => {
     const key = `conversation:${id}`
     const existing = requests.current.get(key)
     if (existing) return existing as Promise<ConversationDetail | undefined>
     if (!force && liveRef.current.conversationDetails[id]) return liveRef.current.conversationDetails[id]
-    reportLoad(key)
+    const silent = opts?.silent === true
+    const hasCached = liveRef.current.conversationDetails[id] !== undefined
+    if (!silent || !hasCached) reportLoad(key)
     const epoch = session.current
-    const task = conversationsApi.getDetail(id, { limit: 150 }).then((detail) => {
-      if (session.current !== epoch) return undefined
+    const reqEpoch = (requestEpochs.current.get(key) ?? 0) + 1
+    requestEpochs.current.set(key, reqEpoch)
+    const controller = new AbortController()
+    inFlightControllers.current.set(key, controller)
+    const limit = opts?.limit ?? defaultConversationDetailLimit()
+    const task = conversationsApi.getDetail(id, { limit, signal: controller.signal }).then((detail) => {
+      if (session.current !== epoch || controller.signal.aborted || requestEpochs.current.get(key) !== reqEpoch) {
+        return undefined
+      }
+      reportLoad(key)
       updateLive((state) => mergeConversationDetail(state, detail))
       return detail
     }).catch((error: unknown) => {
-      if (session.current === epoch) reportLoad(key, error)
+      if (
+        isAbortError(error) ||
+        controller.signal.aborted ||
+        session.current !== epoch ||
+        requestEpochs.current.get(key) !== reqEpoch
+      ) {
+        return undefined
+      }
+      if (!silent || liveRef.current.conversationDetails[id] === undefined) {
+        reportLoad(key, error)
+      }
       return undefined
-    }).finally(() => { if (requests.current.get(key) === task) requests.current.delete(key) })
+    }).finally(() => {
+      if (inFlightControllers.current.get(key) === controller) inFlightControllers.current.delete(key)
+      if (requests.current.get(key) === task) requests.current.delete(key)
+    })
     requests.current.set(key, task)
     return task
   }, [reportLoad, updateLive])
@@ -213,11 +314,31 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     const key = `history:${id}`
     if (requests.current.has(key)) return
     const epoch = session.current
+    const reqEpoch = (requestEpochs.current.get(key) ?? 0) + 1
+    requestEpochs.current.set(key, reqEpoch)
+    const controller = new AbortController()
+    inFlightControllers.current.set(key, controller)
     reportLoad(key)
-    const task = conversationsApi.getDetail(id, { limit: 150, cursor: detail.nextCursor }).then((page) => {
-      if (epoch === session.current) updateLive((state) => mergeConversationDetail(state, page, true))
-    }).catch((error: unknown) => { if (epoch === session.current) reportLoad(key, error) })
-      .finally(() => { if (requests.current.get(key) === task) requests.current.delete(key) })
+    const limit = defaultConversationDetailLimit()
+    const task = conversationsApi.getDetail(id, { limit, cursor: detail.nextCursor, signal: controller.signal }).then((page) => {
+      if (session.current !== epoch || controller.signal.aborted || requestEpochs.current.get(key) !== reqEpoch) {
+        return
+      }
+      updateLive((state) => mergeConversationDetail(state, page, true))
+    }).catch((error: unknown) => {
+      if (
+        isAbortError(error) ||
+        controller.signal.aborted ||
+        session.current !== epoch ||
+        requestEpochs.current.get(key) !== reqEpoch
+      ) {
+        return
+      }
+      reportLoad(key, error)
+    }).finally(() => {
+      if (inFlightControllers.current.get(key) === controller) inFlightControllers.current.delete(key)
+      if (requests.current.get(key) === task) requests.current.delete(key)
+    })
     requests.current.set(key, task)
     await task
   }, [reportLoad, updateLive])
@@ -227,22 +348,58 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     updateLive((state) => applyConversationEntry(state, conversationId, entry))
   }, [updateLive])
 
-  const loadConversationArtifacts = useCallback(async (id: number): Promise<ArtifactMetadata[] | undefined> => {
+  const loadConversationArtifacts = useCallback(async (
+    id: number,
+    opts?: { silent?: boolean },
+  ): Promise<ArtifactMetadata[] | undefined> => {
     const key = `artifacts:${id}`
     const existing = requests.current.get(key)
     if (existing) return existing as Promise<ArtifactMetadata[] | undefined>
+    const silent = opts?.silent === true
+    const hasCached = conversationArtifactsRef.current[id] !== undefined
+    if (!silent || !hasCached) reportLoad(key)
     const epoch = session.current
-    reportLoad(key)
-    const task = conversationsApi.listArtifacts(id).then((list) => {
-      if (epoch === session.current) setConversationArtifacts((prev) => ({ ...prev, [id]: list }))
+    const reqEpoch = (requestEpochs.current.get(key) ?? 0) + 1
+    requestEpochs.current.set(key, reqEpoch)
+    const controller = new AbortController()
+    inFlightControllers.current.set(key, controller)
+    const sampledSummary = liveRef.current.conversations.find((c) => c.id === id)
+    const sampledWatermark = sampledSummary !== undefined
+      ? { stateChangeSeq: sampledSummary.stateChangeSeq, lastEntryId: sampledSummary.lastEntryId }
+      : undefined
+    const task = conversationsApi.listArtifacts(id, { signal: controller.signal }).then((list) => {
+      if (session.current !== epoch || controller.signal.aborted || requestEpochs.current.get(key) !== reqEpoch) {
+        return undefined
+      }
+      reportLoad(key)
+      setConversationArtifacts((prev) => ({ ...prev, [id]: list }))
+      const resolvedWatermark = sampledWatermark ?? (() => {
+        const latest = liveRef.current.conversations.find((c) => c.id === id) ?? liveRef.current.conversationDetails[id]
+        return latest !== undefined
+          ? { stateChangeSeq: latest.stateChangeSeq, lastEntryId: latest.lastEntryId }
+          : undefined
+      })()
+      if (resolvedWatermark !== undefined) artifactsWatermarksRef.current.set(id, resolvedWatermark)
+      else artifactsWatermarksRef.current.delete(id)
       return list
     }).catch((error: unknown) => {
-      if (epoch === session.current) {
+      if (
+        isAbortError(error) ||
+        controller.signal.aborted ||
+        session.current !== epoch ||
+        requestEpochs.current.get(key) !== reqEpoch
+      ) {
+        return undefined
+      }
+      if (!silent || conversationArtifactsRef.current[id] === undefined) {
         reportLoad(key, error)
         pushNotice({ type: 'notification', level: 'error', title: '会话产物加载失败', body: errorText(error), conversationId: id })
       }
       return undefined
-    }).finally(() => { if (requests.current.get(key) === task) requests.current.delete(key) })
+    }).finally(() => {
+      if (inFlightControllers.current.get(key) === controller) inFlightControllers.current.delete(key)
+      if (requests.current.get(key) === task) requests.current.delete(key)
+    })
     requests.current.set(key, task)
     return task
   }, [reportLoad, pushNotice])
@@ -303,10 +460,12 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     initialLocation: boot.location,
     needsHomeLanding: boot.needsHomeLanding,
     authenticated,
+    profilesLoaded,
     assetsLoaded,
     sseConnected,
     liveRef,
     profilesRef,
+    profilesLoadedRef,
     assetsLoadedRef,
     conversationDetails: live.conversationDetails,
     loadErrors,
@@ -314,6 +473,24 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     delay,
     pushNotice,
   })
+
+  // 目标切换或关闭分屏/抽屉时取消已离开会话的在途 detail / history / artifacts 请求，防拥塞与过期回写。
+  useEffect(() => {
+    const nextVisible = new Set<number>()
+    if (primaryTarget.kind === 'conversation') nextVisible.add(primaryTarget.conversationId)
+    if (splitTarget?.kind === 'conversation') nextVisible.add(splitTarget.conversationId)
+    if (activeModal?.kind === 'conversation-drawer' || activeModal?.kind === 'artifact-preview') {
+      if (activeModal.conversationId !== undefined) nextVisible.add(activeModal.conversationId)
+    }
+    for (const prevId of prevVisibleConversationIdsRef.current) {
+      if (!nextVisible.has(prevId)) {
+        abortRequestKey(`conversation:${prevId}`)
+        abortRequestKey(`history:${prevId}`)
+        abortRequestKey(`artifacts:${prevId}`)
+      }
+    }
+    prevVisibleConversationIdsRef.current = nextVisible
+  }, [primaryTarget, splitTarget, activeModal, abortRequestKey])
 
   const {
     pendingEscAbortConversationId,
@@ -342,6 +519,8 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     splitTarget,
     targets,
     liveRef,
+    conversationArtifactsRef,
+    artifactsWatermarksRef,
     session,
     loadConversationDetail,
     loadConversationArtifacts,
@@ -362,8 +541,11 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
 
   const logout = useCallback(() => {
     session.current++
+    abortAllInFlight()
     requests.current.clear()
     failedDocs.current.clear()
+    artifactsWatermarksRef.current.clear()
+    prevVisibleConversationIdsRef.current.clear()
     resetUnreadSync()
     // Resume credentials are invalidated too: after switching identity on the
     // same Hub, another authorization's client watermark must not be reused.
@@ -390,9 +572,11 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     updateLive(emptyLiveState)
     setConversationArtifacts({})
     setLoadErrors({})
+    profilesLoadedRef.current = false
+    setProfilesLoaded(false)
     setAssetsLoaded(false)
     setProfiles([]); setModels([]); setProviders([]); setCredentials([]); setSkills([]); setActions([])
-  }, [clearEscAbortPrompt, lastSyncedLocation, resetNavigationOnLogout, resetUnreadSync, updateLive])
+  }, [abortAllInFlight, clearEscAbortPrompt, lastSyncedLocation, resetNavigationOnLogout, resetUnreadSync, updateLive])
   useEffect(() => {
     window.addEventListener('helm:unauthorized', logout)
     return () => window.removeEventListener('helm:unauthorized', logout)
@@ -513,9 +697,12 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     updateLive,
     setKernelBootId,
     setConversationArtifacts,
+    conversationArtifactsRef,
+    artifactsWatermarksRef,
     visibleConversationIds,
     loadConversationDetail,
     loadConversationArtifacts,
+    abortInFlightConversationRequests,
     clearVisibleConversationUnread,
     pushNotice,
     refreshAssets,
@@ -529,12 +716,12 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
   // state should re-render every consuming component.
   const store: HelmStoreValue = useMemo(
     () => ({
-      ...live, authReady, authConfigured, authenticated, authError, connectionError, loadErrors, sseConnected, kernelBootId, theme, themePreference, locale, quietNotifyEnabled, conversationArtifacts, assetsLoaded,
+      ...live, authReady, authConfigured, authenticated, authError, connectionError, loadErrors, sseConnected, kernelBootId, theme, themePreference, locale, quietNotifyEnabled, conversationArtifacts, profilesLoaded, assetsLoaded,
       groupedUi, profiles, models, providers, credentials, skills, actions, primaryTarget, splitTarget, focusedPanel, sidebarCollapsed, pendingEscAbortConversationId, workbenchOpen, workbenchTab, activeModal, highlightedEntry, notices,
       setTheme, setThemePreference, toggleTheme, setLocale, setQuietNotify, checkAuth, onAuthenticated, logout, refreshAssets, syncPlugins, refreshNodes, loadConversationDetail, loadEarlierEntries, backfillConversationEntry, loadConversationArtifacts, ensurePluginDoc, subscribeSessionDoc, getSessionDocState, getPluginSessionDoc, retrySessionDoc, openTarget, closeSplit, setFocusedPanel, setSidebarCollapsed, toggleSidebarCollapsed, setScreenParams, setWorkbenchOpen, setWorkbenchTab, openSpace, setActiveModal, dismissNotice, pushNotice, invokePluginAction,
     }),
     [
-      live, authReady, authConfigured, authenticated, authError, connectionError, loadErrors, sseConnected, kernelBootId, theme, themePreference, locale, quietNotifyEnabled, conversationArtifacts, assetsLoaded,
+      live, authReady, authConfigured, authenticated, authError, connectionError, loadErrors, sseConnected, kernelBootId, theme, themePreference, locale, quietNotifyEnabled, conversationArtifacts, profilesLoaded, assetsLoaded,
       groupedUi, profiles, models, providers, credentials, skills, actions, primaryTarget, splitTarget, focusedPanel, sidebarCollapsed, pendingEscAbortConversationId, workbenchOpen, workbenchTab, activeModal, highlightedEntry, notices,
       setTheme, setThemePreference, toggleTheme, setLocale, setQuietNotify, checkAuth, onAuthenticated, logout, refreshAssets, syncPlugins, refreshNodes, loadConversationDetail, loadEarlierEntries, backfillConversationEntry, loadConversationArtifacts, ensurePluginDoc, getPluginSessionDoc, openTarget, closeSplit, setFocusedPanel, setSidebarCollapsed, toggleSidebarCollapsed, setScreenParams, setWorkbenchOpen, setWorkbenchTab, openSpace, setActiveModal, dismissNotice, pushNotice, invokePluginAction,
     ],

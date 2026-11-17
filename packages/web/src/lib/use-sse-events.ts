@@ -11,21 +11,26 @@ import type {
   HelmEventFrame,
   HelmResumedFrame,
   HelmSnapshot,
+  HelmTransientLiveFrame,
+  PluginSummary,
 } from '@helm/protocol/browser'
 import { getStoredToken } from './api.js'
 import { errorText } from './format.js'
 import {
   applyEventFrame,
+  applyResumedFrame,
   applySnapshot,
+  applyTransientLiveFrame,
   readSseChunkWithDeadline,
   SseParser,
   sseClientTimings,
   type LiveState,
 } from './live-state.js'
-import { evictPluginClientCache, resetPluginClientCache } from './plugin-client.js'
+import { evictPluginClientCache, reconcilePluginClientCache } from './plugin-client.js'
 import { evictSessionDocsOfConversation, evictSessionDocSubscriptions } from './session-docs.js'
 import { deletedConversationFallbackTarget } from './space-navigation.js'
 import type { ActiveModal, ResolvedTarget, ToastNotice } from './types.js'
+import type { ArtifactsSyncWatermark } from './use-unread-sync.js'
 
 export interface SseCursor {
   bootId: string
@@ -52,9 +57,16 @@ export interface UseSseEventsOptions {
   updateLive: (update: (state: LiveState) => LiveState) => void
   setKernelBootId: Dispatch<SetStateAction<string | null>>
   setConversationArtifacts: Dispatch<SetStateAction<Record<number, ArtifactMetadata[]>>>
+  conversationArtifactsRef?: MutableRefObject<Record<number, ArtifactMetadata[]>>
+  artifactsWatermarksRef?: MutableRefObject<Map<number, ArtifactsSyncWatermark>>
   visibleConversationIds: () => number[]
-  loadConversationDetail: (id: number, force?: boolean) => Promise<ConversationDetail | undefined>
-  loadConversationArtifacts: (id: number) => Promise<ArtifactMetadata[] | undefined>
+  loadConversationDetail: (
+    id: number,
+    force?: boolean,
+    opts?: { silent?: boolean; limit?: number },
+  ) => Promise<ConversationDetail | undefined>
+  loadConversationArtifacts: (id: number, opts?: { silent?: boolean }) => Promise<ArtifactMetadata[] | undefined>
+  abortInFlightConversationRequests?: () => void
   clearVisibleConversationUnread: (id: number, candidate?: ConversationSummary) => void
   pushNotice: (notice: Omit<ToastNotice, 'id' | 'createdAt'>) => void
   refreshAssets: () => Promise<void>
@@ -88,30 +100,139 @@ function computeReconnectBackoffMs(retry: number): number {
   )
 }
 
+const isPluginSummaryActive = (plugin: PluginSummary): boolean =>
+  plugin.enabled && (plugin.status === undefined || plugin.status === 'active')
+
+function sameClientHashes(
+  a: Record<string, string> | undefined,
+  b: Record<string, string> | undefined,
+): boolean {
+  if (a === b) return true
+  if (a === undefined || b === undefined) return false
+  const keysA = Object.keys(a)
+  const keysB = Object.keys(b)
+  if (keysA.length !== keysB.length) return false
+  return keysA.every((key) => Object.hasOwn(b, key) && b[key] === a[key])
+}
+
 function handleSnapshotFrame(payload: unknown, ctx: FrameHandlerContext): void {
   if (ctx.streamState.mode !== null) throw new Error('Live connection received a duplicate snapshot control frame')
   const snap = payload as HelmSnapshot
   if (snap === null || typeof snap !== 'object' || typeof snap.bootId !== 'string' || snap.bootId === '') {
     throw new Error('Invalid kernel live snapshot format (no valid bootId)')
   }
+  const prevPlugins = ctx.liveRef.current.plugins
+  const prevDetails = ctx.liveRef.current.conversationDetails
+  const prevConversationIds = new Set(ctx.liveRef.current.conversations.map((c) => c.id))
+  const nextConversationIds = new Set(snap.conversations.map((c) => c.id))
+
   ctx.streamState.mode = 'fresh'
   ctx.session.current++
+  ctx.abortInFlightConversationRequests?.()
   ctx.requests.current.clear()
   ctx.failedDocs.current.clear()
   ctx.unreadClearInFlight.current.clear()
   ctx.unreadClearedSeq.current.clear()
-  // 断线期间可能发生停用/升级：旧模块与在途下载不能跨快照复活。
-  resetPluginClientCache()
-  ctx.setLoadErrors({})
+
+  // 断线期间增量对账插件客户端缓存：保留启用且 hash 未变的模块与样式，仅逐出变更/停用项。
+  reconcilePluginClientCache(snap.plugins)
+
+  const nextPluginById = new Map(snap.plugins.map((p) => [p.id, p]))
+  const stalePluginIds = new Set<string>()
+  for (const prevPlugin of prevPlugins) {
+    const nextPlugin = nextPluginById.get(prevPlugin.id)
+    if (
+      nextPlugin === undefined ||
+      !isPluginSummaryActive(nextPlugin) ||
+      !sameClientHashes(prevPlugin.clientHashes, nextPlugin.clientHashes) ||
+      (!isPluginSummaryActive(prevPlugin) && isPluginSummaryActive(nextPlugin))
+    ) {
+      stalePluginIds.add(prevPlugin.id)
+    }
+    if (nextPlugin === undefined || !nextPlugin.enabled) {
+      evictSessionDocSubscriptions(prevPlugin.id)
+    }
+  }
+  for (const nextPlugin of snap.plugins) {
+    if (!isPluginSummaryActive(nextPlugin)) stalePluginIds.add(nextPlugin.id)
+    if (!nextPlugin.enabled) evictSessionDocSubscriptions(nextPlugin.id)
+  }
+  for (const prevId of prevConversationIds) {
+    if (!nextConversationIds.has(prevId)) {
+      evictSessionDocsOfConversation(prevId)
+      ctx.artifactsWatermarksRef?.current.delete(prevId)
+    }
+  }
+
+  // loadErrors 仅清理已被停用/移除/hash 变更插件的旧 doc 错误以及已删除会话的错误。
+  ctx.setLoadErrors((prev) => {
+    let changed = false
+    const next: Record<string, string> = {}
+    for (const [key, value] of Object.entries(prev)) {
+      if (key.startsWith('doc:')) {
+        const slash = key.indexOf('/')
+        const pluginId = slash > 4 ? key.slice(4, slash) : ''
+        if (stalePluginIds.has(pluginId)) {
+          changed = true
+          continue
+        }
+      } else if (
+        key.startsWith('conversation:') ||
+        key.startsWith('history:') ||
+        key.startsWith('artifacts:')
+      ) {
+        const convId = Number(key.slice(key.indexOf(':') + 1))
+        if (Number.isInteger(convId) && !nextConversationIds.has(convId)) {
+          changed = true
+          continue
+        }
+      }
+      next[key] = value
+    }
+    return changed ? next : prev
+  })
+
   ctx.updateLive((state) => applySnapshot(state, snap))
   ctx.sseCursorRef.current = { bootId: snap.bootId, seq: snap.seq }
   ctx.setKernelBootId(snap.bootId)
-  ctx.setConversationArtifacts({})
+
+  // SWR 保活：保留仍存在会话的产物缓存，仅清理已删除会话。
+  ctx.setConversationArtifacts((prev) => {
+    let changed = false
+    const next: Record<number, ArtifactMetadata[]> = {}
+    for (const [k, list] of Object.entries(prev)) {
+      const numId = Number(k)
+      if (nextConversationIds.has(numId)) next[numId] = list
+      else changed = true
+    }
+    return changed ? next : prev
+  })
+
   ctx.resetRetry()
   ctx.announceLive()
   for (const id of ctx.visibleConversationIds()) {
-    void ctx.loadConversationDetail(id, true)
-    void ctx.loadConversationArtifacts(id)
+    const prevDetail = prevDetails[id]
+    const nextSummary = snap.conversations.find((c) => c.id === id)
+    const unchanged =
+      prevDetail !== undefined &&
+      nextSummary !== undefined &&
+      nextSummary.status !== 'working' &&
+      prevDetail.stateChangeSeq === nextSummary.stateChangeSeq &&
+      prevDetail.lastEntryId !== undefined &&
+      nextSummary.lastEntryId !== undefined &&
+      prevDetail.lastEntryId === nextSummary.lastEntryId
+    if (!unchanged) {
+      const silent = prevDetail !== undefined
+      void ctx.loadConversationDetail(id, true, silent ? { silent: true } : undefined)
+      void ctx.loadConversationArtifacts(id, silent ? { silent: true } : undefined)
+    } else if (ctx.conversationArtifactsRef !== undefined && ctx.conversationArtifactsRef.current[id] === undefined) {
+      void ctx.loadConversationArtifacts(id, { silent: true })
+    } else if (ctx.artifactsWatermarksRef !== undefined && !ctx.artifactsWatermarksRef.current.has(id)) {
+      ctx.artifactsWatermarksRef.current.set(id, {
+        stateChangeSeq: nextSummary.stateChangeSeq,
+        lastEntryId: nextSummary.lastEntryId,
+      })
+    }
     ctx.clearVisibleConversationUnread(id)
   }
 }
@@ -134,10 +255,16 @@ function handleResumedFrame(payload: unknown, ctx: FrameHandlerContext): void {
   }
   ctx.streamState.mode = 'resumed'
   ctx.streamState.resumedHeadSeq = resumed.headSeq
+  ctx.updateLive((state) => applyResumedFrame(state, resumed))
   ctx.resetRetry()
   // 不清详情/产物/插件缓存：续传补发未丢失任何状态；只有实际追平 headSeq
   // 才宣称 live（零补发时立即 live），重放中不显示「新鲜」。
   if (ctx.liveRef.current.seq >= ctx.streamState.resumedHeadSeq) ctx.announceLive()
+}
+
+function handleTransientLiveFrame(payload: unknown, ctx: FrameHandlerContext): void {
+  if (ctx.streamState.mode === null) throw new Error('Live connection missing the initial snapshot')
+  ctx.updateLive((state) => applyTransientLiveFrame(state, payload as HelmTransientLiveFrame))
 }
 
 function dispatchFrameSideEffects(
@@ -250,6 +377,7 @@ export function useSseEvents(options: UseSseEventsOptions): void {
     visibleConversationIds,
     loadConversationDetail,
     loadConversationArtifacts,
+    abortInFlightConversationRequests,
     clearVisibleConversationUnread,
     pushNotice,
     refreshAssets,
@@ -264,8 +392,13 @@ export function useSseEvents(options: UseSseEventsOptions): void {
     let retry = 0
     let timer: ReturnType<typeof setTimeout> | undefined
     let controller: AbortController | undefined
+    let connecting = false
+    let immediateReconnect = false
+    let lastDataAt = 0
 
     const connect = async (): Promise<void> => {
+      connecting = true
+      lastDataAt = Date.now()
       controller = new AbortController()
       let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
       try {
@@ -320,6 +453,7 @@ export function useSseEvents(options: UseSseEventsOptions): void {
           visibleConversationIds,
           loadConversationDetail,
           loadConversationArtifacts,
+          abortInFlightConversationRequests,
           clearVisibleConversationUnread,
           pushNotice,
           refreshAssets,
@@ -340,6 +474,7 @@ export function useSseEvents(options: UseSseEventsOptions): void {
             const payload: unknown = JSON.parse(message.data)
             if (message.event === 'snapshot') handleSnapshotFrame(payload, ctx)
             else if (message.event === 'resumed') handleResumedFrame(payload, ctx)
+            else if (message.event === 'conversation.live') handleTransientLiveFrame(payload, ctx)
             else handleEventFrame(payload, ctx)
           } catch (error) {
             // 协议边界统一作废续传凭据（见边界注释）后重抛：本次连接按失败重连，
@@ -349,6 +484,7 @@ export function useSseEvents(options: UseSseEventsOptions): void {
           }
         })
 
+        lastDataAt = Date.now()
         reader = response.body.getReader()
         const decoder = new TextDecoder()
         while (active) {
@@ -360,6 +496,7 @@ export function useSseEvents(options: UseSseEventsOptions): void {
             throw new Error('Live connection idle timeout; reconnecting')
           }
           if (read.chunk.done) break
+          lastDataAt = Date.now()
           if (!active) return
           parser.push(decoder.decode(read.chunk.value, { stream: true }))
         }
@@ -374,20 +511,66 @@ export function useSseEvents(options: UseSseEventsOptions): void {
           await reader.cancel().catch(() => {})
           reader.releaseLock()
         }
+        connecting = false
+        controller = undefined
         if (active) {
           setSseConnected(false)
-          // 指数退避 + 随机抖动：内核重启等同时断线场景避免同步重连风暴。
-          const backoff = computeReconnectBackoffMs(retry)
-          retry += 1
-          timer = setTimeout(() => { void connect() }, backoff)
+          if (immediateReconnect) {
+            immediateReconnect = false
+            retry = 0
+            void connect()
+          } else {
+            // 指数退避 + 随机抖动：内核重启等同时断线场景避免同步重连风暴。
+            const backoff = computeReconnectBackoffMs(retry)
+            retry += 1
+            timer = setTimeout(() => {
+              timer = undefined
+              void connect()
+            }, backoff)
+          }
         }
       }
     }
 
+    const wakeup = (): void => {
+      if (!active || immediateReconnect) return
+      // 1. 断线重连退避等待中：立即取消退避定时器并发起无延迟重连
+      if (timer !== undefined) {
+        clearTimeout(timer)
+        timer = undefined
+        retry = 0
+        void connect()
+        return
+      }
+      // 2. 活跃连接疑似半开陈旧（长时间未收任何字节/心跳）：中止当前连接立即重连；健康流不误杀
+      if (connecting && controller !== undefined) {
+        if (Date.now() - lastDataAt >= sseClientTimings.staleWakeupMs) {
+          immediateReconnect = true
+          controller.abort()
+        }
+        return
+      }
+      // 3. 无定时器且无在途连接：立即重连
+      retry = 0
+      void connect()
+    }
+
+    const onOnline = (): void => {
+      wakeup()
+    }
+    const onVisibilityChange = (): void => {
+      if (typeof document === 'undefined' || !document.hidden) wakeup()
+    }
+
+    if (typeof window !== 'undefined') window.addEventListener('online', onOnline)
+    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisibilityChange)
+
     void connect()
     return () => {
       active = false
-      if (timer) clearTimeout(timer)
+      if (timer !== undefined) clearTimeout(timer)
+      if (typeof window !== 'undefined') window.removeEventListener('online', onOnline)
+      if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisibilityChange)
       controller?.abort()
     }
   }, [
@@ -395,6 +578,7 @@ export function useSseEvents(options: UseSseEventsOptions): void {
     logout,
     loadConversationDetail,
     loadConversationArtifacts,
+    abortInFlightConversationRequests,
     visibleConversationIds,
     clearVisibleConversationUnread,
     pushNotice,

@@ -16,7 +16,7 @@
  * - 导出不存在 / HTTP 错误 / import 抛错 / 保留导出类型非法均显式报错，绝不静默空白。
  */
 import type { ComponentType } from 'react'
-import { PLUGIN_CLIENT_CSS_EXPORT } from '@helm/protocol/browser'
+import { PLUGIN_CLIENT_CSS_EXPORT, type PluginSummary } from '@helm/protocol/browser'
 import { getStoredToken } from './api.js'
 
 export interface LoadedClientModule {
@@ -26,15 +26,32 @@ export interface LoadedClientModule {
 
 interface CacheEntry {
   pluginId: string
+  moduleRef: string
   contentHash: string
   namespaced: Promise<Record<string, unknown>>
   /** 动态 import 完成后写入的已解析模块命名空间（同步快路径与 SSR 测试用）。 */
   resolved?: Record<string, unknown>
 }
 
+interface InflightLoad {
+  pluginId: string
+  moduleRef: string
+  expectedHash: string | undefined
+  moduleEpoch: number
+  promise: Promise<LoadedClientModule>
+}
+
+interface FailedModuleEntry {
+  pluginId: string
+  moduleRef: string
+  contentHash: string | undefined
+}
+
 const cache = new Map<string, CacheEntry>()
-const inflightLoads = new Map<string, Promise<LoadedClientModule>>()
+const inflightLoads = new Map<string, InflightLoad>()
+const failedModules = new Map<string, FailedModuleEntry>()
 const pluginEpochs = new Map<string, number>()
+const moduleEpochs = new Map<string, number>()
 let cacheEpoch = 0
 /** 缓存失效监听器（evict/reset 清理完成后通知；正常 load/seed 不通知，避免循环）。 */
 const invalidationListeners = new Set<() => void>()
@@ -145,23 +162,65 @@ function applyPluginClientCss(
   existing.textContent = css
 }
 
+const isPluginSummaryActive = (plugin: PluginSummary): boolean =>
+  plugin.enabled && (plugin.status === undefined || plugin.status === 'active')
+
+function deleteChunksByPrefix(prefix: string): void {
+  for (const k of [...chunkPromiseCache.keys()]) {
+    if (k.startsWith(prefix)) chunkPromiseCache.delete(k)
+  }
+  for (const k of [...chunkTextFetchCache.keys()]) {
+    if (k.startsWith(prefix)) chunkTextFetchCache.delete(k)
+  }
+  const share = (globalThis as Record<string, unknown>).__helm_chunk_share as Record<string, unknown> | undefined
+  if (share) {
+    for (const k of Object.keys(share)) {
+      if (k.startsWith(prefix)) delete share[k]
+    }
+  }
+}
+
+function evictModuleArtifacts(pluginId: string, moduleRef: string): void {
+  const key = cacheKey(pluginId, moduleRef)
+  cache.delete(key)
+  if (inflightLoads.delete(key)) {
+    moduleEpochs.set(key, (moduleEpochs.get(key) ?? 0) + 1)
+  }
+  failedModules.delete(key)
+  deleteChunksByPrefix(`${pluginId}\0${moduleRef}\0`)
+  if (typeof document !== 'undefined') {
+    findPluginStyleNode(pluginStyleKey(pluginId, moduleRef))?.remove()
+  }
+}
+
 /** 插件 UI 贡献变化时调用：移除该插件全部缓存模块（停用/卸载后不残留）。 */
 export function evictPluginClientCache(pluginId: string): void {
   pluginEpochs.set(pluginId, (pluginEpochs.get(pluginId) ?? 0) + 1)
-  for (const [key, entry] of cache) {
+  for (const [key, entry] of [...cache.entries()]) {
     if (entry.pluginId === pluginId) {
       cache.delete(key)
+      moduleEpochs.set(key, (moduleEpochs.get(key) ?? 0) + 1)
+    }
+  }
+  for (const [key, inflight] of [...inflightLoads.entries()]) {
+    if (inflight.pluginId === pluginId) {
       inflightLoads.delete(key)
+      moduleEpochs.set(key, (moduleEpochs.get(key) ?? 0) + 1)
     }
   }
-  for (const key of chunkPromiseCache) {
-    if (key[0].startsWith(`${pluginId}\0`)) {
-      chunkPromiseCache.delete(key[0])
+  for (const [key, failed] of [...failedModules.entries()]) {
+    if (failed.pluginId === pluginId) {
+      failedModules.delete(key)
     }
   }
-  for (const key of chunkTextFetchCache) {
-    if (key[0].startsWith(`${pluginId}\0`)) {
-      chunkTextFetchCache.delete(key[0])
+  for (const key of [...chunkPromiseCache.keys()]) {
+    if (key.startsWith(`${pluginId}\0`)) {
+      chunkPromiseCache.delete(key)
+    }
+  }
+  for (const key of [...chunkTextFetchCache.keys()]) {
+    if (key.startsWith(`${pluginId}\0`)) {
+      chunkTextFetchCache.delete(key)
     }
   }
   // 共享表按 pluginId + moduleRef + contentHash + chunk 隔离清理：只删属于本插件的条目，
@@ -175,18 +234,137 @@ export function evictPluginClientCache(pluginId: string): void {
         delete share[k]
       }
     }
-    pluginLoadedHashes.delete(pluginId)
   }
+  pluginLoadedHashes.delete(pluginId)
   removePluginStyleSheets(pluginId)
   notifyCacheInvalidated()
+}
+
+/**
+ * 增量对账插件客户端缓存（如 SSE snapshot 重建）：
+ * - 保留仍在 nextPlugins 中启用且 clientHashes[moduleRef] === contentHash 的内存缓存与样式；
+ * - 逐出停用、移除、缺失 moduleRef 或 hash 变更的缓存/在途/错误模块及样式；
+ * - 仅在实际逐出至少一个模块时递增对应插件 revision 并通知订阅方；返回逐出模块计数。
+ */
+export function reconcilePluginClientCache(nextPlugins: readonly PluginSummary[]): number {
+  const nextById = new Map(nextPlugins.map((plugin) => [plugin.id, plugin]))
+  const isModuleValid = (pluginId: string, moduleRef: string, hash: string | undefined): boolean => {
+    const plugin = nextById.get(pluginId)
+    if (plugin === undefined || !isPluginSummaryActive(plugin)) return false
+    const expectedHash = plugin.clientHashes?.[moduleRef]
+    if (expectedHash === undefined || expectedHash === '') return false
+    return hash === expectedHash
+  }
+
+  const evictedKeys = new Set<string>()
+  const evictedPlugins = new Set<string>()
+
+  for (const [key, entry] of [...cache.entries()]) {
+    if (!isModuleValid(entry.pluginId, entry.moduleRef, entry.contentHash)) {
+      cache.delete(key)
+      deleteChunksByPrefix(`${entry.pluginId}\0${entry.moduleRef}\0${entry.contentHash}\0`)
+      if (typeof document !== 'undefined') {
+        findPluginStyleNode(pluginStyleKey(entry.pluginId, entry.moduleRef))?.remove()
+      }
+      evictedKeys.add(key)
+      evictedPlugins.add(entry.pluginId)
+    }
+  }
+
+  for (const [key, inflight] of [...inflightLoads.entries()]) {
+    if (!isModuleValid(inflight.pluginId, inflight.moduleRef, inflight.expectedHash)) {
+      inflightLoads.delete(key)
+      moduleEpochs.set(key, (moduleEpochs.get(key) ?? 0) + 1)
+      evictedKeys.add(key)
+      evictedPlugins.add(inflight.pluginId)
+    }
+  }
+
+  for (const [key, failed] of [...failedModules.entries()]) {
+    if (!isModuleValid(failed.pluginId, failed.moduleRef, failed.contentHash)) {
+      failedModules.delete(key)
+      evictedKeys.add(key)
+      evictedPlugins.add(failed.pluginId)
+    }
+  }
+
+  if (typeof document !== 'undefined') {
+    for (const node of [...document.querySelectorAll('style[data-helm-plugin-css-plugin]')]) {
+      const pluginId = node.getAttribute('data-helm-plugin-css-plugin') ?? ''
+      const styleAttr = node.getAttribute('data-helm-plugin-css') ?? ''
+      const prefix = `${pluginId}::`
+      const moduleRef = styleAttr.startsWith(prefix) ? styleAttr.slice(prefix.length) : undefined
+      const styleHash = node.getAttribute('data-helm-plugin-css-hash') ?? undefined
+      const valid =
+        moduleRef !== undefined
+          ? isModuleValid(pluginId, moduleRef, styleHash)
+          : (() => {
+              const plugin = nextById.get(pluginId)
+              return plugin !== undefined && isPluginSummaryActive(plugin)
+            })()
+      if (!valid) {
+        node.remove()
+        evictedKeys.add(moduleRef !== undefined ? cacheKey(pluginId, moduleRef) : styleAttr || pluginId)
+        evictedPlugins.add(pluginId)
+      }
+    }
+  }
+
+  const cleanChunkMap = (map: Map<string, unknown>): void => {
+    for (const k of [...map.keys()]) {
+      const parts = k.split('\0')
+      const pluginId = parts[0] ?? ''
+      const moduleRef = parts[1] ?? ''
+      const hash = parts[2] ?? ''
+      if (!isModuleValid(pluginId, moduleRef, hash)) {
+        map.delete(k)
+      }
+    }
+  }
+  cleanChunkMap(chunkPromiseCache)
+  cleanChunkMap(chunkTextFetchCache)
+  const share = (globalThis as Record<string, unknown>).__helm_chunk_share as Record<string, unknown> | undefined
+  if (share) {
+    for (const k of Object.keys(share)) {
+      const parts = k.split('\0')
+      const pluginId = parts[0] ?? ''
+      const moduleRef = parts[1] ?? ''
+      const hash = parts[2] ?? ''
+      if (!isModuleValid(pluginId, moduleRef, hash)) {
+        delete share[k]
+      }
+    }
+  }
+  for (const [pluginId, hashes] of [...pluginLoadedHashes.entries()]) {
+    const plugin = nextById.get(pluginId)
+    if (plugin === undefined || !isPluginSummaryActive(plugin)) {
+      pluginLoadedHashes.delete(pluginId)
+      continue
+    }
+    const validHashes = new Set(Object.values(plugin.clientHashes ?? {}))
+    for (const hash of [...hashes]) {
+      if (!validHashes.has(hash)) hashes.delete(hash)
+    }
+    if (hashes.size === 0) pluginLoadedHashes.delete(pluginId)
+  }
+
+  for (const pluginId of evictedPlugins) {
+    pluginEpochs.set(pluginId, (pluginEpochs.get(pluginId) ?? 0) + 1)
+  }
+  if (evictedKeys.size > 0) {
+    notifyCacheInvalidated()
+  }
+  return evictedKeys.size
 }
 
 /** 全量重建（如登出）：清空所有插件 client 模块缓存。 */
 export function resetPluginClientCache(): void {
   cacheEpoch++
   pluginEpochs.clear()
+  moduleEpochs.clear()
   cache.clear()
   inflightLoads.clear()
+  failedModules.clear()
   chunkPromiseCache.clear()
   chunkTextFetchCache.clear()
   pluginLoadedHashes.clear()
@@ -384,11 +562,18 @@ async function loadSingleChunk(
   return await loadSingleChunk(pluginId, moduleRef, contentHash, chunkName)
 }
 
-async function fetchModuleText(pluginId: string, moduleRef: string): Promise<{ code: string; contentHash: string }> {
+async function fetchModuleText(
+  pluginId: string,
+  moduleRef: string,
+  expectedHash?: string,
+): Promise<{ code: string; contentHash: string }> {
   const headers: Record<string, string> = {}
   const token = getStoredToken()
   if (token) headers['Authorization'] = `Bearer ${token}`
-  const url = `/api/plugins/${encodeURIComponent(pluginId)}/client.mjs?module=${encodeURIComponent(moduleRef)}`
+  let url = `/api/plugins/${encodeURIComponent(pluginId)}/client.mjs?module=${encodeURIComponent(moduleRef)}`
+  if (expectedHash !== undefined) {
+    url += `&hash=${encodeURIComponent(expectedHash)}`
+  }
   let res: Response
   try {
     res = await fetch(url, { headers })
@@ -400,51 +585,115 @@ async function fetchModuleText(pluginId: string, moduleRef: string): Promise<{ c
     )
   }
   if (!res.ok) {
+    let errorCode: string | undefined
     let message = `HTTP ${res.status}`
     try {
       const body = (await res.json()) as { error?: { code?: string; message?: string } }
+      if (body?.error?.code) errorCode = body.error.code
       if (body?.error?.message) message = body.error.message
     } catch {
       /* 非 JSON 错误体：保留 HTTP 状态描述 */
     }
+    if (res.status === 409 || errorCode === 'client_module_stale') {
+      throw new PluginClientError(
+        errorCode ?? 'client_module_stale',
+        `Plugin ${pluginId} client module ${moduleRef}: ${message}`,
+        res.status,
+      )
+    }
     throw new PluginClientError('client_module_http_error', `Plugin ${pluginId} client module ${moduleRef}: ${message}`, res.status)
   }
   const contentHash = res.headers.get('x-helm-client-hash') ?? ''
+  if (expectedHash !== undefined && contentHash !== expectedHash) {
+    throw new PluginClientError(
+      'client_module_stale',
+      `Plugin ${pluginId} client module ${moduleRef} hash mismatch (expected ${expectedHash}, got ${contentHash || 'none'})`,
+      409,
+    )
+  }
   return { code: await res.text(), contentHash }
 }
 
 /**
  * 加载（或复用缓存）插件 client 模块命名空间。
- * contentHash 变化（源已改）时重新拉取；同 hash 并发请求共享同一 Promise。
+ * - 若传入 expectedHash 且内存缓存 contentHash 命中，直接 Promise.resolve 复用，零网络请求；
+ * - 传入 expectedHash 拉取时携带 &hash= 命中服务端不可变缓存，409/hash 不匹配显式逐出缓存并抛错；
+ * - 无 expectedHash 或缓存未命中时拉取最新并按同 expectedHash 合并在途请求；不同 expectedHash 竞争时新请求取代旧请求。
  */
-export async function loadPluginClientModule(pluginId: string, moduleRef: string): Promise<LoadedClientModule> {
+export function loadPluginClientModule(
+  pluginId: string,
+  moduleRef: string,
+  expectedHash?: string,
+): Promise<LoadedClientModule> {
   const key = cacheKey(pluginId, moduleRef)
+  const targetHash = expectedHash !== undefined && expectedHash !== '' ? expectedHash : undefined
   const epoch = cacheEpoch
   const pluginEpoch = pluginEpochs.get(pluginId)
-  const assertCurrent = () => {
-    if (epoch !== cacheEpoch || pluginEpoch !== pluginEpochs.get(pluginId)) {
+
+  // 0. O(1) 内存缓存快路径：调用方提供 expectedHash 且命中当前缓存条目时零网络请求。
+  if (targetHash !== undefined) {
+    const cached = cache.get(key)
+    if (cached !== undefined && cached.contentHash === targetHash) {
+      if (cached.resolved !== undefined) {
+        return Promise.resolve({ module: cached.resolved, contentHash: cached.contentHash })
+      }
+      return cached.namespaced.then((module) => {
+        if (epoch !== cacheEpoch || pluginEpoch !== pluginEpochs.get(pluginId) || cache.get(key) !== cached) {
+          throw new PluginClientError(
+            'client_module_invalidated',
+            `Plugin ${pluginId} client module has been invalidated; reload required`,
+            0,
+          )
+        }
+        return { module, contentHash: cached.contentHash }
+      })
+    }
+  }
+
+  // 1. 同一模块在途加载复用：相同 expectedHash 共享同一 Promise；不同 expectedHash 竞争时推进 moduleEpoch 使旧在途失效。
+  const existingInflight = inflightLoads.get(key)
+  if (existingInflight !== undefined) {
+    if (existingInflight.expectedHash === targetHash) {
+      return existingInflight.promise.then((res) => {
+        if (
+          epoch !== cacheEpoch ||
+          pluginEpoch !== pluginEpochs.get(pluginId) ||
+          existingInflight.moduleEpoch !== (moduleEpochs.get(key) ?? 0)
+        ) {
+          throw new PluginClientError(
+            'client_module_invalidated',
+            `Plugin ${pluginId} client module has been invalidated; reload required`,
+            0,
+          )
+        }
+        return res
+      })
+    }
+    moduleEpochs.set(key, (moduleEpochs.get(key) ?? 0) + 1)
+    inflightLoads.delete(key)
+  }
+
+  const myModuleEpoch = moduleEpochs.get(key) ?? 0
+  const isCurrent = (): boolean =>
+    epoch === cacheEpoch &&
+    pluginEpoch === pluginEpochs.get(pluginId) &&
+    myModuleEpoch === (moduleEpochs.get(key) ?? 0)
+  const assertCurrent = (): void => {
+    if (!isCurrent()) {
       throw new PluginClientError('client_module_invalidated', `Plugin ${pluginId} client module has been invalidated; reload required`, 0)
     }
   }
 
-  // 1. 同一模块在途加载复用：并发挂载（如一个会话内多个同类图表代码块）共享同一个加载 Promise，
-  // 杜绝同时发起多次重复的 client.mjs 网络请求
-  const pending = inflightLoads.get(key)
-  if (pending !== undefined) {
-    const res = await pending
-    assertCurrent()
-    return res
-  }
-
-  let loadPromise: Promise<LoadedClientModule> | null = null
+  let loadPromise!: Promise<LoadedClientModule>
   loadPromise = (async (): Promise<LoadedClientModule> => {
     try {
-      const { code, contentHash } = await fetchModuleText(pluginId, moduleRef)
+      const { code, contentHash } = await fetchModuleText(pluginId, moduleRef, targetHash)
       assertCurrent()
       const cached = cache.get(key)
       if (cached && cached.contentHash === contentHash) {
-        const module = await cached.namespaced
+        const module = cached.resolved !== undefined ? cached.resolved : await cached.namespaced
         assertCurrent()
+        failedModules.delete(key)
         return { module, contentHash }
       }
       trackPluginHash(pluginId, contentHash)
@@ -455,14 +704,13 @@ export async function loadPluginClientModule(pluginId: string, moduleRef: string
           0,
         )
       })
-      const entry: CacheEntry = { pluginId, contentHash, namespaced: imported }
+      const entry: CacheEntry = { pluginId, moduleRef, contentHash, namespaced: imported }
       // 样式装载与 resolved 发布都在调用方真正 await 的 namespaced 链上完成：import 迟到完成时
-      // 若已失效（epoch / 插件 epoch / entry 身份任一不符）直接显式报错，绝不补挂样式，也绝不
-      // 碰新 epoch 已装载的样式；拒绝（import 失败 / 失效 / 样式契约非法）仅回收仍属于自己的
-      // entry（身份守卫确保不误删新 epoch 条目），允许同 hash 重试，不残留毒化 Promise。
+      // 若已失效（epoch / 插件 epoch / 模块 epoch / entry 身份任一不符）直接显式报错，绝不补挂样式，
+      // 也绝不碰新 epoch 已装载的样式；拒绝仅回收仍属于自己的 entry，允许同 hash 重试，不残留毒化 Promise。
       entry.namespaced = imported.then(
         (moduleNamespace) => {
-          if (epoch !== cacheEpoch || pluginEpoch !== pluginEpochs.get(pluginId) || cache.get(key) !== entry) {
+          if (!isCurrent() || cache.get(key) !== entry) {
             throw new PluginClientError(
               'client_module_invalidated',
               `Plugin ${pluginId} client module has been invalidated; reload required`,
@@ -472,6 +720,7 @@ export async function loadPluginClientModule(pluginId: string, moduleRef: string
           applyPluginClientCss(pluginId, moduleRef, contentHash, moduleNamespace)
           // 样式装载成功后才发布同步 resolved 缓存，保证 getCachedClientComponent 命中时样式已在页面上。
           entry.resolved = moduleNamespace
+          failedModules.delete(key)
           return moduleNamespace
         },
       ).catch((err: unknown) => {
@@ -482,29 +731,45 @@ export async function loadPluginClientModule(pluginId: string, moduleRef: string
       const module = await entry.namespaced
       assertCurrent()
       return { module, contentHash }
+    } catch (err: unknown) {
+      if (isCurrent()) {
+        if (err instanceof PluginClientError && (err.status === 409 || err.code === 'client_module_stale')) {
+          evictModuleArtifacts(pluginId, moduleRef)
+        }
+        if (!(err instanceof PluginClientError && err.code === 'client_module_invalidated')) {
+          failedModules.set(key, { pluginId, moduleRef, contentHash: targetHash })
+        }
+      }
+      throw err
     } finally {
-      if (inflightLoads.get(key) === loadPromise) {
+      if (inflightLoads.get(key)?.promise === loadPromise) {
         inflightLoads.delete(key)
       }
     }
   })()
 
-  inflightLoads.set(key, loadPromise)
-  return await loadPromise
+  inflightLoads.set(key, { pluginId, moduleRef, expectedHash: targetHash, moduleEpoch: myModuleEpoch, promise: loadPromise })
+  return loadPromise
 }
 
 /**
  * 同步取已解析缓存模块的具名导出组件：缓存命中且导出为函数时直接返回，
  * 避免 PluginUiView 重复挂载（时间线重渲染 / SSR）时闪烁 loading 态。
+ * 若传入 expectedHash，则同时校验 contentHash 匹配。
  * 未加载完成或导出非函数时返回 undefined（调用方走异步加载轨道）。
  */
 export function getCachedClientComponent(
   pluginId: string,
   moduleRef: string,
   exportName: string,
+  expectedHash?: string,
 ): ComponentType<Record<string, unknown>> | undefined {
   const cached = cache.get(cacheKey(pluginId, moduleRef))
-  const mod = cached?.resolved
+  if (cached === undefined) return undefined
+  if (expectedHash !== undefined && expectedHash !== '' && cached.contentHash !== expectedHash) {
+    return undefined
+  }
+  const mod = cached.resolved
   if (mod === undefined || typeof mod[exportName] !== 'function') return undefined
   return mod[exportName] as ComponentType<Record<string, unknown>>
 }
@@ -522,8 +787,11 @@ export function seedPluginClientModule(
   contentHash = 'seeded',
 ): void {
   applyPluginClientCss(pluginId, moduleRef, contentHash, moduleNamespace)
-  cache.set(cacheKey(pluginId, moduleRef), {
+  const key = cacheKey(pluginId, moduleRef)
+  failedModules.delete(key)
+  cache.set(key, {
     pluginId,
+    moduleRef,
     contentHash,
     namespaced: Promise.resolve(moduleNamespace),
     resolved: moduleNamespace,

@@ -122,6 +122,7 @@ interface MountOptions {
   hash?: string
   manualPatch?: boolean
   patchStatus?: number
+  onGet?: (path: string, signal?: AbortSignal | null) => Promise<Response | undefined> | Response | undefined
 }
 
 interface Harness {
@@ -236,6 +237,10 @@ async function mountProvider(options: MountOptions = {}): Promise<Harness> {
         }),
         { status: 200, headers: { 'content-type': 'application/json' } },
       )
+    }
+    if (method === 'GET' && options.onGet !== undefined) {
+      const handled = await options.onGet(path, init?.signal ?? null)
+      if (handled !== undefined) return handled
     }
     const detailMatch = /^\/api\/conversations\/(\d+)(\?.*)?$/.exec(path)
     if (detailMatch && method === 'GET') {
@@ -579,5 +584,306 @@ test('logout 与 snapshot 重连清空未读在途/水位状态，登出后切�
   } finally {
     await h.close()
     page.restore()
+  }
+})
+
+test('切会话时中止过时 detail/artifacts 请求，静默吞掉 AbortError 且不回写旧响应', { timeout: 60_000 }, async (t) => {
+  const page = setVisibilityAndFocus({ hidden: false, focused: true })
+  t.after(() => page.restore())
+
+  let detail1Signal: AbortSignal | null | undefined
+  let artifacts1Signal: AbortSignal | null | undefined
+  let releaseArtifacts1Late!: () => void
+  const artifacts1Gate = new Promise<void>((resolve) => { releaseArtifacts1Late = resolve })
+
+  const h = await mountProvider({
+    hash: '#/c/1',
+    onGet: async (path, signal) => {
+      if (path.startsWith('/api/conversations/1?') || path === '/api/conversations/1') {
+        detail1Signal = signal
+        return await new Promise<Response>((_, reject) => {
+          const onAbort = (): void => reject(new DOMException('Aborted', 'AbortError'))
+          if (signal?.aborted) {
+            onAbort()
+            return
+          }
+          signal?.addEventListener('abort', onAbort, { once: true })
+        })
+      }
+      if (path === '/api/conversations/1/artifacts') {
+        artifacts1Signal = signal
+        await artifacts1Gate
+        return new Response(
+          JSON.stringify([{ id: 901, title: 'stale-artifact' }]),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+      if (path === '/api/conversations/2/artifacts') {
+        return new Response(JSON.stringify([]), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      return undefined
+    },
+  })
+
+  try {
+    h.nextEvents((_url, signal) => {
+      const c = controlledStream(signal)
+      c.send(
+        snapshotFrame({
+          bootId: 'boot-1',
+          seq: 1,
+          conversations: [
+            makeConv({ id: 1, status: 'idle', stateChangeSeq: 1, lastEntryId: 1 }),
+            makeConv({ id: 2, status: 'idle', stateChangeSeq: 1, lastEntryId: 2 }),
+          ],
+          pendingAsks: [],
+          plugins: [],
+          ui: [],
+        }),
+      )
+      return c
+    })
+
+    // 等待 /api/conversations/1 请求发出
+    const deadline = Date.now() + 10_000
+    while ((detail1Signal === undefined || artifacts1Signal === undefined) && Date.now() < deadline) {
+      await h.flush(15)
+    }
+    assert.ok(detail1Signal !== undefined && detail1Signal !== null, 'c/1 detail 请求应携带 AbortSignal')
+    assert.ok(artifacts1Signal !== undefined && artifacts1Signal !== null, 'c/1 artifacts 请求应携带 AbortSignal')
+    assert.equal(detail1Signal.aborted, false)
+    assert.equal(artifacts1Signal.aborted, false)
+
+    // 切到会话 2：必须立即中止会话 1 的过时详情与产物请求
+    await act(async () => {
+      h.store().openTarget({ kind: 'conversation', conversationId: 2 })
+    })
+    await h.waitFor((s) => s.conversationDetails[2] !== undefined)
+    assert.equal(detail1Signal.aborted, true, '切会话后 c/1 detail AbortSignal 必须被中止')
+    assert.equal(artifacts1Signal.aborted, true, '切会话后 c/1 artifacts AbortSignal 必须被中止')
+
+    // 即使旧 artifacts 响应延迟到达，也不得回写污染 c/1 产物缓存
+    await act(async () => {
+      releaseArtifacts1Late()
+    })
+    await h.flush(40)
+
+    assert.equal(h.store().conversationDetails[1], undefined, '被中止的 c/1 detail 不得写入缓存')
+    assert.equal(h.store().conversationArtifacts[1], undefined, '过时 c/1 artifacts 响应不得回写状态')
+    assert.equal(h.store().loadErrors['conversation:1'], undefined, 'AbortError 不得写入 loadErrors')
+    assert.equal(h.store().notices.length, 0, 'AbortError 必须静默吞掉，不得弹出错误 notice')
+  } finally {
+    releaseArtifacts1Late()
+    await h.close()
+  }
+})
+
+test('窄屏默认拉取 limit=40 并支持向上分页，桌面保持 limit=150', { timeout: 60_000 }, async (t) => {
+  const page = setVisibilityAndFocus({ hidden: false, focused: true })
+  const originalInnerWidth = window.innerWidth
+  t.after(() => {
+    Object.assign(window, { innerWidth: originalInnerWidth })
+    page.restore()
+  })
+
+  const requestedUrls: string[] = []
+  Object.assign(window, { innerWidth: 375 })
+
+  const h = await mountProvider({
+    hash: '#/c/1',
+    onGet: (path) => {
+      if (path.startsWith('/api/conversations/1')) {
+        requestedUrls.push(path)
+        if (path === '/api/conversations/1/artifacts') {
+          return new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } })
+        }
+        const query = path.includes('?') ? path.slice(path.indexOf('?') + 1) : ''
+        const params = new URLSearchParams(query)
+        if (params.get('cursor') === 'older-1') {
+          return new Response(
+            JSON.stringify({
+              ...makeConv({ id: 1, stateChangeSeq: 1, lastEntryId: 2 }),
+              entries: [{ id: 1, conversationId: 1, kind: 'message', role: 'user', content: 'earlier', createdAt: 1 }],
+              nextCursor: null,
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          )
+        }
+        return new Response(
+          JSON.stringify({
+            ...makeConv({ id: 1, stateChangeSeq: 1, lastEntryId: 2 }),
+            entries: [{ id: 2, conversationId: 1, kind: 'message', role: 'assistant', content: 'latest', createdAt: 2 }],
+            nextCursor: 'older-1',
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+      if (path.startsWith('/api/conversations/2') && path !== '/api/conversations/2/artifacts') {
+        requestedUrls.push(path)
+      }
+      return undefined
+    },
+  })
+
+  try {
+    h.nextEvents((_url, signal) => {
+      const c = controlledStream(signal)
+      c.send(
+        snapshotFrame({
+          bootId: 'boot-1',
+          seq: 1,
+          conversations: [
+            makeConv({ id: 1, stateChangeSeq: 1, lastEntryId: 2 }),
+            makeConv({ id: 2, stateChangeSeq: 1, lastEntryId: 3 }),
+          ],
+          pendingAsks: [],
+          plugins: [],
+          ui: [],
+        }),
+      )
+      return c
+    })
+
+    await h.waitFor((s) => s.sseConnected && s.conversationDetails[1] !== undefined)
+    const mobileUrl = requestedUrls.find((u) => u.startsWith('/api/conversations/1?'))
+    assert.ok(mobileUrl !== undefined, '应发起 c/1 详情请求')
+    const mobileParams = new URLSearchParams(mobileUrl.slice(mobileUrl.indexOf('?') + 1))
+    assert.equal(mobileParams.get('limit'), '40', '窄屏（<=680px）默认 limit 必须为 40')
+
+    // 向上分页加载更早条目
+    await act(async () => {
+      await h.store().loadEarlierEntries(1)
+    })
+    const olderUrl = requestedUrls.find((u) => u.includes('cursor=older-1'))
+    assert.ok(olderUrl !== undefined, 'loadEarlierEntries 应携带 cursor=older-1 请求')
+    assert.deepEqual(
+      h.store().conversationDetails[1]?.entries.map((e) => e.id),
+      [1, 2],
+      '向上分页应将更早条目合并在现有条目之前',
+    )
+    assert.equal(h.store().conversationDetails[1]?.nextCursor, null)
+
+    // 切回桌面宽度后打开会话 2，验证默认 limit 恢复为 150
+    Object.assign(window, { innerWidth: 1024 })
+    await act(async () => {
+      h.store().openTarget({ kind: 'conversation', conversationId: 2 })
+    })
+    await h.waitFor((s) => s.conversationDetails[2] !== undefined)
+    const desktopUrl = requestedUrls.find((u) => u.startsWith('/api/conversations/2?'))
+    assert.ok(desktopUrl !== undefined, '应发起 c/2 详情请求')
+    const desktopParams = new URLSearchParams(desktopUrl.slice(desktopUrl.indexOf('?') + 1))
+    assert.equal(desktopParams.get('limit'), '150', '桌面视口默认 limit 必须保持 150')
+  } finally {
+    await h.close()
+  }
+})
+
+test('切回已缓存会话且 (stateChangeSeq, lastEntryId) 未变时跳过重复 listArtifacts，推进后恢复刷新', { timeout: 60_000 }, async (t) => {
+  const page = setVisibilityAndFocus({ hidden: false, focused: true })
+  t.after(() => page.restore())
+
+  let artifacts1Calls = 0
+  let currentSeq1 = 2
+  let currentLastEntry1 = 5
+
+  const h = await mountProvider({
+    hash: '#/c/1',
+    onGet: (path) => {
+      if (path === '/api/conversations/1/artifacts') {
+        artifacts1Calls += 1
+        return new Response(
+          JSON.stringify([{ id: artifacts1Calls, title: `art-${artifacts1Calls}` }]),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+      if (path.startsWith('/api/conversations/1?') || path === '/api/conversations/1') {
+        return new Response(
+          JSON.stringify({
+            ...makeConv({ id: 1, status: 'idle', stateChangeSeq: currentSeq1, lastEntryId: currentLastEntry1 }),
+            entries: [],
+            nextCursor: null,
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+      if (path === '/api/conversations/2/artifacts') {
+        return new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      if (path.startsWith('/api/conversations/2?') || path === '/api/conversations/2') {
+        return new Response(
+          JSON.stringify({
+            ...makeConv({ id: 2, status: 'idle', stateChangeSeq: 1, lastEntryId: 1 }),
+            entries: [],
+            nextCursor: null,
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }
+      return undefined
+    },
+  })
+
+  try {
+    let stream1!: ControlledStream
+    h.nextEvents((_url, signal) => {
+      stream1 = controlledStream(signal)
+      stream1.send(
+        snapshotFrame({
+          bootId: 'boot-1',
+          seq: 1,
+          conversations: [
+            makeConv({ id: 1, status: 'idle', stateChangeSeq: 2, lastEntryId: 5 }),
+            makeConv({ id: 2, status: 'idle', stateChangeSeq: 1, lastEntryId: 1 }),
+          ],
+          pendingAsks: [],
+          plugins: [],
+          ui: [],
+        }),
+      )
+      return stream1
+    })
+
+    await h.waitFor(
+      (s) => s.sseConnected && s.conversationDetails[1] !== undefined && s.conversationArtifacts[1] !== undefined,
+    )
+
+    // 切到会话 2 后立刻切回会话 1：水位未变且非 working，应跳过重复 listArtifacts(1)
+    await act(async () => {
+      h.store().openTarget({ kind: 'conversation', conversationId: 2 })
+    })
+    await h.waitFor((s) => s.conversationDetails[2] !== undefined)
+
+    await act(async () => {
+      h.store().openTarget({ kind: 'conversation', conversationId: 1 })
+    })
+    await h.waitFor((s) => s.primaryTarget.kind === 'conversation' && s.primaryTarget.conversationId === 1)
+    await h.flush(60)
+    assert.equal(artifacts1Calls, 1, '已缓存产物且 (stateChangeSeq, lastEntryId) 未变时应跳过重复 listArtifacts')
+
+    // 离开期间通过 SSE 推进会话 1 水位后再次切回，必须重新拉取 artifacts
+    await act(async () => {
+      h.store().openTarget({ kind: 'conversation', conversationId: 2 })
+    })
+    await h.waitFor((s) => s.primaryTarget.kind === 'conversation' && s.primaryTarget.conversationId === 2)
+
+    currentSeq1 = 3
+    currentLastEntry1 = 6
+    await act(async () => {
+      stream1.send(
+        eventFrame(2, {
+          type: 'conversation.upsert',
+          conversation: makeConv({ id: 1, status: 'idle', stateChangeSeq: 3, lastEntryId: 6 }),
+        }),
+      )
+    })
+    await h.waitFor((s) => s.conversations.find((c) => c.id === 1)?.stateChangeSeq === 3)
+
+    await act(async () => {
+      h.store().openTarget({ kind: 'conversation', conversationId: 1 })
+    })
+    await h.waitFor(() => artifacts1Calls === 2)
+    assert.equal(artifacts1Calls, 2, '水位推进后再次切回会话应重新拉取 artifacts')
+  } finally {
+    await h.close()
   }
 })

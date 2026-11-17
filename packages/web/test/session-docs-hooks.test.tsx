@@ -2,17 +2,24 @@
  * usePluginSessionDoc / usePluginSessionDocDiagnostics / usePluginSessionDocsMap
  * 真实 React 消费路径测试（createRoot + act，happy-dom 宿主，不 mock hooks）：
  * - StrictMode 双挂载-卸载-重挂载后订阅恢复（refcount 正确重建流）；
+ * - 多文档订阅合并为单条 `/api/session-docs/events?sub=...` 多路复用流；
  * - store 对象引用频繁更换（模拟全局 SSE 引发 Provider 重渲染）不退订重开流；
  * - delete 帧 value=initial（reset 语义）：单值 hook 与 JSON map 消费得到一致初值；
- * - map 部分文档未到达时返回稳定引用（不无限重渲染），错误如实暴露不静默空表；
+ * - map 部分文档未到达/单 tuple 出错时返回稳定引用（不无限重渲染），错误如实暴露不静默空表；
  * - 401 时请求携带 Bearer（鉴权修复回归）。
  */
 import assert from 'node:assert/strict'
-import { test } from 'node:test'
+import { after, before, test } from 'node:test'
 import * as React from 'react'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { bindSessionDocRuntime, getSessionDocState, resetSessionDocSubscriptions, subscribeSessionDoc } from '../src/lib/session-docs.js'
+import {
+  bindSessionDocRuntime,
+  getSessionDocState,
+  resetSessionDocSubscriptions,
+  sessionDocTimings,
+  subscribeSessionDoc,
+} from '../src/lib/session-docs.js'
 import { usePluginSessionDocsMap } from '../src/lib/store-context.js'
 import { usePluginSessionDocValue, usePluginSessionDocState } from '@helm/plugin-client'
 import { createPluginClientHostPort } from '../src/lib/plugin-client-host.js'
@@ -26,6 +33,26 @@ const e = React.createElement
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 GlobalRegistrator.register()
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
+
+const originalTimings = { ...sessionDocTimings }
+before(() => {
+  sessionDocTimings.subscribeDebounceMs = 0
+})
+after(() => {
+  Object.assign(sessionDocTimings, originalTimings)
+})
+
+const multiplexFrame = (
+  action: 'snapshot' | 'updated' | 'deleted',
+  seq: number,
+  doc: Record<string, unknown>,
+  target?: Partial<{ pluginId: string; name: string; conversationId: number }>,
+): string => {
+  const pluginId = target?.pluginId ?? String(doc['pluginId'])
+  const name = target?.name ?? String(doc['name'])
+  const conversationId = target?.conversationId ?? Number(doc['conversationId'])
+  return `event: ${action}\ndata: ${JSON.stringify({ action, pluginId, name, conversationId, seq, doc })}\n\n`
+}
 
 type ProbeResult = { value: unknown; diagnostics: { error?: string; connected: boolean; deleted: boolean; hasValue: boolean } }
 
@@ -101,7 +128,7 @@ test('StrictMode 挂载-卸载-重挂载：订阅恢复且引用稳定（不无�
         start(controller) {
           const encoder = new TextEncoder()
           controller.enqueue(encoder.encode(
-            `event: snapshot\ndata: ${JSON.stringify({ seq: 1, doc: { pluginId: 'builtin:workflow', name: 'runs', conversationId: 42, value: { n: 1 } } })}\n\n`,
+            multiplexFrame('snapshot', 1, { pluginId: 'builtin:workflow', name: 'runs', conversationId: 42, value: { n: 1 } }),
           ))
         },
       }),
@@ -117,17 +144,22 @@ test('StrictMode 挂载-卸载-重挂载：订阅恢复且引用稳定（不无�
   restore()
 })
 
-test('store 引用更换（全局 SSE 重渲染）不退订重开流', { timeout: 60_000 }, async () => {
+test('store 引用更换（全局 SSE 重渲染）不退订重开流，且多文档合并为单条请求', { timeout: 60_000 }, async () => {
   resetSessionDocSubscriptions()
   let streamOpens = 0
-  const restore = bindSessionDocRuntime(async () => {
+  let capturedUrl = ''
+  const restore = bindSessionDocRuntime(async (input: RequestInfo | URL) => {
     streamOpens++
+    capturedUrl = String(input)
     return new Response(
       new ReadableStream<Uint8Array>({
         start(controller) {
           const encoder = new TextEncoder()
           controller.enqueue(encoder.encode(
-            `event: snapshot\ndata: ${JSON.stringify({ seq: 1, doc: { pluginId: 'builtin:workflow', name: 'runs', conversationId: 42, value: 1 } })}\n\n`,
+            multiplexFrame('snapshot', 1, { pluginId: 'builtin:workflow', name: 'runs', conversationId: 42, value: 1 }),
+          ))
+          controller.enqueue(encoder.encode(
+            multiplexFrame('snapshot', 1, { pluginId: 'builtin:workflow', name: 'stats', conversationId: 42, value: 2 }),
           ))
         },
       }),
@@ -137,6 +169,9 @@ test('store 引用更换（全局 SSE 重渲染）不退订重开流', { timeout
   const { reads, harness } = mountProbes(stableSessionDocStore())
   for (let i = 0; i < 30 && reads().value === undefined; i++) await act(async () => {})
   assert.equal(reads().value, 1)
+  assert.equal(streamOpens, 1, '同组件多个 sessionDoc hook 合并为单条多路复用流')
+  const subs = new URL(capturedUrl, 'http://localhost').searchParams.getAll('sub').sort()
+  assert.deepEqual(subs, ['builtin:workflow/runs/42', 'builtin:workflow/stats/42'])
   const before = streamOpens
   // 模拟全局 SSE 状态更新：Provider value 换新对象引用（具名函数保持稳定）
   harness.rerenderStore(stableSessionDocStore({ conversations: [] }))
@@ -155,10 +190,8 @@ test('delete 帧初值契约：单值 hook 与 JSON map 一致暴露 initial', {
       new ReadableStream<Uint8Array>({
         start(controller) {
           const encoder = new TextEncoder()
-          const frame = (seq: number, doc: Record<string, unknown>): string =>
-            `event: ${seq === 1 ? 'snapshot' : 'plugin.session_doc.updated'}\ndata: ${JSON.stringify(seq === 1 ? { seq, doc } : { seq, event: { type: 'plugin.session_doc.updated', seq, doc } })}\n\n`
-          controller.enqueue(encoder.encode(frame(1, { pluginId: 'builtin:workflow', name: 'runs', conversationId: 42, value: { n: 5 } })))
-          controller.enqueue(encoder.encode(frame(2, { pluginId: 'builtin:workflow', name: 'runs', conversationId: 42, value: { n: 0 }, deleted: true })))
+          controller.enqueue(encoder.encode(multiplexFrame('snapshot', 1, { pluginId: 'builtin:workflow', name: 'runs', conversationId: 42, value: { n: 5 } })))
+          controller.enqueue(encoder.encode(multiplexFrame('deleted', 2, { pluginId: 'builtin:workflow', name: 'runs', conversationId: 42, value: { n: 0 }, deleted: true })))
         },
       }),
       { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
@@ -173,27 +206,26 @@ test('delete 帧初值契约：单值 hook 与 JSON map 一致暴露 initial', {
   restore()
 })
 
-test('map 快照引用稳定：部分文档未到达不无限重渲染，错误如实暴露', { timeout: 60_000 }, async () => {
+test('map 快照引用稳定：部分文档未到达或出错不无限重渲染，错误如实暴露', { timeout: 60_000 }, async () => {
   resetSessionDocSubscriptions()
   let renderCount = 0
-  let mapResults: Record<string, unknown>[] = []
-  const restore = bindSessionDocRuntime(async (input: RequestInfo | URL) => {
-    const path = String(input)
-    // runs 正常返回；stats 永远 404（终态错误，不重连）
-    if (path.includes('/events') && path.includes('runs')) {
-      return new Response(
-        new ReadableStream<Uint8Array>({
-          start(controller) {
-            const encoder = new TextEncoder()
-            controller.enqueue(encoder.encode(
-              `event: snapshot\ndata: ${JSON.stringify({ seq: 1, doc: { pluginId: 'builtin:workflow', name: 'runs', conversationId: 42, value: 'ok' } })}\n\n`,
-            ))
-          },
-        }),
-        { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
-      )
-    }
-    return new Response(JSON.stringify({ error: { code: 'plugin_doc_not_found', message: '文档不存在' } }), { status: 404 })
+  const mapResults: Record<string, unknown>[] = []
+  const restore = bindSessionDocRuntime(async () => {
+    return new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          const encoder = new TextEncoder()
+          // runs 正常返回；stats 帧缺失 value 字段（单 tuple 报错），验证部分成功与引用稳定
+          controller.enqueue(encoder.encode(
+            multiplexFrame('snapshot', 1, { pluginId: 'builtin:workflow', name: 'runs', conversationId: 42, value: 'ok' }),
+          ))
+          controller.enqueue(encoder.encode(
+            multiplexFrame('snapshot', 1, { pluginId: 'builtin:workflow', name: 'stats', conversationId: 42 }),
+          ))
+        },
+      }),
+      { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
+    )
   })
   function MapProbe(): React.ReactNode {
     renderCount++
@@ -211,6 +243,7 @@ test('map 快照引用稳定：部分文档未到达不无限重渲染，错误�
   for (let i = 0; i < 30 && mapResults[mapResults.length - 1]!['runs'] === undefined; i++) await act(async () => {})
   assert.equal(mapResults[mapResults.length - 1]!['runs'], 'ok', 'runs 到值')
   assert.equal('stats' in mapResults[mapResults.length - 1]!, false, 'stats 出错缺失')
+  assert.ok(getSessionDocState({ pluginId: 'builtin:workflow', docName: 'stats', conversationId: 42 }).error !== undefined)
   // 稳定性验证：不再主动 render，仅空转事件循环——若快照每次返回新 {} 会触发
   // useSyncExternalStore 重渲染循环（renderCount 持续增长）；正确实现应收敛。
   const baseline = renderCount
@@ -232,7 +265,7 @@ test('订阅请求携带 Bearer（鉴权回归）', { timeout: 60_000 }, async (
         start(controller) {
           const encoder = new TextEncoder()
           controller.enqueue(encoder.encode(
-            `event: snapshot\ndata: ${JSON.stringify({ seq: 1, doc: { pluginId: 'builtin:workflow', name: 'runs', conversationId: 42, value: 1 } })}\n\n`,
+            multiplexFrame('snapshot', 1, { pluginId: 'builtin:workflow', name: 'runs', conversationId: 42, value: 1 }),
           ))
         },
       }),

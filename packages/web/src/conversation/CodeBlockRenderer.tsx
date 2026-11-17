@@ -49,17 +49,23 @@ function CodeBlockError({ language, code, message, onRetry }: { language: string
 }
 
 export function CodeBlockRenderer({ language, code, conversationId }: { language: string; code: string; conversationId?: number }): ReactNode {
-  const { uiContributions } = useHelmStore()
+  const { uiContributions, plugins } = useHelmStore()
   const match = matchMarkdownCodeBlock(uiContributions, language)
 
   if (match === null || match.spec.client === undefined) {
     return <StandardCodeBlock language={language} code={code} />
   }
+  const plugin = plugins.find((p) => p.id === match.pluginId)
+  const expectedHash =
+    plugin !== undefined && plugin.enabled && (plugin.status === undefined || plugin.status === 'active')
+      ? plugin.clientHashes?.[match.spec.client.module]
+      : undefined
   return (
     <PluginCodeBlock
       key={`${match.pluginId}:${match.spec.id}:${language}:${getPluginClientCacheRevision(match.pluginId)}`}
       pluginId={match.pluginId}
       clientRef={match.spec.client}
+      expectedHash={expectedHash}
       language={language}
       code={code}
       conversationId={conversationId}
@@ -70,11 +76,12 @@ export function CodeBlockRenderer({ language, code, conversationId }: { language
 function PluginCodeBlock(props: {
   pluginId: string
   clientRef: { module: string; export: string }
+  expectedHash?: string
   language: string
   code: string
   conversationId?: number
 }): ReactNode {
-  const { pluginId, clientRef, language, code, conversationId } = props
+  const { pluginId, clientRef, expectedHash, language, code, conversationId } = props
   const port = usePluginClientHost()
   const revision = useSyncExternalStore(
     subscribePluginClientCacheInvalidation,
@@ -83,15 +90,18 @@ function PluginCodeBlock(props: {
   )
   const [retry, setRetry] = useState(0)
   const [client, setClient] = useState<ClientState>(() => {
-    const cached = getCachedClientComponent(pluginId, clientRef.module, clientRef.export)
+    const cached = getCachedClientComponent(pluginId, clientRef.module, clientRef.export, expectedHash)
     return cached !== undefined ? { phase: 'ready', Component: cached as unknown as ComponentType<MarkdownCodeBlockProps> } : { phase: 'loading' }
   })
 
   useEffect(() => {
     let cancelled = false
+    if (getCachedClientComponent(pluginId, clientRef.module, clientRef.export, expectedHash) === undefined) {
+      setClient((prev) => (prev.phase === 'loading' ? prev : { phase: 'loading' }))
+    }
     void (async () => {
       try {
-        const loaded = await loadPluginClientModule(pluginId, clientRef.module)
+        const loaded = await loadPluginClientModule(pluginId, clientRef.module, expectedHash)
         const exported = requireClientExport(pluginId, clientRef.module, clientRef.export, loaded.module)
         if (typeof exported !== 'function') {
           throw new PluginClientError(
@@ -100,7 +110,10 @@ function PluginCodeBlock(props: {
             0,
           )
         }
-        if (!cancelled) setClient({ phase: 'ready', Component: exported as unknown as ComponentType<MarkdownCodeBlockProps> })
+        if (!cancelled) {
+          const Component = exported as unknown as ComponentType<MarkdownCodeBlockProps>
+          setClient((prev) => (prev.phase === 'ready' && prev.Component === Component ? prev : { phase: 'ready', Component }))
+        }
       } catch (err) {
         if (!cancelled) {
           setClient({ phase: 'error', message: err instanceof Error ? err.message : String(err) })
@@ -110,7 +123,7 @@ function PluginCodeBlock(props: {
     return () => {
       cancelled = true
     }
-  }, [pluginId, clientRef.module, clientRef.export, retry, revision])
+  }, [pluginId, clientRef.module, clientRef.export, expectedHash, retry, revision])
 
   if (client.phase === 'loading') {
     return (

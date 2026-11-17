@@ -97,6 +97,7 @@ function makeStore(overrides: Partial<HelmStoreValue> = {}): HelmStoreValue {
     pluginDocs: {},
     nodes: [],
     profiles: [],
+    profilesLoaded: true,
     assetsLoaded: true,
     models: [],
     providers: [],
