@@ -1,9 +1,14 @@
 /**
- * builtin:herdr 插件 client 纯函数模型（无 React 依赖）：
- * 总览行的筛选、统计与展示辅助，供 index.tsx 组件与单测共同消费。
+ * Pure-function models for the builtin:herdr client (no React dependency):
+ * filtering, stats and display helpers of the overview rows, consumed by the
+ * index.tsx components and unit tests alike.
+ *
+ * No display copy lives here: label-bearing builders (outcome labels, owner /
+ * status filter options) moved to copy.ts, which can resolve LocalizedText
+ * against the host locale — models.ts stays importable standalone (tests
+ * compile and import it without the shared @helm/plugin-client runtime).
  */
-
-/** 总览文档单行（OverviewDoc.panes 元素；version 2 契约）。 */
+/** Single row of the overview doc (OverviewDoc.panes element; version 2 contract). */
 export interface OverviewPaneRow {
   nodeId: string
   paneId: string
@@ -31,7 +36,7 @@ export interface OverviewDoc {
   asks: Array<{ paneId: string; nodeId: string; seq: number; phase: string }>
 }
 
-/** URL 深链筛选参数（sp.node / sp.owner / sp.status）。 */
+/** URL deep-link filter params (sp.node / sp.owner / sp.status). */
 export interface OverviewFilters {
   node: string
   owner: string
@@ -40,7 +45,7 @@ export interface OverviewFilters {
 
 export const DEFAULT_FILTERS: Readonly<OverviewFilters> = Object.freeze({ node: 'all', owner: 'all', status: 'all' })
 
-/** 从 ScreenProps.params 解析筛选器：非法值回退 'all'，不做任何静默改写之外的猜测。 */
+/** Parse filters from ScreenProps.params: invalid values fall back to 'all'; no guessing beyond that. */
 export function parseFilters(params: Readonly<Record<string, string>>): OverviewFilters {
   const pick = (raw: unknown, allowed: ReadonlyArray<string>): string =>
     typeof raw === 'string' && allowed.includes(raw) ? raw : 'all'
@@ -51,7 +56,7 @@ export function parseFilters(params: Readonly<Record<string, string>>): Overview
   }
 }
 
-/** 筛选器 -> setParams patch（'all' 以 undefined 清除对应键，保持 URL 最小）。 */
+/** Filters -> setParams patch ('all' clears the key with undefined, keeping the URL minimal). */
 export function filtersToParamsPatch(filters: OverviewFilters): Record<string, string | undefined> {
   return {
     node: filters.node !== 'all' ? filters.node : undefined,
@@ -89,7 +94,7 @@ export function collectNodes(panes: OverviewPaneRow[]): string[] {
   return [...new Set(panes.map((p) => p.nodeId))].sort()
 }
 
-/** Herdr 23 种 CLI agent.start kind 标签（detect::agent_label 全集）。 */
+/** The 23 Herdr CLI agent.start kind labels (the detect::agent_label universe). */
 export const HERDR_AGENT_SUGGESTIONS: ReadonlyArray<string> = [
   'pi',
   'claude',
@@ -116,10 +121,10 @@ export const HERDR_AGENT_SUGGESTIONS: ReadonlyArray<string> = [
   'muse',
 ]
 
-/** 行唯一键：nodeId:paneId。 */
+/** Row unique key: nodeId:paneId. */
 export const paneRowKey = (row: Pick<OverviewPaneRow, 'nodeId' | 'paneId'>): string => `${row.nodeId}:${row.paneId}`
 
-/** 行状态徽章色调（未知状态中性展示，不猜测）。 */
+/** Row status badge tone (unknown statuses render neutrally, never guessed). */
 export function agentStatusTone(status: string): string {
   switch (status) {
     case 'working':
@@ -133,23 +138,23 @@ export function agentStatusTone(status: string): string {
   }
 }
 
-/** 受管行任务终态标签（仅 outcome 存在时展示）。 */
-export function outcomeLabel(outcome: string | undefined): { label: string; tone: string } | undefined {
+/** Outcome badge tone for managed rows (labels resolve in copy.ts against the host locale). */
+export function outcomeTone(outcome: string | undefined): string | undefined {
   switch (outcome) {
     case 'running':
-      return { label: '运行中', tone: 'accent' }
+      return 'accent'
     case 'keepalive':
-      return { label: '保活', tone: 'neutral' }
+      return 'neutral'
     case 'failed':
-      return { label: '失败', tone: 'err' }
+      return 'err'
     case 'settled':
-      return { label: '已收尾', tone: 'ok' }
+      return 'ok'
     default:
       return undefined
   }
 }
 
-/** list 动作结果 -> paneKey 到 parentConversationId 的映射（受管行关联会话）。 */
+/** list action result -> paneKey to parentConversationId map (linked conversations of managed rows). */
 export function parseManagedMap(result: unknown): Record<string, number> {
   const map: Record<string, number> = {}
   if (result === null || typeof result !== 'object' || !Array.isArray((result as { panes?: unknown }).panes)) return map
@@ -164,7 +169,7 @@ export function parseManagedMap(result: unknown): Record<string, number> {
   return map
 }
 
-/** read 动作结果 -> 终端快照文本（text 字段缺失时 JSON 序列化兜底，不伪造空串）。 */
+/** read action result -> terminal snapshot text (JSON fallback when the text field is missing; never fakes an empty string). */
 export function parseReadText(result: unknown): string {
   if (result !== null && typeof result === 'object' && 'text' in (result as Record<string, unknown>)) {
     const text = (result as { text?: unknown }).text
@@ -178,9 +183,11 @@ export function parseReadText(result: unknown): string {
 }
 
 /**
- * 是否可对窗格执行聚焦操作：
- * 1. 来源校验：必须由 helm 受管（row.ownedBy === 'helm'），human 窗格不由 builtin:herdr 管理；
- * 2. 状态校验：当前尚未聚焦（!row.focused），任务未收尾（outcome !== 'settled'），且非 done 状态。
+ * Whether the pane accepts a focus action:
+ * 1. origin check: it must be helm-managed (row.ownedBy === 'helm') — human
+ *    panes are not managed by builtin:herdr;
+ * 2. state check: not already focused (!row.focused), the task has not
+ *    settled (outcome !== 'settled') and the status is not done.
  */
 export function canFocusPane(row: OverviewPaneRow): boolean {
   if (row.ownedBy !== 'helm') return false
@@ -191,9 +198,10 @@ export function canFocusPane(row: OverviewPaneRow): boolean {
 }
 
 /**
- * 是否可读取窗格快照：
- * 1. 来源校验：必须由 helm 受管（row.ownedBy === 'helm'），human 窗格不由 builtin:herdr 管理；
- * 2. 状态校验：任务未收尾（outcome !== 'settled'）。
+ * Whether the pane accepts a read-only snapshot:
+ * 1. origin check: it must be helm-managed (row.ownedBy === 'helm') — human
+ *    panes are not managed by builtin:herdr;
+ * 2. state check: the task has not settled (outcome !== 'settled').
  */
 export function canSnapshotPane(row: OverviewPaneRow): boolean {
   if (row.ownedBy !== 'helm') return false
@@ -201,7 +209,7 @@ export function canSnapshotPane(row: OverviewPaneRow): boolean {
   return true
 }
 
-/** 归属判定：非 helm 托管一律视为人类直连（严格只读诊断，禁渲染控制动作）。 */
+/** Ownership check: anything not managed by helm counts as human direct (strictly read-only diagnostics, no control actions). */
 export function isHumanOwnedPane(row: Pick<OverviewPaneRow, 'ownedBy'>): boolean {
   return row.ownedBy !== 'helm'
 }
@@ -213,20 +221,3 @@ export function paneLocationText(row: Pick<OverviewPaneRow, 'title' | 'label' | 
 export function paneCwdText(row: Pick<OverviewPaneRow, 'foregroundCwd' | 'cwd'>): string {
   return row.foregroundCwd ?? row.cwd ?? '—'
 }
-
-export const OWNER_FILTER_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
-  { value: 'all', label: '全部归属' },
-  { value: 'helm', label: 'helm 受管' },
-  { value: 'human', label: 'human 直连' },
-]
-
-export const STATUS_FILTER_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
-  { value: 'all', label: '全部状态' },
-  { value: 'working', label: 'working' },
-  { value: 'idle', label: 'idle' },
-  { value: 'blocked', label: 'blocked' },
-  { value: 'done', label: 'done' },
-  { value: 'unknown', label: 'unknown' },
-]
-
-

@@ -1,11 +1,19 @@
 /**
- * builtin:herdr 插件 client.tsx 组件（只导出组件，保 Fast Refresh 契约）：
- * - HerdrOverviewScreen：Herdr 终端总览全屏视图（桌面表格 + <=680px 双行卡片自适应）。
+ * builtin:herdr plugin client.tsx components (component exports only, Fast
+ * Refresh contract):
+ * - HerdrOverviewScreen: Herdr terminal overview fullscreen view (desktop
+ *   table + <=680px two-line adaptive cards).
  *
- * 归属红线（AGENTS.md §3）：
- * - ownedBy === 'human' 的人类直连终端窗格仅允许只读诊断与状态展示，
- *   绝不渲染聚焦、快照、发送按键或中止类破坏性操作控件。
- * - 仅 ownedBy === 'helm' 的受管窗格开放关联会话、聚焦与只读快照入口。
+ * Ownership red line (AGENTS.md §3):
+ * - Terminal panes with ownedBy === 'human' only allow read-only diagnostics
+ *   and status display; never render focus, snapshot, send-keys or abort
+ *   controls for them.
+ * - Only panes with ownedBy === 'helm' expose the linked conversation, focus
+ *   and read-only snapshot entries.
+ *
+ * Display copy resolves from copy.ts against the active host locale (no
+ * independent language state, no localStorage); backend error messages pass
+ * through unchanged.
  */
 import { useMemo, useState } from 'react'
 import './styles.css'
@@ -23,6 +31,8 @@ import {
   Select,
   usePluginContext,
   usePluginDoc,
+  usePluginLocale,
+  usePluginTranslator,
 } from '@helm/plugin-client'
 import {
   agentStatusTone,
@@ -33,18 +43,57 @@ import {
   filterPanes,
   filtersToParamsPatch,
   isHumanOwnedPane,
-  outcomeLabel,
-  OWNER_FILTER_OPTIONS,
   paneCwdText,
   paneLocationText,
   paneRowKey,
   parseFilters,
   parseManagedMap,
   parseReadText,
-  STATUS_FILTER_OPTIONS,
   type OverviewDoc,
   type OverviewPaneRow,
 } from './models.ts'
+import {
+  HDR_ACTION_FOCUS,
+  HDR_ACTION_OPEN_LINKED,
+  HDR_ACTION_SNAPSHOT,
+  HDR_ASKS_TITLE,
+  HDR_BADGE_FOCUSED,
+  HDR_BADGE_PENDING_ASK,
+  HDR_CLOSE,
+  HDR_COL_ACTIONS,
+  HDR_COL_CWD,
+  HDR_COL_LOCATION,
+  HDR_COL_NODE,
+  HDR_COL_OUTCOME,
+  HDR_COL_OWNER,
+  HDR_COL_PANE,
+  HDR_COL_STATUS,
+  HDR_FILTER_NODE_ARIA,
+  HDR_FILTER_OWNER_ARIA,
+  HDR_FILTER_STATUS_ARIA,
+  HDR_LINK_REFRESH_HINT,
+  HDR_LOADING_DOC,
+  HDR_NO_MATCH,
+  HDR_PANE_LIST_ARIA,
+  HDR_READ_ONLY,
+  HDR_READ_ONLY_TITLE,
+  HDR_REFETCH,
+  HDR_REFRESH_LINKS,
+  HDR_SNAPSHOT_ARIA,
+  HDR_STAT_BLOCKED,
+  HDR_STAT_NODES,
+  HDR_STAT_PANES,
+  HDR_STAT_WORKING,
+  herdrActionFailed,
+  herdrConversationTitle,
+  herdrDegradedNotice,
+  herdrNodeFilterOptions,
+  herdrOutcomeLabel,
+  herdrOwnerFilterOptions,
+  herdrRowCount,
+  herdrSnapshotTitle,
+  herdrStatusFilterOptions,
+} from './copy.ts'
 import {
   Check,
   ChevronDown,
@@ -83,7 +132,7 @@ function Icon({
   return <Cmp size={size} strokeWidth={1.75} className={className} style={style} />
 }
 
-/** 宿主 Radix Select 筛选器（复用 @helm/plugin-client 共享原语；零原生 <select>）。 */
+/** Host Radix Select filter (reuses the @helm/plugin-client shared primitive; zero native <select>). */
 function FilterSelect({
   value,
   options,
@@ -110,6 +159,8 @@ function FilterSelect({
 export function HerdrOverviewScreen(props: ScreenProps): ReactNode {
   const { isSplit, params, setParams } = props
   const ctx = usePluginContext()
+  const t = usePluginTranslator()
+  const locale = usePluginLocale()
   const doc = usePluginDoc<OverviewDoc>('overview')
 
   const filters = useMemo(() => parseFilters(params), [params])
@@ -119,13 +170,12 @@ export function HerdrOverviewScreen(props: ScreenProps): ReactNode {
 
   const panes = doc?.panes ?? []
   const nodes = useMemo(() => collectNodes(panes), [panes])
-  const nodeFilterOptions = useMemo<ReadonlyArray<{ value: string; label: string }>>(
-    () => [
-      { value: 'all', label: '全部节点' },
-      ...nodes.map((m) => ({ value: m, label: m === 'local' ? '本机 (local)' : m })),
-    ],
-    [nodes],
+  const nodeFilterOptions = useMemo(
+    () => herdrNodeFilterOptions(nodes, locale),
+    [nodes, locale],
   )
+  const ownerFilterOptions = useMemo(() => herdrOwnerFilterOptions(locale), [locale])
+  const statusFilterOptions = useMemo(() => herdrStatusFilterOptions(locale), [locale])
 
   const filtered = useMemo(() => filterPanes(panes, filters), [panes, filters])
   const stats = useMemo(() => computeStats(panes, nodes), [panes, nodes])
@@ -141,7 +191,7 @@ export function HerdrOverviewScreen(props: ScreenProps): ReactNode {
       await fn()
     } catch (error) {
       ctx.notify(
-        `Herdr 操作失败：${error instanceof Error ? error.message : String(error)}`,
+        herdrActionFailed(error instanceof Error ? error.message : String(error), locale),
         'error',
       )
     } finally {
@@ -174,7 +224,7 @@ export function HerdrOverviewScreen(props: ScreenProps): ReactNode {
     })
   }
 
-  /** 受管 pane 的 parentConversationId 经 list 动作一次性拉取（显式操作，不逐行轮询）。 */
+  /** parentConversationId of managed panes, fetched once via the list action (explicit action, no per-row polling). */
   const loadManagedMap = () =>
     invokeWithGuard('list', async () => {
       setManagedMap(parseManagedMap(await ctx.callAction('list', {})))
@@ -183,8 +233,8 @@ export function HerdrOverviewScreen(props: ScreenProps): ReactNode {
   const renderManagedActions = (row: OverviewPaneRow, key: string, parentConversationId: number | undefined): ReactNode => {
     if (isHumanOwnedPane(row)) {
       return (
-        <span className="badge badge-neutral" title="人类直连终端仅支持只读诊断与状态展示">
-          只读
+        <span className="badge badge-neutral" title={t(HDR_READ_ONLY_TITLE)}>
+          {t(HDR_READ_ONLY)}
         </span>
       )
     }
@@ -204,7 +254,7 @@ export function HerdrOverviewScreen(props: ScreenProps): ReactNode {
             onClick={() => void focusPane(row)}
           >
             {busyPane === `focus:${key}` ? <Icon name="loader" size={11} /> : null}
-            聚焦
+            {t(HDR_ACTION_FOCUS)}
           </button>
         ) : null}
         {showRead ? (
@@ -215,7 +265,7 @@ export function HerdrOverviewScreen(props: ScreenProps): ReactNode {
             onClick={() => void readPane(row)}
           >
             {busyPane === `read:${key}` ? <Icon name="loader" size={11} /> : null}
-            快照
+            {t(HDR_ACTION_SNAPSHOT)}
           </button>
         ) : null}
         {showConversation ? (
@@ -223,7 +273,7 @@ export function HerdrOverviewScreen(props: ScreenProps): ReactNode {
             type="button"
             className="btn btn-sm btn-ghost"
             disabled={parentConversationId === undefined}
-            title={parentConversationId !== undefined ? `会话 #${parentConversationId}` : '点「刷新关联」获取受管窗格的关联会话'}
+            title={parentConversationId !== undefined ? herdrConversationTitle(parentConversationId, locale) : t(HDR_LINK_REFRESH_HINT)}
             onClick={() => {
               if (parentConversationId === undefined) return
               if (isSplit) ctx.openConversationDrawer(parentConversationId)
@@ -231,7 +281,7 @@ export function HerdrOverviewScreen(props: ScreenProps): ReactNode {
             }}
           >
             <Icon name="message-square" size={11} />
-            打开关联会话
+            {t(HDR_ACTION_OPEN_LINKED)}
           </button>
         ) : null}
       </>
@@ -242,15 +292,15 @@ export function HerdrOverviewScreen(props: ScreenProps): ReactNode {
     <div className="herdr-overview">
       <div className="herdr-overview-toolbar">
         <div className="herdr-toolbar-stats">
-          <span className="badge badge-neutral">窗格 {stats.total}</span>
-          <span className="badge badge-accent">工作中 {stats.working}</span>
-          <span className="badge badge-warn">待确认 {stats.blocked}</span>
-          <span className="badge badge-neutral">节点 {stats.nodes}</span>
+          <span className="badge badge-neutral">{t(HDR_STAT_PANES)} {stats.total}</span>
+          <span className="badge badge-accent">{t(HDR_STAT_WORKING)} {stats.working}</span>
+          <span className="badge badge-warn">{t(HDR_STAT_BLOCKED)} {stats.blocked}</span>
+          <span className="badge badge-neutral">{t(HDR_STAT_NODES)} {stats.nodes}</span>
         </div>
         <div className="herdr-toolbar-actions">
           <button type="button" className="btn btn-sm" onClick={() => void loadManagedMap()}>
             <Icon name="refresh-cw" size={12} />
-            刷新关联
+            {t(HDR_REFRESH_LINKS)}
           </button>
           <button
             type="button"
@@ -259,7 +309,7 @@ export function HerdrOverviewScreen(props: ScreenProps): ReactNode {
             onClick={() => void ctx.getPluginDoc('overview')}
           >
             <Icon name="rotate-ccw" size={12} />
-            重取
+            {t(HDR_REFETCH)}
           </button>
         </div>
       </div>
@@ -267,7 +317,7 @@ export function HerdrOverviewScreen(props: ScreenProps): ReactNode {
       {(doc?.stale === true || doc?.error !== undefined) && (
         <div className="herdr-overview-stale">
           <Callout tone="warn">
-            Herdr 连接降级或不可达：{doc?.error ?? '未知错误'}（以下为最后已知快照，时间 {formatCompactTimestamp(doc?.updatedAt ?? 0)}）
+            {herdrDegradedNotice(doc?.error, formatCompactTimestamp(doc?.updatedAt ?? 0), locale)}
           </Callout>
         </div>
       )}
@@ -276,23 +326,23 @@ export function HerdrOverviewScreen(props: ScreenProps): ReactNode {
         <FilterSelect
           value={filters.node}
           options={nodeFilterOptions}
-          ariaLabel="节点筛选"
+          ariaLabel={t(HDR_FILTER_NODE_ARIA)}
           onChange={(next) => updateFilter('node', next)}
         />
         <FilterSelect
           value={filters.owner}
-          options={OWNER_FILTER_OPTIONS}
-          ariaLabel="归属筛选"
+          options={ownerFilterOptions}
+          ariaLabel={t(HDR_FILTER_OWNER_ARIA)}
           onChange={(next) => updateFilter('owner', next)}
         />
         <FilterSelect
           value={filters.status}
-          options={STATUS_FILTER_OPTIONS}
-          ariaLabel="状态筛选"
+          options={statusFilterOptions}
+          ariaLabel={t(HDR_FILTER_STATUS_ARIA)}
           onChange={(next) => updateFilter('status', next)}
         />
         <span className="text-subtle tabular-nums herdr-metric-label">
-          {filtered.length}/{panes.length} 行
+          {herdrRowCount(filtered.length, panes.length, locale)}
         </span>
       </div>
 
@@ -302,35 +352,35 @@ export function HerdrOverviewScreen(props: ScreenProps): ReactNode {
             <table className="helm-table">
               <thead>
                 <tr>
-                  <th className="herdr-col-node">节点</th>
-                  <th className="herdr-col-pane">窗格</th>
-                  <th className="herdr-col-loc">位置</th>
-                  <th className="herdr-col-owner">归属</th>
-                  <th className="herdr-col-status">状态</th>
+                  <th className="herdr-col-node">{t(HDR_COL_NODE)}</th>
+                  <th className="herdr-col-pane">{t(HDR_COL_PANE)}</th>
+                  <th className="herdr-col-loc">{t(HDR_COL_LOCATION)}</th>
+                  <th className="herdr-col-owner">{t(HDR_COL_OWNER)}</th>
+                  <th className="herdr-col-status">{t(HDR_COL_STATUS)}</th>
                   <th className="herdr-col-cli">CLI</th>
-                  <th>工作目录</th>
-                  <th className="herdr-col-outcome">终态</th>
-                  <th className="herdr-col-actions">操作</th>
+                  <th>{t(HDR_COL_CWD)}</th>
+                  <th className="herdr-col-outcome">{t(HDR_COL_OUTCOME)}</th>
+                  <th className="herdr-col-actions">{t(HDR_COL_ACTIONS)}</th>
                 </tr>
               </thead>
               <tbody>
                 {doc === undefined ? (
                   <tr>
                     <td colSpan={9} className="herdr-muted">
-                      正在加载 overview 文档...
+                      {t(HDR_LOADING_DOC)}
                     </td>
                   </tr>
                 ) : filtered.length === 0 ? (
                   <tr>
                     <td colSpan={9} className="herdr-muted">
-                      没有匹配的窗格
+                      {t(HDR_NO_MATCH)}
                     </td>
                   </tr>
                 ) : (
                   filtered.map((row) => {
                     const key = paneRowKey(row)
                     const statusTone = agentStatusTone(row.agentStatus)
-                    const outcomeMeta = outcomeLabel(row.outcome)
+                    const outcomeMeta = herdrOutcomeLabel(row.outcome, locale)
                     const parentConversationId = managedMap[key]
                     const locText = paneLocationText(row)
                     const cwdText = paneCwdText(row)
@@ -339,8 +389,8 @@ export function HerdrOverviewScreen(props: ScreenProps): ReactNode {
                         <td className="mono">{row.nodeId}</td>
                         <td className="mono">
                           {row.paneId}
-                          {row.focused === true ? <span className="badge badge-accent herdr-badge-inline">聚焦</span> : null}
-                          {row.pendingAsk === true ? <span className="badge badge-warn herdr-badge-inline">待审批</span> : null}
+                          {row.focused === true ? <span className="badge badge-accent herdr-badge-inline">{t(HDR_BADGE_FOCUSED)}</span> : null}
+                          {row.pendingAsk === true ? <span className="badge badge-warn herdr-badge-inline">{t(HDR_BADGE_PENDING_ASK)}</span> : null}
                         </td>
                         <td className="herdr-cell-truncate" title={locText}>
                           {locText}
@@ -377,16 +427,16 @@ export function HerdrOverviewScreen(props: ScreenProps): ReactNode {
             </table>
           </div>
 
-          <div className="herdr-mobile-cards" aria-label="窗格列表（移动视图）">
+          <div className="herdr-mobile-cards" aria-label={t(HDR_PANE_LIST_ARIA)}>
             {doc === undefined ? (
-              <div className="herdr-mobile-empty">正在加载 overview 文档...</div>
+              <div className="herdr-mobile-empty">{t(HDR_LOADING_DOC)}</div>
             ) : filtered.length === 0 ? (
-              <div className="herdr-mobile-empty">没有匹配的窗格</div>
+              <div className="herdr-mobile-empty">{t(HDR_NO_MATCH)}</div>
             ) : (
               filtered.map((row) => {
                 const key = paneRowKey(row)
                 const statusTone = agentStatusTone(row.agentStatus)
-                const outcomeMeta = outcomeLabel(row.outcome)
+                const outcomeMeta = herdrOutcomeLabel(row.outcome, locale)
                 const parentConversationId = managedMap[key]
                 const humanOnly = isHumanOwnedPane(row)
                 const locText = paneLocationText(row)
@@ -406,8 +456,8 @@ export function HerdrOverviewScreen(props: ScreenProps): ReactNode {
                       {outcomeMeta !== undefined ? (
                         <span className={`badge badge-${outcomeMeta.tone}`}>{outcomeMeta.label}</span>
                       ) : null}
-                      {row.focused === true ? <span className="badge badge-accent">聚焦</span> : null}
-                      {row.pendingAsk === true ? <span className="badge badge-warn">待审批</span> : null}
+                      {row.focused === true ? <span className="badge badge-accent">{t(HDR_BADGE_FOCUSED)}</span> : null}
+                      {row.pendingAsk === true ? <span className="badge badge-warn">{t(HDR_BADGE_PENDING_ASK)}</span> : null}
                     </div>
                     <div className="herdr-pane-card-meta">
                       <span className="mono">{row.agentName ?? row.agent ?? '—'}</span>
@@ -425,7 +475,7 @@ export function HerdrOverviewScreen(props: ScreenProps): ReactNode {
 
           {doc !== undefined && doc.asks.length > 0 && (
             <div className="card herdr-asks-card">
-              <div className="herdr-asks-title">待审批（asks）</div>
+              <div className="herdr-asks-title">{t(HDR_ASKS_TITLE)}</div>
               <div className="herdr-ask-list">
                 {doc.asks.map((ask, i) => (
                   <div key={i} className="stack-row herdr-ask-row">
@@ -447,13 +497,13 @@ export function HerdrOverviewScreen(props: ScreenProps): ReactNode {
         <Dialog open onOpenChange={(open) => { if (!open) setSnapshot(null) }}>
           <DialogPortal>
             <DialogOverlay className="modal-backdrop">
-              <DialogContent className="modal herdr-snapshot-modal" aria-label="终端快照">
+              <DialogContent className="modal herdr-snapshot-modal" aria-label={t(HDR_SNAPSHOT_ARIA)}>
                 <div className="modal-header">
-                  <DialogTitle className="modal-title mono">终端快照：{snapshot.title}</DialogTitle>
+                  <DialogTitle className="modal-title mono">{herdrSnapshotTitle(snapshot.title, locale)}</DialogTitle>
                   <DialogClose asChild>
                     <button type="button" className="btn btn-sm btn-ghost">
                       <Icon name="x" size={12} />
-                      关闭
+                      {t(HDR_CLOSE)}
                     </button>
                   </DialogClose>
                 </div>

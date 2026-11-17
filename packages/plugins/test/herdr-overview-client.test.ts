@@ -67,7 +67,7 @@ after(async () => {
   await rm(tempDir, { recursive: true, force: true })
 })
 
-function mountHerdrOverview(doc: OverviewDoc) {
+function mountHerdrOverview(doc: OverviewDoc, locale?: 'en' | 'zh-CN') {
   const actionCalls: Array<{ actionId: string; input: unknown }> = []
   const openedScreens: string[] = []
   const openedDrawers: number[] = []
@@ -76,6 +76,7 @@ function mountHerdrOverview(doc: OverviewDoc) {
   const port: import('../../plugin-client/src/index.js').PluginClientHostPort = {
     authenticated: true,
     theme: 'dark',
+    locale,
     conversations: [],
     conversationDetails: {},
     conversationLives: {},
@@ -195,29 +196,76 @@ describe('HerdrOverviewScreen 双端适配与 human 只读红线', () => {
       assert.ok(mounted.container.querySelector('.herdr-toolbar-stats') !== null)
       assert.ok(mounted.container.querySelector('.herdr-toolbar-actions') !== null)
 
-      // 2. 桌面表格：human 行操作列没有任何 <button>，仅含「只读」诊断徽章
+      // 2. 桌面表格：human 行操作列没有任何 <button>，仅含「只读」诊断徽章（默认 en locale）
       const desktopRows = [...mounted.container.querySelectorAll('.herdr-desktop-table tbody tr')]
       assert.equal(desktopRows.length, 2)
       const humanDesktopRow = desktopRows.find((tr) => tr.textContent?.includes('%1') && !tr.textContent?.includes('%10'))!
       assert.equal(humanDesktopRow.querySelectorAll('button').length, 0, 'human 桌面行严禁渲染任何操作按钮')
-      assert.ok(humanDesktopRow.textContent?.includes('只读'))
+      assert.ok(humanDesktopRow.textContent?.includes('Read-only'))
 
-      // 3. 移动端卡片：human 卡片没有任何 <button>，仅含「只读」诊断徽章
+      // 3. 移动端卡片：human 卡片没有任何 <button>，仅含「只读」诊断徽章（默认 en locale）
       const humanMobileCard = mounted.container.querySelector('.herdr-mobile-cards article[data-owned-by="human"]')
       assert.ok(humanMobileCard !== null, '应为 human 窗格渲染移动端只读卡片')
       assert.equal(humanMobileCard.querySelectorAll('button').length, 0, 'human 移动卡片严禁渲染发送/中止/聚焦/快照等交互控件')
-      assert.ok(humanMobileCard.textContent?.includes('只读'))
+      assert.ok(humanMobileCard.textContent?.includes('Read-only'))
 
       // 4. helm 受管窗格：开放聚焦与快照动作，点击快照弹出 Radix Dialog 展示文本
       const helmMobileCard = mounted.container.querySelector('.herdr-mobile-cards article[data-owned-by="helm"]')
       assert.ok(helmMobileCard !== null)
-      const snapshotBtn = [...helmMobileCard.querySelectorAll('button')].find((b) => b.textContent?.includes('快照'))
+      const snapshotBtn = [...helmMobileCard.querySelectorAll('button')].find((b) => b.textContent?.includes('Snapshot'))
       assert.ok(snapshotBtn !== undefined, 'helm 受管窗格应渲染快照按钮')
       await act(async () => {
         snapshotBtn.click()
       })
       assert.equal(mounted.actionCalls.at(-1)?.actionId, 'read')
       assert.ok(document.body.textContent?.includes('terminal snapshot ok'), '快照 Modal 应展示只读终端输出')
+    } finally {
+      mounted.unmount()
+    }
+  })
+
+  test('文案随宿主 locale 切换：port 传 zh-CN 时只读徽章与快照按钮渲染中文', { timeout: 60_000 }, async () => {
+    const doc: OverviewDoc = {
+      version: 2,
+      updatedAt: 1_700_000_050_000,
+      stale: false,
+      asks: [],
+      panes: [
+        {
+          nodeId: 'local',
+          paneId: '%1',
+          tabId: 'tab-1',
+          workspaceId: 'ws-1',
+          ownedBy: 'human',
+          agentStatus: 'idle',
+          agentName: 'claude',
+          cwd: '/root/code/helm',
+        },
+        {
+          nodeId: 'local',
+          paneId: '%10',
+          tabId: 'tab-2',
+          workspaceId: 'ws-1',
+          ownedBy: 'helm',
+          agentStatus: 'working',
+          agentName: 'codex',
+          cwd: '/root/code/helm',
+        },
+      ],
+    }
+
+    const mounted = mountHerdrOverview(doc, 'zh-CN')
+    try {
+      // human 直连：中文「只读」徽章
+      const humanMobileCard = mounted.container.querySelector('.herdr-mobile-cards article[data-owned-by="human"]')
+      assert.ok(humanMobileCard !== null)
+      assert.ok(humanMobileCard.textContent?.includes('只读'))
+      assert.ok(!humanMobileCard.textContent?.includes('Read-only'))
+      // helm 受管：中文「快照」按钮
+      const helmMobileCard = mounted.container.querySelector('.herdr-mobile-cards article[data-owned-by="helm"]')
+      assert.ok(helmMobileCard !== null)
+      const snapshotBtn = [...helmMobileCard.querySelectorAll('button')].find((b) => b.textContent?.includes('快照'))
+      assert.ok(snapshotBtn !== undefined, 'zh-CN 下快照按钮应渲染中文文案')
     } finally {
       mounted.unmount()
     }
