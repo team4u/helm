@@ -34,8 +34,30 @@ import {
   type BoardCallerIdentity,
 } from './board-router.js'
 import { recentEntrySummaries } from './settlement.js'
-
-const WORKFLOW_PLUGIN_ID = 'builtin:workflow'
+import {
+  archiveWorkerInputSchema,
+  boardPostInputSchema,
+  boardReadInputSchema,
+  boardStatusInputSchema,
+  closeGroupInputSchema,
+  completerInputSchema,
+  createGroupInputSchema,
+  dispatchInputSchema,
+  manageChannelInputSchema,
+  switchModelInputSchema,
+  updateGroupInputSchema,
+  workerIdInputSchema,
+} from './action-schemas.js'
+import {
+  WORKFLOW_PLUGIN_ID,
+  checkMemberWorktree,
+  cleanupManagedWorktree,
+  inspectManagedWorktree,
+  releaseWorktreeHold,
+  toWorktreeHandoffSnapshot,
+  type CheckedMemberWorktree,
+  type WorkflowAcquireResultShape,
+} from './worktree-bridge.js'
 
 export interface DispatchInput {
   prompt: string
@@ -52,34 +74,6 @@ export interface DispatchInput {
   title?: string
   cwd?: string
   nodeId?: string
-}
-
-interface WorkflowInspectResultShape {
-  record: {
-    id: string
-    nodeId: string
-    repoRoot: string
-    path: string
-    branch: string
-    baseBranch?: string
-    baseCommit: string
-    status: 'active' | 'removed'
-  }
-  exists: boolean
-  currentBranch?: string
-  currentHead?: string
-  dirtyFiles: string[]
-  dirtyFileCount: number
-  commitsAhead?: number
-  diffStat?: string
-}
-
-interface WorkflowAcquireResultShape {
-  worktreeId: string
-  path: string
-  branch: string
-  baseCommit: string
-  nodeId: string
 }
 
 function assertCoordinatorAuthority(
@@ -143,68 +137,6 @@ export function assertWorkerNodeId(value: string): string {
   return trimmed
 }
 
-function extractChangedFilesPreview(inspected: WorkflowInspectResultShape, maxItems = 20): string[] {
-  const seen = new Set<string>()
-  const out: string[] = []
-  const push = (file: string): void => {
-    const clean = file.trim()
-    if (clean === '' || seen.has(clean)) return
-    seen.add(clean)
-    if (out.length < maxItems) out.push(clean)
-  }
-  for (const rawLine of inspected.dirtyFiles) {
-    const pathPart = rawLine.length > 3 ? rawLine.slice(3).trim() : rawLine.trim()
-    push(pathPart)
-  }
-  if (typeof inspected.diffStat === 'string') {
-    for (const line of inspected.diffStat.split('\n')) {
-      const pipeIdx = line.indexOf(' | ')
-      if (pipeIdx <= 0) continue
-      push(line.slice(0, pipeIdx))
-    }
-  }
-  return out
-}
-
-export const workerIdSchema: Record<string, unknown> = { type: 'integer', minimum: 1 }
-
-export const workerIdInputSchema: Record<string, unknown> = {
-  type: 'object',
-  properties: {
-    workerConversationId: workerIdSchema,
-    groupId: { type: 'string', minLength: 1, maxLength: 64 },
-    name: { type: 'string', minLength: 1, maxLength: 32 },
-  },
-  additionalProperties: false,
-}
-
-export const dispatchInputSchema: Record<string, unknown> = {
-  type: 'object',
-  properties: {
-    prompt: { type: 'string', minLength: 1, description: 'Initial brief task assignment for this peer role' },
-    groupId: { type: 'string', minLength: 1, maxLength: 64 },
-    name: { type: 'string', minLength: 1, maxLength: 32, description: 'Unique lowercase role name (e.g. author, verifier)' },
-    profileId: { type: 'string', minLength: 1, maxLength: 64, pattern: '^[^\\s/\\\\]+$' },
-    access: { type: 'string', enum: ['readwrite', 'readonly'] },
-    isolation: { type: 'string', enum: ['inherit', 'worktree'] },
-    forkFrom: {
-      type: 'string',
-      minLength: 1,
-      maxLength: 32,
-      description: "Optional fork source: 'coordinator' or an existing member name",
-    },
-    forkEntryId: { type: 'integer', minimum: 1 },
-    model: { type: 'string', minLength: 1, maxLength: 200 },
-    effort: { type: 'string', minLength: 1, maxLength: 32 },
-    channels: { type: 'array', items: { type: 'string', minLength: 1, maxLength: 40 } },
-    title: { type: 'string', minLength: 1, maxLength: 80 },
-    cwd: { type: 'string', minLength: 1 },
-    nodeId: { type: 'string', minLength: 1, maxLength: 64, pattern: '^[^\\s/\\\\]+$' },
-  },
-  required: ['prompt', 'name'],
-  additionalProperties: false,
-}
-
 export function registerSwarmActions(
   ctx: HelmPluginContext,
   coordinator: SwarmCoordinator,
@@ -218,63 +150,12 @@ export function registerSwarmActions(
     settlingWorkers,
   } = coordinator
 
-  // ------------------------------------------------------------------
-  // Worktree 检视与未合入判定辅助（100% 委托 builtin:workflow）
-  // ------------------------------------------------------------------
-  const inspectManagedWorktree = async (worktreeId: string, signal?: AbortSignal): Promise<WorkflowInspectResultShape> => {
-    const raw = await ctx.host.invokeAction(
-      WORKFLOW_PLUGIN_ID,
-      'inspect_worktree',
-      { worktreeId, diff: false },
-      signal !== undefined ? { signal } : undefined,
-    )
-    return raw as WorkflowInspectResultShape
-  }
-
-  const computeEffectiveUnmergedCommits = async (
-    inspected: WorkflowInspectResultShape,
-    signal?: AbortSignal,
-  ): Promise<number> => {
-    if (!inspected.exists) return 0
-    const ahead = inspected.commitsAhead ?? 0
-    if (ahead <= 0) return 0
-    if (inspected.record.repoRoot !== '' && inspected.currentHead !== undefined && inspected.currentHead !== '') {
-      const res = await ctx.host.execEnv(
-        {
-          nodeId: inspected.record.nodeId,
-          cwd: inspected.record.repoRoot,
-          command: ['git', 'merge-base', '--is-ancestor', inspected.currentHead, 'HEAD'],
-        },
-        signal !== undefined ? { signal } : undefined,
-      )
-      if (res.exitCode === 0) return 0
-    }
-    return ahead
-  }
-
-  const releaseWorktreeHold = async (groupId: string, memberName: string, worktreeId: string, signal?: AbortSignal): Promise<void> => {
-    await ctx.host.invokeAction(
-      WORKFLOW_PLUGIN_ID,
-      'release_worktree_hold',
-      {
-        worktreeId,
-        pluginId: SWARM_PLUGIN_ID,
-        holdId: `${groupId}:${memberName}`,
-      },
-      signal !== undefined ? { signal } : undefined,
-    )
-  }
-
-  const cleanupManagedWorktree = async (worktreeId: string, force: boolean, signal?: AbortSignal): Promise<void> => {
-    await ctx.host.invokeAction(
-      WORKFLOW_PLUGIN_ID,
-      'cleanup_worktree',
-      {
-        worktreeId,
-        deleteBranch: true,
-        ...(force ? { force: true } : {}),
-      },
-      signal !== undefined ? { signal } : undefined,
+  const isWorkerBusy = (conversationId: number, status?: string): boolean => {
+    const convStatus = status ?? readConversationOrUndefined(conversationId)?.status
+    return (
+      convStatus === 'working' ||
+      convStatus === 'blocked' ||
+      settlingWorkers.has(conversationId)
     )
   }
 
@@ -708,8 +589,8 @@ export function registerSwarmActions(
       } catch (err) {
         reportError(`协作组 ${freshGroup.id} 成员 @${memberName} (#${created.id}) 派工失败，执行回滚`, err)
         if (acquiredWorktreeId !== undefined) {
-          await releaseWorktreeHold(freshGroup.id, memberName, acquiredWorktreeId).catch(() => {})
-          await cleanupManagedWorktree(acquiredWorktreeId, true).catch(() => {})
+          await releaseWorktreeHold(ctx, freshGroup.id, memberName, acquiredWorktreeId).catch(() => {})
+          await cleanupManagedWorktree(ctx, acquiredWorktreeId, true).catch(() => {})
         }
         const freshConv = readConversationOrUndefined(created.id)
         if (freshConv !== undefined) {
@@ -789,7 +670,6 @@ export function registerSwarmActions(
         caller = { role: 'coordinator', from: 'coordinator' }
       }
     } else {
-      // 人工 HTTP / CLI / Web UI 调用：缺省以 coordinator 身份发帖
       if (input.groupId !== undefined && input.groupId.trim() !== '') {
         group = groups.getGroup(assertGroupId(input.groupId))
       }
@@ -841,14 +721,8 @@ export function registerSwarmActions(
 
     let worktreeSnapshot: WorktreeHandoffSnapshot | undefined
     if (senderMember?.worktreeId !== undefined && (kind === 'handoff' || kind === 'done')) {
-      const inspected = await inspectManagedWorktree(senderMember.worktreeId, signal)
-      worktreeSnapshot = {
-        worktreeId: senderMember.worktreeId,
-        ...(inspected.currentBranch !== undefined ? { branch: inspected.currentBranch } : {}),
-        ...(inspected.commitsAhead !== undefined ? { commitsAhead: inspected.commitsAhead } : {}),
-        dirtyCount: inspected.dirtyFileCount,
-        changedFilesPreview: extractChangedFilesPreview(inspected),
-      }
+      const inspected = await inspectManagedWorktree(ctx, senderMember.worktreeId, signal)
+      worktreeSnapshot = toWorktreeHandoffSnapshot(senderMember.worktreeId, inspected)
     }
 
     const post = await groups.appendPost(group.id, {
@@ -1011,11 +885,7 @@ export function registerSwarmActions(
         workerConversationId,
       })
     }
-    if (
-      summary.status === 'working' ||
-      summary.status === 'blocked' ||
-      settlingWorkers.has(workerConversationId)
-    ) {
+    if (isWorkerBusy(workerConversationId, summary.status)) {
       throw new HelmError(
         'swarm_worker_busy',
         `成员 @${member.name} (#${workerConversationId}) 当前仍在运行中（${summary.status}）；请先等待完成或调用 abort_worker 刹停后再切换模型`,
@@ -1087,10 +957,7 @@ export function registerSwarmActions(
       return { archived: true, workerConversationId }
     }
     const summary = readConversationOrUndefined(workerConversationId)
-    if (
-      summary !== undefined &&
-      (summary.status === 'working' || summary.status === 'blocked' || settlingWorkers.has(workerConversationId))
-    ) {
+    if (summary !== undefined && isWorkerBusy(workerConversationId, summary.status)) {
       throw new HelmError(
         'swarm_worker_busy',
         `成员 @${member.name} (#${workerConversationId}) 当前正在运行或结算，拒绝归档（请先 abort_worker 或等待结束）`,
@@ -1101,12 +968,7 @@ export function registerSwarmActions(
 
     return enqueueDispatch(async () => {
       const freshSummary = readConversationOrUndefined(workerConversationId)
-      if (
-        freshSummary !== undefined &&
-        (freshSummary.status === 'working' ||
-          freshSummary.status === 'blocked' ||
-          settlingWorkers.has(workerConversationId))
-      ) {
+      if (freshSummary !== undefined && isWorkerBusy(workerConversationId, freshSummary.status)) {
         throw new HelmError(
           'swarm_worker_busy',
           `成员 @${member.name} (#${workerConversationId}) 已进入运行，拒绝归档`,
@@ -1115,34 +977,31 @@ export function registerSwarmActions(
         )
       }
 
-      if (member.worktreeId !== undefined) {
-        const inspected = await inspectManagedWorktree(member.worktreeId, signal)
+      const wtCheck = await checkMemberWorktree(ctx, member, signal)
+      if (wtCheck !== undefined) {
         if (input.keepWorktree === true) {
-          await releaseWorktreeHold(group.id, member.name, member.worktreeId, signal)
+          await releaseWorktreeHold(ctx, group.id, member.name, wtCheck.worktreeId, signal)
         } else {
-          if (input.force !== true && inspected.exists) {
-            const unmergedCommits = await computeEffectiveUnmergedCommits(inspected, signal)
-            if (inspected.dirtyFileCount > 0 || unmergedCommits > 0) {
-              throw new HelmError(
-                'swarm_worktree_unmerged',
-                `成员 @${member.name} 的工作树 ${member.worktreeId} (branch: ${inspected.currentBranch ?? inspected.record.branch}) 存在未提交改动(${inspected.dirtyFileCount})或未合入提交(${unmergedCommits})；请先合入或传 keepWorktree: true / force: true`,
-                409,
-                {
-                  pluginId: SWARM_PLUGIN_ID,
-                  groupId: group.id,
-                  memberName: member.name,
-                  worktreeId: member.worktreeId,
-                  branch: inspected.currentBranch ?? inspected.record.branch,
-                  path: inspected.record.path,
-                  dirtyCount: inspected.dirtyFileCount,
-                  commitsAhead: unmergedCommits,
-                },
-              )
-            }
+          if (input.force !== true && wtCheck.inspected.exists && (wtCheck.isDirty || wtCheck.unmergedCommits > 0)) {
+            throw new HelmError(
+              'swarm_worktree_unmerged',
+              `成员 @${member.name} 的工作树 ${wtCheck.worktreeId} (branch: ${wtCheck.inspected.currentBranch ?? wtCheck.inspected.record.branch}) 存在未提交改动(${wtCheck.inspected.dirtyFileCount})或未合入提交(${wtCheck.unmergedCommits})；请先合入或传 keepWorktree: true / force: true`,
+              409,
+              {
+                pluginId: SWARM_PLUGIN_ID,
+                groupId: group.id,
+                memberName: member.name,
+                worktreeId: wtCheck.worktreeId,
+                branch: wtCheck.inspected.currentBranch ?? wtCheck.inspected.record.branch,
+                path: wtCheck.inspected.record.path,
+                dirtyCount: wtCheck.inspected.dirtyFileCount,
+                commitsAhead: wtCheck.unmergedCommits,
+              },
+            )
           }
-          await releaseWorktreeHold(group.id, member.name, member.worktreeId, signal)
-          if (inspected.exists) {
-            await cleanupManagedWorktree(member.worktreeId, input.force === true, signal)
+          await releaseWorktreeHold(ctx, group.id, member.name, wtCheck.worktreeId, signal)
+          if (wtCheck.inspected.exists) {
+            await cleanupManagedWorktree(ctx, wtCheck.worktreeId, input.force === true, signal)
           }
         }
       }
@@ -1203,48 +1062,32 @@ export function registerSwarmActions(
 
       const activeMembers = freshGroup.members.filter((m) => m.lifecycle === 'active')
 
-      // 1) 校验或按需中止在途成员
       for (const member of activeMembers) {
         const s = readConversationOrUndefined(member.conversationId)
-        if (s === undefined) continue
-        if (s.status === 'working' || s.status === 'blocked' || settlingWorkers.has(member.conversationId)) {
-          if (input.abortRunning === true) {
-            if (s.status === 'working' || s.status === 'blocked') {
-              await ctx.host.abortConversationGuarded(member.conversationId, { expectedOwnership: 'helm' })
-            }
-          } else {
-            throw new HelmError(
-              'swarm_worker_busy',
-              `协作组 '${freshGroup.id}' 成员 @${member.name} (#${member.conversationId}) 仍在运行中；请等待完工或传 abortRunning: true`,
-              409,
-              {
-                pluginId: SWARM_PLUGIN_ID,
-                groupId: freshGroup.id,
-                memberName: member.name,
-                workerConversationId: member.conversationId,
-              },
-            )
+        if (s === undefined || !isWorkerBusy(member.conversationId, s.status)) continue
+        if (input.abortRunning === true) {
+          if (s.status === 'working' || s.status === 'blocked') {
+            await ctx.host.abortConversationGuarded(member.conversationId, { expectedOwnership: 'helm' })
           }
+          continue
         }
+        throw new HelmError(
+          'swarm_worker_busy',
+          `协作组 '${freshGroup.id}' 成员 @${member.name} (#${member.conversationId}) 仍在运行中；请等待完工或传 abortRunning: true`,
+          409,
+          {
+            pluginId: SWARM_PLUGIN_ID,
+            groupId: freshGroup.id,
+            memberName: member.name,
+            workerConversationId: member.conversationId,
+          },
+        )
       }
 
-      // 2) 在释放任何 hold 之前，只读检视全部绑定了 worktreeId 的活跃成员
-      const worktreeChecks: Array<{
-        member: GroupMemberState
-        inspected: WorkflowInspectResultShape
-        unmergedCommits: number
-        isDirty: boolean
-      }> = []
+      const worktreeChecks: CheckedMemberWorktree[] = []
       for (const member of activeMembers) {
-        if (member.worktreeId === undefined) continue
-        const inspected = await inspectManagedWorktree(member.worktreeId, signal)
-        const unmergedCommits = await computeEffectiveUnmergedCommits(inspected, signal)
-        worktreeChecks.push({
-          member,
-          inspected,
-          unmergedCommits,
-          isDirty: inspected.exists && inspected.dirtyFileCount > 0,
-        })
+        const checked = await checkMemberWorktree(ctx, member, signal)
+        if (checked !== undefined) worktreeChecks.push(checked)
       }
 
       const keepWorktree = input.keepWorktree === true
@@ -1265,7 +1108,7 @@ export function registerSwarmActions(
               groupId: freshGroup.id,
               unmergedWorktrees: unmerged.map((item) => ({
                 memberName: item.member.name,
-                worktreeId: item.member.worktreeId!,
+                worktreeId: item.worktreeId,
                 branch: item.inspected.currentBranch ?? item.inspected.record.branch,
                 path: item.inspected.record.path,
                 commitsAhead: item.unmergedCommits,
@@ -1276,26 +1119,23 @@ export function registerSwarmActions(
         }
       }
 
-      // 3) 释放全部持久持有锁，按两态策略清理或保留待合入工作树
       const retainedWorktrees: RetainedWorktreeInfo[] = []
       for (const item of worktreeChecks) {
-        const wtId = item.member.worktreeId!
-        await releaseWorktreeHold(freshGroup.id, item.member.name, wtId, signal)
+        await releaseWorktreeHold(ctx, freshGroup.id, item.member.name, item.worktreeId, signal)
         if (!item.inspected.exists) continue
         if (keepWorktree && (item.isDirty || item.unmergedCommits > 0)) {
           retainedWorktrees.push({
             memberName: item.member.name,
-            worktreeId: wtId,
+            worktreeId: item.worktreeId,
             branch: item.inspected.currentBranch ?? item.inspected.record.branch,
             path: item.inspected.record.path,
             commitsAhead: item.unmergedCommits,
           })
         } else {
-          await cleanupManagedWorktree(wtId, false, signal)
+          await cleanupManagedWorktree(ctx, item.worktreeId, false, signal)
         }
       }
 
-      // 4) 归档全体活跃成员会话
       for (const member of activeMembers) {
         const s = readConversationOrUndefined(member.conversationId)
         if (s !== undefined) {
@@ -1322,7 +1162,6 @@ export function registerSwarmActions(
         return { group: draft, result: undefined }
       })
 
-      // 5) 摘除主控会话的 swarm-coordinator 标签，立即恢复其 bash / edit / write / subagent 权限
       const coordConv = readConversationOrUndefined(freshGroup.coordinatorConversationId)
       if (coordConv !== undefined && coordConv.tags.includes(COORDINATOR_TAG)) {
         await ctx.host.updateConversation(freshGroup.coordinatorConversationId, {
@@ -1418,146 +1257,6 @@ export function registerSwarmActions(
           ? items
           : items.filter((item) => `${item.id}\n${item.label}\n${item.hint ?? ''}`.toLowerCase().includes(q)),
     }
-  }
-
-  // ------------------------------------------------------------------
-  // 共享 Schema（所有机器描述严格使用纯英文）
-  // ------------------------------------------------------------------
-  const createGroupInputSchema: Record<string, unknown> = {
-    type: 'object',
-    properties: {
-      title: { type: 'string', minLength: 1, maxLength: 120, description: 'Swarm collaboration group title' },
-      objective: { type: 'string', maxLength: 4000, description: 'Shared objective anchor for the squad' },
-      coordinatorGuard: {
-        type: 'boolean',
-        description: 'Strip direct heavy coding tools on the coordinator while active (defaults to true)',
-      },
-      channels: {
-        type: 'array',
-        items: {
-          type: 'object',
-          properties: {
-            name: { type: 'string', minLength: 1, maxLength: 40 },
-            topic: { type: 'string', maxLength: 200 },
-          },
-          required: ['name'],
-          additionalProperties: false,
-        },
-        description: 'Optional initial subchannels besides main',
-      },
-      conversationId: { type: 'integer', minimum: 1, description: 'Target top-level coordinator conversation ID' },
-    },
-    required: ['title'],
-    additionalProperties: false,
-  }
-
-  const updateGroupInputSchema: Record<string, unknown> = {
-    type: 'object',
-    properties: {
-      groupId: { type: 'string', minLength: 1, maxLength: 64 },
-      title: { type: 'string', minLength: 1, maxLength: 120 },
-      objective: { type: 'string', maxLength: 4000 },
-      coordinatorGuard: { type: 'boolean' },
-    },
-    additionalProperties: false,
-  }
-
-  const manageChannelInputSchema: Record<string, unknown> = {
-    type: 'object',
-    properties: {
-      groupId: { type: 'string', minLength: 1, maxLength: 64 },
-      op: { type: 'string', enum: ['create', 'subscribe', 'unsubscribe', 'archive'] },
-      channel: { type: 'string', minLength: 1, maxLength: 40 },
-      topic: { type: 'string', maxLength: 200 },
-      member: { type: 'string', minLength: 1, maxLength: 32 },
-    },
-    required: ['op', 'channel'],
-    additionalProperties: false,
-  }
-
-  const boardPostInputSchema: Record<string, unknown> = {
-    type: 'object',
-    properties: {
-      groupId: { type: 'string', minLength: 1, maxLength: 64 },
-      to: {
-        type: 'array',
-        minItems: 1,
-        items: { type: 'string', minLength: 1, maxLength: 64 },
-        description: "Targets: 'coordinator', 'all' (coordinator/human only), '#<channel>', or '<memberName>'",
-      },
-      kind: {
-        type: 'string',
-        enum: ['brief', 'handoff', 'review', 'comment', 'blocker', 'done'],
-      },
-      body: { type: 'string', minLength: 1 },
-      channel: { type: 'string', minLength: 1, maxLength: 40 },
-      wake: {
-        type: 'boolean',
-        description: 'Wake idle target sessions immediately (defaults to false for comment, true otherwise)',
-      },
-      refs: { type: 'array', items: { type: 'integer', minimum: 1 } },
-      from: { type: 'string', minLength: 1, maxLength: 32 },
-    },
-    required: ['to', 'kind', 'body'],
-    additionalProperties: false,
-  }
-
-  const boardReadInputSchema: Record<string, unknown> = {
-    type: 'object',
-    properties: {
-      groupId: { type: 'string', minLength: 1, maxLength: 64 },
-      channel: { type: 'string', minLength: 1, maxLength: 40 },
-      sinceSeq: { type: 'integer', minimum: 0 },
-      seqs: { type: 'array', items: { type: 'integer', minimum: 1 } },
-      limit: { type: 'integer', minimum: 1, maximum: 200 },
-    },
-    additionalProperties: false,
-  }
-
-  const boardStatusInputSchema: Record<string, unknown> = {
-    type: 'object',
-    properties: {
-      groupId: { type: 'string', minLength: 1, maxLength: 64 },
-    },
-    additionalProperties: false,
-  }
-
-  const switchModelInputSchema: Record<string, unknown> = {
-    type: 'object',
-    properties: {
-      groupId: { type: 'string', minLength: 1, maxLength: 64 },
-      name: { type: 'string', minLength: 1, maxLength: 32 },
-      workerConversationId: workerIdSchema,
-      model: { type: 'string', minLength: 1, maxLength: 200 },
-    },
-    required: ['model'],
-    additionalProperties: false,
-  }
-
-  const archiveWorkerInputSchema: Record<string, unknown> = {
-    type: 'object',
-    properties: {
-      workerConversationId: workerIdSchema,
-      groupId: { type: 'string', minLength: 1, maxLength: 64 },
-      name: { type: 'string', minLength: 1, maxLength: 32 },
-      keepWorktree: { type: 'boolean' },
-      force: { type: 'boolean' },
-    },
-    additionalProperties: false,
-  }
-
-  const closeGroupInputSchema: Record<string, unknown> = {
-    type: 'object',
-    properties: {
-      groupId: { type: 'string', minLength: 1, maxLength: 64 },
-      keepWorktree: {
-        type: 'boolean',
-        description: 'Release holds and archive members while keeping modified worktree branches and unlocking coordinator bash for merging',
-      },
-      abortRunning: { type: 'boolean', description: 'Abort any running group members before closing' },
-      summary: { type: 'string', maxLength: 2000 },
-    },
-    additionalProperties: false,
   }
 
   // ------------------------------------------------------------------
@@ -1836,14 +1535,7 @@ export function registerSwarmActions(
     idempotent: true,
     scope: PARTICIPANT_SCOPE,
     cli: { hidden: true },
-    inputSchema: {
-      type: 'object',
-      properties: {
-        query: { type: 'string' },
-        conversationId: { type: 'integer', minimum: 1 },
-      },
-      additionalProperties: false,
-    },
+    inputSchema: completerInputSchema,
     outputSchema: { type: 'object' },
     handler: (input: { query?: string; conversationId?: number }, context) =>
       completeBoardMembers(input, context.conversationId),
@@ -1856,14 +1548,7 @@ export function registerSwarmActions(
     idempotent: true,
     scope: PARTICIPANT_SCOPE,
     cli: { hidden: true },
-    inputSchema: {
-      type: 'object',
-      properties: {
-        query: { type: 'string' },
-        conversationId: { type: 'integer', minimum: 1 },
-      },
-      additionalProperties: false,
-    },
+    inputSchema: completerInputSchema,
     outputSchema: { type: 'object' },
     handler: (input: { query?: string; conversationId?: number }, context) =>
       completeBoardChannels(input, context.conversationId),
