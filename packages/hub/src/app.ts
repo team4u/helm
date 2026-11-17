@@ -1,7 +1,5 @@
 import { KernelRuntime, loadExternalPlugins } from '@helm/kernel';
 import { createPluginBuildProvider } from '@helm/plugin-build';
-import { KernelRuntime, loadExternalPlugins } from '@helm/kernel';
-import { createPluginBuildProvider } from '@helm/plugin-build';
 import { createProfilePlugin } from '@helm/plugins/profile';
 import { createWorkflowPlugin } from '@helm/plugins/workflow';
 import { createSwarmPlugin } from '@helm/plugins/swarm';
