@@ -4,7 +4,7 @@
 > 1. **`builtin:superagent` 保持 100% 零改动**：专注常驻双层中枢路由、RecallGraph 与两层定时看门狗，不混入会话级协同看板职责；
 > 2. **新增默认启用的第 12 个内置插件 `builtin:swarm`**：零全局常驻会话、零后台轮询定时器，协作组按需挂载于目标顶层会话（`swarm-coordinator` / `swarm-worker` / `swarm-worker-archived`），异常自愈与 6 条件 0-Token `[stall]` 归因 100% 由 `turn_settled` 纯事件驱动（谁派生、谁负责）；
 > 3. **通用底座保留复用**：Stage 1A 内核 `forkConversation` 可选 `entryId` 干净锚点与 Stage 1B `builtin:workflow` `ManagedWorktreeHold`（`acquire_worktree / release_worktree_hold`）按原设计落地；`builtin:swarm` 不声明静态 `dependencies: ['builtin:workflow']`，空闲时不阻塞停用 `builtin:workflow`，活跃持锁工作树经 `ManagedWorktreeHold` 自动提供 `409 plugin_in_use` 与 `409 worktree_in_use` 保护；
-> 4. **命名空间映射**：下文初稿中的 `builtin:superagent` 看板能力在现行代码中对应 `builtin:swarm`（CLI `helm swarm *`、受管技能 `swarm-collab`、标签 `swarm-coordinator / swarm-worker`、回执渲染器 `swarm:board-report / swarm:board-wakeup`、系统提示词恒定块 `<active_swarm_group>`、Web 路由 `#/views/builtin:swarm/board`）。
+> 4. **命名空间映射**：下文初稿中的 `builtin:superagent` 看板能力在现行代码中对应 `builtin:swarm`（`ctx.action` 保持短名、11 个面向模型的 `ctx.tool` 统一带 `swarm_*` 前缀以便与 `builtin:superagent` 零工具名冲突共存；CLI `helm swarm *`、受管技能 `swarm-collab`、标签 `swarm-coordinator / swarm-worker`、回执渲染器 `swarm:board-report / swarm:board-wakeup`、系统提示词恒定块 `<active_swarm_group>`、Web 路由 `#/views/builtin:swarm/board`）。
 
 ## 背景
 

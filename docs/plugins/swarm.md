@@ -12,7 +12,7 @@
 1. **主控零编码铁律**：主控只做任务切分、具名派工、冲突裁决与最终合入收尾，不直接改业务代码或跑长时构建阻塞看板调度；
 2. **无重叠切分 + 审改分离**：并行改代码成员分配 `isolation: 'worktree'`；读写 Author 配备 `access: 'readonly'` 的 Verifier 交叉跑测并打回 `review`；
 3. **`#seq` 指针零搬运**：跨成员交接统一通过 `refs: [seq]` 与正文 `#seq` 引用黑板记录，禁止复制粘贴其他成员的 Diff 或长篇日志；
-4. **`wake` 门铃与解锁合入纪律**：`wake: true` 是唤醒门铃而非抄送，对等流水线仅唤醒下一跳责任人，仅遇阻塞（`blocker`）或最终交付（`done`）时唤醒 `coordinator`；全员审过且存在待合入分支时调用 `close_group({ keepWorktree: true })` 解锁主控合入收尾。
+4. **`wake` 门铃与解锁合入纪律**：`wake: true` 是唤醒门铃而非抄送，对等流水线仅唤醒下一跳责任人，仅遇阻塞（`blocker`）或最终交付（`done`）时唤醒 `coordinator`；全员审过且存在待合入分支时调用 `swarm_close_group({ keepWorktree: true })`（动作 ID `close_group`）解锁主控合入收尾。
 
 ## 能力和入口
 
@@ -26,7 +26,7 @@
 ### 互斥工具集、零破 KV Cache 与写门控
 
 - **作用域标签**：`swarm-coordinator`（主控）、`swarm-worker`（活跃组员）、`swarm-worker-archived`（已归档组员）。
-- **同回合无缝切换**：未建组普通会话隐藏黑板工具，仅暴露 `create_group` 与常规 `subagent / SubagentWorkflow`；调用 `create_group` 挂载 `swarm-coordinator` 标签后，下一拍 LLM 请求立即解锁主控工具，并在 `coordinatorGuard: true` 时剥离并拦截 `edit / write / bash / subagent / SubagentWorkflow`。
+- **同回合无缝切换**：未建组普通会话隐藏黑板工具，仅暴露 `swarm_create_group` 与常规 `subagent / SubagentWorkflow`；调用 `swarm_create_group`（或 Web/CLI `create_group` 动作）挂载 `swarm-coordinator` 标签后，下一拍 LLM 请求立即解锁主控工具（`swarm_*`），并在 `coordinatorGuard: true` 时剥离并拦截 `edit / write / bash / subagent / SubagentWorkflow`。
 - **只读成员门控**：`access: 'readonly'` 成员剥离并拦截 `write / edit / cleanup_worktree`，保留 `bash` 供测试验收。
 - **恒定 `turn.sections` 保 Cache**：`before_turn` 注入的 `<active_swarm_group>` 仅含不可变 `groupId` 与静态协作铁律，不含可变成员名册或实时状态，中途扩缩容 0 次重写首条系统消息。
 
@@ -41,19 +41,21 @@
 
 ### 动作与工具（五端复用）
 
-| 动作 ID / 工具短名 | CLI 命令 | 作用域与核心说明 |
-| :--- | :--- | :--- |
-| `create_group` | `helm swarm create-group` | 在顶层会话创建活跃协作组（同会话限 1 个活跃组），挂载 `swarm-coordinator` 标签 |
-| `update_group` | `helm swarm update-group` | 主控独享：修改组 `title / objective` 或切换 `coordinatorGuard` |
-| `manage_channel` | `helm swarm channel` | 主控独享动作：子频道 `create / subscribe / unsubscribe / archive`（`main` 禁归档/退订） |
-| `dispatch_worker` | `helm swarm dispatch-worker` | 主控独享：招募具名对等成员（支持 `profileId`、`access`、`isolation: 'worktree'` 持锁、`forkFrom` 干净锚点分叉、`forkEntryId`、`model`、`effort`、`channels`），写入首条 `brief` 并唤醒 |
-| `board_post` | `helm swarm board-post` | 主控/成员/人工向黑板发帖（结构化 `to` + 正交 `wake`；绑有工作树且发 `handoff / done` 时自动内联 `worktreeSnapshot`） |
-| `board_read` / `board_status` | `helm swarm board-read` / `board-status` | 幂等分页读取黑板记录 / 读取完整 `BoardViewDoc` 态势快照（覆盖 `active`、`closed` 与 `coordinatorDetached` 组） |
-| `abort_worker` | `helm swarm abort-worker` | 主控独享：经 `abortConversationGuarded` 原地刹停成员当前回合，保留上下文与 Worktree 锁 |
-| `switch_worker_model` | `helm swarm switch-model` | 主控独享：对空闲成员调用 `updateConversation` 原地切换模型续跑 |
-| `inspect_worker` / `archive_worker` | `helm swarm inspect-worker` / `archive-worker` | 幂等读取成员最近时间线摘要、产物与绑定 `worktreeId` / 校验工作树干净后释放锁并归档成员 |
-| `close_group` | `helm swarm close-group` | 主控独享：两态结单（默认要求工作树干净并全清，未合入返 `409 swarm_worktree_unmerged`；`keepWorktree: true` 释放锁、保留待合入分支写入 `retainedWorktrees`，并摘除 `swarm-coordinator` 标签解锁主控合入） |
-| `complete_board_members` / `complete_board_channels` | 隐藏内部动作 | 幂等补全源：为组内会话输入框提供 `@` 活跃成员与 `#` 活跃子频道候选 |
+`ctx.action` 动作 ID 与 CLI（`helm swarm <cmd>`）使用插件命名空间短名；面向模型的 11 个 `ctx.tool` 统一带 `swarm_` 前缀，确保与 `builtin:superagent`（`dispatch_worker / inspect_worker / archive_worker`）或外部插件同时启用时满足全局工具名唯一性（零 `duplicate_tool_name`）：
+
+| 动作 ID (`ctx.action`) | 模型工具名 (`ctx.tool`) | CLI 命令 | 作用域与核心说明 |
+| :--- | :--- | :--- | :--- |
+| `create_group` | `swarm_create_group` | `helm swarm create-group` | 在顶层会话创建活跃协作组（同会话限 1 个活跃组），挂载 `swarm-coordinator` 标签 |
+| `update_group` | `swarm_update_group` | `helm swarm update-group` | 主控独享：修改组 `title / objective` 或切换 `coordinatorGuard` |
+| `manage_channel` | 仅 `ctx.action` | `helm swarm channel` | 主控独享动作：子频道 `create / subscribe / unsubscribe / archive`（`main` 禁归档/退订） |
+| `dispatch_worker` | `swarm_dispatch_worker` | `helm swarm dispatch-worker` | 主控独享：招募具名对等成员（支持 `profileId`、`access`、`isolation: 'worktree'` 持锁、`forkFrom` 干净锚点分叉、`forkEntryId`、`model`、`effort`、`channels`），写入首条 `brief` 并唤醒 |
+| `board_post` | `swarm_board_post` | `helm swarm board-post` | 主控/成员/人工向黑板发帖（结构化 `to` + 正交 `wake`；绑有工作树且发 `handoff / done` 时自动内联 `worktreeSnapshot`） |
+| `board_read` / `board_status` | `swarm_board_read` / `swarm_board_status` | `helm swarm board-read` / `board-status` | 幂等分页读取黑板记录 / 读取完整 `BoardViewDoc` 态势快照（覆盖 `active`、`closed` 与 `coordinatorDetached` 组） |
+| `abort_worker` | `swarm_abort_worker` | `helm swarm abort-worker` | 主控独享：经 `abortConversationGuarded` 原地刹停成员当前回合，保留上下文与 Worktree 锁 |
+| `switch_worker_model` | `swarm_switch_worker_model` | `helm swarm switch-model` | 主控独享：对空闲成员调用 `updateConversation` 原地切换模型续跑 |
+| `inspect_worker` / `archive_worker` | `swarm_inspect_worker` / `swarm_archive_worker` | `helm swarm inspect-worker` / `archive-worker` | 幂等读取成员最近时间线摘要、产物与绑定 `worktreeId` / 校验工作树干净后释放锁并归档成员 |
+| `close_group` | `swarm_close_group` | `helm swarm close-group` | 主控独享：两态结单（默认要求工作树干净并全清，未合入返 `409 swarm_worktree_unmerged`；`keepWorktree: true` 释放锁、保留待合入分支写入 `retainedWorktrees`，并摘除 `swarm-coordinator` 标签解锁主控合入） |
+| `complete_board_members` / `complete_board_channels` | 仅 `ctx.action` | 隐藏内部动作 | 幂等补全源：为组内会话输入框提供 `@` 活跃成员与 `#` 活跃子频道候选 |
 
 ### Web 协同流转看板（`#/views/builtin:swarm/board`）
 

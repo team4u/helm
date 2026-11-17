@@ -148,8 +148,8 @@ export function swPresetDefaultDraft(
   if (preset === 'author-verifier') {
     return resolveLocalizedText(
       {
-        en: 'Dispatch an isolated worktree @author to implement the changes and a readonly @verifier to audit diffs and run tests via peer board handoffs (#seq). Wake coordinator only on blocker or final [done].',
-        'zh-CN': '请招募独立 worktree 的 @author 负责编码实现，以及只读 @verifier 负责审查 Diff 与跑测验收；双方在黑板以 #seq 指针横向交接打回，仅遇阻塞或最终通过时唤醒 coordinator。',
+        en: 'Use swarm_dispatch_worker to spawn an isolated worktree @author to implement the changes and a readonly @verifier to audit diffs and run tests via swarm_board_post peer handoffs (#seq). Wake coordinator only on blocker or final [done].',
+        'zh-CN': '请通过 swarm_dispatch_worker 招募独立 worktree 的 @author 负责编码实现，以及只读 @verifier 负责审查 Diff 与跑测验收；双方调用 swarm_board_post 以 #seq 指针横向交接打回，仅遇阻塞或最终通过时唤醒 coordinator。',
       },
       locale,
     )
@@ -157,8 +157,8 @@ export function swPresetDefaultDraft(
   if (preset === 'squad') {
     return resolveLocalizedText(
       {
-        en: 'Split the task into non-overlapping slices, dispatch dedicated worktree authors per slice plus a readonly @verifier for integration checks, and coordinate peer handoffs on the board.',
-        'zh-CN': '请将任务拆分为无文件重叠的独立分片，按分片招募独立 worktree 读写成员并配备只读 @verifier 做集成验收，全程通过黑板 #seq 对等流转。',
+        en: 'Split the task into non-overlapping slices, use swarm_dispatch_worker for dedicated worktree authors per slice plus a readonly @verifier for integration checks, and coordinate peer handoffs via swarm_board_post on the board.',
+        'zh-CN': '请将任务拆分为无文件重叠的独立分片，按分片调用 swarm_dispatch_worker 招募独立 worktree 读写成员并配备只读 @verifier 做集成验收，全程通过 swarm_board_post 以 #seq 对等流转。',
       },
       locale,
     )
@@ -250,8 +250,8 @@ export function swRescueWakeBody(target: string, refSeq: number | undefined, loc
   const ref = refSeq !== undefined ? ` (#${refSeq})` : ''
   return resolveLocalizedText(
     {
-      en: `Human nudge: please review the pending board state${ref} for @${target} and post the next handoff or [done].`,
-      'zh-CN': `人工续催：请跟进当前黑板悬空进展${ref}（目标 @${target}），完成后调用 board_post 发布下一跳交接或 [done]。`,
+      en: `Human nudge: please review the pending board state${ref} for @${target} and publish the next handoff or [done] via swarm_board_post.`,
+      'zh-CN': `人工续催：请跟进当前黑板悬空进展${ref}（目标 @${target}），完成后调用 swarm_board_post 发布下一跳交接或 [done]。`,
     },
     locale,
   )
@@ -481,14 +481,14 @@ export function swBuildCoordinatorMergeRequest(
         `- worktreeId: ${input.worktreeId}`,
         `- branch: ${input.branch}${statSuffix}`,
         `- path: ${input.path}${input.nodeId !== undefined ? ` (node: ${input.nodeId})` : ''}`,
-        `If coordinatorGuard is still enabled, run close_group({ groupId: "${input.groupId}", keepWorktree: true }) first to unlock bash/edit/write, merge the branch cleanly, and then run cleanup_worktree.`,
+        `If coordinatorGuard is still enabled, run swarm_close_group({ groupId: "${input.groupId}", keepWorktree: true }) first to unlock bash/edit/write, merge the branch cleanly, and then run cleanup_worktree.`,
       ].join('\n'),
       'zh-CN': [
         `请审阅并合入协作组 ${input.groupId} 成员 @${input.memberName} 的受管 Worktree 分支：`,
         `- worktreeId: ${input.worktreeId}`,
         `- 分支: ${input.branch}${statSuffix}`,
         `- 目录: ${input.path}${input.nodeId !== undefined ? `（节点: ${input.nodeId}）` : ''}`,
-        `若当前仍开启主控守卫（coordinatorGuard），请先调用 close_group({ groupId: "${input.groupId}", keepWorktree: true }) 解锁 bash/edit/write，完成 git merge 与测试验收后再调用 cleanup_worktree 清理。`,
+        `若当前仍开启主控守卫（coordinatorGuard），请先调用 swarm_close_group({ groupId: "${input.groupId}", keepWorktree: true }) 解锁 bash/edit/write，完成 git merge 与测试验收后再调用 cleanup_worktree 清理。`,
       ].join('\n'),
     },
     locale,
