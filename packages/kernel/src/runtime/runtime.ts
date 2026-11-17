@@ -247,6 +247,7 @@ export class KernelRuntime {
     this.svc.conversations.setFatalErrorProvider(() => this.#fatalError)
     this.init.setCompactionModelResolver(() => ({
       model: this.modelsRegistry.defaultCompactionModel,
+      thinkingLevel: this.modelsRegistry.defaultCompactionThinkingLevel,
       isDisabled: (providerId, modelId) => this.modelsRegistry.isModelDisabled(providerId, modelId),
     }))
     this.init.setFatalStorageHandler(
@@ -893,7 +894,12 @@ export class KernelRuntime {
     this.modelsRegistry.assertModelEnabled(provider, modelId)
   }
 
-  async setDefaultModel(model?: string, thinkingLevel?: string, compactionModel?: string): Promise<void> {
+  async setDefaultModel(
+    model?: string,
+    thinkingLevel?: string,
+    compactionModel?: string,
+    compactionThinkingLevel?: string,
+  ): Promise<void> {
     const validateLevel = (level: string) => {
       if (!THINKING_LEVELS.has(level)) {
         throw new HelmError(
@@ -903,7 +909,7 @@ export class KernelRuntime {
         )
       }
     }
-    await this.modelsRegistry.setDefaultModel(model, thinkingLevel, validateLevel, compactionModel)
+    await this.modelsRegistry.setDefaultModel(model, thinkingLevel, validateLevel, compactionModel, compactionThinkingLevel)
   }
 
   listModelProviders() {

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { ConversationSummary } from '@helm/protocol/browser'
 import { assetsApi, conversationsApi } from '../lib/api.js'
 import { HelmIcon, Popover, PopoverContent, PopoverPortal, PopoverTrigger } from '@helm/plugin-client'
-import { useModels, useStoreActions } from '../lib/store-context.js'
+import { useModels, useOptionalModels, useOptionalStoreActions, useStoreActions } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { ThinkingLevelControl } from '../ui/ThinkingLevelControl.js'
 import { Tooltip } from '../ui/Tooltip.js'
@@ -36,6 +36,13 @@ export interface ModelPickerControlProps {
   resetTitle: string
   /** Trigger button title and disabled state. */
   buttonTitle: string
+  /** Optional trigger button id / aria-label / unset placeholder (defaults to composer label). */
+  buttonId?: string
+  buttonAriaLabel?: string
+  placeholderLabel?: string
+  /** Popover placement side and whether Ctrl+L / Shift+Tab hints are active (true for composer, false for settings forms). */
+  popoverSide?: 'top' | 'bottom'
+  enableShortcut?: boolean
   disabled?: boolean
   pending?: boolean
   /** Owning conversation id (refresh notices; omitted on the standby pane). */
@@ -54,6 +61,11 @@ export function ModelPickerControl({
   resetLabel,
   resetTitle,
   buttonTitle,
+  buttonId,
+  buttonAriaLabel,
+  placeholderLabel,
+  popoverSide = 'top',
+  enableShortcut = true,
   disabled = false,
   pending = false,
   conversationId,
@@ -62,8 +74,8 @@ export function ModelPickerControl({
   onPickThinking,
   onCatalogRefreshed,
 }: ModelPickerControlProps) {
-  const models = useModels()
-  const { refreshAssets, pushNotice } = useStoreActions()
+  const models = useOptionalModels() ?? []
+  const actions = useOptionalStoreActions()
   const { t } = useWebLocale()
   const [open, setOpen] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
@@ -77,6 +89,7 @@ export function ModelPickerControl({
     rootRef,
     'toggle-model-picker',
     () => {
+      if (!enableShortcut) return
       if (disabled) {
         setOpen(false)
         return
@@ -112,11 +125,11 @@ export function ModelPickerControl({
     setRefreshing(true)
     try {
       const res = await assetsApi.refreshModels()
-      await refreshAssets()
+      await actions?.refreshAssets()
       await onCatalogRefreshed?.()
       const errors = Object.entries(res.errors ?? {})
       if (errors.length > 0) {
-        pushNotice({
+        actions?.pushNotice({
           type: 'notification',
           level: 'warning',
           title: t('composer.model.catalogPartialFailure'),
@@ -124,7 +137,7 @@ export function ModelPickerControl({
           ...(conversationId !== undefined ? { conversationId } : {}),
         })
       } else {
-        pushNotice({
+        actions?.pushNotice({
           type: 'notification',
           level: 'info',
           title: t('composer.model.catalogRefreshed'),
@@ -133,7 +146,7 @@ export function ModelPickerControl({
         })
       }
     } catch (err) {
-      pushNotice({
+      actions?.pushNotice({
         type: 'notification',
         level: 'error',
         title: t('composer.model.catalogRefreshFailed'),
@@ -161,7 +174,7 @@ export function ModelPickerControl({
     effectiveModel !== undefined && effectiveModel !== ''
       ? effectiveModel.split('/').pop() ?? effectiveModel
       : ''
-  const shortName = rawShortName.trim() !== '' ? rawShortName : t('composer.model.defaultLabel')
+  const shortName = rawShortName.trim() !== '' ? rawShortName : (placeholderLabel ?? t('composer.model.defaultLabel'))
   const currentModel = effectiveModel !== undefined && effectiveModel !== ''
     ? models.find((model) => model.id === effectiveModel)
     : undefined
@@ -178,14 +191,18 @@ export function ModelPickerControl({
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger asChild>
           <button
+            id={buttonId}
             type="button"
             className="btn btn-ghost btn-sm composer-model-button"
             disabled={disabled || pending}
             aria-expanded={open}
-            aria-label={t('composer.model.buttonAria', {
-              model: shortName,
-              level: showLevel ? t('composer.model.levelSuffix', { level: effectiveLevel }) : '',
-            })}
+            aria-label={
+              buttonAriaLabel ??
+              t('composer.model.buttonAria', {
+                model: shortName,
+                level: showLevel ? t('composer.model.levelSuffix', { level: effectiveLevel }) : '',
+              })
+            }
             title={buttonTitle}
           >
             {pending ? <HelmIcon name="loader" size={12} className="spin-slow" /> : null}
@@ -196,7 +213,7 @@ export function ModelPickerControl({
         </PopoverTrigger>
         <PopoverPortal>
           <PopoverContent
-            side="top"
+            side={popoverSide}
             align="start"
             sideOffset={8}
             className="composer-popover composer-model-popover"
@@ -312,7 +329,9 @@ export function ModelPickerControl({
                     {t('composer.model.thinkingHeader')}
                     <span className="composer-model-thinking-name"> · {shortName}</span>
                   </span>
-                  <span className="kbd-hint popover-kbd-hint">{COMPOSER_SHORTCUTS.cycleThinkingLevel}</span>
+                  {enableShortcut ? (
+                    <span className="kbd-hint popover-kbd-hint">{COMPOSER_SHORTCUTS.cycleThinkingLevel}</span>
+                  ) : null}
                 </div>
                 <ThinkingLevelControl
                   value={effectiveLevel}

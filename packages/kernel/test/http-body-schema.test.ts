@@ -144,8 +144,14 @@ function makeKernel(calls: CallLog = newCallLog()): KernelRuntimeLike {
       calls.setDisabledModels!.push([provider, disabledModels])
       return { models: [], thinkingLevels: {} }
     },
-    setDefaultModel: async (model?: string, thinkingLevel?: string, compactionModel?: string) => {
-      calls.setDefaultModel!.push(compactionModel !== undefined ? [model, thinkingLevel, compactionModel] : [model, thinkingLevel])
+    setDefaultModel: async (model?: string, thinkingLevel?: string, compactionModel?: string, compactionThinkingLevel?: string) => {
+      if (compactionThinkingLevel !== undefined) {
+        calls.setDefaultModel!.push([model, thinkingLevel, compactionModel, compactionThinkingLevel])
+      } else if (compactionModel !== undefined) {
+        calls.setDefaultModel!.push([model, thinkingLevel, compactionModel])
+      } else {
+        calls.setDefaultModel!.push([model, thinkingLevel])
+      }
     },
     listModelProviders: async () => [],
     async listNodes() { return [] },
@@ -313,10 +319,10 @@ test('models/default: empty object/empty body/explicit null/wrong type/unknown f
   const clearModel = await call(kernel, 'PUT', '/api/models/default', { model: '' })
   assert.equal(clearModel.status, 200)
   assert.deepEqual(calls.setDefaultModel![1], ['', undefined])
-  const compactionOnly = await call(kernel, 'PUT', '/api/models/default', { compactionModel: 'faux/faux-2' })
+  const compactionOnly = await call(kernel, 'PUT', '/api/models/default', { compactionModel: 'faux/faux-2', compactionThinkingLevel: 'low' })
   assert.equal(compactionOnly.status, 200)
-  assert.deepEqual(calls.setDefaultModel![2], [undefined, undefined, 'faux/faux-2'])
-  for (const bad of [{}, { model: null }, { compactionModel: null }, { thinkingLevel: 3 }, { other: 'high' }, '"str"', '[]']) {
+  assert.deepEqual(calls.setDefaultModel![2], [undefined, undefined, 'faux/faux-2', 'low'])
+  for (const bad of [{}, { model: null }, { compactionModel: null }, { compactionThinkingLevel: 1 }, { thinkingLevel: 3 }, { other: 'high' }, '"str"', '[]']) {
     await expect400(kernel, 'PUT', '/api/models/default', bad)
   }
   const rawEmpty = await call(kernel, 'PUT', '/api/models/default', undefined)

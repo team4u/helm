@@ -15,16 +15,22 @@ import { methodNotAllowed, readOptionalJsonBody, type RouteContext } from './rou
 // /api/models
 // ---------------------------------------------------------------------------
 
-// At least one of model, thinkingLevel, or compactionModel is required (anyOf); empty string clears override.
+// At least one of model, thinkingLevel, compactionModel, or compactionThinkingLevel is required (anyOf); empty string clears override.
 const MODELS_DEFAULT_BODY_SCHEMA: JsonSchema = {
   type: 'object',
   properties: {
     model: { type: 'string' },
     thinkingLevel: { type: 'string' },
     compactionModel: { type: 'string' },
+    compactionThinkingLevel: { type: 'string' },
   },
   additionalProperties: false,
-  anyOf: [{ required: ['model'] }, { required: ['thinkingLevel'] }, { required: ['compactionModel'] }],
+  anyOf: [
+    { required: ['model'] },
+    { required: ['thinkingLevel'] },
+    { required: ['compactionModel'] },
+    { required: ['compactionThinkingLevel'] },
+  ],
 }
 
 const MODELS_FILTER_BODY_SCHEMA: JsonSchema = {
@@ -63,6 +69,7 @@ export async function handleModelsDomain(
       defaultModel: catalog.defaultModel ?? '',
       defaultThinkingLevel: catalog.defaultThinkingLevel ?? '',
       defaultCompactionModel: catalog.defaultCompactionModel ?? '',
+      defaultCompactionThinkingLevel: catalog.defaultCompactionThinkingLevel ?? '',
     })
   }
   if (second === 'default' && third === undefined && method === 'PUT') {
@@ -74,8 +81,11 @@ export async function handleModelsDomain(
     const body = (raw ?? {}) as Record<string, unknown>
     const modelArg = 'model' in body ? (body.model as string) : undefined
     const levelArg = 'thinkingLevel' in body ? (body.thinkingLevel as string) : undefined
-    if ('compactionModel' in body) {
-      await kernel.setDefaultModel(modelArg, levelArg, body.compactionModel as string)
+    const compactionArg = 'compactionModel' in body ? (body.compactionModel as string) : undefined
+    if ('compactionThinkingLevel' in body) {
+      await kernel.setDefaultModel(modelArg, levelArg, compactionArg, body.compactionThinkingLevel as string)
+    } else if ('compactionModel' in body) {
+      await kernel.setDefaultModel(modelArg, levelArg, compactionArg)
     } else {
       await kernel.setDefaultModel(modelArg, levelArg)
     }
@@ -85,6 +95,7 @@ export async function handleModelsDomain(
       defaultModel: catalog.defaultModel ?? '',
       defaultThinkingLevel: catalog.defaultThinkingLevel ?? '',
       defaultCompactionModel: catalog.defaultCompactionModel ?? '',
+      defaultCompactionThinkingLevel: catalog.defaultCompactionThinkingLevel ?? '',
     })
   }
   if (second === 'filter' && third === undefined && method === 'PUT') {

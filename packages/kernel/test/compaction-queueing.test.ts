@@ -535,12 +535,12 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
     }
   })
 
-  it('uses global compactionModel when set (clamping reasoning/maxTokens, persisting across restart), and falls back to current model when cleared; never silently falls back when disabled', { timeout: 60_000 }, async () => {
+  it('uses global compactionModel and compactionThinkingLevel when set (clamping maxTokens, persisting across restart), and falls back to current model when cleared; never silently falls back when disabled', { timeout: 60_000 }, async () => {
     const dir = join(root, 'global-compaction-model')
     const { models, faux } = makeFauxModels({
       models: [
         { id: 'faux-1', reasoning: true, maxTokens: 16_384, contextWindow: 128_000 },
-        { id: 'faux-2', reasoning: false, maxTokens: 2_048, contextWindow: 128_000 },
+        { id: 'faux-2', reasoning: true, maxTokens: 2_048, contextWindow: 128_000 },
       ],
     })
     let kernel = await KernelRuntime.open({
@@ -552,8 +552,10 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
     })
     const seenSummaryCalls: Array<{ modelId: string; maxTokens?: number; reasoning?: unknown }> = []
     try {
-      await kernel.setDefaultModel(undefined, 'high', 'faux/faux-2')
-      assert.equal((await kernel.listModels()).defaultCompactionModel, 'faux/faux-2')
+      await kernel.setDefaultModel(undefined, 'high', 'faux/faux-2', 'low')
+      const catalog = await kernel.listModels()
+      assert.equal(catalog.defaultCompactionModel, 'faux/faux-2')
+      assert.equal(catalog.defaultCompactionThinkingLevel, 'low')
 
       await seedLargeContext(kernel, faux)
 
@@ -570,15 +572,15 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
         20_000,
       )
       assert.equal(seenSummaryCalls[0]?.modelId, 'faux-2', 'compaction must use configured compactionModel')
-      assert.equal(seenSummaryCalls[0]?.reasoning, undefined, 'non-reasoning compaction model must not receive reasoning option')
+      assert.equal(seenSummaryCalls[0]?.reasoning, 'low', 'compaction must use configured compactionThinkingLevel instead of conversation high')
       assert.ok((seenSummaryCalls[0]?.maxTokens ?? 0) <= 2_048, 'maxTokens must be clamped to compaction model limit')
 
-      // Restart and verify compactionModel persisted in config.json.
+      // Restart and verify compactionModel & compactionThinkingLevel persisted in config.json.
       await kernel.close()
       const reloaded = makeFauxModels({
         models: [
           { id: 'faux-1', reasoning: true, maxTokens: 16_384, contextWindow: 128_000 },
-          { id: 'faux-2', reasoning: false, maxTokens: 2_048, contextWindow: 128_000 },
+          { id: 'faux-2', reasoning: true, maxTokens: 2_048, contextWindow: 128_000 },
         ],
       })
       kernel = await KernelRuntime.open({
@@ -588,7 +590,9 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
         models: reloaded.models,
         externalSkillRoots: [],
       })
-      assert.equal((await kernel.listModels()).defaultCompactionModel, 'faux/faux-2')
+      const reloadedCatalog = await kernel.listModels()
+      assert.equal(reloadedCatalog.defaultCompactionModel, 'faux/faux-2')
+      assert.equal(reloadedCatalog.defaultCompactionThinkingLevel, 'low')
 
       // Disabling the configured compactionModel must fail compaction explicitly instead of silently falling back.
       await kernel.setDisabledModels('faux', ['faux-2'])
@@ -606,14 +610,16 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
         recorder.stop()
       }
 
-      // Clearing compactionModel restores using the conversation's current model (faux-1).
+      // Clearing compactionModel & compactionThinkingLevel restores using the conversation's current model & level.
       await kernel.setDisabledModels('faux', [])
-      await kernel.setDefaultModel(undefined, undefined, '')
-      assert.equal((await kernel.listModels()).defaultCompactionModel, undefined)
-      const clearedCalls: string[] = []
+      await kernel.setDefaultModel(undefined, undefined, '', '')
+      const clearedCatalog = await kernel.listModels()
+      assert.equal(clearedCatalog.defaultCompactionModel, undefined)
+      assert.equal(clearedCatalog.defaultCompactionThinkingLevel, undefined)
+      const clearedCalls: Array<{ modelId: string; reasoning?: unknown }> = []
       reloaded.faux.setResponses([
-        async (_ctx, _opts, _state, model) => {
-          clearedCalls.push(model.id)
+        async (_ctx, opts, _state, model) => {
+          clearedCalls.push({ modelId: model.id, reasoning: opts?.reasoning })
           return fauxAssistantMessage('summary from current model faux-1')
         },
       ])
@@ -622,7 +628,8 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
         () => clearedCalls.length === 1 && kernel.getConversation(1).contextUsage?.compacting === undefined,
         20_000,
       )
-      assert.equal(clearedCalls[0], 'faux-1', 'clearing compactionModel must revert to current conversation model')
+      assert.equal(clearedCalls[0]?.modelId, 'faux-1', 'clearing compactionModel must revert to current conversation model')
+      assert.equal(clearedCalls[0]?.reasoning, 'high', 'clearing compactionThinkingLevel must revert to conversation thinking level')
     } finally {
       await kernel.close()
     }

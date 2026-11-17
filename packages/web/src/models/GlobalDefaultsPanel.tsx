@@ -1,28 +1,33 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { assetsApi } from '../lib/api.js'
-import { HelmIcon, Select } from '@helm/plugin-client'
+import { HelmIcon } from '@helm/plugin-client'
 import { useOptionalModels, useOptionalStoreActions } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
-import { buildDefaultModelOptions, UNSET_MODEL_VALUE } from './model-center-model.js'
+import { ModelPickerControl } from '../conversation/ModelPicker.js'
+
+export interface DefaultModelInfo {
+  defaultModel: string
+  defaultThinkingLevel: string
+  defaultCompactionModel?: string
+  defaultCompactionThinkingLevel?: string
+}
 
 export interface GlobalDefaultsPanelProps {
   /** Currently effective global default model info (fetched by ModelCenter). */
-  defaultModelInfo: { defaultModel: string; defaultThinkingLevel: string; defaultCompactionModel?: string } | null
+  defaultModelInfo: DefaultModelInfo | null
   /** Reports a successful save back to the ModelCenter state. */
-  onSaved: (info: { defaultModel: string; defaultThinkingLevel: string; defaultCompactionModel?: string }) => void
+  onSaved: (info: DefaultModelInfo) => void
 }
 
 /**
  * Inline configuration form inside the "Global default" tab:
- * - default model and thinking level selects plus save / reset actions;
- * - the "not set" option rides on the non-empty sentinel (UNSET_MODEL_VALUE):
- *   Radix Select treats an empty-string value as placeholder semantics, so
- *   selecting it never fires onValueChange and the default could never be
- *   cleared;
- * - loading carries a generation guard (loadGeneration): stale responses
+ * - reuses `ModelPickerControl` (same single-row `model · thinking` picker as
+ *   the conversation composer) for both the global default model and the global
+ *   compaction model;
+ * - saving goes through `assetsApi.setDefaultModel` (empty strings clear keys);
+ * - loading carries a generation guard (`loadGeneration`) so stale responses
  *   never overwrite newer state while the model catalog refreshes;
- * - saving goes through assetsApi.setDefaultModel (an empty string clears the
- *   model); strictly zero Emoji and built on design primitives.
+ * - strictly zero Emoji and built on design primitives.
  */
 export function GlobalDefaultsPanel({
   defaultModelInfo,
@@ -33,14 +38,13 @@ export function GlobalDefaultsPanel({
   const { t } = useWebLocale()
   const catalogModels = storeModels ?? []
 
-  const [formModel, setFormModel] = useState(() =>
-    defaultModelInfo?.defaultModel || defaultModelInfo?.defaultModel === ''
-      ? defaultModelInfo.defaultModel || UNSET_MODEL_VALUE
-      : UNSET_MODEL_VALUE,
-  )
+  const [formModel, setFormModel] = useState(() => defaultModelInfo?.defaultModel ?? '')
   const [formLevel, setFormLevel] = useState(() => defaultModelInfo?.defaultThinkingLevel ?? '')
-  const [formCompactionModel, setFormCompactionModel] = useState(() =>
-    defaultModelInfo?.defaultCompactionModel || UNSET_MODEL_VALUE,
+  const [formCompactionModel, setFormCompactionModel] = useState(
+    () => defaultModelInfo?.defaultCompactionModel ?? '',
+  )
+  const [formCompactionLevel, setFormCompactionLevel] = useState(
+    () => defaultModelInfo?.defaultCompactionThinkingLevel ?? '',
   )
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
@@ -52,70 +56,29 @@ export function GlobalDefaultsPanel({
   useEffect(() => {
     if (defaultModelInfo) {
       const gen = ++loadGeneration.current
-      setFormModel(defaultModelInfo.defaultModel || UNSET_MODEL_VALUE)
+      setFormModel(defaultModelInfo.defaultModel ?? '')
       setFormLevel(defaultModelInfo.defaultThinkingLevel ?? '')
-      setFormCompactionModel(defaultModelInfo.defaultCompactionModel || UNSET_MODEL_VALUE)
+      setFormCompactionModel(defaultModelInfo.defaultCompactionModel ?? '')
+      setFormCompactionLevel(defaultModelInfo.defaultCompactionThinkingLevel ?? '')
       return () => {
         loadGeneration.current = Math.max(loadGeneration.current, gen)
       }
     }
   }, [defaultModelInfo])
 
-  const modelOptions = useMemo(
-    () =>
-      buildDefaultModelOptions(
-        catalogModels,
-        formModel === UNSET_MODEL_VALUE ? '' : formModel,
-        t,
-      ),
-    [catalogModels, formModel, t],
-  )
-
-  const compactionModelOptions = useMemo(
-    () =>
-      buildDefaultModelOptions(
-        catalogModels,
-        formCompactionModel === UNSET_MODEL_VALUE ? '' : formCompactionModel,
-        t,
-        t('models.defaults.compactionOptionUnset'),
-      ),
-    [catalogModels, formCompactionModel, t],
-  )
-
-  const availableThinkingLevels = useMemo(() => {
-    const current = formModel === UNSET_MODEL_VALUE ? '' : formModel
-    if (current === '') return []
-    const found = catalogModels.find((m) => m.id === current)
-    return found?.thinkingLevels ?? []
-  }, [formModel, catalogModels])
-
-  const levelOptions = useMemo(() => {
-    const list: Array<{ value: string; label: string }> = [
-      { value: UNSET_MODEL_VALUE, label: t('models.defaults.levelFollowSdk') },
-    ]
-    for (const lvl of availableThinkingLevels) {
-      list.push({ value: lvl, label: lvl })
-    }
-    if (
-      formLevel !== '' &&
-      formLevel !== UNSET_MODEL_VALUE &&
-      !availableThinkingLevels.includes(formLevel)
-    ) {
-      list.push({ value: formLevel, label: t('models.defaults.levelCurrent', { level: formLevel }) })
-    }
-    return list
-  }, [availableThinkingLevels, formLevel, t])
-
-  const handleModelChange = (next: string) => {
-    setFormModel(next)
-    // When the switched-to model no longer supports the current thinking
-    // level, fall back to the default.
+  const pickModelWithLevel = (
+    nextModel: string,
+    currentLevel: string,
+    setModel: (value: string) => void,
+    setLevel: (value: string) => void,
+  ) => {
+    setModel(nextModel)
     const levels =
-      next === UNSET_MODEL_VALUE
+      nextModel === ''
         ? []
-        : catalogModels.find((m) => m.id === next)?.thinkingLevels ?? []
-    if (formLevel !== '' && formLevel !== UNSET_MODEL_VALUE && !levels.includes(formLevel)) {
-      setFormLevel(UNSET_MODEL_VALUE)
+        : catalogModels.find((m) => m.id === nextModel)?.thinkingLevels ?? []
+    if (currentLevel !== '' && !levels.includes(currentLevel)) {
+      setLevel('')
     }
   }
 
@@ -124,10 +87,12 @@ export function GlobalDefaultsPanel({
     setSaveError(null)
     const gen = ++loadGeneration.current
     try {
-      const model = formModel === UNSET_MODEL_VALUE ? '' : formModel
-      const level = formLevel === UNSET_MODEL_VALUE ? '' : formLevel
-      const compactionModel = formCompactionModel === UNSET_MODEL_VALUE ? '' : formCompactionModel
-      const res = await assetsApi.setDefaultModel(model, level, compactionModel)
+      const res = await assetsApi.setDefaultModel(
+        formModel,
+        formLevel,
+        formCompactionModel,
+        formCompactionLevel,
+      )
       if (gen !== loadGeneration.current) return
       if (actions?.refreshAssets) {
         await actions.refreshAssets()
@@ -136,6 +101,7 @@ export function GlobalDefaultsPanel({
         defaultModel: res.defaultModel,
         defaultThinkingLevel: res.defaultThinkingLevel,
         defaultCompactionModel: res.defaultCompactionModel,
+        defaultCompactionThinkingLevel: res.defaultCompactionThinkingLevel,
       })
       const noticeBody = res.defaultModel
         ? t('models.defaults.noticeSetTo', { model: res.defaultModel })
@@ -159,15 +125,10 @@ export function GlobalDefaultsPanel({
   }
 
   const handleReset = () => {
-    if (defaultModelInfo) {
-      setFormModel(defaultModelInfo.defaultModel || UNSET_MODEL_VALUE)
-      setFormLevel(defaultModelInfo.defaultThinkingLevel || UNSET_MODEL_VALUE)
-      setFormCompactionModel(defaultModelInfo.defaultCompactionModel || UNSET_MODEL_VALUE)
-    } else {
-      setFormModel(UNSET_MODEL_VALUE)
-      setFormLevel(UNSET_MODEL_VALUE)
-      setFormCompactionModel(UNSET_MODEL_VALUE)
-    }
+    setFormModel(defaultModelInfo?.defaultModel ?? '')
+    setFormLevel(defaultModelInfo?.defaultThinkingLevel ?? '')
+    setFormCompactionModel(defaultModelInfo?.defaultCompactionModel ?? '')
+    setFormCompactionLevel(defaultModelInfo?.defaultCompactionThinkingLevel ?? '')
     setSaveError(null)
   }
 
@@ -187,49 +148,59 @@ export function GlobalDefaultsPanel({
             {t('models.defaults.modelLabel')}
           </label>
           <div className="flex-col-xs">
-            <Select
-              id="model-defaults-model"
-              value={formModel}
+            <ModelPickerControl
+              buttonId="model-defaults-model"
+              buttonAriaLabel={t('models.defaults.modelAria')}
+              buttonTitle={formModel || t('models.defaults.optionUnset')}
+              placeholderLabel={t('models.defaults.optionUnset')}
+              effectiveModel={formModel}
+              selectedModel={formModel || undefined}
+              activeThinkingLevel={formLevel}
+              resetLabel={t('models.defaults.optionUnset')}
+              resetTitle={t('models.defaults.optionUnset')}
+              popoverSide="bottom"
+              enableShortcut={false}
               disabled={saving}
-              popoverClassName="helm-select-popover-wide"
-              className="w-full mono"
-              aria-label={t('models.defaults.modelAria')}
-              options={modelOptions}
-              onChange={(e) => handleModelChange(e.target.value)}
+              onPickModel={(id) => pickModelWithLevel(id, formLevel, setFormModel, setFormLevel)}
+              onResetDefault={() => {
+                setFormModel('')
+                setFormLevel('')
+              }}
+              onPickThinking={(lvl) => setFormLevel(lvl)}
             />
             <span className="text-subtle">{t('models.defaults.modelHint')}</span>
-          </div>
-
-          <label htmlFor="model-defaults-thinking-level" className="form-grid-label">
-            {t('models.defaults.levelLabel')}
-          </label>
-          <div className="flex-col-xs">
-            <Select
-              id="model-defaults-thinking-level"
-              value={formLevel === '' ? UNSET_MODEL_VALUE : formLevel}
-              disabled={saving || formModel === UNSET_MODEL_VALUE}
-              aria-label={t('models.defaults.levelAria')}
-              options={levelOptions}
-              onChange={(e) => setFormLevel(e.target.value)}
-            />
-            {formModel !== UNSET_MODEL_VALUE && availableThinkingLevels.length === 0 && (
-              <span className="text-subtle">{t('models.defaults.levelUnsupported')}</span>
-            )}
           </div>
 
           <label htmlFor="model-defaults-compaction-model" className="form-grid-label">
             {t('models.defaults.compactionLabel')}
           </label>
           <div className="flex-col-xs">
-            <Select
-              id="model-defaults-compaction-model"
-              value={formCompactionModel}
+            <ModelPickerControl
+              buttonId="model-defaults-compaction-model"
+              buttonAriaLabel={t('models.defaults.compactionAria')}
+              buttonTitle={formCompactionModel || t('models.defaults.compactionOptionUnset')}
+              placeholderLabel={t('models.defaults.compactionOptionUnset')}
+              effectiveModel={formCompactionModel}
+              selectedModel={formCompactionModel || undefined}
+              activeThinkingLevel={formCompactionLevel}
+              resetLabel={t('models.defaults.compactionOptionUnset')}
+              resetTitle={t('models.defaults.compactionOptionUnset')}
+              popoverSide="bottom"
+              enableShortcut={false}
               disabled={saving}
-              popoverClassName="helm-select-popover-wide"
-              className="w-full mono"
-              aria-label={t('models.defaults.compactionAria')}
-              options={compactionModelOptions}
-              onChange={(e) => setFormCompactionModel(e.target.value)}
+              onPickModel={(id) =>
+                pickModelWithLevel(
+                  id,
+                  formCompactionLevel,
+                  setFormCompactionModel,
+                  setFormCompactionLevel,
+                )
+              }
+              onResetDefault={() => {
+                setFormCompactionModel('')
+                setFormCompactionLevel('')
+              }}
+              onPickThinking={(lvl) => setFormCompactionLevel(lvl)}
             />
             <span className="text-subtle">{t('models.defaults.compactionHint')}</span>
           </div>

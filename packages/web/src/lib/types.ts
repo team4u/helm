@@ -462,7 +462,12 @@ export interface HelmStoreValue {
   /** Whether static assets (profiles/models/skills/...) finished their first load this session (standby page distinguishes loading from non-existent). */
   assetsLoaded: boolean
   models: ModelDescriptor[]
-  defaultModelInfo?: { defaultModel: string; defaultThinkingLevel: string; defaultCompactionModel?: string } | null
+  defaultModelInfo?: {
+    defaultModel: string
+    defaultThinkingLevel: string
+    defaultCompactionModel?: string
+    defaultCompactionThinkingLevel?: string
+  } | null
   providers: ProviderConfig[]
   credentials: CredentialSummary[]
   skills: SkillSummary[]

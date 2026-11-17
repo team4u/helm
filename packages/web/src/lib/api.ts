@@ -420,6 +420,8 @@ export interface ModelCatalogInfo {
   defaultThinkingLevel?: string
   /** 全局压缩模型（未配置省略）。 */
   defaultCompactionModel?: string
+  /** 全局压缩思考档位（未配置省略）。 */
+  defaultCompactionThinkingLevel?: string
 }
 
 /** 解析 GET /api/models：新版 { models, thinkingLevels, defaultModel } 形状。 */
@@ -433,6 +435,7 @@ export function normalizeModelCatalogInfo(raw: unknown): ModelCatalogInfo {
     defaultModel?: unknown
     defaultThinkingLevel?: unknown
     defaultCompactionModel?: unknown
+    defaultCompactionThinkingLevel?: unknown
   }
   const levelsRaw = body.thinkingLevels && typeof body.thinkingLevels === 'object' && !Array.isArray(body.thinkingLevels)
     ? body.thinkingLevels as Record<string, unknown>
@@ -471,6 +474,9 @@ export function normalizeModelCatalogInfo(raw: unknown): ModelCatalogInfo {
     ...(typeof body.defaultModel === 'string' && body.defaultModel !== '' ? { defaultModel: body.defaultModel } : {}),
     ...(typeof body.defaultThinkingLevel === 'string' && body.defaultThinkingLevel !== '' ? { defaultThinkingLevel: body.defaultThinkingLevel } : {}),
     ...(typeof body.defaultCompactionModel === 'string' && body.defaultCompactionModel !== '' ? { defaultCompactionModel: body.defaultCompactionModel } : {}),
+    ...(typeof body.defaultCompactionThinkingLevel === 'string' && body.defaultCompactionThinkingLevel !== ''
+      ? { defaultCompactionThinkingLevel: body.defaultCompactionThinkingLevel }
+      : {}),
   }
 }
 
@@ -497,12 +503,29 @@ export const assetsApi = {
   listModels: async (opts?: { signal?: AbortSignal }) =>
     normalizeModelCatalogInfo(await apiRequest<unknown>('GET', '/api/models', undefined, opts?.signal)).models,
   getDefaultModel: (opts?: { signal?: AbortSignal }) =>
-    apiRequest<{ defaultModel: string; defaultThinkingLevel: string; defaultCompactionModel?: string }>('GET', '/api/models/default', undefined, opts?.signal),
-  setDefaultModel: (model?: string, thinkingLevel?: string, compactionModel?: string) =>
-    apiRequest<{ ok: boolean; defaultModel: string; defaultThinkingLevel: string; defaultCompactionModel?: string }>('PUT', '/api/models/default', {
+    apiRequest<{
+      defaultModel: string
+      defaultThinkingLevel: string
+      defaultCompactionModel?: string
+      defaultCompactionThinkingLevel?: string
+    }>('GET', '/api/models/default', undefined, opts?.signal),
+  setDefaultModel: (
+    model?: string,
+    thinkingLevel?: string,
+    compactionModel?: string,
+    compactionThinkingLevel?: string,
+  ) =>
+    apiRequest<{
+      ok: boolean
+      defaultModel: string
+      defaultThinkingLevel: string
+      defaultCompactionModel?: string
+      defaultCompactionThinkingLevel?: string
+    }>('PUT', '/api/models/default', {
       ...(model !== undefined ? { model } : {}),
       ...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
       ...(compactionModel !== undefined ? { compactionModel } : {}),
+      ...(compactionThinkingLevel !== undefined ? { compactionThinkingLevel } : {}),
     }),
   listModelProviders: (opts?: { signal?: AbortSignal }) =>
     apiRequest<ModelProviderSummary[]>('GET', '/api/models/providers', undefined, opts?.signal),

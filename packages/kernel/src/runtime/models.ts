@@ -219,7 +219,13 @@ export function parseModelRef(ref: string): ModelRefParts {
  */
 export async function listModelCatalog(
   models: Models,
-  defaults?: { model?: string; thinkingLevel?: string; compactionModel?: string; disabledModels?: Readonly<Record<string, readonly string[]>> },
+  defaults?: {
+    model?: string
+    thinkingLevel?: string
+    compactionModel?: string
+    compactionThinkingLevel?: string
+    disabledModels?: Readonly<Record<string, readonly string[]>>
+  },
 ): Promise<ModelCatalog> {
   const entries: ModelCatalogEntry[] = []
   const thinkingLevels: Record<string, string[]> = {}
@@ -244,6 +250,7 @@ export async function listModelCatalog(
     ...(defaults?.model ? { defaultModel: defaults.model } : {}),
     ...(defaults?.thinkingLevel ? { defaultThinkingLevel: defaults.thinkingLevel } : {}),
     ...(defaults?.compactionModel ? { defaultCompactionModel: defaults.compactionModel } : {}),
+    ...(defaults?.compactionThinkingLevel ? { defaultCompactionThinkingLevel: defaults.compactionThinkingLevel } : {}),
   }
 }
 
@@ -297,6 +304,7 @@ export function clampThinkingLevelForModel(
 
 export interface CompactionModelResolution {
   model: string | undefined
+  thinkingLevel?: string | undefined
   isDisabled: (providerId: string, modelId: string) => boolean
 }
 
@@ -364,55 +372,57 @@ export function wrapModelsForCompaction(
           context: Parameters<Models['completeSimple']>[1],
           options?: Parameters<Models['completeSimple']>[2],
         ): Promise<AssistantMessage> => {
-          const { model: compactionRef, isDisabled } = resolveCompaction()
-          if (!compactionRef || !isCompactionSummarizationCall(context, options)) {
+          const { model: compactionRef, thinkingLevel: compactionThinkingLevel, isDisabled } = resolveCompaction()
+          if ((!compactionRef && !compactionThinkingLevel) || !isCompactionSummarizationCall(context, options)) {
             return target.completeSimple(model, context, options)
           }
-          let ref: ModelRefParts
-          try {
-            ref = parseModelRef(compactionRef)
-          } catch (err) {
-            return compactionErrorMessage(
-              model,
-              model.provider,
-              model.id,
-              err instanceof Error ? err.message : String(err),
-            )
-          }
-          if (isDisabled(ref.provider, ref.modelId)) {
-            return compactionErrorMessage(
-              model,
-              ref.provider,
-              ref.modelId,
-              `Compaction model ${ref.provider}/${ref.modelId} is disabled`,
-            )
-          }
-          const compactionModel = target.getModel(ref.provider, ref.modelId)
-          if (compactionModel === undefined) {
-            return compactionErrorMessage(
-              model,
-              ref.provider,
-              ref.modelId,
-              `Compaction model ${ref.provider}/${ref.modelId} is not available`,
-            )
-          }
-          let effectiveOptions = options
-          if (effectiveOptions !== undefined) {
-            const next = { ...effectiveOptions }
-            if (compactionModel.maxTokens > 0 && next.maxTokens !== undefined) {
-              next.maxTokens = Math.min(next.maxTokens, compactionModel.maxTokens)
+          let targetModel = model
+          if (compactionRef) {
+            let ref: ModelRefParts
+            try {
+              ref = parseModelRef(compactionRef)
+            } catch (err) {
+              return compactionErrorMessage(
+                model,
+                model.provider,
+                model.id,
+                err instanceof Error ? err.message : String(err),
+              )
             }
-            if (next.reasoning !== undefined) {
-              const clamped = clampToModelLevels(compactionModel, next.reasoning)
-              if (clamped === 'off') {
-                delete next.reasoning
-              } else {
-                next.reasoning = clamped
-              }
+            if (isDisabled(ref.provider, ref.modelId)) {
+              return compactionErrorMessage(
+                model,
+                ref.provider,
+                ref.modelId,
+                `Compaction model ${ref.provider}/${ref.modelId} is disabled`,
+              )
             }
-            effectiveOptions = next
+            const resolved = target.getModel(ref.provider, ref.modelId)
+            if (resolved === undefined) {
+              return compactionErrorMessage(
+                model,
+                ref.provider,
+                ref.modelId,
+                `Compaction model ${ref.provider}/${ref.modelId} is not available`,
+              )
+            }
+            targetModel = resolved
           }
-          return target.completeSimple(compactionModel, context, effectiveOptions)
+          const next = { ...(options ?? {}) }
+          if (compactionRef && targetModel.maxTokens > 0 && next.maxTokens !== undefined) {
+            next.maxTokens = Math.min(next.maxTokens, targetModel.maxTokens)
+          }
+          const desiredThinking = compactionThinkingLevel ?? next.reasoning
+          if (desiredThinking !== undefined) {
+            const clamped = clampToModelLevels(targetModel, desiredThinking as ModelThinkingLevel)
+            if (clamped === 'off') {
+              delete next.reasoning
+            } else {
+              next.reasoning = clamped
+            }
+          }
+          const effectiveOptions = options === undefined && Object.keys(next).length === 0 ? undefined : next
+          return target.completeSimple(targetModel, context, effectiveOptions)
         }
       }
       const value = Reflect.get(target, prop, target)

@@ -407,6 +407,34 @@
   max-width: 640px;
 }
 
+.model-defaults-panel .composer-picker-root {
+  max-width: 100%;
+  width: 100%;
+}
+
+.model-defaults-panel .composer-model-button {
+  width: 100%;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 13px;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.model-defaults-panel .composer-model-button:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background: var(--bg-subtle);
+}
+
+.model-defaults-panel .composer-model-button .composer-model-label {
+  margin-right: auto;
+  text-align: left;
+}
+
 /* 供应商 Tab 内部工具栏（位于滚动区内，去边框） */
 .model-toolbar-inline.primary-center-toolbar {
   border-bottom: none;
