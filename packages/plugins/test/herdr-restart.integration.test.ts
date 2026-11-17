@@ -322,6 +322,10 @@ test('T4 场景 ①：runtime.close() 保活 running 窗格；重启窗口文件
   writeFileSync(outputPath, JSON.stringify({ ok: true, value: 42 }), 'utf8')
   transport.advancePane(capturedPaneId, 'done')
 
+  // 排空关闭前旧 Hub 已写入 UDS 缓冲区但被 abort 的在途请求（如 onPaneEvent 触发的 agent.get），
+  // 避免在重启阶段后才被 serveTransport 读取并计入 callsBeforeRestart 之后。
+  await server.drain()
+
   const callsBeforeRestart = transport.calls.length
   const tabsBeforeRestart = transport.calls.filter((c) => c.method === 'tab.create').length
   const startsBeforeRestart = transport.calls.filter((c) => c.method === 'agent.start').length

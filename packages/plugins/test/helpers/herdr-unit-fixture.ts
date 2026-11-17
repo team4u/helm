@@ -101,6 +101,8 @@ export class FsOutputFiles {
 export interface ServedTransport {
   socketPath: string
   close(): Promise<void>
+  /** Drain any queued RPC connections and wait for in-flight transport.call handlers to finish. */
+  drain(): Promise<void>
 }
 
 /**
@@ -136,6 +138,7 @@ export async function serveTransport(
 ): Promise<ServedTransport> {
   const sockets = new Set<Socket>()
   const socketsWithReleases: Array<{ socket: Socket; release: () => void }> = []
+  const inflightCalls = new Set<Promise<void>>()
   const server: Server = createServer({ allowHalfOpen: true }, (socket) => {
     sockets.add(socket)
     socket.once('close', () => sockets.delete(socket))
@@ -153,9 +156,13 @@ export async function serveTransport(
         const line = buffer.slice(0, newline)
         buffer = buffer.slice(newline + 1)
         newline = buffer.indexOf('\n')
-        void (async () => {
+        const task = (async () => {
           const request = JSON.parse(line) as { id: string; method: string; params: Record<string, unknown> }
           try {
+            if (request.method === '__drain__') {
+              socket.end(`${JSON.stringify({ id: request.id, result: null })}\n`)
+              return
+            }
             if (request.method === 'events.subscribe') {
               // 官方订阅请求：params.subscriptions 为过滤数组；逐窗格状态过滤
               // （pane.agent_status_changed + pane_id）映射为 options.paneIds 传给
@@ -191,6 +198,8 @@ export async function serveTransport(
             socket.end(`${JSON.stringify({ id: request.id, error: body })}\n`)
           }
         })()
+        inflightCalls.add(task)
+        void task.finally(() => inflightCalls.delete(task))
       }
     })
   })
@@ -202,6 +211,14 @@ export async function serveTransport(
       for (const entry of socketsWithReleases) entry.socket.destroy()
       for (const socket of sockets) socket.destroy()
       await new Promise<void>((resolve) => server.close(() => resolve()))
+    },
+    drain: async () => {
+      // FIFO accept-queue barrier: any connection opened before drain() is accepted and has its
+      // buffered RPC line dispatched before __drain__ finishes its round-trip.
+      await ipcLineCall(socketPath, JSON.stringify({ id: '__drain__', method: '__drain__', params: {} }), 5_000)
+      while (inflightCalls.size > 0) {
+        await Promise.all([...inflightCalls])
+      }
     },
   }
 }

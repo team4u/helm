@@ -258,8 +258,9 @@ function raiseWireError(error: { code?: unknown; message?: unknown }, target: st
  *   (absent means herdr_unreachable, same semantics as UDS ENOENT), then convert to the pipe name and connect;
  *   never treat the marker file path as a connectable endpoint.
  */
-async function openLocalHerdrSocket(socketPath: string, target: string): Promise<Socket> {
+async function openLocalHerdrSocket(socketPath: string, target: string, signal?: AbortSignal): Promise<Socket> {
   const net = await import('node:net')
+  checkAborted(signal, target)
   if (!isWindowsShapedPath(socketPath)) {
     const socket = net.connect(socketPath)
     socket.setNoDelay(true)
@@ -282,6 +283,7 @@ async function openLocalHerdrSocket(socketPath: string, target: string): Promise
       }
       throw new HerdrTransportError('herdr_io', `cannot access the herdr marker file: ${socketPath} (${code ?? String(err)})`, target, { cause: err })
     }
+    checkAborted(signal, target)
   }
   const socket = connectHerdrEndpoint(socketPath, 'named-pipe')
   socket.setNoDelay(true)
@@ -300,7 +302,7 @@ async function callLocal(
   const signal = options?.signal
   checkAborted(signal, target)
 
-  const socket = await openLocalHerdrSocket(socketPath, target)
+  const socket = await openLocalHerdrSocket(socketPath, target, signal)
   const assembler = new LineAssembler()
   const timeoutMs = resolveCallTimeoutMs(method, params, options)
   const timer = timeoutMs === undefined ? undefined : timeoutPromise(timeoutMs, target)
@@ -397,7 +399,7 @@ async function subscribeLocal(
   if (invalidPaneId !== undefined) {
     throw new HerdrTransportError('herdr_invalid_subscription', `invalid pane id in subscription options: ${String(invalidPaneId)}`, target)
   }
-  const socket = await openLocalHerdrSocket(socketPath, target)
+  const socket = await openLocalHerdrSocket(socketPath, target, signal)
   const assembler = new LineAssembler()
 
   let stopped = false
