@@ -14,6 +14,7 @@ import path from 'node:path'
 import os from 'node:os'
 import process from 'node:process'
 import { CliError } from './errors.js'
+import { atomicWriteFile } from '@helm/env-io'
 
 export interface CliCredential {
   hubUrl?: string
@@ -24,9 +25,6 @@ const LOCK_WAIT_MS = 10_000
 const LOCK_POLL_MS = 25
 /** Grace window for empty or half-written lock files: allows a concurrent holder to finish writing before declaring the lock corrupt. */
 const LOCK_SETTLE_GRACE_MS = 2_000
-/** Bounded retry window and polling interval when Windows readers (antivirus/indexers) briefly lock the target during rename. */
-const RENAME_BUSY_TOTAL_MS = 1_500
-const RENAME_BUSY_POLL_MS = 25
 
 export function dataDirFor(env: NodeJS.ProcessEnv): string {
   const v = env['HELM_DATA_DIR']
@@ -174,43 +172,13 @@ async function acquireCliTokenLock(lockFile: string): Promise<() => Promise<void
 }
 
 /**
- * Windows transient lock detection: readers/scanners can trigger brief EPERM/EACCES/EBUSY during rename;
- * backing off and retrying succeeds. On other platforms these are real permission errors and fail immediately.
+ * Atomic write delegated to the shared `@helm/env-io` primitive (hidden temp + 0600 + fsync + bounded
+ * transient-lock retry on all platforms); wraps failures into the CLI error envelope.
  */
-function isTransientRenameBusy(err: unknown): boolean {
-  if (process.platform !== 'win32') return false
-  const code = (err as NodeJS.ErrnoException).code
-  return code === 'EPERM' || code === 'EACCES' || code === 'EBUSY'
-}
-
-/** Atomic rename replacement with bounded backoff on Windows transient locks (~1.5s total); rethrows the original error if exhausted. */
-async function renameAtomically(tmp: string, file: string): Promise<void> {
-  const deadline = Date.now() + RENAME_BUSY_TOTAL_MS
-  for (;;) {
-    try {
-      await fsp.rename(tmp, file)
-      return
-    } catch (err) {
-      if (!isTransientRenameBusy(err) || Date.now() >= deadline) throw err
-      await new Promise((resolve) => setTimeout(resolve, RENAME_BUSY_POLL_MS))
-    }
-  }
-}
-
-/** Atomic write with unique temp file, fsync, and 0600 permissions; stays atomic even after Windows busy-lock backoff. */
 async function atomicWrite0600(file: string, text: string): Promise<void> {
-  const tmp = `${file}.tmp-${randomUUID()}`
-  let handle: fsp.FileHandle | undefined
   try {
-    handle = await fsp.open(tmp, 'w', 0o600)
-    await handle.writeFile(text)
-    await handle.sync()
-    await handle.close()
-    handle = undefined
-    await renameAtomically(tmp, file)
+    await atomicWriteFile(file, text)
   } catch (err) {
-    await handle?.close().catch(() => {})
-    await fsp.rm(tmp, { force: true }).catch(() => {})
     throw new CliError(
       `failed to write CLI credentials file (${file}): ${err instanceof Error ? err.message : String(err)}`,
       'credentials_write_failed',

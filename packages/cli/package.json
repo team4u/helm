@@ -19,6 +19,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
+    "@helm/env-io": "workspace:*",
     "@helm/protocol": "workspace:*"
   },
   "devDependencies": {
