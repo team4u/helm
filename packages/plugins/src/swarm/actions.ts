@@ -1,5 +1,6 @@
 import {
   HelmError,
+  type ConversationSummary,
   type HelmPluginContext,
   type PluginToolContext,
 } from '@helm/protocol'
@@ -135,6 +136,93 @@ export function assertWorkerNodeId(value: string): string {
     )
   }
   return trimmed
+}
+
+export interface EnsureCoordinatorGroupInput {
+  conversationId: number
+  title: string
+  objective?: string
+  coordinatorGuard?: boolean
+  channels?: Array<{ name: string; topic?: string }>
+  reuseExisting?: boolean
+}
+
+export function checkCoordinatorEligibility(
+  conv: ConversationSummary,
+  ownership: 'human' | 'bot' | 'helm' | string,
+): { code: 'validation_error' | 'conversation_scope_violation'; message: string; status: 400 | 403; details: Record<string, unknown> } | undefined {
+  if (conv.parentConversationId !== undefined) {
+    return {
+      code: 'validation_error',
+      message: `仅允许在顶层会话创建协作组（会话 #${conv.id} 是子会话，父会话 #${conv.parentConversationId}）`,
+      status: 400,
+      details: { conversationId: conv.id, parentConversationId: conv.parentConversationId },
+    }
+  }
+  if (
+    ownership !== 'human' ||
+    conv.tags.includes(WORKER_TAG) ||
+    conv.tags.includes(ARCHIVED_WORKER_TAG)
+  ) {
+    return {
+      code: 'conversation_scope_violation',
+      message: `禁止在后台会话或 Worker 会话 #${conv.id} 上创建协作组`,
+      status: 403,
+      details: { conversationId: conv.id },
+    }
+  }
+  return undefined
+}
+
+export async function ensureCoordinatorGroup(
+  ctx: HelmPluginContext,
+  coordinator: SwarmCoordinator,
+  input: EnsureCoordinatorGroupInput,
+): Promise<{ groupId: string; group: BoardViewDoc['group'] }> {
+  const { readConversationOrUndefined, enqueueDispatch, groups } = coordinator
+  const targetConvId = input.conversationId
+  const conv = readConversationOrUndefined(targetConvId)
+  if (conv === undefined) {
+    throw new HelmError('not_found', `目标会话 #${targetConvId} 不存在`, 404, { conversationId: targetConvId })
+  }
+  const eligibilityErr = checkCoordinatorEligibility(conv, ctx.host.getConversationOwnership(targetConvId))
+  if (eligibilityErr !== undefined) {
+    throw new HelmError(eligibilityErr.code, eligibilityErr.message, eligibilityErr.status, eligibilityErr.details)
+  }
+  if (input.coordinatorGuard !== undefined && typeof input.coordinatorGuard !== 'boolean') {
+    throw new HelmError('validation_error', 'coordinatorGuard 必须是布尔值', 400, {})
+  }
+  const coordinatorGuard = input.coordinatorGuard ?? true
+
+  return enqueueDispatch(async () => {
+    const syncTagAndProjections = async (groupId: string): Promise<{ groupId: string; group: BoardViewDoc['group'] }> => {
+      const latestConv = readConversationOrUndefined(targetConvId)
+      if (latestConv !== undefined && !latestConv.tags.includes(COORDINATOR_TAG)) {
+        await ctx.host.updateConversation(targetConvId, {
+          tags: [...latestConv.tags, COORDINATOR_TAG],
+        })
+      }
+      groups.syncProjections()
+      const view = groups.buildBoardView(groupId)
+      return { groupId, group: view.group }
+    }
+
+    if (input.reuseExisting === true) {
+      const existing = groups.findActiveGroupByCoordinator(targetConvId)
+      if (existing !== undefined) {
+        return syncTagAndProjections(existing.id)
+      }
+    }
+
+    const created = await groups.createGroup({
+      coordinatorConversationId: targetConvId,
+      title: input.title.trim().slice(0, 120),
+      ...(input.objective !== undefined ? { objective: input.objective } : {}),
+      coordinatorGuard,
+      ...(input.channels !== undefined ? { channels: input.channels } : {}),
+    })
+    return syncTagAndProjections(created.id)
+  })
 }
 
 export function registerSwarmActions(
@@ -280,53 +368,13 @@ export function registerSwarmActions(
     if (!isPosIntId(targetConvId)) {
       throw new HelmError('validation_error', 'create_group 需要有效的目标主控会话 conversationId', 400, {})
     }
-    const conv = readConversationOrUndefined(targetConvId)
-    if (conv === undefined) {
-      throw new HelmError('not_found', `目标会话 #${targetConvId} 不存在`, 404, { conversationId: targetConvId })
-    }
-    if (conv.parentConversationId !== undefined) {
-      throw new HelmError(
-        'validation_error',
-        `仅允许在顶层会话创建协作组（会话 #${targetConvId} 是子会话，父会话 #${conv.parentConversationId}）`,
-        400,
-        { conversationId: targetConvId, parentConversationId: conv.parentConversationId },
-      )
-    }
-    const ownership = ctx.host.getConversationOwnership(targetConvId)
-    if (
-      ownership !== 'human' ||
-      conv.tags.includes(WORKER_TAG) ||
-      conv.tags.includes(ARCHIVED_WORKER_TAG)
-    ) {
-      throw new HelmError(
-        'conversation_scope_violation',
-        `禁止在后台会话或 Worker 会话 #${targetConvId} 上创建协作组`,
-        403,
-        { conversationId: targetConvId },
-      )
-    }
-    if (input.coordinatorGuard !== undefined && typeof input.coordinatorGuard !== 'boolean') {
-      throw new HelmError('validation_error', 'coordinatorGuard 必须是布尔值', 400, {})
-    }
-    const coordinatorGuard = input.coordinatorGuard ?? true
-
-    return enqueueDispatch(async () => {
-      const created = await groups.createGroup({
-        coordinatorConversationId: targetConvId,
-        title: input.title.trim().slice(0, 120),
-        ...(input.objective !== undefined ? { objective: input.objective } : {}),
-        coordinatorGuard,
-        ...(input.channels !== undefined ? { channels: input.channels } : {}),
-      })
-      const latestConv = readConversationOrUndefined(targetConvId)
-      if (latestConv !== undefined && !latestConv.tags.includes(COORDINATOR_TAG)) {
-        await ctx.host.updateConversation(targetConvId, {
-          tags: [...latestConv.tags, COORDINATOR_TAG],
-        })
-      }
-      groups.syncProjections()
-      const view = groups.buildBoardView(created.id)
-      return { groupId: created.id, group: view.group }
+    return ensureCoordinatorGroup(ctx, coordinator, {
+      conversationId: targetConvId,
+      title: input.title,
+      ...(input.objective !== undefined ? { objective: input.objective } : {}),
+      ...(input.coordinatorGuard !== undefined ? { coordinatorGuard: input.coordinatorGuard } : {}),
+      ...(input.channels !== undefined ? { channels: input.channels } : {}),
+      reuseExisting: false,
     })
   }
 

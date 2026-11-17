@@ -852,3 +852,162 @@ test('swarm-int4: failed turn auto [blocker], At-Most-Once Silent-Exit Nudge -> 
     await inst.app.close()
   }
 })
+
+test('swarm-int5: /swarm slash activation loop (task auto-create + same-turn tools, empty/idempotent reuse, worker/child block, non-matching passthrough)', { timeout: 60_000 }, async (t) => {
+  const env = await openSwarmEnv(useTempDir(t, 'helm-swarm-slash-'))
+  try {
+    const { kernel } = env.app
+
+    // 1) Non-/swarm inputs pass through untouched without creating any group
+    const plainConv = await kernel.createConversation({ title: 'Normal Chat', profileId: 'assistant', cwd: env.repoDir })
+    let plainSawText = ''
+    env.faux.setResponses([
+      (ctx) => {
+        plainSawText = JSON.stringify(ctx.messages)
+        return fauxAssistantMessage('Normal reply.')
+      },
+      (ctx) => {
+        plainSawText = JSON.stringify(ctx.messages)
+        return fauxAssistantMessage('Second normal reply.')
+      },
+    ])
+    await kernel.submitInput(plainConv.id, '/swarming check')
+    await kernel.waitForIdle(plainConv.id)
+    assert.match(plainSawText, /\/swarming check/)
+    assert.equal(kernel.getConversation(plainConv.id).tags.includes(COORDINATOR_TAG), false)
+
+    await kernel.submitInput(plainConv.id, 'please explain /swarm syntax')
+    await kernel.waitForIdle(plainConv.id)
+    assert.match(plainSawText, /please explain \/swarm syntax/)
+    assert.equal(kernel.getConversation(plainConv.id).tags.includes(COORDINATOR_TAG), false)
+
+    // 2) Sending `/swarm <task>` on a blank top-level human conversation auto-creates group, tags coordinator, strips heavy tools, and completes flow
+    const coord = await kernel.createConversation({ title: 'Auth Squad Chat', profileId: 'assistant', cwd: env.repoDir })
+    let turnMeta: { toolNames: string[]; sectionsById: Record<string, string>; userText: string } | undefined
+    let workerDispatched = false
+    setSwarmRoleResponses(env.faux, {
+      coordinator: [
+        (ctx) => {
+          const meta = captureRequestMeta(ctx.messages as unknown as Record<string, unknown>[])
+          turnMeta = {
+            ...meta,
+            userText: JSON.stringify(ctx.messages),
+          }
+          return fauxAssistantMessage(
+            [
+              fauxToolCall('swarm_dispatch_worker', {
+                prompt: 'Implement token helper and report done.',
+                name: 'author',
+                access: 'readwrite',
+                isolation: 'worktree',
+              }),
+            ],
+            { stopReason: 'toolUse' },
+          )
+        },
+        fauxAssistantMessage('Coordinator dispatched @author.'),
+        fauxAssistantMessage('Coordinator received @author done.'),
+      ],
+      author: [
+        () => {
+          workerDispatched = true
+          return fauxAssistantMessage(
+            [fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'done', body: 'Implemented cleanly.' })],
+            { stopReason: 'toolUse' },
+          )
+        },
+        fauxAssistantMessage('Author finished.'),
+      ],
+    })
+
+    await kernel.submitInput(coord.id, '/swarm 重构鉴权模块并交叉验收')
+    await kernel.waitForIdle(coord.id)
+    await waitFor(() => workerDispatched)
+    await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+    await kernel.waitForIdle(coord.id)
+
+    assert.ok(turnMeta !== undefined)
+    assert.equal(kernel.getConversation(coord.id).tags.includes(COORDINATOR_TAG), true)
+    for (const expected of ['swarm_dispatch_worker', 'swarm_board_post', 'swarm_board_read', 'swarm_close_group']) {
+      assert.ok(turnMeta.toolNames.includes(expected), `expected ${expected} exposed on turn 1 after /swarm`)
+    }
+    for (const stripped of ['swarm_create_group', 'bash', 'edit', 'write', 'subagent', 'SubagentWorkflow']) {
+      assert.equal(turnMeta.toolNames.includes(stripped), false, `expected ${stripped} stripped on turn 1 after /swarm`)
+    }
+    assert.ok(turnMeta.sectionsById['swarm.active_group']?.includes('role="coordinator"'))
+    assert.match(turnMeta.userText, /load_skill/)
+    assert.match(turnMeta.userText, /swarm-collab/)
+    assert.match(turnMeta.userText, /swarm_dispatch_worker/)
+    assert.match(turnMeta.userText, /重构鉴权模块并交叉验收/)
+
+    const indexDoc = kernel.plugins.getPublicDoc(SWARM_PLUGIN_ID, 'index').value as SwarmIndexDoc
+    const coordGroup = indexDoc.groups.find((g) => g.coordinatorConversationId === coord.id && g.status === 'active')
+    assert.ok(coordGroup !== undefined, 'active group created for /swarm coordinator')
+    assert.equal(coordGroup.title, '重构鉴权模块并交叉验收')
+
+    // 3) Sending `/swarm <followup>` again in the same active coordinator reuses the existing group idempotently
+    let secondPromptText = ''
+    setSwarmRoleResponses(env.faux, {
+      coordinator: [
+        (ctx) => {
+          secondPromptText = JSON.stringify(ctx.messages.slice(-2))
+          return fauxAssistantMessage('Reused active group cleanly.')
+        },
+      ],
+    })
+    await kernel.submitInput(coord.id, '/swarm 补充单测覆盖')
+    await kernel.waitForIdle(coord.id)
+    assert.match(secondPromptText, new RegExp(coordGroup.id))
+    assert.match(secondPromptText, /补充单测覆盖/)
+    const indexAfterSecond = kernel.plugins.getPublicDoc(SWARM_PLUGIN_ID, 'index').value as SwarmIndexDoc
+    assert.equal(
+      indexAfterSecond.groups.filter((g) => g.coordinatorConversationId === coord.id && g.status === 'active').length,
+      1,
+      'must reuse existing active group without creating duplicate',
+    )
+
+    // 4) Sending `/swarm` on a worker or child sub-conversation is explicitly blocked by onInput
+    const workerId = indexAfterSecond.workers.find((w) => w.groupId === coordGroup.id)!.conversationId
+    await assert.rejects(
+      () => kernel.submitInput(workerId, '/swarm nested attempt'),
+      (err: unknown) =>
+        err instanceof HelmError &&
+        err.code === 'input_blocked' &&
+        err.message.includes('不能在子成员或后台会话中使用 /swarm 发起协同'),
+    )
+    const childConv = await kernel.createConversation({
+      title: 'Child Chat',
+      profileId: 'assistant',
+      cwd: env.repoDir,
+      parentConversationId: plainConv.id,
+    })
+    await assert.rejects(
+      () => kernel.submitInput(childConv.id, '/swarm child attempt'),
+      (err: unknown) =>
+        err instanceof HelmError &&
+        err.code === 'input_blocked' &&
+        err.message.includes('不能在子成员或后台会话中使用 /swarm 发起协同'),
+    )
+
+    // 5) Plain `/swarm` (no arguments) on a top-level human conversation activates group and prompts coordinator to ask for task
+    const emptyArgCoord = await kernel.createConversation({ title: 'Standby Swarm Topic', profileId: 'assistant', cwd: env.repoDir })
+    let emptyArgPrompt = ''
+    env.faux.setResponses([
+      (ctx) => {
+        emptyArgPrompt = JSON.stringify(ctx.messages)
+        return fauxAssistantMessage('请告诉我本次协同目标任务。')
+      },
+    ])
+    await kernel.submitInput(emptyArgCoord.id, '/swarm')
+    await kernel.waitForIdle(emptyArgCoord.id)
+    assert.equal(kernel.getConversation(emptyArgCoord.id).tags.includes(COORDINATOR_TAG), true)
+    assert.match(emptyArgPrompt, /swarm-collab/)
+    assert.match(emptyArgPrompt, /简短询问用户/)
+    const emptyArgIndex = kernel.plugins.getPublicDoc(SWARM_PLUGIN_ID, 'index').value as SwarmIndexDoc
+    const emptyArgGroup = emptyArgIndex.groups.find((g) => g.coordinatorConversationId === emptyArgCoord.id && g.status === 'active')
+    assert.ok(emptyArgGroup !== undefined)
+    assert.equal(emptyArgGroup.title, 'Standby Swarm Topic')
+  } finally {
+    await env.close()
+  }
+})

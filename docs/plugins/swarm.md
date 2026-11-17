@@ -59,7 +59,7 @@
 
 ### Web 协同流转看板（`#/views/builtin:swarm/board`）
 
-- **无碰撞会话入口**：未挂 `swarm-coordinator / swarm-worker` 的顶层人类会话「更多操作」菜单提供「开启协同组」三预设引导弹窗（*Author + Verifier 审改闭环*、*多角色联合攻坚*、*自定义空白组*，预填草稿不自动发送）；主控与组内成员顶栏工具栏渲染双向定位角标按钮（不占用 `COMPOSER_DOCK_SLOT`，与 `WorkflowActiveTray` 零冲突）；时间线将 `swarm:board-report` 与 `swarm:board-wakeup` 收敛为单行回执胶囊（点击 `#seq` 分屏定位流转卡）。
+- **对话 `/swarm` 入口与双向顶栏**：通过 `ctx.ui.command` 注册 `slash: 'swarm', insert: '/swarm '`（不设 `scope`，待命新对话与顶层人类会话输入 `/` 均可补全回填，体验与 `/skill:` 一致）；发送 `/swarm <任务>` 后由 `onInput` 钩子自动在当前顶层会话建组（`coordinatorGuard: true`）、挂载 `swarm-coordinator` 标签并展开主控协同引导。活跃协同会话（主控与组内成员）在顶栏工具栏渲染双向定位「协同看板」角标按钮（不占用 `COMPOSER_DOCK_SLOT`，与 `WorkflowActiveTray` 零冲突）；看板空态仅展示 `/swarm <任务>` 只读提示，移除侧边栏入口与弹窗表单；时间线将 `swarm:board-report` 与 `swarm:board-wakeup` 收敛为单行回执胶囊（点击 `#seq` 分屏定位流转卡）。
 - **自适应主舞台与 `540px` 成员抽屉**：宽屏全屏渲染正交 SVG 角色协同拓扑图，分屏或窄屏（`<= 680px`）自动收敛为紧凑横排角色胶囊条；异常态挂载 `<Callout>` 一键唤醒/切模/解锁合入急救按钮；底部提供 `<MultiSelect>` 目标选择、正交 `wake` 开关与 `15px` 输入栏；点击成员滑出右侧 `540px` 详情抽屉（支持 `abort_worker`、空闲模型 `<Select>`、跨插件调用 `builtin:workflow` `inspect_worktree` 快照与一键向主控提交合入请求、打开子会话抽屉与归档）。历史 `closed` 或 `coordinatorDetached` 组自动退避 `board_status + board_read` 无白屏展示。
 
 ## 配置与数据边界
@@ -81,7 +81,7 @@
 | :--- | :--- |
 | 插件入口与 UI 注册 | `packages/plugins/src/swarm.ts`、`packages/plugins/src/swarm/ui.ts` |
 | 单真源黑板存储 / 寻址 / 静默归因 / 动作 / 钩子 | `packages/plugins/src/swarm/`（`contracts.ts`、`action-schemas.ts`、`worktree-bridge.ts`、`group-store.ts`、`board-router.ts`、`board-stall.ts`、`settlement.ts`、`actions.ts`、`hooks.ts`、`assets.ts`、`assets/`） |
-| Web 客户端组件与纯模型 | `packages/plugins/src/swarm/client/`（`index.tsx`、`BoardScreen.tsx`、`BoardTopology.tsx`、`MemberDrawer.tsx`、`StarterDialog.tsx`、`HeaderBoardAction.tsx`、`board-model.ts`、`models.ts`、`copy.ts`、`styles.css`） |
+| Web 客户端组件与纯模型 | `packages/plugins/src/swarm/client/`（`index.tsx`、`BoardScreen.tsx`、`BoardTopology.tsx`、`MemberDrawer.tsx`、`HeaderBoardAction.tsx`、`board-model.ts`、`models.ts`、`copy.ts`、`styles.css`） |
 | 测试 | `packages/plugins/test/swarm.test.ts`、`packages/plugins/test/swarm.integration.test.ts`、`packages/web/test/swarm-client-interactions.test.tsx` |
 
 ## 相关文档

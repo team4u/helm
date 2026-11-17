@@ -6,12 +6,18 @@ import {
   COORDINATOR_TAG,
   READONLY_WORKER_BLOCKED_TOOL_NAMES,
   SWARM_PLUGIN_ID,
+  SWARM_SKILL_ID,
   WORKER_TAG,
   type SwarmCoordinator,
   type WorkerAccess,
   type WorkerIsolation,
 } from './contracts.js'
+import { checkCoordinatorEligibility, ensureCoordinatorGroup } from './actions.js'
 import { collectMemberLastReplySummary } from './settlement.js'
+
+const SWARM_SLASH_RE = /^\/swarm(?:\s+([\s\S]*))?$/
+const INELIGIBLE_SWARM_SLASH_REASON =
+  '不能在子成员或后台会话中使用 /swarm 发起协同，请在顶层对话输入 /swarm <任务>'
 
 /** 100% 字节恒定的协作组主控系统提示词段（仅含创建后永不变更的 groupId 与静态协作铁律，零可变成员列表或状态）。 */
 export function activeSwarmGroupCoordinatorSection(groupId: string): string {
@@ -65,6 +71,74 @@ export function registerSwarmHooks(
     groups,
     settlingWorkers,
   } = coordinator
+
+  // ------------------------------------------------------------------
+  // input：/swarm 斜杠指令激活协作组并展开主控协同引导
+  // ------------------------------------------------------------------
+  ctx.hook.onInput(async (payload) => {
+    if (!isActive()) return
+    const origin = payload.input.origin
+    if (origin !== undefined && origin !== 'human') return
+    const trimmed = payload.input.text.trim()
+    const match = SWARM_SLASH_RE.exec(trimmed)
+    if (match === null) return
+
+    const conv = readConversationOrUndefined(payload.conversationId)
+    if (
+      conv === undefined ||
+      checkCoordinatorEligibility(conv, ctx.host.getConversationOwnership(conv.id)) !== undefined
+    ) {
+      return { action: 'block', reason: INELIGIBLE_SWARM_SLASH_REASON }
+    }
+
+    const rawTask = (match[1] ?? '').trim()
+    let groupId = groups.findActiveGroupByCoordinator(conv.id)?.id
+    if (groupId === undefined) {
+      const firstLine = rawTask.split(/\r?\n/, 1)[0]?.trim() ?? ''
+      const title =
+        firstLine !== ''
+          ? firstLine.slice(0, 80)
+          : conv.title.trim() !== ''
+            ? conv.title.trim().slice(0, 80)
+            : 'Swarm 协同任务'
+      const objective = rawTask !== '' ? rawTask.slice(0, 240) : undefined
+      const ensured = await ensureCoordinatorGroup(ctx, coordinator, {
+        conversationId: conv.id,
+        title,
+        ...(objective !== undefined ? { objective } : {}),
+        coordinatorGuard: true,
+        reuseExisting: true,
+      })
+      groupId = ensured.groupId
+    }
+
+    const expandedText =
+      rawTask !== ''
+        ? [
+            `已进入 Swarm 多智能体协同主控模式（groupId: ${groupId}）。`,
+            `1. 请先调用 load_skill({ skillId: "${SWARM_SKILL_ID}" }) 阅读并遵循协同规则；`,
+            '2. 使用 swarm_dispatch_worker 派发隔离 worktree 的 readwrite 作者（如 @author）与 access: "readonly" 的验收者（如 @verifier）协同完成以下任务并交叉验收；',
+            '3. 通过 swarm_board_post / swarm_board_read / swarm_board_status 以 #seq 推进流转，全部审过后调用 swarm_close_group({ keepWorktree: true }) 解锁主控并合入收尾。',
+            '',
+            '任务目标：',
+            rawTask,
+          ].join('\n')
+        : [
+            `已进入 Swarm 多智能体协同主控模式（groupId: ${groupId}）。`,
+            `请先调用 load_skill({ skillId: "${SWARM_SKILL_ID}" }) 阅读协同规则（后续可通过 swarm_dispatch_worker 派发 worktree 作者与 readonly 验收者），然后简短询问用户本次需要协同完成的目标任务。`,
+          ].join('\n')
+
+    return {
+      action: 'transform',
+      value: {
+        ...payload,
+        input: {
+          ...payload.input,
+          text: expandedText,
+        },
+      },
+    }
+  })
 
   // ------------------------------------------------------------------
   // before_turn：互斥工具裁剪 + 恒定 sections 注入（零破 Cache）

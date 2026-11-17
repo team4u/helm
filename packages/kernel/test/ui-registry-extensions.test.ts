@@ -179,12 +179,23 @@ test('commandPalette: slash format, reserved words, and intra-plugin duplicates'
     () => ui.registerUi('p1', 'commandPalette', { id: 'cmd-empty', title: 'E' }, 'command'),
     isHelmError('invalid_ui_spec'),
   );
-  // client-track command is valid; slash commands must supply an executable action (never an unexecutable suggestion)
+  // client-track command is valid; slash commands must supply actionId or insert (mutually exclusive)
   ui.registerUi('p1', 'commandPalette', { id: 'cmd-client', title: 'C', client: { module: 'index.tsx', export: 'X' } }, 'command', CLIENT_ROOT);
+  ui.registerUi('p1', 'commandPalette', { id: 'cmd-insert', title: 'Swarm', slash: 'swarm', insert: '/swarm ' }, 'command');
   assert.throws(
     () => ui.registerUi('p1', 'commandPalette', { id: 'slash-client-only', title: 'C', slash: 'client-only' }, 'command'),
     isHelmError('invalid_ui_spec'),
   );
+  assert.throws(
+    () => ui.registerUi('p1', 'commandPalette', { id: 'slash-both', title: 'B', slash: 'both', actionId: 'act', insert: '/both ' }, 'command'),
+    isHelmError('invalid_ui_spec'),
+  );
+  for (const badInsert of ['', '   ', 123]) {
+    assert.throws(
+      () => ui.registerUi('p1', 'commandPalette', { id: 'bad-insert', title: 'I', slash: 'ins', insert: badInsert }, 'command'),
+      isHelmError('invalid_ui_spec'),
+    );
+  }
   for (const actionId of ['', 5, 'bad.id']) {
     assert.throws(
       () => ui.registerUi('p1', 'commandPalette', { id: 'bad-action', title: 'A', actionId }, 'command'),

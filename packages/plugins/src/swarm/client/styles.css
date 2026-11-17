@@ -4,8 +4,8 @@
  * Reuses host design-system primitives (.screen-container, .screen-header,
  * .screen-section, .kv-grid, .primary-drawer-*, .modal, .callout, .empty-state,
  * .loading-state, .badge, .btn).
- * Keeps only Swarm starter preset cards, adaptive orthogonal SVG/pill topology,
- * #seq handoff cards, 15px human post bar, and 540px member drawer layout.
+ * Keeps only adaptive orthogonal SVG/pill topology, #seq handoff cards, 15px
+ * human post bar, and 540px member drawer layout.
  */
 .sw-muted {
   font-size: 12.5px;
@@ -45,49 +45,6 @@
   gap: 6px;
 }
 
-/* Lightweight starter preset modal (480px~560px) */
-.sw-starter-modal {
-  width: min(560px, 94vw);
-  max-width: 560px;
-  display: flex;
-  flex-direction: column;
-  padding: 0;
-}
-.sw-starter-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 16px 20px 12px;
-  border-bottom: 1px solid var(--border);
-}
-.sw-starter-heading {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 0;
-}
-.sw-starter-body {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 16px 20px;
-  overflow-y: auto;
-  max-height: min(72vh, 560px);
-}
-.sw-starter-footer {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-  padding: 12px 20px;
-  border-top: 1px solid var(--border);
-}
-.sw-field {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
 .sw-field-header {
   display: flex;
   align-items: center;
@@ -95,56 +52,7 @@
   gap: 8px;
   flex-wrap: wrap;
 }
-.sw-preset-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-}
-.sw-preset-card {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 4px;
-  padding: 10px;
-  text-align: left;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-subtle);
-  color: var(--fg);
-  cursor: pointer;
-}
-.sw-preset-card:hover:not(:disabled) {
-  border-color: var(--fg-subtle);
-}
-.sw-preset-card.is-selected {
-  border-color: var(--accent, var(--fg));
-  background: var(--bg-elevated);
-}
-.sw-preset-card-top {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12.5px;
-  font-weight: 600;
-}
-.sw-preset-card-desc {
-  font-size: 11.5px;
-  line-height: 1.4;
-  color: var(--fg-muted);
-}
-.sw-guard-row {
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-subtle);
-}
-.sw-guard-text {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.sw-input,
-.sw-textarea {
+.sw-input {
   width: 100%;
   padding: 7px 10px;
   border: 1px solid var(--border);
@@ -154,10 +62,6 @@
   font-size: 13px;
   line-height: 1.45;
   box-sizing: border-box;
-}
-.sw-textarea-compact {
-  resize: vertical;
-  min-height: 64px;
 }
 
 /* Swarm Board Screen */
@@ -217,13 +121,6 @@
   align-items: center;
   gap: 10px;
   padding: 36px 20px;
-}
-.sw-empty-starter-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin-top: 6px;
 }
 
 /* Retained worktrees merge list */
@@ -542,22 +439,17 @@
 }
 
 @media (max-width: 680px) {
-  .sw-starter-modal,
   .sw-member-drawer {
     width: 100vw;
     max-width: 100vw;
     left: 0;
     right: 0;
   }
-  .sw-preset-grid {
-    grid-template-columns: 1fr;
-  }
   .sw-post-input {
     font-size: 15px;
     line-height: 1.55;
   }
-  .sw-input,
-  .sw-textarea {
+  .sw-input {
     font-size: 14px;
   }
 }

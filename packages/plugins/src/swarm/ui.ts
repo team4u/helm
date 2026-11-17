@@ -1,6 +1,5 @@
 import type { ConversationScope, HelmPluginContext } from '@helm/protocol'
 
-export const SWARM_UI_PLUGIN_ID = 'builtin:swarm' as const
 export const SWARM_BOARD_SCREEN_ID = 'board' as const
 export const SWARM_COORDINATOR_TAG = 'swarm-coordinator' as const
 export const SWARM_WORKER_TAG = 'swarm-worker' as const
@@ -17,27 +16,23 @@ const SWARM_PARTICIPANT_SCOPE: ConversationScope = {
  * WorkflowActiveTray keeps sole ownership).
  */
 export function registerSwarmUi(ctx: HelmPluginContext): void {
-  ctx.ui.sidebarItem({
-    id: 'swarm-board',
-    label: { en: 'Swarm Board', 'zh-CN': '协同流转看板' },
-    icon: 'workflow',
-    target: `screen:${SWARM_UI_PLUGIN_ID}/${SWARM_BOARD_SCREEN_ID}`,
-    order: 15,
+  ctx.ui.command({
+    id: 'swarm',
+    title: { en: 'Swarm Multi-Agent Collaboration', 'zh-CN': 'Swarm 多智能体协同' },
+    icon: 'network',
+    slash: 'swarm',
+    insert: '/swarm ',
+    description: {
+      en: 'Start multi-agent peer collaboration (/swarm <task>)',
+      'zh-CN': '启动多智能体并行协同与交叉验收（输入 /swarm <任务>）',
+    },
+    keywords: ['swarm', 'multi-agent', 'collab', '协同', '多智能体'],
   })
   ctx.ui.screen({
     id: SWARM_BOARD_SCREEN_ID,
     label: { en: 'Swarm Board', 'zh-CN': '协同流转看板' },
     icon: 'workflow',
     client: { module: 'index.tsx', export: 'SwarmBoardScreen' },
-  })
-  ctx.ui.action({
-    id: 'start-swarm-group',
-    target: 'conversation:header',
-    placement: 'menu',
-    order: 20,
-    label: { en: 'Start Swarm Collaboration', 'zh-CN': '开启协同组' },
-    icon: 'workflow',
-    client: { module: 'index.tsx', export: 'SwarmStartGroupAction' },
   })
   ctx.ui.action({
     id: 'open-swarm-board',

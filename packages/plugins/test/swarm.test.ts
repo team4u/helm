@@ -38,6 +38,7 @@ import {
   type CollabGroupRecord,
   type GroupMemberState,
 } from '../src/swarm.js'
+import { checkCoordinatorEligibility } from '../src/swarm/actions.js'
 
 function makeMember(over: Partial<GroupMemberState> = {}): GroupMemberState {
   return {
@@ -415,4 +416,31 @@ test('swarm-unit4: At-Most-Once Silent-Exit Nudge and 6-condition 0-Token [stall
   const diag3 = diagnoseStallRootCause(g3, posts3)
   assert.equal(diag3.cause, 'idle_without_done')
   assert.match(diag3.body, /#3/)
+})
+
+test('swarm-unit5: checkCoordinatorEligibility rejects child, worker, archived-worker, and non-human conversations', { timeout: 60_000 }, () => {
+  const baseConv = {
+    id: 1,
+    title: 'Top Chat',
+    profileId: 'assistant',
+    tags: [] as string[],
+    cwd: '/repo',
+    model: 'faux/faux-1',
+    thinkingLevel: 'off',
+    status: 'idle' as const,
+    stateChangeSeq: 1,
+    completionSeq: 0,
+    unread: false,
+    pinned: false,
+    pendingAskCount: 0,
+    createdAt: 1,
+    updatedAt: 1,
+  }
+  assert.equal(checkCoordinatorEligibility(baseConv, 'human'), undefined)
+  assert.equal(checkCoordinatorEligibility({ ...baseConv, tags: [COORDINATOR_TAG] }, 'human'), undefined)
+  assert.equal(checkCoordinatorEligibility({ ...baseConv, parentConversationId: 9 }, 'human')?.code, 'validation_error')
+  assert.equal(checkCoordinatorEligibility({ ...baseConv, tags: [WORKER_TAG] }, 'human')?.code, 'conversation_scope_violation')
+  assert.equal(checkCoordinatorEligibility({ ...baseConv, tags: [ARCHIVED_WORKER_TAG] }, 'human')?.code, 'conversation_scope_violation')
+  assert.equal(checkCoordinatorEligibility(baseConv, 'helm')?.code, 'conversation_scope_violation')
+  assert.equal(checkCoordinatorEligibility(baseConv, 'bot')?.code, 'conversation_scope_violation')
 })

@@ -2,8 +2,6 @@
  * builtin:swarm plugin client.tsx entry (component & type exports only, Fast
  * Refresh compliant):
  * - SwarmBoardScreen: adaptive collaboration board & 540px member drawer;
- * - SwarmStartGroupAction: conversation:header ('menu') starter preset dialog
- *   trigger for top-level human conversations;
  * - SwarmOpenBoardAction: conversation:header ('toolbar') bidirectional board
  *   button with live badge count & tone;
  * - SwarmBoardReportPill / SwarmBoardWakeupPill: compact 1-line board batch
@@ -19,19 +17,11 @@ import {
   SwarmOpenBoardAction as OpenBoardActionImpl,
   type SwarmOpenBoardActionProps,
 } from './HeaderBoardAction.tsx'
-import {
-  SwarmStartGroupAction as StartGroupActionImpl,
-  type SwarmStartGroupActionProps,
-} from './StarterDialog.tsx'
 
-export type { SwarmOpenBoardActionProps, SwarmStartGroupActionProps }
+export type { SwarmOpenBoardActionProps }
 
 export function SwarmBoardScreen(props: ScreenProps): ReactNode {
   return <BoardScreen {...props} />
-}
-
-export function SwarmStartGroupAction(props: SwarmStartGroupActionProps): ReactNode {
-  return <StartGroupActionImpl {...props} />
 }
 
 export function SwarmOpenBoardAction(props: SwarmOpenBoardActionProps): ReactNode {

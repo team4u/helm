@@ -2,9 +2,9 @@
  * Display copy for the builtin:swarm client (pure copy table + builders, zero
  * component exports -- Fast Refresh compliant, zero Emoji).
  *
- * Every human-visible string of the collaboration board, starter presets,
- * header badge action, timeline receipt pills, and 540px member drawer resolves
- * here against the active host locale via usePluginTranslator / usePluginLocale.
+ * Every human-visible string of the collaboration board, header badge action,
+ * timeline receipt pills, and 540px member drawer resolves here against the
+ * active host locale via usePluginTranslator / usePluginLocale.
  */
 import type { HelmLocale, LocalizedText } from '@helm/plugin-client'
 import { resolveLocalizedText } from '@helm/plugin-client'
@@ -19,7 +19,6 @@ export const SW_LOADING_BOARD: LocalizedText = {
   'zh-CN': '协同看板读取中…',
 }
 export const SW_ACTION_CLOSE: LocalizedText = { en: 'Close', 'zh-CN': '关闭' }
-export const SW_ACTION_CANCEL: LocalizedText = { en: 'Cancel', 'zh-CN': '取消' }
 export const SW_ACTION_REFRESH: LocalizedText = { en: 'Refresh', 'zh-CN': '刷新' }
 export const SW_ACTION_RETRY: LocalizedText = { en: 'Retry', 'zh-CN': '重试' }
 
@@ -39,77 +38,10 @@ export function swReceiptCountLabel(count: number, locale: HelmLocale): string {
 }
 
 // ---------------------------------------------------------------------------
-// Starter dialog & conversation:header actions
+// Conversation:header badge action & drawer copy helpers
 // ---------------------------------------------------------------------------
 
-export const SW_START_GROUP_BUTTON: LocalizedText = {
-  en: 'Start Swarm Collaboration',
-  'zh-CN': '开启协同组',
-}
-export const SW_START_GROUP_DESC: LocalizedText = {
-  en: 'Create a flat peer-handoff blackboard for this conversation and unlock coordinator tools.',
-  'zh-CN': '为当前会话创建扁平对等流转看板，并切换为主控协调工具集。',
-}
-export const SW_PRESET_LABEL: LocalizedText = { en: 'Collaboration preset', 'zh-CN': '协作预设' }
-export const SW_PRESET_AUTHOR_VERIFIER: LocalizedText = {
-  en: 'Author + Verifier',
-  'zh-CN': 'Author + Verifier 审改闭环',
-}
-export const SW_PRESET_AUTHOR_VERIFIER_DESC: LocalizedText = {
-  en: 'Isolated worktree implementation paired with an independent read-only verifier.',
-  'zh-CN': '独立 Worktree 编码实现 + 只读 Verifier 交叉跑测与打回审改。',
-}
-export const SW_PRESET_SQUAD: LocalizedText = {
-  en: 'Multi-Role Squad',
-  'zh-CN': '多角色联合攻坚',
-}
-export const SW_PRESET_SQUAD_DESC: LocalizedText = {
-  en: 'Parallel non-overlapping worktree authors + dedicated verifier + coordinator synthesis.',
-  'zh-CN': '无重叠分片并行读写成员 + 独立门禁验收 + 主控裁决合入。',
-}
-export const SW_PRESET_BLANK: LocalizedText = {
-  en: 'Blank Group',
-  'zh-CN': '自定义空白组',
-}
-export const SW_PRESET_BLANK_DESC: LocalizedText = {
-  en: 'Empty blackboard ready for custom roles, channels, and manual dispatch.',
-  'zh-CN': '仅初始化空白看板，按需自定义招募角色与子频道。',
-}
-export const SW_GROUP_TITLE_LABEL: LocalizedText = { en: 'Group title', 'zh-CN': '协作组标题' }
-export const SW_GROUP_TITLE_PLACEHOLDER: LocalizedText = {
-  en: 'e.g. Auth refactor & verification',
-  'zh-CN': '例如：鉴权模块重构与交叉验收',
-}
-export const SW_GROUP_OBJECTIVE_LABEL: LocalizedText = {
-  en: 'Objective (optional)',
-  'zh-CN': '协作目标（可选）',
-}
-export const SW_GROUP_OBJECTIVE_PLACEHOLDER: LocalizedText = {
-  en: 'Shared goal anchored on coordinator batch reports',
-  'zh-CN': '在主控汇总信封顶部持续锚定的核心验收目标',
-}
-export const SW_GUARD_LABEL: LocalizedText = {
-  en: 'Coordinator guard',
-  'zh-CN': '主控守卫（剥离直改工具）',
-}
-export const SW_GUARD_HINT: LocalizedText = {
-  en: 'Strips edit/write/bash/subagent on the coordinator so all edits stay in workers until merge unlock.',
-  'zh-CN': '开启期间剥离主控会话的 edit/write/bash/subagent，防止主控阻塞调度；结单选保留分支合入即可恢复。',
-}
-export const SW_STARTER_PROMPT_LABEL: LocalizedText = {
-  en: 'Starter prompt draft (optional, not auto-sent)',
-  'zh-CN': '开场任务草稿（可选，仅预填或复制，不自动发送）',
-}
 export const SW_COPY_PROMPT: LocalizedText = { en: 'Copy draft', 'zh-CN': '复制草稿' }
-export const SW_CREATE_OPEN_BOARD: LocalizedText = {
-  en: 'Create & Open Board',
-  'zh-CN': '创建并打开看板',
-}
-export const SW_CREATING_GROUP: LocalizedText = { en: 'Creating…', 'zh-CN': '创建中…' }
-export const SW_GROUP_TITLE_REQUIRED: LocalizedText = {
-  en: 'Group title is required.',
-  'zh-CN': '请填写协作组标题。',
-}
 export const SW_OPEN_BOARD_BUTTON: LocalizedText = {
   en: 'Swarm Board',
   'zh-CN': '协同看板',
@@ -121,50 +53,6 @@ export function swOpenBoardTitle(footerText: string | undefined, locale: HelmLoc
     locale,
   )
   return footerText !== undefined && footerText.trim() !== '' ? `${base}: ${footerText}` : base
-}
-
-export function swPresetDefaultTitle(
-  preset: 'author-verifier' | 'squad' | 'blank',
-  convTitle: string,
-  locale: HelmLocale,
-): string {
-  const clean = convTitle.trim()
-  if (clean !== '') return clean.slice(0, 80)
-  if (preset === 'author-verifier') {
-    return resolveLocalizedText(
-      { en: 'Author + Verifier Review Loop', 'zh-CN': 'Author + Verifier 审改闭环' },
-      locale,
-    )
-  }
-  if (preset === 'squad') {
-    return resolveLocalizedText({ en: 'Multi-Role Squad', 'zh-CN': '多角色联合攻坚' }, locale)
-  }
-  return resolveLocalizedText({ en: 'Swarm Collaboration Group', 'zh-CN': '协同工作组' }, locale)
-}
-
-export function swPresetDefaultDraft(
-  preset: 'author-verifier' | 'squad' | 'blank',
-  locale: HelmLocale,
-): string {
-  if (preset === 'author-verifier') {
-    return resolveLocalizedText(
-      {
-        en: 'Use swarm_dispatch_worker to spawn an isolated worktree @author to implement the changes and a readonly @verifier to audit diffs and run tests via swarm_board_post peer handoffs (#seq). Wake coordinator only on blocker or final [done].',
-        'zh-CN': '请通过 swarm_dispatch_worker 招募独立 worktree 的 @author 负责编码实现，以及只读 @verifier 负责审查 Diff 与跑测验收；双方调用 swarm_board_post 以 #seq 指针横向交接打回，仅遇阻塞或最终通过时唤醒 coordinator。',
-      },
-      locale,
-    )
-  }
-  if (preset === 'squad') {
-    return resolveLocalizedText(
-      {
-        en: 'Split the task into non-overlapping slices, use swarm_dispatch_worker for dedicated worktree authors per slice plus a readonly @verifier for integration checks, and coordinate peer handoffs via swarm_board_post on the board.',
-        'zh-CN': '请将任务拆分为无文件重叠的独立分片，按分片调用 swarm_dispatch_worker 招募独立 worktree 读写成员并配备只读 @verifier 做集成验收，全程通过 swarm_board_post 以 #seq 对等流转。',
-      },
-      locale,
-    )
-  }
-  return ''
 }
 
 // ---------------------------------------------------------------------------
@@ -180,16 +68,12 @@ export const SW_BOARD_EMPTY_TITLE: LocalizedText = {
   'zh-CN': '暂无协同工作组',
 }
 export const SW_BOARD_EMPTY_HINT: LocalizedText = {
-  en: 'Open a top-level conversation and choose "Start Swarm Collaboration" from More actions, or start one from an active conversation below.',
-  'zh-CN': '可在任意顶层人类会话右上角「更多操作 -> 开启协同组」创建，或在下方选择顶层会话直接开启。',
+  en: 'Send /swarm <task> in any top-level human conversation composer to start a collaboration group and open its live board.',
+  'zh-CN': '在任意顶层人类对话输入框发送 /swarm <任务> 即可启动协同工作组并打开实时看板。',
 }
 export const SW_BOARD_SELECT_GROUP_ARIA: LocalizedText = {
   en: 'Select collaboration group',
   'zh-CN': '选择协作组',
-}
-export const SW_BOARD_SELECT_CONV_ARIA: LocalizedText = {
-  en: 'Select target conversation to start a group',
-  'zh-CN': '选择要开启协作组的顶层会话',
 }
 export const SW_BOARD_CHANNEL_ALL: LocalizedText = { en: 'All channels', 'zh-CN': '全部频道' }
 export const SW_BOARD_CHANNEL_TABS_ARIA: LocalizedText = { en: 'Board channels', 'zh-CN': '看板频道切换' }

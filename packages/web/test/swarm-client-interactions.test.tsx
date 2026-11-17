@@ -2,13 +2,12 @@
  * builtin:swarm 插件 client 组件测试（真实编译产物 + 共享宿主 SDK + DOM 事件）。
  *
  * 覆盖：
- * 1. UI 扩展注册不变量（registerSwarmUi：sidebarItem、board screen、双向顶栏动作、单行回执渲染器、@/# composerCompleter、绝不占用 COMPOSER_DOCK_SLOT、双语 LocalizedText）；
- * 2. 普通顶层人类会话「Start Swarm Collaboration」三预设引导弹窗（过滤 swarm-coordinator / swarm-worker / 子会话 / 非 human 会话；草稿预填不自动发送；宽/窄屏自适应打开看板）；
- * 3. 主控与组内 Worker 顶栏双向定位角标按钮（Worker 自动附带 worker=<name>）与 swarm:board-report / swarm:board-wakeup 单行回执胶囊 #seq 跳转；
- * 4. SwarmBoardScreen 实时 sessionDoc 宽屏正交 SVG 拓扑、频道 Tabs 切换、分屏与 <=680px 窄屏自动收敛紧凑角色胶囊条、stall/blocker/unmerged Callout 急救按钮、两态 close_group、底部人工发帖栏（MultiSelect + 正交 wake Switch + 15px 输入框）；
- * 5. 右侧 540px 成员详情抽屉（working 态 abort_worker、空闲态 Radix 模型 Select -> switch_worker_model、跨插件 builtin:workflow inspect_worktree 快照与请求主控合入 submitInput、子会话抽屉与归档）；
- * 6. closed 历史组（含 retainedWorktrees）与 coordinatorDetached 组自动退避 board_status + board_read 无白屏加载；
- * 7. 空态页顶层会话 Select 启动闭环、zh-CN 双语文案、零 Emoji、零原生 <select>/<input type="checkbox"> 与 Fast Refresh 组件导出纯度。
+ * 1. UI 扩展注册不变量（registerSwarmUi：无 sidebarItem、无 start-swarm-group、ui.command 注册 slash:'swarm' + insert:'/swarm '、board screen、双向顶栏动作、单行回执渲染器、@/# composerCompleter、绝不占用 COMPOSER_DOCK_SLOT、双语 LocalizedText）；
+ * 2. 主控与组内 Worker 顶栏双向定位角标按钮（Worker 自动附带 worker=<name>）与 swarm:board-report / swarm:board-wakeup 单行回执胶囊 #seq 跳转；
+ * 3. SwarmBoardScreen 实时 sessionDoc 宽屏正交 SVG 拓扑、频道 Tabs 切换、分屏与 <=680px 窄屏自动收敛紧凑角色胶囊条、stall/blocker/unmerged Callout 急救按钮、两态 close_group、底部人工发帖栏（MultiSelect + 正交 wake Switch + 15px 输入框）；
+ * 4. 右侧 540px 成员详情抽屉（working 态 abort_worker、空闲态 Radix 模型 Select -> switch_worker_model、跨插件 builtin:workflow inspect_worktree 快照与请求主控合入 submitInput、子会话抽屉与归档）；
+ * 5. closed 历史组（含 retainedWorktrees）与 coordinatorDetached 组自动退避 board_status + board_read 无白屏加载；
+ * 6. 空态页纯只读 /swarm 引导、failure Retry、zh-CN 双语文案、零 Emoji、零原生 <select>/<input type="checkbox"> 与 Fast Refresh 组件导出纯度。
  */
 import assert from 'node:assert/strict'
 import { readdirSync, readFileSync } from 'node:fs'
@@ -51,7 +50,6 @@ mountSharedPluginNamespaces({ realHooks: true })
 
 interface SwarmClientComponents {
   SwarmBoardScreen: (p: ScreenProps) => React.ReactElement
-  SwarmStartGroupAction: (p: { conversation?: ConversationSummary }) => React.ReactElement | null
   SwarmOpenBoardAction: (p: { conversation?: ConversationSummary }) => React.ReactElement
   SwarmBoardReportPill: (p: TimelineRendererProps) => React.ReactElement
   SwarmBoardWakeupPill: (p: TimelineRendererProps) => React.ReactElement
@@ -65,7 +63,6 @@ before(async () => {
   rawModule = mod
   components = {
     SwarmBoardScreen: mod['SwarmBoardScreen'] as SwarmClientComponents['SwarmBoardScreen'],
-    SwarmStartGroupAction: mod['SwarmStartGroupAction'] as SwarmClientComponents['SwarmStartGroupAction'],
     SwarmOpenBoardAction: mod['SwarmOpenBoardAction'] as SwarmClientComponents['SwarmOpenBoardAction'],
     SwarmBoardReportPill: mod['SwarmBoardReportPill'] as SwarmClientComponents['SwarmBoardReportPill'],
     SwarmBoardWakeupPill: mod['SwarmBoardWakeupPill'] as SwarmClientComponents['SwarmBoardWakeupPill'],
@@ -288,11 +285,19 @@ test('UI 注册契约：registerSwarmUi 注册看板 Screen/顶栏动作/单行�
   )
   assert.equal(slots.length, 0, '不注册任何冲突 slot')
 
-  const sidebarItems = recorded.filter((r) => r.method === 'sidebarItem').map((r) => ({
+  const sidebarItems = recorded.filter((r) => r.method === 'sidebarItem')
+  assert.equal(sidebarItems.length, 0, '移除侧边栏入口，不再注册 sidebarItem')
+
+  const commands = recorded.filter((r) => r.method === 'command').map((r) => ({
     id: r.spec['id'],
-    target: r.spec['target'],
+    slash: r.spec['slash'],
+    insert: r.spec['insert'],
+    icon: r.spec['icon'],
+    scope: r.spec['scope'],
   }))
-  assert.deepEqual(sidebarItems, [{ id: 'swarm-board', target: 'screen:builtin:swarm/board' }])
+  assert.deepEqual(commands, [
+    { id: 'swarm', slash: 'swarm', insert: '/swarm ', icon: 'network', scope: undefined },
+  ])
 
   const screens = recorded.filter((r) => r.method === 'screen').map((r) => ({
     id: r.spec['id'],
@@ -307,7 +312,6 @@ test('UI 注册契约：registerSwarmUi 注册看板 Screen/顶栏动作/单行�
     scope: r.spec['scope'],
   }))
   assert.deepEqual(actions, [
-    { id: 'start-swarm-group', target: 'conversation:header', placement: 'menu', scope: undefined },
     {
       id: 'open-swarm-board',
       target: 'conversation:header',
@@ -356,7 +360,8 @@ test('UI 注册契约：registerSwarmUi 注册看板 Screen/顶栏动作/单行�
     }
   }
 
-  // Fast Refresh：编译产物模块除 __helmClientCss 外全部为大写开头的组件函数
+  // Fast Refresh：编译产物模块除 __helmClientCss 外全部为大写开头的组件函数，且不再导出 SwarmStartGroupAction
+  assert.equal('SwarmStartGroupAction' in rawModule, false, '移除废弃的 SwarmStartGroupAction 导出')
   for (const [exportName, value] of Object.entries(rawModule)) {
     if (exportName === '__helmClientCss') continue
     assert.match(exportName, /^[A-Z]/, `client 入口导出必须为 PascalCase 组件：${exportName}`)
@@ -365,125 +370,8 @@ test('UI 注册契约：registerSwarmUi 注册看板 Screen/顶栏动作/单行�
 })
 
 // ---------------------------------------------------------------------------
-// 2. Starter Dialog & Header Bidirectional Entry & Timeline Receipt Pills
+// 2. Header Bidirectional Entry & Timeline Receipt Pills
 // ---------------------------------------------------------------------------
-
-test('SwarmStartGroupAction：仅未建组顶层人类会话展示；三预设弹窗预填草稿不自动发送，宽/窄屏自适应打开看板', { timeout: 60_000 }, async () => {
-  const humanConv = convSummary(30, '重构支付网关', { ownedBy: 'human', tags: [] })
-  const coordConv = convSummary(31, '已建组主控', { ownedBy: 'human', tags: ['swarm-coordinator'] })
-  const workerConv = convSummary(32, '子成员', { ownedBy: 'helm', parentConversationId: 31, tags: ['swarm-worker'] })
-  const archivedConv = convSummary(33, '已归档成员', { ownedBy: 'human', tags: ['swarm-worker-archived'] })
-  const botConv = convSummary(34, '后台会话', { ownedBy: 'helm', tags: [] })
-
-  // 1) 已挂 swarm-coordinator / swarm-worker / 归档 / 子会话 / 非 human 返回空 DOM
-  for (const ineligible of [coordConv, workerConv, archivedConv, botConv]) {
-    const spy = makeSpyCtx({ conversationId: ineligible.id })
-    const { host, unmount } = await mount(
-      spy,
-      e(components.SwarmStartGroupAction, { conversation: ineligible }),
-      [ineligible],
-    )
-    try {
-      assert.equal(host.textContent, '', `不满足条件的会话 #${ineligible.id} 不渲染入口`)
-    } finally {
-      unmount()
-    }
-  }
-
-  // 2) 顶层人类会话打开三预设引导 -> 切换预设 -> 预填草稿不自动发送 -> 打开右侧分屏看板
-  let draftedText = ''
-  let submittedCount = 0
-  const spy = makeSpyCtx({
-    conversationId: 30,
-    composer: {
-      draft: '',
-      attachments: [],
-      sending: false,
-      setDraft: (t) => {
-        draftedText = t
-      },
-      insertText: () => {},
-      submit: async () => {
-        submittedCount += 1
-      },
-    },
-  })
-  spy.callAction = async (actionId, input, options) => {
-    spy.actionCalls.push({ actionId, input, ...(options !== undefined ? { options } : {}) })
-    return { groupId: 'grp-pay' }
-  }
-
-  const prevWidth = window.innerWidth
-  window.innerWidth = 1280
-  const { host, unmount } = await mount(
-    spy,
-    e(components.SwarmStartGroupAction, { conversation: humanConv }),
-    [humanConv],
-  )
-  try {
-    const triggerBtn = host.querySelector('button')
-    assert.ok(triggerBtn !== null, '渲染 Start Swarm Collaboration 菜单按钮')
-    assert.match(triggerBtn.textContent ?? '', /Start Swarm Collaboration/)
-
-    await act(async () => {
-      triggerBtn.click()
-    })
-
-    const dialog = document.body.querySelector('[role="dialog"]')
-    assert.ok(dialog !== null, '打开轻量预设 Dialog')
-    assert.equal(EMOJI_RE.test(dialog.textContent ?? ''), false, '预设弹窗零 Emoji')
-    const presetRadios = [...dialog.querySelectorAll<HTMLButtonElement>('[role="radio"]')]
-    assert.equal(presetRadios.length, 3, '内置三类协作预设')
-    assert.match(dialog.textContent ?? '', /Author \+ Verifier/)
-    assert.match(dialog.textContent ?? '', /Multi-Role Squad/)
-    assert.match(dialog.textContent ?? '', /Blank Group/)
-
-    // 切换到 Multi-Role Squad 预设并提交
-    const squadRadio = dialog.querySelector<HTMLButtonElement>('[data-preset="squad"]')
-    assert.ok(squadRadio !== null)
-    await act(async () => {
-      squadRadio.click()
-    })
-
-    const createBtn = [...dialog.querySelectorAll<HTMLButtonElement>('button')].find((b) =>
-      b.textContent?.includes('Create & Open Board'),
-    )
-    assert.ok(createBtn !== undefined)
-    await act(async () => {
-      createBtn.click()
-    })
-
-    assert.equal(spy.actionCalls.length, 1)
-    assert.equal(spy.actionCalls[0]?.actionId, 'create_group')
-    assert.deepEqual(spy.actionCalls[0]?.input, {
-      title: '重构支付网关',
-      coordinatorGuard: true,
-      conversationId: 30,
-    })
-    assert.ok(draftedText.includes('non-overlapping slices'), '向输入框填入开场任务草稿')
-    assert.equal(submittedCount, 0, '仅预填草稿，绝不自动发送')
-    assert.equal(spy.submitCalls.length, 0, '不自动调用 submitInput')
-    assert.deepEqual(spy.splitCalls, ['screen:builtin:swarm/board?groupId=grp-pay'], '宽屏打开右侧分屏看板')
-
-    // 3) 窄屏 (<= 680px) 自动切换为全屏 openScreen 打开
-    window.innerWidth = 480
-    await act(async () => {
-      triggerBtn.click()
-    })
-    const narrowDialog = document.body.querySelector('[role="dialog"]')
-    const narrowCreate = [...(narrowDialog?.querySelectorAll<HTMLButtonElement>('button') ?? [])].find((b) =>
-      b.textContent?.includes('Create & Open Board'),
-    )
-    assert.ok(narrowCreate !== undefined)
-    await act(async () => {
-      narrowCreate.click()
-    })
-    assert.deepEqual(spy.screenCalls, ['screen:builtin:swarm/board?groupId=grp-pay'], '窄屏 <=680px 跳全屏看板')
-  } finally {
-    window.innerWidth = prevWidth
-    unmount()
-  }
-})
 
 test('SwarmOpenBoardAction 与单行回执胶囊：主控与 Worker 双向定位看板，点击 #seq 聚焦对应流转卡', { timeout: 60_000 }, async () => {
   const swarmIndex = {
@@ -1361,7 +1249,7 @@ test('双通道无白屏回退与 zh-CN 双语空态：closed 历史组及 coord
     detachedMount.unmount()
   }
 
-  // 3) zh-CN 双语空态与加载态验证
+  // 3) zh-CN 双语空态与加载态验证（纯只读引导，零弹窗零表单）
   resetDefaultStubs()
   const zhSpy = makeSpyCtx({ locale: 'zh-CN', conversationId: 90 })
   const zhEmptyMount = await mount(
@@ -1378,24 +1266,18 @@ test('双通道无白屏回退与 zh-CN 双语空态：closed 历史组及 coord
   try {
     assert.match(zhEmptyMount.host.textContent ?? '', /协同流转看板/)
     assert.match(zhEmptyMount.host.textContent ?? '', /暂无协同工作组/)
-    assert.match(zhEmptyMount.host.textContent ?? '', /开启协同组/)
+    assert.match(zhEmptyMount.host.textContent ?? '', /\/swarm/)
     assert.equal(zhEmptyMount.host.querySelectorAll('select').length, 0)
+    assert.equal(zhEmptyMount.host.querySelectorAll('button').length, 0, '空态页不再渲染启动按钮或弹窗触发器')
   } finally {
     zhEmptyMount.unmount()
     resetDefaultStubs()
   }
 })
 
-test('空态页启动闭环与失败重试：选择顶层会话创建组写回 groupId 参数；board_status 失败展示错误横幅并支持 Retry', { timeout: 60_000 }, async () => {
+test('空态页纯只读 /swarm 引导与失败重试：board_status 失败展示错误横幅并支持 Retry', { timeout: 60_000 }, async () => {
   resetDefaultStubs()
   const spy = makeSpyCtx({ conversationId: undefined })
-  spy.callAction = async (actionId, input, options) => {
-    spy.actionCalls.push({ actionId, input, ...(options !== undefined ? { options } : {}) })
-    if (actionId === 'create_group') return { groupId: 'grp-from-empty' }
-    return {}
-  }
-
-  const patches: Array<Record<string, string | undefined>> = []
   const emptyMount = await mount(
     spy,
     e(components.SwarmBoardScreen, {
@@ -1403,7 +1285,7 @@ test('空态页启动闭环与失败重试：选择顶层会话创建组写回 g
       screenId: 'board',
       isSplit: false,
       params: {},
-      setParams: (patch) => patches.push(patch),
+      setParams: () => {},
     }),
     [
       convSummary(71, '第一个会话', { ownedBy: 'human', tags: [] }),
@@ -1411,24 +1293,11 @@ test('空态页启动闭环与失败重试：选择顶层会话创建组写回 g
     ],
   )
   try {
-    const startBtn = [...emptyMount.host.querySelectorAll<HTMLButtonElement>('button')].find((b) =>
-      b.textContent?.includes('Start Swarm Collaboration'),
-    )
-    assert.ok(startBtn !== undefined)
-    await act(async () => {
-      startBtn.click()
-    })
-    const dialog = document.body.querySelector('[role="dialog"]')
-    assert.ok(dialog !== null)
-    const createBtn = [...dialog.querySelectorAll<HTMLButtonElement>('button')].find((b) =>
-      b.textContent?.includes('Create & Open Board'),
-    )
-    assert.ok(createBtn !== undefined)
-    await act(async () => {
-      createBtn.click()
-    })
-    assert.equal(spy.actionCalls[0]?.actionId, 'create_group')
-    assert.deepEqual(patches[patches.length - 1], { groupId: 'grp-from-empty' })
+    assert.match(emptyMount.host.textContent ?? '', /No collaboration groups yet/)
+    assert.match(emptyMount.host.textContent ?? '', /\/swarm <task>/)
+    assert.equal(emptyMount.host.querySelectorAll('select').length, 0)
+    assert.equal(emptyMount.host.querySelectorAll('button').length, 0)
+    assert.equal(spy.actionCalls.length, 0)
   } finally {
     emptyMount.unmount()
   }

@@ -30,7 +30,6 @@ import {
   Tabs,
   TabsList,
   TabsTrigger,
-  useConversations,
   usePluginContext,
   usePluginDoc,
   usePluginLocale,
@@ -41,7 +40,6 @@ import {
 import type { SwarmIndexDoc } from './models.ts'
 import {
   buildPostTargetOptions,
-  canStartSwarmGroup,
   extractPostRefs,
   filterBoardPosts,
   isNarrowViewport,
@@ -71,7 +69,6 @@ import {
   SW_BOARD_EMPTY_TITLE,
   SW_BOARD_GUARD_SHORT,
   SW_BOARD_OPEN_COORDINATOR,
-  SW_BOARD_SELECT_CONV_ARIA,
   SW_BOARD_SELECT_GROUP_ARIA,
   SW_BOARD_STATUS_ACTIVE,
   SW_BOARD_STATUS_CLOSED,
@@ -102,7 +99,6 @@ import {
   SW_RESCUE_UNMERGED_TITLE,
   SW_RESCUE_WAKE_BUTTON,
   SW_RETAINED_WT_TITLE,
-  SW_START_GROUP_BUTTON,
   SW_STREAM_EMPTY,
   SW_STREAM_TITLE,
   SW_TOPO_SECTION_TITLE,
@@ -114,7 +110,6 @@ import {
 } from './copy.ts'
 import { BoardTopologySection } from './BoardTopology.tsx'
 import { BoardMemberDrawer } from './MemberDrawer.tsx'
-import { SwarmGroupStarterDialog } from './StarterDialog.tsx'
 
 const POST_KIND_OPTIONS: ReadonlyArray<SelectOption<BoardPostKind>> = [
   { value: 'handoff', label: 'handoff' },
@@ -214,7 +209,6 @@ export function BoardScreen(props: ScreenProps): ReactNode {
   const ctx = usePluginContext()
   const locale = usePluginLocale()
   const t = usePluginTranslator()
-  const conversations = useConversations()
   const index = usePluginDoc<SwarmIndexDoc>('index')
   const rawBadges = usePluginDoc<BoardBadgesDoc>('board-badges')
   const badges = useMemo(() => parseBoardBadges(rawBadges), [rawBadges])
@@ -333,14 +327,6 @@ export function BoardScreen(props: ScreenProps): ReactNode {
   const [postBody, setPostBody] = useState('')
   const [postSending, setPostSending] = useState(false)
   const [postError, setPostError] = useState<string | undefined>(undefined)
-
-  // Empty-state starter dialog state
-  const eligibleStarterConvs = useMemo(
-    () => conversations.filter((c) => canStartSwarmGroup(c, index, badges)),
-    [conversations, index, badges],
-  )
-  const [starterConvId, setStarterConvId] = useState<string>('')
-  const [starterOpen, setStarterOpen] = useState(false)
 
   useEffect(() => {
     setEdgeFilter(undefined)
@@ -537,51 +523,13 @@ export function BoardScreen(props: ScreenProps): ReactNode {
       )
     }
 
-    const effectiveConvId =
-      starterConvId !== ''
-        ? Number(starterConvId)
-        : (ctx.conversationId ?? eligibleStarterConvs[0]?.id)
-    const targetConv = eligibleStarterConvs.find((c) => c.id === effectiveConvId) ?? eligibleStarterConvs[0]
-
     return (
       <Screen title={t(SW_BOARD_TITLE)}>
         <div className="empty-state sw-board-empty">
           <HelmIcon name="workflow" size={20} />
           <strong>{t(SW_BOARD_EMPTY_TITLE)}</strong>
           <p className="sw-muted">{t(SW_BOARD_EMPTY_HINT)}</p>
-          {eligibleStarterConvs.length > 0 ? (
-            <div className="sw-empty-starter-row">
-              <Select
-                value={String(targetConv?.id ?? '')}
-                options={eligibleStarterConvs.map((c) => ({
-                  value: String(c.id),
-                  label: c.title.trim() !== '' ? `${c.title} (#${c.id})` : `#${c.id}`,
-                  icon: 'message-square',
-                }))}
-                aria-label={t(SW_BOARD_SELECT_CONV_ARIA)}
-                onChange={(e) => setStarterConvId(e.target.value)}
-              />
-              <button
-                type="button"
-                className="btn btn-sm btn-primary"
-                onClick={() => setStarterOpen(true)}
-              >
-                <HelmIcon name="workflow" size={12} />
-                <span>{t(SW_START_GROUP_BUTTON)}</span>
-              </button>
-            </div>
-          ) : null}
         </div>
-        <SwarmGroupStarterDialog
-          open={starterOpen}
-          onOpenChange={setStarterOpen}
-          targetConversation={targetConv}
-          onCreated={(newGroupId) => {
-            if (newGroupId !== undefined) {
-              props.setParams({ groupId: newGroupId })
-            }
-          }}
-        />
       </Screen>
     )
   }

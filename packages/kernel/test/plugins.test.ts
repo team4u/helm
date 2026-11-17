@@ -242,6 +242,21 @@ test('tool_call block carry reason short route;block missing reason explicit err
   });
   assert.deepEqual(blocked, { action: 'block', reason: 'sensitive command must human confirm' });
 
+  const inputBlockedHost = makeHost();
+  await inputBlockedHost.register({
+    id: 'p:input-guard',
+    definePlugin: (ctx) => {
+      ctx.hook.onInput((p) =>
+        p.input.text.startsWith('/swarm') ? { action: 'block', reason: 'ineligible conversation' } : { action: 'continue' },
+      );
+    },
+  });
+  const inputBlocked = await inputBlockedHost.runHook('input', {
+    conversationId: 1,
+    input: { id: 'i1', text: '/swarm task', origin: 'human', createdAt: 1 },
+  });
+  assert.deepEqual(inputBlocked, { action: 'block', reason: 'ineligible conversation' });
+
   const host2 = makeHost();
   await host2.register({
     id: 'p:bad-block',

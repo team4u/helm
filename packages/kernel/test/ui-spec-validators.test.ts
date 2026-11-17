@@ -104,11 +104,12 @@ test('timeline.entry.action: valid kinds/roles pass; invalid roles and kinds on 
 // Early phase: commandPalette / profile.runtime / plugin.slot
 // ---------------------------------------------------------------------------
 
-test('commandPalette: slash+actionId passes; reserved words and intra-plugin duplicate slash reject', { timeout: 60_000 }, () => {
+test('commandPalette: slash+actionId or slash+insert passes; mutual exclusion, missing target, reserved words and intra-plugin duplicate slash reject', { timeout: 60_000 }, () => {
   const ctx = makeCtx('commandPalette', [
     { pluginId: 'p1', surface: 'commandPalette', spec: { id: 'c0', slash: 'chart' } },
   ]);
   validateUiSpecEarly('commandPalette', { id: 'c1', slash: 'diagram', actionId: 'act' }, 'c1', ctx);
+  validateUiSpecEarly('commandPalette', { id: 'c2', slash: 'swarm', insert: '/swarm ' }, 'c2', ctx);
   expectThrow(
     () => validateUiSpecEarly('commandPalette', { id: 'c1', slash: 'new', actionId: 'act' }, 'c1', makeCtx('commandPalette')),
     'invalid_ui_spec',
@@ -118,7 +119,22 @@ test('commandPalette: slash+actionId passes; reserved words and intra-plugin dup
   expectThrow(
     () => validateUiSpecEarly('commandPalette', { id: 'c1', slash: 'chart' }, 'c1', makeCtx('commandPalette')),
     'invalid_ui_spec',
-    'declaration slash when must bind set actionId',
+    'declaration slash when must bind set actionId or insert',
+  );
+  expectThrow(
+    () => validateUiSpecEarly('commandPalette', { id: 'c1', slash: 'swarm', actionId: 'act', insert: '/swarm ' }, 'c1', makeCtx('commandPalette')),
+    'invalid_ui_spec',
+    'cannot declare both actionId and insert',
+  );
+  expectThrow(
+    () => validateUiSpecEarly('commandPalette', { id: 'c1', slash: 'swarm', insert: '   ' }, 'c1', makeCtx('commandPalette')),
+    'invalid_ui_spec',
+    'insert must be non-empty string',
+  );
+  expectThrow(
+    () => validateUiSpecEarly('commandPalette', { id: 'c1' }, 'c1', makeCtx('commandPalette')),
+    'invalid_ui_spec',
+    'must at least provide actionId, insert, or client of one',
   );
 });
 

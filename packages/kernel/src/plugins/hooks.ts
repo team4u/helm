@@ -32,7 +32,7 @@ import {
  */
 export const HOOK_ALLOWED_ACTIONS: Record<HookName, ReadonlySet<string>> = {
   trigger: new Set(['continue', 'transform', 'handled']),
-  input: new Set(['continue', 'transform', 'handled']),
+  input: new Set(['continue', 'transform', 'handled', 'block']),
   before_turn: new Set(['continue', 'transform']),
   tool_call: new Set(['continue', 'transform', 'handled', 'block']),
   tool_result: new Set(['continue', 'transform', 'handled']),

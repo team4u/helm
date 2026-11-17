@@ -317,9 +317,13 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
     [groupedUi.commands],
   )
 
+  // ⌘K 仅展示可执行动作命令（actionId）或内联视图命令（client）；
+  // 纯 insert 回填型斜杠指令依赖对话输入框草稿上下文，不放入命令面板以免产生空点项。
   const pluginCommands = useMemo<Array<PaletteRow>>(
     () =>
-      commandsForConversation(groupedUi.commands, paletteConversation).map((cmd) => ({
+      commandsForConversation(groupedUi.commands, paletteConversation)
+        .filter((cmd) => cmd.spec.insert === undefined && (cmd.spec.actionId !== undefined || cmd.spec.client !== undefined))
+        .map((cmd) => ({
         kind: 'command' as const,
         id: `plugin:${cmd.pluginId}/${cmd.spec.id}`,
         title: resolveLocalizedText(cmd.spec.title, locale),

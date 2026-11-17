@@ -205,6 +205,13 @@ export interface CommandSpec extends UiSpecBase {
   icon?: string
   /** Trigger word without /; also derives the composer slash menu. Must not override host reserved commands. */
   slash?: string
+  /**
+   * When declared, selecting the command in the `/` menu or command list
+   * inserts this text into the composer input so the user can append arguments
+   * and send, rather than immediately triggering `actionId` with no arguments
+   * (mutually exclusive with `actionId`).
+   */
+  insert?: string
   /** Display copy describing the command (resolved by the active UI locale). */
   description?: LocalizedText
   /** Quick commands reuse the ctx.action endpoint. */

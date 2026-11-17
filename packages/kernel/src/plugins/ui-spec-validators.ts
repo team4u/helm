@@ -209,6 +209,7 @@ function validateUiActionSpec(spec: Record<string, unknown>, id: string, ctx: Ui
 const COMMAND_PALETTE_CHECKER = Compile(
   Type.Object({
     slash: Type.Optional(CommandSlashSchema),
+    insert: Type.Optional(NonEmptyString),
     actionId: Type.Optional(CommandActionIdSchema),
     actionPluginId: Type.Optional(NonEmptyString),
   }),
@@ -217,11 +218,17 @@ const COMMAND_PALETTE_CHECKER = Compile(
 function validateCommandPaletteSpec(spec: Record<string, unknown>, id: string, ctx: UiSpecContext): void {
   const { pluginId } = ctx;
   runCompiledUiSchema(COMMAND_PALETTE_CHECKER, spec, id, ctx, (errors) => {
-    const err = findErrorByPathPrefix(errors, ['/slash', '/actionId', '/actionPluginId']);
+    const err = findErrorByPathPrefix(errors, ['/slash', '/insert', '/actionId', '/actionPluginId']);
     if (err?.instancePath.startsWith('/slash')) {
       return {
         message: `plugin ${pluginId} ui.command  slash must match /^[a-z0-9][a-z0-9:_-]{0,63}$/(excludes before lead /)`,
         details: { pluginId, id, slash: String(spec['slash']) },
+      };
+    }
+    if (err?.instancePath.startsWith('/insert')) {
+      return {
+        message: `plugin ${pluginId} ui.command  insert must be non-empty string`,
+        details: { pluginId, id },
       };
     }
     if (err?.instancePath.startsWith('/actionId')) {
@@ -249,13 +256,34 @@ function validateCommandPaletteSpec(spec: Record<string, unknown>, id: string, c
     }
   }
   const actionId = spec['actionId'];
-  if (slash !== undefined && actionId === undefined) {
-    throw new HelmError('invalid_ui_spec', `plugin ${pluginId} ui.command declaration slash when must bind set actionId`, 400);
-  }
-  if (actionId === undefined && spec['client'] === undefined) {
+  const insert = spec['insert'] as string | undefined;
+  if (insert !== undefined && insert.trim() === '') {
     throw new HelmError(
       'invalid_ui_spec',
-      `plugin ${pluginId} ui.command must at least provide actionId or client of one (command must can trigger)`,
+      `plugin ${pluginId} ui.command  insert must be non-empty string`,
+      400,
+      { pluginId, id },
+    );
+  }
+  if (actionId !== undefined && insert !== undefined) {
+    throw new HelmError(
+      'invalid_ui_spec',
+      `plugin ${pluginId} ui.command cannot declare both actionId and insert (ambiguous execution vs text-insertion semantics)`,
+      400,
+      { pluginId, id },
+    );
+  }
+  if (slash !== undefined && actionId === undefined && insert === undefined) {
+    throw new HelmError(
+      'invalid_ui_spec',
+      `plugin ${pluginId} ui.command declaration slash when must bind set actionId or insert`,
+      400,
+    );
+  }
+  if (actionId === undefined && insert === undefined && spec['client'] === undefined) {
+    throw new HelmError(
+      'invalid_ui_spec',
+      `plugin ${pluginId} ui.command must at least provide actionId, insert, or client of one (command must can trigger)`,
       400,
       { pluginId, id },
     );

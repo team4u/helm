@@ -34,7 +34,10 @@ export function isValidPluginSlash(slash: string): boolean {
   return !slash.startsWith(SKILL_SLASH_PREFIX)
 }
 
-/** 草稿首 token 精确命中插件斜杠词（如 '/archive 有参数'）；命令面板回车与输入框提交共用。 */
+/**
+ * 草稿首 token 精确命中插件即时执行斜杠词（如 '/archive'）；
+ * 仅匹配绑定了 actionId 的命令，insert 型文本回填命令提交时走正常消息管道交由后端 onInput 钩子处理。
+ */
 export function matchExactPluginSlash(
   payload: string,
   commands: ReadonlyArray<QualifiedCommand>,
@@ -45,12 +48,12 @@ export function matchExactPluginSlash(
   const word = m[1] ?? ''
   if (!isValidPluginSlash(word)) return undefined
   const rest = trimmed.slice(m[0].length).trim()
-  return commands.find((cmd) => cmd.spec.slash === word && rest === '')
+  return commands.find((cmd) => cmd.spec.slash === word && cmd.spec.actionId !== undefined && rest === '')
 }
 
 /**
  * 可出现在当前会话输入框 '/' 补全中的插件命令：
- * 声明 slash + actionId（无 actionId 无从执行）、命中会话作用域；
+ * 声明 slash 且绑定 actionId 或 insert 之一、命中会话作用域；
  * 相同 slash 多插件声明时取注册顺序首个（重复声明由后端注册边界拒绝）。
  */
 export function pluginSlashCommandsFor(
@@ -61,7 +64,7 @@ export function pluginSlashCommandsFor(
   const out: QualifiedCommand[] = []
   for (const cmd of commands) {
     const slash = cmd.spec.slash
-    if (slash === undefined || cmd.spec.actionId === undefined) continue
+    if (slash === undefined || (cmd.spec.actionId === undefined && cmd.spec.insert === undefined)) continue
     if (!isValidPluginSlash(slash)) continue
     if (seen.has(slash)) continue
     if (!matchesUiScope(conversation, cmd.spec.scope)) continue
@@ -84,16 +87,20 @@ export function commandActionPluginId(cmd: QualifiedCommand): string {
   return cmd.spec.actionPluginId ?? cmd.pluginId
 }
 
-/** 命令面板行 hint：优先插件声明 description（按 locale 解析的显示文案），回退 action 寻址（pluginId / actionId）。 */
+/** 命令面板行 hint：优先插件声明 description（按 locale 解析的显示文案），回退 action 寻址或 insert 标题。 */
 export function commandHint(spec: CommandSpec, pluginId: string, locale: HelmLocale): string {
   const description =
     spec.description !== undefined ? resolveLocalizedText(spec.description, locale) : undefined
   if (description !== undefined && description !== '') return description
   if (spec.actionId !== undefined) return `${spec.actionPluginId ?? pluginId} / ${spec.actionId}`
+  if (spec.insert !== undefined) {
+    const title = resolveLocalizedText(spec.title, locale)
+    return title !== '' ? title : `/${spec.slash ?? spec.id}`
+  }
   return spec.actionPluginId ?? pluginId
 }
 
-/** 斜杠菜单条目：apply 回填草稿（内置命令/技能）；run 直接执行（插件 action 命令，不回填）。 */
+/** 斜杠菜单条目：apply 回填草稿（内置命令/技能/insert 型插件命令）；run 直接执行（插件 action 命令，不回填）。 */
 export interface SlashMenuItem {
   id: string
   label: string
@@ -104,8 +111,8 @@ export interface SlashMenuItem {
 
 /**
  * 合并斜杠菜单条目：宿主内置管理命令 → 可见技能 → 满足作用域的插件命令。
- * 插件命令选中即执行（run），不把触发词回填草稿；hint 消费按 locale
- * 解析后的 description/title 显示文案。
+ * 声明 insert 的插件命令与 /skill: 一致走 apply 回填草稿供补全参数；
+ * 声明 actionId 的插件命令选中即执行（run）；hint 消费按 locale 解析后的 description/title 显示文案。
  */
 export function buildSlashMenuItems(
   visibleSkills: ReadonlyArray<{ id: string; name: string }>,
@@ -127,15 +134,19 @@ export function buildSlashMenuItems(
   const plugins: SlashMenuItem[] = pluginSlash.map((cmd) => {
     const description =
       cmd.spec.description !== undefined ? resolveLocalizedText(cmd.spec.description, locale) : undefined
-    return {
+    const hint =
+      description !== undefined && description !== ''
+        ? description
+        : resolveLocalizedText(cmd.spec.title, locale)
+    const base: SlashMenuItem = {
       id: `plugin:${cmd.pluginId}/${cmd.spec.id}`,
       label: `/${cmd.spec.slash}`,
-      hint:
-        description !== undefined && description !== ''
-          ? description
-          : resolveLocalizedText(cmd.spec.title, locale),
-      run: () => runPluginCommand(cmd),
+      hint,
     }
+    if (cmd.spec.insert !== undefined) {
+      return { ...base, apply: cmd.spec.insert }
+    }
+    return { ...base, run: () => runPluginCommand(cmd) }
   })
   return [...builtin, ...skills, ...plugins]
 }

@@ -7,9 +7,6 @@ import type { ConversationSummary, TimelineRendererProps } from '@helm/protocol'
 import type { SelectOption } from '@helm/plugin-client'
 import type { SwarmIndexDoc } from './models.ts'
 
-export const COORDINATOR_TAG = 'swarm-coordinator'
-export const WORKER_TAG = 'swarm-worker'
-export const ARCHIVED_WORKER_TAG = 'swarm-worker-archived'
 export const BOARD_SCREEN_BASE = 'screen:builtin:swarm/board'
 
 export type WorkerAccess = 'readwrite' | 'readonly'
@@ -17,7 +14,6 @@ export type WorkerIsolation = 'inherit' | 'worktree'
 export type CollabGroupStatus = 'active' | 'closed'
 export type BoardPostKind = 'brief' | 'handoff' | 'review' | 'comment' | 'blocker' | 'done' | 'stall'
 export type MemberLiveState = 'idle' | 'working' | 'blocked' | 'done' | 'error' | 'missing'
-export type StarterPresetId = 'author-verifier' | 'squad' | 'blank'
 
 export interface CollabGroupSummary {
   id: string
@@ -492,14 +488,6 @@ export function mergeBoardViewWithRead(view: BoardViewDoc, readPosts: ReadonlyAr
   return { ...view, posts: merged }
 }
 
-export function parseCreateGroupId(raw: unknown): string | undefined {
-  if (!isPlainObject(raw)) return undefined
-  if (typeof raw.groupId === 'string' && raw.groupId !== '') return raw.groupId
-  if (isPlainObject(raw.group) && typeof raw.group.id === 'string' && raw.group.id !== '') return raw.group.id
-  if (typeof raw.id === 'string' && raw.id !== '') return raw.id
-  return undefined
-}
-
 export function parseBoardReportMeta(props: TimelineRendererProps): BoardReportReceiptMeta {
   const data = props.entry.data as { meta?: BoardReportReceiptMeta } | undefined
   return data?.meta ?? {}
@@ -645,33 +633,6 @@ export function resolveConversationBoardLink(
     }
   }
   return undefined
-}
-
-export function canStartSwarmGroup(
-  conversation: ConversationSummary | undefined,
-  index: SwarmIndexDoc | undefined,
-  badges: Record<string, BoardBadgeItem>,
-): boolean {
-  if (conversation === undefined) return false
-  if (conversation.parentConversationId !== undefined) return false
-  if ((conversation.ownedBy ?? 'human') !== 'human') return false
-  if (
-    conversation.tags.includes(COORDINATOR_TAG) ||
-    conversation.tags.includes(WORKER_TAG) ||
-    conversation.tags.includes(ARCHIVED_WORKER_TAG)
-  ) {
-    return false
-  }
-  const badge = badges[String(conversation.id)]
-  if (badge !== undefined) {
-    const groups = parseGroups(index)
-    const g = groups.find((item) => item.id === badge.groupId)
-    if (g === undefined || g.status === 'active') return false
-  }
-  const activeGroup = parseGroups(index).find(
-    (g) => g.coordinatorConversationId === conversation.id && g.status === 'active',
-  )
-  return activeGroup === undefined
 }
 
 // ---------------------------------------------------------------------------
