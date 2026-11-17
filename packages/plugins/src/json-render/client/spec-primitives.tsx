@@ -1,30 +1,64 @@
 /**
- * @json-render 20 个标准原语组件（布局展示 13 + 表单交互 7）。
+ * @json-render standard primitives: 20 components (13 layout/display + 7
+ * form/interaction).
  *
- * 每个原语接收已归一化的 NormalizedSpecNode 与渲染上下文（scope 求值 +
- * 子节点渲染 + 动作执行），无任何插件业务特判；样式全部复用 styles.css
- * 的 .jr-* / .btn / .badge / .card / .list / .tabs 既有类，零新增全局样式。
+ * Each primitive receives the normalized NormalizedSpecNode plus a render
+ * context (scope evaluation + child rendering + action execution) with no
+ * plugin-business special-casing; styling reuses the existing .jr-* / .btn /
+ * .badge / .card / .list / .tabs classes from styles.css — zero new global
+ * styles.
+ *
+ * Display copy discipline: chrome produced by this plugin (fallback labels,
+ * submit states, misuse notices) resolves from copy.ts against the
+ * render-context locale; any text declared in the spec itself (titles,
+ * labels, options) is model output and passes through verbatim. Primitives
+ * are invoked as plain functions (see SpecNodeView), so hooks are not an
+ * option — the locale flows in through the render context.
  */
 import { useEffect, useId, useState, type ReactNode } from 'react'
 import { HelmIcon, Select, Checkbox, Tabs, TabsList, TabsTrigger, PluginSlot, MarkdownText } from '@helm/plugin-client'
+import type { HelmLocale, LocalizedText } from '@helm/plugin-client'
+import { resolveLocalizedText } from '@helm/plugin-client'
 import { evaluateSpecValue, type EvalScope } from './evaluator.ts'
+import {
+  JSON_RENDER_ACTION_LABEL_FALLBACK,
+  JSON_RENDER_BUTTON_LABEL_FALLBACK,
+  JSON_RENDER_INPUT_SUBMIT,
+  JSON_RENDER_INPUT_SUBMITTED,
+  JSON_RENDER_INPUT_SUBMITTING,
+  JSON_RENDER_SECRET_TAG,
+  JSON_RENDER_SLOT_MISSING_NAME,
+  JSON_RENDER_SLOT_NO_HOST,
+  JSON_RENDER_SUBMITTING_HINT,
+  JSON_RENDER_TABLE_ACTIONS_HEADER,
+  JSON_RENDER_TABLE_EMPTY,
+  jsonRenderStepFallbackTitle,
+  jsonRenderUnknownComponent,
+} from './copy.ts'
 import { formatSpecText, normalizeSpec, resolveKeyValueItems, type NormalizedSpecNode } from './spec-normalize.ts'
 
 export interface SpecRenderContext {
-  /** 属性求值作用域（$docs / $sessionDocs / $data / $row / $value）。 */
+  /** Property evaluation scope ($docs / $sessionDocs / $data / $row / $value). */
   scope: EvalScope
-  /** 当前会话上下文（Slot 原语传给子插槽贡献项 scope 过滤；无会话槽位 undefined）。 */
+  /** Active host UI locale for plugin chrome copy (fallback labels, state hints); spec-declared text passes through untranslated. */
+  locale: HelmLocale
+  /** Current conversation context (the Slot primitive passes it to sub-slot contributions for scope filtering; undefined when there is no conversation slot). */
   conversationId?: number
-  /** 当前渲染视图归属插件（Slot 原语解析本插件短名拼接全限定插槽名）。 */
+  /** Owning plugin of the current render view (the Slot primitive resolves its short name into the fully-qualified slot name). */
   pluginId?: string
-  /** 子树渲染入口（原语间互相组合）。 */
+  /** Child-tree render entry (primitives compose with each other). */
   renderChildren(children: NormalizedSpecNode[]): ReactNode
-  /** 执行一条声明式动作指令；pendingKey 相同的按钮进入 loading 防连点。 */
+  /** Execute one declarative action directive; buttons sharing a pendingKey enter loading (double-click guard). */
   runAction(rawAction: unknown, scope: EvalScope, pendingKey: string): void
-  /** 该 pendingKey 的动作是否执行中（loading 防连点）。 */
+  /** Whether the action for this pendingKey is executing (loading double-click guard). */
   isPending(pendingKey: string): boolean
-  /** 该 pendingKey 的动作是否刚成功完成（原地确认态，如按钮打勾）。 */
+  /** Whether the action for this pendingKey just succeeded (in-place confirmation state, e.g. a button check mark). */
   isSucceeded?(pendingKey: string): boolean
+}
+
+/** Resolve plugin display copy against the render-context locale. */
+function tr(ctx: SpecRenderContext, text: LocalizedText): string {
+  return resolveLocalizedText(text, ctx.locale)
 }
 
 function str(value: unknown, fallback = ''): string {
@@ -37,23 +71,25 @@ function bool(value: unknown): boolean {
   return value === true
 }
 
-/** 原语内部再求值（Table 行动作的 $row 注入等场景：局部 scope 覆盖）。 */
+/** Re-evaluate inside a primitive (e.g. $row injection for Table row actions: local scope override). */
 function evalIn<T>(template: unknown, scope: EvalScope): T {
   return evaluateSpecValue<T>(template, scope)
 }
 
 /**
- * 远端值驱动 + 本地未提交输入保护的同步 state：
- * - 远端（SSE 推送）新值到达时同步本地；
- * - 用户本地编辑中（dirty）不覆盖，避免打断输入；
- * - 组件卸载后远端不再拉回（与 React 受控语义一致）。
+ * Remote-value-driven state with local uncommitted-input protection:
+ * - when a new remote value (SSE push) arrives, sync it into local state;
+ * - while the user is editing locally (dirty), never overwrite — avoid
+ *   interrupting input;
+ * - after unmount the remote value no longer pulls back (React controlled semantics).
  */
 function useRemoteSyncedState<T>(remote: T, areEqual: (a: T, b: T) => boolean): [T, (next: T) => void] {
   const [local, setLocal] = useState<T>(remote)
   const [dirty, setDirty] = useState(false)
   useEffect(() => {
     if (!dirty && !areEqual(local, remote)) setLocal(remote)
-    // 仅依赖远端值变化；local/dirty 读取用意即「未提交不覆盖」
+    // Only reacts to remote value changes; reading local/dirty here is
+    // intentional — "never overwrite uncommitted input"
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [remote])
   const update = (next: T) => {
@@ -74,7 +110,7 @@ function setsEqual(a: Set<string>, b: Set<string>): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// 布局与展示（13 个）
+// Layout & display (13)
 // ---------------------------------------------------------------------------
 
 function StackImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderContext }) {
@@ -189,10 +225,12 @@ function MetricCardImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRend
 }
 
 function KeyValueListImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderContext }) {
-  // 不预先 evalIn(items)：pointer key（'/$docs/...'）必须保持原始模板到本阶段再求值，
-  // 否则 key 被提前转为具体值（如 number），resolveKeyValueItems 识别不出而显示破折号
+  // Do not evalIn(items) up front: pointer keys ('/$docs/...') must stay raw
+  // templates until this stage — otherwise the key is already turned into a
+  // concrete value (e.g. a number), resolveKeyValueItems cannot recognize the
+  // spelling and shows a dash
   const items = resolveKeyValueItems(node.props['items'], (expr) => evaluateSpecValue(expr, ctx.scope))
-  // .kv-list 是两列 grid：key 与 value 交替排列即自动成对
+  // .kv-list is a two-column grid: key and value alternate and pair up automatically
   return (
     <div className="kv-list">
       {items.map((item, i) => (
@@ -248,7 +286,7 @@ function StepsImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCon
   const rawItems = evalIn<unknown>(node.props['items'] ?? node.props['steps'], ctx.scope)
   const items = Array.isArray(rawItems)
     ? (rawItems as Array<Record<string, unknown>>).map((raw, i) => ({
-        title: str(raw['title'] ?? raw['label'], `步骤 ${i + 1}`),
+        title: str(raw['title'] ?? raw['label'], jsonRenderStepFallbackTitle(i + 1, ctx.locale)),
         detail: str(raw['detail']),
         status: str(raw['status'], 'pending'),
       }))
@@ -334,8 +372,10 @@ function TableImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCon
     : []
   const rawRows = evalIn<unknown>(node.props['rows'], ctx.scope)
   const rows: Array<Record<string, unknown>> = Array.isArray(rawRows) ? (rawRows as Array<Record<string, unknown>>) : []
-  // rowActions 保留原始模板：其中 {$row.xxx} 依赖行级 scope，在外层求值会被
-  // 提前插值成空串（点击时无法恢复）；行渲染时才注入 $row 求值
+  // rowActions keep their raw templates: {$row.xxx} inside them depends on
+  // the row-level scope — evaluating at the outer layer would interpolate them
+  // into empty strings too early (unrecoverable at click time); they are
+  // evaluated at row-render time with $row injected
   const rawRowActions = node.props['rowActions']
   const rowActions = Array.isArray(rawRowActions) ? (rawRowActions as Array<Record<string, unknown>>) : []
   const empty = str(evalIn(node.props['empty'], ctx.scope))
@@ -353,7 +393,7 @@ function TableImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCon
               {headerLabels.map((label, i) => (
                 <th key={i}>{label}</th>
               ))}
-              {rowActions.length > 0 && <th style={{ textAlign: 'right' }}>操作</th>}
+              {rowActions.length > 0 && <th style={{ textAlign: 'right' }}>{tr(ctx, JSON_RENDER_TABLE_ACTIONS_HEADER)}</th>}
             </tr>
           </thead>
         )}
@@ -361,12 +401,13 @@ function TableImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCon
           {rows.length === 0 && (
             <tr>
               <td colSpan={colSpan} style={{ color: 'var(--fg-muted)' }}>
-                {empty !== '' ? empty : '暂无数据'}
+                {empty !== '' ? empty : tr(ctx, JSON_RENDER_TABLE_EMPTY)}
               </td>
             </tr>
           )}
           {rows.map((row, i) => {
-            // 行级 scope：当前行对象注入 $row，rowActions 求值时保持 row 字段原始类型
+            // Row-level scope: the current row object is injected as $row, so
+            // rowActions evaluation keeps the raw types of the row fields
             const rowScope: EvalScope = { ...ctx.scope, $row: row }
             const pendingKey = `${tableId}-row-${i}`
             return (
@@ -380,7 +421,7 @@ function TableImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCon
                       {rowActions.map((ra, k) => (
                         <RowActionButton
                           key={k}
-                          label={str(evalIn(ra['label'], rowScope), '操作')}
+                          label={str(evalIn(ra['label'], rowScope), tr(ctx, JSON_RENDER_ACTION_LABEL_FALLBACK))}
                           tone={str(evalIn(ra['tone'], rowScope))}
                           pending={ctx.isPending(`${pendingKey}-${k}`)}
                           succeeded={ctx.isSucceeded?.(`${pendingKey}-${k}`) === true}
@@ -399,7 +440,7 @@ function TableImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCon
   )
 }
 
-/** 交互按钮的确认/加载图标：pending 优先于 succeeded（新一轮请求中不显示旧 check）。 */
+/** Confirm/loading icon for interactive buttons: pending wins over succeeded (no stale check mark during a new request round). */
 function actionIconState(pending: boolean, succeeded: boolean, icon: string): { name: string | null; className?: string } {
   if (pending) return { name: 'loader', className: 'spin-slow' }
   if (succeeded) return { name: 'check' }
@@ -466,7 +507,7 @@ function AccordionImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRende
 }
 
 // ---------------------------------------------------------------------------
-// 表单与交互（7 个）
+// Forms & interaction (7)
 // ---------------------------------------------------------------------------
 
 function TextInputImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderContext }) {
@@ -475,7 +516,7 @@ function TextInputImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRende
   const secret = bool(evalIn(node.props['secret'], ctx.scope))
   const evaluatedValue = evalIn<unknown>(node.props['value'], ctx.scope)
   const remote = typeof evaluatedValue === 'string' ? evaluatedValue : ''
-  // SSE 后续推送的 value 同步到本地；用户未提交的本地输入不被覆盖
+  // Later SSE-pushed values sync into local state; the user's uncommitted local input is never overwritten
   const [text, setText] = useRemoteSyncedState(remote, strictEquals)
   const pendingKey = useId()
   const pending = ctx.isPending(pendingKey)
@@ -485,7 +526,7 @@ function TextInputImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRende
       {label !== '' && (
         <span style={{ fontSize: 12, color: 'var(--fg-secondary)' }}>
           {label}
-          {secret && <span style={{ color: 'var(--warn)' }}>（机密）</span>}
+          {secret && <span style={{ color: 'var(--warn)' }}>{tr(ctx, JSON_RENDER_SECRET_TAG)}</span>}
         </span>
       )}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
@@ -512,7 +553,11 @@ function TextInputImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRende
             ) : succeeded ? (
               <HelmIcon name="check" size={12} />
             ) : null}
-            {pending ? '提交中' : succeeded ? '已提交' : '提交'}
+            {pending
+              ? tr(ctx, JSON_RENDER_INPUT_SUBMITTING)
+              : succeeded
+                ? tr(ctx, JSON_RENDER_INPUT_SUBMITTED)
+                : tr(ctx, JSON_RENDER_INPUT_SUBMIT)}
           </button>
         )}
       </div>
@@ -553,12 +598,14 @@ function SelectImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCo
 function SwitchImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderContext }) {
   const label = str(evalIn(node.props['label'], ctx.scope))
   const evaluated = evalIn<unknown>(node.props['value'], ctx.scope)
-  // checked 每次渲染都从远端 scope 重新求值：SSE 推送的新布尔值自然同步，无需本地 state
+  // checked is re-evaluated from the remote scope on every render: new
+  // booleans pushed over SSE sync naturally, no local state needed
   const checked = typeof evaluated === 'boolean' ? evaluated : bool(evaluated)
   const pendingKey = useId()
   const pending = ctx.isPending(pendingKey)
   const toggle = () => {
-    // 新布尔值注入 $value 后触发 action（superagent set_router_mode 真实写法）
+    // Trigger the action with the new boolean injected as $value (the
+    // real-world superagent set_router_mode spelling)
     ctx.runAction(node.props['action'], { ...ctx.scope, $value: !checked }, pendingKey)
   }
   return (
@@ -651,7 +698,7 @@ function CheckboxGroupImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecR
       {pending && (
         <span style={{ fontSize: 11, color: 'var(--fg-muted)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
           <HelmIcon name="loader" size={11} />
-          正在提交...
+          {tr(ctx, JSON_RENDER_SUBMITTING_HINT)}
         </span>
       )}
     </div>
@@ -665,10 +712,10 @@ const BUTTON_VARIANT_CLASS: Record<string, string> = {
 }
 
 function ButtonImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderContext }) {
-  const label = str(evalIn(node.props['label'] ?? node.props['text'], ctx.scope), '按钮')
+  const label = str(evalIn(node.props['label'] ?? node.props['text'], ctx.scope), tr(ctx, JSON_RENDER_BUTTON_LABEL_FALLBACK))
   const icon = str(evalIn(node.props['icon'], ctx.scope))
   const variant = str(evalIn(node.props['variant'], ctx.scope))
-  // 节点级唯一 pendingKey：多个 Button 并存时互不禁用
+  // Node-unique pendingKey: multiple coexisting Buttons never disable each other
   const pendingKey = useId()
   const pending = ctx.isPending(pendingKey)
   const succeeded = ctx.isSucceeded?.(pendingKey) === true
@@ -696,10 +743,10 @@ function ActionBarImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRende
     return (
       <div className="stack-row">
         {actions.map((a, i) => {
-          const label = str(evalIn(a['label'], ctx.scope), '操作')
+          const label = str(evalIn(a['label'], ctx.scope), tr(ctx, JSON_RENDER_ACTION_LABEL_FALLBACK))
           const icon = str(evalIn(a['icon'], ctx.scope))
           const variant = str(evalIn(a['variant'], ctx.scope))
-          // 节点级唯一前缀 + 按钮序号：多个 ActionBar 并存时互不禁用
+          // Node-unique prefix + button index: multiple coexisting ActionBars never disable each other
           const pendingKey = `${actionBarId}-${i}`
           const pending = ctx.isPending(pendingKey)
           const succeeded = ctx.isSucceeded?.(pendingKey) === true
@@ -759,7 +806,7 @@ function TabsImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCont
   )
 }
 
-/** Tab 的 children 是求值前的原始 JSON（树状简写数组），需现场归一化再渲染。 */
+/** Tab children are raw, unevaluated JSON (a tree-shorthand array); normalize them on the spot before rendering. */
 function TabChildren({ childrenRaw, ctx }: { childrenRaw: unknown; ctx: SpecRenderContext }) {
   if (!Array.isArray(childrenRaw)) return null
   const normalized = normalizeSpec({ component: 'Stack', children: childrenRaw })
@@ -768,7 +815,8 @@ function TabChildren({ childrenRaw, ctx }: { childrenRaw: unknown; ctx: SpecRend
 }
 
 // ---------------------------------------------------------------------------
-// Slot 原语：声明式轨道的插件间子插槽注入（复用 client 轨 <PluginSlot />）
+// Slot primitive: cross-plugin sub-slot injection on the declarative track
+// (reuses the client track's <PluginSlot />)
 // ---------------------------------------------------------------------------
 
 function SlotImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderContext }) {
@@ -780,7 +828,7 @@ function SlotImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCont
     return (
       <div className="callout callout--warning">
         <HelmIcon name="alert-triangle" size={13} />
-        <span>Slot 原语缺少 name 属性</span>
+        <span>{tr(ctx, JSON_RENDER_SLOT_MISSING_NAME)}</span>
       </div>
     )
   }
@@ -788,7 +836,7 @@ function SlotImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCont
     return (
       <div className="callout callout--warning">
         <HelmIcon name="alert-triangle" size={13} />
-        <span>Slot 原语仅在插件视图内可用（聊天代码块无插件宿主）</span>
+        <span>{tr(ctx, JSON_RENDER_SLOT_NO_HOST)}</span>
       </div>
     )
   }
@@ -805,12 +853,12 @@ function SlotImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCont
 }
 
 // ---------------------------------------------------------------------------
-// 分发表
+// Dispatch table
 // ---------------------------------------------------------------------------
 
 export type SpecPrimitiveImpl = (args: { node: NormalizedSpecNode; ctx: SpecRenderContext }) => ReactNode
 
-/** 本插件私有的原语名契约（从 protocol 迁出；注册表见文件尾）。 */
+/** Primitive-name contract private to this plugin (migrated out of protocol; registry at the end of this file). */
 export type SpecPrimitiveName =
   | 'Stack' | 'Card' | 'Text' | 'Badge' | 'Markdown'
   | 'MetricGrid' | 'MetricCard' | 'KeyValueList' | 'Callout'
@@ -842,21 +890,21 @@ const PRIMITIVES: Record<SpecPrimitiveName, SpecPrimitiveImpl> = {
   Slot: SlotImpl,
 }
 
-/** 渲染一个归一化节点（未知组件显式提示，不静默吞掉）。 */
+/** Render one normalized node (unknown components get an explicit notice, never silently swallowed). */
 export function SpecNodeView({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderContext }): ReactNode {
   const impl = (PRIMITIVES as Record<string, SpecPrimitiveImpl | undefined>)[node.component]
   if (impl === undefined) {
     return (
       <div className="callout callout--warning">
         <HelmIcon name="alert-triangle" size={13} />
-        <span>未注册的组件: {node.component}</span>
+        <span>{jsonRenderUnknownComponent(node.component, ctx.locale)}</span>
       </div>
     )
   }
   return impl({ node, ctx })
 }
 
-/** 渲染一组归一化节点。 */
+/** Render a list of normalized nodes. */
 export function SpecNodeList({ nodes, ctx }: { nodes: NormalizedSpecNode[]; ctx: SpecRenderContext }): ReactNode {
   return (
     <>

@@ -1,16 +1,17 @@
 /**
- * @json-render 表达式求值器（支持原始 JS 类型保持 Type Preservation）。
+ * @json-render expression evaluator (supports raw JS type preservation).
  *
- * 统一兼容三种路径语法：
- * 1. 花括号点路径：`{$docs.index.workers}`、`{$data.entry.data.meta.summary}`、`{$row.conversationId}`、`{$value}`
- * 2. 花括号带方括号字符串键：`{$docs["recall-graph"].nodes}`、`{$docs['recall-graph'].nodes[0]}`
- * 3. 斜杠 JSON Pointer 路径：`/$docs/index/routerConversationId`
+ * Accepts three path syntaxes uniformly:
+ * 1. Brace dot paths: `{$docs.index.workers}`, `{$data.entry.data.meta.summary}`, `{$row.conversationId}`, `{$value}`
+ * 2. Brace paths with bracketed string keys: `{$docs["recall-graph"].nodes}`, `{$docs['recall-graph'].nodes[0]}`
+ * 3. Slash-style JSON Pointer paths: `/$docs/index/routerConversationId`
  *
- * 类型保持铁律（Type Preservation）：
- * - 当整个字符串恰好为单个 `{...}` 表达式或单个 `/$...` JSON Pointer 时，
- *   原样返回底层 JS 值（Array / boolean / number / object / null / string），绝不强转为 string；
- * - 仅当 `{...}` 嵌于长文本中（如 `"活跃 Worker {$docs.index.workers.length} 个"` 或 `"conversation:{$row.conversationId}"`）时，
- *   才执行字符串插值拼接。
+ * Type-preservation rule:
+ * - When the whole string is exactly one `{...}` expression or one `/$...`
+ *   JSON Pointer, return the underlying JS value (Array / boolean / number /
+ *   object / null / string) as-is — never coerce it to a string;
+ * - Only when `{...}` is embedded inside a longer text (e.g. `"active workers: {$docs.index.workers.length}"`
+ *   or `"conversation:{$row.conversationId}"`) do we interpolate into a string.
  */
 
 export interface EvalScope {
@@ -22,8 +23,8 @@ export interface EvalScope {
 }
 
 /**
- * 将路径表达式（不含外层 `{}`）解析为路径段数组。
- * 例如：
+ * Parse a path expression (without the surrounding `{}`) into path segments.
+ * Examples:
  * - `$docs.index.workers.length` -> `['$docs', 'index', 'workers', 'length']`
  * - `$docs["recall-graph"].nodes[0]` -> `['$docs', 'recall-graph', 'nodes', '0']`
  * - `/$docs/index/routerConversationId` -> `['$docs', 'index', 'routerConversationId']`
@@ -90,8 +91,9 @@ export function parseExpressionSegments(rawExpr: string): string[] {
   return segments
 }
 
-// 只读 own property：非自有键一律 undefined，天然阻断 __proto__ / constructor /
-// prototype 等原型链路径（它们都不是普通对象的 own property），也无法触发 getter 逃逸。
+// Read own properties only: non-own keys resolve to undefined, which blocks
+// prototype-chain paths like __proto__ / constructor / prototype (none of them
+// is an own property of a plain object) and cannot trigger getter escapes.
 function readOwnSegment(target: Record<string, unknown>, seg: string): unknown {
   return Object.prototype.hasOwnProperty.call(target, seg) ? target[seg] : undefined
 }
@@ -123,7 +125,7 @@ export function resolvePathInScope(rawExpr: string, scope: EvalScope): unknown {
 const SINGLE_BRACE_EXPR_RE = /^\{([^{}]+)\}$/
 const MULTI_BRACE_EXPR_RE = /\{([^{}]+)\}/g
 
-/** 判断花括号内是否为合法绑定表达式：必须以 $ 开头的路径（$docs/$data/$row/$value 等，含裸 $value）。 */
+/** Whether the content inside braces is a bindable expression: a `$`-prefixed path ($docs/$data/$row/$value, including a bare $value). */
 function isBindableExpression(expr: string): boolean {
   return /^\$[\w$]*(\.|\[|$)/.test(expr)
 }
@@ -141,11 +143,11 @@ function interpolate(template: string, scope: EvalScope): string {
 }
 
 /**
- * 求值单个字符串或任意嵌套 JSON 值：
- * - 若整串是 `"{$docs.index.workers}"` 或 `"/$docs/index/routerConversationId"`，返回原始 JS 值；
- * - 若字符串内含多个或内嵌 `{...}`，返回插值后的字符串；
- * - 花括号内非 `$` 路径开头（如 JSON 示例 `{"enabled":true}`）视为普通文本原样保留；
- * - 若输入为数组或纯对象，递归求值其每个元素/属性。
+ * Evaluate a single string or an arbitrarily nested JSON value:
+ * - If the whole string is `"{$docs.index.workers}"` or `"/$docs/index/routerConversationId"`, return the raw JS value;
+ * - If the string contains multiple or embedded `{...}` fragments, return the interpolated string;
+ * - Brace content not starting with a `$` path (e.g. a JSON sample like `{"enabled":true}`) is treated as plain text and kept verbatim;
+ * - Arrays and plain objects are evaluated recursively, element by element / property by property.
  */
 export function evaluateSpecValue<T = unknown>(template: unknown, scope: EvalScope): T {
   if (typeof template === 'string') {

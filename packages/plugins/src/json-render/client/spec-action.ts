@@ -1,20 +1,42 @@
 /**
- * 声明式动作指令求值（纯逻辑）。
+ * Declarative action directive resolution (pure logic).
  *
- * 三个标准指令（与内核内置插件的真实写法一一对应）：
- * - helm:action：{ type: 'helm:action', actionId, input?, pluginId? }
- * - helm:open  ：{ type: 'helm:open', target, split? }
- * - helm:send  ：{ type: 'helm:send', target?, text, whenBusy? }
- *   仅当 target 字段完全省略（undefined/null）或显式写 'current' /
- *   'conversation:current' 时才回退到当前会话（defaultConversationId）；
- *   声明里明确提供了 target 时，求值结果 undefined/null/空串/非法值一律
- *   显式 invalid（整串模板表达式路径缺失会求值出 undefined，静默回退会把
- *   消息发错会话），绝不带 default 回退。
+ * Three standard directives (mirroring the real-world spellings inside the
+ * kernel's built-in plugins):
+ * - helm:action: { type: 'helm:action', actionId, input?, pluginId? }
+ * - helm:open  : { type: 'helm:open', target, split? }
+ * - helm:send  : { type: 'helm:send', target?, text, whenBusy? }
+ *   Falling back to the current conversation (defaultConversationId) is only
+ *   allowed when the target field is entirely omitted (undefined/null) or
+ *   explicitly written as 'current' / 'conversation:current'; when the
+ *   declaration explicitly provides a target, an evaluated result of
+ *   undefined/null/empty/invalid is always an explicit invalid (a
+ *   whole-template expression with a missing path evaluates to undefined —
+ *   silently falling back would send the message to the wrong conversation),
+ *   never a default fallback.
  *
- * 求值规则：input / target / text 都是模板值，经 evaluateSpecValue 在当前
- * scope（含 $row / $value / $data）求值，保持原始 JS 类型（数字不转字符串）。
+ * Evaluation rules: input / target / text are template values evaluated via
+ * evaluateSpecValue in the current scope (including $row / $value / $data),
+ * preserving raw JS types (numbers stay numbers).
+ *
+ * Invalid-kind messages are display copy surfaced to the user via host
+ * notifications, so they resolve against the host locale (execution errors
+ * from the host pass through unchanged).
  */
+import type { HelmLocale } from '@helm/plugin-client'
+import { DEFAULT_HELM_LOCALE } from '@helm/plugin-client'
 import { evaluateSpecValue, type EvalScope } from './evaluator.js'
+import {
+  jsonRenderActionMissingActionId,
+  jsonRenderActionNotObject,
+  jsonRenderOpenTargetEmpty,
+  jsonRenderSendNoTargetNoDefault,
+  jsonRenderSendTargetEvaluatedInvalid,
+  jsonRenderSendTargetInvalid,
+  jsonRenderSendTextEmpty,
+  jsonRenderSendWhenBusyInvalid,
+  jsonRenderUnknownActionType,
+} from './copy.ts'
 
 export type SpecAction =
   | { type: 'helm:action'; actionId: string; input?: Record<string, unknown>; pluginId?: string }
@@ -43,16 +65,18 @@ export interface ResolvedSpecSend {
 
 export type ResolvedSpecDirective = ResolvedSpecAction | ResolvedSpecOpen | ResolvedSpecSend
 
-/** 安全正整数会话 ID 判定（含 2^53 上界，拒绝 Infinity/小数/0/负数）。 */
+/** Safe positive-integer conversation id check (with the 2^53 bound; rejects Infinity/fractions/0/negatives). */
 function safeConversationId(value: unknown): number | null {
   return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : null
 }
 
 /**
- * helm:send 目标解析：
- * - undefined（字段缺省）或显式 'current' / 'conversation:current' → 默认会话；
- * - number 正整数 / 'conversation:<id>' / 纯数字字符串 → 定向 ID；
- * - null / 空串 / 空白串（常见于模板求值失败）与其它非法值 → null（显式 invalid，绝不静默路由）。
+ * helm:send target resolution:
+ * - undefined (field omitted) or explicit 'current' / 'conversation:current' -> the default conversation;
+ * - a positive integer / 'conversation:<id>' / a pure digit string -> the targeted id;
+ * - null / empty / blank strings (typical products of failed template
+ *   evaluation) and any other invalid value -> null (explicitly invalid,
+ *   never silently routed).
  */
 export function parseSendTarget(target: unknown, defaultConversationId?: number): number | null {
   const resolveDefault = (): number | null => safeConversationId(defaultConversationId)
@@ -70,17 +94,19 @@ export function parseSendTarget(target: unknown, defaultConversationId?: number)
 }
 
 /**
- * 求值一条声明式动作（未知 type / 非法载荷返回 kind: 'invalid' 描述）。
- * evaluateSpecValue 递归求 input：`{ workerConversationId: '{$row.conversationId}' }`
- * 在 $row 注入后保持 number；`{ enabled: '{$value}' }` 保持 boolean。
+ * Resolve one declarative action (unknown type / invalid payload returns a
+ * kind: 'invalid' description). evaluateSpecValue recurses into input:
+ * `{ workerConversationId: '{$row.conversationId}' }` keeps the number once
+ * $row is injected; `{ enabled: '{$value}' }` keeps the boolean.
  */
 export function resolveSpecAction(
   raw: unknown,
   scope: EvalScope,
   defaultConversationId?: number,
+  locale: HelmLocale = DEFAULT_HELM_LOCALE,
 ): ResolvedSpecDirective | { kind: 'invalid'; message: string } {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
-    return { kind: 'invalid', message: 'action 不是对象' }
+    return { kind: 'invalid', message: jsonRenderActionNotObject(locale) }
   }
   const action = raw as Record<string, unknown>
   const type = action['type']
@@ -88,7 +114,7 @@ export function resolveSpecAction(
   if (type === 'helm:action') {
     const actionId = action['actionId']
     if (typeof actionId !== 'string' || actionId.trim() === '') {
-      return { kind: 'invalid', message: 'helm:action 缺少 actionId' }
+      return { kind: 'invalid', message: jsonRenderActionMissingActionId(locale) }
     }
     const inputRaw = evaluateSpecValue(action['input'] ?? {}, scope)
     const input =
@@ -107,23 +133,29 @@ export function resolveSpecAction(
   if (type === 'helm:open') {
     const target = evaluateSpecValue<string>(action['target'], scope)
     if (typeof target !== 'string' || target.trim() === '') {
-      return { kind: 'invalid', message: 'helm:open 求值后 target 为空' }
+      return { kind: 'invalid', message: jsonRenderOpenTargetEmpty(locale) }
     }
     return { kind: 'open', target, split: action['split'] === true }
   }
 
   if (type === 'helm:send') {
-    // 原始字段检查：声明里明确提供了 target（非 undefined）且不是显式 current 时，
-    // 求值结果 undefined/null/空都必须 invalid——整串模板表达式路径缺失会求值出
-    // undefined，把它当「省略」回退默认会话会把消息发错会话（浏览器实测 bug）。
+    // Raw-field check: when the declaration explicitly provides a target (not
+    // undefined) that is not an explicit current, an evaluated result of
+    // undefined/null/empty must be invalid — a whole-template expression with
+    // a missing path evaluates to undefined, and treating that as "omitted"
+    // would fall back to the default conversation and send the message to the
+    // wrong conversation (a bug observed in the browser).
     const rawTarget = action['target']
     const explicitCurrent =
       typeof rawTarget === 'string' &&
       (rawTarget.trim() === 'current' || rawTarget.trim() === 'conversation:current')
     const evaluatedTarget = evaluateSpecValue(rawTarget, scope)
-    // 仅字段完全缺省（undefined）或显式 current 才允许回退默认会话；
-    // null、空串、求值失败的模板都是「声明里明确提供了 target」，一律 invalid
-    //（整串模板表达式路径缺失会求值出 undefined，静默回退会把消息发错会话）。
+    // Only a fully omitted field (undefined) or an explicit current may fall
+    // back to the default conversation; null, empty strings and failed
+    // template evaluations all mean "the declaration explicitly provided a
+    // target" and are invalid (a whole-template expression with a missing
+    // path evaluates to undefined — silently falling back would send the
+    // message to the wrong conversation).
     const targetOmitted = rawTarget === undefined || explicitCurrent
     const conversationId = targetOmitted
       ? parseSendTarget(explicitCurrent ? 'current' : undefined, defaultConversationId)
@@ -133,20 +165,20 @@ export function resolveSpecAction(
       return {
         kind: 'invalid',
         message: targetOmitted
-          ? 'helm:send 缺少 target 且当前视图无默认会话：请显式指定 conversation:<id>'
+          ? jsonRenderSendNoTargetNoDefault(locale)
           : hasDefault
-            ? `helm:send target 求值后无效（${JSON.stringify(evaluatedTarget) ?? String(evaluatedTarget)}，通常为模板路径缺失）：应为 conversation:<id> 或正整数`
-            : 'helm:send target 无效：应为 conversation:<id>、正整数或显式 current',
+            ? jsonRenderSendTargetEvaluatedInvalid(JSON.stringify(evaluatedTarget) ?? String(evaluatedTarget), locale)
+            : jsonRenderSendTargetInvalid(locale),
       }
     }
     const text = evaluateSpecValue<string>(action['text'], scope)
     if (typeof text !== 'string' || text.trim() === '') {
-      return { kind: 'invalid', message: 'helm:send 求值后 text 为空' }
+      return { kind: 'invalid', message: jsonRenderSendTextEmpty(locale) }
     }
-    // whenBusy 有值但不合法 → 显式 invalid（不静默丢弃拼写错误）
+    // whenBusy present but invalid -> explicit invalid (typos are not silently dropped)
     const whenBusyRaw = evaluateSpecValue(action['whenBusy'], scope)
     if (whenBusyRaw !== undefined && whenBusyRaw !== null && whenBusyRaw !== 'steer' && whenBusyRaw !== 'followUp' && whenBusyRaw !== 'reject') {
-      return { kind: 'invalid', message: `helm:send whenBusy 无效：${String(whenBusyRaw)}（应为 steer | followUp | reject）` }
+      return { kind: 'invalid', message: jsonRenderSendWhenBusyInvalid(String(whenBusyRaw), locale) }
     }
     return {
       kind: 'send',
@@ -158,5 +190,5 @@ export function resolveSpecAction(
     }
   }
 
-  return { kind: 'invalid', message: `未知的动作类型: ${String(type)}` }
+  return { kind: 'invalid', message: jsonRenderUnknownActionType(String(type), locale) }
 }

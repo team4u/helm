@@ -84,7 +84,10 @@ test('spec-normalize: 循环引用不致死循环', { timeout: 60_000 }, () => {
   // 整体不降级（根合法），循环子节点成为局部降级节点
   assert.equal(result.degraded, false)
   const cycleChild = result.root!.children[0]!.children[0]!
-  assert.ok(String(cycleChild.props['reason']).includes('循环'))
+  assert.ok(String(cycleChild.props['reason']).includes('circular'))
+  // 显式 zh-CN：降级原因走中文口径（显示文案跟随宿主 locale）
+  const zhResult = normalizeSpec(spec, 'zh-CN')
+  assert.ok(String(zhResult.root!.children[0]!.children[0]!.props['reason']).includes('循环引用'))
 })
 
 // ---------------------------------------------------------------------------
