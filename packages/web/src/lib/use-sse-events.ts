@@ -301,7 +301,7 @@ function dispatchFrameSideEffects(
   if (deletedConversationId !== undefined) {
     ctx.unreadClearInFlight.current.delete(deletedConversationId)
     ctx.unreadClearedSeq.current.delete(deletedConversationId)
-    // 删除导航唯一 truths：仅当被删的正是当前主屏/分屏/抽屉目标时，
+    // 删除导航唯一事实源：仅当被删的正是当前主屏/分屏/抽屉目标时，
     // 以 replace 回到该智能体待命态（无 Profile 信息时显式回角色中心）；
     // 绝不选中其他会话，批量连续删除不闪烁，用户已切走时不覆盖新导航。
     const fallback = deletedConversationFallbackTarget(deletedSummary)

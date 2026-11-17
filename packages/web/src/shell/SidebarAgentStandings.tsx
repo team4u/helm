@@ -7,7 +7,6 @@ import { useWebLocale } from '../i18n/use-web-locale.js'
 import { Tooltip } from '../ui/Tooltip.js'
 import { ConversationRowActionsMenu } from '../ui/ConversationRowActionsMenu.js'
 import { ConfirmDialog } from '../ui/AlertDialog.js'
-import type { HelmStoreValue } from '../lib/types.js'
 import {
   AGENT_SUB_LIST_PREVIEW,
   activeConversationIdsOf,
@@ -21,6 +20,7 @@ import {
   openAgentStandby,
   presenceNavClassSuffix,
   type AgentStanding,
+  type SidebarStoreView,
 } from './sidebar-model.js'
 import {
   resolveStandingStatusIndicator,
@@ -89,7 +89,7 @@ function AgentStandingItem({
   onToggleSelect,
 }: {
   agent: AgentStanding
-  store: HelmStoreValue
+  store: SidebarStoreView
   background: ConversationBackgroundIndex
   activeProfileIds: ReadonlySet<string>
   activeConversationIds: ReadonlySet<number>
@@ -246,7 +246,7 @@ function AgentConversationsList({
   onToggleSelect,
 }: {
   agent: AgentStanding
-  store: HelmStoreValue
+  store: SidebarStoreView
   background: ConversationBackgroundIndex
   activeConversationIds: ReadonlySet<number>
   searching: boolean
@@ -319,7 +319,7 @@ function AgentConversationRow({
   onToggleSelect,
 }: {
   conv: ConversationSummary
-  store: HelmStoreValue
+  store: SidebarStoreView
   background?: ConversationBackgroundActivity
   batchMode?: boolean
   selected?: boolean
@@ -395,7 +395,7 @@ export function AgentStandingsGroup({
   background,
   onNavigate,
 }: {
-  store: HelmStoreValue
+  store: SidebarStoreView
   background: ConversationBackgroundIndex
   onNavigate?: () => void
 }) {

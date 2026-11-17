@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { SegmentedControl } from '@helm/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { conversationsApi } from '../lib/api.js'
-import { useHelmStore } from '../lib/store-context.js'
+import { useStoreActions } from '../lib/store-context.js'
 import { isMarkdown, looksLikeText, shouldDecodeText } from './artifact-preview-text.js'
 import { detectLanguage } from './code-language.js'
 import { FilePreviewBody } from './FilePreviewBody.js'
@@ -44,7 +44,7 @@ export function WorkspaceFilePreviewModal({
   onClose,
   inline,
 }: WorkspaceFilePreviewModalProps): ReactNode {
-  const store = useHelmStore()
+  const { pushNotice } = useStoreActions()
   const { t } = useWebLocale()
   const [state, setState] = useState<FilePreviewLoadState>({ phase: 'loading' })
   const [view, setView] = useState<'rich' | 'source'>(() => (startLine !== undefined ? 'source' : 'rich'))
@@ -124,7 +124,7 @@ export function WorkspaceFilePreviewModal({
     void conversationsApi
       .downloadWorkspaceFileToBrowser(conversationId, path, fileName)
       .catch((error: unknown) =>
-        store.pushNotice({
+        pushNotice({
           type: 'notification',
           level: 'error',
           title: t('conv.artifact.downloadFailed'),

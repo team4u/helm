@@ -1,7 +1,7 @@
-import React, { useContext, useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { assetsApi, type ModelDescriptor } from '../lib/api.js'
 import { HelmIcon, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle } from '@helm/plugin-client'
-import { HelmStoreContext } from '../lib/store-context.js'
+import { useOptionalModels, useOptionalStoreActions } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { ConfirmDialog } from '../ui/AlertDialog.js'
 import {
@@ -48,9 +48,10 @@ export function ModelDetailDrawer({
   onSave,
   onTestConnection,
 }: ModelDetailDrawerProps): React.JSX.Element {
-  const store = useContext(HelmStoreContext)
+  const storeModels = useOptionalModels()
+  const actions = useOptionalStoreActions()
   const { t } = useWebLocale()
-  const catalogModels = availableModels ?? store?.models ?? []
+  const catalogModels = availableModels ?? storeModels ?? []
 
   // Regular provider form state
   const [apiKey, setApiKey] = useState('')
@@ -229,8 +230,8 @@ export function ModelDetailDrawer({
     setSaveError(null)
     try {
       const res = await assetsApi.refreshModels([provider.id])
-      if (store?.refreshAssets) {
-        await store.refreshAssets()
+      if (actions?.refreshAssets) {
+        await actions.refreshAssets()
       }
       const refreshError = res.errors?.[provider.id]
       if (refreshError) {
@@ -240,7 +241,7 @@ export function ModelDetailDrawer({
       } else {
         setSaveSuccess(true)
         setTimeout(() => setSaveSuccess(false), 2400)
-        store?.pushNotice?.({
+        actions?.pushNotice?.({
           type: 'notification',
           level: 'info',
           title: t('models.notice.catalogRefreshed'),
@@ -262,10 +263,10 @@ export function ModelDetailDrawer({
     try {
       await assetsApi.deleteCredential(provider.id)
       setApiKey('')
-      if (store?.refreshAssets) {
-        await store.refreshAssets()
+      if (actions?.refreshAssets) {
+        await actions.refreshAssets()
       }
-      store?.pushNotice?.({
+      actions?.pushNotice?.({
         type: 'notification',
         level: 'info',
         title: t('models.notice.secretDeleted'),
@@ -303,8 +304,8 @@ export function ModelDetailDrawer({
         })
       } else if (apiKey.trim()) {
         await assetsApi.setCredential(provider.id, apiKey.trim())
-        if (store?.refreshAssets) {
-          await store.refreshAssets()
+        if (actions?.refreshAssets) {
+          await actions.refreshAssets()
         }
       }
       setSaveSuccess(true)

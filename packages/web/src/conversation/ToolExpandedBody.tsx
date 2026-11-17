@@ -24,7 +24,7 @@ import { Fragment, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ToolEditDiff } from '@helm/protocol/browser'
 import { HelmIcon, CopyButton } from '@helm/plugin-client'
-import { useHelmStore } from '../lib/store-context.js'
+import { useStoreActions } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { formatBytes } from '../lib/format.js'
 import { SyntaxCode } from './SyntaxCode.js'
@@ -653,7 +653,7 @@ function GenericToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
 // ---------------------------------------------------------------------------
 
 function ArtifactEntry({ tool, conversationId }: { tool: ToolTrace; conversationId: number }): ReactNode {
-  const store = useHelmStore()
+  const { setActiveModal } = useStoreActions()
   const { t } = useWebLocale()
   const artifactRef = tool.artifactRef
   if (artifactRef === undefined) return null
@@ -661,7 +661,7 @@ function ArtifactEntry({ tool, conversationId }: { tool: ToolTrace; conversation
     <button
       type="button"
       className="btn btn-sm btn-primary"
-      onClick={() => store.setActiveModal({ kind: 'artifact-preview', artifactId: artifactRef, conversationId })}
+      onClick={() => setActiveModal({ kind: 'artifact-preview', artifactId: artifactRef, conversationId })}
     >
       <HelmIcon name="external-link" size={12} />
       {t('conv.tool.openFullArtifact', { id: artifactRef })}

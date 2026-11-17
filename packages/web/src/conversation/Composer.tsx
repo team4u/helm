@@ -1,11 +1,20 @@
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ComposerScopeProps, ConversationSummary } from '@helm/protocol/browser'
 import { COMPOSER_DOCK_SLOT, COMPOSER_STATUS_SLOT, resolveLocalizedText } from '@helm/protocol/browser'
 import { conversationsApi } from '../lib/api.js'
 import { buildSlashMenuItems, pluginSlashCommandsFor } from '../lib/commands-model.js'
 import { HelmIcon, PluginSlot } from '@helm/plugin-client'
 import { matchesUiScope } from '../lib/types.js'
-import { useHelmStore } from '../lib/store-context.js'
+import {
+  HelmStoreContext,
+  useConversationDetail,
+  useGroupedUi,
+  useHelmExternalStore,
+  useModels,
+  usePlugins,
+  useProfilesSlice,
+  useSkills,
+} from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { collectEnabledPluginIds } from '../shell/sidebar-model.js'
 import { slashMenuSkills } from './slash-menu-skills.js'
@@ -72,7 +81,14 @@ function ContextUsageStatus({ conversation }: { conversation: ConversationSummar
 }
 
 export function Composer({ conversation, prefill, onSendingChange, onNewThread }: ComposerProps) {
-  const store = useHelmStore()
+  const externalStore = useHelmExternalStore()
+  const legacyStore = useContext(HelmStoreContext)
+  const detail = useConversationDetail(conversation.id)
+  const groupedUi = useGroupedUi()
+  const plugins = usePlugins()
+  const { profiles } = useProfilesSlice()
+  const skills = useSkills()
+  const models = useModels()
   const { locale, t } = useWebLocale()
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const composerBoxRef = useRef<HTMLDivElement | null>(null)
@@ -88,7 +104,6 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
   const compacting = conversation.contextUsage?.compacting === true
   const working = conversation.status === 'working' || conversation.status === 'blocked' || compacting
   const isMobile = useIsMobile(680)
-  const detail = store.conversationDetails[conversation.id]
   // 历史尚未完整加载且当前页没有 reset 时，不能把缺少消息的分页窗口当作空会话。
   const detailEntries = detail?.nextCursor && !detail.entries.some((entry) => entry.kind === 'pi.reset')
     ? undefined
@@ -96,8 +111,8 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
   const envConfigurable = canConfigureSessionEnv(detailEntries, conversation.status)
 
   const slashPluginCommands = useMemo(
-    () => pluginSlashCommandsFor(store.groupedUi.commands, conversation),
-    [store.groupedUi.commands, conversation],
+    () => pluginSlashCommandsFor(groupedUi.commands, conversation),
+    [groupedUi.commands, conversation],
   )
 
   // 发送管线（草稿 / 编辑锚点 / 附件上传 / 提交与失败恢复 / 环境阻塞）。
@@ -136,8 +151,8 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
     dirtyKey: composerDirtyKey,
   })
 
-  const widgets = store.groupedUi.composerWidgets.filter((w) => matchesUiScope(conversation, w.spec.scope))
-  const pills = store.groupedUi.composerPills.filter((p) => matchesUiScope(conversation, p.spec.scope))
+  const widgets = groupedUi.composerWidgets.filter((w) => matchesUiScope(conversation, w.spec.scope))
+  const pills = groupedUi.composerPills.filter((p) => matchesUiScope(conversation, p.spec.scope))
 
   useLayoutEffect(() => {
     autoGrowTextarea(textareaRef.current)
@@ -188,21 +203,21 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
     draftText: text,
     readLiveDraft,
     setDraftState,
-    completers: store.groupedUi.composerCompleters,
+    completers: groupedUi.composerCompleters,
     conversation,
     resetKey: conversation.id,
   })
 
   // 斜杠菜单三源合并：宿主内置命令 + 当前会话可用技能（profile.skills 白名单 +
   // 插件启用双过滤，缺 Profile 时先不展示技能）+ 满足作用域的插件命令。
-  const enabledPluginIds = useMemo(() => collectEnabledPluginIds(store.plugins), [store.plugins])
+  const enabledPluginIds = useMemo(() => collectEnabledPluginIds(plugins), [plugins])
   const conversationProfile = useMemo(
-    () => store.profiles.find((p) => p.id === conversation.profileId),
-    [store.profiles, conversation.profileId],
+    () => profiles.find((p) => p.id === conversation.profileId),
+    [profiles, conversation.profileId],
   )
   const availableSkills = useMemo(
-    () => slashMenuSkills(conversationProfile, store.skills, enabledPluginIds),
-    [conversationProfile, store.skills, enabledPluginIds],
+    () => slashMenuSkills(conversationProfile, skills, enabledPluginIds),
+    [conversationProfile, skills, enabledPluginIds],
   )
   useEffect(() => {
     setSlashMenuItems(
@@ -260,7 +275,7 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
 
   const cycleThinking = async (): Promise<void> => {
     if (thinkingPendingRef.current) return
-    const currentModel = store.models.find((m) => m.id === conversation.model)
+    const currentModel = models.find((m) => m.id === conversation.model)
     const levels = currentModel?.thinkingLevels ?? ['off']
     const baseLevel =
       optimisticThinkingRef.current !== null &&
@@ -321,7 +336,11 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
       editingEntryId === null &&
       canRecallOnArrowUp(e.currentTarget.value, e.currentTarget.selectionStart)
     ) {
-      const queued = latestHumanQueuedInput(store.conversationLives[conversation.id]?.queuedInputs)
+      const liveQueued =
+        externalStore !== null
+          ? externalStore.getConversationLive(conversation.id)?.queuedInputs
+          : legacyStore?.conversationLives[conversation.id]?.queuedInputs
+      const queued = latestHumanQueuedInput(liveQueued)
       if (queued !== undefined) {
         e.preventDefault()
         void withdrawQueuedInput(queued)

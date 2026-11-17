@@ -12,9 +12,9 @@
  * explicit `t` (or `locale`) parameter instead; see `i18n/catalog.ts` for the
  * English bridge default used at not-yet-migrated call sites.
  */
-import { useContext, useMemo } from 'react'
+import { useMemo } from 'react'
 import { DEFAULT_HELM_LOCALE, type HelmLocale } from '@helm/protocol/browser'
-import { HelmStoreContext } from '../lib/store-context.js'
+import { useOptionalLocale } from '../lib/store-context.js'
 import { createWebTranslator, type WebMessageTranslator } from './catalog.js'
 
 export interface WebLocaleValue {
@@ -25,7 +25,6 @@ export interface WebLocaleValue {
 }
 
 export function useWebLocale(): WebLocaleValue {
-  const store = useContext(HelmStoreContext)
-  const locale = store?.locale ?? DEFAULT_HELM_LOCALE
+  const locale = useOptionalLocale() ?? DEFAULT_HELM_LOCALE
   return useMemo(() => ({ locale, t: createWebTranslator(locale) }), [locale])
 }

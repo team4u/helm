@@ -14,7 +14,12 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { ComposerCompleterSpec, ComposerCompletionItem, ConversationSummary } from '@helm/protocol/browser'
-import { useHelmStore } from '../lib/store-context.js'
+import {
+  useCatalogActions,
+  useLoadErrorsMap,
+  usePluginDocsState,
+  useStoreActions,
+} from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import type { QualifiedUiSpec } from '../lib/types.js'
 import {
@@ -91,7 +96,15 @@ export function useComposerCompletionSources(input: UseComposerCompletionSources
   const { token, completers, conversation, profileId } = input
   const conversationId = conversation?.id
   const contextKey = `${conversationId ?? ''}:${profileId ?? ''}`
-  const store = useHelmStore()
+  const pluginDocs = usePluginDocsState()
+  const loadErrors = useLoadErrorsMap()
+  const actions = useCatalogActions()
+  const {
+    ensurePluginDoc,
+    subscribeSessionDoc,
+    getSessionDocState,
+    invokePluginAction,
+  } = useStoreActions()
   const { t } = useWebLocale()
   const trigger = token === null ? null : token.trigger
   const query = token?.query ?? ''
@@ -120,8 +133,7 @@ export function useComposerCompletionSources(input: UseComposerCompletionSources
   )
 
   // ---- doc sources: trigger ensurePluginDoc on demand (values are read at
-  // render time from store.pluginDocs) ----
-  const { ensurePluginDoc, pluginDocs, loadErrors } = store
+  // render time from pluginDocs) ----
   const docKey = useMemo(() => docSources.map((s) => `${s.pluginId}/${(s.spec.source as { name: string }).name}`).join('|'), [docSources])
   useEffect(() => {
     if (docKey === '') return
@@ -137,7 +149,6 @@ export function useComposerCompletionSources(input: UseComposerCompletionSources
   // ---- sessionDoc sources: dedicated SSE channel merged subscription
   // (stable snapshot identity; never subscribed without a conversation) ----
   const tuplesKey = useMemo(() => JSON.stringify(sessionDocSources.map((s) => ({ pluginId: s.pluginId, docName: s.spec.source.name }))), [sessionDocSources])
-  const { subscribeSessionDoc, getSessionDocState } = store
   const subscribeSession = useCallback(
     (listener: () => void) => {
       const list = JSON.parse(tuplesKey) as SessionDocTuple[]
@@ -164,8 +175,6 @@ export function useComposerCompletionSources(input: UseComposerCompletionSources
   // ---- action sources: debounce + generation race guard ----
   const [actionState, setActionState] = useState<ActionSourceState>(ACTION_IDLE)
   const actionGeneration = useRef(0)
-  const { invokePluginAction } = store
-  const actions = store.actions
   useEffect(() => {
     const generation = ++actionGeneration.current
     if (sourceKey === '' || actionSources.length === 0) {

@@ -13,7 +13,7 @@ import {
   validateStarterDrafts,
 } from './profile-center-model.js'
 import { HelmIcon, Checkbox, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle, PluginSlot, Select, type SelectOption, Switch } from '@helm/plugin-client'
-import { useHelmStore } from '../lib/store-context.js'
+import { useModels, useNodes, useSkills } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { nodeOptionLabel } from '../modals/nodes-modal-model.js'
 import { ConfirmDialog } from '../ui/AlertDialog.js'
@@ -97,7 +97,9 @@ export function ProfileDetailDrawer({
   onSaved,
   onDeleted,
 }: ProfileDetailDrawerProps): React.JSX.Element {
-  const store = useHelmStore()
+  const models = useModels()
+  const nodes = useNodes()
+  const skills = useSkills()
   const { t } = useWebLocale()
   const [form, setForm] = useState<FormState>(() => createInitialForm(profile, isNew))
   const [baseline, setBaseline] = useState<FormState>(() => createInitialForm(profile, isNew))
@@ -209,14 +211,14 @@ export function ProfileDetailDrawer({
 
   // 模型下拉选项列表（过滤为已配置模型）
   const modelOptions = useMemo<SelectOption<string>[]>(() => {
-    return buildProfileModelOptions(store.models ?? [], form.model, t)
-  }, [store.models, form.model, t])
+    return buildProfileModelOptions(models ?? [], form.model, t)
+  }, [models, form.model, t])
 
-  // 默认节点下拉选项：未绑定项 + store.nodes 全量；既有值不在节点列表时补「未知节点」回退项
+  // 默认节点下拉选项：未绑定项 + nodes 全量；既有值不在节点列表时补「未知节点」回退项
   const nodeOptions = useMemo<SelectOption<string>[]>(() => {
     const list: SelectOption<string>[] = [
       { value: '', label: t('profiles.drawer.unboundNode'), icon: 'monitor' },
-      ...store.nodes.map((n) => ({
+      ...nodes.map((n) => ({
         value: n.id,
         label: nodeOptionLabel(n, t),
         icon: n.id === 'local' || n.kind === 'local' ? 'monitor' : 'network',
@@ -228,20 +230,20 @@ export function ProfileDetailDrawer({
       list.push({ value: current, label: t('profiles.drawer.unknownNode', { id: current }), icon: 'alert-circle' })
     }
     return list
-  }, [store.nodes, form.nodeId, t])
+  }, [nodes, form.nodeId, t])
 
   // 所选模型支持的思考档位：未绑定模型时无档位（跟随全局缺省）；
   // 目录缺失（模型未配置/外部）时无档位可选，仅保留既有值提示。
   const profileThinkingLevels = useMemo(() => {
-    const found = (store.models ?? []).find((m) => m.id === form.model)
+    const found = (models ?? []).find((m) => m.id === form.model)
     return found?.thinkingLevels ?? []
-  }, [store.models, form.model])
+  }, [models, form.model])
   const profileThinkingSupported = profileThinkingLevels.some((level) => level !== 'off')
   const profileThinkingLevelUnsupported =
     form.thinkingLevel !== '' && !profileThinkingLevels.includes(form.thinkingLevel)
 
   // 可用技能列表
-  const availableSkills = store.skills ?? []
+  const availableSkills = skills ?? []
 
   // 技能勾选切换
   const handleToggleSkill = (skillId: string, checked: boolean) => {
@@ -484,7 +486,7 @@ export function ProfileDetailDrawer({
                         const model = e.target.value
                         // 切换模型后：当前档位不在新模型支持列表时回落跟随全局缺省（与全局默认面板同法）
                         if (prev.thinkingLevel !== '') {
-                          const levels = (store.models ?? []).find((m) => m.id === model)?.thinkingLevels ?? []
+                          const levels = (models ?? []).find((m) => m.id === model)?.thinkingLevels ?? []
                           if (!levels.includes(prev.thinkingLevel)) {
                             return { ...prev, model, thinkingLevel: '' }
                           }

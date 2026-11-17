@@ -1,9 +1,9 @@
-import React, { useContext, useMemo } from 'react'
+import React, { useMemo } from 'react'
 import type { PluginSummary } from '@helm/protocol/browser'
 import { DEFAULT_HELM_LOCALE, resolveLocalizedText } from '@helm/protocol/browser'
 import { HelmIcon, Switch } from '@helm/plugin-client'
 import { createWebTranslator } from '../i18n/catalog.js'
-import { HelmStoreContext } from '../lib/store-context.js'
+import { useOptionalGroupedUi, useOptionalLocale, useOptionalStoreActions } from '../lib/store-context.js'
 import {
   getPluginDescription,
   listPluginScreens,
@@ -33,18 +33,20 @@ export function PluginCard({
   onToggle,
   toggling = false,
 }: PluginCardProps): React.JSX.Element {
-  const store = useContext(HelmStoreContext)
+  const storeLocale = useOptionalLocale()
+  const groupedUi = useOptionalGroupedUi()
+  const actions = useOptionalStoreActions()
   // 展示名 / 描述属 LocalizedText 显示元数据：按 store 的权威 locale 解析；
   // 组件保留无 Provider 的 SSR 渲染容忍（缺省英文桥接）。
-  const locale = store?.locale ?? DEFAULT_HELM_LOCALE
+  const locale = storeLocale ?? DEFAULT_HELM_LOCALE
   const t = useMemo(() => createWebTranslator(locale), [locale])
   const name = resolveLocalizedText(plugin.name, locale) || plugin.id
   const description = getPluginDescription(plugin, locale, t)
   const isLocked = plugin.locked === true
   // 已启用且有 Screen 贡献时提供快捷打开（主屏/右屏），经 store.openTarget 唯一导航。
   const primaryScreen =
-    store !== null && plugin.enabled
-      ? listPluginScreens(store.groupedUi, plugin.id)[0] ?? null
+    groupedUi !== undefined && plugin.enabled
+      ? listPluginScreens(groupedUi, plugin.id)[0] ?? null
       : null
   // 源码/清单加载阶段失败（scan/load）：模块未成功导入，无有效 definition 可重试启用
   const isLoadBroken = plugin.error?.stage === 'scan' || plugin.error?.stage === 'load'
@@ -175,7 +177,7 @@ export function PluginCard({
               aria-label={t('plugins.card.openViewAria', { name })}
               onClick={(e) => {
                 e.stopPropagation()
-                store?.openTarget({
+                actions?.openTarget({
                   kind: 'screen',
                   pluginId: primaryScreen.pluginId,
                   screenId: primaryScreen.screenId,

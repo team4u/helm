@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react'
 import { HelmIcon } from '@helm/plugin-client'
-import { useHelmStore } from '../lib/store-context.js'
+import { useLocationTargets, useSkills, useStoreActions } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
 import { SkillCard } from './SkillCard.js'
@@ -40,12 +40,13 @@ export function SkillCenter({
   onCloseSplit,
   inlineDrawer = false,
 }: SkillCenterProps): React.JSX.Element {
-  const store = useHelmStore()
+  const skills = useSkills() ?? []
+  const { primaryTarget, splitTarget } = useLocationTargets()
+  const { openTarget, closeSplit, refreshAssets } = useStoreActions()
   const { t } = useWebLocale()
   const [query, setQuery] = useState('')
   const [activeTab, setActiveTab] = useState<SkillCategoryTab>('all')
 
-  const skills = store.skills ?? []
   const categoryCounts = useMemo(() => buildSkillCategoryCounts(skills), [skills])
 
   const filteredSkills = useMemo(() => {
@@ -55,7 +56,7 @@ export function SkillCenter({
     })
   }, [skills, query, activeTab])
 
-  const currentTarget = isSplit ? store.splitTarget : store.primaryTarget
+  const currentTarget = isSplit ? splitTarget : primaryTarget
   const selectedSkillId =
     currentTarget && currentTarget.kind === 'skills' ? currentTarget.skillId : undefined
 
@@ -67,11 +68,11 @@ export function SkillCenter({
   const isDrawerOpen = Boolean(selectedSkillId && selectedSkill)
 
   const handleSelectSkill = (skillId: string) => {
-    store.openTarget({ kind: 'skills', skillId }, isSplit ? { split: true } : undefined)
+    openTarget({ kind: 'skills', skillId }, isSplit ? { split: true } : undefined)
   }
 
   const handleCloseDrawer = () => {
-    store.openTarget({ kind: 'skills' }, isSplit ? { split: true } : undefined)
+    openTarget({ kind: 'skills' }, isSplit ? { split: true } : undefined)
   }
 
   const toggleSplit = () => {
@@ -79,11 +80,11 @@ export function SkillCenter({
       onCloseSplit?.()
       return
     }
-    if (store.splitTarget !== null) {
-      store.closeSplit()
+    if (splitTarget !== null) {
+      closeSplit()
       return
     }
-    store.openTarget({ kind: 'skills', skillId: selectedSkillId }, { split: true })
+    openTarget({ kind: 'skills', skillId: selectedSkillId }, { split: true })
   }
 
   return (
@@ -101,7 +102,7 @@ export function SkillCenter({
           <button
             type="button"
             className="btn btn-sm"
-            onClick={() => void store.refreshAssets?.()}
+            onClick={() => void refreshAssets?.()}
             title={t('skills.center.refreshTitle')}
           >
             <HelmIcon name="refresh-cw" size={12} />
@@ -111,7 +112,7 @@ export function SkillCenter({
             <CloseSplitButton onCloseSplit={onCloseSplit} />
           ) : (
             <SplitToggleButton
-              isSplitActive={store.splitTarget !== null}
+              isSplitActive={splitTarget !== null}
               onToggleSplit={toggleSplit}
             />
           )}

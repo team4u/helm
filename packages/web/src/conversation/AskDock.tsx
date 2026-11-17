@@ -2,7 +2,7 @@ import { useId, useMemo, useState } from 'react'
 import type { AskFieldSpec, AskSpec } from '@helm/protocol/browser'
 import { asksApi } from '../lib/api.js'
 import { HelmIcon, Select } from '@helm/plugin-client'
-import { useHelmStore } from '../lib/store-context.js'
+import { useConversations, usePendingAsks, useStoreActions } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { collectSubtreeIds } from './ancestry-model.js'
 
@@ -124,7 +124,7 @@ function AskFieldInput({
 }
 
 function AskCard({ ask, source }: { ask: AskSpec; source?: AskSourceInfo }) {
-  const store = useHelmStore()
+  const { setActiveModal } = useStoreActions()
   const { t } = useWebLocale()
   // The same approval can appear in both an ancestor panel and a child
   // conversation drawer; form labels associate with this instance only.
@@ -184,7 +184,7 @@ function AskCard({ ask, source }: { ask: AskSpec; source?: AskSourceInfo }) {
               ? t('composer.ask.openChildTitle', { id: source.conversationId, title: source.title })
               : t('composer.ask.openChildDrawer', { id: source.conversationId })}
             aria-label={t('composer.ask.openChildDrawer', { id: source.conversationId })}
-            onClick={() => store.setActiveModal({ kind: 'conversation-drawer', conversationId: source.conversationId })}
+            onClick={() => setActiveModal({ kind: 'conversation-drawer', conversationId: source.conversationId })}
           >
             <HelmIcon name="corner-down-right" size={11} />
             {t('composer.ask.fromSource', { id: source.conversationId })}
@@ -267,14 +267,15 @@ function AskCard({ ask, source }: { ask: AskSpec; source?: AskSourceInfo }) {
  * expectedStateSeq CAS); this dock only aggregates display and changes nothing
  * about the approval chain. */
 export function AskDock({ conversationId }: AskDockProps) {
-  const store = useHelmStore()
-  // Ancestry derives purely from store.conversations; pending asks of
+  const conversations = useConversations()
+  const pendingAsks = usePendingAsks()
+  // Ancestry derives purely from conversations; pending asks of
   // descendant conversations are surfaced as well.
   const subtreeIds = useMemo(
-    () => collectSubtreeIds(store.conversations, conversationId),
-    [store.conversations, conversationId],
+    () => collectSubtreeIds(conversations, conversationId),
+    [conversations, conversationId],
   )
-  const pending = store.pendingAsks.filter(
+  const pending = pendingAsks.filter(
     (a) => a.status === 'pending' && subtreeIds.has(a.conversationId),
   )
   if (pending.length === 0) return null
@@ -288,7 +289,7 @@ export function AskDock({ conversationId }: AskDockProps) {
             ? {
                 source: {
                   conversationId: ask.conversationId,
-                  title: store.conversations.find((conv) => conv.id === ask.conversationId)?.title ?? '',
+                  title: conversations.find((conv) => conv.id === ask.conversationId)?.title ?? '',
                 },
               }
             : {})}

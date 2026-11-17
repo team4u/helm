@@ -19,7 +19,15 @@ import { standbyDraftKey } from './conversation/standby-model.js'
 import { ConversationDrawer } from './conversation/ConversationDrawer.js'
 import { useWebLocale } from './i18n/use-web-locale.js'
 import { HelmStoreProvider } from './lib/HelmStoreProvider.js'
-import { useHelmStore } from './lib/store-context.js'
+import {
+  useActiveModal,
+  useAuthConnection,
+  useLocationTargets,
+  useProfilesSlice,
+  useSidebarCollapsed,
+  useStoreActions,
+  useWorkbenchState,
+} from './lib/store-context.js'
 import {
   hashHasPrimaryTarget,
   isSameLocationState,
@@ -162,8 +170,19 @@ const WorkbenchDrawer = lazyWithRetry(
   { overlay: true },
 )
 
+function QuietNotifierMount() {
+  useQuietNotifier()
+  return null
+}
+
 function HelmShellInner() {
-  const store = useHelmStore()
+  const { authReady, authError, authenticated, sseConnected, connectionError } = useAuthConnection()
+  const { assetsLoaded } = useProfilesSlice()
+  const { primaryTarget, splitTarget, focusedPanel } = useLocationTargets()
+  const sidebarCollapsed = useSidebarCollapsed()
+  const { workbenchOpen, workbenchTab } = useWorkbenchState()
+  const activeModal = useActiveModal()
+  const { setActiveModal, setFocusedPanel, checkAuth, openTarget, closeSplit } = useStoreActions()
   const { t } = useWebLocale()
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [showConnectionBanner, setShowConnectionBanner] = useState(false)
@@ -180,25 +199,21 @@ function HelmShellInner() {
   })
   const [landingSettled, setLandingSettled] = useState(!bootLanding.needsHomeLanding)
 
-  // Background browser notifications: mounted once globally (gates itself on preference/auth state).
-  useQuietNotifier()
   // Version awareness and auto refresh: mounted once globally (sleeps when no production entry is detected).
   const versionWatch = useVersionWatcher()
-  const setActiveModal = store.setActiveModal
-  const setFocusedPanel = store.setFocusedPanel
   const closeModal = useCallback(() => setActiveModal(null), [setActiveModal])
   const focusPrimary = useCallback(() => setFocusedPanel?.('primary'), [setFocusedPanel])
   const focusSplit = useCallback(() => setFocusedPanel?.('split'), [setFocusedPanel])
 
   useEffect(() => {
     if (landingSettled) return
-    if (store.authenticated && store.assetsLoaded && store.sseConnected) {
+    if (authenticated && assetsLoaded && sseConnected) {
       setLandingSettled(true)
     }
-  }, [landingSettled, store.authenticated, store.assetsLoaded, store.sseConnected])
+  }, [landingSettled, authenticated, assetsLoaded, sseConnected])
 
   useEffect(() => {
-    if (!store.authenticated || store.sseConnected) {
+    if (!authenticated || sseConnected) {
       setShowConnectionBanner(false)
       return
     }
@@ -206,23 +221,23 @@ function HelmShellInner() {
       setShowConnectionBanner(true)
     }, CONNECTION_BANNER_DELAY_MS)
     return () => clearTimeout(timer)
-  }, [store.authenticated, store.sseConnected])
+  }, [authenticated, sseConnected])
 
   useEffect(() => {
-    if (store.activeModal !== null) {
+    if (activeModal !== null) {
       setSidebarOpen(false)
     }
-  }, [store.activeModal])
+  }, [activeModal])
 
   useEffect(() => {
-    if (store.activeModal?.kind === 'plugin-settings') {
-      const pluginId = store.activeModal.pluginId
+    if (activeModal?.kind === 'plugin-settings') {
+      const pluginId = activeModal.pluginId
       closeModal()
-      store.openTarget({ kind: 'plugins', pluginId })
+      openTarget({ kind: 'plugins', pluginId })
     }
-  }, [store.activeModal, closeModal, store.openTarget])
+  }, [activeModal, closeModal, openTarget])
 
-  if (!store.authReady) {
+  if (!authReady) {
     return (
       <div className="app-loading-screen" style={{ height: '100dvh' }}>
         {t('shell.loading.connecting')}
@@ -230,39 +245,36 @@ function HelmShellInner() {
     )
   }
 
-  if (store.authError) {
+  if (authError) {
     return (
       <div className="connection-screen" role="alert">
         <strong>{t('shell.connection.cannotConnect')}</strong>
-        <p>{store.authError}</p>
-        <button className="btn btn-primary" onClick={() => void store.checkAuth()}>{t('shell.connection.reconnect')}</button>
+        <p>{authError}</p>
+        <button className="btn btn-primary" onClick={() => void checkAuth()}>{t('shell.connection.reconnect')}</button>
       </div>
     )
   }
 
-  if (!store.authenticated) return <AuthGate />
+  if (!authenticated) return <AuthGate />
 
   const currentLocation: WorkspaceLocationState = {
-    primaryTarget: store.primaryTarget,
-    splitTarget: store.splitTarget,
-    workbenchOpen: store.workbenchOpen,
-    workbenchTab: store.workbenchTab,
-    activeModal: store.activeModal,
+    primaryTarget,
+    splitTarget,
+    workbenchOpen,
+    workbenchTab,
+    activeModal,
   }
-  const storeHomeLandingPending = (store as { homeLandingPending?: boolean }).homeLandingPending
   const homeLandingPending =
-    storeHomeLandingPending !== undefined
-      ? storeHomeLandingPending
-      : !landingSettled &&
-        bootLanding.initialLocation !== null &&
-        isSameLocationState(currentLocation, bootLanding.initialLocation)
+    !landingSettled &&
+    bootLanding.initialLocation !== null &&
+    isSameLocationState(currentLocation, bootLanding.initialLocation)
 
   const activeTarget =
-    store.focusedPanel === 'split' && store.splitTarget !== null
-      ? store.splitTarget
-      : store.primaryTarget
+    focusedPanel === 'split' && splitTarget !== null
+      ? splitTarget
+      : primaryTarget
   const fallbackTarget =
-    store.focusedPanel === 'split' ? store.primaryTarget : store.splitTarget
+    focusedPanel === 'split' ? primaryTarget : splitTarget
   const activeConversationId =
     activeTarget.kind === 'conversation'
       ? activeTarget.conversationId
@@ -273,7 +285,7 @@ function HelmShellInner() {
   return (
     <LazyRetryContext.Provider value={versionWatch.clearPreloadError}>
       <div
-        className={`helm-shell${sidebarOpen ? ' sidebar-open' : ''}${store.sidebarCollapsed ? ' sidebar-collapsed' : ''}`}
+        className={`helm-shell${sidebarOpen ? ' sidebar-open' : ''}${sidebarCollapsed ? ' sidebar-collapsed' : ''}`}
         onClick={(event) => {
           const target = event.target as HTMLElement
           if (target.closest('.nav-item')) {
@@ -300,9 +312,9 @@ function HelmShellInner() {
         <Sidebar onClose={() => setSidebarOpen(false)} />
 
         <main className="helm-main-stage">
-          {showConnectionBanner && !store.sseConnected && (
+          {showConnectionBanner && !sseConnected && (
             <div className="connection-banner" role="status">
-              <span>{store.connectionError ?? t('shell.connection.syncing')}</span>
+              <span>{connectionError ?? t('shell.connection.syncing')}</span>
               <span className="connection-banner-hint">{t('shell.connection.autoRefresh')}</span>
             </div>
           )}
@@ -323,7 +335,7 @@ function HelmShellInner() {
             <div
               className="helm-primary-pane"
               data-helm-panel="primary"
-              data-helm-panel-focused={store.splitTarget !== null && (store.focusedPanel ?? 'primary') === 'primary' ? 'true' : undefined}
+              data-helm-panel-focused={splitTarget !== null && focusedPanel === 'primary' ? 'true' : undefined}
               onPointerDownCapture={focusPrimary}
               onFocusCapture={focusPrimary}
             >
@@ -337,81 +349,81 @@ function HelmShellInner() {
                       <div className="home-landing-skeleton-line home-landing-skeleton-line-short" />
                     </div>
                   </div>
-                ) : store.primaryTarget.kind === 'conversation' ? (
+                ) : primaryTarget.kind === 'conversation' ? (
                   <ConversationPane
-                    key={`primary-conv-${store.primaryTarget.conversationId}`}
-                    conversationId={store.primaryTarget.conversationId}
+                    key={`primary-conv-${primaryTarget.conversationId}`}
+                    conversationId={primaryTarget.conversationId}
                   />
-                ) : store.primaryTarget.kind === 'agent' ? (
+                ) : primaryTarget.kind === 'agent' ? (
                   <AgentStandbyPane
-                    key={standbyDraftKey({ panel: 'primary', ...store.primaryTarget })}
-                    profileId={store.primaryTarget.profileId}
-                    nodeId={store.primaryTarget.nodeId}
-                    cwd={store.primaryTarget.cwd}
+                    key={standbyDraftKey({ panel: 'primary', ...primaryTarget })}
+                    profileId={primaryTarget.profileId}
+                    nodeId={primaryTarget.nodeId}
+                    cwd={primaryTarget.cwd}
                   />
-                ) : store.primaryTarget.kind === 'screen' ? (
+                ) : primaryTarget.kind === 'screen' ? (
                   <ScreenHost
-                    key={`primary-screen-${store.primaryTarget.pluginId}-${store.primaryTarget.screenId}`}
-                    pluginId={store.primaryTarget.pluginId}
-                    screenId={store.primaryTarget.screenId}
+                    key={`primary-screen-${primaryTarget.pluginId}-${primaryTarget.screenId}`}
+                    pluginId={primaryTarget.pluginId}
+                    screenId={primaryTarget.screenId}
                   />
-                ) : store.primaryTarget.kind === 'plugins' ? (
+                ) : primaryTarget.kind === 'plugins' ? (
                   <PluginCenter key="primary-plugins" />
-                ) : store.primaryTarget.kind === 'profiles' ? (
+                ) : primaryTarget.kind === 'profiles' ? (
                   <ProfileCenter key="primary-profiles" />
-                ) : store.primaryTarget.kind === 'skills' ? (
+                ) : primaryTarget.kind === 'skills' ? (
                   <SkillCenter key="primary-skills" />
-                ) : store.primaryTarget.kind === 'nodes' ? (
+                ) : primaryTarget.kind === 'nodes' ? (
                   <NodeCenter key="primary-nodes" />
-                ) : store.primaryTarget.kind === 'models' ? (
+                ) : primaryTarget.kind === 'models' ? (
                   <ModelCenter key="primary-models" />
                 ) : null}
               </Suspense>
             </div>
 
-            {store.splitTarget && (
+            {splitTarget && (
               <div
                 className="helm-split-pane"
                 data-helm-panel="split"
-                data-helm-panel-focused={store.focusedPanel === 'split' ? 'true' : undefined}
+                data-helm-panel-focused={focusedPanel === 'split' ? 'true' : undefined}
                 onPointerDownCapture={focusSplit}
                 onFocusCapture={focusSplit}
               >
                 <Suspense fallback={<div className="screen-loading" role="status">{t('conv.shell.loadingView')}</div>}>
-                  {store.splitTarget.kind === 'conversation' ? (
+                  {splitTarget.kind === 'conversation' ? (
                     <ConversationPane
-                      key={`split-conv-${store.splitTarget.conversationId}`}
-                      conversationId={store.splitTarget.conversationId}
+                      key={`split-conv-${splitTarget.conversationId}`}
+                      conversationId={splitTarget.conversationId}
                       isSplit
-                      onCloseSplit={store.closeSplit}
+                      onCloseSplit={closeSplit}
                     />
-                  ) : store.splitTarget.kind === 'agent' ? (
+                  ) : splitTarget.kind === 'agent' ? (
                     <AgentStandbyPane
-                      key={standbyDraftKey({ panel: 'split', ...store.splitTarget })}
-                      profileId={store.splitTarget.profileId}
-                      nodeId={store.splitTarget.nodeId}
-                      cwd={store.splitTarget.cwd}
+                      key={standbyDraftKey({ panel: 'split', ...splitTarget })}
+                      profileId={splitTarget.profileId}
+                      nodeId={splitTarget.nodeId}
+                      cwd={splitTarget.cwd}
                       isSplit
-                      onCloseSplit={store.closeSplit}
+                      onCloseSplit={closeSplit}
                     />
-                  ) : store.splitTarget.kind === 'screen' ? (
+                  ) : splitTarget.kind === 'screen' ? (
                     <ScreenHost
-                      key={`split-screen-${store.splitTarget.pluginId}-${store.splitTarget.screenId}`}
-                      pluginId={store.splitTarget.pluginId}
-                      screenId={store.splitTarget.screenId}
+                      key={`split-screen-${splitTarget.pluginId}-${splitTarget.screenId}`}
+                      pluginId={splitTarget.pluginId}
+                      screenId={splitTarget.screenId}
                       isSplit
-                      onCloseSplit={store.closeSplit}
+                      onCloseSplit={closeSplit}
                     />
-                  ) : store.splitTarget.kind === 'plugins' ? (
-                    <PluginCenter key="split-plugins" isSplit onCloseSplit={store.closeSplit} />
-                  ) : store.splitTarget.kind === 'profiles' ? (
-                    <ProfileCenter key="split-profiles" isSplit onCloseSplit={store.closeSplit} />
-                  ) : store.splitTarget.kind === 'skills' ? (
-                    <SkillCenter key="split-skills" isSplit onCloseSplit={store.closeSplit} />
-                  ) : store.splitTarget.kind === 'nodes' ? (
-                    <NodeCenter key="split-nodes" isSplit onCloseSplit={store.closeSplit} />
-                  ) : store.splitTarget.kind === 'models' ? (
-                    <ModelCenter key="split-models" isSplit onCloseSplit={store.closeSplit} />
+                  ) : splitTarget.kind === 'plugins' ? (
+                    <PluginCenter key="split-plugins" isSplit onCloseSplit={closeSplit} />
+                  ) : splitTarget.kind === 'profiles' ? (
+                    <ProfileCenter key="split-profiles" isSplit onCloseSplit={closeSplit} />
+                  ) : splitTarget.kind === 'skills' ? (
+                    <SkillCenter key="split-skills" isSplit onCloseSplit={closeSplit} />
+                  ) : splitTarget.kind === 'nodes' ? (
+                    <NodeCenter key="split-nodes" isSplit onCloseSplit={closeSplit} />
+                  ) : splitTarget.kind === 'models' ? (
+                    <ModelCenter key="split-models" isSplit onCloseSplit={closeSplit} />
                   ) : null}
                 </Suspense>
               </div>
@@ -419,45 +431,45 @@ function HelmShellInner() {
           </div>
         </main>
 
-        {store.workbenchOpen && (
+        {workbenchOpen && (
           <Suspense fallback={<div className="screen-loading screen-loading-overlay" role="status">{t('conv.shell.loadingWorkbench')}</div>}>
             <WorkbenchDrawer conversationId={activeConversationId} />
           </Suspense>
         )}
 
-        {store.activeModal?.kind === 'command-palette' && (
+        {activeModal?.kind === 'command-palette' && (
           <Suspense fallback={<div className="screen-loading screen-loading-overlay" role="status">{t('conv.shell.loadingCommandPalette')}</div>}>
             <CommandPaletteModal onClose={closeModal} />
           </Suspense>
         )}
-        {store.activeModal?.kind === 'artifact-preview' && (
+        {activeModal?.kind === 'artifact-preview' && (
           <Suspense fallback={<div className="screen-loading screen-loading-overlay" role="status">{t('conv.shell.loadingPreview')}</div>}>
             <ArtifactPreviewModal
-              artifactId={store.activeModal.artifactId}
-              conversationId={store.activeModal.conversationId}
+              artifactId={activeModal.artifactId}
+              conversationId={activeModal.conversationId}
               onClose={closeModal}
             />
           </Suspense>
         )}
-        {store.activeModal?.kind === 'workspace-file' && (
+        {activeModal?.kind === 'workspace-file' && (
           <Suspense fallback={<div className="screen-loading screen-loading-overlay" role="status">{t('conv.shell.loadingPreview')}</div>}>
             <WorkspaceFilePreviewModal
-              conversationId={store.activeModal.conversationId}
-              path={store.activeModal.path}
-              startLine={store.activeModal.startLine}
-              endLine={store.activeModal.endLine}
+              conversationId={activeModal.conversationId}
+              path={activeModal.path}
+              startLine={activeModal.startLine}
+              endLine={activeModal.endLine}
               onClose={closeModal}
             />
           </Suspense>
         )}
-        {store.activeModal?.kind === 'conversation-drawer' && (
+        {activeModal?.kind === 'conversation-drawer' && (
           <ConversationDrawer
-            conversationId={store.activeModal.conversationId}
+            conversationId={activeModal.conversationId}
             onClose={closeModal}
           />
         )}
 
-        <ModalFocusScope active={store.activeModal !== null} onClose={closeModal} />
+        <ModalFocusScope active={activeModal !== null} onClose={closeModal} />
         <ToastOverlay />
       </div>
     </LazyRetryContext.Provider>
@@ -468,6 +480,7 @@ export function App() {
   return (
     <HelmStoreProvider>
       <TooltipProvider delayDuration={300}>
+        <QuietNotifierMount />
         <HelmShellInner />
       </TooltipProvider>
     </HelmStoreProvider>

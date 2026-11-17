@@ -44,7 +44,7 @@
  * 本模块只导出 hook 与纯类型（无组件），保持 .ts Fast Refresh 约定。
  */
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
-import { useHelmStore } from '../lib/store-context.js'
+import { useActiveModal, useAuthConnection, useStoreActions } from '../lib/store-context.js'
 import { composerDirty, subscribeComposerDirty } from '../conversation/composer-dirty.js'
 import { standbyDraftsDirty, subscribeStandbyDrafts } from '../conversation/standby-model.js'
 import {
@@ -109,13 +109,15 @@ export interface VersionWatcherView {
 }
 
 export function useVersionWatcher(options: VersionWatcherOptions = {}): VersionWatcherView {
-  const store = useHelmStore()
+  const { kernelBootId } = useAuthConnection()
+  const activeModal = useActiveModal()
+  const { pushNotice } = useStoreActions()
   // 本地未提交草稿现场（外部 store 聚合布尔值；getSnapshot 为原始值天然稳定）。
   const composerDirtyNow = useSyncExternalStore(subscribeComposerDirty, composerDirty, () => false)
   const standbyDirtyNow = useSyncExternalStore(subscribeStandbyDrafts, standbyDraftsDirty, () => false)
   const draftDirty = composerDirtyNow || standbyDirtyNow
   // 弹窗现场：任意 activeModal（含只读预览）都挂起自动刷新，理由见文件头。
-  const modalOpen = store.activeModal !== null
+  const modalOpen = activeModal !== null
   // 焦点现场：焦点在 input/textarea 即保守视为存在未提交输入（额外 guard）。
   const [textInputFocused, setTextInputFocused] = useState<boolean>(() =>
     typeof document !== 'undefined' && isTextInputElement(document.activeElement),
@@ -140,8 +142,8 @@ export function useVersionWatcher(options: VersionWatcherOptions = {}): VersionW
   textFocusRef.current = textInputFocused
   const pendingRef = useRef(false)
   const preloadProbePendingRef = useRef(false)
-  const pushNoticeRef = useRef(store.pushNotice)
-  pushNoticeRef.current = store.pushNotice
+  const pushNoticeRef = useRef(pushNotice)
+  pushNoticeRef.current = pushNotice
   const reloadTriggeredRef = useRef(false)
   const probingRef = useRef(false)
   /** 在途探测期间收到的新触发（如 bootId 变化）：完成后立刻补一次，不吞快速触发。 */
@@ -285,7 +287,6 @@ export function useVersionWatcher(options: VersionWatcherOptions = {}): VersionW
   //（当前页面刚加载/首连不视为更新）；之后变化立即探测（不受 5s 节流）。
   // 登出不重置 kernelBootId：它是「最近见过的内核启动代」这一事实，重新
   // 登录后快照同代不探测、跨代（登出期间内核重启）才探测。
-  const kernelBootId = store.kernelBootId ?? null
   useEffect(() => {
     if (currentEntry === null) return
     const prev = bootIdSeenRef.current

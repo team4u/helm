@@ -1,8 +1,8 @@
-import React, { useContext, useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { DEFAULT_HELM_LOCALE, type PluginDoctorReport } from '@helm/protocol/browser'
 import { pluginsApi } from '../lib/api.js'
 import { createWebTranslator } from '../i18n/catalog.js'
-import { HelmStoreContext } from '../lib/store-context.js'
+import { useOptionalLocale } from '../lib/store-context.js'
 import { HelmIcon, Dialog, DialogClose, DialogContent, DialogDescription, DialogOverlay, DialogPortal, DialogTitle, Switch } from '@helm/plugin-client'
 import {
   buildDoctorCheckItems,
@@ -34,8 +34,8 @@ export function PluginInstallModal({
   onInstalled,
   inline = false,
 }: PluginInstallModalProps): React.JSX.Element {
-  const store = useContext(HelmStoreContext)
-  const locale = store?.locale ?? DEFAULT_HELM_LOCALE
+  const storeLocale = useOptionalLocale()
+  const locale = storeLocale ?? DEFAULT_HELM_LOCALE
   const t = useMemo(() => createWebTranslator(locale), [locale])
   const [source, setSource] = useState('')
   const [enableAfterInstall, setEnableAfterInstall] = useState(false)

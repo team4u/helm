@@ -9,7 +9,7 @@ import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react
 import type { ComponentType } from 'react'
 import type { MarkdownCodeBlockProps } from '@helm/protocol/browser'
 import { CopyButton, createPluginClientContext, HelmIcon, PluginClientContext, usePluginClientHost, ViewBoundary } from '@helm/plugin-client'
-import { useHelmStore } from '../lib/store-context.js'
+import { usePluginsUi } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import {
   getCachedClientComponent,
@@ -51,7 +51,7 @@ function CodeBlockError({ language, code, message, onRetry }: { language: string
 }
 
 export function CodeBlockRenderer({ language, code, conversationId }: { language: string; code: string; conversationId?: number }): ReactNode {
-  const { uiContributions, plugins } = useHelmStore()
+  const { uiContributions, plugins } = usePluginsUi()
   const match = matchMarkdownCodeBlock(uiContributions, language)
 
   if (match === null || match.spec.client === undefined) {

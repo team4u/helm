@@ -14,7 +14,7 @@ import type { ComponentType, ReactNode } from 'react'
 import type { ClientComponentRef, ComposerController } from '@helm/protocol/browser'
 import { HelmIcon, createPluginClientContext, PluginClientContext, usePluginClientHost, ViewBoundary } from '@helm/plugin-client'
 import { getCachedClientComponent, getPluginClientCacheRevision, loadPluginClientModule, PluginClientError, requireClientExport, subscribePluginClientCacheInvalidation } from '../lib/plugin-client.js'
-import { useHelmStore } from '../lib/store-context.js'
+import { usePlugins } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 
 export interface PluginUiViewProps {
@@ -38,7 +38,7 @@ type ClientState =
 
 export function PluginUiView(props: PluginUiViewProps): ReactNode {
   const { pluginId, spec } = props
-  const { plugins } = useHelmStore()
+  const plugins = usePlugins()
   const revision = useSyncExternalStore(
     subscribePluginClientCacheInvalidation,
     () => getPluginClientCacheRevision(pluginId),

@@ -1,6 +1,6 @@
 /**
  * 双层导航与话题切换器交互测试（happy-dom + 真实 React 事件）：
- * - Sidebar：对话/Views space切换、搜索过滤智能体、智能体行导航；
+ * - Sidebar：对话/视图空间切换、搜索过滤智能体、智能体行导航；
  * - 双层导航与单展开：仅当前目标所属智能体展开话题子列表（无折叠钮，
  *   点击智能体名称进入待命态并随之展开），切换目标自动收起原智能体。
  */
@@ -149,7 +149,7 @@ function render(store: HelmStoreValue, element: React.ReactElement): void {
 
 
 
-test('Sidebar 空间切换：对话空间默认渲染智能体，Views space渲染 screen 贡献', { timeout: 60_000 }, async () => {
+test('Sidebar 空间切换：对话空间默认渲染智能体，视图空间渲染 screen 贡献', { timeout: 60_000 }, async () => {
   const store = makeStore()
   render(store, e(SpaceAwareSidebar, { base: store }))
   await act(async () => {})
@@ -157,16 +157,16 @@ test('Sidebar 空间切换：对话空间默认渲染智能体，Views space渲�
   const body = document.body
   assert.ok(body.querySelector('.activity-rail'), '应渲染 Activity Rail')
   assert.ok(body.textContent!.includes('个人助理'), '对话空间渲染智能体行')
-  assert.ok(!body.textContent!.includes('Herdr 终端'), '默认不渲染Views space项')
+  assert.ok(!body.textContent!.includes('Herdr 终端'), '默认不渲染视图空间项')
 
-  // 切换到Views space
+  // 切换到视图空间
   const viewsBtn = body.querySelector('button[aria-label="Views space"]') as HTMLButtonElement
-  assert.ok(viewsBtn, 'Views space切换按钮存在')
+  assert.ok(viewsBtn, '视图空间切换按钮存在')
   await act(async () => {
     viewsBtn.click()
   })
-  assert.ok(body.textContent!.includes('Herdr 终端'), 'Views space渲染 screen 贡献')
-  assert.ok(!body.textContent!.includes('个人助理'), 'Views space不渲染智能体分组')
+  assert.ok(body.textContent!.includes('Herdr 终端'), '视图空间渲染 screen 贡献')
+  assert.ok(!body.textContent!.includes('个人助理'), '视图空间不渲染智能体分组')
 })
 
 test('Sidebar 设置空间：点击设置空间按钮切换列表，点击插件中心调用 openTarget', { timeout: 60_000 }, async () => {

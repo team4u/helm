@@ -29,7 +29,8 @@ import {
   removeTokenBeforeCaret,
   type QualifiedCommand,
 } from '../lib/commands-model.js'
-import { useHelmStore } from '../lib/store-context.js'
+import { useOptionalLocale, useStoreActions } from '../lib/store-context.js'
+import { DEFAULT_HELM_LOCALE } from '@helm/protocol/browser'
 import { useStableCallback } from '../lib/use-stable-callback.js'
 import { clearComposerDirty, setComposerDirty } from './composer-dirty.js'
 import { focusWithCaret } from './composer-controller.js'
@@ -130,7 +131,8 @@ export interface ComposerSendApi {
 
 export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslator = englishWebTranslator): ComposerSendApi {
   const { conversation, prefill, onSendingChange, onNewThread, textareaRef, slashPluginCommands, envConfigurable, working, dirtyKey } = input
-  const store = useHelmStore()
+  const { invokePluginAction, pushNotice } = useStoreActions()
+  const locale = useOptionalLocale() ?? DEFAULT_HELM_LOCALE
   const [text, setText] = useState('')
   const [attachments, setAttachments] = useState<PendingAttachment[]>([])
   const [editingEntryId, setEditingEntryId] = useState<number | null>(null)
@@ -191,7 +193,7 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
         sendingRef.current ||
         uploadingRef.current > 0
       ) {
-        store.pushNotice({
+        pushNotice({
           type: 'notification',
           level: 'warning',
           title: t('composer.draft.handleBeforeStarter'),
@@ -208,7 +210,7 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
     setAttachments(nextAttachments)
     syncLiveDraft(prefill.text, nextEditing, nextAttachments)
     textareaRef.current?.focus()
-  }, [prefill, syncLiveDraft, t, store, conversation.id, textareaRef])
+  }, [prefill, syncLiveDraft, t, pushNotice, conversation.id, textareaRef])
 
   // Leaving history-edit mode when the conversation switches (popover resets
   // are the component-side effect of the same name).
@@ -225,7 +227,7 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
 
   const notifyError = useCallback(
     (title: string, err: unknown) => {
-      store.pushNotice({
+      pushNotice({
         type: 'notification',
         level: 'error',
         title,
@@ -233,7 +235,7 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
         conversationId: conversation.id,
       })
     },
-    [store, conversation.id],
+    [pushNotice, conversation.id],
   )
 
   const uploadFiles = useCallback(
@@ -267,12 +269,12 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
   const runPluginCommandFrom = useCallback(
     (cmd: QualifiedCommand): Promise<void> =>
       executePluginSlashAction(cmd, {
-        invokePluginAction: store.invokePluginAction,
-        pushNotice: store.pushNotice,
-        locale: store.locale,
+        invokePluginAction,
+        pushNotice,
+        locale,
         conversationId: conversation.id,
       }),
-    [store, conversation.id],
+    [invokePluginAction, pushNotice, locale, conversation.id],
   )
 
   // Consume the trigger word only after the command succeeds; when the user
@@ -307,7 +309,7 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
       if (onNewThread !== undefined) {
         onNewThread()
       } else {
-        store.pushNotice({
+        pushNotice({
           type: 'notification',
           level: 'warning',
           title: t('composer.send.newTopicFromTopBar'),
@@ -320,7 +322,7 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
       void conversationsApi
         .reset(conversation.id)
         .then(() => {
-          store.pushNotice({ type: 'notification', level: 'info', title: t('composer.compaction.resetDone'), conversationId: conversation.id })
+          pushNotice({ type: 'notification', level: 'info', title: t('composer.compaction.resetDone'), conversationId: conversation.id })
         })
         .catch((err: unknown) => notifyError(t('composer.compaction.resetFailed'), err))
       return true
@@ -328,7 +330,7 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
     const compactCmd = parseCompactSlashCommand(cmd)
     if (compactCmd !== null) {
       if (conversation.contextUsage?.compacting === true) {
-        store.pushNotice({
+        pushNotice({
           type: 'notification',
           level: 'info',
           title: t('composer.compaction.inProgress'),
@@ -339,7 +341,7 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
       void conversationsApi
         .compact(conversation.id, compactCmd.instructions)
         .then(() => {
-          store.pushNotice({ type: 'notification', level: 'info', title: t('composer.compaction.submitted'), conversationId: conversation.id })
+          pushNotice({ type: 'notification', level: 'info', title: t('composer.compaction.submitted'), conversationId: conversation.id })
         })
         .catch((err: unknown) => notifyError(t('composer.compaction.failed'), err))
       return true
@@ -406,7 +408,7 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
       const draftModified = live.text !== '' || live.targetEntryId !== null
       if (res.status === 'withdrawn') {
         if (draftModified) {
-          store.pushNotice({
+          pushNotice({
             type: 'notification',
             level: 'info',
             title: t('composer.send.withdrawnTitle'),
@@ -418,7 +420,7 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
         applyHistoryEdit(baseTarget)
       } else if ((res.status === 'already_placed' || res.status === 'settled') && res.entryId !== undefined) {
         if (draftModified) {
-          store.pushNotice({
+          pushNotice({
             type: 'notification',
             level: 'warning',
             title: t('composer.send.enteredExecutionTitle'),
@@ -429,7 +431,7 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
         }
         applyHistoryEdit({ ...baseTarget, entryId: res.entryId })
       } else {
-        store.pushNotice({
+        pushNotice({
           type: 'notification',
           level: 'warning',
           title: t('composer.send.cannotWithdrawTitle'),
@@ -444,7 +446,7 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
     } finally {
       withdrawingRef.current = false
     }
-  }, [conversation.id, applyHistoryEdit, notifyError, store, t])
+  }, [conversation.id, applyHistoryEdit, notifyError, pushNotice, t])
 
   const send = useCallback(async (busyMode: WhenBusy = 'steer', strict = false): Promise<void> => {
     const draft = liveDraftRef.current.text
@@ -456,7 +458,7 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
     // Sending is disallowed while the environment is unsaved or still saving
     // (covers both Enter and the send button).
     if (envBlockedRef.current) {
-      store.pushNotice({
+      pushNotice({
         type: 'notification',
         level: 'warning',
         title: t('composer.env.saveOrCancelFirst'),
@@ -542,7 +544,7 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
       setSending(false)
       onSendingChange?.(false)
     }
-  }, [text, attachments, editingEntryId, working, runSlashCommand, syncLiveDraft, onSendingChange, notifyError, store, conversation.id, uploadingRef, envBlocker, runPluginCommandFrom, slashPluginCommands, t])
+  }, [text, attachments, editingEntryId, working, runSlashCommand, syncLiveDraft, onSendingChange, notifyError, pushNotice, conversation.id, uploadingRef, envBlocker, runPluginCommandFrom, slashPluginCommands, t])
 
   // Explicit text submission: consumes no draft / edit anchor / attachments
   // (content not typed by the user, e.g. plugin command output). Shares the
@@ -554,7 +556,7 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
       throw new Error('composer_send_invalid')
     }
     if (envBlockedRef.current) {
-      store.pushNotice({
+      pushNotice({
         type: 'notification',
         level: 'warning',
         title: t('composer.env.saveOrCancelFirst'),
@@ -580,7 +582,7 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
       setSending(false)
       onSendingChange?.(false)
     }
-  }, [working, onSendingChange, notifyError, store, conversation.id, uploadingRef, envBlocker, t])
+  }, [working, onSendingChange, notifyError, pushNotice, conversation.id, uploadingRef, envBlocker, t])
 
   const readLiveDraft = useCallback((): string => liveDraftRef.current.text, [])
 

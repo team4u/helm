@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { assetsApi } from '../lib/api.js'
 import { HelmIcon, Select } from '@helm/plugin-client'
-import { HelmStoreContext } from '../lib/store-context.js'
+import { useOptionalModels, useOptionalStoreActions } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { buildDefaultModelOptions, UNSET_MODEL_VALUE } from './model-center-model.js'
 
@@ -28,9 +28,10 @@ export function GlobalDefaultsPanel({
   defaultModelInfo,
   onSaved,
 }: GlobalDefaultsPanelProps): React.JSX.Element {
-  const store = React.useContext(HelmStoreContext)
+  const storeModels = useOptionalModels()
+  const actions = useOptionalStoreActions()
   const { t } = useWebLocale()
-  const catalogModels = store?.models ?? []
+  const catalogModels = storeModels ?? []
 
   const [formModel, setFormModel] = useState(() =>
     defaultModelInfo?.defaultModel || defaultModelInfo?.defaultModel === ''
@@ -112,11 +113,11 @@ export function GlobalDefaultsPanel({
       const level = formLevel === UNSET_MODEL_VALUE ? '' : formLevel
       const res = await assetsApi.setDefaultModel(model, level)
       if (gen !== loadGeneration.current) return
-      if (store?.refreshAssets) {
-        await store.refreshAssets()
+      if (actions?.refreshAssets) {
+        await actions.refreshAssets()
       }
       onSaved({ defaultModel: res.defaultModel, defaultThinkingLevel: res.defaultThinkingLevel })
-      store?.pushNotice?.({
+      actions?.pushNotice?.({
         type: 'notification',
         level: 'info',
         title: t('models.defaults.noticeUpdated'),

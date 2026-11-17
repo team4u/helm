@@ -10,7 +10,20 @@ import {
   partitionSidebarUi,
 } from '../shell/sidebar-model.js'
 import { patchConversationArchived } from '../shell/archive-ops.js'
-import { useHelmStore } from '../lib/store-context.js'
+import {
+  useConversationArtifacts,
+  useConversationDetail,
+  useConversationLive,
+  useConversationSummary,
+  useConversations,
+  useGroupedUi,
+  useLoadError,
+  useLocationTargets,
+  usePlugins,
+  useProfilesSlice,
+  useStoreActions,
+  useWorkbenchState,
+} from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuPortal, DropdownMenuSeparator, DropdownMenuTrigger } from '../ui/DropdownMenu.js'
 import { Tooltip } from '../ui/Tooltip.js'
@@ -40,10 +53,28 @@ export interface ConversationPaneProps {
 
 /** 会话顶栏 + 时间线 + AskDock(Composer 内) + Composer 微操舱。 */
 export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDrawer, onCloseDrawer }: ConversationPaneProps) {
-  const store = useHelmStore()
+  const detail = useConversationDetail(conversationId)
+  const summary = useConversationSummary(conversationId)
+  const conversations = useConversations()
+  const live = useConversationLive(conversationId)
+  const groupedUi = useGroupedUi()
+  const convArtifacts = useConversationArtifacts(conversationId)
+  const detailError = useLoadError(`conversation:${conversationId}`)
+  const { profiles } = useProfilesSlice()
+  const plugins = usePlugins()
+  const { primaryTarget, splitTarget } = useLocationTargets()
+  const { workbenchOpen, workbenchTab } = useWorkbenchState()
+  const {
+    loadConversationDetail,
+    loadEarlierEntries,
+    pushNotice,
+    closeSplit,
+    openTarget,
+    setActiveModal,
+    setWorkbenchTab,
+    setWorkbenchOpen,
+  } = useStoreActions()
   const { t } = useWebLocale()
-  const detail = store.conversationDetails[conversationId]
-  const summary = useMemo(() => store.conversations.find((c) => c.id === conversationId), [store.conversations, conversationId])
   const conversation = summary ?? detail
   const [renaming, setRenaming] = useState(false)
   const [titleDraft, setTitleDraft] = useState('')
@@ -59,7 +90,6 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
   const moreMenuRef = useRef<HTMLSpanElement | null>(null)
   const moreButtonRef = useRef<HTMLButtonElement | null>(null)
 
-  const live = store.conversationLives[conversationId]
   const isWorking = conversation?.status === 'working'
   const isCompacting = conversation?.contextUsage?.compacting === true
   const compactPending = actionPending === 'compact' || isCompacting
@@ -70,30 +100,29 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
         ...(live !== undefined ? { live } : {}),
         working: isWorking,
         compacting: isCompacting,
-        timelineRenderers: store.groupedUi.timelineRenderers,
-        toolViews: store.groupedUi.toolViews,
+        timelineRenderers: groupedUi.timelineRenderers,
+        toolViews: groupedUi.toolViews,
       }),
-    [detailEntries, live, isWorking, isCompacting, store.groupedUi.timelineRenderers, store.groupedUi.toolViews],
+    [detailEntries, live, isWorking, isCompacting, groupedUi.timelineRenderers, groupedUi.toolViews],
   )
   const outlineNodes = useMemo(
     () => buildConversationOutline(timelineItems, { latestAssistantTurnFailed: conversation?.status === 'error' }),
     [timelineItems, conversation?.status],
   )
 
-  const loadDetail = store.loadConversationDetail
   useEffect(() => {
     if (detail === undefined) {
-      void loadDetail(conversationId, true)
+      void loadConversationDetail(conversationId, true)
     }
-  }, [conversationId, detail, loadDetail])
+  }, [conversationId, detail, loadConversationDetail])
 
-  // 祖先面包屑链（根在前）：仅由 store.conversations 摘要推导，不引入平行路由状态。
+  // 祖先面包屑链（根在前）：仅由 conversations 摘要推导，不引入平行路由状态。
   const ancestors = useMemo(
-    () => buildAncestorChain(store.conversations, conversationId, conversation),
-    [store.conversations, conversationId, conversation],
+    () => buildAncestorChain(conversations, conversationId, conversation),
+    [conversations, conversationId, conversation],
   )
   const ancestorTitle = (id: number): string =>
-    store.conversations.find((conv) => conv.id === id)?.title ?? ''
+    conversations.find((conv) => conv.id === id)?.title ?? ''
 
   // 切换会话时关闭更多菜单与重置大纲滚动状态（组件复用时也保持确定语义）
   useEffect(() => {
@@ -115,23 +144,21 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
   const loadEarlierForOutline = (): void => {
     if (loadingOlderOutline || !detail?.nextCursor) return
     setLoadingOlderOutline(true)
-    void store.loadEarlierEntries(conversationId).finally(() => setLoadingOlderOutline(false))
+    void loadEarlierEntries(conversationId).finally(() => setLoadingOlderOutline(false))
   }
 
   // 工作台汇总角标：内置产物计数 + 各插件面板 badge（从 public doc 动态提取）。
   const workbenchTabs = useWorkbenchTabs(conversationId, conversation)
   const workbenchBadge = summarizeWorkbenchBadge(workbenchTabs)
   const hasWorkbenchPanel = workbenchTabs.some((tab) => tab.id !== 'artifacts')
-  const convArtifacts = store.conversationArtifacts[conversationId]
   const hasAnyArtifacts = Array.isArray(convArtifacts) && convArtifacts.length > 0
-  const detailError = store.loadErrors[`conversation:${conversationId}`]
   if (detailError) {
     return (
       <div className={`${isSplit ? 'helm-split-pane' : 'helm-pane'} pane-error`} role="alert">
         <div className="pane-error-row">
           <p>{t('conv.pane.loadFailed', { id: conversationId, error: detailError })}</p>
           <span className="pane-error-actions">
-            <button className="btn" onClick={() => void store.loadConversationDetail(conversationId, true)}>{t('common.retry')}</button>
+            <button className="btn" onClick={() => void loadConversationDetail(conversationId, true)}>{t('common.retry')}</button>
             {isDrawer && onCloseDrawer !== undefined ? (
               <button type="button" className="btn btn-sm btn-ghost conversation-drawer-close-btn" aria-label={t('conv.pane.closeDrawerAria')} onClick={onCloseDrawer}>{t('common.close')}</button>
             ) : isSplit && onCloseSplit !== undefined ? <CloseSplitButton onCloseSplit={onCloseSplit} /> : null}
@@ -182,14 +209,14 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
     setActionPending(name)
     try {
       await fn()
-      store.pushNotice({
+      pushNotice({
         type: 'notification',
         level: 'info',
         title: successTitle,
         conversationId,
       })
     } catch (err) {
-      store.pushNotice({
+      pushNotice({
         type: 'notification',
         level: 'error',
         title: t('conv.pane.actionFailedTitle', { title: successTitle }),
@@ -201,21 +228,21 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
     }
   }
 
-  const profile = store.profiles.find((p) => p.id === conversation.profileId)
+  const profile = profiles.find((p) => p.id === conversation.profileId)
   const profileStarters = profile !== undefined && profile.starters !== undefined && profile.starters.length > 0 ? profile.starters : undefined
-  const enabledPluginIds = new Set(store.plugins.filter((p) => p.enabled).map((p) => p.id))
+  const enabledPluginIds = new Set(plugins.filter((p) => p.enabled).map((p) => p.id))
   const canCreateThread = profile !== undefined &&
     isHumanSelectableProfile(profile, enabledPluginIds) &&
     (conversation.ownedBy ?? 'human') === 'human'
 
   // 插件微插槽 conversation.header.action：placement='toolbar' 直出顶栏按钮组，
   // 其余（缺省 'menu'）收纳进「更多操作」下拉菜单；均按 scope 过滤当前会话。
-  const headerActions = matchConversationActions(store.groupedUi.uiActions, 'conversation:header', conversation)
+  const headerActions = matchConversationActions(groupedUi.uiActions, 'conversation:header', conversation)
   const { toolbar: toolbarActions, menu: menuActions } = splitConversationHeaderActions(headerActions)
   const archived = isConversationArchived(conversation)
   const canManageArchive = isConversationArchivable(
     conversation,
-    partitionSidebarUi([], store.groupedUi.sidebarSections).sectionTags,
+    partitionSidebarUi([], groupedUi.sidebarSections).sectionTags,
   )
 
   const saveTitle = async (): Promise<void> => {
@@ -240,28 +267,28 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
       onCloseSplit?.()
       return
     }
-    if (store.splitTarget !== null) {
-      store.closeSplit()
+    if (splitTarget !== null) {
+      closeSplit()
       return
     }
-    store.openTarget({ kind: 'conversation', conversationId }, { split: true })
+    openTarget({ kind: 'conversation', conversationId }, { split: true })
   }
 
   // 祖先导航：主屏/分屏内直接切换该面板目标；抽屉内不顶掉主屏——
   // 祖先已在主屏/分屏时仅需收起抽屉，否则抽屉原位切换到祖先会话。
   const navigateToAncestor = (ancestorId: number): void => {
     if (isDrawer) {
-      const onStage = [store.primaryTarget, store.splitTarget].some(
+      const onStage = [primaryTarget, splitTarget].some(
         (target) => target?.kind === 'conversation' && target.conversationId === ancestorId,
       )
       if (onStage) {
         onCloseDrawer?.()
         return
       }
-      store.setActiveModal({ kind: 'conversation-drawer', conversationId: ancestorId })
+      setActiveModal({ kind: 'conversation-drawer', conversationId: ancestorId })
       return
     }
-    store.openTarget(
+    openTarget(
       { kind: 'conversation', conversationId: ancestorId },
       isSplit ? { split: true } : undefined,
     )
@@ -270,7 +297,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
   // 新话题：进入该智能体待命页并继承当前会话环境（远端节点/目录不回落本机）；
   // 首次发送才创建会话，不再预建空会话。
   const startNewThread = (): void => {
-    store.openTarget(
+    openTarget(
       {
         kind: 'agent',
         profileId: conversation.profileId,
@@ -404,17 +431,17 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
           {!isDrawer && (workbenchCount > 0 || hasWorkbenchPanel || hasAnyArtifacts) ? (
             <button
               type="button"
-              className={`btn btn-sm${store.workbenchOpen ? ' btn-primary' : ''}`}
+              className={`btn btn-sm${workbenchOpen ? ' btn-primary' : ''}`}
               aria-label={workbenchCount > 0 ? t('conv.pane.workbenchWithCount', { count: workbenchCount }) : t('conv.pane.workbench')}
               title={t('conv.pane.workbenchTitle')}
               onClick={() => {
                 // 打开首个可用页签；已打开时保持当前有效页签。
                 const target = resolveActiveWorkbenchTab(
-                  store.workbenchOpen ? store.workbenchTab : undefined,
+                  workbenchOpen ? workbenchTab : undefined,
                   workbenchTabs,
                 )
-                if (!store.workbenchOpen || target !== store.workbenchTab) store.setWorkbenchTab(target)
-                store.setWorkbenchOpen(true)
+                if (!workbenchOpen || target !== workbenchTab) setWorkbenchTab(target)
+                setWorkbenchOpen(true)
               }}
             >
               <HelmIcon name="panel-right" size={12} />
@@ -430,7 +457,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
               title={t('conv.pane.openFullscreenTitle')}
               onClick={() => {
                 onCloseDrawer()
-                store.openTarget({ kind: 'conversation', conversationId })
+                openTarget({ kind: 'conversation', conversationId })
               }}
             >
               <HelmIcon name="external-link" size={12} />
@@ -439,9 +466,9 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
           ) : isSplit && onCloseSplit !== undefined ? (
             <CloseSplitButton onCloseSplit={onCloseSplit} />
           ) : (
-            <span className={store.splitTarget === null ? 'pane-split-btn' : undefined}>
+            <span className={splitTarget === null ? 'pane-split-btn' : undefined}>
               <SplitToggleButton
-                isSplitActive={store.splitTarget !== null}
+                isSplitActive={splitTarget !== null}
                 onToggleSplit={toggleSplit}
               />
             </span>
@@ -655,14 +682,14 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
               await conversationsApi.remove(conversationId)
               // 导航由 conversation.deleted 事件按当前目标做条件更新；这里不使用
               // await 前捕获的主屏/分屏快照，避免删除完成时打断用户的新导航。
-              store.pushNotice({
+              pushNotice({
                 type: 'notification',
                 level: 'info',
                 title: t('conv.pane.conversationDeleted'),
                 body: t('conv.pane.conversationDeletedBody', { id: conversationId }),
               })
             } catch (err) {
-              store.pushNotice({
+              pushNotice({
                 type: 'notification',
                 level: 'error',
                 title: t('conv.pane.deleteFailed'),
