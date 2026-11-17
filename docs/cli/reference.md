@@ -160,7 +160,7 @@ PUT 为整体替换契约：update 走语义化标志时 CLI 先 GET 完整 Prof
 
 **`helm plugins client <id> [--module <m>] [--chunk <name>] [--output <f>]`** — 获取 client.tsx 编译产物；缺省模块 `client.tsx`；响应携带 `x-helm-client-hash` 内容哈希。
 
-**`helm plugins doctor [<id> | <dir>] [--path <dir>] [--dir <dir>] [--id <id>]`** — 外部插件源码静态自检：真实代际导入 + 临时宿主真实注册 + 前端模块真实编译，检查链 `manifest -> backend -> register -> client` 后继依赖前驱。位置参数为绝对路径时视为目录目标。预检失败报告仍完整输出但退出码非零。doctor 是静态自检：`definePlugin` 顶层依赖 `ctx.host.*` 的插件在 register 阶段如实失败。
+**`helm plugins doctor [<id> | <dir>] [--path <dir>] [--id <id>]`** — 外部插件源码静态自检：真实代际导入 + 临时宿主真实注册 + 前端模块真实编译，检查链 `manifest -> backend -> register -> client` 后继依赖前驱。位置参数为绝对路径时视为目录目标。预检失败报告仍完整输出但退出码非零。doctor 是静态自检：`definePlugin` 顶层依赖 `ctx.host.*` 的插件在 register 阶段如实失败。
 
 **`helm plugins reload <id>`** — 受控热重载：在途任务预检（409）→ dry-run doctor 预检（失败旧实例保持不动，`422 plugin_reload_preflight_failed`）→ 新代际切换（失败回滚）→ 启用状态保持。内置插件禁止热重载（403）。
 
