@@ -420,8 +420,8 @@ describe('Workflow 三区零重复与无损呈现', () => {
       assert.ok(nativeMount.container.querySelector('.subagent-live-card') === null, '时间线严禁挂载大卡片')
       const btn = nativeMount.container.querySelector('button.trace-row') as HTMLButtonElement | null
       assert.ok(btn !== null, '应渲染单行 .trace-row 按钮')
-      assert.ok(btn.textContent?.includes('Subagent #21'))
-      assert.ok(btn.textContent?.includes('排查登录问题'))
+      assert.ok(btn.querySelector('.trace-tool-name')?.textContent?.includes('排查登录问题'))
+      assert.ok(btn.querySelector('.workflow-trace-id')?.textContent?.includes('#21'))
       act(() => {
         btn.click()
       })
@@ -1106,7 +1106,7 @@ describe('Workflow 三区零重复与无损呈现', () => {
     assert.ok(enText.includes('Background subagent'), '缺省 en 应渲染英文任务类型取值')
     assert.ok(enText.includes('审校结论：全部通过'), 'result 正文是模型输出样例，两种 locale 均原样透传')
 
-    // 子代理轨迹行工具名跟随 locale（子会话 #60 / Subagent #60）。
+    // 子代理轨迹行有 prompt 时主名展示任务标题 + #60，同时状态徽章跟随 zh-CN locale。
     const zhHarness = createHostHarness({
       conversationId: 1,
       conversations: [createConv({ id: 1 }), childConv],
@@ -1125,7 +1125,8 @@ describe('Workflow 三区零重复与无损呈现', () => {
       }),
     )
     try {
-      assert.ok(zhRow.container.textContent?.includes('子代理 #60'), 'zh-CN 轨迹行应渲染中文工具名')
+      assert.ok(zhRow.container.querySelector('.trace-tool-name')?.textContent?.includes('排查登录问题'), 'zh-CN 轨迹行应展示任务标题')
+      assert.ok(zhRow.container.querySelector('.workflow-trace-id')?.textContent?.includes('#60'), 'zh-CN 轨迹行应附带 #60')
       assert.ok(zhRow.container.textContent?.includes('已完成'), 'zh-CN 轨迹行应渲染中文终态徽章')
     } finally {
       zhRow.unmount()
