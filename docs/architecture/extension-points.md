@@ -28,9 +28,9 @@ Hook 覆盖从外部事件入站到回合终态结算的完整调用链。处理
 ```typescript
 export type HookName =
   | 'trigger'      // 外部入站事件（cron/webhook 经 defang 防逃逸信封）
-  | 'input'        // 每次提交输入（human/agent/trigger 三种 origin）
+  | 'input'        // 每次提交输入（human/agent/trigger 三种 origin；支持 block 拦截）
   | 'before_turn'  // 回合推理前，可原地改写 tools/sections/messages
-  | 'tool_call'    // 工具开始执行前（唯一允许 block 的门控点）
+  | 'tool_call'    // 工具开始执行前（支持 block 门控）
   | 'tool_result'  // 工具执行返回后
   | 'agent_spawn'  // 子代理派生（额外支持 around continuation）
   | 'turn_settled' // 回合终态（completed | failed | aborted 统一覆盖）
@@ -39,14 +39,14 @@ export type HookName =
 | Hook | 触发时机 | 典型应用 | 允许的控制流 |
 | :--- | :--- | :--- | :--- |
 | `trigger` | 外部事件投递入站 | ThreadKey 直通 Worker、定向投递 | `continue / transform / handled` |
-| `input` | 输入提交 | 输入审计、上下文预处理 | `continue / transform / handled` |
+| `input` | 输入提交 | 输入审计、斜杠入口门控、上下文预处理 | `continue / transform / handled / block` |
 | `before_turn` | 回合推理前 | 注入记忆段落、动态增删工具 | `continue / transform` |
 | `tool_call` | 工具执行前 | 权限门控、敏感参数二次确认 | `continue / transform / handled / block` |
 | `tool_result` | 工具返回后 | 产物登记、结果格式化 | `continue / transform / handled` |
 | `agent_spawn` | 子代理派生 | 接管外部运行时或包裹隔离生命周期 | `continue / transform / handled` + around |
 | `turn_settled` | 回合终态结算 | 向中枢汇报、级联取消、更新召回图谱 | `continue / transform / handled` |
 
-四种控制流的语义：`continue` 放行；`transform` 原地改写载荷交由后续处理器与内核消费；`handled` 短路接管并终止默认行为；`block` 门控拦截并附带显式 reason（仅 `tool_call` 允许）。非法产物——缺 action、未知 action、该钩子不允许的组合、`transform` 缺 value、`block` 缺 reason——在宿主处显式抛 `invalid_hook_result`，绝不静默当 continue。
+四种控制流的语义：`continue` 放行；`transform` 原地改写载荷交由后续处理器与内核消费；`handled` 短路接管并终止默认行为；`block` 门控拦截并附带显式 reason（仅 `tool_call` 与 `input` 允许）。非法产物——缺 action、未知 action、该钩子不允许的组合、`transform` 缺 value、`block` 缺 reason——在宿主处显式抛 `invalid_hook_result`，绝不静默当 continue。
 
 内核不内置巡检定时器，也不存在 `watchdog_tick` Hook：周期性巡检由插件自管服务调度，终端侧诊断由 `builtin:herdr` 经通用进程内事件（`diagnostics.collect`）采集。
 

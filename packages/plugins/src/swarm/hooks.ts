@@ -23,9 +23,9 @@ const INELIGIBLE_SWARM_SLASH_REASON =
 export function activeSwarmGroupCoordinatorSection(groupId: string): string {
   return [
     `<active_swarm_group id="${escapeXml(groupId)}" role="coordinator">`,
-    '1. Recruit named peer workers via swarm_dispatch_worker (use isolation="worktree" for parallel writers and access="readonly" for verifiers).',
-    '2. Coordinate handoffs via swarm_board_post / swarm_board_read / swarm_board_status using #seq pointers in refs without copy-pasting diffs or long reports.',
-    '3. Keep wake=true strictly for the next actor who must act; never close the group while activeWorkingMembers is non-empty.',
+    `1. Before coordinating, call load_skill({ skillId: "${SWARM_SKILL_ID}" }) for the full blackboard collaboration rules. If the user only sent "/swarm" with no task and no prior goal, confirm swarm mode is ready and briefly ask what task to coordinate.`,
+    '2. Dynamically decide the squad for the task itself (never follow fixed role-name templates): choose worker count, lowercase names, directory access ("readwrite" / "readonly"), workspace isolation ("worktree" / "inherit"), and optional profileId / model via swarm_dispatch_worker.',
+    '3. Coordinate handoffs via swarm_board_post / swarm_board_read / swarm_board_status using #seq pointers in refs without copy-pasting diffs or long reports; keep wake=true strictly for the next actor who must act, and never close the group while activeWorkingMembers is non-empty.',
     '4. When all slices pass verification and worktree branches await merging, call swarm_close_group({ keepWorktree: true }) to unlock bash and merge cleanly.',
     '</active_swarm_group>',
   ].join('\n')
@@ -73,7 +73,7 @@ export function registerSwarmHooks(
   } = coordinator
 
   // ------------------------------------------------------------------
-  // input：/swarm 斜杠指令激活协作组并展开主控协同引导
+  // input：/swarm 斜杠指令激活或复用协作组，保留用户输入原文不变
   // ------------------------------------------------------------------
   ctx.hook.onInput(async (payload) => {
     if (!isActive()) return
@@ -92,8 +92,7 @@ export function registerSwarmHooks(
     }
 
     const rawTask = (match[1] ?? '').trim()
-    let groupId = groups.findActiveGroupByCoordinator(conv.id)?.id
-    if (groupId === undefined) {
+    if (groups.findActiveGroupByCoordinator(conv.id) === undefined) {
       const firstLine = rawTask.split(/\r?\n/, 1)[0]?.trim() ?? ''
       const title =
         firstLine !== ''
@@ -102,42 +101,16 @@ export function registerSwarmHooks(
             ? conv.title.trim().slice(0, 80)
             : 'Swarm 协同任务'
       const objective = rawTask !== '' ? rawTask.slice(0, 240) : undefined
-      const ensured = await ensureCoordinatorGroup(ctx, coordinator, {
+      await ensureCoordinatorGroup(ctx, coordinator, {
         conversationId: conv.id,
         title,
         ...(objective !== undefined ? { objective } : {}),
         coordinatorGuard: true,
         reuseExisting: true,
       })
-      groupId = ensured.groupId
     }
 
-    const expandedText =
-      rawTask !== ''
-        ? [
-            `已进入 Swarm 多智能体协同主控模式（groupId: ${groupId}）。`,
-            `1. 请先调用 load_skill({ skillId: "${SWARM_SKILL_ID}" }) 阅读并遵循协同规则；`,
-            '2. 使用 swarm_dispatch_worker 派发隔离 worktree 的 readwrite 作者（如 @author）与 access: "readonly" 的验收者（如 @verifier）协同完成以下任务并交叉验收；',
-            '3. 通过 swarm_board_post / swarm_board_read / swarm_board_status 以 #seq 推进流转，全部审过后调用 swarm_close_group({ keepWorktree: true }) 解锁主控并合入收尾。',
-            '',
-            '任务目标：',
-            rawTask,
-          ].join('\n')
-        : [
-            `已进入 Swarm 多智能体协同主控模式（groupId: ${groupId}）。`,
-            `请先调用 load_skill({ skillId: "${SWARM_SKILL_ID}" }) 阅读协同规则（后续可通过 swarm_dispatch_worker 派发 worktree 作者与 readonly 验收者），然后简短询问用户本次需要协同完成的目标任务。`,
-          ].join('\n')
-
-    return {
-      action: 'transform',
-      value: {
-        ...payload,
-        input: {
-          ...payload.input,
-          text: expandedText,
-        },
-      },
-    }
+    return { action: 'continue' }
   })
 
   // ------------------------------------------------------------------

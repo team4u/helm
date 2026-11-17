@@ -297,6 +297,8 @@ test('swarm-unit3: synthesizeBoardView, fingerprint deduplication, and byte-cons
   // Byte-constant sections contain <active_swarm_group> and zero mutable roster/headSeq
   const coordSec = activeSwarmGroupCoordinatorSection('grp_test_1')
   assert.match(coordSec, /^<active_swarm_group id="grp_test_1" role="coordinator">/)
+  assert.match(coordSec, /load_skill\(\{ skillId: "swarm-collab" \}\)/)
+  assert.match(coordSec, /never follow fixed role-name templates/)
   assert.match(coordSec, /swarm_dispatch_worker/)
   assert.match(coordSec, /<\/active_swarm_group>$/)
   const workerSec = activeSwarmGroupWorkerSection('grp_test_1', 'verifier', 'readonly', 'inherit')

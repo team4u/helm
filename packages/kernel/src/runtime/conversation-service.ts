@@ -775,7 +775,8 @@ export class ConversationService {
     if (prepared.kind === 'handled') return { submissionId: prepared.submissionId }
 
     this.contextOps.assertOpen()
-    this.inputPipeline.applyFirstInputTitle(convMeta, prepared.effectiveText)
+    // Re-read metadata after prepareInput so mutations performed by onInput hooks (e.g. tags) are preserved.
+    this.inputPipeline.applyFirstInputTitle(requireConv(this.store, id), prepared.effectiveText)
 
     const content =
       prepared.resolvedAttachments !== undefined

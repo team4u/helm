@@ -881,8 +881,8 @@ test('swarm-int5: /swarm slash activation loop (task auto-create + same-turn too
     assert.match(plainSawText, /please explain \/swarm syntax/)
     assert.equal(kernel.getConversation(plainConv.id).tags.includes(COORDINATOR_TAG), false)
 
-    // 2) Sending `/swarm <task>` on a blank top-level human conversation auto-creates group, tags coordinator, strips heavy tools, and completes flow
-    const coord = await kernel.createConversation({ title: 'Auth Squad Chat', profileId: 'assistant', cwd: env.repoDir })
+    // 2) Sending `/swarm <task>` on a blank top-level human conversation auto-creates group, tags coordinator, keeps clean user bubble/title, and injects system guide
+    const coord = await kernel.createConversation({ title: '', profileId: 'assistant', cwd: env.repoDir })
     let turnMeta: { toolNames: string[]; sectionsById: Record<string, string>; userText: string } | undefined
     let workerDispatched = false
     setSwarmRoleResponses(env.faux, {
@@ -927,25 +927,35 @@ test('swarm-int5: /swarm slash activation loop (task auto-create + same-turn too
     await kernel.waitForIdle(coord.id)
 
     assert.ok(turnMeta !== undefined)
-    assert.equal(kernel.getConversation(coord.id).tags.includes(COORDINATOR_TAG), true)
+    const coordSummary = kernel.getConversation(coord.id)
+    assert.equal(coordSummary.tags.includes(COORDINATOR_TAG), true)
+    assert.equal(coordSummary.title, '/swarm 重构鉴权模块并交叉验收', 'auto-title must derive from clean user input')
+    const coordDetail = await kernel.getConversationDetail(coord.id, { limit: 20 })
+    const firstHumanInput = coordDetail.entries.find((e) => e.kind === 'helm.input')
+    assert.equal(
+      (firstHumanInput?.data as { text?: string } | undefined)?.text,
+      '/swarm 重构鉴权模块并交叉验收',
+      'helm.input must preserve original /swarm text verbatim without system-prompt wall',
+    )
     for (const expected of ['swarm_dispatch_worker', 'swarm_board_post', 'swarm_board_read', 'swarm_close_group']) {
       assert.ok(turnMeta.toolNames.includes(expected), `expected ${expected} exposed on turn 1 after /swarm`)
     }
     for (const stripped of ['swarm_create_group', 'bash', 'edit', 'write', 'subagent', 'SubagentWorkflow']) {
       assert.equal(turnMeta.toolNames.includes(stripped), false, `expected ${stripped} stripped on turn 1 after /swarm`)
     }
-    assert.ok(turnMeta.sectionsById['swarm.active_group']?.includes('role="coordinator"'))
-    assert.match(turnMeta.userText, /load_skill/)
-    assert.match(turnMeta.userText, /swarm-collab/)
-    assert.match(turnMeta.userText, /swarm_dispatch_worker/)
-    assert.match(turnMeta.userText, /重构鉴权模块并交叉验收/)
+    const coordSection = turnMeta.sectionsById['swarm.active_group'] ?? ''
+    assert.match(coordSection, /^<active_swarm_group id="[^"]+" role="coordinator">/)
+    assert.match(coordSection, /load_skill\(\{ skillId: "swarm-collab" \}\)/)
+    assert.match(coordSection, /never follow fixed role-name templates/)
+    assert.match(coordSection, /swarm_dispatch_worker/)
+    assert.match(turnMeta.userText, /\/swarm 重构鉴权模块并交叉验收/)
 
     const indexDoc = kernel.plugins.getPublicDoc(SWARM_PLUGIN_ID, 'index').value as SwarmIndexDoc
     const coordGroup = indexDoc.groups.find((g) => g.coordinatorConversationId === coord.id && g.status === 'active')
     assert.ok(coordGroup !== undefined, 'active group created for /swarm coordinator')
     assert.equal(coordGroup.title, '重构鉴权模块并交叉验收')
 
-    // 3) Sending `/swarm <followup>` again in the same active coordinator reuses the existing group idempotently
+    // 3) Sending `/swarm <followup>` again in the same active coordinator reuses the existing group idempotently and keeps user text verbatim
     let secondPromptText = ''
     setSwarmRoleResponses(env.faux, {
       coordinator: [
@@ -957,8 +967,7 @@ test('swarm-int5: /swarm slash activation loop (task auto-create + same-turn too
     })
     await kernel.submitInput(coord.id, '/swarm 补充单测覆盖')
     await kernel.waitForIdle(coord.id)
-    assert.match(secondPromptText, new RegExp(coordGroup.id))
-    assert.match(secondPromptText, /补充单测覆盖/)
+    assert.match(secondPromptText, /\/swarm 补充单测覆盖/)
     const indexAfterSecond = kernel.plugins.getPublicDoc(SWARM_PLUGIN_ID, 'index').value as SwarmIndexDoc
     assert.equal(
       indexAfterSecond.groups.filter((g) => g.coordinatorConversationId === coord.id && g.status === 'active').length,
@@ -989,20 +998,27 @@ test('swarm-int5: /swarm slash activation loop (task auto-create + same-turn too
         err.message.includes('不能在子成员或后台会话中使用 /swarm 发起协同'),
     )
 
-    // 5) Plain `/swarm` (no arguments) on a top-level human conversation activates group and prompts coordinator to ask for task
+    // 5) Plain `/swarm` (no arguments) on a top-level human conversation activates group, keeps '/swarm' verbatim, and injects ask-for-task system guidance
     const emptyArgCoord = await kernel.createConversation({ title: 'Standby Swarm Topic', profileId: 'assistant', cwd: env.repoDir })
-    let emptyArgPrompt = ''
+    let emptyArgSection = ''
+    let emptyArgMessages = ''
     env.faux.setResponses([
       (ctx) => {
-        emptyArgPrompt = JSON.stringify(ctx.messages)
+        emptyArgSection =
+          captureRequestMeta(ctx.messages as unknown as Record<string, unknown>[]).sectionsById['swarm.active_group'] ?? ''
+        emptyArgMessages = JSON.stringify(ctx.messages)
         return fauxAssistantMessage('请告诉我本次协同目标任务。')
       },
     ])
     await kernel.submitInput(emptyArgCoord.id, '/swarm')
     await kernel.waitForIdle(emptyArgCoord.id)
     assert.equal(kernel.getConversation(emptyArgCoord.id).tags.includes(COORDINATOR_TAG), true)
-    assert.match(emptyArgPrompt, /swarm-collab/)
-    assert.match(emptyArgPrompt, /简短询问用户/)
+    assert.match(emptyArgSection, /load_skill\(\{ skillId: "swarm-collab" \}\)/)
+    assert.match(emptyArgSection, /briefly ask what task to coordinate/)
+    assert.match(emptyArgMessages, /"\/swarm"/)
+    const emptyArgDetail = await kernel.getConversationDetail(emptyArgCoord.id, { limit: 10 })
+    const emptyArgInput = emptyArgDetail.entries.find((e) => e.kind === 'helm.input')
+    assert.equal((emptyArgInput?.data as { text?: string } | undefined)?.text, '/swarm')
     const emptyArgIndex = kernel.plugins.getPublicDoc(SWARM_PLUGIN_ID, 'index').value as SwarmIndexDoc
     const emptyArgGroup = emptyArgIndex.groups.find((g) => g.coordinatorConversationId === emptyArgCoord.id && g.status === 'active')
     assert.ok(emptyArgGroup !== undefined)
