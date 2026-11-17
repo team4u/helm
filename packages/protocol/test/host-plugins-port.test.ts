@@ -98,6 +98,7 @@ test('AgentSpawnRequest reattach/requestId and PluginToolSpec replay contract fi
   const spawnWithReattach: AgentSpawnRequest = {
     parentConversationId: 1,
     prompt: 'resume work',
+    title: 'Resume worker task',
     requestId: 'req-1',
     reattach: {
       conversationId: 2,
@@ -105,6 +106,7 @@ test('AgentSpawnRequest reattach/requestId and PluginToolSpec replay contract fi
       effectiveCwd: '/repo',
     },
   }
+  assert.equal(spawnWithReattach.title, 'Resume worker task')
   assert.equal(spawnWithReattach.requestId, 'req-1')
   assert.equal(spawnWithReattach.reattach?.conversationId, 2)
   assert.equal(spawnWithReattach.reattach?.executionId, 'exec-2')

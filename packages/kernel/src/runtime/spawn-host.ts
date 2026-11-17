@@ -78,6 +78,8 @@ export interface SpawnHostSource {
     parentToolCallId: string | undefined,
     /** Clamped explicit reasoning effort override (`undefined` if `request.effort` was not provided). */
     thinkingLevelOverride: string | undefined,
+    /** Optional initial display title for the newly created child conversation. */
+    title: string | undefined,
   ): Promise<void>
   /** Update child conversation's `parentToolCallId` on resume (snapshot + broadcast). */
   bindChildToolCall(childId: number, parentToolCallId: string): void
@@ -138,10 +140,10 @@ export function buildSpawnHost(options: SpawnHostOptions): SpawnHost {
       source.resolvedAttachments !== undefined
         ? async () => source.buildAttachmentBlock(source.resolvedAttachments!)
         : undefined,
-    registerChildConversation: (childId, parentId, profileId, childCwd, modelMirror, tags, thinkingLevel, nodeId, thinkingLevelOverride) =>
+    registerChildConversation: (childId, parentId, profileId, childCwd, modelMirror, tags, thinkingLevel, nodeId, thinkingLevelOverride, title) =>
       source.registerChildConversation(
         childId, parentId, profileId, childCwd, modelMirror, tags, thinkingLevel, nodeId,
-        finalRequest.parentToolCallId, thinkingLevelOverride,
+        finalRequest.parentToolCallId, thinkingLevelOverride, title ?? finalRequest.title,
       ),
     bindChildToolCall: (childId, parentToolCallId) => source.bindChildToolCall(childId, parentToolCallId),
     ...(source.abortChildConversationGuarded !== undefined

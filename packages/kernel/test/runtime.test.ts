@@ -18,6 +18,7 @@ import { join } from 'node:path'
 import { after, before, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { KernelRuntime } from '../src/runtime/index.js'
+import { assertSpawnRequestTitle, normalizeSpawnTitle } from '../src/runtime/spawn.js'
 import { buildToolEnv } from '../src/runtime/tools.js'
 import type { ConversationSummary, HelmEventFrame, HelmSnapshot, HelmTransientLiveFrame } from '@helm/protocol'
 import { cleanupDir, makeFauxModels, makeTempDir, waitFor } from './helpers.js'
@@ -591,6 +592,154 @@ describe('native subagent', { timeout: 60_000 }, () => {
           }),
         (err: unknown) => err instanceof HelmError && err.code === 'unsupported_runtime',
       )
+    } finally {
+      await kernel.close()
+    }
+  })
+
+  it('spawnAgent title boundary validation rejects non-strings and control characters before creating child conversations', { timeout: 60_000 }, async () => {
+    const kernel = await openRuntime(join(root, 'spawn-title-validation'))
+    try {
+      const convCountBefore = kernel.listConversations().length
+      const callsBefore = kernel.__faux.state.callCount
+
+      for (const badTitle of [123, null, {}, ['bad']]) {
+        await assertThrowsSync(
+          () => assertSpawnRequestTitle(badTitle),
+          'validation_error',
+        )
+        await assert.rejects(
+          () =>
+            kernel.spawnAgent({
+              parentConversationId: 1,
+              prompt: 'bad title type',
+              title: badTitle as never,
+            }),
+          (err: unknown) => err instanceof HelmError && err.code === 'validation_error' && err.status === 400,
+        )
+      }
+
+      for (const ctrlTitle of ['bad\u0000title', 'line1\nline2', 'tab\ttitle', 'cr\rtitle', 'del\u007ftitle']) {
+        await assertThrowsSync(
+          () => assertSpawnRequestTitle(ctrlTitle),
+          'validation_error',
+        )
+        await assert.rejects(
+          () =>
+            kernel.spawnAgent({
+              parentConversationId: 1,
+              prompt: 'control char title',
+              title: ctrlTitle,
+            }),
+          (err: unknown) => err instanceof HelmError && err.code === 'validation_error' && err.status === 400,
+        )
+      }
+
+      // Hook rewriting title to contain control chars is also rejected before native child creation.
+      await kernel.plugins.register({
+        id: 'test:bad-title-hook',
+        definePlugin(ctx) {
+          ctx.hook.onAgentSpawn(async (req, next) => next({ ...req, title: 'hook\nbad' }))
+        },
+      })
+      await assert.rejects(
+        () =>
+          kernel.spawnAgent({
+            parentConversationId: 1,
+            prompt: 'hook bad title',
+            title: 'clean request title',
+          }),
+        (err: unknown) => err instanceof HelmError && err.code === 'validation_error' && err.status === 400,
+      )
+
+      assert.equal(kernel.listConversations().length, convCountBefore, 'rejected titles must never create conversations')
+      assert.equal(kernel.__faux.state.callCount, callsBefore, 'rejected titles must never invoke model requests')
+    } finally {
+      await kernel.close()
+    }
+  })
+
+  it('spawnAgent normalizes title on fresh creation (trim, redact secrets, cap 120 chars, fallback on blank) and preserves title on resume', { timeout: 60_000 }, async () => {
+    const kernel = await openRuntime(join(root, 'spawn-title-normalize'))
+    try {
+      // Register both per-conversation stash secret and global redaction token.
+      kernel.services.stash.put(1, 'API_TOKEN', 'secret-token-xyz-987')
+      const disposeGlobal = kernel.stash.addRedaction('global-secret-456')
+
+      kernel.__faux.setResponses([
+        fauxAssistantMessage('custom done'),
+        fauxAssistantMessage('secret done'),
+        fauxAssistantMessage('long done'),
+        fauxAssistantMessage('blank done'),
+        fauxAssistantMessage('resumed done'),
+      ])
+
+      try {
+        // 1. Trimmed explicit title + preserved on resume even when caller passes a new title.
+        let child1 = 0
+        await kernel.spawnAgent({
+          parentConversationId: 1,
+          prompt: 'inspect build',
+          title: '  Inspect build failure  ',
+          onResolved: (info) => {
+            child1 = info.conversationId ?? 0
+          },
+        })
+        assert.equal(kernel.getConversation(child1).title, 'Inspect build failure')
+
+        // 2. Secret redaction before persistence & cap.
+        let child2 = 0
+        await kernel.spawnAgent({
+          parentConversationId: 1,
+          prompt: 'check token',
+          title: '  Check secret-token-xyz-987 and global-secret-456  ',
+          onResolved: (info) => {
+            child2 = info.conversationId ?? 0
+          },
+        })
+        const child2Title = kernel.getConversation(child2).title
+        assert.ok(!child2Title.includes('secret-token-xyz-987'), 'stash secret must be redacted in title')
+        assert.ok(!child2Title.includes('global-secret-456'), 'global secret must be redacted in title')
+        assert.ok(child2Title.includes('[REDACTED'), `expected redaction marker in title: ${child2Title}`)
+
+        // 3. Cap at 120 characters.
+        let child3 = 0
+        await kernel.spawnAgent({
+          parentConversationId: 1,
+          prompt: 'long title task',
+          title: `  ${'x'.repeat(160)}  `,
+          onResolved: (info) => {
+            child3 = info.conversationId ?? 0
+          },
+        })
+        assert.equal(kernel.getConversation(child3).title, 'x'.repeat(120))
+        assert.equal(kernel.getConversation(child3).title.length, 120)
+
+        // 4. Blank / whitespace-only falls back to `subagent <id>`.
+        let child4 = 0
+        await kernel.spawnAgent({
+          parentConversationId: 1,
+          prompt: 'blank title task',
+          title: '   ',
+          onResolved: (info) => {
+            child4 = info.conversationId ?? 0
+          },
+        })
+        assert.equal(kernel.getConversation(child4).title, `subagent ${child4}`)
+        assert.equal(normalizeSpawnTitle(undefined, 99), 'subagent 99')
+        assert.equal(normalizeSpawnTitle('   ', 99), 'subagent 99')
+
+        // 5. Resume preserves original title and ignores request.title.
+        await kernel.spawnAgent({
+          parentConversationId: 1,
+          prompt: 'continue build check',
+          resume: String(child1),
+          title: 'Attempted overwrite on resume',
+        })
+        assert.equal(kernel.getConversation(child1).title, 'Inspect build failure')
+      } finally {
+        disposeGlobal()
+      }
     } finally {
       await kernel.close()
     }

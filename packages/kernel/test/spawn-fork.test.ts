@@ -866,7 +866,10 @@ describe('KernelRuntime.spawnAgent({ fork: true }) integration contracts', { tim
         parentConversationId: 1,
         fork: true,
         prompt: 'verify post-rewind fork history',
+        title: '  Post-rewind fork check  ',
       })
+      const forkedChild = kernel.listConversations({ parentConversationId: 1 }).at(-1)
+      assert.equal(forkedChild?.title, 'Post-rewind fork check')
       assert.ok(forkedMessages)
       const serialized = JSON.stringify(forkedMessages)
       assert.ok(serialized.includes('KEEP_ME_111'), 'retained pre-rewind turn must be inherited')

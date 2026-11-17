@@ -104,6 +104,11 @@ export interface AgentSpawnRequest {
   /** 发起本次派生的父会话工具调用 ID（可选，供原生子会话登记实时关联）。 */
   parentToolCallId?: string
   prompt: string
+  /**
+   * 新建子会话的可选显示标题（经裁剪、脱敏并截断至 120 字符；为空或省略时沿用 `subagent <id>`；
+   * `resume` / `reattach` 场景忽略本字段，保留既有标题）。
+   */
+  title?: string
   /** 编排宿主分配的稳定调用标识，用于续接与取消。 */
   agentId?: string
   /** Profile ID 或 'herdr:<kind>' 外部运行时标识。 */

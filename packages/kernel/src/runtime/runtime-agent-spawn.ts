@@ -43,7 +43,7 @@ import {
   sanitizeAgentGateResult,
   sanitizeAgentNamespacedMeta,
 } from '@helm/protocol'
-import { isSpawnConversationInTurn, runNativeSpawn } from './spawn.js'
+import { assertSpawnRequestTitle, isSpawnConversationInTurn, normalizeSpawnTitle, runNativeSpawn } from './spawn.js'
 import { validateJsonSchema, type StructuredOutputSession } from './structured-output.js'
 import type { HelmStore } from './store.js'
 import type { HelmToolDeps } from './tool-deps.js'
@@ -167,6 +167,7 @@ export class RuntimeAgentSpawn {
       field: 'spawn request meta',
     })
     assertSpawnRequestModes(request)
+    assertSpawnRequestTitle(request.title)
     const preResolvedForkAnchor = await this.preflightForkRequest(request)
     const token = randomUUID()
     try {
@@ -322,6 +323,7 @@ export class RuntimeAgentSpawn {
         field: 'spawn request meta',
       })
       assertSpawnRequestModes(finalRequest)
+      assertSpawnRequestTitle(finalRequest.title)
       const forkChanged =
         request.fork !== true ||
         finalRequest.agentType !== request.agentType ||
@@ -384,7 +386,7 @@ export class RuntimeAgentSpawn {
             installExtension: (extension) => {
               this.deps.registry.install(extension as never)
             },
-            registerChildConversation: async (childId, parentId, profileId, childCwd, modelMirror, tags, thinkingLevel, nodeId, parentToolCallId, thinkingLevelOverride) => {
+            registerChildConversation: async (childId, parentId, profileId, childCwd, modelMirror, tags, thinkingLevel, nodeId, parentToolCallId, thinkingLevelOverride, title) => {
               const profile = await this.deps.conversations.readProfile(profileId)
               const parentMeta = this.deps.store.getConv(parentId)
               const { forkSameProfile } = resolveForkMode(profileId, finalRequest.fork, parentMeta?.profileId)
@@ -394,9 +396,14 @@ export class RuntimeAgentSpawn {
                 parentMeta?.modelOverride,
               )
               const now = Date.now()
+              const normalizedTitle = normalizeSpawnTitle(
+                title ?? finalRequest.title,
+                childId,
+                (text) => this.deps.stashService.redact(text),
+              )
               this.deps.store.upsertConv({
                 id: childId,
-                title: `subagent ${childId}`,
+                title: normalizedTitle,
                 profileId,
                 tags,
                 parentConversationId: parentId,

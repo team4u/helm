@@ -57,6 +57,48 @@ const DEFAULT_SPAWN_PROFILE = 'assistant'
 /** Valid `thinkingLevel` enum values (`pi-ai` `ModelThinkingLevel`; `effort` maps directly here, rejecting arbitrary strings). */
 export const THINKING_LEVELS = new Set(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
 
+/** Maximum character length for normalized child conversation titles on fresh spawn. */
+export const MAX_SPAWN_TITLE_LENGTH = 120
+
+/**
+ * Boundary validation for optional `AgentSpawnRequest.title`:
+ * rejects non-string values and any ASCII control characters (`0x00..0x1F`, `0x7F`).
+ */
+export function assertSpawnRequestTitle(title: unknown): void {
+  if (title === undefined) return
+  if (typeof title !== 'string') {
+    throw new HelmError(
+      'validation_error',
+      `title must be a string (received ${title === null ? 'null' : typeof title})`,
+      400,
+    )
+  }
+  for (let i = 0; i < title.length; i += 1) {
+    const code = title.charCodeAt(i)
+    if (code < 0x20 || code === 0x7f) {
+      throw new HelmError('validation_error', 'title must not contain control characters', 400)
+    }
+  }
+}
+
+/**
+ * Normalize a spawn `title` for fresh child conversation creation:
+ * trims whitespace, redacts secrets (when a redactor is provided), caps at 120 characters,
+ * and falls back to `'subagent <childId>'` when omitted or blank after trim.
+ */
+export function normalizeSpawnTitle(
+  rawTitle: string | undefined,
+  childId: number,
+  redact?: (text: string) => string,
+): string {
+  if (rawTitle === undefined) return `subagent ${childId}`
+  const trimmed = rawTitle.trim()
+  if (trimmed === '') return `subagent ${childId}`
+  const redacted = (redact ? redact(trimmed) : trimmed).trim()
+  if (redacted === '') return `subagent ${childId}`
+  return redacted.slice(0, MAX_SPAWN_TITLE_LENGTH)
+}
+
 export interface ResolvedProfile {
   model?: string
   thinkingLevel?: string
@@ -120,6 +162,7 @@ export interface NativeSpawnDeps extends HelmToolDeps {
     thinkingLevel?: string,
     nodeId?: string,
     thinkingLevelOverride?: string,
+    title?: string,
   ): Promise<void>
   /**
    * Update child's `parentToolCallId` on resume to correlate with this parent tool call
@@ -433,6 +476,7 @@ async function runNativeReattachTurn(
 /** Strict synchronous validation of request shape (fails explicitly, never coerces silently). */
 function assertSpawnRequestShape(request: AgentSpawnRequest): void {
   assertSpawnRequestModes(request)
+  assertSpawnRequestTitle(request.title)
   if (request.isolation !== undefined && request.isolation !== null && request.isolation !== '') {
     // Kernel has zero business branches: non-empty isolation reaching native execution means no plugin claimed it
     // via `agent_spawn` continuation (e.g., `builtin:workflow` disabled when worktree isolation was requested).
@@ -674,6 +718,7 @@ async function createChildConversation(
   claimSpawnConversation(deps.harness, childId)
   execution.childId = childId
   // Native spawns assign no business role tags (tags belong to host policies; kernel never hardcodes roles).
+  const resolvedTitle = normalizeSpawnTitle(request.title, childId, deps.redact)
   await deps.registerChildConversation(
     childId,
     request.parentConversationId,
@@ -684,6 +729,7 @@ async function createChildConversation(
     thinkingLevel,
     target.nodeId,
     thinkingLevelOverride,
+    resolvedTitle,
   )
   // Emit resolved metadata once creation and snapshot registration are complete.
   request.onResolved?.({

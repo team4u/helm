@@ -188,6 +188,7 @@ const PAYLOAD_CHECKS: Record<HookName, PayloadCheck> = {
     return (
       reqPositiveInt(v, 'parentConversationId') ??
       reqString(v, 'prompt') ??
+      optString(v, 'title') ??
       optString(v, 'agentId') ??
       optString(v, 'agentType') ??
       optString(v, 'model') ??

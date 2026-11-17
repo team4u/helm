@@ -909,6 +909,7 @@ test('spawnAgent(requestId + reattach.conversationId) resumes in-place across ru
   const plainFirst = await r4a.spawnAgent({
     parentConversationId: 1,
     prompt: 'plain text task',
+    title: 'Original plain task',
     requestId: 'req-plain-done',
     cwd: dir4,
     onResolved: (info) => {
@@ -916,6 +917,7 @@ test('spawnAgent(requestId + reattach.conversationId) resumes in-place across ru
     },
   })
   assert.equal(plainFirst, 'PRE_RESTART_PLAIN_TEXT')
+  assert.equal(r4a.getConversation(childId4).title, 'Original plain task')
   await r4a.close()
 
   const { models: m4b, faux: f4b } = createFaux()
@@ -931,6 +933,7 @@ test('spawnAgent(requestId + reattach.conversationId) resumes in-place across ru
   const reattachedPlain = await r4b.spawnAgent({
     parentConversationId: 1,
     prompt: 'plain text task',
+    title: 'Overwrite attempt on reattach',
     requestId: 'req-plain-done',
     gate: 'test -f plain-gate.txt',
     reattach: { conversationId: childId4 },
@@ -939,6 +942,7 @@ test('spawnAgent(requestId + reattach.conversationId) resumes in-place across ru
     },
   })
   assert.equal(reattachedPlain, 'PRE_RESTART_PLAIN_TEXT')
+  assert.equal(r4b.getConversation(childId4).title, 'Original plain task', 'reattach must preserve original child title')
   assert.equal(plainGate?.ok, true)
   assert.equal(f4b.state.callCount, 0, 'reattach after pre-crash settled submission must not re-send model request')
   assert.equal(await countUserEntries(r4b, childId4), 1)
