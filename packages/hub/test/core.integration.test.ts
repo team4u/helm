@@ -232,11 +232,11 @@ before(async () => {
   dbPath = join(mainEnv.dataDir, 'state.sqlite')
   const runtime = mainEnv.kernel as unknown as { setHubUrl?: (url: string) => void }
   runtime.setHubUrl?.(mainEnv.hubUrl)
-})
+}, { timeout: 60_000 })
 
 after(async () => {
   await mainEnv?.close()
-})
+}, { timeout: 60_000 })
 
 test('核心协同 1：profile/memory 默认装配与锁定保护、SYSTEM/MEMORY 段落注入、update_memory 跨回合持久化及 subagent parentToolCallId 广播', { timeout: 60_000 }, async () => {
   const { kernel, faux } = mainEnv

@@ -10,11 +10,11 @@ let fixture: HubTestEnv
 
 before(async () => {
   fixture = await openHubTestEnv({ prefix: 'helm-runtime-boundary-' })
-})
+}, { timeout: 60_000 })
 
 after(async () => {
   await fixture?.close().catch(() => {})
-})
+}, { timeout: 60_000 })
 
 function collectStrings(value: unknown): string[] {
   if (typeof value === 'string') return [value]

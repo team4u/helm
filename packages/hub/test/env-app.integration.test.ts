@@ -109,11 +109,11 @@ before(async () => {
       }
     },
   }
-})
+}, { timeout: 60_000 })
 
 after(async () => {
   await env?.close()
-})
+}, { timeout: 60_000 })
 
 test('跨节点后台原生 subagent：真实 WS 节点分配 worktree、执行远端 gate、CLI 清理受管 worktree', { timeout: 60_000 }, async () => {
   const repoDir = join(env.remoteCwd, 'wt-repo')

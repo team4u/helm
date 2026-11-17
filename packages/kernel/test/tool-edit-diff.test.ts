@@ -321,10 +321,10 @@ describe('computeEditDiff pure function: pre- compute and truncate', { timeout: 
     })
   })
 
-  it('replace zone between out of bounds: pre- condition immediately throws (write before failed)', { timeout: 60_000 }, () => {
-    assert.throws(() => computeEditDiff('abc', 'abc', 3, 2, identityRedact), /pre- condition failed/)
-    assert.throws(() => computeEditDiff('abc', 'abc', -1, 1, identityRedact), /pre- condition failed/)
-    assert.throws(() => computeEditDiff('abc', 'abc', 0, 0, identityRedact), /pre- condition failed/)
+  it('replace zone between out of bounds: precondition throws immediately before writing', { timeout: 60_000 }, () => {
+    assert.throws(() => computeEditDiff('abc', 'abc', 3, 2, identityRedact), /Edit diff precondition failed/)
+    assert.throws(() => computeEditDiff('abc', 'abc', -1, 1, identityRedact), /Edit diff precondition failed/)
+    assert.throws(() => computeEditDiff('abc', 'abc', 0, 0, identityRedact), /Edit diff precondition failed/)
   })
 
   it('algorithm pre- compute (maxEditLength) over limit: whole segment replace means, public before suffix keep, count consistent,truncated=true', { timeout: 60_000 }, () => {
@@ -595,7 +595,7 @@ describe('edit tool:local real difference structure output', { timeout: 60_000 }
     const dup = await tool.execute({ path: 'dup.txt', oldText: 'same\n', newText: 'x' }, makeApi(dir), BACKGROUND_CONTEXT)
     assert.equal(dup.isError, true)
     assert.equal(dup.structuredOutput, undefined)
-    assert.ok((dup.output as Array<{ text: string }>)[0]!.text.includes('appear 2 time'))
+    assert.ok((dup.output as Array<{ text: string }>)[0]!.text.includes('appeared 2 times'))
     assert.equal(readFileSync(file, 'utf8'), 'a\nsame\nb\nsame\nc\n', 'failed path file must keep original')
   })
 

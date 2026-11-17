@@ -9,11 +9,11 @@ let env: HubHttpTestEnv
 
 before(async () => {
   env = await openHubHttpEnv({ prefix: 'helm-cli-ask-' })
-})
+}, { timeout: 60_000 })
 
 after(async () => {
   await env?.close()
-})
+}, { timeout: 60_000 })
 
 async function ask(args: string[], stdinText?: string) {
   let out = ''

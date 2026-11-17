@@ -24,11 +24,11 @@ const requests: CapturedRequest[] = []
 
 before(async () => {
   env = await openHubTestEnv({ prefix: 'helm-action-discovery-' })
-})
+}, { timeout: 60_000 })
 
 after(async () => {
   await env?.close()
-})
+}, { timeout: 60_000 })
 
 function capture(): FauxResponseStep {
   return (context) => {

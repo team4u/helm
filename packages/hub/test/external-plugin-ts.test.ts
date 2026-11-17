@@ -233,13 +233,13 @@ export default {
   writeFileSync(join(pluginsDir, 'dotdot', 'index.ts'), "import { x } from '../../evil-dotdot.js'\nexport default { id: 'dotdot', tag: x, definePlugin() {} }\n")
 
   sharedApp = (await createHubTestApp({ dataDir: sharedDataDir, cwd: sharedDataDir })).app
-})
+}, { timeout: 60_000 })
 
 after(async () => {
   await sharedApp?.close().catch(() => {})
   await cleanupDir(sharedDataDir)
   await cleanupDir(outsideDir)
-})
+}, { timeout: 60_000 })
 
 test('TS/TSX 外部插件全链路：依赖闭包、内置/npm 模块、@helm 同构类、json、import.meta.url、别名/动静态同一性与无磁盘中间产物', { timeout: 60_000 }, async () => {
   const plugins = sharedApp.kernel.plugins

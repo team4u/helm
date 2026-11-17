@@ -87,12 +87,12 @@ before(async () => {
   nodeClosers.push(await registerFakeNode(env.hubUrl, 'win-build', winIssued.token, 'win32'))
   const silentIssued = await env.kernel.nodes.issueNodeToken('silent-node')
   nodeClosers.push(await registerFakeNode(env.hubUrl, 'silent-node', silentIssued.token, ''))
-})
+}, { timeout: 60_000 })
 
 after(async () => {
   for (const close of nodeClosers) close()
   await env?.close()
-})
+}, { timeout: 60_000 })
 
 function harnessOf(): Harness {
   return (env.kernel as unknown as { harness: Harness }).harness

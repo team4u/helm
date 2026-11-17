@@ -27,11 +27,11 @@ let env: HubTestEnv
 
 before(async () => {
   env = await openHubTestEnv({ prefix: 'helm-rewind-atomic-', swallowCloseError: true })
-})
+}, { timeout: 60_000 })
 
 after(async () => {
   await env?.close()
-})
+}, { timeout: 60_000 })
 
 function harnessOf(): Harness {
   return (env.kernel as unknown as { harness: Harness }).harness

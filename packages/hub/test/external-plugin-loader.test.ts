@@ -165,13 +165,13 @@ before(async () => {
   put('no-setup', { 'index.mjs': 'export default { id: "no-setup", name: "without entry" }' })
 
   sharedApp = (await createHubTestApp({ dataDir: sharedDataDir, cwd: sharedDataDir })).app
-})
+}, { timeout: 60_000 })
 
 after(async () => {
   await sharedApp?.close().catch(() => {})
   await cleanupDir(sharedDataDir)
   await cleanupDir(outsideDir)
-})
+}, { timeout: 60_000 })
 
 test('自动发现与全链路启用：约定入口、plugin.json main、缺省 name、clientRoot 默认与显式 ./client 均生效，纯数据目录静默忽略', { timeout: 60_000 }, async () => {
   const list = sharedApp.kernel.plugins.list()

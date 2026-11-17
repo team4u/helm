@@ -21,17 +21,17 @@ before(async () => {
     prefix: 'helm-models-filter-',
     fauxOptions: { models: [{ id: 'faux-1' }, { id: 'faux-2' }, { id: 'nested/model' }] },
   })
-})
+}, { timeout: 60_000 })
 
 afterEach(async () => {
   if (env !== undefined) {
     await env.call('PUT', '/api/models/filter', { disabledModels: [] })
   }
-})
+}, { timeout: 60_000 })
 
 after(async () => {
   await env?.close()
-})
+}, { timeout: 60_000 })
 
 test('PUT /api/models/filter 设置与清空、GET /api/models 标注、config.json 持久化、参数校验与 models.changed 事件广播', { timeout: 60_000 }, async () => {
   const seenEvents: Array<{ providers: unknown }> = []

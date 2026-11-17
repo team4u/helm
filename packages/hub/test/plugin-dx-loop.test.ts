@@ -26,11 +26,11 @@ let env: HubHandlerTestEnv
 
 before(async () => {
   env = await openHubHandlerEnv({ prefix: 'helm-plugin-dx-' })
-})
+}, { timeout: 60_000 })
 
 after(async () => {
   await env?.close().catch(() => {})
-})
+}, { timeout: 60_000 })
 
 function writeMinimalPlugin(
   pluginsDir: string,

@@ -188,6 +188,37 @@ export class PluginDocRegistry {
     if (byName.size === 0) this.transientSessionDocs.delete(pluginId);
   }
 
+  private assertConversationAliveOrCleanup(conversationId: number): void {
+    const assertConversationExists = this.options.assertConversationExists!;
+    try {
+      assertConversationExists(conversationId);
+    } catch (err) {
+      if (err instanceof HelmError && err.status === 404) {
+        this.deleteConversation(conversationId);
+      }
+      throw err;
+    }
+  }
+
+  private pruneDeadTransientConversations(pluginId: string, name: string): number[] {
+    const byConv = this.transientSessionDocs.get(pluginId)?.get(name);
+    if (!byConv || byConv.size === 0) return [];
+    const assertConversationExists = this.options.assertConversationExists;
+    if (!assertConversationExists) return [...byConv.keys()];
+    for (const cid of [...byConv.keys()]) {
+      try {
+        assertConversationExists(cid);
+      } catch (err) {
+        if (err instanceof HelmError && err.status === 404) {
+          this.deleteConversation(cid);
+          continue;
+        }
+        throw err;
+      }
+    }
+    return [...(this.transientSessionDocs.get(pluginId)?.get(name)?.keys() ?? [])];
+  }
+
   private readDocValue(pluginId: string, name: string, durable: boolean, initial: unknown): unknown {
     return durable
       ? jsonClone(this.store.get(`${pluginId}:${name}`, initial as never))
@@ -408,7 +439,7 @@ export class PluginDocRegistry {
     const assertTupleUsable = (conversationId: number): void => {
       assertUsable();
       this.assertSessionDocId(conversationId);
-      assertConversationExists(conversationId);
+      this.assertConversationAliveOrCleanup(conversationId);
     };
     return {
       get: (conversationId) => {
@@ -437,7 +468,7 @@ export class PluginDocRegistry {
         assertUsable();
         const ids = durable
           ? store!.listConversationIds(pluginId, name)
-          : [...(this.transientSessionDocs.get(pluginId)?.get(name)?.keys() ?? [])];
+          : this.pruneDeadTransientConversations(pluginId, name);
         return [...ids].sort((a, b) => a - b);
       },
       flush: async () => {
@@ -573,7 +604,7 @@ export class PluginDocRegistry {
       );
     }
     if (!reg.durable) {
-      assertConversationExists(conversationId);
+      this.assertConversationAliveOrCleanup(conversationId);
       const byConv = this.transientSessionDocs.get(pluginId)?.get(name);
       return {
         pluginId,

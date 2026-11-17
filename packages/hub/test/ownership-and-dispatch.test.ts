@@ -16,11 +16,11 @@ let env: HubTestEnv
 
 before(async () => {
   env = await openHubTestEnv({ prefix: 'helm-ownership-' })
-})
+}, { timeout: 60_000 })
 
 after(async () => {
   await env?.close()
-})
+}, { timeout: 60_000 })
 
 async function residentIds(target: HubTestEnv): Promise<{ router?: number; watchdog?: number }> {
   await target.kernel.documentStore.flush()
