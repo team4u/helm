@@ -79,16 +79,30 @@ function localNodePorts() {
   const envOf = (cwd: string) => new NodeExecutionEnv({ cwd })
   return {
     exec: async (
-      nodeId: string,
+      _nodeId: string,
       cwd: string,
       args: readonly string[],
-      options: { cwd: string; timeout: number; onOutput: (text: string) => void },
-      context: import('@earendil-works/chord/context').Context,
-    ) => envOf(cwd).exec([...args], options, context) as never,
-    nodeExists: async (nodeId: string, path: string, context: import('@earendil-works/chord/context').Context) =>
-      envOf(path).exists(path, context) as never,
-    nodeCanonicalPath: async (nodeId: string, path: string, context: import('@earendil-works/chord/context').Context) =>
-      envOf(path).canonicalPath(path, context) as never,
+      options?: { timeoutMs?: number; signal?: AbortSignal },
+    ) => {
+      let output = ''
+      const res = await envOf(cwd).exec(
+        [...args],
+        {
+          cwd,
+          ...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs / 1000 } : {}),
+          onOutput: (text: string) => {
+            output += text
+          },
+        },
+        BACKGROUND_CONTEXT,
+      )
+      if (!res.ok) {
+        return { ok: false, exitCode: null, output, timedOut: res.error.code === 'timeout' }
+      }
+      return { ok: res.value.exitCode === 0, exitCode: res.value.exitCode, output, timedOut: false }
+    },
+    nodeExists: (_nodeId: string, path: string) => envOf(path).exists(path, BACKGROUND_CONTEXT),
+    nodeCanonicalPath: (_nodeId: string, path: string) => envOf(path).canonicalPath(path, BACKGROUND_CONTEXT),
   }
 }
 
@@ -193,7 +207,7 @@ async function openSpawnHarness(repoDir: string, dataDir: string): Promise<{
         if (!result.ok) {
           return { ok: false, exitCode: null, output: combined, timedOut: result.error.code === 'timeout' }
         }
-        return { ok: true, exitCode: result.value.exitCode, output: combined, timedOut: false }
+        return { ok: result.value.exitCode === 0, exitCode: result.value.exitCode, output: combined, timedOut: false }
       },
       executionEnv: (nodeId, cwd) => new NodeExecutionEnv({ cwd }),
       inspectNodePathUsage: (input) => envFabric.inspectPathUsage(input.nodeId, input.path, input.signal),
@@ -743,7 +757,7 @@ async function executeCleanupTool(
     if (!r.ok) {
       return { ok: false, exitCode: null, output: combined, timedOut: r.error.code === 'timeout' }
     }
-    return { ok: true, exitCode: r.value.exitCode, output: combined, timedOut: false }
+    return { ok: r.value.exitCode === 0, exitCode: r.value.exitCode, output: combined, timedOut: false }
   }
   const backend: PluginHostBackend = {
     ...createPluginHostBackendFixture(),
@@ -1702,7 +1716,7 @@ describe('inspect 只读检视：成功输出脱敏与 diff 驱动隔离（真�
 // 计数，不 mock 任何 git 行为断言——git 行为全部由上方真实 git 测试覆盖）
 // ---------------------------------------------------------------------------
 
-/** 受控 exec：按命令尾参派发脚本输出，按固定块大小分块回调 onOutput（模拟真实流式输出跨块切行）。 */
+/** 受控 exec：按命令尾参派发脚本输出，返回直接执行结果形状。 */
 function stubChunkedExec(scriptOf: (args: readonly string[]) => { output: string; exitCode?: number }) {
   const seen: string[][] = []
   let chunkSize = 64
@@ -1710,14 +1724,12 @@ function stubChunkedExec(scriptOf: (args: readonly string[]) => { output: string
     _nodeId: string,
     _cwd: string,
     args: readonly string[],
-    options: { onOutput: (text: string) => void },
-  ): Promise<{ ok: true; value: { exitCode: number } }> => {
+  ): Promise<{ ok: boolean; exitCode: number; output: string; timedOut: false }> => {
     seen.push([...args])
     const spec = scriptOf(args.slice(3))
-    for (let i = 0; i < spec.output.length; i += chunkSize) {
-      options.onOutput(spec.output.slice(i, i + chunkSize))
-    }
-    return { ok: true, value: { exitCode: spec.exitCode ?? 0 } }
+    const exitCode = spec.exitCode ?? 0
+    void chunkSize
+    return { ok: exitCode === 0, exitCode, output: spec.output, timedOut: false }
   }
   return { seen, setChunkSize: (n: number) => (chunkSize = n), exec }
 }
@@ -2098,8 +2110,12 @@ describe('运行租约释放（原生子会话失败路径）', { timeout: 60_00
       assert.ok(record, 'Worktree 记录保留（供下一轮 resume / cleanup）')
       assert.equal(record!.conversationId, 5)
       const state = th.docs.get('builtin:workflow:worktree-state') as Record<string, unknown>
-      const bindings = state['worktree-agent-bindings'] as Record<string, number>
-      assert.equal(bindings['agent-rel-1'], 5, 'agentId -> childId 绑定保留（供 resume ref 解析）')
+      const bindings = state['worktree-agent-bindings'] as Record<string, { childId: number; parentConversationId: number }>
+      assert.deepEqual(
+        bindings['agent-rel-1'],
+        { childId: 5, parentConversationId: 1 },
+        'agentId -> { childId, parentConversationId } 绑定保留（供 resume ref 解析）',
+      )
       // 释放后 cleanup 不再报 worktree_execution_unknown（租约门已过；Linux 上
       // 通常全量成功，但沙箱 /proc 可能含不可读 fd 的外部进程——快照不完整
       // 时 fail-closed 的 worktree_process_check_failed 是环境事实，也证明已越过租约检查）。
@@ -2303,6 +2319,199 @@ describe('运行租约释放（原生子会话失败路径）', { timeout: 60_00
       }
     } finally {
       await th.close()
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 会话删除裁剪（pruneConversation）与批量 Git 预检（allocate）
+// ---------------------------------------------------------------------------
+
+describe('pruneConversation：裁剪绑定与已 removed 记录，绝不删 active 记录与租约', { timeout: 60_000 }, () => {
+  it('按子会话或父会话裁剪绑定与 removed 记录，严格保留 active 记录与活跃/fail-closed 租约', {
+    timeout: 60_000,
+  }, async () => {
+    const dir = join(rootDir, 't22-prune')
+    const repo = makeGitRepo(join(dir, 'repo'))
+    const th = await openSpawnHarness(repo, join(dir, 'data'))
+    try {
+      th.faux.setResponses([
+        fauxAssistantMessage('c1'),
+        fauxAssistantMessage('c2'),
+        fauxAssistantMessage('c3'),
+      ])
+      let c1 = 0
+      let c2 = 0
+      let c3 = 0
+      await th.spawnIsolated({
+        parentConversationId: 10,
+        prompt: 'task-1',
+        isolation: 'worktree',
+        agentId: 'ag-c1',
+        onResolved: (i: AgentExecutionInfo) => { c1 = i.conversationId ?? 0 },
+      } as never)
+      await th.spawnIsolated({
+        parentConversationId: 10,
+        prompt: 'task-2',
+        isolation: 'worktree',
+        agentId: 'ag-c2',
+        onResolved: (i: AgentExecutionInfo) => { c2 = i.conversationId ?? 0 },
+      } as never)
+      await th.spawnIsolated({
+        parentConversationId: 20,
+        prompt: 'task-3',
+        isolation: 'worktree',
+        agentId: 'ag-c3',
+        onResolved: (i: AgentExecutionInfo) => { c3 = i.conversationId ?? 0 },
+      } as never)
+
+      const rec1 = th.isolation.getForConversation(c1)!
+      const rec2 = th.isolation.getForConversation(c2)!
+      const rec3 = th.isolation.getForConversation(c3)!
+
+      // 把 rec1 与一条被 fail-closed 租约引用的记录标为 removed；rec2 与 rec3 保持 active。
+      const state = th.docs.get('builtin:workflow:worktree-state') as Record<string, unknown>
+      const wtDoc = state['runtime/worktrees'] as { version: 1; records: ManagedWorktreeRecord[] }
+      wtDoc.records = wtDoc.records.map((r) =>
+        r.id === rec1.id ? { ...r, status: 'removed', removedAt: Date.now() } : r,
+      )
+      const leasedRemovedId = 'local:/tmp/leased-removed-wt'
+      wtDoc.records.push({
+        ...rec1,
+        id: leasedRemovedId,
+        path: '/tmp/leased-removed-wt',
+        conversationId: c1,
+        parentConversationId: 10,
+        status: 'removed',
+        removedAt: Date.now(),
+      })
+      state['worktree-leases'] = {
+        'fail-closed-lease': {
+          phase: 'running',
+          nodeId: 'local',
+          path: rec2.path,
+          info: { nodeId: 'local', executionId: 'ext-keep' },
+          worktreeId: rec2.id,
+          createdAt: 1,
+        },
+        'leased-removed-token': {
+          phase: 'pending',
+          nodeId: 'local',
+          path: '/tmp/leased-removed-wt',
+          info: { nodeId: 'local', executionId: 'ext-leased-removed' },
+          worktreeId: leasedRemovedId,
+          createdAt: 2,
+        },
+      }
+      th.docs.set('builtin:workflow:worktree-state', state)
+
+      // 1) 无关会话裁剪：完全无副作用
+      th.isolation.pruneConversation(99999)
+      assert.equal(rawRecords(th.docs).length, 4)
+
+      // 2) 按子会话 c1 裁剪：ag-c1 绑定删除、rec1（removed）删除；leasedRemoved 因仍有租约保留；c2/c3 不变
+      th.isolation.pruneConversation(c1)
+      let afterState = th.docs.get('builtin:workflow:worktree-state') as Record<string, unknown>
+      let bindings = afterState['worktree-agent-bindings'] as Record<string, unknown>
+      assert.equal(bindings['ag-c1'], undefined, '子会话匹配时应清理 agentId 绑定')
+      assert.ok(bindings['ag-c2'] !== undefined, '同父其他子会话绑定此时保留')
+      assert.ok(bindings['ag-c3'] !== undefined, '其他父会话绑定保留')
+      assert.equal(rawRecords(th.docs).some((r) => r.id === rec1.id), false, '已 removed 的关联记录应被裁剪')
+      assert.equal(rawRecords(th.docs).some((r) => r.id === leasedRemovedId), true, '仍被租约引用的记录绝不删除')
+      assert.equal(rawRecords(th.docs).some((r) => r.id === rec2.id), true, 'active 记录绝不删除')
+      assert.equal(Object.keys(leasesOf(th.docs)).length, 2, '任何活跃/fail-closed 租约绝不删除')
+
+      // 3) 按父会话 10 裁剪：ag-c2 绑定因父会话匹配被清理，但 active 的 rec2 与全部租约严格保留
+      th.isolation.pruneConversation(10)
+      afterState = th.docs.get('builtin:workflow:worktree-state') as Record<string, unknown>
+      bindings = afterState['worktree-agent-bindings'] as Record<string, unknown>
+      assert.equal(bindings['ag-c2'], undefined, '父会话匹配时应清理其名下 agentId 绑定')
+      assert.ok(bindings['ag-c3'] !== undefined, '无关父会话 20 的绑定保留')
+      assert.equal(rawRecords(th.docs).find((r) => r.id === rec2.id)?.status, 'active', '父会话裁剪绝不删除 active worktree')
+      assert.equal(rawRecords(th.docs).find((r) => r.id === rec3.id)?.status, 'active')
+      assert.equal(Object.keys(leasesOf(th.docs)).length, 2, '父会话裁剪绝不删除租约')
+    } finally {
+      await th.close()
+    }
+  })
+})
+
+describe('allocate 批量 Git 预检与非常规布局诚实拒绝', { timeout: 60_000 }, () => {
+  it('单次 allocate 全程仅触发 4 条 git 子命令（3 条预检 + 1 条 worktree add），且子目录 sourceCwd 精确定位仓库根', {
+    timeout: 60_000,
+  }, async () => {
+    const dir = join(rootDir, 't23-batch')
+    const repo = makeGitRepo(join(dir, 'repo'))
+    const subDir = join(repo, 'nested', 'module')
+    mkdirSync(subDir, { recursive: true })
+    const docs = new Map<string, unknown>()
+    const basePorts = localNodePorts()
+    const gitCalls: string[][] = []
+    const allocator = new WorktreeAllocator({
+      ...basePorts,
+      exec: async (nodeId, cwd, args, options) => {
+        gitCalls.push([...args])
+        return basePorts.exec(nodeId, cwd, args, options)
+      },
+      inspectPathUsage: (nodeId, path, signal) => bareFabricOf().inspectPathUsage(nodeId, path, signal),
+      docStore: {
+        get<T>(key: string, initial: T): T {
+          return (docs.get(key) as T | undefined) ?? initial
+        },
+        set<T>(key: string, value: T): void {
+          docs.set(key, value)
+        },
+      },
+    })
+    try {
+      const record = await allocator.allocate({ nodeId: 'local', sourceCwd: subDir, parentConversationId: 1 })
+      assert.equal(record.repoRoot, repo, '子目录 sourceCwd 应精确定位仓库主工作树')
+      assert.equal(record.baseBranch, 'main')
+      assert.equal(record.dirtySource, false)
+      assert.equal(
+        gitCalls.length,
+        4,
+        `allocate 应合并预检为 3 条 git 命令 + 1 条 worktree add（实得 ${gitCalls.length}: ${JSON.stringify(gitCalls)}）`,
+      )
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('裸仓库（bare）、--separate-git-dir 与无初始提交仓库（unborn HEAD）均返回精确错误码', {
+    timeout: 60_000,
+  }, async () => {
+    const dir = join(rootDir, 't23-layouts')
+    mkdirSync(dir, { recursive: true })
+    const docs = new Map<string, unknown>()
+    const allocator = bareAllocator(docs)
+    try {
+      // 1) bare 仓库 -> worktree_unsupported_layout
+      const bareDir = join(dir, 'bare.git')
+      execFileSync('git', ['init', '-q', '--bare', bareDir])
+      await assert.rejects(
+        () => allocator.allocate({ nodeId: 'local', sourceCwd: bareDir, parentConversationId: 1 }),
+        (err: unknown) => err instanceof HelmError && err.code === 'worktree_unsupported_layout',
+      )
+
+      // 2) --separate-git-dir -> worktree_unsupported_layout
+      const sepGit = join(dir, 'sep-git')
+      const sepWork = join(dir, 'sep-work')
+      execFileSync('git', ['init', '-q', `--separate-git-dir=${sepGit}`, sepWork])
+      await assert.rejects(
+        () => allocator.allocate({ nodeId: 'local', sourceCwd: sepWork, parentConversationId: 1 }),
+        (err: unknown) => err instanceof HelmError && err.code === 'worktree_unsupported_layout',
+      )
+
+      // 3) unborn HEAD（git init 尚无任何 commit）-> worktree_failed
+      const unbornDir = join(dir, 'unborn')
+      execFileSync('git', ['init', '-q', '-b', 'main', unbornDir])
+      await assert.rejects(
+        () => allocator.allocate({ nodeId: 'local', sourceCwd: unbornDir, parentConversationId: 1 }),
+        (err: unknown) => err instanceof HelmError && err.code === 'worktree_failed',
+      )
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
     }
   })
 })
