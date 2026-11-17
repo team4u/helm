@@ -2,6 +2,7 @@ import React, { useContext, useEffect, useMemo, useState } from 'react'
 import { assetsApi, type ModelDescriptor } from '../lib/api.js'
 import { HelmIcon, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle } from '@helm/plugin-client'
 import { HelmStoreContext } from '../lib/store-context.js'
+import { useWebLocale } from '../i18n/use-web-locale.js'
 import { ConfirmDialog } from '../ui/AlertDialog.js'
 import {
   type ProviderItem,
@@ -9,7 +10,8 @@ import {
 } from './model-center-model.js'
 
 /**
- * 无过滤且未展开时最多渲染的模型胶囊数，避免海量目录一次性铺满抽屉。
+ * Maximum number of model pills rendered without a filter and before
+ * expanding, so huge catalogs never flood the drawer in one frame.
  */
 const CHIP_RENDER_LIMIT = 80
 
@@ -30,11 +32,12 @@ export interface ModelDetailDrawerProps {
 }
 
 /**
- * 模型与凭证中心供应商详情、凭证配置抽屉：
- * - 基于 Radix UI Dialog 原语封装，540px 右侧滑出抽屉；
- * - 渲染 API 密钥安全输入、服务端点、动态目录刷新与单个模型路由开关；
- * - 凭据删除支持 ConfirmDialog 二次确认；
- * - 绝对零 Emoji 规范，遵循 Fast Refresh 与 WAI-ARIA 原语。
+ * Provider details & credentials drawer of the Models & Credentials Center:
+ * - built on Radix UI Dialog primitives as a 540px right slide-over;
+ * - renders the API-key secure input, service endpoint, dynamic catalog
+ *   refresh and per-model routing toggles;
+ * - credential deletion is guarded by a ConfirmDialog second confirmation;
+ * - strictly zero Emoji; follows Fast Refresh and WAI-ARIA primitives.
  */
 export function ModelDetailDrawer({
   provider,
@@ -46,9 +49,10 @@ export function ModelDetailDrawer({
   onTestConnection,
 }: ModelDetailDrawerProps): React.JSX.Element {
   const store = useContext(HelmStoreContext)
+  const { t } = useWebLocale()
   const catalogModels = availableModels ?? store?.models ?? []
 
-  // 常规供应商表单状态
+  // Regular provider form state
   const [apiKey, setApiKey] = useState('')
   const [baseUrl, setBaseUrl] = useState(() => provider?.baseUrl ?? '')
   const [models, setModels] = useState<ProviderModelItem[]>(() =>
@@ -69,19 +73,21 @@ export function ModelDetailDrawer({
   const [modelFilter, setModelFilter] = useState('')
   const [isExpanded, setIsExpanded] = useState(false)
 
-  // 服务端点可编辑性：只有自定义网关（providers.json）的端点能在本界面真正
-  // 持久化。插件网关（pluginId 存在，如 builtin:magpie）端点由所属插件的
-  // 配置管理，内置供应商端点固定——一律只读展示，杜绝「可编辑却保存无效」
-  // 的假入口（改了也改不回默认地址的根因）。
+  // Endpoint editability: only custom gateway (providers.json) endpoints can
+  // actually be persisted from this UI. Plugin gateway endpoints (pluginId
+  // set, e.g. builtin:magpie) are owned by the plugin configuration, and
+  // built-in provider endpoints are fixed — both render read-only, so there
+  // is never an editable-looking input whose save silently does nothing (the
+  // root cause of endpoints bouncing back to the default address).
   const endpointEditable = provider?.custom === true
   const endpointHint =
     endpointEditable === true
-      ? 'For reverse proxies, intranet forwarding endpoints or local inference services.'
+      ? t('models.endpoint.hintCustom')
       : provider?.pluginId
-        ? `This endpoint is managed by the configuration of plugin ${provider.pluginId}; change it in that plugin configuration in the plugin center.`
-        : 'This provider endpoint is built in and cannot be changed here.'
+        ? t('models.endpoint.hintPlugin', { pluginId: provider.pluginId })
+        : t('models.endpoint.hintBuiltIn')
 
-  // 当选中的供应商变化时同步本地表单状态
+  // Sync local form state whenever the selected provider changes
   useEffect(() => {
     if (provider) {
       setApiKey('')
@@ -104,7 +110,7 @@ export function ModelDetailDrawer({
     }
   }, [provider])
 
-  // 计算已启用的模型 ID 与过滤列表
+  // Enabled model ids and the filtered list
   const enabledModelIds = useMemo(
     () => models.filter((m) => m.enabled).map((m) => m.id),
     [models],
@@ -123,9 +129,10 @@ export function ModelDetailDrawer({
 
   const hasModelFilter = modelFilter.trim() !== ''
 
-  // 无过滤且未展开时严格限制首帧数量；模型默认均为启用态，不能用 enabled 作为
-  // “用户特别选择”的标记，否则 OpenRouter 初始目录仍会一次性渲染全部模型。
-  // 搜索或显式展开后再显示完整结果。
+  // Hard-limit the first frame without a filter and before expanding; models
+  // default to enabled, so `enabled` cannot mark "user-picked" — otherwise an
+  // OpenRouter initial catalog would still render every model at once. Search
+  // or explicit expansion reveals the full list.
   const visibleModels = useMemo(() => {
     if (hasModelFilter || isExpanded) return filteredModels
     return filteredModels.slice(0, CHIP_RENDER_LIMIT)
@@ -141,8 +148,10 @@ export function ModelDetailDrawer({
     )
   }
 
-  // 批量启停：无过滤词时作用于全量；有过滤词时仅作用于当前匹配结果，
-  // 不影响搜索之外的模型，保存仍提交完整清单（由本地状态统一保存）。
+  // Bulk enable/disable: with no filter term it applies to the full list; with
+  // a filter term it applies only to the current matches, never touching
+  // models outside the search. Saving always submits the complete list (the
+  // local state is saved as a whole).
   const handleSelectAll = () => {
     const matchedIds = hasModelFilter ? new Set(filteredModels.map((m) => m.id)) : null
     setModels((prev) =>
@@ -161,7 +170,7 @@ export function ModelDetailDrawer({
     )
   }
 
-  // 连通性测试
+  // Connectivity test
   const handleTest = async () => {
     if (!provider) return
     setTesting(true)
@@ -175,17 +184,18 @@ export function ModelDetailDrawer({
         const start = Date.now()
         const res = await assetsApi.refreshModels([provider.id])
         const latencyMs = Date.now() - start
-        if (res.errors?.[provider.id]) {
+        const refreshError = res.errors?.[provider.id]
+        if (refreshError) {
           setTestResult({
             success: false,
             latencyMs,
-            message: `Connection failed: ${res.errors[provider.id]}`,
+            message: t('models.test.failed', { error: refreshError }),
           })
         } else {
           setTestResult({
             success: true,
             latencyMs,
-            message: 'Provider endpoint reachable and model catalog synced.',
+            message: t('models.test.ok'),
           })
         }
       } else {
@@ -193,12 +203,12 @@ export function ModelDetailDrawer({
         if (!isKeyPresent && provider.type === 'commercial') {
           setTestResult({
             success: false,
-            message: 'No API key configured; enter the key before testing the connection.',
+            message: t('models.test.noKey'),
           })
         } else {
           setTestResult({
             success: true,
-            message: 'Endpoint and credential format validated.',
+            message: t('models.test.validated'),
           })
         }
       }
@@ -212,7 +222,7 @@ export function ModelDetailDrawer({
     }
   }
 
-  // 动态供应商刷新模型目录
+  // Refresh the model catalog of a dynamic provider
   const handleRefreshCatalog = async () => {
     if (!provider) return
     setRefreshingCatalog(true)
@@ -226,15 +236,15 @@ export function ModelDetailDrawer({
       if (refreshError) {
         setSaveError(refreshError)
       } else if (res.aborted) {
-        setSaveError('Model catalog refresh was cancelled; retry.')
+        setSaveError(t('models.refresh.cancelled'))
       } else {
         setSaveSuccess(true)
         setTimeout(() => setSaveSuccess(false), 2400)
         store?.pushNotice?.({
           type: 'notification',
           level: 'info',
-          title: 'Model catalog refreshed',
-          body: `${provider.name} re-synced the latest model catalog.`,
+          title: t('models.notice.catalogRefreshed'),
+          body: t('models.notice.catalogResynced', { name: provider.name }),
         })
       }
     } catch (err) {
@@ -244,7 +254,7 @@ export function ModelDetailDrawer({
     }
   }
 
-  // 真实删除密钥
+  // Really delete the stored key
   const handleDeleteCredential = async () => {
     if (!provider) return
     setDeleting(true)
@@ -258,8 +268,8 @@ export function ModelDetailDrawer({
       store?.pushNotice?.({
         type: 'notification',
         level: 'info',
-        title: 'Secret deleted',
-        body: `Local credentials of ${provider.name} removed successfully.`,
+        title: t('models.notice.secretDeleted'),
+        body: t('models.notice.secretDeletedBody', { name: provider.name }),
       })
       setDeleteConfirmOpen(false)
       setSaveSuccess(true)
@@ -271,14 +281,15 @@ export function ModelDetailDrawer({
     }
   }
 
-  // 保存常规供应商配置
+  // Save the regular provider configuration
   const handleSaveProvider = async () => {
     if (!provider) return
-    // 自定义网关端点为 providers.json 必填字段：清空后保存显式拒绝，
-    // 绝不静默保留旧值冒充保存成功。
+    // The custom gateway endpoint is a required providers.json field: saving
+    // an empty value is explicitly rejected — never silently keep the old
+    // value and pretend the save succeeded.
     if (provider.custom === true && !baseUrl.trim()) {
       setSaveSuccess(false)
-      setSaveError('The custom gateway endpoint cannot be empty.')
+      setSaveError(t('models.errors.customGatewayEndpointEmpty'))
       return
     }
     setSaving(true)
@@ -319,7 +330,11 @@ export function ModelDetailDrawer({
           <DialogContent
             className="primary-drawer-content"
             role="dialog"
-            aria-label={provider ? `${provider.name} details and credentials` : 'Provider details and credentials'}
+            aria-label={
+              provider
+                ? t('models.drawer.ariaSelected', { name: provider.name })
+                : t('models.drawer.ariaDefault')
+            }
           >
             {/* Header metadata */}
             <div className="primary-drawer-header">
@@ -327,14 +342,14 @@ export function ModelDetailDrawer({
                 <div className="primary-drawer-title-col">
                   <div className="primary-drawer-title-row">
                     <DialogTitle className="primary-drawer-title break-word">
-                      {provider?.name || 'Provider details'}
+                      {provider?.name || t('models.drawer.titleFallback')}
                     </DialogTitle>
                     {provider?.configured ? (
-                      <span className="badge badge-ok">Configured</span>
+                      <span className="badge badge-ok">{t('models.configured')}</span>
                     ) : (
-                      <span className="badge badge-neutral">Not configured</span>
+                      <span className="badge badge-neutral">{t('models.notConfigured')}</span>
                     )}
-                    {provider?.dynamic && <span className="badge badge-neutral">Dynamic sync</span>}
+                    {provider?.dynamic && <span className="badge badge-neutral">{t('models.dynamicSyncBadge')}</span>}
                   </div>
                   <div className="text-subtle mono break-word">{provider?.id}</div>
                 </div>
@@ -343,8 +358,8 @@ export function ModelDetailDrawer({
                 <button
                   type="button"
                   className="btn btn-ghost btn-icon-sm"
-                  aria-label="Close"
-                  title="Close"
+                  aria-label={t('common.close')}
+                  title={t('common.close')}
                 >
                   <HelmIcon name="x" size={14} />
                 </button>
@@ -355,7 +370,7 @@ export function ModelDetailDrawer({
             <div className="primary-drawer-body">
               {!provider ? (
                 <div className="primary-center-empty">
-                  <div className="primary-center-empty-text">No provider selected</div>
+                  <div className="primary-center-empty-text">{t('models.drawer.noSelection')}</div>
                 </div>
               ) : (
                 <>
@@ -364,7 +379,7 @@ export function ModelDetailDrawer({
                     <div className="section-flat-header flex-row-between">
                       <div className="flex-row">
                         <HelmIcon name="key" size={14} />
-                        <span className="section-flat-title">Credentials and connection settings</span>
+                        <span className="section-flat-title">{t('models.drawer.credentialsSection')}</span>
                       </div>
                       {provider.dynamic && (
                         <button
@@ -372,29 +387,29 @@ export function ModelDetailDrawer({
                           className="btn btn-xs btn-ghost"
                           onClick={handleRefreshCatalog}
                           disabled={refreshingCatalog}
-                          title="Re-sync the dynamic model catalog of this provider"
+                          title={t('models.drawer.resyncTitle')}
                         >
                           <HelmIcon
                             name="refresh-cw"
                             size={12}
                             className={refreshingCatalog ? 'spin' : ''}
                           />
-                          <span>{refreshingCatalog ? 'Refreshing...' : 'Refresh catalog'}</span>
+                          <span>{refreshingCatalog ? t('models.refreshing') : t('models.refreshCatalog')}</span>
                         </button>
                       )}
                     </div>
                     <div className="form-grid">
                       <label htmlFor="model-drawer-api-key" className="form-grid-label">
-                        API key
+                        {t('models.apiKey')}
                       </label>
                       <div className="flex-col-xs">
                         {provider.pluginId ? (
                           <>
-                            <div className="form-grid-value" title="Plugin gateway key">
-                              Managed by the configuration of plugin {provider.pluginId}
+                            <div className="form-grid-value" title={t('models.apiKey.pluginKeyTitle')}>
+                              {t('models.apiKey.pluginManaged', { pluginId: provider.pluginId })}
                             </div>
                             <span className="text-subtle">
-                              This key is set in the plugin configuration in the plugin center, not stored in the kernel credential vault; filling it in here has no effect.
+                              {t('models.apiKey.pluginManagedHint')}
                             </span>
                           </>
                         ) : (
@@ -407,20 +422,20 @@ export function ModelDetailDrawer({
                               onChange={(e) => setApiKey(e.target.value)}
                               placeholder={
                                 provider.configured
-                                  ? 'Configured (leave empty to keep unchanged)'
-                                  : 'Enter API key'
+                                  ? t('models.apiKey.placeholderConfigured')
+                                  : t('models.apiKey.placeholderEnter')
                               }
                               autoComplete="off"
                             />
                             <span className="text-subtle">
-                              The secret is stored encrypted in the system secret stash and injected automatically by the kernel on calls; never exposed to the model.
+                              {t('models.apiKey.secretHint')}
                             </span>
                           </>
                         )}
                       </div>
 
                       <label htmlFor="model-drawer-base-url" className="form-grid-label">
-                        Endpoint
+                        {t('models.endpoint')}
                       </label>
                       <div className="flex-col-xs">
                         {endpointEditable ? (
@@ -434,11 +449,11 @@ export function ModelDetailDrawer({
                               provider.baseUrl ||
                               (provider.type === 'local'
                                 ? 'http://127.0.0.1:11434'
-                                : 'https://api.example.com/v1 (empty for default URL)')
+                                : t('models.endpoint.defaultUrlPlaceholder'))
                             }
                           />
                         ) : (
-                          <div className="form-grid-value mono break-word" title="Read-only endpoint">
+                          <div className="form-grid-value mono break-word" title={t('models.endpoint.readOnlyTitle')}>
                             {provider.baseUrl || '—'}
                           </div>
                         )}
@@ -455,7 +470,7 @@ export function ModelDetailDrawer({
                         disabled={testing}
                       >
                         <HelmIcon name="activity" size={12} />
-                        <span>{testing ? 'Testing connection...' : 'Test connection'}</span>
+                        <span>{testing ? t('models.test.testing') : t('models.test.action')}</span>
                       </button>
 
                       {provider.configured && (
@@ -466,7 +481,7 @@ export function ModelDetailDrawer({
                           disabled={deleting}
                         >
                           <HelmIcon name="trash" size={12} />
-                          <span>Delete credentials</span>
+                          <span>{t('models.credentials.delete')}</span>
                         </button>
                       )}
                     </div>
@@ -483,7 +498,7 @@ export function ModelDetailDrawer({
                         <span className="callout-text selectable">
                           {testResult.message}
                           {testResult.latencyMs !== undefined &&
-                            `(latency ${testResult.latencyMs}ms)`}
+                            t('models.test.latency', { ms: testResult.latencyMs })}
                         </span>
                       </div>
                     )}
@@ -494,22 +509,25 @@ export function ModelDetailDrawer({
                     <div className="section-flat-header flex-row-between">
                       <div className="flex-row">
                         <HelmIcon name="cpu" size={14} />
-                        <span className="section-flat-title">Models and routing control</span>
+                        <span className="section-flat-title">{t('models.models.section')}</span>
                       </div>
                       <span className="badge badge-neutral mono tabular-nums">
-                        {`${enabledModelIds.length} enabled / ${models.length} models in total`}
+                        {t('models.models.countBadge', {
+                          enabled: enabledModelIds.length,
+                          total: models.length,
+                        })}
                       </span>
                     </div>
 
                     <p className="text-subtle">
-                      Click a pill to toggle a model; disabled models are marked in the catalog and cannot be picked in conversations.
+                      {t('models.models.hint')}
                     </p>
 
                     {models.length === 0 ? (
                       <div className="text-subtle">
                         {provider.dynamic
-                          ? 'This dynamic provider can fetch available models via Refresh catalog above.'
-                          : 'This provider has no preset models; the catalog syncs automatically after saving the endpoint.'}
+                          ? t('models.models.emptyDynamic')
+                          : t('models.models.emptyStatic')}
                       </div>
                     ) : (
                       <div className="models model-chips-container">
@@ -519,10 +537,10 @@ export function ModelDetailDrawer({
                             <HelmIcon name="search" size={13} />
                             <input
                               type="text"
-                              placeholder="Filter models..."
+                              placeholder={t('models.models.filterPlaceholder')}
                               value={modelFilter}
                               onChange={(e) => setModelFilter(e.target.value)}
-                              aria-label="Filter models"
+                              aria-label={t('models.models.filterAria')}
                             />
                           </div>
                           <div className="model-chips-actions">
@@ -530,21 +548,21 @@ export function ModelDetailDrawer({
                               type="button"
                               className="text action"
                               onClick={handleSelectAll}
-                              title={hasModelFilter ? 'Enable models matching the current filter' : 'Enable all'}
+                              title={hasModelFilter ? t('models.models.enableMatchesTitle') : t('models.models.enableAll')}
                             >
                               {hasModelFilter
-                                ? `Enable matches (${filteredModels.length})`
-                                : 'Enable all'}
+                                ? t('models.models.enableMatches', { count: filteredModels.length })
+                                : t('models.models.enableAll')}
                             </button>
                             <button
                               type="button"
                               className="text action"
                               onClick={handleClearAll}
-                              title={hasModelFilter ? 'Disable models matching the current filter' : 'Disable all'}
+                              title={hasModelFilter ? t('models.models.disableMatchesTitle') : t('models.models.disableAll')}
                             >
                               {hasModelFilter
-                                ? `Disable matches (${filteredModels.length})`
-                                : 'Disable all'}
+                                ? t('models.models.disableMatches', { count: filteredModels.length })
+                                : t('models.models.disableAll')}
                             </button>
                           </div>
                         </div>
@@ -553,11 +571,11 @@ export function ModelDetailDrawer({
                         <div
                           className={`mchips model-drawer-tags-wrap ${isExpanded ? 'open is-expanded' : ''}`}
                           role="group"
-                          aria-label="Select enabled models"
+                          aria-label={t('models.models.selectAria')}
                         >
                           {visibleModels.length === 0 ? (
                             <span className="text-subtle">
-                              No matching models
+                              {t('models.models.noMatches')}
                             </span>
                           ) : (
                             visibleModels.map((model) => {
@@ -570,7 +588,12 @@ export function ModelDetailDrawer({
                                   aria-checked={isChecked}
                                   className={`mchip pick model-drawer-tag ${isChecked ? 'on active' : ''}`}
                                   onClick={() => handleToggleModel(model.id)}
-                                  title={`${model.name} (${model.id}) - click to ${isChecked ? 'Disable' : 'Enable'}`}
+                                  title={t(
+                                    isChecked
+                                      ? 'models.models.chipTitleDisable'
+                                      : 'models.models.chipTitleEnable',
+                                    { name: model.name, id: model.id },
+                                  )}
                                 >
                                   <span className="mchip-check" aria-hidden="true">
                                     <HelmIcon name="check" size={10} />
@@ -594,14 +617,14 @@ export function ModelDetailDrawer({
                             className="mchips-fold"
                             onClick={() => setIsExpanded((prev) => !prev)}
                             aria-expanded={isExpanded}
-                            title={isExpanded ? 'Collapse list' : 'Expand all'}
+                            title={isExpanded ? t('models.models.collapseList') : t('models.models.expandAll')}
                           >
                             <span>
                               {isExpanded
-                                ? 'Collapse list'
+                                ? t('models.models.collapseList')
                                 : hiddenModelCount > 0
-                                  ? `Expand all (${hiddenModelCount} hidden)`
-                                  : 'Expand all'}
+                                  ? t('models.models.expandAllHidden', { count: hiddenModelCount })
+                                  : t('models.models.expandAll')}
                             </span>
                             <HelmIcon name={isExpanded ? 'chevron-up' : 'chevron-down'} size={12} />
                           </button>
@@ -618,7 +641,7 @@ export function ModelDetailDrawer({
               <div className="flex-1">
                 {saveSuccess && (
                   <span className="text-subtle" role="status">
-                    Configuration saved
+                    {t('models.saveSuccess')}
                   </span>
                 )}
                 {saveError && (
@@ -635,7 +658,7 @@ export function ModelDetailDrawer({
                 disabled={saving || !provider}
               >
                 <HelmIcon name="check" size={14} />
-                <span>{saving ? 'Saving...' : 'Save configuration'}</span>
+                <span>{saving ? t('models.saving') : t('models.saveConfig')}</span>
               </button>
             </div>
           </DialogContent>
@@ -646,10 +669,12 @@ export function ModelDetailDrawer({
       <ConfirmDialog
         open={deleteConfirmOpen}
         onOpenChange={setDeleteConfirmOpen}
-        title="Confirm credential deletion"
-        description={`Delete the local credentials of ${provider?.name ?? 'This provider'}? Conversations without another configured key will lose access to this provider.`}
-        confirmText="Confirm deletion"
-        cancelText="Cancel"
+        title={t('models.confirm.title')}
+        description={t('models.confirm.body', {
+          name: provider?.name ?? t('models.confirm.thisProvider'),
+        })}
+        confirmText={t('models.confirm.confirm')}
+        cancelText={t('common.cancel')}
         danger
         inline={inline}
         onConfirm={handleDeleteCredential}

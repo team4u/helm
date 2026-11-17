@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { copyToClipboard, CopyButton, HelmIcon, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle, PluginSlot } from '@helm/plugin-client'
 import { nodesApi, type NodeUpgradeCheckResult } from '../lib/api.js'
+import { useWebLocale } from '../i18n/use-web-locale.js'
 import {
   buildNodeConnectGuide,
   formatBytes,
@@ -21,25 +22,33 @@ export interface NodeDetailDrawerProps {
   node: NodeInfo | null
   open: boolean
   onClose: () => void
-  /** 显式指定是否内联渲染（便于测试与 SSR 统一断言） */
+  /** Render inline (uniform assertions for tests and SSR). */
   inline?: boolean
-  /** 是否处于接入新节点模式 */
+  /** Whether the drawer is in the new-node enrollment mode. */
   isNew?: boolean
   onTokenIssued?: (token: string) => void
   onRefresh?: () => Promise<unknown> | void
 }
 
 /**
- * 全屏计算节点中心右侧滑出抽屉（NodeDetailDrawer）：
- * - 基于 Radix Dialog 原语实现 520px-560px 抽屉；
- * - 头部：节点图标、友好名称、在线状态徽章、mono 节点 ID 与关闭按钮；
- * - 节点系统概览：操作系统、CPU架构、Node版本、主机名、工作目录、连接地址、运行时长；
- * - 节点健康体检：体检触发按钮、CPU 负载、内存与磁盘容量图表、版本诊断；
- * - 远程节点接入与命令：签发接入令牌（调用 nodesApi.issueToken）、一键复制接入命令行及复制反馈；
- * - 注册工具能力列表：bash / read / write / edit 矢量能力清单；
- * - 插件扩展子插槽：已有节点在系统概览后挂载 builtin:node/detail-section
- *   （其他插件注入节点维度扩展区块；仅传节点公开快照，不含接入令牌等凭据）；
- * - 严格遵循零 Emoji 铁律与 Fast Refresh 规范。
+ * Right slide-over drawer of the full-screen Compute Nodes Center
+ * (NodeDetailDrawer):
+ * - built on Radix Dialog primitives as a 520px-560px drawer;
+ * - header: node icon, friendly name, online badge, mono node ID and a close
+ *   button;
+ * - node system overview: OS, CPU architecture, Node version, hostname,
+ *   working directory, connection channel, uptime;
+ * - node health check: check trigger button, CPU load, memory and disk
+ *   capacity figures, version diagnostics;
+ * - remote node enrollment & commands: issue an access token (via
+ *   nodesApi.issueToken), one-click copy of the enrollment command line with
+ *   copy feedback;
+ * - registered tool capability list: the bash / read / write / edit vector;
+ * - plugin extension slot: existing nodes mount builtin:node/detail-section
+ *   after the system overview (other plugins inject node-scoped sections;
+ *   only the public node snapshot is passed — never enrollment tokens or
+ *   other credentials);
+ * - strictly zero Emoji and Fast Refresh compliant.
  */
 export function NodeDetailDrawer({
   node,
@@ -50,6 +59,7 @@ export function NodeDetailDrawer({
   onTokenIssued,
   onRefresh,
 }: NodeDetailDrawerProps): React.JSX.Element {
+  const { t } = useWebLocale()
   const [issuedToken, setIssuedToken] = useState<string | null>(null)
   const [newNodeId, setNewNodeId] = useState('')
   const [tokenError, setTokenError] = useState<string | null>(null)
@@ -63,7 +73,11 @@ export function NodeDetailDrawer({
 
   const isLocal = node ? isNodeLocal(node) : false
   const isOnline = node ? isNodeOnline(node) : false
-  const displayName = isNew ? 'Connect a new compute node' : node ? getNodeDisplayName(node) : 'Node details'
+  const displayName = isNew
+    ? t('nodes.drawer.newTitle')
+    : node
+      ? getNodeDisplayName(node, t)
+      : t('nodes.drawer.titleFallback')
   const iconName = isLocal ? 'laptop' : 'server'
   const platformArch = node ? formatNodePlatformArch(node) : '--'
 
@@ -91,7 +105,7 @@ export function NodeDetailDrawer({
     }
 
     if (!targetNodeId) {
-      setTokenError('Enter a valid node ID')
+      setTokenError(t('nodes.drawer.invalidNodeId'))
       return
     }
 
@@ -187,11 +201,11 @@ export function NodeDetailDrawer({
                       className={`badge ${isOnline ? 'badge-ok' : 'badge-neutral'}`}
                     >
                       <HelmIcon name={isOnline ? 'check' : 'circle'} size={10} />
-                      <span>{isOnline ? 'Online' : 'Offline'}</span>
+                      <span>{isOnline ? t('common.online') : t('common.offline')}</span>
                     </span>
                   )}
                   {isLocal && (
-                    <span className="badge badge-neutral">Local</span>
+                    <span className="badge badge-neutral">{t('nodes.local')}</span>
                   )}
                   {node?.version && (
                     <span className="badge badge-neutral mono">
@@ -208,8 +222,8 @@ export function NodeDetailDrawer({
               <button
                 type="button"
                 className="btn btn-ghost btn-icon-sm"
-                aria-label="Close"
-                title="Close"
+                aria-label={t('common.close')}
+                title={t('common.close')}
                 onClick={onClose}
               >
                 <HelmIcon name="x" size={14} />
@@ -220,7 +234,7 @@ export function NodeDetailDrawer({
           {/* Drawer body */}
           <div className="primary-drawer-body">
             {!node && !isNew ? (
-              <div className="primary-center-empty">No node selected</div>
+              <div className="primary-center-empty">{t('nodes.drawer.noSelection')}</div>
             ) : (
               <>
                 {/* 1. Node system overview */}
@@ -228,41 +242,41 @@ export function NodeDetailDrawer({
                   <section className="section-flat">
                     <div className="section-flat-header">
                       <HelmIcon name="cpu" size={13} />
-                      <span className="section-flat-title">System overview</span>
+                      <span className="section-flat-title">{t('nodes.drawer.overview')}</span>
                     </div>
 
                     <div className="form-grid">
-                      <span className="form-grid-label">Operating system</span>
+                      <span className="form-grid-label">{t('nodes.drawer.os')}</span>
                       <span className="mono selectable form-grid-value">
                         {node.os || node.platform || '--'}
                       </span>
 
-                      <span className="form-grid-label">CPU architecture</span>
+                      <span className="form-grid-label">{t('nodes.drawer.arch')}</span>
                       <span className="mono selectable form-grid-value">
                         {node.arch || '--'}
                       </span>
 
-                      <span className="form-grid-label">Node version</span>
+                      <span className="form-grid-label">{t('nodes.drawer.version')}</span>
                       <span className="mono selectable form-grid-value">
                         {node.version || '--'}
                       </span>
 
-                      <span className="form-grid-label">Hostname</span>
+                      <span className="form-grid-label">{t('nodes.drawer.hostname')}</span>
                       <span className="mono selectable form-grid-value">
                         {node.hostname || '--'}
                       </span>
 
-                      <span className="form-grid-label">Working directory</span>
+                      <span className="form-grid-label">{t('nodes.drawer.cwd')}</span>
                       <span className="mono selectable form-grid-value">
                         {node.cwd || '--'}
                       </span>
 
-                      <span className="form-grid-label">Connection channel</span>
+                      <span className="form-grid-label">{t('nodes.drawer.channel')}</span>
                       <span className="mono selectable form-grid-value">
-                        {node.hubUrl || (isLocal ? 'Local IPC / socket' : '--')}
+                        {node.hubUrl || (isLocal ? t('nodes.drawer.localIpc') : '--')}
                       </span>
 
-                      <span className="form-grid-label">Uptime</span>
+                      <span className="form-grid-label">{t('nodes.drawer.uptime')}</span>
                       <span className="mono selectable form-grid-value">{uptime}</span>
                     </div>
                   </section>
@@ -288,7 +302,7 @@ export function NodeDetailDrawer({
                     <div className="section-flat-header flex-row-between">
                       <div className="flex-row">
                         <HelmIcon name="activity" size={13} />
-                        <span className="section-flat-title">Health check and resource load</span>
+                        <span className="section-flat-title">{t('nodes.drawer.healthSection')}</span>
                       </div>
                       <button
                         type="button"
@@ -297,19 +311,19 @@ export function NodeDetailDrawer({
                         onClick={() => void handleHealthCheck()}
                       >
                         <HelmIcon name="activity" size={12} />
-                        <span>{checkingHealth ? 'Checking…' : 'Health check'}</span>
+                        <span>{checkingHealth ? t('nodes.drawer.checking') : t('nodes.drawer.healthAction')}</span>
                       </button>
                     </div>
 
                     <div className="form-grid">
-                      <span className="form-grid-label">CPU usage</span>
+                      <span className="form-grid-label">{t('nodes.drawer.cpuUsage')}</span>
                       <span className="mono selectable form-grid-value">
                         {health?.cpuUsagePercent !== undefined
                           ? `${health.cpuUsagePercent}%`
                           : '--'}
                       </span>
 
-                      <span className="form-grid-label">System load</span>
+                      <span className="form-grid-label">{t('nodes.drawer.systemLoad')}</span>
                       <span className="mono selectable form-grid-value">
                         {health?.loadAvg
                           ? `${health.loadAvg[0]?.toFixed(2) ?? '--'} / ${health.loadAvg[1]?.toFixed(2) ?? '--'} / ${health.loadAvg[2]?.toFixed(2) ?? '--'}`
@@ -318,7 +332,7 @@ export function NodeDetailDrawer({
                             : '--'}
                       </span>
 
-                      <span className="form-grid-label">Memory usage</span>
+                      <span className="form-grid-label">{t('nodes.drawer.memUsage')}</span>
                       <span className="mono selectable form-grid-value">
                         {memUsage?.label ??
                           (health?.memTotalBytes !== undefined
@@ -326,7 +340,7 @@ export function NodeDetailDrawer({
                             : '--')}
                       </span>
 
-                      <span className="form-grid-label">Disk space</span>
+                      <span className="form-grid-label">{t('nodes.drawer.diskSpace')}</span>
                       <span className="mono selectable form-grid-value">
                         {diskUsage?.label ??
                           (health?.diskTotalBytes !== undefined
@@ -346,8 +360,8 @@ export function NodeDetailDrawer({
                         />
                         <span className="callout-text">
                           {healthResult.updateAvailable
-                            ? `Update available: v${healthResult.latestVersion}`
-                            : 'Node kernel healthy and up to date'}
+                            ? t('nodes.drawer.updateAvailable', { version: healthResult.latestVersion })
+                            : t('nodes.drawer.upToDate')}
                         </span>
                       </div>
                     )}
@@ -366,19 +380,19 @@ export function NodeDetailDrawer({
                   <section className="section-flat border-accent">
                     <div className="section-flat-header">
                       <HelmIcon name="key" size={13} />
-                      <span className="section-flat-title">Controlled machine enrollment command</span>
+                      <span className="section-flat-title">{t('nodes.drawer.enrollSection')}</span>
                     </div>
 
                     {isNew && (
                       <div className="form-grid">
                         <label htmlFor="new-node-id-input" className="form-grid-label">
-                          Node ID
+                          {t('nodes.drawer.nodeId')}
                         </label>
                         <input
                           id="new-node-id-input"
                           type="text"
                           className="input mono"
-                          placeholder="e.g. gpu-worker-1"
+                          placeholder={t('nodes.drawer.nodeIdPlaceholder')}
                           value={newNodeId}
                           onChange={(e) => setNewNodeId(e.target.value)}
                         />
@@ -393,7 +407,7 @@ export function NodeDetailDrawer({
                         onClick={() => void handleIssueToken()}
                       >
                         <HelmIcon name="key" size={12} />
-                        <span>{issuedToken ? 'Re-issue token' : 'Issue access token'}</span>
+                        <span>{issuedToken ? t('nodes.drawer.reissueToken') : t('nodes.drawer.issueToken')}</span>
                       </button>
                     </div>
 
@@ -406,7 +420,7 @@ export function NodeDetailDrawer({
 
                     {issuedToken && (
                       <div className="flex-col">
-                        <div className="text-subtle">Access token (shown once):</div>
+                        <div className="text-subtle">{t('nodes.drawer.tokenLabel')}</div>
                         <div className="flex-row flex-row-wrap">
                           <code className="code-box selectable flex-1 mono">
                             {issuedToken}
@@ -415,10 +429,10 @@ export function NodeDetailDrawer({
                             type="button"
                             className="btn btn-ghost btn-sm"
                             onClick={() => void handleCopyToken()}
-                            title="Copy token"
+                            title={t('nodes.drawer.copyToken')}
                           >
                             <HelmIcon name={copiedToken ? 'check' : 'copy'} size={12} />
-                            <span>{copiedToken ? 'Copied' : 'Copy token'}</span>
+                            <span>{copiedToken ? t('nodes.drawer.copied') : t('nodes.drawer.copyToken')}</span>
                           </button>
                         </div>
                       </div>
@@ -426,7 +440,7 @@ export function NodeDetailDrawer({
 
                     {guide && (
                       <div className="flex-col">
-                        <div className="text-subtle">One-line enrollment command (background daemon start):</div>
+                        <div className="text-subtle">{t('nodes.drawer.oneLineLabel')}</div>
                         <div className="flex-row flex-row-wrap">
                           <code className="code-box selectable flex-1 mono">
                             {guide.oneLineCommand}
@@ -435,15 +449,15 @@ export function NodeDetailDrawer({
                             type="button"
                             className="btn btn-ghost btn-sm"
                             onClick={() => void handleCopyCmd()}
-                            title="Copy command line"
+                            title={t('nodes.drawer.copyCommandTitle')}
                           >
                             <HelmIcon name={copiedCmd ? 'check' : 'copy'} size={12} />
-                            <span>{copiedCmd ? 'Copied' : 'Copy command'}</span>
+                            <span>{copiedCmd ? t('nodes.drawer.copied') : t('nodes.drawer.copyCommand')}</span>
                           </button>
                         </div>
 
                         <div className="text-subtle">
-                          Common maintenance commands:
+                          {t('nodes.drawer.maintenanceLabel')}
                         </div>
                         <div className="flex-row flex-row-wrap">
                           <code className="code-box selectable flex-1 mono">
@@ -467,7 +481,7 @@ export function NodeDetailDrawer({
                   <section className="section-flat">
                     <div className="section-flat-header">
                       <HelmIcon name="wrench" size={13} />
-                      <span className="section-flat-title">Registered tools</span>
+                      <span className="section-flat-title">{t('nodes.drawer.toolsSection')}</span>
                     </div>
 
                     <div className="primary-card-pills">
@@ -475,7 +489,7 @@ export function NodeDetailDrawer({
                         <span
                           key={tool}
                           className="primary-card-pill mono"
-                          title={`Tool: ${tool}`}
+                          title={t('nodes.drawer.toolTitle', { tool })}
                         >
                           <HelmIcon name="terminal" size={11} />
                           <span>{tool}</span>
@@ -491,7 +505,7 @@ export function NodeDetailDrawer({
           {/* Drawer footer */}
           <div className="primary-drawer-footer">
             <button type="button" className="btn btn-sm" onClick={onClose}>
-              Close
+              {t('common.close')}
             </button>
           </div>
         </DialogContent>

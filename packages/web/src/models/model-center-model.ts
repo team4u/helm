@@ -1,15 +1,24 @@
 /**
- * 模型与凭证中心纯函数模型与检索过滤
+ * Pure-function model and search/filter logic for the Models & Credentials
+ * Center.
  *
- * 覆盖：
- * - 供应商与模型数据结构定义；
- * - 内置主流大语言模型供应商静态元数据（Anthropic, OpenAI, DeepSeek, Gemini, Ollama 等）；
- * - 多维检索（按供应商名称、ID、描述及所包含的模型名称搜索）；
- * - 指标统计与默认模型选项构建。
- * - 遵循前端规范：纯属性驱动，零 ID 字符串硬编码推测。
+ * Covers:
+ * - Provider and model data structures;
+ * - static metadata for mainstream built-in LLM providers (Anthropic, OpenAI,
+ *   DeepSeek, Gemini, Ollama, ...);
+ * - multi-dimensional search (provider name, ID, description and included
+ *   model names);
+ * - category counting and default-model option building.
+ * - Front-end conventions: pure property-driven logic, zero ID-string guessing.
+ *
+ * i18n: functions that produce display copy take an optional trailing
+ * `t` translator (English bridge by default); preset descriptions/tags are
+ * constant-table labels and therefore resolved through `t` by the
+ * `buildDefaultProviders` builder instead of living as raw literals.
  */
 import type { ModelProviderSummary, ProviderConfig } from '@helm/protocol/browser'
 import type { CredentialSummary, ModelDescriptor } from '../lib/api.js'
+import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 import { formatTokens } from '../lib/format.js'
 
 export interface ProviderModelItem {
@@ -37,10 +46,26 @@ export interface ProviderItem {
 
 export type ProviderFilterTab = 'all' | 'configured'
 
-export const PROVIDER_FILTER_TABS: Array<{ key: ProviderFilterTab; label: string }> = [
-  { key: 'all', label: 'All' },
-  { key: 'configured', label: 'Configured' },
-]
+/**
+ * Provider filter pills with labels resolved through the active-locale
+ * translator (`common.all` is shared exactly; the configured label is
+ * domain copy).
+ */
+export function buildProviderFilterTabs(
+  t: WebMessageTranslator = englishWebTranslator,
+): Array<{ key: ProviderFilterTab; label: string }> {
+  return [
+    { key: 'all', label: t('common.all') },
+    { key: 'configured', label: t('models.configured') },
+  ]
+}
+
+/**
+ * English-label constant kept as the pre-i18n compatibility export; migrated
+ * call sites use `buildProviderFilterTabs(t)` instead.
+ */
+export const PROVIDER_FILTER_TABS: Array<{ key: ProviderFilterTab; label: string }> =
+  buildProviderFilterTabs()
 
 export interface FilterProvidersOptions {
   query?: string
@@ -53,115 +78,127 @@ export interface ProviderSummaryStats {
 }
 
 /**
- * 内置主流供应商静态元数据列表
+ * Built-in mainstream provider presets with display copy resolved through the
+ * translator; brand names, model ids and numeric tokens (200K, LPU, ...) are
+ * locale-stable data and stay literal.
  */
-export const DEFAULT_PROVIDERS: ProviderItem[] = [
-  {
-    id: 'anthropic',
-    name: 'Anthropic',
-    configured: false,
-    modelsCount: 3,
-    description: 'Frontier Claude models with very long context windows and deep reasoning.',
-    models: [
-      { id: 'claude-3-7-sonnet', name: 'Claude 3.7 Sonnet', tags: ['Hybrid reasoning', 'Code', '200K'], enabled: true },
-      { id: 'claude-3-5-sonnet', name: 'Claude 3.5 Sonnet', tags: ['General-purpose foundation', 'Code', '200K'], enabled: true },
-      { id: 'claude-3-5-haiku', name: 'Claude 3.5 Haiku', tags: ['Fast response', 'Lightweight'], enabled: true },
-    ],
-  },
-  {
-    id: 'openai',
-    name: 'OpenAI',
-    configured: false,
-    modelsCount: 4,
-    description: 'GPT-4o and o1/o3 deep reasoning models with top-tier general-purpose capabilities.',
-    models: [
-      { id: 'gpt-4o', name: 'GPT-4o', tags: ['Multimodal', 'High intelligence', '128K'], enabled: true },
-      { id: 'gpt-4o-mini', name: 'GPT-4o Mini', tags: ['Great value', 'Fast'], enabled: true },
-      { id: 'o1', name: 'o1', tags: ['Deep reasoning', 'Math and logic'], enabled: true },
-      { id: 'o3-mini', name: 'o3-mini', tags: ['Lightweight reasoning', 'STEM'], enabled: true },
-    ],
-  },
-  {
-    id: 'deepseek',
-    name: 'DeepSeek',
-    configured: false,
-    modelsCount: 2,
-    description: 'DeepSeek foundation models and the full-strength R1 reinforcement learning reasoner at extreme value.',
-    models: [
-      { id: 'deepseek-reasoner', name: 'DeepSeek R1', tags: ['Deep thinking', 'Reinforcement learning', '64K'], enabled: true },
-      { id: 'deepseek-chat', name: 'DeepSeek V3', tags: ['General conversation', 'Great value', '64K'], enabled: true },
-    ],
-  },
-  {
-    id: 'gemini',
-    name: 'Google Gemini',
-    configured: false,
-    modelsCount: 3,
-    description: 'Native multimodal models with million-token context and native tool calling.',
-    models: [
-      { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', tags: ['Very long context', '2M'], enabled: true },
-      { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', tags: ['Low latency', 'Multimodal'], enabled: true },
-      { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', tags: ['Fast response'], enabled: true },
-    ],
-  },
-  {
-    id: 'ollama',
-    name: 'Ollama',
-    configured: false,
-    modelsCount: 0,
-    baseUrl: 'http://127.0.0.1:11434',
-    dynamic: true,
-    description: 'Self-hosted local model platform providing zero-dependency inference through a local daemon.',
-    models: [],
-  },
-  {
-    id: 'openrouter',
-    name: 'OpenRouter',
-    configured: false,
-    modelsCount: 0,
-    baseUrl: 'https://openrouter.ai/api/v1',
-    dynamic: true,
-    description: 'Unified gateway aggregating hundreds of global model providers with smart routing and elastic scheduling.',
-    models: [],
-  },
-  {
-    id: 'mistral',
-    name: 'Mistral AI',
-    configured: false,
-    modelsCount: 3,
-    description: 'Top European open-source and commercial model series with strong multilingual and reasoning skills.',
-    models: [
-      { id: 'mistral-large-latest', name: 'Mistral Large', tags: ['Flagship foundation', '128K'], enabled: true },
-      { id: 'codestral-latest', name: 'Codestral', tags: ['Code generation', '32K'], enabled: true },
-      { id: 'ministral-8b-latest', name: 'Ministral 8B', tags: ['Edge-fast'], enabled: true },
-    ],
-  },
-  {
-    id: 'groq',
-    name: 'Groq',
-    configured: false,
-    modelsCount: 2,
-    description: 'Ultra-high-throughput inference on proprietary LPU chips, hundreds of tokens per second at very low latency.',
-    models: [
-      { id: 'llama-3.3-70b-versatile', name: 'Llama 3.3 70B Versatile', tags: ['Ultra-low latency', 'LPU'], enabled: true },
-      { id: 'deepseek-r1-distill-llama-70b', name: 'DeepSeek R1 Distill 70B', tags: ['Fast inference'], enabled: true },
-    ],
-  },
-  {
-    id: 'custom',
-    name: 'Custom OpenAI-compatible endpoint',
-    configured: false,
-    modelsCount: 1,
-    baseUrl: 'http://127.0.0.1:8000/v1',
-    description: 'Connect to self-hosted vLLM, SGLang, OneAPI or any third-party OpenAI-compatible endpoint.',
-    models: [
-      { id: 'custom-model', name: 'Custom Model', tags: ['Custom compatible'], enabled: true },
-    ],
-  },
-]
+export function buildDefaultProviders(
+  t: WebMessageTranslator = englishWebTranslator,
+): ProviderItem[] {
+  return [
+    {
+      id: 'anthropic',
+      name: 'Anthropic',
+      configured: false,
+      modelsCount: 3,
+      description: t('models.preset.anthropic.description'),
+      models: [
+        { id: 'claude-3-7-sonnet', name: 'Claude 3.7 Sonnet', tags: [t('models.tag.hybridReasoning'), t('models.tag.code'), '200K'], enabled: true },
+        { id: 'claude-3-5-sonnet', name: 'Claude 3.5 Sonnet', tags: [t('models.tag.generalFoundation'), t('models.tag.code'), '200K'], enabled: true },
+        { id: 'claude-3-5-haiku', name: 'Claude 3.5 Haiku', tags: [t('models.tag.fastResponse'), t('models.tag.lightweight')], enabled: true },
+      ],
+    },
+    {
+      id: 'openai',
+      name: 'OpenAI',
+      configured: false,
+      modelsCount: 4,
+      description: t('models.preset.openai.description'),
+      models: [
+        { id: 'gpt-4o', name: 'GPT-4o', tags: [t('models.tag.multimodal'), t('models.tag.highIntelligence'), '128K'], enabled: true },
+        { id: 'gpt-4o-mini', name: 'GPT-4o Mini', tags: [t('models.tag.greatValue'), t('models.tag.fast')], enabled: true },
+        { id: 'o1', name: 'o1', tags: [t('models.tag.deepReasoning'), t('models.tag.mathLogic')], enabled: true },
+        { id: 'o3-mini', name: 'o3-mini', tags: [t('models.tag.lightweightReasoning'), 'STEM'], enabled: true },
+      ],
+    },
+    {
+      id: 'deepseek',
+      name: 'DeepSeek',
+      configured: false,
+      modelsCount: 2,
+      description: t('models.preset.deepseek.description'),
+      models: [
+        { id: 'deepseek-reasoner', name: 'DeepSeek R1', tags: [t('models.tag.deepThinking'), t('models.tag.reinforcementLearning'), '64K'], enabled: true },
+        { id: 'deepseek-chat', name: 'DeepSeek V3', tags: [t('models.tag.generalConversation'), t('models.tag.greatValue'), '64K'], enabled: true },
+      ],
+    },
+    {
+      id: 'gemini',
+      name: 'Google Gemini',
+      configured: false,
+      modelsCount: 3,
+      description: t('models.preset.gemini.description'),
+      models: [
+        { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', tags: [t('models.tag.veryLongContext'), '2M'], enabled: true },
+        { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', tags: [t('models.tag.lowLatency'), t('models.tag.multimodal')], enabled: true },
+        { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', tags: [t('models.tag.fastResponse')], enabled: true },
+      ],
+    },
+    {
+      id: 'ollama',
+      name: 'Ollama',
+      configured: false,
+      modelsCount: 0,
+      baseUrl: 'http://127.0.0.1:11434',
+      dynamic: true,
+      description: t('models.preset.ollama.description'),
+      models: [],
+    },
+    {
+      id: 'openrouter',
+      name: 'OpenRouter',
+      configured: false,
+      modelsCount: 0,
+      baseUrl: 'https://openrouter.ai/api/v1',
+      dynamic: true,
+      description: t('models.preset.openrouter.description'),
+      models: [],
+    },
+    {
+      id: 'mistral',
+      name: 'Mistral AI',
+      configured: false,
+      modelsCount: 3,
+      description: t('models.preset.mistral.description'),
+      models: [
+        { id: 'mistral-large-latest', name: 'Mistral Large', tags: [t('models.tag.flagshipFoundation'), '128K'], enabled: true },
+        { id: 'codestral-latest', name: 'Codestral', tags: [t('models.tag.codeGeneration'), '32K'], enabled: true },
+        { id: 'ministral-8b-latest', name: 'Ministral 8B', tags: [t('models.tag.edgeFast')], enabled: true },
+      ],
+    },
+    {
+      id: 'groq',
+      name: 'Groq',
+      configured: false,
+      modelsCount: 2,
+      description: t('models.preset.groq.description'),
+      models: [
+        { id: 'llama-3.3-70b-versatile', name: 'Llama 3.3 70B Versatile', tags: [t('models.tag.ultraLowLatency'), 'LPU'], enabled: true },
+        { id: 'deepseek-r1-distill-llama-70b', name: 'DeepSeek R1 Distill 70B', tags: [t('models.tag.fastInference')], enabled: true },
+      ],
+    },
+    {
+      id: 'custom',
+      name: t('models.preset.custom.name'),
+      configured: false,
+      modelsCount: 1,
+      baseUrl: 'http://127.0.0.1:8000/v1',
+      description: t('models.preset.custom.description'),
+      models: [
+        { id: 'custom-model', name: 'Custom Model', tags: [t('models.tag.customCompatible')], enabled: true },
+      ],
+    },
+  ]
+}
 
 /**
- * 统计供应商全部与已配置数量
+ * English preset table kept as the pre-i18n compatibility export (also the
+ * default `baseProviders` for `buildMergedProviders` at unmigrated call sites).
+ */
+export const DEFAULT_PROVIDERS: ProviderItem[] = buildDefaultProviders()
+
+/**
+ * Count total and configured providers.
  */
 export function buildProviderCategoryCounts(
   providers: ProviderItem[],
@@ -177,7 +214,7 @@ export function buildProviderCategoryCounts(
 }
 
 /**
- * 供应商列表默认排序：已配置优先，其次按名称升序
+ * Default provider ordering: configured first, then ascending by name.
  */
 export function sortProvidersConfiguredFirst(providers: ProviderItem[]): ProviderItem[] {
   return [...providers].sort(
@@ -188,7 +225,8 @@ export function sortProvidersConfiguredFirst(providers: ProviderItem[]): Provide
 }
 
 /**
- * 提取供应商卡片预览的前 N 个可用模型短名与剩余数量
+ * Extract the first N available model short names for the card preview plus
+ * the remaining count.
  */
 export function summarizeCardModels(
   provider: ProviderItem,
@@ -208,8 +246,9 @@ export function summarizeCardModels(
 }
 
 /**
- * 多维过滤供应商列表：
- * 匹配分类状态（全部 / 已配置）与关键字（供应商名称、ID、描述或包含的模型 ID/名称）。
+ * Multi-dimensional provider filtering:
+ * matches the category status (all / configured) and a keyword (provider
+ * name, ID, description or included model id/name).
  */
 export function filterProviders(
   providers: ProviderItem[],
@@ -223,7 +262,7 @@ export function filterProviders(
       return false
     }
 
-    // 搜索词匹配
+    // Keyword match
     if (!term) return true
 
     if (provider.id.toLowerCase().includes(term)) return true
@@ -246,25 +285,28 @@ export function filterProviders(
 }
 
 /**
- * 全局默认模型下拉选项的空值哨兵：
- * Radix Select 把空字符串 value 视为 placeholder 语义（选中后 onValueChange 不触发），
- * 因此「未设置」用非空哨兵值承载，提交时再映射回空串。
+ * Non-empty sentinel value for the "not set" default-model select option:
+ * Radix Select treats an empty-string value as placeholder semantics (selecting
+ * it never fires onValueChange), so the clear action rides on a sentinel value
+ * and is mapped back to the empty string on submit.
  */
 export const UNSET_MODEL_VALUE = '__unset__'
 
 /**
- * 构造全局默认模型下拉选项：
- * - 首项恒为「未设置」哨兵项（显式表达清除语义）；
- * - 仅列出目录中可用且未被用户禁用的模型；
- * - 当前值不在可选列表（凭据失效/外部模型/已禁用）时保留并标注「目录外」或「已禁用」，
- *   不静默丢失；标注项不重复添加。
+ * Build the global default-model select options:
+ * - the first entry is always the "not set" sentinel (explicit clear semantics);
+ * - only models that are available in the catalog and not user-disabled are listed;
+ * - a current value missing from the selectable list (broken credentials,
+ *   external model, disabled) is kept and annotated as "not in catalog" or
+ *   "disabled" instead of being dropped silently; annotated items are not duplicated.
  */
 export function buildDefaultModelOptions(
   models: ModelDescriptor[],
   currentValue?: string,
+  t: WebMessageTranslator = englishWebTranslator,
 ): Array<{ value: string; label: string; meta?: string }> {
   const options: Array<{ value: string; label: string; meta?: string }> = [
-    { value: UNSET_MODEL_VALUE, label: 'Not set (inherits system baseline)' },
+    { value: UNSET_MODEL_VALUE, label: t('models.defaults.optionUnset') },
   ]
 
   for (const m of models) {
@@ -276,8 +318,10 @@ export function buildDefaultModelOptions(
     })
   }
 
-  // 若当前配置的模型不在可选列表中（如历史配置、已删除提供商、凭据未配或被禁用），
-  // 保留为首选显示项防静默丢失；已禁用单独标注（与目录外区分，提示需重新启用）。
+  // If the currently configured model is not selectable (historic config,
+  // deleted provider, missing credentials or disabled), keep it as a visible
+  // entry so it is not silently lost; disabled models get a dedicated
+  // annotation (distinct from out-of-catalog, hinting a re-enable is needed).
   const trimmed = currentValue?.trim()
   if (
     trimmed &&
@@ -287,8 +331,10 @@ export function buildDefaultModelOptions(
     const disabled = models.some((m) => m.id === trimmed && m.disabled === true)
     options.push({
       value: trimmed,
-      label: disabled ? `${trimmed} (disabled)` : `${trimmed} (current)`,
-      meta: disabled ? 'Disabled' : 'Not in catalog',
+      label: disabled
+        ? t('models.defaults.optionDisabled', { model: trimmed })
+        : t('models.defaults.optionCurrent', { model: trimmed }),
+      meta: disabled ? t('models.defaults.metaDisabled') : t('models.defaults.metaNotInCatalog'),
     })
   }
 
@@ -296,7 +342,7 @@ export function buildDefaultModelOptions(
 }
 
 /**
- * 计算供应商总数与已配置数
+ * Summarize total and configured provider counts.
  */
 export function summarizeProviders(
   providers: ProviderItem[],
@@ -308,7 +354,8 @@ export function summarizeProviders(
 }
 
 /**
- * 将预设供应商与后端真实目录、运行时凭证、自定义网关及目录模型全量融合
+ * Merge the preset providers with the live backend catalog, runtime
+ * credentials, custom gateways and catalog models.
  */
 export function buildMergedProviders(
   baseProviders: ProviderItem[] = DEFAULT_PROVIDERS,
@@ -316,6 +363,7 @@ export function buildMergedProviders(
   gateways?: ProviderConfig[],
   catalogModels?: ModelDescriptor[],
   catalog?: ModelProviderSummary[],
+  t: WebMessageTranslator = englishWebTranslator,
 ): ProviderItem[] {
   const configuredIds = new Set(
     (credentials ?? [])
@@ -330,13 +378,14 @@ export function buildMergedProviders(
     modelsByProvider.set(m.provider, list)
   }
 
-  // 1. 建立以 ID 为键的映射表，优先以 baseProviders 提供的高精元数据初始化
+  // 1. Seed an id-keyed map from the high-fidelity preset metadata.
   const providerMap = new Map<string, ProviderItem>()
   for (const base of baseProviders) {
     providerMap.set(base.id.toLowerCase(), { ...base })
   }
 
-  // 2. 融入后端实时拉取的完整供应商目录（包含 magpie 与全部插件或外部注册的供应商）
+  // 2. Merge the full backend provider catalog pulled live (magpie plus every
+  //    plugin- or externally-registered provider).
   for (const cat of catalog ?? []) {
     const key = cat.id.toLowerCase()
     const existing = providerMap.get(key)
@@ -360,13 +409,13 @@ export function buildMergedProviders(
         pluginId: cat.pluginId,
         authMethods: cat.authMethods,
         description: cat.dynamic
-          ? 'LLM provider with dynamic model catalog refresh.'
-          : `${cat.name || cat.id} model provider.`,
+          ? t('models.catalog.dynamicDescription')
+          : t('models.catalog.providerDescription', { name: cat.name || cat.id }),
       })
     }
   }
 
-  // 3. 融入自定义网关（store.providers）
+  // 3. Merge custom gateways (store.providers).
   for (const gw of gateways ?? []) {
     const key = gw.id.toLowerCase()
     const existing = providerMap.get(key)
@@ -382,30 +431,35 @@ export function buildMergedProviders(
         modelsCount: 0,
         baseUrl: gw.baseUrl,
         custom: true,
-        description: 'Model gateway registered dynamically at runtime.',
+        description: t('models.gatewayDynamicDescription'),
       })
     }
   }
 
-  // 4. 校准凭据状态与模型数量（以 credentials 与实时目录为准）
+  // 4. Reconcile credential state and model counts (credentials and the live
+  //    catalog win).
   for (const [key, p] of providerMap.entries()) {
     const remoteModels = modelsByProvider.get(key)
     const isConfiguredByKey = configuredIds.has(key)
     const hasAvailableModel = Boolean(remoteModels && remoteModels.some((m) => m.available))
     p.configured = Boolean(p.configured || isConfiguredByKey || hasAvailableModel)
 
-    // 5. 聚合实时目录模型并更新模型数量。勾选态是「路由启用」：仅由 disabled
-    //    决定，与凭据可用性（available）解耦——否则未配凭据的供应商填写密钥
-    //    保存时会把全部模型误写成禁用；available 供模型选择器/默认模型选项过滤。
+    // 5. Aggregate live catalog models and refresh the count. The checked
+    //    state means "routing enabled": it is driven by `disabled` only and
+    //    decoupled from credential availability — otherwise saving a key for a
+    //    provider without credentials would wrongly disable all its models;
+    //    `available` feeds the model picker / default-model option filtering.
     if (remoteModels && remoteModels.length > 0) {
       p.modelsCount = remoteModels.length
       p.models = remoteModels.map((m) => {
-        // 标签顺序：思考模型在前，真实已知窗口（正数 tokens，紧凑格式）在后；
-        // 窗口未知绝不推测或补缺省；两者皆无保持 undefined（空语义不触发徽章渲染）。
+        // Tag order: thinking models first, then the real known window
+        // (positive token count, compact format); never guess or default an
+        // unknown window; keep undefined when neither applies (empty semantics
+        // suppress the badge rendering).
         const tags: string[] = []
-        if (m.thinkingLevels && m.thinkingLevels.length > 1) tags.push('Thinking models')
+        if (m.thinkingLevels && m.thinkingLevels.length > 1) tags.push(t('models.tag.thinking'))
         if (typeof m.contextWindow === 'number' && m.contextWindow > 0) {
-          tags.push(`${formatTokens(m.contextWindow)} context`)
+          tags.push(t('models.tag.context', { size: formatTokens(m.contextWindow) }))
         }
         return {
           id: m.modelId,
@@ -417,7 +471,7 @@ export function buildMergedProviders(
     }
   }
 
-  // 6. 排序：已配置优先，其次按名称字母升序
+  // 6. Order: configured first, then ascending alphabetically by name.
   return Array.from(providerMap.values()).sort(
     (a, b) =>
       Number(b.configured) - Number(a.configured) ||

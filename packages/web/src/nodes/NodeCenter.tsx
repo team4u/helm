@@ -1,13 +1,14 @@
 import React, { useMemo, useState } from 'react'
 import { HelmIcon } from '@helm/plugin-client'
 import { useHelmStore } from '../lib/store-context.js'
+import { useWebLocale } from '../i18n/use-web-locale.js'
+import type { WebMessageKey } from '../i18n/catalog.js'
 import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
 import { NodeCard } from './NodeCard.js'
 import { NodeDetailDrawer } from './NodeDetailDrawer.js'
 import {
   buildNodeCategoryCounts,
   filterNodes,
-  summarizeNodes,
   type NodeCategoryTab,
   type NodeInfo,
 } from './node-center-model.js'
@@ -15,26 +16,34 @@ import {
 export interface NodeCenterProps {
   isSplit?: boolean
   onCloseSplit?: () => void
-  /** 显式指定详情抽屉是否内联渲染（便于测试与 SSR 统一断言） */
+  /** Render the detail drawer inline (uniform assertions for tests and SSR). */
   inlineDrawer?: boolean
 }
 
-const CATEGORY_TABS: Array<{ key: NodeCategoryTab; label: string }> = [
-  { key: 'all', label: 'All' },
-  { key: 'local', label: 'Local' },
-  { key: 'remote', label: 'Remote' },
-  { key: 'online', label: 'Online' },
-  { key: 'offline', label: 'Offline' },
+/**
+ * Category pills as pure data: labels resolve through the active-locale
+ * translator at render time (constant-table labels are never localized in
+ * place). Shared exact-fit copy (all/online/offline) reuses `common.*`.
+ */
+const CATEGORY_TABS: ReadonlyArray<{ key: NodeCategoryTab; labelKey: WebMessageKey }> = [
+  { key: 'all', labelKey: 'common.all' },
+  { key: 'local', labelKey: 'nodes.local' },
+  { key: 'remote', labelKey: 'nodes.remote' },
+  { key: 'online', labelKey: 'common.online' },
+  { key: 'offline', labelKey: 'common.offline' },
 ]
 
 /**
- * 全屏计算节点中心（NodeCenter）主视图容器：
- * - 升格为系统一级主舞台全屏视图，统一管理本机与分布式计算节点；
- * - 顶部工具栏：多维检索搜索框、分类药丸标签栏与各状态数量统计徽章；
- * - 响应式卡片网格：消费 NodeCard 自适应流式呈现；
- * - 详情与诊断抽屉：右侧联动滑出 NodeDetailDrawer，支持节点健康体检、接入指令与能力清单；
- * - 状态闭环：深度联动 useHelmStore() primaryTarget 状态与 URL Hash；
- * - 严格遵循零 Emoji 铁律与 Fast Refresh 规范。
+ * Full-screen Compute Nodes Center primary view container:
+ * - a system-level full-stage view managing local and distributed compute nodes;
+ * - top toolbar: multi-dimensional search box, category pill tabs and status
+ *   count badges;
+ * - responsive card grid consuming NodeCard in an adaptive flow;
+ * - details & diagnostics drawer: the right-side NodeDetailDrawer with node
+ *   health checks, enrollment commands and capability lists;
+ * - state loop: deeply integrated with the useHelmStore() primaryTarget state
+ *   and the URL hash;
+ * - strictly zero Emoji and Fast Refresh compliant.
  */
 export function NodeCenter({
   isSplit = false,
@@ -42,6 +51,7 @@ export function NodeCenter({
   inlineDrawer = false,
 }: NodeCenterProps): React.JSX.Element {
   const store = useHelmStore()
+  const { t } = useWebLocale()
   const [query, setQuery] = useState('')
   const [activeTab, setActiveTab] = useState<NodeCategoryTab>('all')
   const [isAddingNew, setIsAddingNew] = useState(false)
@@ -100,7 +110,7 @@ export function NodeCenter({
         <div className="primary-center-title-wrap pane-title-group">
           <div className="primary-center-title">
             <HelmIcon name="cpu" size={14} />
-            <span>Compute Nodes Center</span>
+            <span>{t('nodes.title')}</span>
           </div>
         </div>
 
@@ -109,10 +119,10 @@ export function NodeCenter({
             type="button"
             className="btn btn-sm"
             onClick={handleOpenAddNew}
-            title="Connect new distributed compute nodes"
+            title={t('nodes.connectTitle')}
           >
             <HelmIcon name="plus" size={12} />
-            <span className="pane-action-label">Connect node</span>
+            <span className="pane-action-label">{t('nodes.connect')}</span>
           </button>
           {isSplit ? (
             <CloseSplitButton onCloseSplit={onCloseSplit} />
@@ -131,17 +141,17 @@ export function NodeCenter({
           <HelmIcon name="search" size={14} />
           <input
             type="text"
-            placeholder="Search node ID, name, platform, version or OS…"
+            placeholder={t('nodes.searchPlaceholder')}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            aria-label="Search compute nodes"
+            aria-label={t('nodes.searchAria')}
           />
           {query && (
             <button
               type="button"
               className="btn btn-ghost btn-sm primary-search-clear"
-              title="Clear search"
-              aria-label="Clear search"
+              title={t('nodes.searchClear')}
+              aria-label={t('nodes.searchClear')}
               onClick={() => setQuery('')}
             >
               <HelmIcon name="x" size={12} />
@@ -149,7 +159,7 @@ export function NodeCenter({
           )}
         </div>
 
-        <div className="primary-category-pills" role="tablist" aria-label="Filter by compute node category">
+        <div className="primary-category-pills" role="tablist" aria-label={t('nodes.filterAria')}>
           {CATEGORY_TABS.map((tab) => {
             const count = categoryCounts[tab.key] ?? 0
             const isActive = activeTab === tab.key
@@ -162,7 +172,7 @@ export function NodeCenter({
                 className={`primary-category-pill${isActive ? ' is-active' : ''}`}
                 onClick={() => setActiveTab(tab.key)}
               >
-                <span className="primary-category-pill-label">{tab.label}</span>
+                <span className="primary-category-pill-label">{t(tab.labelKey)}</span>
                 <span className="badge tabular-nums">{count}</span>
               </button>
             )
@@ -188,9 +198,9 @@ export function NodeCenter({
             <div className="primary-center-empty-icon">
               <HelmIcon name="search" size={28} />
             </div>
-            <div className="primary-center-empty-text">No matching compute nodes</div>
+            <div className="primary-center-empty-text">{t('nodes.emptyTitle')}</div>
             <div className="primary-center-empty-hint text-subtle">
-              Try adjusting the search keywords or switching category tabs.
+              {t('nodes.emptyHint')}
             </div>
             {(query || activeTab !== 'all') && (
               <button
@@ -202,7 +212,7 @@ export function NodeCenter({
                 }}
               >
                 <HelmIcon name="rotate-ccw" size={12} />
-                <span>Reset filters</span>
+                <span>{t('nodes.resetFilters')}</span>
               </button>
             )}
           </div>

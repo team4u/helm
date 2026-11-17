@@ -1,20 +1,25 @@
 /**
- * 计算节点中心（NodeCenter）纯函数模型与分类过滤
+ * Compute Node Center (NodeCenter) pure-function model and category filtering.
  *
- * 提供节点多维检索（ID / Label / 平台 / 架构 / 版本 / OS / 主机名）、
- * 状态判定（在线 / 离线 / 本机 / 远端）、分类标签统计与概要指标汇总。
- * 全部无副作用，纯函数隔离，保障 Fast Refresh 与单元测试防死锁。
+ * Provides multi-dimensional node search (ID / label / platform / arch /
+ * version / OS / hostname), status predicates (online / offline / local /
+ * remote), category-pill counting and summary metrics. All side-effect free
+ * and purely functional to keep Fast Refresh and unit tests deadlock-safe.
+ *
+ * i18n: display-copy-producing helpers take an optional trailing `t`
+ * translator (English bridge by default).
  */
 
 import type {
   NodeHealthSnapshot as ProtocolNodeHealthSnapshot,
   NodeInfo as ProtocolNodeInfo,
 } from '@helm/protocol/browser'
+import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 
-/** 节点分类药丸标签类型 */
+/** Node category pill tab type. */
 export type NodeCategoryTab = 'all' | 'local' | 'remote' | 'online' | 'offline'
 
-/** 节点健康快照，兼容 ProtocolNodeHealthSnapshot 并支持可选 CPU 与单项负载字段 */
+/** Node health snapshot: ProtocolNodeHealthSnapshot-compatible plus optional CPU and per-load fields. */
 export interface NodeHealthSnapshot extends Partial<ProtocolNodeHealthSnapshot> {
   cpuUsagePercent?: number
   load1?: number
@@ -30,8 +35,8 @@ export interface NodeHealthSnapshot extends Partial<ProtocolNodeHealthSnapshot> 
 }
 
 /**
- * 节点中心使用的统一节点模型。
- * 兼容标准 ProtocolNodeInfo 并扩展 label、arch、os、status、connected、tools、cwd、health 等可选展示字段。
+ * Unified node model for the node center: standard ProtocolNodeInfo plus
+ * optional display fields (label, arch, os, status, connected, tools, cwd, health).
  */
 export interface NodeInfo extends Omit<Partial<ProtocolNodeInfo>, 'health'> {
   id: string
@@ -52,13 +57,13 @@ export interface NodeInfo extends Omit<Partial<ProtocolNodeInfo>, 'health'> {
   uptimeSec?: number
 }
 
-/** 节点过滤选项 */
+/** Node filter options. */
 export interface NodeFilterOptions {
   query: string
   categoryTab: NodeCategoryTab
 }
 
-/** 节点中心统计汇总指标 */
+/** Node center summary metrics. */
 export interface NodeSummaryStats {
   total: number
   online: number
@@ -67,8 +72,8 @@ export interface NodeSummaryStats {
 }
 
 /**
- * 判断节点是否处于在线连通状态
- * 兼容 node.online、node.status === 'online' 与 node.connected === true
+ * Whether the node is online and reachable: accepts node.online,
+ * node.status === 'online' or node.connected === true.
  */
 export function isNodeOnline(node: NodeInfo): boolean {
   return Boolean(
@@ -78,29 +83,31 @@ export function isNodeOnline(node: NodeInfo): boolean {
   )
 }
 
-/**
- * 判断节点是否为本机内核节点（id 为 'local' 或 kind 为 'local'）
- */
+/** Whether the node is the built-in local kernel node (id 'local' or kind 'local'). */
 export function isNodeLocal(node: NodeInfo): boolean {
   return node.id === 'local' || node.kind === 'local'
 }
 
 /**
- * 获取节点友好展示名称：
- * 优先取 label；其次若为本机节点则返回“本机内核”；否则回退为节点 ID
+ * Friendly display name for a node: prefer the label; fall back to the
+ * localized local-kernel name for the built-in node, then to the node ID.
  */
-export function getNodeDisplayName(node: NodeInfo): string {
+export function getNodeDisplayName(
+  node: NodeInfo,
+  t: WebMessageTranslator = englishWebTranslator,
+): string {
   if (node.label && node.label.trim() !== '') {
     return node.label.trim()
   }
   if (node.id === 'local') {
-    return 'Local kernel'
+    return t('nodes.displayName.localKernel')
   }
-  return node.id || 'Unknown node'
+  return node.id || t('nodes.displayName.unknown')
 }
 
 /**
- * 格式化展示节点的平台与架构（如 "linux / x64"、"darwin / arm64"）
+ * Format the node platform and architecture for display (e.g.
+ * "linux / x64", "darwin / arm64").
  */
 export function formatNodePlatformArch(node: NodeInfo): string {
   const os = (node.platform || node.os || '').trim()
@@ -118,9 +125,7 @@ export function formatNodePlatformArch(node: NodeInfo): string {
   return '--'
 }
 
-/**
- * 计算各类目标签下的节点数量
- */
+/** Count nodes per category-pill key. */
 export function buildNodeCategoryCounts(nodes: NodeInfo[]): Record<NodeCategoryTab, number> {
   const list = Array.isArray(nodes) ? nodes : []
   let local = 0
@@ -151,9 +156,7 @@ export function buildNodeCategoryCounts(nodes: NodeInfo[]): Record<NodeCategoryT
   }
 }
 
-/**
- * 汇总计算节点统计指标（总量、在线、本机、远端）
- */
+/** Summarize node metrics (total, online, local, remote). */
 export function summarizeNodes(nodes: NodeInfo[]): NodeSummaryStats {
   const counts = buildNodeCategoryCounts(nodes)
   return {
@@ -165,15 +168,17 @@ export function summarizeNodes(nodes: NodeInfo[]): NodeSummaryStats {
 }
 
 /**
- * 按多维条件过滤计算节点列表（纯函数，返回新数组，不修改原数组）
+ * Filter the node list by multi-dimensional conditions (pure function:
+ * returns a new array, never mutates the input).
  *
- * 搜索规则：大小写不敏感匹配 node.id, node.label, node.platform, node.arch, node.version, node.os, node.hostname
- * 分类规则：
- * - all: 全部节点
+ * Search: case-insensitive match against node.id, node.label, node.platform,
+ * node.arch, node.version, node.os, node.hostname.
+ * Categories:
+ * - all: every node
  * - local: node.id === 'local'
  * - remote: node.id !== 'local'
  * - online: node.status === 'online' || node.connected === true || node.online === true
- * - offline: 非 online
+ * - offline: not online
  */
 export function filterNodes(
   nodes: NodeInfo[],
@@ -185,13 +190,13 @@ export function filterNodes(
   const tab = options.categoryTab ?? 'all'
 
   return nodes.filter((node) => {
-    // 1. 分类筛选
+    // 1. Category filter
     if (tab === 'local' && node.id !== 'local') return false
     if (tab === 'remote' && node.id === 'local') return false
     if (tab === 'online' && !isNodeOnline(node)) return false
     if (tab === 'offline' && isNodeOnline(node)) return false
 
-    // 2. 关键字搜索匹配
+    // 2. Keyword search match
     if (query) {
       const matchId = (node.id ?? '').toLowerCase().includes(query)
       const matchLabel = (node.label ?? '').toLowerCase().includes(query)

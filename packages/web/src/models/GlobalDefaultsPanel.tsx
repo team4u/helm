@@ -2,28 +2,34 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { assetsApi } from '../lib/api.js'
 import { HelmIcon, Select } from '@helm/plugin-client'
 import { HelmStoreContext } from '../lib/store-context.js'
+import { useWebLocale } from '../i18n/use-web-locale.js'
 import { buildDefaultModelOptions, UNSET_MODEL_VALUE } from './model-center-model.js'
 
 export interface GlobalDefaultsPanelProps {
-  /** 当前已生效的全局默认模型信息（由 ModelCenter 统一拉取）。 */
+  /** Currently effective global default model info (fetched by ModelCenter). */
   defaultModelInfo: { defaultModel: string; defaultThinkingLevel: string } | null
-  /** 保存成功后回写 ModelCenter 侧状态。 */
+  /** Reports a successful save back to the ModelCenter state. */
   onSaved: (info: { defaultModel: string; defaultThinkingLevel: string }) => void
 }
 
 /**
- * 「全局默认」Tab 内联配置表单：
- * - 默认模型与思考档位下拉 + 保存 / 重置动作；
- * - 「未设置」选项采用非空哨兵值（UNSET_MODEL_VALUE）：Radix Select 把空字符串
- *   value 当作 placeholder 语义，选中后 onValueChange 不触发，导致无法清除默认；
- * - 表单加载带代数竞争保护（loadGeneration）：模型目录刷新期间旧响应不覆盖新状态；
- * - 保存走 assetsApi.setDefaultModel（空串清除模型），严格遵守零 Emoji 与设计原语。
+ * Inline configuration form inside the "Global default" tab:
+ * - default model and thinking level selects plus save / reset actions;
+ * - the "not set" option rides on the non-empty sentinel (UNSET_MODEL_VALUE):
+ *   Radix Select treats an empty-string value as placeholder semantics, so
+ *   selecting it never fires onValueChange and the default could never be
+ *   cleared;
+ * - loading carries a generation guard (loadGeneration): stale responses
+ *   never overwrite newer state while the model catalog refreshes;
+ * - saving goes through assetsApi.setDefaultModel (an empty string clears the
+ *   model); strictly zero Emoji and built on design primitives.
  */
 export function GlobalDefaultsPanel({
   defaultModelInfo,
   onSaved,
 }: GlobalDefaultsPanelProps): React.JSX.Element {
   const store = React.useContext(HelmStoreContext)
+  const { t } = useWebLocale()
   const catalogModels = store?.models ?? []
 
   const [formModel, setFormModel] = useState(() =>
@@ -37,7 +43,8 @@ export function GlobalDefaultsPanel({
   const [saveSuccess, setSaveSuccess] = useState(false)
   const loadGeneration = useRef(0)
 
-  // 外部状态（深链直达 / 目录刷新）变化时同步本地表单；仅在被动的属性同步时生效。
+  // Sync the local form when external state changes (deep-link navigation /
+  // catalog refresh); only for passive property synchronization.
   useEffect(() => {
     if (defaultModelInfo) {
       const gen = ++loadGeneration.current
@@ -50,8 +57,13 @@ export function GlobalDefaultsPanel({
   }, [defaultModelInfo])
 
   const modelOptions = useMemo(
-    () => buildDefaultModelOptions(catalogModels, formModel === UNSET_MODEL_VALUE ? '' : formModel),
-    [catalogModels, formModel],
+    () =>
+      buildDefaultModelOptions(
+        catalogModels,
+        formModel === UNSET_MODEL_VALUE ? '' : formModel,
+        t,
+      ),
+    [catalogModels, formModel, t],
   )
 
   const availableThinkingLevels = useMemo(() => {
@@ -63,7 +75,7 @@ export function GlobalDefaultsPanel({
 
   const levelOptions = useMemo(() => {
     const list: Array<{ value: string; label: string }> = [
-      { value: UNSET_MODEL_VALUE, label: 'Follow SDK default' },
+      { value: UNSET_MODEL_VALUE, label: t('models.defaults.levelFollowSdk') },
     ]
     for (const lvl of availableThinkingLevels) {
       list.push({ value: lvl, label: lvl })
@@ -73,14 +85,15 @@ export function GlobalDefaultsPanel({
       formLevel !== UNSET_MODEL_VALUE &&
       !availableThinkingLevels.includes(formLevel)
     ) {
-      list.push({ value: formLevel, label: `${formLevel} (current)` })
+      list.push({ value: formLevel, label: t('models.defaults.levelCurrent', { level: formLevel }) })
     }
     return list
-  }, [availableThinkingLevels, formLevel])
+  }, [availableThinkingLevels, formLevel, t])
 
   const handleModelChange = (next: string) => {
     setFormModel(next)
-    // 模型切换后思考档位不在新模型支持列表时回落到缺省
+    // When the switched-to model no longer supports the current thinking
+    // level, fall back to the default.
     const levels =
       next === UNSET_MODEL_VALUE
         ? []
@@ -106,8 +119,10 @@ export function GlobalDefaultsPanel({
       store?.pushNotice?.({
         type: 'notification',
         level: 'info',
-        title: 'Global default model updated',
-        body: res.defaultModel ? `Set to ${res.defaultModel}` : 'Global default model cleared',
+        title: t('models.defaults.noticeUpdated'),
+        body: res.defaultModel
+          ? t('models.defaults.noticeSetTo', { model: res.defaultModel })
+          : t('models.defaults.noticeCleared'),
       })
       setSaveSuccess(true)
       setTimeout(() => setSaveSuccess(false), 2400)
@@ -135,15 +150,15 @@ export function GlobalDefaultsPanel({
       <div className="section-flat">
         <div className="section-flat-header">
           <HelmIcon name="sliders" size={14} />
-          <span className="section-flat-title">Global model rules</span>
+          <span className="section-flat-title">{t('models.defaults.section')}</span>
         </div>
         <p className="text-muted">
-          The inheritance chain for new conversations: session override &gt; Profile model &gt; this global default. Switching applies immediately to every conversation without an explicit model override.
+          {t('models.defaults.inheritanceHelp')}
         </p>
 
         <div className="form-grid form-grid-align-start">
           <label htmlFor="model-defaults-model" className="form-grid-label">
-            Default model
+            {t('models.defaults.modelLabel')}
           </label>
           <div className="flex-col-xs">
             <Select
@@ -152,27 +167,27 @@ export function GlobalDefaultsPanel({
               disabled={saving}
               popoverClassName="helm-select-popover-wide"
               className="w-full mono"
-              aria-label="Global default model"
+              aria-label={t('models.defaults.modelAria')}
               options={modelOptions}
               onChange={(e) => handleModelChange(e.target.value)}
             />
-            <span className="text-subtle">Selectable models come from the catalogs of all configured and available providers.</span>
+            <span className="text-subtle">{t('models.defaults.modelHint')}</span>
           </div>
 
           <label htmlFor="model-defaults-thinking-level" className="form-grid-label">
-            Default thinking level
+            {t('models.defaults.levelLabel')}
           </label>
           <div className="flex-col-xs">
             <Select
               id="model-defaults-thinking-level"
               value={formLevel === '' ? UNSET_MODEL_VALUE : formLevel}
               disabled={saving || formModel === UNSET_MODEL_VALUE}
-              aria-label="Global default thinking level"
+              aria-label={t('models.defaults.levelAria')}
               options={levelOptions}
               onChange={(e) => setFormLevel(e.target.value)}
             />
             {formModel !== UNSET_MODEL_VALUE && availableThinkingLevels.length === 0 && (
-              <span className="text-subtle">The selected model does not support thinking levels.</span>
+              <span className="text-subtle">{t('models.defaults.levelUnsupported')}</span>
             )}
           </div>
         </div>
@@ -185,12 +200,14 @@ export function GlobalDefaultsPanel({
             disabled={saving}
           >
             <HelmIcon name="check" size={14} />
-            <span>{saving ? 'Saving...' : 'Save global defaults'}</span>
+            <span>{saving ? t('models.saving') : t('models.defaults.save')}</span>
           </button>
           <button type="button" className="btn btn-ghost" onClick={handleReset} disabled={saving}>
-            <span>Reset</span>
+            <span>{t('models.defaults.reset')}</span>
           </button>
-          {saveSuccess && <span className="text-subtle" role="status">Configuration saved</span>}
+          {saveSuccess && (
+            <span className="text-subtle" role="status">{t('models.saveSuccess')}</span>
+          )}
         </div>
         {saveError && (
           <div className="callout callout-error" role="alert">

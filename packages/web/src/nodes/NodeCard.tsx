@@ -1,5 +1,6 @@
 import React from 'react'
 import { HelmIcon } from '@helm/plugin-client'
+import { useWebLocale } from '../i18n/use-web-locale.js'
 import { formatUptime } from '../modals/nodes-modal-model.js'
 import {
   formatNodePlatformArch,
@@ -16,22 +17,28 @@ export interface NodeCardProps {
 }
 
 /**
- * 计算节点卡片视图组件（NodeCard）：
- * - 采用 .primary-card 统一样式结构与 1px 发丝边框；
- * - 头部：状态脉冲指示灯（在线高亮呼吸动效，离线中性）、HelmIcon（本机 laptop，远程 server）、节点名称与 mono 节点 ID；
- * - 中部：平台系统与 CPU 架构徽章（如 linux / x64）、版本号与主机运行时长；
- * - 底部：在线/离线连接状态徽章与支持的工具能力胶囊标签（bash / read / write / edit 等）；
- * - 交互：支持点击与 Enter / Space 键盘导航激活；选中时高亮 .is-selected；
- * - 严格遵循零 Emoji 铁律与 Fast Refresh 规范。
+ * Compute node card view (NodeCard):
+ * - uses the shared .primary-card structure with 1px hairline borders;
+ * - header: status pulse indicator (breathing animation when online, neutral
+ *   when offline), HelmIcon (laptop for local, server for remote), node name
+ *   and the mono node ID;
+ * - middle: platform/OS and CPU architecture badges (e.g. linux / x64),
+ *   version and host uptime;
+ * - bottom: online/offline connection badge plus supported tool capability
+ *   pills (bash / read / write / edit, ...);
+ * - interaction: click and Enter / Space keyboard activation; the selected
+ *   state highlights .is-selected;
+ * - strictly zero Emoji and Fast Refresh compliant.
  */
 export function NodeCard({
   node,
   selected = false,
   onSelect,
 }: NodeCardProps): React.JSX.Element {
+  const { t } = useWebLocale()
   const isLocal = isNodeLocal(node)
   const isOnline = isNodeOnline(node)
-  const displayName = getNodeDisplayName(node)
+  const displayName = getNodeDisplayName(node, t)
   const platformArch = formatNodePlatformArch(node)
   const iconName = isLocal ? 'laptop' : 'server'
   const version = node.version
@@ -78,19 +85,19 @@ export function NodeCard({
           <div className="primary-card-title-row">
             <span
               className={`status-dot ${isOnline ? 'status-dot-done status-dot-working' : ''}`}
-              title={isOnline ? 'Node online and running' : 'Node offline'}
-              aria-label={isOnline ? 'Online' : 'Offline'}
+              title={isOnline ? t('nodes.statusOnlineTitle') : t('nodes.statusOfflineTitle')}
+              aria-label={isOnline ? t('common.online') : t('common.offline')}
             />
             <span className="primary-card-name" title={displayName}>
               {displayName}
             </span>
             {isLocal && (
-              <span className="badge badge-neutral" title="Microkernel local node">
-                Local
+              <span className="badge badge-neutral" title={t('nodes.localTitle')}>
+                {t('nodes.local')}
               </span>
             )}
             {version && (
-              <span className="badge badge-neutral mono" title={`Version ${version}`}>
+              <span className="badge badge-neutral mono" title={t('nodes.versionTitle', { version })}>
                 {version}
               </span>
             )}
@@ -104,17 +111,17 @@ export function NodeCard({
       {/* Middle: platform, architecture and runtime overview */}
       <div className="flex-row-wrap">
         {platformArch !== '--' && (
-          <span className="badge badge-neutral mono" title="Platform and architecture">
+          <span className="badge badge-neutral mono" title={t('nodes.platformTitle')}>
             {platformArch}
           </span>
         )}
         {node.hostname && (
-          <span className="mono text-subtle break-word" title={`Hostname: ${node.hostname}`}>
+          <span className="mono text-subtle break-word" title={t('nodes.hostnameTitle', { hostname: node.hostname })}>
             {node.hostname}
           </span>
         )}
         {uptime !== '--' && (
-          <span className="text-subtle" title={`Uptime: ${uptime}`}>
+          <span className="text-subtle" title={t('nodes.uptimeTitle', { uptime })}>
             {uptime}
           </span>
         )}
@@ -124,7 +131,7 @@ export function NodeCard({
       <div className="primary-card-footer">
         <div className="primary-card-pills">
           {tools.slice(0, 4).map((tool) => (
-            <span key={tool} className="primary-card-pill mono" title={`Tool: ${tool}`}>
+            <span key={tool} className="primary-card-pill mono" title={t('nodes.cardToolTitle', { tool })}>
               <HelmIcon name="terminal" size={10} />
               <span>{tool}</span>
             </span>
@@ -132,7 +139,7 @@ export function NodeCard({
           {tools.length > 4 && (
             <span
               className="primary-card-pill text-subtle tabular-nums"
-              title={`${tools.length - 4} more tools`}
+              title={t('nodes.moreTools', { count: tools.length - 4 })}
             >
               +{tools.length - 4}
             </span>
@@ -141,7 +148,7 @@ export function NodeCard({
 
         <div className="flex-row">
           <span className={`badge ${isOnline ? 'badge-ok' : 'badge-neutral'}`}>
-            {isOnline ? 'Online' : 'Offline'}
+            {isOnline ? t('common.online') : t('common.offline')}
           </span>
         </div>
       </div>

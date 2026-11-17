@@ -3,17 +3,18 @@ import type { ModelProviderSummary } from '@helm/protocol/browser'
 import { assetsApi } from '../lib/api.js'
 import { HelmIcon, Tabs, TabsContent, TabsList, TabsTrigger } from '@helm/plugin-client'
 import { useHelmStore } from '../lib/store-context.js'
+import { useWebLocale } from '../i18n/use-web-locale.js'
 import type { ModelsCenterTab } from '../lib/types.js'
 import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
 import { GlobalDefaultsPanel } from './GlobalDefaultsPanel.js'
 import { ModelCard } from './ModelCard.js'
 import { ModelDetailDrawer } from './ModelDetailDrawer.js'
 import {
+  buildDefaultProviders,
   buildMergedProviders,
   buildProviderCategoryCounts,
-  DEFAULT_PROVIDERS,
+  buildProviderFilterTabs,
   filterProviders,
-  PROVIDER_FILTER_TABS,
   sortProvidersConfiguredFirst,
   type ProviderFilterTab,
   type ProviderItem,
@@ -36,13 +37,17 @@ export interface ModelCenterProps {
 }
 
 /**
- * 全屏模型与供应商中心（Model Center）主视图容器：
- * - 系统一级主舞台全屏视图，彻底淘汰传统模态弹窗；
- * - 顶部 Tab 切换：「供应商」（检索 + 分类药丸 + 卡片网格）与「全局默认」（内联默认模型表单），
- *   Tab 状态经 URL Hash（#/settings/models/defaults）持久化，defaults 为路径保留段（全局默认 Tab）；
- * - 动态目录加载：实时拉取后端 PI 原生供应商与插件网关，支持全量展示与一键刷新；
- * - 详情与凭证抽屉：右侧联动滑出 ModelDetailDrawer，与 URL Hash 深链（#/settings/models/<providerId>）双向同步；
- * - 绝对零 Emoji 铁律，遵循 Fast Refresh 与 WAI-ARIA 规范。
+ * Full-screen Models & Credentials Center primary view container:
+ * - a system-level full-stage view that fully replaces the legacy modal;
+ * - top tabs switch between "Providers" (search + category pills + card grid)
+ *   and "Global default" (inline default-model form); the tab state persists
+ *   through the URL hash (#/settings/models/defaults) where defaults is a
+ *   reserved path segment (the global-default tab);
+ * - dynamic catalog loading: pulls the backend PI-native providers and plugin
+ *   gateways live, with full listing and one-click refresh;
+ * - details & credentials drawer: the right-side ModelDetailDrawer stays in
+ *   sync with the URL hash deep link (#/settings/models/<providerId>);
+ * - strictly zero Emoji; follows Fast Refresh and WAI-ARIA rules.
  */
 export function ModelCenter({
   isSplit = false,
@@ -53,10 +58,11 @@ export function ModelCenter({
   onTestConnection,
 }: ModelCenterProps): React.JSX.Element {
   const store = useHelmStore()
+  const { t } = useWebLocale()
   const [query, setQuery] = useState('')
   const [statusTab, setStatusTab] = useState<ProviderFilterTab>('all')
 
-  // 动态目录与全局默认模型状态
+  // Dynamic catalog and global default model state
   const [catalog, setCatalog] = useState<ModelProviderSummary[]>([])
   const [defaultModelInfo, setDefaultModelInfo] = useState<{
     defaultModel: string
@@ -64,7 +70,8 @@ export function ModelCenter({
   } | null>(null)
   const [refreshingCatalog, setRefreshingCatalog] = useState(false)
 
-  // 挂载时拉取全量后端供应商目录与全局默认模型配置（代数竞争保护：依赖变化时旧响应不覆盖）
+  // On mount, fetch the full backend provider catalog and the global default
+  // model config (generation guard: stale responses never overwrite on deps change).
   useEffect(() => {
     const generation = { cancelled: false }
     const fetchRemote = async () => {
@@ -90,26 +97,28 @@ export function ModelCenter({
     }
   }, [store.models, store.credentials])
 
-  // 将预设主流供应商与 store 中的凭据、网关、模型目录及后端全量 catalog 实时融合
+  // Merge the mainstream presets with store credentials, gateways, the model
+  // catalog and the full backend catalog (labels follow the active locale).
   const providers = useMemo(() => {
     if (customProviders) return sortProvidersConfiguredFirst(customProviders)
     return buildMergedProviders(
-      DEFAULT_PROVIDERS,
+      buildDefaultProviders(t),
       store.credentials,
       store.providers,
       store.models,
       catalog,
+      t,
     )
-  }, [customProviders, store.credentials, store.providers, store.models, catalog])
+  }, [customProviders, store.credentials, store.providers, store.models, catalog, t])
 
   const statusCounts = useMemo(() => buildProviderCategoryCounts(providers), [providers])
 
-  // 综合过滤（按配置状态标签与关键词）
+  // Combined filtering (by configuration status tab and keyword)
   const filteredProviders = useMemo(() => {
     return filterProviders(providers, { query, statusTab })
   }, [providers, query, statusTab])
 
-  // 路由与抽屉联动：支持主屏和分屏下的 providerId 与 tab
+  // Routing <-> drawer wiring: providerId and tab in both primary and split panes
   const currentTarget =
     isSplit && store.splitTarget?.kind === 'models'
       ? store.splitTarget
@@ -133,7 +142,8 @@ export function ModelCenter({
     store.openTarget({ kind: 'models' }, isSplit ? { split: true } : undefined)
   }
 
-  // Tab 切换写回 URL：进入「全局默认」时清除 providerId（抽屉不与之共存）
+  // Tab changes write back to the URL: entering "Global default" clears the
+  // providerId (the drawer never coexists with it).
   const handleTabChange = (tab: string) => {
     if (tab === centerTab) return
     if (tab === 'defaults') {
@@ -143,7 +153,7 @@ export function ModelCenter({
     }
   }
 
-  // 刷新全量模型目录
+  // Refresh the full model catalog
   const handleRefreshAll = async () => {
     setRefreshingCatalog(true)
     try {
@@ -160,14 +170,14 @@ export function ModelCenter({
       store.pushNotice?.({
         type: 'notification',
         level: 'info',
-        title: 'Model catalog refreshed',
-        body: 'Available model list re-synced from all enabled providers.',
+        title: t('models.notice.catalogRefreshed'),
+        body: t('models.notice.catalogRefreshedBody'),
       })
     } catch (err) {
       store.pushNotice?.({
         type: 'notification',
         level: 'error',
-        title: 'Failed to refresh model catalog',
+        title: t('models.notice.catalogRefreshFailed'),
         body: err instanceof Error ? err.message : String(err),
       })
     } finally {
@@ -175,8 +185,10 @@ export function ModelCenter({
     }
   }
 
-  // 凭证与模型配置保存：凭据与模型启停（全量替换语义）分两次提交；
-  // 后端目录不存在的静态预设供应商跳过 filter 写入（目录无从标注，写了也无意义）。
+  // Credential & model configuration save: credentials and model enablement
+  // (full-replace semantics) are submitted separately; static preset providers
+  // absent from the backend catalog skip the filter write (the catalog cannot
+  // annotate them, so writing would be meaningless).
   const handleSave = async (
     providerId: string,
     data: { apiKey?: string; baseUrl?: string; models?: ProviderModelItem[] },
@@ -193,9 +205,11 @@ export function ModelCenter({
       if (data.apiKey) {
         await assetsApi.setCredential(providerId, data.apiKey)
       }
-      // 自定义网关（providers.json）服务端点变更：全量替换语义下只改该条
-      // baseUrl，其余网关与字段原样保留；插件网关（如 magpie）端点由所属
-      // 插件配置管理，不归模型层写，绝不在此假装已保存。
+      // Custom gateway (providers.json) endpoint change: under full-replace
+      // semantics only that entry's baseUrl changes; other gateways and fields
+      // stay untouched. Plugin gateway endpoints (e.g. magpie) are owned by
+      // the plugin configuration, never written here — and never pretend to
+      // have been saved.
       if (provider?.custom === true && data.baseUrl !== undefined && data.baseUrl !== '') {
         const gateways = store.providers ?? []
         const gateway = gateways.find((g) => g.id === providerId)
@@ -209,15 +223,16 @@ export function ModelCenter({
         }
       }
       if (data.models && filterEligible) {
-        // 全量替换：当前未勾选的模型 id 即该 provider 的完整禁用集（与后端语义一致）。
+        // Full replacement: the currently unchecked model ids are the
+        // provider's complete disabled set (matching backend semantics).
         const disabledModels = data.models.filter((m) => !m.enabled).map((m) => m.id)
         await assetsApi.setModelFilter({ provider: providerId, disabledModels })
       }
       store.pushNotice?.({
         type: 'notification',
         level: 'info',
-        title: 'Provider configuration updated',
-        body: `${providerId} configuration saved successfully.`,
+        title: t('models.notice.providerUpdated'),
+        body: t('models.notice.providerUpdatedBody', { providerId }),
       })
       if (store.refreshAssets) {
         await store.refreshAssets()
@@ -226,7 +241,7 @@ export function ModelCenter({
       store.pushNotice?.({
         type: 'notification',
         level: 'error',
-        title: 'Save failed',
+        title: t('models.notice.saveFailed'),
         body: err instanceof Error ? err.message : String(err),
       })
       throw err
@@ -248,6 +263,8 @@ export function ModelCenter({
     )
   }
 
+  const filterTabs = buildProviderFilterTabs(t)
+
   return (
     <div className={`primary-center${isSplit ? ' is-split' : ''}`} data-view="model-center">
       {/* Top bar */}
@@ -255,7 +272,7 @@ export function ModelCenter({
         <div className="primary-center-title-wrap pane-title-group">
           <div className="primary-center-title">
             <HelmIcon name="cpu" size={14} />
-            <span>Models & Credentials Center</span>
+            <span>{t('models.title')}</span>
           </div>
         </div>
 
@@ -265,10 +282,10 @@ export function ModelCenter({
             className="btn btn-sm"
             onClick={handleRefreshAll}
             disabled={refreshingCatalog}
-            title="Pull the latest model catalog from all providers again"
+            title={t('models.refreshCatalogTitle')}
           >
             <HelmIcon name="refresh-cw" size={12} className={refreshingCatalog ? 'spin' : undefined} />
-            <span className="pane-action-label">Refresh catalog</span>
+            <span className="pane-action-label">{t('models.refreshCatalog')}</span>
           </button>
           {isSplit ? (
             <CloseSplitButton onCloseSplit={onCloseSplit} />
@@ -283,14 +300,14 @@ export function ModelCenter({
 
       {/* Top tabs: providers / global defaults */}
       <Tabs value={centerTab} onValueChange={handleTabChange} className="model-center-tabs">
-        <TabsList aria-label="Model center views">
+        <TabsList aria-label={t('models.viewsAria')}>
           <TabsTrigger value="providers" className="model-center-tab-btn">
             <HelmIcon name="layers" size={13} />
-            <span>Providers</span>
+            <span>{t('models.tab.providers')}</span>
           </TabsTrigger>
           <TabsTrigger value="defaults" className="model-center-tab-btn">
             <HelmIcon name="sliders" size={13} />
-            <span>Global default</span>
+            <span>{t('models.tab.defaults')}</span>
           </TabsTrigger>
         </TabsList>
       </Tabs>
@@ -301,19 +318,19 @@ export function ModelCenter({
         <span
           className={`badge ${defaultModelInfo?.defaultModel ? 'badge-ok' : 'badge-neutral'}`}
         >
-          {defaultModelInfo?.defaultModel ? 'Configured' : 'Not set'}
+          {defaultModelInfo?.defaultModel ? t('models.configured') : t('models.defaults.notSet')}
         </span>
         {defaultModelInfo?.defaultModel ? (
           <span>
-            Current: <strong className="mono">{defaultModelInfo.defaultModel}</strong>
+            {t('models.defaults.currentPrefix')} <strong className="mono">{defaultModelInfo.defaultModel}</strong>
             {defaultModelInfo.defaultThinkingLevel &&
               defaultModelInfo.defaultThinkingLevel !== 'off' &&
-              `(thinking level: ${defaultModelInfo.defaultThinkingLevel})`}
+              t('models.defaults.thinkingLevelSuffix', { level: defaultModelInfo.defaultThinkingLevel })}
           </span>
         ) : (
-          <span>No global default model set; conversations without an explicit model cannot reply properly.</span>
+          <span>{t('models.defaults.unsetHint')}</span>
         )}
-        <span className="text-subtle">Inheritance chain: session override &gt; Profile model &gt; global default</span>
+        <span className="text-subtle">{t('models.defaults.inheritanceChain')}</span>
       </div>
 
       <Tabs value={centerTab} onValueChange={handleTabChange} className="model-center-main-tabs">
@@ -327,16 +344,16 @@ export function ModelCenter({
                 type="text"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search provider name, ID or included models..."
-                aria-label="Search providers"
+                placeholder={t('models.searchPlaceholder')}
+                aria-label={t('models.searchAria')}
               />
               {query && (
                 <button
                   type="button"
                   className="btn btn-ghost btn-sm primary-search-clear"
                   onClick={() => setQuery('')}
-                  aria-label="Clear search"
-                  title="Clear search"
+                  aria-label={t('models.searchClear')}
+                  title={t('models.searchClear')}
                 >
                   <HelmIcon name="x" size={12} />
                 </button>
@@ -346,9 +363,9 @@ export function ModelCenter({
             <div
               className="primary-category-pills"
               role="tablist"
-              aria-label="Filter by provider configuration status"
+              aria-label={t('models.filterAria')}
             >
-              {PROVIDER_FILTER_TABS.map((tab) => {
+              {filterTabs.map((tab) => {
                 const count = statusCounts[tab.key] ?? 0
                 const isActive = statusTab === tab.key
                 return (
@@ -374,10 +391,8 @@ export function ModelCenter({
               <div className="primary-center-empty-icon">
                 <HelmIcon name="search" size={22} />
               </div>
-              <div className="primary-center-empty-text">No matching providers</div>
-              <div className="primary-center-empty-hint">
-                No LLM providers match the search; try different keywords or switch the filter.
-              </div>
+              <div className="primary-center-empty-text">{t('models.emptyTitle')}</div>
+              <div className="primary-center-empty-hint">{t('models.emptyHint')}</div>
               {(query || statusTab !== 'all') && (
                 <button
                   type="button"
@@ -387,7 +402,7 @@ export function ModelCenter({
                     setStatusTab('all')
                   }}
                 >
-                  Reset filters
+                  {t('models.resetFilters')}
                 </button>
               )}
             </div>
