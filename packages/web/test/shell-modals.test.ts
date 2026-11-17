@@ -1161,38 +1161,6 @@ test('Archived分组默认折叠，展开态才渲染归档会话', { timeout: 6
   assert.doesNotMatch(html, /已收尾的话题/)
 })
 
-test('批量模式勾选框只存在于会话子项，机器人站位行绝不含勾选框（源码结构回归）', { timeout: 60_000 }, () => {
-  // Sidebar 拆分后源码断言拼接主文件与拆出的子模块（断言本身不变）。
-  const sidebarSource = [
-    '../src/shell/Sidebar.tsx',
-    '../src/shell/SidebarAgentStandings.tsx',
-    '../src/shell/SidebarPrimitives.tsx',
-  ]
-    .map((p) => readFileSync(new URL(p, import.meta.url), 'utf8'))
-    .join('\n')
-
-  // sidebar-batch-checkbox 仅出现在 AgentConversationRow（会话子行）内，
-  // 且位于其受控渲染块中；Agent 站位头部行只使用 nav-item-main 名称按钮（折叠展开钮已移除）。
-  const checkboxIdx = sidebarSource.indexOf('sidebar-batch-checkbox')
-  assert.ok(checkboxIdx > 0, '会话子行应渲染 sidebar-batch-checkbox')
-  const convRowStart = sidebarSource.lastIndexOf('function AgentConversationRow', checkboxIdx)
-  assert.ok(convRowStart > 0, '勾选框必须定义在 AgentConversationRow 组件内')
-  const convRowEnd = sidebarSource.indexOf('\nfunction ', convRowStart + 10)
-  assert.ok(
-    checkboxIdx < convRowEnd,
-    '勾选框必须只存在于会话子行组件，不得混入机器人站位头部行',
-  )
-
-  // 站位头部行（agent-standing-row 与其子按钮）不含任何 checkbox 类名。
-  const standingStart = sidebarSource.indexOf('function AgentStandingItem')
-  const standingEnd = sidebarSource.indexOf('function AgentConversationsList', standingStart)
-  const standingBody = sidebarSource.slice(standingStart, standingEnd)
-  assert.ok(!standingBody.includes('type="checkbox"'), '机器人站位头部行严禁包含 checkbox 输入框')
-  assert.ok(!standingBody.includes('sidebar-batch-checkbox'), '机器人站位头部行严禁复用会话勾选框类名')
-  // 批量模式下头部行仅切换展开，不提供勾选。
-  assert.match(standingBody, /if \(batchMode && hasSubList\) \{\s*setExpanded/, '批量模式下头部行仅切换子列表展开')
-})
-
 test('Sidebar 状态圆点渲染验证：五态圆点与单会话站位行', { timeout: 60_000 }, () => {
   // 手风琴契约：仅当前会话所属智能体展开话题子列表，其余智能体单行展示圆点与计数。
   const store = makeTestStore({

@@ -121,7 +121,7 @@
   color: var(--fg);
 }
 
-/* 归属父行弱态：子会话激活而父站位未进入待命态时，提亮并加粗智能体名称，无卡片底与阴影 */
+/* 归属父行弱态：子会话激活而父站位未进入待命态时，提亮文字，无卡片底与阴影 */
 .agent-standing-row-branch {
   color: var(--fg);
 }
@@ -130,9 +130,15 @@
   color: var(--fg);
 }
 
-.agent-standing-row-branch .nav-item-label,
-.agent-standing-row.nav-item-active .nav-item-label {
-  font-weight: 600;
+/* 智能体会话列表统一采用极简纸面分阶：Hover 轻垫层、Active 实底微垫层（无投影、无竖线），
+ * 让父行待命与子会话选中保持同一视觉语言，且不与 Hover 撞色。 */
+.sidebar-context .agent-standing-group .nav-item:hover {
+  --nav-row-bg: var(--nav-list-hover-bg);
+}
+
+.sidebar-context .agent-standing-group .nav-item:not(.nav-item-active):not(.nav-item-split):has([aria-expanded="true"]) {
+  --nav-row-bg: var(--nav-list-hover-bg);
+  color: var(--fg);
 }
 
 /* 分屏非聚焦在场态：柔和底色 + 1px 内描边 */
@@ -179,10 +185,12 @@
   color: var(--nav-active-muted);
 }
 
-/* 二级会话行选中态：与悬停态保持一致的柔和中性底色，无投影、无边框、无左侧竖线 */
+/* 智能体会话列表选中态（待命父行 + 子会话行）：统一扁平纸面高亮，无投影、无边框、无左侧竖线 */
+.sidebar-context .agent-standing-group .nav-item.nav-item-active:hover,
+.sidebar-context .agent-standing-group .nav-item.nav-item-active,
 .sidebar-context .nav-item.nav-item-sub.nav-item-active:hover,
 .sidebar-context .nav-item.nav-item-sub.nav-item-active {
-  --nav-row-bg: var(--nav-hover-bg);
+  --nav-row-bg: var(--nav-list-active-bg);
   background: var(--nav-row-bg);
   color: var(--fg);
   box-shadow: none;
@@ -258,21 +266,65 @@
   flex-shrink: 0;
 }
 
-/* 智能体站位：一级 Agent 行 + 缩进的二级历史会话子列表 */
+/* 智能体站位：一级 Agent 行 + 轻缩进二级历史会话子列表（去树线，给标题留足宽度） */
 .agent-standing {
   display: flex;
   flex-direction: column;
   gap: 2px;
 }
 
-/* 1px 竖向引导线正对父行状态灯圆心 13px 轴线；子列表内容从 13 + 1 + 10 = 24px 起排，与父行标题齐平 */
+.agent-standing-open {
+  margin: 2px 0 6px;
+}
+
+.agent-standing-row {
+  min-height: 30px;
+  padding: 4px 8px;
+}
+
+.agent-standing-row .nav-status-slot {
+  width: 14px;
+}
+
+.agent-standing-chevron {
+  color: var(--fg-subtle);
+  transition: color 120ms ease;
+}
+
+.agent-standing-row:hover .agent-standing-chevron,
+.agent-standing-row.agent-standing-row-branch .agent-standing-chevron,
+.agent-standing-row.nav-item-active .agent-standing-chevron,
+.agent-standing-row.nav-item-split .agent-standing-chevron {
+  color: var(--fg-muted);
+}
+
+.agent-standing-row .nav-item-label {
+  font-weight: 600;
+}
+
+.agent-standing-count {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--fg-muted);
+  padding: 0 2px;
+  line-height: 1;
+}
+
 .agent-standing-group .agent-conversations-list {
-  margin: 2px 0 4px 13px;
-  padding-left: 10px;
-  border-left: 1px solid var(--border);
+  margin: 1px 0 0;
+  padding-left: 14px;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
+}
+
+.agent-standing-group .nav-item-sub .nav-status-slot {
+  width: 8px;
+}
+
+.agent-standing-group .status-dot {
+  width: 6px;
+  height: 6px;
 }
 
 .nav-item-sub {
@@ -479,9 +531,10 @@
 
 .agent-list-toggle {
   align-self: flex-start;
-  height: 22px;
+  height: 24px;
+  margin-left: 16px;
   padding: 0 6px;
-  font-size: 11px;
+  font-size: 11.5px;
   color: var(--fg-muted);
 }
 
