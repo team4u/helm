@@ -102,11 +102,11 @@ test('工作流真实编译样式：__helmClientCss 注入后阶段状态颜色�
 test('插件自有样式契约：整卡统一 hover 与唯一右推耗时位', { timeout: 60_000 }, () => {
   const pluginCss = readFileSync(join(WORKFLOW_CLIENT_ROOT, 'styles.css'), 'utf-8')
   assert.ok(pluginCss.includes('.subagent-card-clickable:hover'), '插件样式应包含整卡 hover 高亮规则')
-  assert.match(
-    pluginCss,
-    /\.subagent-card-clickable:hover:not\(:has\(\.execution-children:hover/,
-    '移入内层多级子会话区域时，外层父卡不得同时高亮',
+  assert.ok(
+    !pluginCss.includes('.subagent-card-clickable:hover:not(:has('),
+    '主体导航真实按钮不再包裹内层区域，无需 :has 防误亮守卫',
   )
+  assert.ok(pluginCss.includes('.subagent-card-clickable:focus-visible'), '主体导航按钮具备键盘焦点样式')
   assert.match(
     pluginCss,
     /\.execution-child-clickable:hover\s*\{[\s\S]*?background:\s*var\(--accent-bg\)/,

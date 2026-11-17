@@ -142,10 +142,14 @@ export function ExecutionChildrenRows({ nodes }: { nodes: ExecutionNode[] }): Re
                 {node.children.length > 0 ? (
                   <span className="execution-child-count tabular-nums">{`${aggregated.done}/${aggregated.total}`}</span>
                 ) : null}
-                <StatusLight
-                  status={executionLightStatus(aggregated.status, node.run)}
-                  label={executionStatusLabel(executionLightStatus(aggregated.status, node.run), locale)}
-                />
+                {(() => {
+                  const lightStatus = executionLightStatus(
+                    aggregated.status,
+                    node.run,
+                    node.children.length > 0 && aggregated.error > 0,
+                  )
+                  return <StatusLight status={lightStatus} label={executionStatusLabel(lightStatus, locale)} />
+                })()}
               </span>
             </div>
             {expanded ? <ExecutionChildrenRows nodes={node.children} /> : null}

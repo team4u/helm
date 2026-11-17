@@ -158,7 +158,7 @@ export function SubagentToolView(props: ToolViewProps): ReactNode {
       : subagentBadge(undefined, props.status, undefined, undefined, locale)
 
   // 主状态灯：aborted 后台句柄保留专用 aborted 语义；其余沿用徽章标签（含后台运行中等细分文案）作为可访问名称。
-  const badgeLightStatus = executionLightStatus(badge.status, backgroundRun)
+  const badgeLightStatus = executionLightStatus(badge.status, backgroundRun, childSummary?.status === 'error')
   const badgeLightLabel = badgeLightStatus === 'aborted' ? executionStatusLabel('aborted', locale) : badge.label
   const isWorking =
     isLatest &&

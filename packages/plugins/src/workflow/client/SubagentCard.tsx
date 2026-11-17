@@ -246,6 +246,7 @@ export function SubagentLiveCard(props: {
           cwd={summary?.cwd}
           createdAt={backgroundRun?.createdAt ?? summary?.createdAt}
           runId={backgroundRun?.id}
+          selfStatus={effectiveStatus !== selfBadge.status ? selfBadge.label : undefined}
         />
       }
     >
@@ -264,7 +265,7 @@ export function SubagentLiveCard(props: {
         />
       ) : null}
       {props.worktreeInspect !== undefined && wt !== undefined ? (
-        <div className="subagent-inspect-slot" onClick={(e) => e.stopPropagation()}>
+        <div className="subagent-inspect-slot">
           <WorktreeInspectSection
             worktree={{
               path: wt.path,

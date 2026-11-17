@@ -956,11 +956,11 @@ test('主徽章同源有效状态：父 idle + 后代 blocked/working 不显示�
     const trigger = host.querySelector('.subagent-live-trigger')!
     assert.ok(trigger !== null)
     const badgeTexts = Array.from(trigger.querySelectorAll('.badge')).map((b) => b.textContent ?? '')
-    const lightTexts = Array.from(trigger.querySelectorAll('.helm-status-light')).map((l) => l.textContent ?? '')
-    const allTexts = [...badgeTexts, ...lightTexts]
-    assert.ok(lightTexts.includes('Awaiting approval'), `主状态灯应为同源有效状态（Awaiting approval），实际：${allTexts.join('|')}`)
-    assert.ok(badgeTexts.includes('Self: Done'), '自身终态应另标清楚')
-    assert.ok(!badgeTexts.includes('Done'), '不得以孤立的「Done」徽章假完成')
+    const lights = Array.from(trigger.querySelectorAll('.helm-status-light'))
+    const lightLabels = lights.map((l) => l.getAttribute('aria-label') ?? '')
+    assert.ok(lightLabels.some((label) => label.includes('Awaiting approval')), `主状态灯可访问名称应为同源有效状态（Awaiting approval），实际：${lightLabels.join('|')}`)
+    assert.ok(lightLabels.some((label) => label.includes('Self: Done')), '自身终态经灯的可访问名称交代清楚')
+    assert.ok(!badgeTexts.includes('Self: Done'), '自身状态文字不再以常驻徽章重复摆在头部')
     assert.ok(trigger.querySelector('.helm-status-light-blocked .status-dot-blocked') !== null, 'blocked 为实心 warn 灯')
     const warnBadge = trigger.querySelector('.badge-warn') as HTMLElement
     assert.match(warnBadge.getAttribute('title') ?? '', /确认删除文件 \(#5\) awaiting approval/, '后代审批徽章 title 应含审批摘要')

@@ -78,6 +78,7 @@ interface RenderOpts {
   loadErrors?: Record<string, string>
   runsByConversation?: Record<number, WorkflowRunSummary[]>
   backgroundRun?: WorkflowRunSummary
+  childNodes?: ExecutionNode[]
   worktree?: { path: string; branch: string }
   expanded?: boolean
   toolSummary?: SubagentParentToolSummary
@@ -1125,18 +1126,23 @@ test('折叠子代理卡：不渲染内联流与展开箭头，整卡通过抽�
   assert.ok(html.includes('Click to open the subagent drawer'), '应支持点击卡片打开子会话抽屉')
 })
 
-test('SubagentLiveCard 整体大卡片点击契约：外层整卡可点击，第 1 层和第 2 层无割裂的内层按钮链接', { timeout: 60_000 }, () => {
+test('SubagentLiveCard 点击契约：头部主体为唯一真实导航按钮，subline 层无割裂交互', { timeout: 60_000 }, () => {
   const html = renderCard('done', {
     expanded: undefined,
     conversations: [summary(11, 'done')],
     toolSummary: { prompt: '任务', durationMs: 1000, resultText: '产出结论' },
   })
   assert.ok(html.includes('subagent-card-clickable'), '整卡应具有可点击类名')
-  assert.ok(html.includes('role="button"'), '整卡应具有 button 语义')
+  assert.ok(html.includes('<button type="button" class="subagent-live-trigger subagent-card-clickable"'), '整卡主体是真实导航 button')
   assert.ok(html.includes('Open subagent #11 drawer'), '整卡应带有打开抽屉的可访问性描述')
-  // 第 1/2 层（trigger / subline）仍不得是导航按钮；元数据披露的小按钮只出现在 .subagent-live-meta 内。
-  assert.ok(!html.includes('<button type="button" class="subagent-live-trigger'), '第 1 层不得为独立 button')
+  // 第 1 层（trigger）就是唯一的真实导航按钮；第 2 层（subline）不是交互元素，
+  // 元数据披露的小按钮只出现在 .subagent-live-meta 内（与导航按钮同级结构，无嵌套）。
+  const triggerBtnMatch = html.match(/<button type="button" class="subagent-live-trigger subagent-card-clickable"[^>]*>/)
+  assert.ok(triggerBtnMatch !== null, '第 1 层 trigger 为真实导航 button')
+  assert.ok(!triggerBtnMatch![0].includes('subagent-live-subline'), '导航按钮不包裹 subline 层')
   assert.ok(!html.includes('<button type="button" class="subagent-live-subline'), '第 2 层不得为独立 button')
+  // 元数据披露结构存在（位于导航按钮之外的同级结构中）。
+  assert.ok(html.includes('class="subagent-live-meta"'), '元数据披露结构存在')
 })
 
 const EMOJI_RE = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}\u{2190}-\u{21FF}\u{2700}-\u{27BF}]/u
@@ -1267,4 +1273,42 @@ test('清亮化修正：时间线插件行标题带可缩标记（移动端不�
     siblingCalls: [],
   }))
   assert.ok(html.includes('trace-tool-name workflow-trace-name'), '插件行标题带 workflow-trace-name 可缩标记')
+})
+
+test('executionLightStatus 精度：后代真实失败不被 run 级中止掩盖，仅自身中止结论显示 aborted 菱形', { timeout: 60_000 }, async () => {
+  const { executionLightStatus } = await importWorkflowModels()
+  const abortedRun = { status: 'aborted' as const }
+  // run 自身中止且无后代失败：error 结论来自自身 abort → aborted 菱形。
+  assert.equal(executionLightStatus('error', abortedRun), 'aborted')
+  assert.equal(executionLightStatus('error', abortedRun, false), 'aborted')
+  // 后代有真实失败：即便 run 也中止，灯保持 error（真实子树失败不得被掩盖）。
+  assert.equal(executionLightStatus('error', abortedRun, true), 'error')
+  // 非中止来源 / 非错误结论原样透传。
+  assert.equal(executionLightStatus('error', { status: 'failed' as const }, true), 'error')
+  assert.equal(executionLightStatus('error', undefined, true), 'error')
+  assert.equal(executionLightStatus('working', abortedRun, true), 'working')
+  assert.equal(executionLightStatus('done', abortedRun), 'done')
+})
+
+test('清亮化终审：自身状态文字移出主头部——灯可访问名称交代，元数据披露保留事实', { timeout: 60_000 }, () => {
+  const html = renderCard('done', {
+    expanded: undefined,
+    conversations: [summary(11, 'idle')],
+    backgroundRun: bgRun({ status: 'completed' }),
+    childNodes: [{
+      key: 'c1',
+      kind: 'conversation',
+      status: 'error',
+      label: '失败子任务',
+      conversationId: 21,
+      children: [],
+      aggregated: { status: 'error', total: 1, done: 0, running: 0, blocked: 0, error: 1 },
+      updatedAt: 100,
+    }],
+  })
+  // 主头部只保留一盏聚合灯；不再有 "Self: ..." 常驻徽章。
+  assert.ok(!html.includes('class="badge badge-neutral" title="Run status'), '自身状态不再以常驻徽章摆在头部')
+  assert.ok(/aria-label="Self: [^"]+; subtree aggregate:/.test(html), '灯的可访问名称交代自身状态')
+  // 展开的元数据披露保留自身状态事实行。
+  assert.ok(html.includes('Self status'), '元数据披露携带自身状态行')
 })

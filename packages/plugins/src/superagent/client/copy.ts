@@ -84,6 +84,9 @@ export const SA_ROUTER_PILL_ARIA: LocalizedText = {
 export const SA_DISPATCH_TITLE: LocalizedText = { en: 'Worker dispatch', 'zh-CN': '后台 Worker 派工' }
 /** Running dispatch state. */
 export const SA_DISPATCHING: LocalizedText = { en: 'Dispatching…', 'zh-CN': '派工中…' }
+export const SA_STATUS_RUNNING: LocalizedText = { en: 'Running', 'zh-CN': '执行中' }
+export const SA_STATUS_COMPLETED: LocalizedText = { en: 'Completed', 'zh-CN': '已完成' }
+export const SA_STATUS_FAILED: LocalizedText = { en: 'Failed', 'zh-CN': '失败' }
 /** Dispatch failed (action error banner shows the backend message). */
 export const SA_DISPATCH_FAILED: LocalizedText = { en: 'Dispatch failed', 'zh-CN': '派工失败' }
 /** Dispatch completed without a worker id in the result. */

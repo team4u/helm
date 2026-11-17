@@ -51,6 +51,7 @@ import {
   dispatchedWorkerId,
   dispatchInput,
   outcomeLabel,
+  outcomeTone,
   parseRecallNodes,
   parseRouterMode,
   parseSubscriptions,
@@ -96,6 +97,9 @@ import {
   SA_SUBSCRIPTIONS_TITLE,
   SA_WIDGET_TITLE,
   SA_WORKER_REPORT,
+  SA_STATUS_COMPLETED,
+  SA_STATUS_FAILED,
+  SA_STATUS_RUNNING,
   saArtifactTitle,
   saDispatchedWorker,
   saRecallSubtitle,
@@ -356,7 +360,8 @@ export function SuperAgentDispatchToolView(props: ToolViewProps): ReactNode {
         <span>{t(SA_DISPATCH_TITLE)}</span>
       </div>
       <div className="sa-dispatch-receipt">
-        <StatusLight status={lightStatus} label={receiptText} />
+        {/* 灯的可访问名称只用短状态词：相邻可见回执已承载 worker id/摘要，避免读屏重复 */}
+        <StatusLight status={lightStatus} label={t(lightStatus === 'running' ? SA_STATUS_RUNNING : lightStatus === 'failed' ? SA_STATUS_FAILED : SA_STATUS_COMPLETED)} />
         <span className="sa-dispatch-text">{receiptText}</span>
         {input.profileId !== undefined ? <span className="sa-dispatch-meta">Profile {input.profileId}</span> : null}
         {input.threadKey !== undefined ? <span className="sa-dispatch-meta mono">{input.threadKey}</span> : null}
@@ -482,7 +487,10 @@ export function SuperAgentRecallScreen(props: ScreenProps): ReactNode {
                     <ConversationCell conversationId={n.conversationId} conversationsById={conversationsById} />
                     <td>{n.profileId}</td>
                     <td>
-                      <StatusLight status={n.outcome ?? 'unknown'} label={outcomeLabel(n.outcome, locale)} />
+                      {/* 表格保留可见 outcome 文字徽章（列语义不依赖列标题或颜色解释）；回执/汇报卡继续用灯 */}
+                      <span className={`badge badge-${outcomeTone(n.outcome)}`}>
+                        {outcomeLabel(n.outcome, locale)}
+                      </span>
                     </td>
                     <td className="sa-summary-cell">{n.summary}</td>
                     <td className="cell-actions">

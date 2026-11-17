@@ -23,6 +23,7 @@ import {
   EXTERNAL_TITLE,
   externalBackgroundTaskLabel,
   executionStatusLabel,
+  nodeStatusLabel,
   runStatusLabel,
   externalErrorJoiner,
   META_KV_CREATED,
@@ -91,10 +92,15 @@ export function ExternalRunSummary(props: {
             {worktree.branch}
           </span>
         ) : null}
-        <StatusLight
-          status={executionLightStatus(badge.status, run)}
-          label={executionLightStatus(badge.status, run) === 'aborted' ? runStatusLabel('aborted', locale) : badge.label}
-        />
+        {(() => {
+          const lightStatus = executionLightStatus(badge.status, run, failed !== undefined)
+          return (
+            <StatusLight
+              status={lightStatus}
+              label={lightStatus === 'aborted' ? runStatusLabel('aborted', locale) : badge.label}
+            />
+          )
+        })()}
         {elapsedMs !== undefined ? (
           <span className="subagent-live-elapsed tabular-nums">{formatDurationMs(elapsedMs)}</span>
         ) : null}
@@ -164,7 +170,7 @@ export function ExternalRunSummary(props: {
           <div className="workflow-node-list">
             {nodes.map((n) => (
               <div key={n.id} className="workflow-node-line">
-                <StatusLight status={n.status} />
+                <StatusLight status={n.status} label={nodeStatusLabel(n.status, locale)} />
                 <span className="workflow-node-label">{n.label ?? n.id}</span>
                 {n.executionId !== undefined ? <span className="subagent-external-exec">{n.executionId}</span> : null}
               </div>

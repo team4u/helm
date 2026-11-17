@@ -58,6 +58,7 @@ import {
   actionDetachDone,
   approvalsBadge,
   approvalsTitle,
+  selfAggregateTitle,
   executionStatusLabel,
   externalErrorJoiner,
   PHASE_ICON,
@@ -89,10 +90,8 @@ import {
   RUN_CARD_SAVE_FAILED,
   runCardSavedBadgeTitle,
   RUN_CARD_SAVED_BADGE,
-  runCardSelfStateTitle,
   runCardSubtreeStat,
   runCardTokensStat,
-  selfStatusLabel,
   SPIN,
   traceActiveNode,
   TRACE_BG_DISPATCHED,
@@ -107,6 +106,7 @@ import {
   RUN_EXPAND_RESULT,
   RUN_KV_CREATED_AT,
   RUN_KV_RUN_ID,
+  RUN_KV_SELF_STATUS,
   RUN_KV_SAVED_DEF,
   RUN_KV_SOURCE_RUN,
   RUN_KV_UPDATED_AT,
@@ -377,7 +377,7 @@ export function WorkflowToolView(props: ToolViewProps): ReactNode {
           <StatusLight
             status={
               effectiveStatus !== undefined && effectiveStatus !== selfRunStatus
-                ? executionLightStatus(effectiveStatus, run)
+                ? executionLightStatus(effectiveStatus, run, subtree.error > 0)
                 : run.status
             }
             label={statusBadgeText}
@@ -515,15 +515,10 @@ export function WorkflowRunCardBody(props: {
           <Icon name={run.kind === 'subagent' ? 'bot' : 'terminal'} />
           <strong className="workflow-run-header-name">{displayName}</strong>
           {effectiveStatus !== selfRunStatus ? (
-            <>
-              <StatusLight
-                status={executionLightStatus(effectiveStatus, run)}
-                label={executionStatusLabel(executionLightStatus(effectiveStatus, run), locale)}
-              />
-              <span className="badge badge-neutral" title={runCardSelfStateTitle(runStatusLabel(run.status, locale), locale)}>
-                {selfStatusLabel(runStatusLabel(run.status, locale), locale)}
-              </span>
-            </>
+            <StatusLight
+              status={executionLightStatus(effectiveStatus, run, subtree.error > 0)}
+              label={selfAggregateTitle(runStatusLabel(run.status, locale), executionStatusLabel(executionLightStatus(effectiveStatus, run, subtree.error > 0), locale), locale)}
+            />
           ) : (
             <StatusLight status={run.status} label={runStatusLabel(run.status, locale)} />
           )}
@@ -658,6 +653,12 @@ export function WorkflowRunCardBody(props: {
             <span className="kv-val tabular-nums">{formatCompactTimestamp(run.createdAt)}</span>
             <span className="kv-key">{resolveLocalizedText(RUN_KV_UPDATED_AT, locale)}</span>
             <span className="kv-val tabular-nums">{formatCompactTimestamp(run.updatedAt)}</span>
+            {effectiveStatus !== selfRunStatus ? (
+              <>
+                <span className="kv-key">{resolveLocalizedText(RUN_KV_SELF_STATUS, locale)}</span>
+                <span className="kv-val">{runStatusLabel(run.status, locale)}</span>
+              </>
+            ) : null}
             {run.replayedFrom !== undefined ? (
               <>
                 <span className="kv-key">{resolveLocalizedText(RUN_KV_SOURCE_RUN, locale)}</span>

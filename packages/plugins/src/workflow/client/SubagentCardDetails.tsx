@@ -43,14 +43,14 @@ import {
   BADGE_CACHED,
   cardSubagentHeading,
   executionStatusLabel,
-  runCardSelfStateTitle,
-  selfStatusLabel,
+  selfAggregateTitle,
   SPIN,
   subtreeBadge,
   subtreeProgressTitle,
   META_KV_CREATED,
   META_KV_LOCATION,
   META_KV_RUN_ID,
+  META_KV_SELF_STATUS,
   META_TOGGLE_ARIA,
   META_TOGGLE_LABEL,
   SUBLINE_FRONTLINE_TAG,
@@ -77,7 +77,8 @@ export function SubagentCardHeading(props: {
   const { childConversationId, profileId, taskTitle, worktree, effectiveStatus, selfBadge, abortedRun, descendants, approvals, statSegments, elapsedText } = props
   const locale = usePluginLocale()
   const abortedRunRef = abortedRun === true ? ({ status: 'aborted' } as const) : undefined
-  const effectiveLightStatus = executionLightStatus(effectiveStatus, abortedRunRef)
+  // 后代真实失败不得被 run 级中止掩盖：descendantError 时聚合灯保持 error。
+  const effectiveLightStatus = executionLightStatus(effectiveStatus, abortedRunRef, descendants.error > 0)
   const selfLightStatus = executionLightStatus(selfBadge.status, abortedRunRef)
   const primaryTitle = taskTitle ?? cardSubagentHeading(childConversationId, locale)
   return (
@@ -100,13 +101,11 @@ export function SubagentCardHeading(props: {
       ) : null}
       {props.cached === true ? <span className="badge badge-warn">{resolveLocalizedText(BADGE_CACHED, locale)}</span> : null}
       {effectiveStatus !== selfBadge.status ? (
-        <>
-          <StatusLight
-            status={effectiveLightStatus}
-            label={executionStatusLabel(effectiveLightStatus, locale)}
-          />
-          <span className="badge badge-neutral" title={runCardSelfStateTitle(selfBadge.label, locale)}>{selfStatusLabel(selfBadge.label, locale)}</span>
-        </>
+        /* 主头部只保留一盏聚合灯；自身状态经可访问名称交代，事实完整保存在元数据披露中。 */
+        <StatusLight
+          status={effectiveLightStatus}
+          label={selfAggregateTitle(selfBadge.label, executionStatusLabel(effectiveLightStatus, locale), locale)}
+        />
       ) : (
         <StatusLight status={selfLightStatus} label={selfBadge.label} />
       )}
@@ -270,8 +269,10 @@ export function SubagentCardSublines(props: {
   cwd?: string
   createdAt?: number
   runId?: string
+  /** Self status fact (only when it differs from the aggregate light); kept in the metadata disclosure. */
+  selfStatus?: string
 }): ReactNode {
-  const { snippet, frontline, nodeId, cwd, createdAt, runId } = props
+  const { snippet, frontline, nodeId, cwd, createdAt, runId, selfStatus } = props
   const locale = usePluginLocale()
   const [metaOpen, setMetaOpen] = useState(false)
   const metaId = useId()
@@ -283,7 +284,11 @@ export function SubagentCardSublines(props: {
         : nodeId !== undefined && nodeId !== ''
           ? nodeId
           : undefined
-  const hasMeta = coord !== undefined || (createdAt !== undefined && Number.isFinite(createdAt)) || runId !== undefined
+  const hasMeta =
+    coord !== undefined ||
+    (createdAt !== undefined && Number.isFinite(createdAt)) ||
+    runId !== undefined ||
+    selfStatus !== undefined
   if (snippet === undefined && frontline.length === 0 && !hasMeta) return undefined
   return (
     <>
@@ -307,7 +312,7 @@ export function SubagentCardSublines(props: {
       {hasMeta ? (
         /* 机器元数据（node:cwd / 创建时间 / runId）收进原地展开：真实按钮 + aria-expanded，
            点击不冒泡进整卡导航，标题不再是唯一信息渠道。 */
-        <div className="subagent-live-meta" onClick={(e) => e.stopPropagation()}>
+        <div className="subagent-live-meta">
           <button
             type="button"
             className="btn btn-ghost btn-xs subagent-live-meta-toggle"
@@ -321,6 +326,12 @@ export function SubagentCardSublines(props: {
             <Icon name="info" size={11} />
           </button>
           <div id={metaId} hidden={!metaOpen} className="subagent-live-meta-row">
+            {selfStatus !== undefined ? (
+              <span className="subagent-live-meta-item">
+                <span className="subagent-live-meta-key">{resolveLocalizedText(META_KV_SELF_STATUS, locale)}</span>
+                {selfStatus}
+              </span>
+            ) : null}
             {coord !== undefined ? (
               <span className="subagent-live-meta-item mono">
                 <span className="subagent-live-meta-key">{resolveLocalizedText(META_KV_LOCATION, locale)}</span>

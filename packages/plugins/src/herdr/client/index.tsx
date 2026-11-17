@@ -36,6 +36,7 @@ import {
   usePluginTranslator,
 } from '@helm/plugin-client'
 import {
+  agentStatusTone,
   canFocusPane,
   canSnapshotPane,
   collectNodes,
@@ -400,7 +401,8 @@ export function HerdrOverviewScreen(props: ScreenProps): ReactNode {
                           </span>
                         </td>
                         <td>
-                          <StatusLight status={row.agentStatus} label={row.agentStatus} />
+                          {/* 表格保留可见状态文字（列语义不依赖列标题或颜色解释） */}
+                          <span className={`badge badge-${agentStatusTone(row.agentStatus)}`}>{row.agentStatus}</span>
                         </td>
                         <td className="mono">{row.agentName ?? row.agent ?? '—'}</td>
                         <td className="mono herdr-cell-truncate" title={row.foregroundCwd ?? row.cwd ?? ''}>

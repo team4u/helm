@@ -273,6 +273,8 @@ test('toolView：派工卡为轻量单行回执（状态灯 + 摘要 + worker �
     assert.match(host.textContent ?? '', /Profile coder/, '输入摘要')
     assert.ok(host.querySelector('.sa-dispatch-receipt') !== null, '单行回执形态')
     assert.ok(host.querySelector('.helm-status-light-done') !== null, '派发成功为完成灯（可访问名称，无可見状态文字）')
+    const receiptLight = host.querySelector('.sa-dispatch-receipt .helm-status-light') as HTMLElement | null
+    assert.ok(receiptLight !== null && receiptLight.getAttribute('aria-label') === 'Completed', '灯的可访问名称为短状态词（不与可见回执重复）')
     assert.equal(host.querySelector('.helm-table') === null, true, '时间线派工卡不再渲染完整 worker 表')
     const open = [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('Open'))
     assert.ok(open, 'worker 会话入口保留')
@@ -295,6 +297,7 @@ test('toolView：运行中/失败回执分别为执行中灯与错误灯', { tim
   )
   try {
     assert.ok(running.host.querySelector('.helm-status-light-working .status-dot-working') !== null, '运行中为执行中灯')
+    assert.equal(running.host.querySelector('.sa-dispatch-receipt .helm-status-light')?.getAttribute('aria-label'), 'Running', '运行中灯可访问名称为短状态词')
     assert.equal(running.host.querySelector('.helm-status-light-label') === null, true, '无可見状态文字')
   } finally {
     running.unmount()
@@ -407,6 +410,10 @@ test('screen：图谱视图渲染 recall 节点与事件订阅两张表', { time
   try {
     assert.match(host.textContent ?? '', /RecallGraph memory graph/, '标题')
     assert.match(host.textContent ?? '', /修复构建并跑通测试/, 'recall 摘要行')
+    // 表格语义保留：Outcome 列为可见文字徽章（不依赖列标题或颜色解释）。
+    const outcomeBadges = [...host.querySelectorAll('td .badge')] as HTMLElement[]
+    assert.ok(outcomeBadges.some((b) => (b.textContent ?? '') === 'completed'), 'Outcome 列显示可见 outcome 文字')
+    assert.ok(outcomeBadges.some((b) => (b.textContent ?? '') === 'failed'), '失败 outcome 文字可见')
     assert.match(host.textContent ?? '', /写作失败：模型拒绝/, '第二个节点')
     assert.match(host.textContent ?? '', /Event subscriptions/, '订阅区块标题')
     assert.match(host.textContent ?? '', /ci\/main/, 'threadKey 行')

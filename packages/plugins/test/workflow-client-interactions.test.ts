@@ -157,24 +157,19 @@ test('时间线单行与工作台整卡均点击触发 openConversationDrawer（
     // 工作台内的一体化整卡（SubagentLiveCard）：点击 / 回车 / 空格统一打开抽屉。
     spy.drawerCalls.length = 0
     await rerender(e(SubagentLiveCard, { childConversationId: 11, toolStatus: 'running' }))
-    const card = host.querySelector('.subagent-card-clickable') as HTMLElement | null
+    const card = host.querySelector('.subagent-card-clickable') as HTMLButtonElement | null
     assert.ok(card !== null, '工作台一体化整卡必须渲染 subagent-card-clickable')
+    assert.equal(card.tagName, 'BUTTON', '整卡主体是真实导航 button（元数据披露/动作为同级结构，无嵌套交互）')
+    assert.equal(card.querySelectorAll('button').length, 0, '导航按钮内无嵌套交互')
     act(() => {
       card!.click()
     })
-    assert.deepEqual(spy.drawerCalls, [11], '点击整卡必须调用 openConversationDrawer(11)')
+    assert.deepEqual(spy.drawerCalls, [11], '点击整卡主体必须调用 openConversationDrawer(11)')
     assert.deepEqual(spy.screenCalls, [], '不得调用 openScreen 跳主屏')
     assert.deepEqual(spy.splitCalls, [], '不得调用 openSplitScreen 开分屏')
-    spy.drawerCalls.length = 0
-    act(() => {
-      card!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
-    })
-    assert.deepEqual(spy.drawerCalls, [11], '回车必须同样触发抽屉入口')
-    spy.drawerCalls.length = 0
-    const space = new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true })
-    act(() => { card!.dispatchEvent(space) })
-    assert.deepEqual(spy.drawerCalls, [11], '空格必须同样触发抽屉入口')
-    assert.equal(space.defaultPrevented, true, '空格打开卡片时不得滚动页面')
+    // 真实 button 的 Enter/Space 由 UA 原生激活；此处验证可聚焦性。
+    card!.focus()
+    assert.ok(host.ownerDocument.activeElement === card, '整卡主体按钮可聚焦（回车/空格原生触发）')
   } finally {
     unmount()
   }
@@ -1124,6 +1119,49 @@ test('WorkflowRunCardBody 头部整块可点展开：主体真实按钮切换，
     // 键盘可达：主体按钮可聚焦（Enter/Space 由 UA 原生激活）。
     main.focus()
     assert.ok(host.ownerDocument.activeElement === main, '头部主体按钮可聚焦')
+  } finally {
+    unmount()
+  }
+})
+
+test('执行卡结构：元数据披露与动作区均在导航按钮之外的同级结构（无嵌套交互）', { timeout: 60_000 }, async () => {
+  const child11 = { ...summary(11, 'working'), parentConversationId: 1, parentToolCallId: 'call-nested' }
+  setWorkflowClientStub({
+    docValue: {
+      runs: [
+        {
+          id: 'wf_nested',
+          kind: 'subagent',
+          name: '嵌套结构检查',
+          conversationId: 1,
+          status: 'running',
+          createdAt: 1,
+          updatedAt: 100,
+          nodes: [{ id: 'a11', kind: 'agent', status: 'running', conversationId: 11 }],
+        },
+      ],
+    },
+    conversations: [child11],
+    conversation: () => ({ summary: undefined, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} }),
+  })
+  const spy = makeSpyCtx()
+  const mod = await importWorkflowClientModule('index.tsx')
+  const Panel = mod['WorkflowWorkbenchPanel'] as React.ComponentType<Record<string, unknown>>
+  const { host, unmount } = await mountClient(spy, e(Panel, { conversation: summary(1, 'working') }))
+  try {
+    const navBtn = host.querySelector('button.subagent-card-clickable') as HTMLButtonElement | null
+    assert.ok(navBtn !== null, '导航主体为真实按钮')
+    const metaToggle = host.querySelector('button.subagent-live-meta-toggle') as HTMLButtonElement | null
+    assert.ok(metaToggle !== null, '元数据披露入口存在')
+    assert.ok(metaToggle !== null && navBtn !== null && !navBtn.contains(metaToggle), '元数据披露不在导航按钮内部（同级结构）')
+    const abortBtn = host.querySelector('.subagent-live-actions button.btn-danger') as HTMLButtonElement | null
+    if (abortBtn !== null) {
+      assert.ok(!navBtn!.contains(abortBtn), '动作按钮不在导航按钮内部（同级结构）')
+    }
+    // 展开元数据不影响导航；点击导航仍打开抽屉。
+    await act(async () => { metaToggle!.click() })
+    await act(async () => { navBtn!.click() })
+    assert.deepEqual(spy.drawerCalls, [11], '点击导航主体仍打开子会话抽屉')
   } finally {
     unmount()
   }
