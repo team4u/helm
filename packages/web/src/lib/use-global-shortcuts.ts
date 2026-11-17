@@ -1,6 +1,7 @@
 /**
- * 全局唯一单键快捷键分发 hook：
- * 严格一功能一键（Ctrl+L / Ctrl+O / Mod+K / Mod+B / Mod+J / Esc×2），无别名。
+ * The single global single-key shortcut dispatch hook:
+ * strictly one key per function (Ctrl+L / Ctrl+O / Mod+K / Mod+B / Mod+J / Esc×2), no aliases.
+ * Display copy is not produced here, so no locale seam is needed.
  */
 import { useEffect, type Dispatch, type MutableRefObject, type SetStateAction } from 'react'
 import type { LiveState } from './live-state.js'

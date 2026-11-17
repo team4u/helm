@@ -1,5 +1,6 @@
 /**
- * 侧栏空间记忆判定、默认回跳目标、删除回退与 Screen 路由参数补丁纯函数（零 React 依赖）。
+ * Pure functions for sidebar space-memory verdicts, default jump-back targets,
+ * delete fallbacks and Screen route-param patching (zero React dependencies).
  */
 import type { ConversationSummary, Profile } from '@helm/protocol/browser'
 import { isConversationArchived } from '../conversation/archive-model.js'
@@ -13,18 +14,20 @@ import {
   type SidebarSpace,
 } from './types.js'
 
-/** openSpace 判定空间回跳目标时的实时快照输入。 */
+/** Live snapshot input for openSpace's space jump-back target verdict. */
 export interface SpaceTargetInput {
   conversations: ConversationSummary[]
   profiles: Profile[]
   plugins: ReadonlyArray<{ id: string; enabled: boolean }>
-  /** 静态资产是否已完成本轮加载（未加载完时无法证伪角色存在性，按可用放行）。 */
+  /** Whether static assets finished loading this round (before that, profile existence cannot be falsified; treat as available). */
   assetsLoaded: boolean
   grouped: GroupedUiSpecs
 }
 
-/** 空间回跳目标当前是否仍可用：会话须在列表中；agent 待命须角色仍存在；
- * screen 须仍是启用插件的贡献；系统中心是宿主静态目标，恒可用。 */
+/** Whether a space jump-back target is still available: conversations must be
+ * in the list; agent standby requires the profile to still exist; screens must
+ * still be contributed by an enabled plugin; the system center is a static host
+ * target and always available. */
 export function isSpaceTargetAvailable(target: ResolvedTarget, input: SpaceTargetInput): boolean {
   switch (target.kind) {
     case 'conversation':
@@ -41,9 +44,12 @@ export function isSpaceTargetAvailable(target: ResolvedTarget, input: SpaceTarge
   }
 }
 
-/** 空间缺省目标（该空间尚无记忆时）：settings -> 角色中心；conversations -> 最新根会话
- * 所属智能体的待命入口（无会话时退到首个可用角色）；views -> 第一个可解析为 screen
- * 的侧栏项。找不到可用目标时返回 null，由调用方显式通知，绝不伪造不存在目标。 */
+/** The default target of a space (when the space has no memory yet): settings
+ * -> profile center; conversations -> the standby entry of the agent owning the
+ * latest root conversation (falling back to the first usable profile when there
+ * are none); views -> the first sidebar item resolvable to a screen. Returns
+ * null when no usable target exists — the caller notifies explicitly and never
+ * fabricates a nonexistent target. */
 export function defaultSpaceTarget(space: SidebarSpace, input: SpaceTargetInput): ResolvedTarget | null {
   if (space === 'settings') return { kind: 'profiles' }
   if (space === 'views') {
@@ -81,7 +87,8 @@ export type SpaceSwitchResolution =
   | { kind: 'navigate'; target: ResolvedTarget; clearStaleMemory: boolean }
   | { kind: 'unavailable'; clearStaleMemory: boolean }
 
-/** 解析点击 Activity Rail 空间时的目标决策：同空间 no-op；优先有效记忆；失效记忆标记清理并退到缺省。 */
+/** Resolve the target decision for an Activity Rail space click: same space no-op;
+ * valid memory first; stale memory marked for cleanup with a fallback to the default. */
 export function resolveSpaceSwitch(
   space: SidebarSpace,
   currentPrimary: ResolvedTarget,
@@ -107,8 +114,10 @@ export function resolveSpaceSwitch(
 }
 
 /**
- * 被删会话若正是当前主屏目标，回退到所属智能体待命态并继承远端节点与工作目录
- * （local 节点按 URL 契约省略；无会话摘要兜底回角色中心）。
+ * When the deleted conversation is exactly the current primary target, fall
+ * back to the owning agent's standby state, inheriting the remote node and
+ * working directory (the local node is omitted per the URL contract; without a
+ * conversation summary, fall back to the profile center).
  */
 export function deletedConversationFallbackTarget(
   deletedSummary: Pick<ConversationSummary, 'profileId' | 'nodeId' | 'cwd'> | undefined,
@@ -129,7 +138,7 @@ export interface ScreenParamsPatchResult {
   invalidKeys: string[]
 }
 
-/** 校验并拆分 Screen 路由参数补丁，过滤非法键与原型保留键。 */
+/** Validate and split a Screen route-param patch, filtering illegal keys and prototype-reserved keys. */
 export function partitionScreenParamsPatch(
   patch: Record<string, string | undefined>,
 ): ScreenParamsPatchResult {
@@ -145,7 +154,7 @@ export function partitionScreenParamsPatch(
   return { validEntries, invalidKeys }
 }
 
-/** 将已校验的 Screen 路由参数补丁应用到目标（undefined 删除键，空串忽略）。 */
+/** Apply a validated Screen route-param patch to the target (undefined deletes the key; empty strings are ignored). */
 export function applyScreenParamsPatch(
   current: ResolvedTarget,
   validEntries: ReadonlyArray<[string, string | undefined]>,

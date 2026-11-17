@@ -1,6 +1,7 @@
 /**
- * 全局单键快捷键、分屏焦点路由、桌面侧栏折叠持久化与命令面板排序纯函数。
- * 零 React / DOM 挂载副作用，供 HelmStoreProvider / CommandPaletteModal / Sidebar 共用。
+ * Pure functions for global single-key shortcuts, split-focus routing, desktop
+ * sidebar-collapse persistence and command-palette ordering. Zero React / DOM
+ * mount side effects; shared by HelmStoreProvider / CommandPaletteModal / Sidebar.
  */
 import type { ConversationSummary } from '@helm/protocol/browser'
 import { isConversationArchived } from '../conversation/archive-model.js'
@@ -47,7 +48,7 @@ export function persistSidebarCollapsed(collapsed: boolean): void {
   try {
     localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, collapsed ? '1' : '0')
   } catch {
-    /* 禁用存储时保留内存折叠状态 */
+    /* Keep the in-memory collapse state when storage is disabled */
   }
 }
 
@@ -94,7 +95,7 @@ export function hasNonWorkbenchDialogOpen(): boolean {
   return document.querySelector(NON_WORKBENCH_DIALOG_SELECTOR) !== null
 }
 
-/** 检测除 ModelPicker 浮层以外的阻塞对话框（确保 Ctrl+L 再次按下时可切换关闭已打开的选型框）。 */
+/** Detect blocking dialogs other than the ModelPicker popover (so a second Ctrl+L can toggle the open picker closed). */
 export function hasNonModelPickerDialogOpen(): boolean {
   if (typeof document === 'undefined') return false
   return document.querySelector(NON_MODEL_PICKER_DIALOG_SELECTOR) !== null
@@ -118,13 +119,13 @@ export function isApplePlatform(): boolean {
   return /mac|iphone|ipad|ipod/i.test(platform)
 }
 
-/** 唯一 Mod 快捷键显示文案（严格单键，无多键别名）。 */
+/** The single Mod-shortcut display label (strictly one key; no multi-key aliases). */
 export function formatModShortcut(key: string): string {
   const upper = key.toUpperCase()
   return isApplePlatform() ? `⌘${upper}` : `Ctrl+${upper}`
 }
 
-/** 空搜索词时按最近活跃时间挑选前 N 条非归档会话（排除当前正查看会话）。 */
+/** Pick the first N non-archived conversations by recent activity for an empty search term (excluding the currently viewed one). */
 export function selectRecentConversationsForPalette(
   conversations: ReadonlyArray<ConversationSummary>,
   activeConversationId: number | undefined,

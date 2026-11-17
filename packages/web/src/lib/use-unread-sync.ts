@@ -1,5 +1,6 @@
 /**
- * 前台可见聚焦门控自动清未读与可见会话首载同步 hook。
+ * Foreground-visibility-gated automatic unread clearing and visible-conversation
+ * first-load sync hook.
  */
 import { useCallback, useEffect, useRef, type MutableRefObject } from 'react'
 import type { ArtifactMetadata, ConversationDetail, ConversationSummary } from '@helm/protocol/browser'
@@ -8,6 +9,7 @@ import { isPageActive } from './browser-notification.js'
 import { errorText } from './format.js'
 import type { LiveState } from './live-state.js'
 import type { ResolvedTarget, ToastNotice } from './types.js'
+import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 
 export interface ArtifactsSyncWatermark {
   stateChangeSeq: number
@@ -31,6 +33,12 @@ export interface UseUnreadSyncOptions {
   ) => Promise<ConversationDetail | undefined>
   loadConversationArtifacts: (conversationId: number, opts?: { silent?: boolean }) => Promise<ArtifactMetadata[] | undefined>
   pushNotice: (notice: Omit<ToastNotice, 'id' | 'createdAt'>) => void
+  /**
+   * Locale seam: this hook runs inside HelmStoreProvider's own body (no
+   * context access); the Provider does not pass `t` yet, so the English bridge
+   * translator keeps today's behavior until the wiring lands.
+   */
+  t?: WebMessageTranslator
 }
 
 export interface UseUnreadSyncResult {
@@ -54,7 +62,9 @@ export function useUnreadSync({
   loadConversationDetail,
   loadConversationArtifacts,
   pushNotice,
+  t,
 }: UseUnreadSyncOptions): UseUnreadSyncResult {
+  const tt = t ?? englishWebTranslator
   const unreadClearInFlight = useRef(new Set<number>())
   const unreadClearedSeq = useRef(new Map<number, number>())
 
@@ -72,12 +82,17 @@ export function useUnreadSync({
   }, [])
 
   /**
-   * 前台可见聚焦门控自动清未读（单飞 + stateChangeSeq 水位防重）：
-   * - 仅当 authenticated && isPageActive() 且会话当前 unread=true 时才发 PATCH；
-   * - 请求在途期间由 unreadClearInFlight 去重，成功后记录 requestedSeq 水位，
-   *   在 SSE upsert 尚未将 unread 翻为 false 期间拦截 visibilitychange+focus 连发；
-   * - 收到 unread=false 或 stateChangeSeq 推进且仍 unread=true 时允许下次清零；
-   * - 失败只报 toast 通知，绝不污染 loadErrors['conversation:id']。
+   * Foreground-visibility-gated automatic unread clearing (single-flight +
+   * stateChangeSeq watermark dedup):
+   * - PATCH only when authenticated && isPageActive() and the conversation is
+   *   currently unread=true;
+   * - requests in flight are deduped by unreadClearInFlight; after success the
+   *   requestedSeq watermark is recorded, intercepting visibilitychange+focus
+   *   bursts while SSE upsert has not yet flipped unread to false;
+   * - receiving unread=false, or stateChangeSeq advancing while still
+   *   unread=true, allows the next clearing;
+   * - failures only report a toast notice and never pollute
+   *   loadErrors['conversation:id'].
    */
   const clearVisibleConversationUnread = useCallback(
     (id: number, candidate?: ConversationSummary): void => {
@@ -128,13 +143,13 @@ export function useUnreadSync({
             pushNotice({
               type: 'notification',
               level: 'error',
-              title: 'Failed to mark as read',
+              title: tt('shell.unread.markFailed'),
               body: errorText(error),
             })
           }
         })
     },
-    [authenticatedRef, liveRef, pushNotice, session, visibleConversationIds],
+    [authenticatedRef, liveRef, pushNotice, session, tt, visibleConversationIds],
   )
 
   useEffect(() => {
@@ -171,7 +186,9 @@ export function useUnreadSync({
     clearVisibleConversationUnread,
   ])
 
-  // 切回前台且窗口恢复聚焦时补清当前主屏/分屏可见会话未读（登出/卸载自动解绑）。
+  // When the tab becomes visible and the window refocused, catch up on clearing
+  // unread for the currently visible main/split conversations (logout/unmount
+  // unbinds automatically).
   useEffect(() => {
     if (!authenticated || typeof document === 'undefined' || typeof window === 'undefined') return
     const onPageActive = () => {

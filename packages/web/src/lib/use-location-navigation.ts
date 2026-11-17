@@ -1,6 +1,8 @@
 /**
- * 工作台导航位置状态、分屏焦点、空间记忆回跳、首页落地与搜索条目定位 hook。
- * 浏览器地址栏读写边界（hashchange/popstate 与 pushState/replaceState）留在 HelmStoreProvider。
+ * Workbench navigation-location state, split focus, space-memory jump-back,
+ * home landing and search-entry locating hook. The browser address-bar
+ * read/write boundary (hashchange/popstate and pushState/replaceState) stays
+ * in HelmStoreProvider.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type MutableRefObject, type SetStateAction } from 'react'
 import type { ConversationDetail, Profile } from '@helm/protocol/browser'
@@ -18,6 +20,7 @@ import {
 } from './types.js'
 import { isSameLocationState, type WorkspaceLocationState } from './url-hash-model.js'
 import { resolveFocusedPanel } from '../shell/shortcuts-model.js'
+import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 
 export interface UseLocationNavigationOptions {
   initialLocation: WorkspaceLocationState
@@ -35,6 +38,12 @@ export interface UseLocationNavigationOptions {
   loadEarlierEntries: (conversationId: number) => Promise<void>
   delay: (fn: () => void, ms: number) => void
   pushNotice: (notice: Omit<ToastNotice, 'id' | 'createdAt'>) => void
+  /**
+   * Locale seam: this hook runs inside HelmStoreProvider's own body (no
+   * context access); the Provider does not pass `t` yet, so the English bridge
+   * translator keeps today's behavior until the wiring lands.
+   */
+  t?: WebMessageTranslator
 }
 
 export interface UseLocationNavigationResult {
@@ -84,7 +93,9 @@ export function useLocationNavigation({
   loadEarlierEntries,
   delay,
   pushNotice,
+  t,
 }: UseLocationNavigationOptions): UseLocationNavigationResult {
+  const tt = t ?? englishWebTranslator
   const [primaryTarget, setPrimaryTarget] = useState<ResolvedTarget>(initialLocation.primaryTarget)
   const [splitTarget, setSplitTarget] = useState<ResolvedTarget | null>(initialLocation.splitTarget)
   const [focusedPanel, setFocusedPanelState] = useState<FocusedPanel>('primary')
@@ -93,10 +104,13 @@ export function useLocationNavigation({
   const [activeModal, setActiveModal] = useState<ActiveModal>(initialLocation.activeModal)
   const [highlightedEntry, setHighlightedEntry] = useState<{ conversationId: number; entryId: string } | null>(null)
 
-  // 最近一次与地址栏达成一致的位置：既是外部 Hash 变更的判重基准，也是 push/replace 决策的 prev。
+  // The location last agreed with the address bar: both the dedup baseline for
+  // external hash changes and the "prev" for push/replace decisions.
   const lastSyncedLocation = useRef<WorkspaceLocationState>(initialLocation)
-  // 显式历史策略标记（openTarget history 选项 / setScreenParams push / openSpace）：
-  // 只标记下一拍，实际 pushState/replaceState 由唯一的地址栏写回 effect 执行，组件不得直接操作 history。
+  // Explicit history-mode marker (openTarget history option / setScreenParams
+  // push / openSpace): marks only the next beat; the actual pushState/
+  // replaceState is executed by the single address-bar write-back effect —
+  // components never touch history directly.
   const pendingHistoryMode = useRef<'push' | 'replace' | null>(null)
   const targets = useRef({ primaryTarget, splitTarget })
   targets.current = { primaryTarget, splitTarget }
@@ -106,8 +120,10 @@ export function useLocationNavigation({
   workbenchOpenRef.current = workbenchOpen
   const activeModalRef = useRef(activeModal)
   activeModalRef.current = activeModal
-  // 空间记忆：每个侧栏空间最近的主屏目标（会话内内存态，不进 URL）。Rail 切换回跳用；
-  // 主屏 openTarget / 外部 Hash 恢复 / 删除回退统一在此更新，初始由深链目标播种。
+  // Space memory: each sidebar space's most recent primary target (in-session
+  // memory only, never in the URL). Used by Rail switching to jump back; updated
+  // uniformly by primary openTarget / external hash restore / delete fallback,
+  // seeded initially from the deep-link target.
   const spaceMemory = useRef<Partial<Record<SidebarSpace, ResolvedTarget>>>({
     [spaceForTarget(initialLocation.primaryTarget)]: initialLocation.primaryTarget,
   })
@@ -132,7 +148,8 @@ export function useLocationNavigation({
     }
   }, [splitTarget])
 
-  // 主屏目标变化的统一入口：同步更新所属空间记忆（openTarget / 删除回退共用）。
+  // Single entry point for primary-target changes: syncs the owning space
+  // memory (shared by openTarget and delete fallback).
   const applyPrimaryTarget = useCallback((target: ResolvedTarget) => {
     spaceMemory.current[spaceForTarget(target)] = target
     setPrimaryTarget(target)
@@ -144,22 +161,31 @@ export function useLocationNavigation({
   ) => {
     const resolved = typeof target === 'string' ? resolveTargetString(target, liveRef.current.conversations) : target
     if (!resolved) {
-      pushNotice({ type: 'notification', level: 'warning', title: 'Target not ready', body: typeof target === 'string' ? target : 'Invalid navigation target' })
+      pushNotice({
+        type: 'notification',
+        level: 'warning',
+        title: tt('shell.nav.targetNotReady'),
+        body: typeof target === 'string' ? target : tt('shell.nav.invalidTarget'),
+      })
       return
     }
-    // 显式历史策略只标记下一拍；实际 pushState/replaceState 仍由唯一写回 effect 执行。
+    // Explicit history mode marks only the next beat; the actual pushState/
+    // replaceState is still executed by the single write-back effect.
     if (opts?.history !== undefined) pendingHistoryMode.current = opts.history
     if (opts?.split) setSplitTarget(resolved)
     else applyPrimaryTarget(resolved)
     if (resolved.kind === 'conversation' && opts?.highlightEntryId) {
       setHighlightedEntry({ conversationId: resolved.conversationId, entryId: opts.highlightEntryId })
     }
-  }, [applyPrimaryTarget, liveRef, pushNotice])
+  }, [applyPrimaryTarget, liveRef, pushNotice, tt])
 
-  // Activity Rail 空间切换 = 直接导航主舞台：回跳该空间最近的主屏目标（无记忆时取空间
-  // 缺省目标），经 openTarget 唯一导航机制 push 入栈（实际 pushState 由唯一写回 effect
-  // 执行）；目标不可用时显式通知并安全 no-op，绝不伪造不存在目标。已在当前空间时
-  // 主屏即最新记忆，直接 no-op（不产生历史项）。
+  // Activity Rail space switch = navigating the main stage directly: jump back
+  // to the space's most recent primary target (or the space default when no
+  // memory), pushed through the openTarget single navigation mechanism (the
+  // actual pushState is done by the single write-back effect); an unavailable
+  // target produces an explicit notice and a safe no-op — never a fabricated
+  // target. Already in the space means the main stage IS the latest memory, so
+  // plain no-op (no history entry).
   const openSpace = useCallback((space: SidebarSpace) => {
     const input: SpaceTargetInput = {
       conversations: liveRef.current.conversations,
@@ -177,23 +203,22 @@ export function useLocationNavigation({
       pushNotice({
         type: 'notification',
         level: 'warning',
-        title: 'No openable entry yet',
-        body:
-          space === 'views'
-            ? 'No views available; enable a plugin providing views in the plugin center first'
-            : 'No conversations or profiles available yet; retry later',
+        title: tt('shell.nav.noOpenableEntry'),
+        body: space === 'views' ? tt('shell.nav.noViewsBody') : tt('shell.nav.noConversationsBody'),
       })
       return
     }
     openTarget(resolution.target, { history: 'push' })
-  }, [assetsLoadedRef, profilesLoadedRef, liveRef, openTarget, profilesRef, pushNotice])
+  }, [assetsLoadedRef, profilesLoadedRef, liveRef, openTarget, profilesRef, pushNotice, tt])
 
   const applyExternalLocation = useCallback((parsed: WorkspaceLocationState) => {
-    // 外部 Hash 事件优先级高于尚未消费的组件导航标记，避免 push/replace 标记泄漏到下一次导航。
+    // External hash events outrank unconsumed component navigation markers, so
+    // push/replace markers cannot leak into the next navigation.
     pendingHistoryMode.current = null
     lastSyncedLocation.current = parsed
     setPrimaryTarget(parsed.primaryTarget)
-    // 外部 Hash 恢复（前进/后退/手动改 Hash）同样更新所属空间记忆。
+    // External hash restore (forward/back/manual hash edit) also updates the
+    // owning space memory.
     spaceMemory.current[spaceForTarget(parsed.primaryTarget)] = parsed.primaryTarget
     setSplitTarget(parsed.splitTarget)
     setWorkbenchOpen(parsed.workbenchOpen)
@@ -207,7 +232,8 @@ export function useLocationNavigation({
     focusedPanelRef.current = 'primary'
     setFocusedPanelState('primary')
     setPrimaryTarget({ kind: 'profiles' })
-    // 全量数据已清空：空间记忆一并复位为登出后的默认深链位置。
+    // All data is cleared: reset space memory to the post-logout default
+    // deep-link location as well.
     spaceMemory.current = { settings: { kind: 'profiles' } }
     setWorkbenchOpen(false)
     setWorkbenchTab('artifacts')
@@ -218,14 +244,19 @@ export function useLocationNavigation({
     [primaryTarget, splitTarget, workbenchOpen, workbenchTab, activeModal],
   )
 
-  // 首页落地：空 Hash（无显式主屏目标且无弹窗）进入不是导航意图——认证、角色资产与
-  // 会话快照就绪后（不等待慢模型/技能列表），主屏以 replace 落到对话空间缺省目标；
-  // 期间位置被移动则既有意图优先取消落地；无任何可用角色时保持解析缺省（角色中心）。
+  // Home landing: entering with an empty hash (no explicit primary target and
+  // no modal) is not a navigation intent — once authenticated and the
+  // conversation snapshot plus profile assets are ready (without waiting for
+  // slow models/skills), the primary lands with replace on the conversations
+  // space's default target; if the location moved meanwhile the existing intent
+  // wins and the landing is cancelled; with no usable profile at all, keep
+  // the parsed default (profile center).
   useEffect(() => {
     if (!homeLandingPending.current) return
     if (!authenticated || !profilesLoaded || !sseConnected) return
     homeLandingPending.current = false
-    // 数据就绪前位置已被移动（用户点击 / 外部前进后退 / 程序导航）：既有意图优先，取消落地。
+    // Location already moved before data was ready (user click / external
+    // forward-back / programmatic navigation): the existing intent wins; cancel the landing.
     if (!isSameLocationState(locationState, initialLocation)) return
     const home = defaultSpaceTarget('conversations', {
       conversations: liveRef.current.conversations,
@@ -235,11 +266,12 @@ export function useLocationNavigation({
       grouped: groupUiContributions(liveRef.current.uiContributions),
     })
     if (home === null) return // No profiles available: keep the resolution default (profile center); never fabricate a target
-    // 落地是初始位置解析的延续而非用户导航：replace 不产生历史项，后退不回到角色中心。
+    // The landing is a continuation of initial location parsing, not a user
+    // navigation: replace creates no history entry, and back does not return to the profile center.
     openTarget(home, { history: 'replace' })
   }, [authenticated, profilesLoaded, sseConnected, locationState, initialLocation, openTarget, liveRef, profilesRef, profilesLoadedRef, assetsLoadedRef])
 
-  // 命中老消息时逐页取历史，直至 entry 可见或游标耗尽。
+  // When an old message is hit, page in history until the entry is visible or the cursor is exhausted.
   useEffect(() => {
     if (!highlightedEntry) return
     const detail = conversationDetails[highlightedEntry.conversationId]
@@ -254,10 +286,10 @@ export function useLocationNavigation({
     } else if (detail.nextCursor && !loadErrors[`history:${detail.id}`]) {
       void loadEarlierEntries(detail.id)
     } else if (!detail.nextCursor) {
-      pushNotice({ type: 'notification', level: 'warning', title: 'Search entry no longer in conversation history', conversationId: detail.id })
+      pushNotice({ type: 'notification', level: 'warning', title: tt('shell.nav.searchEntryGone'), conversationId: detail.id })
       setHighlightedEntry(null)
     }
-  }, [highlightedEntry, conversationDetails, loadEarlierEntries, loadErrors, delay, pushNotice])
+  }, [highlightedEntry, conversationDetails, loadEarlierEntries, loadErrors, delay, pushNotice, tt])
 
   return {
     primaryTarget,
