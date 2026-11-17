@@ -1,12 +1,16 @@
 /**
- * Composer 稳定回调与 await 快照纪律测试（真实 DOM：createRoot + act，happy-dom）：
- * - 附件上传 await 完成后以 liveDraftRef 活值同步：发起上传时渲染快照里的旧文本/锚点
- *   不得回灌活草稿（随后发送携带完整文本与附件）；
- * - A 会话上传在途时切 B（生产按 `composer-<id>` key 重挂载）：上传仍指向 A，
- *   完成后不向 B 草稿混入附件；
- * - A 会话发送在途时切 B：提交只落在 A（携带 A 的草稿快照），B 草稿不被回写污染；
- * - 切 A→B 后 B 草稿全新：B 的 prefill 回填正常落地，onlyIfEmpty 拒绝不串 A 残留；
- * - 斜杠浮层打开期间无关重渲染不重挂全局键盘监听（onPick/onClose/visible 身份稳定）。
+ * Composer stable-callback and await-snapshot discipline tests (real DOM: createRoot + act, happy-dom):
+ * - after an attachment-upload await completes, state syncs from liveDraftRef live values:
+ *   the stale text/anchor from the render snapshot that started the upload must never
+ *   flow back into the live draft (the subsequent send carries the full text + attachments);
+ * - switching A -> B while A's upload is in flight (production remounts on the `composer-<id>`
+ *   key): the upload still targets A and never leaks attachments into B's draft;
+ * - switching A -> B while A's send is in flight: the submit lands on A only (with A's draft
+ *   snapshot); B's draft is not polluted by the write-back;
+ * - after switching A -> B, B's draft is fresh: B's prefill lands normally; onlyIfEmpty
+ *   refusals never leak A residue;
+ * - unrelated re-renders while the slash popover is open never re-bind its global keyboard
+ *   listeners (onPick/onClose/visible identities stay stable).
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
@@ -40,9 +44,9 @@ function makeStore(opts?: { detail?: boolean }): { store: HelmStoreValue; notice
   const store = {
     authReady: true, authConfigured: true, authenticated: true, authError: null,
     connectionError: null, loadErrors: {}, sseConnected: true, theme: 'dark' as const,
-    themePreference: 'system' as const,
+    themePreference: 'system' as const, locale: 'en' as const,
     conversations: [convA, convB],
-    // 空 entries + idle：空会话展示起始环境配置条（SessionEnvBar）
+    // Empty entries + idle: the empty conversation shows the starting-environment bar (SessionEnvBar)
     conversationDetails: opts?.detail === true ? { 1: { ...convA, entries: [] } } : {},
     conversationLives: {},
     conversationArtifacts: { 1: [], 2: [] }, pendingAsks: [], resolvedAsksByConv: {},
@@ -132,7 +136,7 @@ const enter = async (ta: HTMLTextAreaElement): Promise<void> => {
   await act(async () => {})
 }
 
-/** 合成粘贴文件：React 合成 ClipboardEvent 从原生事件读 clipboardData.files。 */
+/** Synthesize a pasted file: React synthetic ClipboardEvents read clipboardData.files off the native event. */
 function pasteFiles(ta: HTMLTextAreaElement, files: File[]): void {
   const ev = new Event('paste', { bubbles: true, cancelable: true })
   Object.defineProperty(ev, 'clipboardData', { value: { files } })
@@ -191,7 +195,7 @@ const flush = async (): Promise<void> => {
 
 const testFile = (): File => new File(['x'], '笔记.txt', { type: 'text/plain' })
 
-test('上传完成以活草稿同步：await 后旧渲染快照文本不回灌，随后的发送携带完整文本与附件', { timeout: 60_000 }, async () => {
+test('upload completion syncs the live draft: stale snapshot text never flows back after the await; the next send carries full text and attachments', { timeout: 60_000 }, async () => {
   const gate = deferred<void>()
   const api = stubApi({ uploadGate: gate.promise })
   const { store } = makeStore()
@@ -200,14 +204,14 @@ test('上传完成以活草稿同步：await 后旧渲染快照文本不回灌�
     app.show('composer-1', convA)
     await type(app.ta(), 'hello')
     await paste(app.ta(), [testFile()])
-    // 上传在途期间继续输入：上传回调闭包里的旧文本绝不能覆盖这段活草稿
+    // Keep typing while the upload is in flight: the stale text in the upload callback closure must never overwrite this live draft
     await type(app.ta(), 'hello world')
     await act(async () => { gate.resolve() })
     await flush()
-    assert.equal(app.chips().length, 1, '上传完成后附件条出现')
-    assert.equal(app.ta().value, 'hello world', '活草稿文本不被发起上传时的旧快照覆盖')
+    assert.equal(app.chips().length, 1, 'the attachment chip appears once the upload completes')
+    assert.equal(app.ta().value, 'hello world', 'the live draft text is not overwritten by the stale snapshot from upload start')
     await enter(app.ta())
-    assert.equal(api.submits.length, 1, '草稿完整即可发送')
+    assert.equal(api.submits.length, 1, 'a complete draft sends')
     assert.equal(api.submits[0]!.id, 1)
     assert.deepEqual(
       {
@@ -216,7 +220,7 @@ test('上传完成以活草稿同步：await 后旧渲染快照文本不回灌�
         attachments: api.submits[0]!.payload.attachments,
       },
       { text: 'hello world', origin: 'human', attachments: ['art-1'] },
-      '发送携带完整文本与已Uploaded attachment',
+      'the send carries the full text and the uploaded attachment',
     )
   } finally {
     api.restore()
@@ -224,7 +228,7 @@ test('上传完成以活草稿同步：await 后旧渲染快照文本不回灌�
   }
 })
 
-test('A 会话上传在途时切到 B：上传目标锁定 A，完成后不向 B 草稿混入附件', { timeout: 60_000 }, async () => {
+test('switching A -> B mid-upload: the upload stays bound to A and never leaks attachments into B', { timeout: 60_000 }, async () => {
   const gate = deferred<void>()
   const api = stubApi({ uploadGate: gate.promise })
   const { store } = makeStore()
@@ -233,27 +237,27 @@ test('A 会话上传在途时切到 B：上传目标锁定 A，完成后不向 B
     app.show('composer-1', convA)
     await type(app.ta(), 'a 草稿')
     await paste(app.ta(), [testFile()])
-    // 生产按 composer-<id> key 挂载：切会话即重挂，B 是全新实例
+    // Production mounts on the composer-<id> key: switching conversations remounts; B is a fresh instance
     app.show('composer-2', convB)
-    assert.equal(app.ta().value, '', 'B 草稿全新空白')
+    assert.equal(app.ta().value, '', 'B starts with a fresh blank draft')
     await act(async () => { gate.resolve() })
     await flush()
-    assert.deepEqual(api.uploads, [{ id: 1, name: '笔记.txt' }], '上传仍指向发起时的会话 A')
-    assert.equal(app.chips().length, 0, 'A 的在途附件不污染 B 草稿')
-    assert.equal(app.ta().value, '', 'B 正文不被 A 实例的回写触碰')
+    assert.deepEqual(api.uploads, [{ id: 1, name: '笔记.txt' }], 'the upload still targets conversation A where it started')
+    assert.equal(app.chips().length, 0, 'A in-flight attachments never pollute B draft')
+    assert.equal(app.ta().value, '', 'B text is untouched by A instance write-backs')
     await type(app.ta(), 'b 草稿')
     await enter(app.ta())
     assert.equal(api.submits.length, 1)
-    assert.equal(api.submits[0]!.id, 2, 'B 发送只落在 B')
+    assert.equal(api.submits[0]!.id, 2, 'B send lands on B only')
     assert.equal(api.submits[0]!.payload.text, 'b 草稿')
-    assert.equal(api.submits[0]!.payload.attachments, undefined, 'B 提交不携带 A 的附件')
+    assert.equal(api.submits[0]!.payload.attachments, undefined, 'B submit carries none of A attachments')
   } finally {
     api.restore()
     app.unmount()
   }
 })
 
-test('A 会话发送在途时切到 B：提交只落在 A，B 草稿不被 A 的回写污染', { timeout: 60_000 }, async () => {
+test('switching A -> B mid-send: the submit lands on A only; B draft stays unpolluted by A write-backs', { timeout: 60_000 }, async () => {
   const gate = deferred<void>()
   const api = stubApi({ submitGate: gate.promise })
   const { store } = makeStore()
@@ -263,15 +267,15 @@ test('A 会话发送在途时切到 B：提交只落在 A，B 草稿不被 A 的
     app.show('composer-1', convA)
     await type(app.ta(), 'msg-a')
     await enter(app.ta())
-    assert.deepEqual(sending, [true], '在途反馈如实开启')
+    assert.deepEqual(sending, [true], 'in-flight feedback opens honestly')
     app.show('composer-2', convB)
     await act(async () => { gate.resolve() })
     await flush()
     assert.equal(api.submits.length, 1)
-    assert.equal(api.submits[0]!.id, 1, '提交目标是发起时的会话 A，绝不改投 B')
+    assert.equal(api.submits[0]!.id, 1, 'the submit targets conversation A where it started, never re-routed to B')
     assert.equal(api.submits[0]!.payload.text, 'msg-a')
-    assert.deepEqual(sending, [true, false], '在途反馈如实收尾，不悬挂')
-    assert.equal(app.ta().value, '', 'B 草稿保持空白')
+    assert.deepEqual(sending, [true, false], 'in-flight feedback closes honestly, never dangling')
+    assert.equal(app.ta().value, '', 'B draft stays blank')
     assert.equal(app.chips().length, 0)
   } finally {
     api.restore()
@@ -279,30 +283,30 @@ test('A 会话发送在途时切到 B：提交只落在 A，B 草稿不被 A 的
   }
 })
 
-test('切 A→B 后 B 草稿全新：prefill 回填正常落地，onlyIfEmpty 拒绝不串 A 残留', { timeout: 60_000 }, async () => {
+test('after switching A -> B the B draft is fresh: prefill lands normally; onlyIfEmpty refusals never leak A residue', { timeout: 60_000 }, async () => {
   const api = stubApi()
   const { store, notices } = makeStore()
   const app = mountComposer(store)
   try {
     app.show('composer-1', convA)
     await type(app.ta(), 'a 草稿')
-    // 切 B（生产 Pane 亦按会话 key 重挂，prefill 状态随会话重置为 null）
+    // Switch to B (the production Pane also remounts on the conversation key; prefill state resets to null with it)
     app.show('composer-2', convB)
-    assert.equal(app.ta().value, '', 'B 不继承 A 草稿')
-    // B 内触发引导词回填
+    assert.equal(app.ta().value, '', 'B inherits nothing of the A draft')
+    // Trigger a starter prefill inside B
     app.show('composer-2', convB, { text: 'B 引导词', tick: 1, onlyIfEmpty: true })
     await flush()
-    assert.equal(app.ta().value, 'B 引导词', 'B 的回填正常落地')
-    // 草稿非空时 onlyIfEmpty 回填被拒绝：警告归属 B，正文不动
+    assert.equal(app.ta().value, 'B 引导词', 'the B prefill lands normally')
+    // With a non-empty draft the onlyIfEmpty prefill is refused: the warning belongs to B; the text stays
     app.show('composer-2', convB, { text: '另一个引导词', tick: 2, onlyIfEmpty: true })
     await flush()
-    assert.equal(app.ta().value, 'B 引导词', '非空草稿不被覆盖')
+    assert.equal(app.ta().value, 'B 引导词', 'the non-empty draft is not overwritten')
     assert.equal(notices.length, 1)
-    assert.equal(notices[0]!.conversationId, 2, '拒绝警告归属当前会话 B')
+    assert.equal(notices[0]!.conversationId, 2, 'the refusal warning belongs to the current conversation B')
     assert.match(String(notices[0]!.title), /Handle the current draft before picking a starter/)
-    // 切回 A：全新草稿，无 A 旧文与 B 残留
+    // Switch back to A: a fresh draft, no old A text nor B residue
     app.show('composer-1', convA)
-    assert.equal(app.ta().value, '', '切回 A 同样是全新草稿（按会话 key 重挂）')
+    assert.equal(app.ta().value, '', 'switching back to A also yields a fresh draft (remounted on the conversation key)')
     assert.equal(app.chips().length, 0)
   } finally {
     api.restore()
@@ -310,16 +314,16 @@ test('切 A→B 后 B 草稿全新：prefill 回填正常落地，onlyIfEmpty �
   }
 })
 
-test('起始环境条阻塞态不因无关重渲染循环：blocker 回调出口身份稳定', { timeout: 60_000 }, async () => {
+test('the env-bar block state never loops on unrelated re-renders: the blocker callback outlet keeps a stable identity', { timeout: 60_000 }, async () => {
   const api = stubApi()
   const { store } = makeStore({ detail: true })
   const app = mountComposer(store)
   try {
     app.show('composer-1', convA)
     const envBar = app.host.querySelector('.composer-env-bar')
-    assert.notEqual(envBar, null, '空会话展示起始环境条')
-    // 修改 cwd 草稿 → dirty → blocker={blocked:true} 每渲染新对象：
-    // 若 onBlockerChange 身份不稳定，SessionEnvBar 的 blocker effect 将每 render 重跑并循环
+    assert.notEqual(envBar, null, 'the empty conversation shows the starting-environment bar')
+    // Editing the cwd draft -> dirty -> blocker={blocked:true}, a fresh object per render:
+    // if onBlockerChange were unstable, SessionEnvBar's blocker effect would re-run every render and loop
     const cwdInput = envBar!.querySelector<HTMLInputElement>('input[aria-label="Conversation working directory"]')!
     await act(async () => {
       const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
@@ -331,29 +335,29 @@ test('起始环境条阻塞态不因无关重渲染循环：blocker 回调出口
     })
     await flush()
     const sendBtn = app.host.querySelector<HTMLButtonElement>('button.btn-send')!
-    assert.equal(sendBtn.disabled, true, '未保存环境修改时发送被阻塞')
-    // 无关重渲染（正文输入）不触发 blocker effect 重跑/循环；若循环将抛 Maximum update depth exceeded
+    assert.equal(sendBtn.disabled, true, 'sending is blocked while environment edits are unsaved')
+    // Unrelated re-renders (text input) must not re-run/loop the blocker effect; a loop would throw Maximum update depth exceeded
     await type(app.ta(), 'hello')
     await type(app.ta(), 'hello world')
-    assert.equal(app.host.querySelector<HTMLButtonElement>('button.btn-send')!.disabled, true, '阻塞持续且状态稳定')
-    // Escape 取消 → 阻塞解除
+    assert.equal(app.host.querySelector<HTMLButtonElement>('button.btn-send')!.disabled, true, 'the block persists and the state stays stable')
+    // Escape cancels -> the block lifts
     await act(async () => {
       cwdInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
     })
     await flush()
-    assert.equal(app.host.querySelector<HTMLButtonElement>('button.btn-send')!.disabled, false, '取消后发送恢复')
+    assert.equal(app.host.querySelector<HTMLButtonElement>('button.btn-send')!.disabled, false, 'sending recovers after cancel')
   } finally {
     api.restore()
     app.unmount()
   }
 })
 
-test('斜杠浮层打开期间无关重渲染不重挂全局键盘监听（边界回调身份稳定）', { timeout: 60_000 }, async () => {
+test('unrelated re-renders while the slash popover is open never re-bind its global keyboard listeners (boundary callback identities stay stable)', { timeout: 60_000 }, async () => {
   const gate = deferred<void>()
   const api = stubApi({ uploadGate: gate.promise })
   const { store } = makeStore()
   const app = mountComposer(store)
-  // 挂载完成后再计数：只观测浮层自身的监听，排除挂载期无关监听
+  // Count only after mounting: observe the popover own listeners, excluding unrelated mount-time ones
   const originalAdd = window.addEventListener.bind(window)
   const originalRemove = window.removeEventListener.bind(window)
   let keydownAdds = 0
@@ -371,12 +375,12 @@ test('斜杠浮层打开期间无关重渲染不重挂全局键盘监听（边�
   try {
     app.show('composer-1', convA)
     await type(app.ta(), '/')
-    assert.notEqual(app.slashPopover(), null, '斜杠浮层已打开')
-    assert.equal(keydownAdds, 1, '浮层全局键盘监听只挂一次')
-    // 无关状态更新（上传计数）触发重渲染：条目集未变，不得重挂监听
+    assert.notEqual(app.slashPopover(), null, 'the slash popover is open')
+    assert.equal(keydownAdds, 1, 'the popover global keyboard listener binds exactly once')
+    // Unrelated state updates (upload count) trigger re-renders: the item set is unchanged, so listeners must not re-bind
     await paste(app.ta(), [testFile()])
     await flush()
-    assert.equal(keydownAdds, 1, '无关重渲染不重挂键盘监听（onPick/onClose/visible 身份稳定）')
+    assert.equal(keydownAdds, 1, 'unrelated re-renders never re-bind the keyboard listeners (onPick/onClose/visible identities stay stable)')
     await act(async () => { gate.resolve() })
     await flush()
   } finally {

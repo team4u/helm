@@ -1,15 +1,16 @@
 /**
- * Composer 上下文用量只读状态文本 DOM 回归（真实挂载）。
+ * DOM regression for the Composer context-usage read-only status text (real mount).
  *
- * 契约（照抄 pi footer 展示规则）：
- * - 只读 span：无 button / 无 Popover / 无 gauge 图标，点击不弹任何浮层；
- * - 窗口已知显示 `${percent.toFixed(1)}%/${formatTokens(window)}`（如 37.5%/200k）；
- *   >90 红（composer-context-status-high）、>70 黄（-warn）、其余默认灰；
- * - tokens=null（压缩后尚无有效 usage）显示 `?/窗口`；窗口未知显示紧凑估算量；
+ * Contract (mirroring the pi footer display rules):
+ * - a read-only span: no button / no Popover / no gauge icon; clicks open nothing;
+ * - known window shows `${percent.toFixed(1)}%/${formatTokens(window)}` (e.g. 37.5%/200k);
+ *   >90 red (composer-context-status-high), >70 yellow (-warn), else default gray;
+ * - tokens=null (no valid usage yet after compaction) shows `?/window`; unknown window
+ *   shows the compact estimate;
  * - tokens=0（空会话/刚 reset）不渲染；压缩中显示「精简中…」；
  * - 无 contextUsage（内核尚未刷新）不渲染；
- * - 速率类只读指标不在宿主内置渲染（策略归可选插件 builtin:token-speed，
- *   经 COMPOSER_STATUS_SLOT 插槽贡献）。
+ * - rate metrics are not rendered built-in by the host (policy belongs to the optional
+ *   builtin:token-speed plugin, contributed via the COMPOSER_STATUS_SLOT).
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
@@ -62,19 +63,19 @@ function statusSpan(host: HTMLElement): HTMLElement | null {
   return host.querySelector<HTMLElement>('.composer-context-status')
 }
 
-/** 断言只读：无按钮、无 gauge 图标、点击不弹浮层。 */
+/** Assert read-only: no button, no gauge icon, no popover on click. */
 function assertReadOnly(host: HTMLElement): void {
   const span = statusSpan(host)
-  assert.ok(span, '状态文本必须渲染')
-  assert.ok(span.querySelector('button') === null, '不得内嵌按钮')
-  assert.ok(span.querySelector('svg') === null, '不得显示 gauge 等图标')
-  assert.ok(host.querySelector('button.composer-context-status') === null, '状态文本不得是按钮')
+  assert.ok(span, 'the status text must render')
+  assert.ok(span.querySelector('button') === null, 'no nested button')
+  assert.ok(span.querySelector('svg') === null, 'no gauge or other icons')
+  assert.ok(host.querySelector('button.composer-context-status') === null, 'the status text must not be a button')
   act(() => { span.click() })
-  assert.ok(document.body.querySelector('.composer-context-popover') === null, '点击不得弹出任何浮层')
+  assert.ok(document.body.querySelector('.composer-context-popover') === null, 'clicks must not open any popover')
   assert.ok(document.body.querySelector('[data-radix-popper-content-wrapper]') === null)
 }
 
-test('无 contextUsage 或 tokens=0 时不渲染状态文本', { timeout: 60_000 }, async () => {
+test('no status text renders without contextUsage or with tokens=0', { timeout: 60_000 }, async () => {
   const none = await mountComposer(conv(undefined))
   try {
     assert.ok(statusSpan(none.host) === null)
@@ -83,13 +84,13 @@ test('无 contextUsage 或 tokens=0 时不渲染状态文本', { timeout: 60_000
   }
   const zero = await mountComposer(conv({ tokens: 0 }))
   try {
-    assert.ok(statusSpan(zero.host) === null, '空会话/刚 reset（tokens=0）不显示状态文本')
+    assert.ok(statusSpan(zero.host) === null, 'an empty conversation or fresh reset (tokens=0) shows no status text')
   } finally {
     zero.unmount()
   }
 })
 
-test('窗口已知：pi 同款 37.5%/200k，默认灰色，只读不可点', { timeout: 60_000 }, async () => {
+test('known window: pi-style 37.5%/200k, default gray, read-only', { timeout: 60_000 }, async () => {
   const { host, unmount } = await mountComposer(conv({ tokens: 75_000, contextWindow: 200_000 }))
   try {
     const span = statusSpan(host)
@@ -103,7 +104,7 @@ test('窗口已知：pi 同款 37.5%/200k，默认灰色，只读不可点', { t
   }
 })
 
-test('占比 >70 黄色、>90 红色（严格大于阈值）', { timeout: 60_000 }, async () => {
+test('ratio >70 yellow, >90 red (strictly greater than the thresholds)', { timeout: 60_000 }, async () => {
   const warn = await mountComposer(conv({ tokens: 75_100, contextWindow: 100_000 }))
   try {
     const span = statusSpan(warn.host)
@@ -123,7 +124,7 @@ test('占比 >70 黄色、>90 红色（严格大于阈值）', { timeout: 60_000
   }
 })
 
-test('tokens=null（压缩后尚无有效 usage）：显示 ?/窗口，不着色', { timeout: 60_000 }, async () => {
+test('tokens=null (no valid usage yet after compaction): shows ?/window, uncolored', { timeout: 60_000 }, async () => {
   const { host, unmount } = await mountComposer(conv({ tokens: null, contextWindow: 200_000 }))
   try {
     const span = statusSpan(host)
@@ -135,7 +136,7 @@ test('tokens=null（压缩后尚无有效 usage）：显示 ?/窗口，不着色
   }
 })
 
-test('窗口未知：只显示紧凑估算量（无伪百分比/伪分母）且不着色', { timeout: 60_000 }, async () => {
+test('unknown window: shows only the compact estimate (no fake percentage/denominator), uncolored', { timeout: 60_000 }, async () => {
   const { host, unmount } = await mountComposer(conv({ tokens: 12_345 }))
   try {
     const span = statusSpan(host)
@@ -148,7 +149,7 @@ test('窗口未知：只显示紧凑估算量（无伪百分比/伪分母）且�
   }
 })
 
-test('压缩中：只读文本「精简中…」', { timeout: 60_000 }, async () => {
+test('while compacting: the read-only compacting text', { timeout: 60_000 }, async () => {
   const { host, unmount } = await mountComposer(conv({ tokens: null, contextWindow: 100_000, compacting: true }))
   try {
     const span = statusSpan(host)
@@ -159,14 +160,15 @@ test('压缩中：只读文本「精简中…」', { timeout: 60_000 }, async ()
   }
 })
 
-test('重启后首次打开 idle 会话：详情首读合并后列表摘要带 contextUsage，状态文本随之渲染', { timeout: 60_000 }, async () => {
-  // 内核首次填充用量缓存静默不发 SSE 帧：快照摘要无用量，只有 HTTP 详情携带
+test('first open of an idle conversation after restart: the merged list summary carries contextUsage and the status text renders', { timeout: 60_000 }, async () => {
+  // The kernel fills the usage cache silently without an SSE frame: the snapshot summary
+  // has no usage; only the HTTP detail carries it
   const base = conv(undefined)
   let state = applySnapshot(emptyLiveState(), { bootId: 'test-boot', seq: 3, conversations: [base], pendingAsks: [], plugins: [], ui: [] })
   state = mergeConversationDetail(state, { ...base, entries: [], contextUsage: { tokens: 25_000, contextWindow: 100_000 } })
-  // ConversationPane 向 Composer 传 summary ?? detail：状态文本数据源是合并后的列表摘要
+  // ConversationPane passes summary ?? detail to the Composer: the status text data source is the merged list summary
   const merged = state.conversations.find((c) => c.id === 1)
-  assert.ok(merged?.contextUsage, '合并后列表摘要必须带 contextUsage')
+  assert.ok(merged?.contextUsage, 'the merged list summary must carry contextUsage')
   const { host, unmount } = await mountComposer(merged)
   try {
     assert.equal(statusSpan(host)?.textContent, '25.0%/100k')
@@ -175,10 +177,10 @@ test('重启后首次打开 idle 会话：详情首读合并后列表摘要带 c
   }
 })
 
-test('CSS 优先级回归：加载真实 forms.css，色调类必须真正覆盖默认灰', { timeout: 60_000 }, () => {
-  // 回归背景：基础规则 `.composer-toolbar .composer-context-status`（0,2,0）
-  // 一度高于裸 `.composer-context-status-warn/-high`（0,1,0），黄红永远不生效。
-  // DOM class 断言无法发现该 bug：用真实样式表的 computedStyle 验证。
+test('CSS specificity regression: load the real forms.css and verify tone classes truly override the default gray', { timeout: 60_000 }, () => {
+  // Regression background: the base rule `.composer-toolbar .composer-context-status` (0,2,0)
+  // once outranked the bare `.composer-context-status-warn/-high` (0,1,0), so yellow/red never
+  // applied. DOM class assertions cannot catch that bug: verify with computedStyle from the real stylesheet.
   const css = readFileSync(new URL('../src/styles/forms.css', import.meta.url), 'utf8')
   const style = document.createElement('style')
   style.textContent = `:root { --fg-muted: rgb(11, 12, 13); --warn: rgb(21, 22, 23); --err: rgb(31, 32, 33); }\n${css}`
@@ -195,30 +197,30 @@ test('CSS 优先级回归：加载真实 forms.css，色调类必须真正覆盖
   document.body.appendChild(toolbar)
   try {
     assert.equal(getComputedStyle(base).color, 'rgb(11, 12, 13)')
-    assert.equal(getComputedStyle(warn).color, 'rgb(21, 22, 23)', 'warn 色调必须覆盖默认灰（specificity 不得低于基础规则）')
-    assert.equal(getComputedStyle(high).color, 'rgb(31, 32, 33)', 'high 色调必须覆盖默认灰')
+    assert.equal(getComputedStyle(warn).color, 'rgb(21, 22, 23)', 'the warn tone must override the default gray (specificity must not fall below the base rule)')
+    assert.equal(getComputedStyle(high).color, 'rgb(31, 32, 33)', 'the high tone must override the default gray')
   } finally {
     toolbar.remove()
     style.remove()
   }
 })
 
-test('速率类指标不在宿主内置渲染：contextUsage 无 response 字段（策略归可选插件）', { timeout: 60_000 }, async () => {
+test('rate metrics are not rendered built-in: contextUsage has no response field (policy belongs to optional plugins)', { timeout: 60_000 }, async () => {
   const { host, unmount } = await mountComposer(conv({ tokens: 75_000, contextWindow: 200_000 }))
   try {
-    // @ts-expect-error response 已删除：速率展示完全交给 builtin:token-speed 插件经 COMPOSER_STATUS_SLOT 贡献
+    // @ts-expect-error response is removed: rate display belongs entirely to the builtin:token-speed plugin via COMPOSER_STATUS_SLOT
     conv({ tokens: 1, response: { responseTps: 52.4 } })
-    assert.ok(host.querySelector('.composer-context-tps') === null, '宿主不渲染任何内置速率文本')
-    assert.equal(statusSpan(host)?.textContent, '37.5%/200k', '上下文状态不受影响')
+    assert.ok(host.querySelector('.composer-context-tps') === null, 'the host renders no built-in rate text')
+    assert.equal(statusSpan(host)?.textContent, '37.5%/200k', 'the context status is unaffected')
   } finally {
     unmount()
   }
 })
 
-test('composer/status 宿主保留插槽：PluginSlot 挂载在状态区，贡献组件收到 ComposerScopeProps', { timeout: 60_000 }, async () => {
+test('composer/status host slot: PluginSlot mounts in the status area; contributed components receive ComposerScopeProps', { timeout: 60_000 }, async () => {
   const { usePluginContext } = await import('@helm/plugin-client')
-  // SSR 渲染（同 profile-center 插槽测试约定）：client 组件从种子缓存同步就绪，
-  // 不触发动态加载 effect 的真实 fetch。
+  // SSR render (same convention as the profile-center slot tests): client components are
+  // ready synchronously from the seeded cache, no real fetch from the dynamic-load effect.
   function ComposerStatusProbe(props: ComposerScopeProps) {
     const ctx = usePluginContext()
     return e(
@@ -250,23 +252,23 @@ test('composer/status 宿主保留插槽：PluginSlot 挂载在状态区，贡�
     e(HostStoreProviders, { value: store }, e(Composer, { conversation, prefill: null })),
   )
   const probeAt = html.indexOf('data-probe="composer-status"')
-  assert.ok(probeAt >= 0, '插槽贡献组件必须经 PluginSlot 渲染')
-  assert.match(html, /conv:1 draft:0 ctx-composer:true/, '贡献组件收到 conversation + composer 标准 Props，且 usePluginContext().composer 同样拿到宿主输入控制器')
-  // 挂载位置：工具栏左侧状态区，紧跟上下文状态之后；不在 more 菜单（composer-extras）内。
+  assert.ok(probeAt >= 0, 'slot contributions must render through PluginSlot')
+  assert.match(html, /conv:1 draft:0 ctx-composer:true/, 'contributed components receive the standard conversation + composer Props; usePluginContext().composer also gets the host input controller')
+  // Mount position: the toolbar-left status area right after the context status; never inside the more menu (composer-extras).
   const leftAt = html.indexOf('composer-toolbar-left')
   const statusAt = html.indexOf('composer-context-status')
   const slotAt = html.indexOf('composer-status-slot')
   const extrasAt = html.indexOf('composer-extras')
-  assert.ok(leftAt >= 0 && leftAt < slotAt, '状态贡献位于工具栏状态区（移动端同样不收入 more 菜单）')
-  assert.ok(statusAt >= 0 && statusAt < slotAt, '插槽紧邻 ContextUsageStatus 之后')
-  assert.ok(extrasAt < 0 || slotAt < extrasAt, '插槽不在 more 菜单容器内')
-  assert.ok(html.includes('probe-composer-status'), '插槽贡献与上下文状态同区渲染')
+    assert.ok(leftAt >= 0 && leftAt < slotAt, 'status contributions sit in the toolbar status area (mobile likewise keeps them out of the more menu)')
+  assert.ok(statusAt >= 0 && statusAt < slotAt, 'the slot sits right after ContextUsageStatus')
+  assert.ok(extrasAt < 0 || slotAt < extrasAt, 'the slot is not inside the more-menu container')
+  assert.ok(html.includes('probe-composer-status'), 'slot contributions render in the same area as the context status')
 })
 
-test('composer/status 插槽无贡献时不渲染任何容器（宿主状态区零噪声）', { timeout: 60_000 }, async () => {
+test('composer/status renders no container without contributions (zero noise in the host status area)', { timeout: 60_000 }, async () => {
   const { host, unmount } = await mountComposer(conv({ tokens: 75_000, contextWindow: 200_000 }))
   try {
-    assert.ok(host.querySelector('.composer-status-slot') === null, '无贡献时 PluginSlot 渲染 null')
+    assert.ok(host.querySelector('.composer-status-slot') === null, 'PluginSlot renders null without contributions')
     assert.ok(host.querySelector('[data-probe]') === null)
   } finally {
     unmount()

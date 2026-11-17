@@ -1,13 +1,15 @@
 /**
- * ComposerController 与插件命令派生测试（真实 React DOM 挂载 + 拦截 fetch）：
- * - controller 真实 draft / attachments / sending 读取（不虚构）；
- * - setDraft / insertText 光标插入与草稿同步；
- * - submit(undefined) 复用宿主发送链路（校验 / whenBusy / 附件 / 失败恢复）；
- * - submit(explicitText) 不消费草稿 / 编辑锚点 / 附件，失败如实 reject；
- * - 斜杠菜单合并插件命令、未知斜杠不吞草稿、跨插件 actionPluginId 路由；
- * - ⌘K 与 '/' 同一 command 行为一致（icon / description / 作用域）。
+ * ComposerController and plugin command derivation tests (real React DOM mount + intercepted fetch):
+ * - controller reads the real draft / attachments / sending (nothing fabricated);
+ * - setDraft / insertText caret insertion and draft sync;
+ * - submit(undefined) reuses the host send chain (validation / whenBusy / attachments / failure restore);
+ * - submit(explicitText) consumes no draft / edit anchor / attachments and rejects honestly on failure;
+ * - the slash menu merges plugin commands; unknown slash words never swallow the draft;
+ *   cross-plugin actionPluginId routing;
+ * - ⌘K and '/' share the same command behavior (icon / description / scope).
  *
- * store 为最小测试替身（数据真实、行为断言真实）；fetch 拦截捕获真实请求体。
+ * The store is a minimal test double (real data, real behavior assertions); the fetch
+ * interception captures real request bodies.
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
@@ -15,14 +17,16 @@ import * as React from 'react'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { HostStoreProviders } from './helpers/host-store.js'
 
-// 重要顺序约束：happy-dom + react-dom 19 的合成事件委托要求在 import react-dom/client
-// 之前挂载 happy-dom 全局；否则 react-dom 缓存原始 addEventListener 引用后，
-// root 容器上的委托 listener 无法收到派发事件（onChange 永不触发，见探针验证）。
+// Critical ordering constraint: synthetic event delegation with happy-dom + react-dom 19
+// requires the happy-dom globals to be registered before importing react-dom/client; otherwise
+// react-dom caches the original addEventListener reference and delegated listeners on the root
+// container never receive dispatched events (onChange never fires; verified by probe).
 GlobalRegistrator.register()
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
 
-// 受控 textarea 的合成 onChange 需要原生 value tracker 感知程序赋值：
-// 直接 ta.value= 不会推进 react-dom 的 _valueTracker，onChange 被判为无变化而不触发。
+// Synthetic onChange of a controlled textarea needs the native value tracker to notice programmatic
+// assignment: a direct ta.value= does not advance react-dom's _valueTracker, so onChange is judged
+// unchanged and never fires.
 const { act } = await import('react')
 const { createRoot } = await import('react-dom/client')
 import type { ComposerController, ConversationSummary, PluginUiContribution } from '@helm/protocol'
@@ -43,19 +47,19 @@ import {
   replaceSlashToken,
 } from '../src/lib/commands-model.js'
 
-/** 真实用户键入路径：原生 setter 赋值 + 重置 value tracker + 派发 input。 */
+/** Real user typing path: native setter assignment + value tracker reset + input dispatch. */
 function typeInto(ta: HTMLTextAreaElement, text: string): void {
   const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!
   const tracker = (ta as unknown as { _valueTracker?: { getValue(): string; setValue(v: string): void } })._valueTracker
   const prev = tracker?.getValue() ?? ''
   setter.call(ta, text)
-  // tracker 重置为旧值，react-dom 才会判定 value 已变化并触发 onChange
+  // Only after the tracker resets to the old value will react-dom see the value as changed and fire onChange
   tracker?.setValue(prev)
   ta.dispatchEvent(new Event('input', { bubbles: true }))
 }
 
 // ---------------------------------------------------------------------------
-// 纯函数：commands-model
+// Pure functions: commands-model
 // ---------------------------------------------------------------------------
 
 const conv = (id: number, tags: string[] = []): ConversationSummary => ({
@@ -69,36 +73,36 @@ const cmd = (pluginId: string, spec: Record<string, unknown>) => ({
   spec: { id: `cmd-${pluginId}`, title: `命令 ${pluginId}`, ...spec },
 })
 
-test('isValidPluginSlash：保留词与 skill: 前缀拒绝，合法小写触发词通过', { timeout: 60_000 }, () => {
+test('isValidPluginSlash: reserved words and the skill: prefix are rejected; valid lowercase triggers pass', { timeout: 60_000 }, () => {
   assert.equal(isValidPluginSlash('archive'), true)
   assert.equal(isValidPluginSlash('run-tests2'), true)
   assert.equal(isValidPluginSlash('a:b_c-d'), true)
-  assert.equal(isValidPluginSlash('new'), false, '宿主保留词')
+  assert.equal(isValidPluginSlash('new'), false, 'host reserved word')
   assert.equal(isValidPluginSlash('clear'), false)
   assert.equal(isValidPluginSlash('compact'), false)
-  assert.equal(isValidPluginSlash('skill:foo'), false, 'skill: 命名空间保留')
-  assert.equal(isValidPluginSlash('Archive'), false, '大写拒绝')
+  assert.equal(isValidPluginSlash('skill:foo'), false, 'the skill: namespace is reserved')
+  assert.equal(isValidPluginSlash('Archive'), false, 'uppercase rejected')
   assert.equal(isValidPluginSlash(''), false)
   assert.equal(isValidPluginSlash('/x'), false)
 })
 
-test('pluginSlashCommandsFor：仅收声明 slash+actionId 且命中作用域的命令，重复 slash 取首个', { timeout: 60_000 }, () => {
+test('pluginSlashCommandsFor: only commands declaring slash+actionId and matching scope; duplicate slash takes the first', { timeout: 60_000 }, () => {
   const commands = [
     cmd('p1', { slash: 'archive', actionId: 'archive' }),
-    cmd('p1', { slash: 'noop' }), // 无 actionId：无从执行，不进补全
-    cmd('p2', { slash: 'archive', actionId: 'archive2' }), // 重复 slash：取首个
+    cmd('p1', { slash: 'noop' }), // no actionId: nothing to execute, excluded from completion
+    cmd('p2', { slash: 'archive', actionId: 'archive2' }), // duplicate slash: first wins
     cmd('p3', { slash: 'worker-only', actionId: 'w', scope: { tags: ['worker'] } }),
-    cmd('p4', { slash: 'new', actionId: 'x' }), // 保留词：防御性跳过
+    cmd('p4', { slash: 'new', actionId: 'x' }), // reserved word: defensively skipped
   ]
   const hit = pluginSlashCommandsFor(commands, conv(1))
   assert.deepEqual(hit.map((c) => c.spec.slash), ['archive'])
   const workerHit = pluginSlashCommandsFor(commands, conv(2, ['worker']))
   assert.deepEqual(workerHit.map((c) => c.spec.slash), ['archive', 'worker-only'])
-  // 无会话上下文：仅不限作用域命令
+  // No conversation context: only scope-free commands
   assert.deepEqual(pluginSlashCommandsFor(commands, undefined).map((c) => c.spec.slash), ['archive'])
 })
 
-test('buildSlashMenuItems：三源合并，插件命令 run 不回填', { timeout: 60_000 }, () => {
+test('buildSlashMenuItems: three-source merge; plugin commands run without write-back', { timeout: 60_000 }, () => {
   const executed: string[] = []
   const items = buildSlashMenuItems(
     [{ id: 'review', name: '代码审查' }],
@@ -112,35 +116,36 @@ test('buildSlashMenuItems：三源合并，插件命令 run 不回填', { timeou
   )
   const pluginItem = items[4]!
   assert.equal(pluginItem!.label, '/archive')
-  assert.equal(pluginItem!.apply, undefined, '插件命令不回填触发词')
+  assert.equal(pluginItem!.apply, undefined, 'plugin commands never write the trigger word back')
   pluginItem!.run!()
   assert.deepEqual(executed, ['p1'])
 })
 
-test('matchExactPluginSlash：首 token 精确命中，带参数不命中', { timeout: 60_000 }, () => {
+test('matchExactPluginSlash: exact first-token hit; arguments never hit', { timeout: 60_000 }, () => {
   const commands = [cmd('p1', { slash: 'archive', actionId: 'archive' })]
   assert.equal(matchExactPluginSlash('/archive', commands)?.pluginId, 'p1')
   assert.equal(matchExactPluginSlash('  /archive  ', commands)?.pluginId, 'p1')
-  assert.equal(matchExactPluginSlash('/archive extra', commands), undefined, '带参数不命中')
+  assert.equal(matchExactPluginSlash('/archive extra', commands), undefined, 'with arguments it never hits')
   assert.equal(matchExactPluginSlash('/archivex', commands), undefined)
-  assert.equal(matchExactPluginSlash('/new', commands), undefined, '保留词不命中插件命令')
+  assert.equal(matchExactPluginSlash('/new', commands), undefined, 'reserved words never hit plugin commands')
 })
 
-test('insertAtCaret / removeTokenBeforeCaret / replaceSlashToken：光标插入与触发词替换清理', { timeout: 60_000 }, () => {
+test('insertAtCaret / removeTokenBeforeCaret / replaceSlashToken: caret insertion and trigger-token replacement', { timeout: 60_000 }, () => {
   assert.deepEqual(insertAtCaret('hello', 5, '@a1 '), { next: 'hello@a1 ', nextCaret: 9 })
   assert.deepEqual(insertAtCaret('hello', 0, 'x'), { next: 'xhello', nextCaret: 1 })
-  assert.deepEqual(insertAtCaret('hello', 99, '!'), { next: 'hello!', nextCaret: 6 }, '越界收敛到末尾')
-  assert.deepEqual(insertAtCaret('hello', -3, '!'), { next: '!hello', nextCaret: 1 }, '负值收敛到 0')
-  // 触发词清理：仅移除光标前最近 token（与 applyPopover 同一 token 正则：含前导空白一并发），其余草稿原样保留
+  assert.deepEqual(insertAtCaret('hello', 99, '!'), { next: 'hello!', nextCaret: 6 }, 'out-of-range clamps to the end')
+  assert.deepEqual(insertAtCaret('hello', -3, '!'), { next: '!hello', nextCaret: 1 }, 'negative clamps to 0')
+  // Trigger cleanup: removes only the nearest token before the caret (same token regex as applyPopover:
+  // leading whitespace included); the rest of the draft is kept verbatim
   assert.deepEqual(removeTokenBeforeCaret('/ar rest', 3), { next: ' rest', nextCaret: 0 })
   assert.deepEqual(removeTokenBeforeCaret('text /archi', 10), { next: 'text i', nextCaret: 5 })
-  assert.deepEqual(removeTokenBeforeCaret('plain', 5), { next: 'plain', nextCaret: 5 }, '无 token 不吞草稿')
+  assert.deepEqual(removeTokenBeforeCaret('plain', 5), { next: 'plain', nextCaret: 5 }, 'no token: the draft is not swallowed')
   assert.deepEqual(replaceSlashToken('/rev', 4, '/skill:review '), { next: '/skill:review ', nextCaret: 14 })
   assert.deepEqual(replaceSlashToken('请用 /rev 检查', 7, '/skill:review '), { next: '请用 /skill:review  检查', nextCaret: 17 })
   assert.deepEqual(replaceSlashToken('plain', 5, '/new'), { next: 'plain/new', nextCaret: 9 })
 })
 
-test('executePluginSlashAction：成功/失败统一通知与可选 conversationId 传递', { timeout: 60_000 }, async () => {
+test('executePluginSlashAction: unified success/failure notices and optional conversationId passthrough', { timeout: 60_000 }, async () => {
   const notices: Array<{ level: string; title: string; conversationId?: number }> = []
   const invoked: Array<{ pluginId: string; actionId: string; conversationId?: number }> = []
   await executePluginSlashAction(cmd('p1', { slash: 'ping', title: '诊断', actionId: 'ping' }), {
@@ -169,7 +174,7 @@ test('executePluginSlashAction：成功/失败统一通知与可选 conversation
   assert.match(notices[1]!.title, /\/ping/)
 })
 
-test('commandActionPluginId / commandHint：跨插件路由与 hint 派生', { timeout: 60_000 }, () => {
+test('commandActionPluginId / commandHint: cross-plugin routing and hint derivation', { timeout: 60_000 }, () => {
   assert.equal(commandActionPluginId(cmd('p1', { actionId: 'a' })), 'p1')
   assert.equal(commandActionPluginId(cmd('p1', { actionId: 'a', actionPluginId: 'p2' })), 'p2')
   assert.equal(commandHint({ id: 'x', title: 't', description: '归档当前会话' } as never, 'p1', 'en'), '归档当前会话')
@@ -224,7 +229,7 @@ test('LocalizedText 命令元数据：hint 与通知正文按 locale 解析，�
   assert.equal(notices[0]!.body, '/ping · 探测', '通知正文消费解析后的 title 显示文案')
 })
 
-test('commandsForConversation：⌘K 与 / 同一作用域过滤', { timeout: 60_000 }, () => {
+test('commandsForConversation: ⌘K and / share the same scope filtering', { timeout: 60_000 }, () => {
   const commands = [
     cmd('p1', { slash: 'archive', actionId: 'archive' }),
     cmd('p3', { actionId: 'w', scope: { tags: ['worker'] } }),
@@ -235,7 +240,7 @@ test('commandsForConversation：⌘K 与 / 同一作用域过滤', { timeout: 60
 })
 
 // ---------------------------------------------------------------------------
-// 交互：真实挂载 Composer + controller
+// Interaction: real mounted Composer + controller
 // ---------------------------------------------------------------------------
 
 function summary(id: number, status: ConversationSummary['status'] = 'idle'): ConversationSummary {
@@ -256,6 +261,7 @@ function makeStore(conversation: ConversationSummary, ui: PluginUiContribution[]
   return {
     authReady: true, authConfigured: true, authenticated: true, authError: null,
     connectionError: null, loadErrors: {}, sseConnected: true, theme: 'dark' as const, themePreference: 'system' as const,
+    locale: 'en' as const,
     conversations: [conversation], conversationDetails: {}, conversationLives: {}, conversationArtifacts: {},
     pendingAsks: [], resolvedAsksByConv: {}, plugins: [], uiContributions: ui,
     groupedUi: groupUiContributions(ui), pluginDocs: {}, nodes: [], profiles: [], profilesLoaded: true, assetsLoaded: true, models: [],
@@ -277,7 +283,7 @@ function makeStore(conversation: ConversationSummary, ui: PluginUiContribution[]
   } as unknown as HelmStoreValue & { notices: Array<Record<string, unknown>>; actionCalls: Array<{ pluginId: string; actionId: string; input: unknown; conversationId?: number }> }
 }
 
-/** 拦截全局 fetch 捕获 /api/conversations/:id/input 请求体；reply 控制成败。 */
+/** Intercept global fetch to capture /api/conversations/:id/input bodies; reply controls success/failure. */
 function stubFetch(captured: CapturedRequest[], ok: boolean): () => void {
   const original = globalThis.fetch
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -300,7 +306,7 @@ function stubFetch(captured: CapturedRequest[], ok: boolean): () => void {
 
 const { Composer } = await import('../src/conversation/Composer.js')
 
-/** 挂载真实 Composer 组件树（真实用户路径断言：textarea 键入 + 键盘/按钮 + fetch 捕获）。 */
+/** Mount the real Composer tree (real user-path assertions: textarea typing + keyboard/buttons + fetch capture). */
 function mountComposer(
   conversation: ConversationSummary,
   ui: PluginUiContribution[],
@@ -331,7 +337,7 @@ function mountComposer(
 
 const textareaOf = (host: HTMLElement): HTMLTextAreaElement => {
   const el = host.querySelector<HTMLTextAreaElement>('textarea.composer-textarea')
-  assert.ok(el !== null, '必须渲染输入框')
+  assert.ok(el !== null, 'the input must render')
   return el
 }
 
@@ -339,10 +345,10 @@ const sendButtonOf = (host: HTMLElement): HTMLButtonElement => {
   for (const btn of host.querySelectorAll<HTMLButtonElement>('button')) {
     if ((btn.getAttribute('aria-label') ?? '').includes('发送')) return btn
   }
-  assert.fail('未找到发送按钮')
+  assert.fail('send button not found')
 }
 
-test('交互：键入草稿并提交，草稿清空且请求体正确；失败恢复草稿', { timeout: 60_000 }, async () => {
+test('interaction: type a draft and submit; the draft clears and the request body is correct; failure restores it', { timeout: 60_000 }, async () => {
   const captured: CapturedRequest[] = []
   const restore = stubFetch(captured, true)
   const conversation = summary(1, 'idle')
@@ -360,14 +366,14 @@ test('交互：键入草稿并提交，草稿清空且请求体正确；失败�
     assert.equal(captured[0]!.path, '/api/conversations/1/input')
     assert.equal(captured[0]!.body.text, '你好，世界')
     assert.equal(captured[0]!.body.origin, 'human')
-    assert.equal(ta.value, '', '提交后草稿清空')
+    assert.equal(ta.value, '', 'the draft clears after submit')
   } finally {
     unmount()
     restore()
   }
 })
 
-test('交互：发送失败草稿恢复（乐观清空后回滚），错误如实可见', { timeout: 60_000 }, async () => {
+test('interaction: draft restore on send failure (rollback after optimistic clear); the error stays visible', { timeout: 60_000 }, async () => {
   const captured: CapturedRequest[] = []
   const restore = stubFetch(captured, false)
   const conversation = summary(2, 'idle')
@@ -382,14 +388,14 @@ test('交互：发送失败草稿恢复（乐观清空后回滚），错误如�
     })
     await act(async () => {})
     assert.equal(captured.length, 1)
-    assert.equal(ta.value, '会失败的消息', '失败后活草稿未被用户改动，恢复回滚')
+    assert.equal(ta.value, '会失败的消息', 'the live draft was untouched by the user, so the restore rolls back')
   } finally {
     unmount()
     restore()
   }
 })
 
-test('交互：busy 会话 Enter 走插话引导（whenBusy=steer），⌘Enter 排队（followUp）', { timeout: 60_000 }, async () => {
+test('interaction: busy conversation Enter steers (whenBusy=steer); ⌘Enter queues (followUp)', { timeout: 60_000 }, async () => {
   const captured: CapturedRequest[] = []
   const restore = stubFetch(captured, true)
   const conversation = summary(3, 'working')
@@ -402,21 +408,21 @@ test('交互：busy 会话 Enter 走插话引导（whenBusy=steer），⌘Enter 
     await act(async () => {
       ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
     })
-    assert.equal(captured[0]!.body.whenBusy, 'steer', 'busy 默认插话引导')
+    assert.equal(captured[0]!.body.whenBusy, 'steer', 'busy defaults to steering')
     await act(async () => {
       typeInto(ta, '排队')
     })
     await act(async () => {
       ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', metaKey: true, bubbles: true, cancelable: true }))
     })
-    assert.equal(captured[1]!.body.whenBusy, 'followUp', '⌘Enter 排队发送')
+    assert.equal(captured[1]!.body.whenBusy, 'followUp', '⌘Enter queues the send')
   } finally {
     unmount()
     restore()
   }
 })
 
-test('交互：/new 无宿主回调时不 reset 不落 input；/clear 仍立即重置上下文', { timeout: 60_000 }, async () => {
+test('interaction: /new without a host callback neither resets nor lands input; /clear still resets the context immediately', { timeout: 60_000 }, async () => {
   const captured: CapturedRequest[] = []
   const restore = stubFetch(captured, true)
   const { host, unmount } = mountComposer(summary(4, 'idle'), [])
@@ -428,18 +434,19 @@ test('交互：/new 无宿主回调时不 reset 不落 input；/clear 仍立即�
     await act(async () => {
       ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
     })
-    // 第一次 Enter 被斜杠浮层捕获：回填选中项 '/new' 并关闭浮层
+    // The first Enter is captured by the slash popover: it writes the picked '/new' back and closes
     await act(async () => {})
     assert.equal(ta.value, '/new')
-    // 第二次 Enter 提交：/new 是新话题入口，无宿主回调时显式提示，不 reset 原会话也不落 input
+    // The second Enter submits: /new is the new-topic entry; without a host callback it notifies
+    // explicitly — no reset of the original conversation and no input landing
     await act(async () => {
       ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
     })
     await act(async () => {})
-    assert.equal(captured.filter((c) => c.path.endsWith('/input')).length, 0, '管理命令不走 input 提交')
-    assert.equal(captured.some((c) => c.path.endsWith('/reset')), false, '/new 不再触发 reset')
+    assert.equal(captured.filter((c) => c.path.endsWith('/input')).length, 0, 'management commands never submit via input')
+    assert.equal(captured.some((c) => c.path.endsWith('/reset')), false, '/new no longer triggers reset')
 
-    // /clear 保持原有重置语义
+    // /clear keeps the original reset semantics
     await act(async () => {
       typeInto(ta, '/clear')
     })
@@ -451,15 +458,15 @@ test('交互：/new 无宿主回调时不 reset 不落 input；/clear 仍立即�
       ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
     })
     await act(async () => {})
-    assert.equal(captured.some((c) => c.path.endsWith('/reset')), true, '/clear 触发 reset')
-    assert.equal(captured.filter((c) => c.path.endsWith('/input')).length, 0, '/clear 不走 input 提交')
+    assert.equal(captured.some((c) => c.path.endsWith('/reset')), true, '/clear triggers reset')
+    assert.equal(captured.filter((c) => c.path.endsWith('/input')).length, 0, '/clear does not submit via input')
   } finally {
     unmount()
     restore()
   }
 })
 
-test('交互：未知斜杠词不吞草稿，作为普通文本提交', { timeout: 60_000 }, async () => {
+test('interaction: unknown slash words never swallow the draft; they submit as plain text', { timeout: 60_000 }, async () => {
   const captured: CapturedRequest[] = []
   const restore = stubFetch(captured, true)
   const { host, unmount } = mountComposer(summary(5, 'idle'), [])
@@ -471,14 +478,14 @@ test('交互：未知斜杠词不吞草稿，作为普通文本提交', { timeou
     await act(async () => {
       ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
     })
-    // 第一次 Enter 被斜杠浮层捕获（无匹配项时浮层关闭不回填）
+    // The first Enter is captured by the slash popover (with no matches it closes without write-back)
     await act(async () => {})
-    // 第二次 Enter 提交：未知斜杠词按普通文本提交
+    // The second Enter submits: the unknown slash word goes as plain text
     await act(async () => {
       ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
     })
     await act(async () => {})
-    assert.equal(captured[0]!.body.text, '/definitely-not-registered', '未知斜杠按普通文本提交，不吞草稿')
+    assert.equal(captured[0]!.body.text, '/definitely-not-registered', 'unknown slash submits as plain text; the draft is not swallowed')
   } finally {
     unmount()
     restore()
@@ -512,7 +519,7 @@ const archiveCommandUi: PluginUiContribution[] = [
   },
 ]
 
-test('交互：草稿首 token 命中插件命令时执行 action（context 带会话 id），草稿清空', { timeout: 60_000 }, async () => {
+test('interaction: a draft whose first token hits a plugin command executes the action (context carries the conversation id) and clears', { timeout: 60_000 }, async () => {
   const captured: CapturedRequest[] = []
   const restore = stubFetch(captured, true)
   const { host, unmount } = mountComposer(summary(6, 'idle'), archiveCommandUi)
@@ -524,24 +531,25 @@ test('交互：草稿首 token 命中插件命令时执行 action（context 带�
     await act(async () => {
       ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
     })
-    // 第一次 Enter 被斜杠浮层捕获：插件命令选中即执行（不回填草稿），浮层关闭
+    // The first Enter is captured by the slash popover: the plugin command runs on pick (no draft write-back) and the popover closes
     await act(async () => {})
-    // 注意：不要 assert.equal(元素, null)——失败时 node 会序列化整个 DOM+Fiber 循环引用树，曾把单进程堆打到 20GB+。
-    assert.ok(host.querySelector('.composer-popover') === null, '执行插件命令后浮层关闭')
-    // 第二次 Enter：草稿已清空，无提交动作（不落 input）
+  // Note: never assert.equal(element, null) — on failure node would serialize the whole DOM+Fiber cyclic
+  // tree and once blew a single-process heap past 20GB+.
+    assert.ok(host.querySelector('.composer-popover') === null, 'the popover closes after executing the plugin command')
+    // The second Enter: the draft is already empty, no submit happens (nothing lands in input)
     await act(async () => {
       ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
     })
     await act(async () => {})
-    assert.equal(captured.filter((c) => c.path.endsWith('/input')).length, 0, '命中插件命令不走 input 提交')
-    assert.equal(ta.value, '', '选中插件命令后草稿清空')
+    assert.equal(captured.filter((c) => c.path.endsWith('/input')).length, 0, 'a plugin command hit never submits via input')
+    assert.equal(ta.value, '', 'the draft clears after picking the plugin command')
   } finally {
     unmount()
     restore()
   }
 })
 
-test('action 路由：actionPluginId 跨插件路由 + conversationId 第四参', { timeout: 60_000 }, async () => {
+test('action routing: actionPluginId cross-plugin routing + conversationId as the fourth argument', { timeout: 60_000 }, async () => {
   const store = makeStore(summary(7, 'idle'), archiveCommandUi)
   const commands = store.groupedUi.commands
   const cross = commands.find((c) => c.spec.id === 'cross')!
@@ -552,7 +560,7 @@ test('action 路由：actionPluginId 跨插件路由 + conversationId 第四参'
   assert.equal(spy.actionCalls[0]!.conversationId, 7)
 })
 
-test('斜杠浮层合并插件命令：输入 /ar 弹出 /archive，选中执行不回填', { timeout: 60_000 }, async () => {
+test('the slash popover merges plugin commands: typing /ar pops /archive; picking runs without write-back', { timeout: 60_000 }, async () => {
   const captured: CapturedRequest[] = []
   const restore = stubFetch(captured, true)
   const { host, unmount } = mountComposer(summary(8, 'idle'), archiveCommandUi)
@@ -563,10 +571,10 @@ test('斜杠浮层合并插件命令：输入 /ar 弹出 /archive，选中执行
     })
     await act(async () => {})
     const popover = host.querySelector('.composer-popover')
-    assert.ok(popover !== null, '/ 前缀弹出斜杠浮层')
-    assert.match(popover.textContent!, /\/archive/, '插件命令进入浮层')
-    assert.match(popover.textContent!, /跨插件路由命令|\/cross-route/, '第二个插件命令进入浮层')
-    // 继续输入 ar 过滤
+    assert.ok(popover !== null, "'/' prefix opens the slash popover")
+    assert.match(popover.textContent!, /\/archive/, 'plugin commands enter the popover')
+    assert.match(popover.textContent!, /跨插件路由命令|\/cross-route/, 'the second plugin command enters the popover')
+    // Keep typing ar to filter
     await act(async () => {
       typeInto(ta, '/ar')
     })
@@ -582,7 +590,7 @@ function mountControllerProbe(conversation: ConversationSummary) {
   let controller: ComposerController | undefined
   function Probe(props: { composer: ComposerController }) {
     controller = usePluginContext().composer
-    assert.equal(controller, props.composer, 'props 与共享 SDK 上下文使用同一控制器')
+    assert.equal(controller, props.composer, 'props and the shared SDK context use the same controller')
     return React.createElement('span', null, 'controller probe')
   }
   seedPluginClientModule('test:controller', 'probe.tsx', { Probe })
@@ -593,7 +601,7 @@ function mountControllerProbe(conversation: ConversationSummary) {
   return { ...mounted, controller: controller! }
 }
 
-test('controller 真实集成：同一事件 setDraft 后 submit 使用最新草稿，reject 忙时策略不改为 steer', { timeout: 60_000 }, async () => {
+test('controller real integration: setDraft then submit in the same event uses the newest draft; a reject busy policy never becomes steer', { timeout: 60_000 }, async () => {
   const captured: CapturedRequest[] = []
   const restore = stubFetch(captured, true)
   const app = mountControllerProbe(summary(31, 'working'))
@@ -609,7 +617,7 @@ test('controller 真实集成：同一事件 setDraft 后 submit 使用最新草
   } finally { app.unmount(); restore() }
 })
 
-test('controller 真实集成：失败 reject 并恢复草稿；显式文本不消费草稿；插入替换选区', { timeout: 60_000 }, async () => {
+test('controller real integration: failure rejects and restores the draft; explicit text consumes no draft; insertion replaces the selection', { timeout: 60_000 }, async () => {
   const captured: CapturedRequest[] = []
   let restore = stubFetch(captured, false)
   const app = mountControllerProbe(summary(32))
@@ -632,7 +640,7 @@ test('controller 真实集成：失败 reject 并恢复草稿；显式文本不�
   } finally { app.unmount(); restore() }
 })
 
-test('插件 slash 失败保留原草稿与显式诊断', { timeout: 60_000 }, async () => {
+test('a failing plugin slash keeps the original draft and diagnoses explicitly', { timeout: 60_000 }, async () => {
   const restore = stubFetch([], true)
   const app = mountComposer(summary(33), [{ pluginId: 'test:slash', surface: 'commandPalette', spec: {
     id: 'archive', title: '归档', slash: 'archive', actionId: 'archive',

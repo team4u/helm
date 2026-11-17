@@ -9,7 +9,7 @@ import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
 import { getSessionDocState, subscribeSessionDoc } from '../src/lib/session-docs.js'
 import { HostStoreProviders } from './helpers/host-store.js'
 
-// 与现有 SSR 测试一致，为 tsx 的 classic JSX 转换提供 React。
+// Provide React for the classic JSX transform in .tsx, same as the existing SSR tests.
 ;(globalThis as Record<string, unknown>).React = React
 const { ConversationTimeline } = await import('../src/conversation/ConversationTimeline.js')
 
@@ -54,7 +54,7 @@ function waitingCount(html: string): number {
   return (html.match(/aria-label="Generating"/g) ?? []).length
 }
 
-test('首条输入请求在途时立即显示一次等待，隐藏空会话引导', { timeout: 60_000 }, () => {
+test('shows one wait indicator while the first input request is in flight and hides the empty-conversation intro', { timeout: 60_000 }, () => {
   const html = renderTimeline('idle', true)
   assert.equal(waitingCount(html), 1)
   assert.match(html, /role="status"/)
@@ -67,19 +67,19 @@ test('首条输入请求在途时立即显示一次等待，隐藏空会话引�
   assert.doesNotMatch(html, /msg-human-pill/)
 })
 
-test('服务端接管后只保留运行反馈，审批时不显示响应等待', { timeout: 60_000 }, () => {
+test('keeps only the running feedback once the server takes over; no response wait during approvals', { timeout: 60_000 }, () => {
   assert.equal(waitingCount(renderTimeline('working', true)), 1)
   assert.equal(waitingCount(renderTimeline('working', false)), 1)
   assert.equal(waitingCount(renderTimeline('blocked', true)), 0)
 })
 
-test('发送失败或回合结束后不残留等待提示', { timeout: 60_000 }, () => {
+test('no wait hint lingers after a failed send or a finished turn', { timeout: 60_000 }, () => {
   for (const status of ['idle', 'done', 'error'] as const) {
     assert.equal(waitingCount(renderTimeline(status, false)), 0, status)
   }
 })
 
-test('工具结束等待下一轮响应时提示持续，回合结束后消失', { timeout: 60_000 }, () => {
+test('wait hint persists between a tool end and the next response, gone once the turn ends', { timeout: 60_000 }, () => {
   const entries: ConversationEntry[] = [
     { id: '1', kind: 'pi.assistant', model: [{ role: 'assistant', content: [
       { type: 'toolCall', id: 'call-1', name: 'bash', arguments: { command: 'pwd' } },
@@ -91,7 +91,7 @@ test('工具结束等待下一轮响应时提示持续，回合结束后消失',
   assert.equal(waitingCount(renderTimeline('done', false, entries)), 0)
 })
 
-test('流式正文按收到的全文显示，运行反馈不重复', { timeout: 60_000 }, () => {
+test('streamed body shows the full received text; running feedback is not duplicated', { timeout: 60_000 }, () => {
   const html = renderTimeline('working', true, [], {
     conversationId: 1, text: '已收到的完整流式正文', tools: [], updatedAt: 1,
   })

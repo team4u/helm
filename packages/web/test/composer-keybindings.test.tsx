@@ -1,18 +1,24 @@
 /**
- * Composer / Standby pi 单键快捷键、队列撤回、Ctrl+L 跨组件联动、
- * COMPOSER_DOCK_SLOT 与移动端双按钮单元测试。
+ * Unit tests for Composer / Standby single-key shortcuts, queued-input recall, cross-component
+ * Ctrl+L wiring, COMPOSER_DOCK_SLOT and the mobile dual buttons.
  *
- * 严格遵循一功能一快捷键与单键肌肉记忆，测试覆盖：
- * 1. keybindings-model 纯逻辑（Shift+Tab / ↑ / Enter / Mod+Enter / panel 匹配 / 索引循环，无多键别名）；
- * 2. Ctrl+L（helm:shortcut）分屏精准路由 + 搜索框 autoFocus + ↑↓Enter 选型 + Esc 焦点回还 + 无冒泡阻断；
- * 3. Shift+Tab 立即 preventDefault() 并循环切换 thinkingLevel（不响应 Ctrl+T 别名）；
- * 4. ↑（空草稿且位于首行）优先从 live.queuedInputs 撤回最新人类排队项并回填（不触发历史警告），
- *    无人类排队项时才回退历史编辑，拒绝 Alt+Up 别名；
- * 5. Esc 层级优先级（关闭浮层 + stopPropagation -> 取消编辑态 + stopPropagation -> 交外层双 Esc）；
- * 6. COMPOSER_DOCK_SLOT 直出在 <AskDock /> 正上方并传递 ComposerScopeProps（不收进移动端 more 菜单）；
- * 7. 移动端（<=680px）忙时显式渲染 [插话] + [排队] 双按钮，桌面端角标统一携带 .kbd-hint；
- * 8. Standby 待命页全局默认模型继承、Shift+Tab、Ctrl+L 与静态 '/' 技能补全；
- * 9. 零 Emoji 与 Fast Refresh 检查。
+ * Strictly one function per shortcut, single-key muscle memory; coverage:
+ * 1. keybindings-model pure logic (Shift+Tab / ↑ / Enter / Mod+Enter / panel matching / index cycling,
+ *    no multi-key aliases);
+ * 2. Ctrl+L (helm:shortcut) precise split routing + search autoFocus + ↑↓Enter picking + Esc focus
+ *    return + no bubbling blocked;
+ * 3. Shift+Tab preventDefault() immediately and cycles thinkingLevel (never answers the Ctrl+T alias);
+ * 4. ↑ (empty draft on the first line) prefers withdrawing the newest human queued input from
+ *    live.queuedInputs and prefilling (no history warning); only without human queued input does it
+ *    fall back to history editing; the Alt+Up alias is rejected;
+ * 5. Esc layer priority (close popover + stopPropagation -> cancel edit mode + stopPropagation -> hand
+ *    to the outer double-Esc);
+ * 6. COMPOSER_DOCK_SLOT renders directly above <AskDock /> passing ComposerScopeProps (never tucked
+ *    into the mobile more menu);
+ * 7. Mobile (<=680px) busy state explicitly renders [steer] + [queue] buttons; desktop badges carry
+ *    .kbd-hint uniformly;
+ * 8. Standby pane global-default model inheritance, Shift+Tab, Ctrl+L and static '/' skill completion;
+ * 9. Zero-emoji and Fast Refresh checks.
  */
 import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
@@ -55,7 +61,7 @@ const { conversationsApi, assetsApi } = await import('../src/lib/api.js')
 const { seedPluginClientModule } = await import('../src/lib/plugin-client.js')
 const { usePluginContext } = await import('@helm/plugin-client')
 const { HostStoreProviders } = await import('./helpers/host-store.js')
-const { makeTestStore } = await import('./helpers/store.js')
+const { makeTestStore, HelmStoreContext } = await import('./helpers/store.js')
 const { Composer } = await import('../src/conversation/Composer.js')
 const { ComposerSendControls } = await import('../src/conversation/ComposerSendControls.js')
 const { AgentStandbyPane } = await import('../src/conversation/AgentStandbyPane.js')
@@ -63,29 +69,29 @@ const { AgentStandbyPane } = await import('../src/conversation/AgentStandbyPane.
 const e = React.createElement
 
 // ---------------------------------------------------------------------------
-// 1. 纯逻辑测试：keybindings-model
+// 1. Pure-logic tests: keybindings-model
 // ---------------------------------------------------------------------------
 
-test('keybindings-model：一功能一快捷键严格匹配，禁止 Alt+Up / Alt+Enter / Ctrl+T 别名', { timeout: 60_000 }, () => {
+test('keybindings-model: strict one-shortcut-per-function matching; Alt+Up / Alt+Enter / Ctrl+T aliases forbidden', { timeout: 60_000 }, () => {
   const base = { key: '', shiftKey: false, ctrlKey: false, metaKey: false, altKey: false }
 
   assert.equal(isShiftTabEvent({ ...base, key: 'Tab', shiftKey: true }), true)
   assert.equal(isShiftTabEvent({ ...base, key: 'Tab' }), false)
-  assert.equal(isShiftTabEvent({ ...base, key: 't', ctrlKey: true }), false, '禁止 Ctrl+T 别名')
+  assert.equal(isShiftTabEvent({ ...base, key: 't', ctrlKey: true }), false, 'Ctrl+T alias forbidden')
   assert.equal(isShiftTabEvent({ ...base, key: 'Tab', shiftKey: true, ctrlKey: true }), false)
 
   assert.equal(isPlainArrowUpEvent({ ...base, key: 'ArrowUp' }), true)
-  assert.equal(isPlainArrowUpEvent({ ...base, key: 'ArrowUp', altKey: true }), false, '禁止 Alt+Up 别名')
+  assert.equal(isPlainArrowUpEvent({ ...base, key: 'ArrowUp', altKey: true }), false, 'Alt+Up alias forbidden')
   assert.equal(isPlainArrowUpEvent({ ...base, key: 'ArrowUp', ctrlKey: true }), false)
   assert.equal(isPlainArrowUpEvent({ ...base, key: 'ArrowUp', metaKey: true }), false)
   assert.equal(isPlainArrowUpEvent({ ...base, key: 'ArrowUp', shiftKey: true }), false)
 
   assert.equal(isComposerSubmitEnterEvent({ key: 'Enter', shiftKey: false, altKey: false }), true)
-  assert.equal(isComposerSubmitEnterEvent({ key: 'Enter', shiftKey: true, altKey: false }), false, 'Shift+Enter 仅换行')
-  assert.equal(isComposerSubmitEnterEvent({ key: 'Enter', shiftKey: false, altKey: true }), false, '禁止 Alt+Enter 别名')
+  assert.equal(isComposerSubmitEnterEvent({ key: 'Enter', shiftKey: true, altKey: false }), false, 'Shift+Enter is newline only')
+  assert.equal(isComposerSubmitEnterEvent({ key: 'Enter', shiftKey: false, altKey: true }), false, 'Alt+Enter alias forbidden')
 })
 
-test('keybindings-model：canRecallOnArrowUp 仅空草稿且位于首行放行', { timeout: 60_000 }, () => {
+test('keybindings-model: canRecallOnArrowUp passes only for an empty draft on the first line', { timeout: 60_000 }, () => {
   assert.equal(isCaretAtFirstLine('', 0), true)
   assert.equal(isCaretAtFirstLine('hello', 3), true)
   assert.equal(isCaretAtFirstLine('line1\nline2', 6), false)
@@ -95,7 +101,7 @@ test('keybindings-model：canRecallOnArrowUp 仅空草稿且位于首行放行',
   assert.equal(canRecallOnArrowUp('\nsecond', 1), false)
 })
 
-test('keybindings-model：latestHumanQueuedInput 忽略 agent/trigger 并取最新人类排队项', { timeout: 60_000 }, () => {
+test('keybindings-model: latestHumanQueuedInput ignores agent/trigger and takes the newest human queued input', { timeout: 60_000 }, () => {
   const q = (id: string, sub: string, origin: QueuedConversationInput['origin'], createdAt: number): QueuedConversationInput => ({
     id, submissionId: sub, text: `msg-${id}`, mode: 'followUp', origin, createdAt,
   })
@@ -103,7 +109,7 @@ test('keybindings-model：latestHumanQueuedInput 忽略 agent/trigger 并取最�
   assert.equal(latestHumanQueuedInput([]), undefined)
   assert.equal(latestHumanQueuedInput([q('a1', '1', 'agent', 10), q('t1', '2', 'trigger', 20)]), undefined)
 
-  // 不同时间取 createdAt 最大的人类输入，忽略更新的 agent 项
+  // Different times: take the human input with the greatest createdAt, ignoring newer agent items
   const picked = latestHumanQueuedInput([
     q('h1', '10', 'human', 100),
     q('h2', '11', 'human', 200),
@@ -111,7 +117,7 @@ test('keybindings-model：latestHumanQueuedInput 忽略 agent/trigger 并取最�
   ])
   assert.equal(picked?.id, 'h2')
 
-  // createdAt 相等时取队尾项
+  // Equal createdAt: take the queue-tail item
   const tiePicked = latestHumanQueuedInput([
     q('h1', '10', 'human', 50),
     q('h2', '11', 'human', 50),
@@ -119,18 +125,18 @@ test('keybindings-model：latestHumanQueuedInput 忽略 agent/trigger 并取最�
   assert.equal(tiePicked?.id, 'h2')
 })
 
-test('keybindings-model：nextThinkingLevel 循环步进与不支持思考时的保护', { timeout: 60_000 }, () => {
+test('keybindings-model: nextThinkingLevel cyclic stepping with the no-thinking guard', { timeout: 60_000 }, () => {
   const levels = ['off', 'low', 'medium', 'high']
   assert.equal(nextThinkingLevel(levels, 'off'), 'low')
   assert.equal(nextThinkingLevel(levels, 'low'), 'medium')
-  assert.equal(nextThinkingLevel(levels, 'high'), 'off', '到达末尾回绕至首项')
+  assert.equal(nextThinkingLevel(levels, 'high'), 'off', 'wraps back to the first item at the end')
   assert.equal(nextThinkingLevel(levels, 'unknown'), 'off')
   assert.equal(nextThinkingLevel(['off'], 'off'), null)
   assert.equal(nextThinkingLevel([], 'off'), null)
   assert.equal(resolveEffectiveThinkingLevel(['minimal', 'high'], 'max'), 'minimal')
 })
 
-test('keybindings-model：initialModelActiveIndex / stepActiveIndex 与面板匹配', { timeout: 60_000 }, () => {
+test('keybindings-model: initialModelActiveIndex / stepActiveIndex and panel matching', { timeout: 60_000 }, () => {
   const items = [{ id: 'a/1' }, { id: 'b/2' }, { id: 'c/3' }]
   assert.equal(initialModelActiveIndex(items, 'b/2'), 1)
   assert.equal(initialModelActiveIndex(items, 'missing'), 0)
@@ -150,11 +156,11 @@ test('keybindings-model：initialModelActiveIndex / stepActiveIndex 与面板匹
   drawer.className = 'conversation-drawer'
   const drawerChild = document.createElement('span')
   drawer.appendChild(drawerChild)
-  assert.equal(isShortcutPanelMatch(drawerChild, 'primary'), false, '抽屉内未挂 data-helm-panel 不误响主屏快捷键')
+  assert.equal(isShortcutPanelMatch(drawerChild, 'primary'), false, 'a drawer child without data-helm-panel never answers primary shortcuts')
 })
 
 // ---------------------------------------------------------------------------
-// 测试夹具与清理
+// Test fixtures and cleanup
 // ---------------------------------------------------------------------------
 
 const originalPatch = conversationsApi.patch
@@ -247,10 +253,10 @@ function stubMatchMedia(isMobile: boolean): void {
 }
 
 // ---------------------------------------------------------------------------
-// 2. Ctrl+L 跨组件联动 + 搜索框 autoFocus + 键盘选型 + Esc 回传焦点
+// 2. Ctrl+L cross-component wiring + search autoFocus + keyboard picking + Esc focus return
 // ---------------------------------------------------------------------------
 
-test('Ctrl+L：分屏匹配 data-helm-panel 精准开关 ModelPicker，自动聚焦搜索框并支持 ↑↓Enter 选型', { timeout: 60_000 }, async () => {
+test('Ctrl+L: precisely toggles the ModelPicker per data-helm-panel in split view, auto-focuses search and supports ↑↓Enter picking', { timeout: 60_000 }, async () => {
   const patched: Array<{ id: number; body: Record<string, unknown> }> = []
   conversationsApi.patch = (async (id, body) => {
     patched.push({ id, body: body as Record<string, unknown> })
@@ -278,7 +284,7 @@ test('Ctrl+L：分屏匹配 data-helm-panel 精准开关 ModelPicker，自动聚
   const primaryTa = primaryHost.querySelector<HTMLTextAreaElement>('textarea.composer-textarea')!
   const splitTa = splitHost.querySelector<HTMLTextAreaElement>('textarea.composer-textarea')!
 
-  // 在 textarea 上按 Ctrl+L 绝不调用 stopPropagation 阻断外层全局监听
+  // Ctrl+L on the textarea never calls stopPropagation to block the outer global listener
   let bubbledToWindow = false
   const windowSpy = (ev: KeyboardEvent): void => {
     if (ev.ctrlKey && ev.key.toLowerCase() === 'l') bubbledToWindow = true
@@ -288,45 +294,45 @@ test('Ctrl+L：分屏匹配 data-helm-panel 精准开关 ModelPicker，自动聚
     act(() => {
       splitTa.dispatchEvent(new KeyboardEvent('keydown', { key: 'l', ctrlKey: true, bubbles: true, cancelable: true }))
     })
-    assert.equal(bubbledToWindow, true, 'Composer 不吞掉或阻断 Ctrl+L 冒泡')
+    assert.equal(bubbledToWindow, true, 'the Composer never swallows or blocks the Ctrl+L bubble')
   } finally {
     window.removeEventListener('keydown', windowSpy)
   }
 
-  // 全局派发 helm:shortcut (panel='split')：仅右屏 ModelPicker 打开，左屏保持关闭
+  // Globally dispatch helm:shortcut (panel='split'): only the right ModelPicker opens; the left stays closed
   await act(async () => {
     window.dispatchEvent(new CustomEvent(HELM_SHORTCUT_EVENT, { detail: { action: 'toggle-model-picker', panel: 'split' } }))
   })
 
-  assert.equal(primaryHost.querySelector('button.composer-model-button')?.getAttribute('aria-expanded'), 'false', '主屏不响应 split 快捷键')
-  assert.equal(splitHost.querySelector('button.composer-model-button')?.getAttribute('aria-expanded'), 'true', '分屏 ModelPicker 打开')
+  assert.equal(primaryHost.querySelector('button.composer-model-button')?.getAttribute('aria-expanded'), 'false', 'the primary panel ignores the split shortcut')
+  assert.equal(splitHost.querySelector('button.composer-model-button')?.getAttribute('aria-expanded'), 'true', 'the split ModelPicker opens')
 
   const popover = document.body.querySelector<HTMLElement>('.composer-model-popover')
-  assert.ok(popover, 'ModelPicker 浮层已渲染')
+  assert.ok(popover, 'the ModelPicker popover rendered')
   const searchInput = popover.querySelector<HTMLInputElement>('input[aria-label="Search models"]')
-  assert.ok(searchInput !== null, '搜索输入框存在')
-  assert.ok(document.activeElement === searchInput, '打开时自动聚焦搜索输入框（非首项重置按钮）')
+  assert.ok(searchInput !== null, 'the search input exists')
+  assert.ok(document.activeElement === searchInput, 'opening auto-focuses the search input (not the first reset button)')
 
-  // 初始高亮指向当前模型 faux/m2（索引 1）
+  // The initial highlight points at the current model faux/m2 (index 1)
   const modelBtns = Array.from(popover.querySelectorAll<HTMLButtonElement>('button.popover-item[title^="faux/"]'))
   assert.equal(modelBtns.length, 3)
-  assert.equal(modelBtns[1]!.classList.contains('popover-item-active'), true, '初始高亮指向当前生效模型 m2')
+  assert.equal(modelBtns[1]!.classList.contains('popover-item-active'), true, 'the initial highlight points at the effective model m2')
 
-  // 搜索框内 ArrowDown 移动到 m3，Enter 选中关闭并调用 patch
+  // ArrowDown inside the search moves to m3; Enter picks, closes and calls patch
   await act(async () => {
     searchInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }))
   })
-  assert.equal(modelBtns[2]!.classList.contains('popover-item-active'), true, 'ArrowDown 移动高亮至 m3')
+    assert.equal(modelBtns[2]!.classList.contains('popover-item-active'), true, 'ArrowDown moves the highlight to m3')
 
   await act(async () => {
     searchInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
   })
   assert.equal(patched.length, 1)
   assert.deepEqual(patched[0], { id: 2, body: { model: 'faux/m3' } })
-  assert.ok(document.body.querySelector('.composer-model-popover') === null, 'Enter 选中后关闭浮层')
-  assert.ok(document.activeElement === splitTa, '关闭后焦点归还当前面板 Composer textarea')
+  assert.ok(document.body.querySelector('.composer-model-popover') === null, 'the popover closes after the Enter pick')
+  assert.ok(document.activeElement === splitTa, 'focus returns to the current panel Composer textarea after close')
 
-  // 再次 Ctrl+L 打开，再按一次 Ctrl+L 关闭并归还焦点
+  // Ctrl+L again reopens; one more Ctrl+L closes and returns focus
   await act(async () => {
     window.dispatchEvent(new CustomEvent(HELM_SHORTCUT_EVENT, { detail: { action: 'toggle-model-picker', panel: 'split' } }))
   })
@@ -334,10 +340,10 @@ test('Ctrl+L：分屏匹配 data-helm-panel 精准开关 ModelPicker，自动聚
   await act(async () => {
     window.dispatchEvent(new CustomEvent(HELM_SHORTCUT_EVENT, { detail: { action: 'toggle-model-picker', panel: 'split' } }))
   })
-  assert.ok(document.body.querySelector('.composer-model-popover') === null, '再次 Ctrl+L 关闭浮层')
-  assert.ok(document.activeElement === splitTa, 'Ctrl+L 关闭后焦点回到分屏 textarea')
+  assert.ok(document.body.querySelector('.composer-model-popover') === null, 'a second Ctrl+L closes the popover')
+  assert.ok(document.activeElement === splitTa, 'focus returns to the split textarea after the Ctrl+L close')
 
-  // 再次 Ctrl+L 打开并通过 Esc 关闭：必须 stopPropagation 防止触发外层双 Esc 中断，且归还焦点
+  // Ctrl+L reopens, Esc closes: it must stopPropagation so the outer double-Esc abort never fires, and return focus
   await act(async () => {
     window.dispatchEvent(new CustomEvent(HELM_SHORTCUT_EVENT, { detail: { action: 'toggle-model-picker', panel: 'split' } }))
   })
@@ -354,9 +360,9 @@ test('Ctrl+L：分屏匹配 data-helm-panel 精准开关 ModelPicker，自动聚
         new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }),
       )
     })
-    assert.ok(document.body.querySelector('.composer-model-popover') === null, 'Esc 关闭 ModelPicker')
-    assert.equal(escLeakedToWindow, false, 'ModelPicker Esc 必须 stopPropagation 防触发外层双 Esc')
-    assert.ok(document.activeElement === splitTa, 'Esc 关闭后焦点回到分屏 textarea')
+    assert.ok(document.body.querySelector('.composer-model-popover') === null, 'Esc closes the ModelPicker')
+    assert.equal(escLeakedToWindow, false, 'the ModelPicker Esc must stopPropagation to avoid the outer double-Esc')
+    assert.ok(document.activeElement === splitTa, 'focus returns to the split textarea after the Esc close')
     assert.ok(document.activeElement !== primaryTa)
   } finally {
     window.removeEventListener('keydown', escWindowSpy)
@@ -364,10 +370,10 @@ test('Ctrl+L：分屏匹配 data-helm-panel 精准开关 ModelPicker，自动聚
 })
 
 // ---------------------------------------------------------------------------
-// 3. Shift+Tab 思考深度切换（含严格无 Ctrl+T 别名）
+// 3. Shift+Tab thinking-level cycling (including the strict no-Ctrl+T alias)
 // ---------------------------------------------------------------------------
 
-test('Shift+Tab：立即 preventDefault() 并循环切换 thinkingLevel；Ctrl+T 不生效', { timeout: 60_000 }, async () => {
+test('Shift+Tab: preventDefault() immediately and cycles thinkingLevel; Ctrl+T does nothing', { timeout: 60_000 }, async () => {
   const patched: Array<Record<string, unknown>> = []
   conversationsApi.patch = (async (_id, body) => {
     patched.push(body as Record<string, unknown>)
@@ -379,7 +385,7 @@ test('Shift+Tab：立即 preventDefault() 并循环切换 thinkingLevel；Ctrl+T
   const host = mountTree(e(HostStoreProviders, { value: store }, e(Composer, { conversation: conv, prefill: null })))
   const ta = host.querySelector<HTMLTextAreaElement>('textarea.composer-textarea')!
 
-  // Ctrl+T 不得触发思考档位切换
+  // Ctrl+T must not trigger a thinking-level switch
   await act(async () => {
     const ev = new KeyboardEvent('keydown', { key: 't', ctrlKey: true, bubbles: true, cancelable: true })
     ta.dispatchEvent(ev)
@@ -387,22 +393,22 @@ test('Shift+Tab：立即 preventDefault() 并循环切换 thinkingLevel；Ctrl+T
   })
   assert.equal(patched.length, 0)
 
-  // Shift+Tab 立即 preventDefault 并顺序循环 off -> low -> medium -> high -> off
+  // Shift+Tab preventDefaults immediately and cycles in order off -> low -> medium -> high -> off
   for (const expected of ['low', 'medium', 'high', 'off']) {
     await act(async () => {
       const ev = new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true })
       ta.dispatchEvent(ev)
-      assert.equal(ev.defaultPrevented, true, 'Shift+Tab 必须立即 preventDefault')
+      assert.equal(ev.defaultPrevented, true, 'Shift+Tab must preventDefault immediately')
     })
     assert.equal(patched.at(-1)?.thinkingLevel, expected)
   }
 })
 
 // ---------------------------------------------------------------------------
-// 4. ↑ 优先撤回 queuedInputs 最新人类排队项 -> 无排队时回退历史编辑
+// 4. ↑ prefers withdrawing the newest human queued input -> falls back to history editing when the queue is empty
 // ---------------------------------------------------------------------------
 
-test('↑（空草稿首行）：优先撤回 queuedInputs 最新人类排队项并回填，不触发历史回滚横幅', { timeout: 60_000 }, async () => {
+test('↑ (empty draft, first line): withdraws the newest human queued input and prefills, without the history-rollback banner', { timeout: 60_000 }, async () => {
   const withdrawCalls: Array<{ id: number; subId: string | number }> = []
   conversationsApi.withdraw = (async (id, subId) => {
     withdrawCalls.push({ id, subId })
@@ -445,22 +451,22 @@ test('↑（空草稿首行）：优先撤回 queuedInputs 最新人类排队项
   const host = mountTree(e(HostStoreProviders, { value: store }, e(Composer, { conversation: conv, prefill: null })))
   const ta = host.querySelector<HTMLTextAreaElement>('textarea.composer-textarea')!
 
-  // Alt+ArrowUp 绝不触发撤回
+  // Alt+ArrowUp never triggers a withdrawal
   await act(async () => {
     ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', altKey: true, bubbles: true, cancelable: true }))
   })
-  assert.equal(withdrawCalls.length, 0, '严禁 Alt+Up 别名')
+  assert.equal(withdrawCalls.length, 0, 'the Alt+Up alias is strictly forbidden')
 
-  // 草稿非空时不触发撤回
+  // A non-empty draft never triggers a withdrawal
   await act(async () => {
     typeInto(ta, '正在输入的新草稿')
   })
   await act(async () => {
     ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true, cancelable: true }))
   })
-  assert.equal(withdrawCalls.length, 0, '非空草稿 ↑ 不撤回队列')
+  assert.equal(withdrawCalls.length, 0, '↑ withdraws nothing from the queue on a non-empty draft')
 
-  // 清空草稿后按单键 ↑：撤回最新人类排队项 q-2（submissionId='22'）
+  // With the draft cleared, plain ↑ withdraws the newest human queued item q-2 (submissionId='22')
   await act(async () => {
     typeInto(ta, '')
   })
@@ -470,12 +476,12 @@ test('↑（空草稿首行）：优先撤回 queuedInputs 最新人类排队项
   await act(async () => {})
 
   assert.deepEqual(withdrawCalls, [{ id: 7, subId: '22' }])
-  assert.equal(ta.value, '最新人类插话', '回填排队消息正文')
-  assert.ok(host.textContent?.includes('spec.md'), '同时回填排队附件')
-  assert.ok(host.querySelector('.composer-edit-banner') === null, '撤回排队不触发历史回滚横幅')
+  assert.equal(ta.value, '最新人类插话', 'the queued message text is prefilled')
+  assert.ok(host.textContent?.includes('spec.md'), 'the queued attachments prefill too')
+  assert.ok(host.querySelector('.composer-edit-banner') === null, 'a queued withdrawal never triggers the history-rollback banner')
 })
 
-test('↑（无人类排队项时）：回退编辑上一条历史人类消息', { timeout: 60_000 }, async () => {
+test('↑ (no human queued input): falls back to editing the previous historical human message', { timeout: 60_000 }, async () => {
   const conv = makeConv({ id: 8, status: 'idle' })
   const detail: ConversationDetail = {
     ...conv,
@@ -504,14 +510,14 @@ test('↑（无人类排队项时）：回退编辑上一条历史人类消息',
     ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true, cancelable: true }))
   })
   assert.equal(ta.value, '历史提问五')
-  assert.ok(host.querySelector('.composer-edit-banner') !== null, '无人类排队项时回退历史编辑并显示横幅')
+  assert.ok(host.querySelector('.composer-edit-banner') !== null, 'without human queued input it falls back to history editing and shows the banner')
 })
 
 // ---------------------------------------------------------------------------
-// 5. Esc 层级处理（浮层 -> 取消编辑态 -> 冒泡给外层双 Esc）
+// 5. Esc layering (popover -> cancel edit mode -> bubble to the outer double-Esc)
 // ---------------------------------------------------------------------------
 
-test('Esc 层级：关闭斜杠浮层与取消历史编辑均 stopPropagation，空闲无浮层时才冒泡外层', { timeout: 60_000 }, async () => {
+test('Esc layering: closing the slash popover and cancelling history editing both stopPropagation; only idle without popovers bubbles outward', { timeout: 60_000 }, async () => {
   const conv = makeConv({ id: 9, status: 'working' })
   const detail: ConversationDetail = {
     ...conv,
@@ -527,7 +533,7 @@ test('Esc 层级：关闭斜杠浮层与取消历史编辑均 stopPropagation，
   }
   window.addEventListener('keydown', onWinEsc)
   try {
-    // 1) 历史编辑态按 Esc：取消编辑且 stopPropagation
+    // 1) Esc in history-edit mode: cancels editing and stopPropagation
     await act(async () => {
       ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true, cancelable: true }))
     })
@@ -535,11 +541,11 @@ test('Esc 层级：关闭斜杠浮层与取消历史编辑均 stopPropagation，
     await act(async () => {
       ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
     })
-    assert.ok(host.querySelector('.composer-edit-banner') === null, 'Esc 退出历史编辑态')
+    assert.ok(host.querySelector('.composer-edit-banner') === null, 'Esc exits history-edit mode')
     assert.equal(ta.value, '')
-    assert.equal(windowEscCount, 0, '取消编辑时 stopPropagation，不触发外层双 Esc 计数')
+    assert.equal(windowEscCount, 0, 'cancelling the edit stopPropagation: the outer double-Esc counter is untouched')
 
-    // 2) 斜杠浮层打开时按 Esc：关闭浮层且 stopPropagation
+    // 2) Esc with the slash popover open: closes it and stopPropagation
     await act(async () => {
       typeInto(ta, '/')
     })
@@ -548,27 +554,27 @@ test('Esc 层级：关闭斜杠浮层与取消历史编辑均 stopPropagation，
       ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
     })
     assert.ok(host.querySelector('.composer-popover') === null)
-    assert.equal(windowEscCount, 0, '关闭斜杠浮层时 stopPropagation')
+    assert.equal(windowEscCount, 0, 'closing the slash popover stopPropagation')
 
-    // 3) 无浮层且非编辑态按 Esc：正常冒泡到 window 供外层双 Esc 中断处理
+    // 3) Esc with no popover outside edit mode: bubbles normally to window for the outer double-Esc abort
     await act(async () => {
       typeInto(ta, '')
     })
     await act(async () => {
       ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
     })
-    assert.equal(windowEscCount, 1, '无浮层非编辑态时 Esc 正常冒泡到外层')
+    assert.equal(windowEscCount, 1, 'with no popover outside edit mode, Esc bubbles outward normally')
   } finally {
     window.removeEventListener('keydown', onWinEsc)
   }
 })
 
 // ---------------------------------------------------------------------------
-// 6. COMPOSER_DOCK_SLOT 在 <AskDock /> 正上方直出且双端可见
+// 6. COMPOSER_DOCK_SLOT renders directly above <AskDock /> and stays visible on both form factors
 // ---------------------------------------------------------------------------
 
-test('COMPOSER_DOCK_SLOT：位于 AskDock 正上方直出渲染，接收 ComposerScopeProps，移动端不收进 more 菜单', { timeout: 60_000 }, async () => {
-  stubMatchMedia(true) // 模拟移动端视口
+test('COMPOSER_DOCK_SLOT: renders directly above AskDock receiving ComposerScopeProps; mobile never tucks it into the more menu', { timeout: 60_000 }, async () => {
+  stubMatchMedia(true) // simulate a mobile viewport
   function DockProbe(props: ComposerScopeProps) {
     const ctx = usePluginContext()
     return e(
@@ -611,17 +617,17 @@ test('COMPOSER_DOCK_SLOT：位于 AskDock 正上方直出渲染，接收 Compose
   const dockAt = html.indexOf('composer-dock-slot')
   const askAt = html.indexOf('ask-dock-stack')
   const extrasAt = html.indexOf('composer-extras')
-  assert.ok(dockAt >= 0, 'COMPOSER_DOCK_SLOT 必须直出渲染')
-  assert.ok(askAt > dockAt, 'COMPOSER_DOCK_SLOT 必须位于 AskDock 正上方')
-  assert.ok(extrasAt < 0 || dockAt < extrasAt, '不得收进移动端 more 菜单')
-  assert.match(html, /dock-conv:12:ctx:true/, '正确传递 ComposerScopeProps')
+  assert.ok(dockAt >= 0, 'COMPOSER_DOCK_SLOT must render directly')
+  assert.ok(askAt > dockAt, 'COMPOSER_DOCK_SLOT must sit right above AskDock')
+  assert.ok(extrasAt < 0 || dockAt < extrasAt, 'it must not be tucked into the mobile more menu')
+  assert.match(html, /dock-conv:12:ctx:true/, 'ComposerScopeProps passed correctly')
 })
 
 // ---------------------------------------------------------------------------
-// 7. 移动端忙时双按钮 [插话] + [排队] 与桌面 .kbd-hint
+// 7. Mobile busy dual buttons [steer] + [queue] and desktop .kbd-hint
 // ---------------------------------------------------------------------------
 
-test('ComposerSendControls：移动端忙时有输入显式渲染 [插话] 与 [排队] 双独立按钮；桌面端保留下拉与 .kbd-hint', { timeout: 60_000 }, async () => {
+test('ComposerSendControls: mobile busy with input explicitly renders independent [steer] and [queue] buttons; desktop keeps the split dropdown and .kbd-hint', { timeout: 60_000 }, async () => {
   const sent: Array<string | undefined> = []
   const send = async (mode?: 'steer' | 'followUp' | 'reject') => {
     sent.push(mode)
@@ -629,9 +635,11 @@ test('ComposerSendControls：移动端忙时有输入显式渲染 [插话] 与 [
   const abortTurn = async () => {}
   const blocker = { blocked: false, reason: null }
 
-  // 移动端忙时：同时显式渲染 [插话] 与 [排队] 两个独立按钮，无窄缝下拉触发器
+  // Mobile busy: renders both the [steer] and [queue] independent buttons explicitly, no narrow
+  // split trigger. ComposerSendControls reads the locale via useWebLocale, so it mounts inside a
+  // store provider.
   const mobileHost = mountTree(
-    e(ComposerSendControls, {
+    e(HelmStoreContext.Provider, { value: makeTestStore() }, e(ComposerSendControls, {
       working: true,
       editingEntryId: null,
       sending: false,
@@ -641,13 +649,13 @@ test('ComposerSendControls：移动端忙时有输入显式渲染 [插话] 与 [
       isMobile: true,
       send,
       abortTurn,
-    }),
+    })),
   )
-  assert.ok(mobileHost.querySelector('.composer-split-trigger') === null, '移动端不渲染窄缝下拉触发器')
+  assert.ok(mobileHost.querySelector('.composer-split-trigger') === null, 'mobile renders no narrow split trigger')
   const steerBtn = mobileHost.querySelector<HTMLButtonElement>('button.composer-mobile-steer-btn')
   const queueBtn = mobileHost.querySelector<HTMLButtonElement>('button.composer-mobile-queue-btn')
-  assert.ok(steerBtn && steerBtn.textContent?.includes('Steer'), '移动端显示 [插话] 按钮')
-  assert.ok(queueBtn && queueBtn.textContent?.includes('Queue'), '移动端显示 [排队] 按钮')
+  assert.ok(steerBtn && steerBtn.textContent?.includes('Steer'), 'mobile shows the [steer] button')
+  assert.ok(queueBtn && queueBtn.textContent?.includes('Queue'), 'mobile shows the [queue] button')
 
   await act(async () => {
     steerBtn.click()
@@ -655,9 +663,9 @@ test('ComposerSendControls：移动端忙时有输入显式渲染 [插话] 与 [
   })
   assert.deepEqual(sent, ['steer', 'followUp'])
 
-  // 桌面端：渲染分体下拉，菜单项角标带 .kbd-hint 类
+  // Desktop: renders the split dropdown; menu-item badges carry the .kbd-hint class
   const desktopHost = mountTree(
-    e(ComposerSendControls, {
+    e(HelmStoreContext.Provider, { value: makeTestStore() }, e(ComposerSendControls, {
       working: true,
       editingEntryId: null,
       sending: false,
@@ -667,19 +675,19 @@ test('ComposerSendControls：移动端忙时有输入显式渲染 [插话] 与 [
       isMobile: false,
       send,
       abortTurn,
-    }),
+    })),
   )
   assert.ok(desktopHost.querySelector('.composer-busy-mobile-actions') === null)
   const trigger = desktopHost.querySelector<HTMLButtonElement>('button.composer-split-trigger')
-  assert.ok(trigger, '桌面端保留分体下拉触发器')
+  assert.ok(trigger, 'desktop keeps the split dropdown trigger')
 })
 
 // ---------------------------------------------------------------------------
-// 8. Standby 待命页：默认模型继承、Shift+Tab、Ctrl+L 与静态 '/' 技能补全
+// 8. Standby pane: default model inheritance, Shift+Tab, Ctrl+L and static '/' skill completion
 // ---------------------------------------------------------------------------
 
-test('Standby 待命页：继承全局默认模型 glm-5.3·max，支持 Shift+Tab / Ctrl+L 与静态 /skill 补全', { timeout: 60_000 }, async () => {
-  // 纯函数校验
+test('Standby pane: inherits the global default model glm-5.3·max; supports Shift+Tab / Ctrl+L and static /skill completion', { timeout: 60_000 }, async () => {
+  // Pure-function checks
   assert.equal(resolveStandbyEffectiveModel(undefined, undefined, 'magpie/auto/glm-5.3'), 'magpie/auto/glm-5.3')
   assert.equal(resolveStandbyEffectiveModel(undefined, 'p/m1', 'magpie/auto/glm-5.3'), 'p/m1')
   assert.equal(resolveStandbyEffectiveModel('d/m2', 'p/m1', 'magpie/auto/glm-5.3'), 'd/m2')
@@ -732,70 +740,70 @@ test('Standby 待命页：继承全局默认模型 glm-5.3·max，支持 Shift+T
   )
 
   const modelBtn = host.querySelector<HTMLButtonElement>('button.composer-model-button')!
-  assert.match(modelBtn.textContent ?? '', /glm-5\.3/, '首屏继承全局默认模型短名')
-  assert.match(modelBtn.textContent ?? '', /· max/, '首屏继承全局默认思考档位')
+  assert.match(modelBtn.textContent ?? '', /glm-5\.3/, 'first paint inherits the global default model short name')
+  assert.match(modelBtn.textContent ?? '', /· max/, 'first paint inherits the global default thinking level')
 
-  // Shift+Tab 在待命页循环思考档位（max -> off）
+  // Shift+Tab cycles the thinking level on the standby pane (max -> off)
   const ta = host.querySelector<HTMLTextAreaElement>('textarea.composer-textarea')!
   await act(async () => {
     const ev = new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true })
     ta.dispatchEvent(ev)
     assert.equal(ev.defaultPrevented, true)
   })
-  assert.ok(host.querySelector('.composer-model-level') === null, 'max 下一档为 off，角标隐藏')
+  assert.ok(host.querySelector('.composer-model-level') === null, 'the level after max is off, so the badge hides')
   await act(async () => {
     ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true }))
   })
-  assert.equal(host.querySelector('.composer-model-level')?.textContent, '· low', '继续 Shift+Tab 切至 low')
+  assert.equal(host.querySelector('.composer-model-level')?.textContent, '· low', 'another Shift+Tab switches to low')
 
-  // Ctrl+L 仅命中 split 面板打开 StandbyModelPicker 并自动聚焦搜索框
+  // Ctrl+L targets the split panel only, opening the StandbyModelPicker and auto-focusing the search
   await act(async () => {
     window.dispatchEvent(new CustomEvent(HELM_SHORTCUT_EVENT, { detail: { action: 'toggle-model-picker', panel: 'primary' } }))
   })
-  assert.ok(document.body.querySelector('.composer-model-popover') === null, 'primary 事件不打开 split 待命选择器')
+  assert.ok(document.body.querySelector('.composer-model-popover') === null, 'a primary event never opens the split standby picker')
 
   await act(async () => {
     window.dispatchEvent(new CustomEvent(HELM_SHORTCUT_EVENT, { detail: { action: 'toggle-model-picker', panel: 'split' } }))
   })
   const popover = document.body.querySelector<HTMLElement>('.composer-model-popover')
-  assert.ok(popover !== null, 'split Ctrl+L 打开待命模型浮层')
-  assert.ok(popover.querySelector('button.composer-model-refresh-btn') !== null, '待命模型浮层补齐动态刷新按钮')
-  assert.ok(document.activeElement === popover.querySelector('input[aria-label="Search models"]'), '自动聚焦搜索输入框')
+  assert.ok(popover !== null, 'split Ctrl+L opens the standby model popover')
+  assert.ok(popover.querySelector('button.composer-model-refresh-btn') !== null, 'the standby model popover includes the dynamic refresh button')
+  assert.ok(document.activeElement === popover.querySelector('input[aria-label="Search models"]'), 'auto-focuses the search input')
 
   await act(async () => {
     window.dispatchEvent(new CustomEvent(HELM_SHORTCUT_EVENT, { detail: { action: 'toggle-model-picker', panel: 'split' } }))
   })
   assert.ok(document.body.querySelector('.composer-model-popover') === null)
 
-  // 静态 '/' 技能补全：过滤停用插件托管技能，选中 /skill:review 插入文本
+  // Static '/' skill completion: filters disabled-plugin managed skills; picking /skill:review inserts text
   await act(async () => {
     typeInto(ta, '/rev')
   })
   const slashPopover = host.querySelector<HTMLElement>('.composer-popover')
-  assert.ok(slashPopover, '待命页输入 / 弹出静态命令与技能菜单')
+  assert.ok(slashPopover, "typing / on the standby pane opens the static command & skill menu")
   assert.match(slashPopover.textContent ?? '', /\/skill:review/)
   assert.doesNotMatch(slashPopover.textContent ?? '', /herdr-only/)
 
   await act(async () => {
     ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
   })
-  assert.equal(ta.value, '/skill:review ', '选中技能仅回填触发词，不创建会话')
+  assert.equal(ta.value, '/skill:review ', 'picking a skill writes back only the trigger word; no conversation created')
 
-  // 通用 '@' 补全浮层在待命页同步工作（与 '/' 技能补全、Ctrl+L、Shift+Tab 共存无冲突）
+  // The generic '@' completion popover also works on the standby pane (coexists with '/' skill completion, Ctrl+L, Shift+Tab without conflicts)
   await act(async () => {
     typeInto(ta, '/skill:review @mem')
   })
   await act(async () => {})
   const atPopover = host.querySelector<HTMLElement>('.composer-completion-popover')
-  assert.ok(atPopover, '待命页输入 @ 应弹出 CompletionPopover')
+  assert.ok(atPopover, 'typing @ on the standby pane must open the CompletionPopover')
   assert.match(atPopover.textContent ?? '', /@memory/)
   await act(async () => {
     ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
   })
-  assert.equal(ta.value, '/skill:review @memory ', 'Enter 选中 @ 候选仅补全触发文本，不创建会话')
+  assert.equal(ta.value, '/skill:review @memory ', 'Enter picking an @ candidate completes only the trigger text; no conversation created')
 })
 
-test('Composer 提交键位：Enter steer、Ctrl/Cmd+Enter followUp、Shift+Enter 换行、Alt+Enter 禁止别名', { timeout: 60_000 }, async () => {
+test('Composer submit keys: Enter steer, Ctrl/Cmd+Enter followUp, Shift+Enter newline, Alt+Enter alias forbidden', { timeout: 60_000 }, async () => {
   const submitted: Array<Record<string, unknown>> = []
   conversationsApi.submitInput = (async (_id, payload) => {
     submitted.push(payload as unknown as Record<string, unknown>)
@@ -807,13 +815,13 @@ test('Composer 提交键位：Enter steer、Ctrl/Cmd+Enter followUp、Shift+Ente
   const host = mountTree(e(HostStoreProviders, { value: store }, e(Composer, { conversation: conv, prefill: null })))
   const ta = host.querySelector<HTMLTextAreaElement>('textarea.composer-textarea')!
 
-  // Shift+Enter 与 Alt+Enter 绝不触发提交
+  // Shift+Enter and Alt+Enter never trigger a submit
   await act(async () => { typeInto(ta, '待验证') })
   await act(async () => {
     ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', shiftKey: true, bubbles: true, cancelable: true }))
     ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', altKey: true, bubbles: true, cancelable: true }))
   })
-  assert.equal(submitted.length, 0, 'Shift+Enter 与 Alt+Enter 均不发送')
+  assert.equal(submitted.length, 0, 'neither Shift+Enter nor Alt+Enter sends')
 
   // Enter -> steer
   await act(async () => {
@@ -836,7 +844,7 @@ test('Composer 提交键位：Enter steer、Ctrl/Cmd+Enter followUp、Shift+Ente
   assert.equal(submitted.at(-1)?.whenBusy, 'followUp')
 })
 
-test('CompletionPopover：Esc 关闭补全浮层且 stopPropagation 不触达外层', { timeout: 60_000 }, async () => {
+test('CompletionPopover: Esc closes the completion popover and stopPropagation keeps it from the outer layer', { timeout: 60_000 }, async () => {
   const conv = makeConv({ id: 21, status: 'working' })
   const store = makeTestStore({
     conversations: [conv],
@@ -865,18 +873,18 @@ test('CompletionPopover：Esc 关闭补全浮层且 stopPropagation 不触达外
   try {
     await act(async () => { typeInto(ta, '@') })
     await act(async () => {})
-    assert.ok(host.querySelector('.composer-completion-popover'), '补全浮层打开')
+    assert.ok(host.querySelector('.composer-completion-popover'), 'the completion popover opens')
     await act(async () => {
       ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
     })
-    assert.ok(host.querySelector('.composer-completion-popover') === null, 'Esc 关闭补全浮层')
-    assert.equal(leakedEsc, 0, 'Esc 已 stopPropagation 防外层双 Esc 误触发')
+    assert.ok(host.querySelector('.composer-completion-popover') === null, 'Esc closes the completion popover')
+    assert.equal(leakedEsc, 0, 'Esc stopPropagation prevents the outer double-Esc from misfiring')
   } finally {
     window.removeEventListener('keydown', spy)
   }
 })
 
-test('ModelPickerControl 运行时过滤不可用与禁用模型，刷新按钮触发 /api/models/refresh 与 refreshAssets', { timeout: 60_000 }, async () => {
+test('ModelPickerControl filters unavailable and disabled models at runtime; the refresh button triggers /api/models/refresh and refreshAssets', { timeout: 60_000 }, async () => {
   const { ModelPickerControl } = await import('../src/conversation/ModelPicker.js')
   const originalFetch = globalThis.fetch
   let refreshPostCount = 0
@@ -927,19 +935,103 @@ test('ModelPickerControl 运行时过滤不可用与禁用模型，刷新按钮�
     const popover = document.body.querySelector<HTMLElement>('.composer-model-popover')
     assert.ok(popover)
     const items = [...popover.querySelectorAll<HTMLButtonElement>('button.popover-item')]
-    assert.ok(items.some((el) => el.textContent?.includes('enabled-model')), '可用且未禁用模型应展示')
-    assert.equal(items.some((el) => el.textContent?.includes('disabled-model')), false, 'disabled 模型不得作为可选项')
-    assert.equal(items.some((el) => el.textContent?.includes('unavailable-model')), false, '不可用模型不得作为可选项')
+    assert.ok(items.some((el) => el.textContent?.includes('enabled-model')), 'available and not-disabled models must show')
+    assert.equal(items.some((el) => el.textContent?.includes('disabled-model')), false, 'disabled models must not be options')
+    assert.equal(items.some((el) => el.textContent?.includes('unavailable-model')), false, 'unavailable models must not be options')
 
     const refreshBtn = popover.querySelector<HTMLButtonElement>('button.composer-model-refresh-btn')
-    assert.ok(refreshBtn, '存在刷新动态模型目录按钮')
+    assert.ok(refreshBtn, 'the dynamic catalog refresh button exists')
     await act(async () => {
       refreshBtn.click()
     })
-    assert.equal(refreshPostCount, 1, '点击刷新按钮触发 POST /api/models/refresh')
-    assert.equal(refreshAssetsCount, 1, '刷新完成后同步 refreshAssets')
+    assert.equal(refreshPostCount, 1, 'clicking refresh triggers POST /api/models/refresh')
+    assert.equal(refreshAssetsCount, 1, 'refreshAssets follows the completed refresh')
     assert.equal(notices.some((n) => n.title === 'Model catalog refreshed'), true)
   } finally {
     globalThis.fetch = originalFetch
   }
+})
+
+test('zh-CN locale: AgentStandbyPane renders the Chinese catalog copy', { timeout: 60_000 }, async () => {
+  const store = makeTestStore({
+    locale: 'zh-CN',
+    profiles: [{ id: 'assistant', name: '个人助理' }],
+    models: [
+      {
+        id: 'magpie/auto/glm-5.3',
+        provider: 'magpie',
+        modelId: 'auto/glm-5.3',
+        available: true,
+        thinkingLevels: ['off', 'low', 'medium', 'high', 'max'],
+      },
+    ],
+    defaultModelInfo: { defaultModel: 'magpie/auto/glm-5.3', defaultThinkingLevel: 'max' },
+  })
+  const host = mountTree(
+    e(HostStoreProviders, { value: store }, e(AgentStandbyPane, { profileId: 'assistant' })),
+  )
+  assert.ok(
+    host.textContent?.includes('发送第一条消息开始新话题；会话将在首次发送时创建'),
+    'the intro hint renders the zh-CN copy',
+  )
+  const ta = host.querySelector<HTMLTextAreaElement>('textarea.composer-textarea')!
+  assert.equal(
+    ta.getAttribute('aria-label'),
+    '向 个人助理 输入首条消息',
+    'the textarea aria-label renders the zh-CN copy',
+  )
+  assert.equal(
+    ta.getAttribute('placeholder'),
+    '输入消息开始新话题；/ 命令与技能 · @ 点名，⌘V 粘贴附件',
+    'the desktop placeholder renders the zh-CN copy',
+  )
+  assert.ok(
+    host.textContent?.includes('执行环境跟随角色默认'),
+    'the env bar hint renders the zh-CN copy',
+  )
+  assert.ok(
+    host.textContent?.includes('自定义'),
+    'the customize button renders the zh-CN copy',
+  )
+  const modelBtn = host.querySelector<HTMLButtonElement>('button.composer-model-button')!
+  assert.equal(
+    modelBtn.getAttribute('title'),
+    '当前模型：magpie/auto/glm-5.3 · 思考 max (Ctrl+L)',
+    'the model button title renders the zh-CN copy (resolved from the global default)',
+  )
+  const sendBtn = host.querySelector<HTMLButtonElement>('button.btn-send')!
+  assert.equal(sendBtn.getAttribute('aria-label'), '发送', 'the send aria-label renders the zh-CN copy')
+  assert.equal(
+    sendBtn.getAttribute('title'),
+    '发送 (Enter)；会话将在首次发送时创建',
+    'the send title renders the zh-CN copy',
+  )
+})
+
+test('zh-CN locale: ComposerSendControls mobile busy buttons render the Chinese copy', { timeout: 60_000 }, async () => {
+  const sent: Array<string | undefined> = []
+  const send = async (mode?: 'steer' | 'followUp' | 'reject') => { sent.push(mode) }
+  const blocker = { blocked: false, reason: null }
+  const mobileHost = mountTree(
+    e(HelmStoreContext.Provider, { value: makeTestStore({ locale: 'zh-CN' }) }, e(ComposerSendControls, {
+      working: true,
+      editingEntryId: null,
+      sending: false,
+      uploading: 0,
+      envBlocker: blocker,
+      text: '中文指令',
+      isMobile: true,
+      send,
+      abortTurn: async () => {},
+    })),
+  )
+  const steerBtn = mobileHost.querySelector<HTMLButtonElement>('button.composer-mobile-steer-btn')
+  const queueBtn = mobileHost.querySelector<HTMLButtonElement>('button.composer-mobile-queue-btn')
+  assert.ok(steerBtn && steerBtn.textContent?.includes('插话'), 'mobile shows the zh-CN steer button')
+  assert.ok(queueBtn && queueBtn.textContent?.includes('排队'), 'mobile shows the zh-CN queue button')
+  await act(async () => {
+    steerBtn.click()
+    queueBtn.click()
+  })
+  assert.deepEqual(sent, ['steer', 'followUp'], 'zh-CN buttons keep the original send policies')
 })

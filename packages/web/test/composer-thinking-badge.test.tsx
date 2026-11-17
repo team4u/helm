@@ -1,10 +1,12 @@
 /**
- * Composer 模型徽章与思考档位控件选中态 DOM 回归（真实挂载 + Radix Popover 交互）。
+ * DOM regression for the Composer model badge and thinking-level control
+ * selection state (real mount + Radix Popover interaction).
  *
- * 契约（纯实体档位，所见即所得）：
- * - 徽章与控件以实际生效档位为权威展示；
- * - 移除「默认」伪档位，所选即所见；
- * - 生效档不在目录支持列表时，安全回退至有效档位（off 或首项）。
+ * Contract (pure entity levels, what you see is what you get):
+ * - the badge and control authoritatively show the effective level;
+ * - the fake "default" pseudo-level is removed; the selection is what you see;
+ * - when the effective level is outside the catalog's supported list, it
+ *   safely falls back to a valid level (off or the first).
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
@@ -37,11 +39,12 @@ function makeStore(conversation: ConversationSummary): HelmStoreValue {
   return {
     authReady: true, authConfigured: true, authenticated: true, authError: null,
     connectionError: null, loadErrors: {}, sseConnected: true, theme: 'dark' as const, themePreference: 'system' as const,
+    locale: 'en' as const,
     conversations: [conversation], conversationDetails: {}, conversationLives: {}, conversationArtifacts: {},
     pendingAsks: [], resolvedAsksByConv: {}, plugins: [], uiContributions: [],
     groupedUi: groupUiContributions([]), pluginDocs: {}, nodes: [], profiles: [], profilesLoaded: true, assetsLoaded: true,
     models: [
-      // 目录明确 B 仅支持到 high（与内核收敛结果一致）。
+      // The catalog explicitly caps B at high (aligned with the kernel's convergence).
       { id: 'faux-cap-b/model-b', provider: 'faux-cap-b', modelId: 'model-b', available: true, thinkingLevels: ['minimal', 'low', 'medium', 'high'] },
     ],
     providers: [], credentials: [], skills: [], actions: [],
@@ -70,44 +73,44 @@ async function mountComposer(conversation: ConversationSummary): Promise<{ host:
   return { host, unmount: () => { act(() => root.unmount()); host.remove() } }
 }
 
-/** 打开模型浮层（真实点击 Radix PopoverTrigger），返回浮层内容根。 */
+/** Open the model popover (a real Radix PopoverTrigger click); returns the popover content root. */
 function openModelPopover(host: HTMLElement): HTMLElement {
   const btn = host.querySelector<HTMLButtonElement>('button.composer-model-button')
-  assert.ok(btn, '模型按钮必须渲染')
+  assert.ok(btn, 'the model button must render')
   act(() => { btn.click() })
   const popover = document.body.querySelector<HTMLElement>('.composer-model-popover')
-  assert.ok(popover, '点击后模型浮层必须打开（Portal 挂 body）')
+  assert.ok(popover, 'the model popover must open on click (portaled to body)')
   return popover
 }
 
-/** 控件当前选中项文本（具体档位；无选中返回空串）。 */
+/** Selected item text of the control (a concrete level; empty string when none). */
 function selectedLevel(popover: HTMLElement): string {
   const active = popover.querySelector('.composer-thinking-row .segmented-control-btn.is-active')
   return active?.textContent?.trim() ?? ''
 }
 
-/** 徽章文本（如 '· high'）；未渲染返回 null。 */
+/** Badge text (e.g. '· high'); null when not rendered. */
 function badgeOf(host: HTMLElement): string | null {
   return host.querySelector('.composer-model-level')?.textContent ?? null
 }
 
-test('DOM：B=high、override=max、effective=high 时徽章与控件选中均为 high', { timeout: 60_000 }, async () => {
+test('DOM: B=high, override=max, effective=high -> badge and control selection both high', { timeout: 60_000 }, async () => {
   const { host, unmount } = await mountComposer(conv({ thinkingLevel: 'high', thinkingLevelOverride: 'max' }))
   try {
-    // 徽章以生效档位为权威，不展示 override 的 max。
+    // The badge is authoritative on the effective level; the override's max never shows.
     assert.equal(badgeOf(host), '· high')
     const popover = openModelPopover(host)
-    // 控件直接高亮生效档 high。
+    // The control highlights the effective level high directly.
     assert.equal(selectedLevel(popover), 'high')
     const triggers = Array.from(popover.querySelectorAll('.composer-thinking-row .segmented-control-btn'))
-    assert.equal(triggers.length, 4, 'minimal/low/medium/high 四档（移除默认伪档位）')
-    assert.equal(triggers.filter((b) => b.classList.contains('is-active')).length, 1, '恰好一项选中')
+    assert.equal(triggers.length, 4, 'four levels minimal/low/medium/high (fake default removed)')
+    assert.equal(triggers.filter((b) => b.classList.contains('is-active')).length, 1, 'exactly one selected')
   } finally {
     unmount()
   }
 })
 
-test('DOM：无 override 时控件直接高亮生效档 high，徽章展示生效档 high', { timeout: 60_000 }, async () => {
+test('DOM: without an override the control highlights the effective high and the badge shows high', { timeout: 60_000 }, async () => {
   const { host, unmount } = await mountComposer(conv({ thinkingLevel: 'high' }))
   try {
     assert.equal(badgeOf(host), '· high')
@@ -118,10 +121,10 @@ test('DOM：无 override 时控件直接高亮生效档 high，徽章展示生�
   }
 })
 
-test('DOM：目录明确不支持生效档（max）时回退至首项支持档位（minimal）', { timeout: 60_000 }, async () => {
+test('DOM: when the catalog rejects the effective level (max), fall back to the first supported (minimal)', { timeout: 60_000 }, async () => {
   const { host, unmount } = await mountComposer(conv({ thinkingLevel: 'max' }))
   try {
-    assert.equal(badgeOf(host), '· minimal', '回退至首项有效档位展示')
+    assert.equal(badgeOf(host), '· minimal', 'falls back to the first valid level for display')
     const popover = openModelPopover(host)
     assert.equal(selectedLevel(popover), 'minimal')
   } finally {

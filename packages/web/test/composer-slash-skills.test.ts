@@ -1,13 +1,16 @@
 /**
- * 会话斜杠菜单技能过滤（Composer '/' 补全）回归：
- * - 纯模型 slashMenuSkills：profile.skills 白名单 + 插件启用双过滤（协议 isSkillAvailable 唯一规则）；
- * - 真实挂载 Composer：输入 '/' 弹出斜杠浮层，按当前会话 Profile 过滤技能；
- * - profile.skills 缺失（资产未返回 / Profile 已删）：先不展示技能，不意外放开全部；
- * - []：不展示任何技能；白名单：仅展示白名单内且插件启用的技能；
- * - 停用插件托管技能：即使白名单命中也不展示；
- * - 内置 /new /clear /compact 与插件命令不受技能过滤影响。
+ * Skill filtering regression for the conversation slash menu (Composer '/' completion):
+ * - pure model slashMenuSkills: profile.skills whitelist + plugin enablement
+ *   double filter (the protocol's isSkillAvailable is the single rule source);
+ * - real mounted Composer: typing '/' opens the slash popover with skills
+ *   filtered by the current conversation's Profile;
+ * - profile.skills missing (assets not returned / Profile deleted): no skills
+ *   shown yet; never accidentally exposing everything;
+ * - []: no skills; whitelist: only whitelisted skills of enabled plugins;
+ * - skills managed by a disabled plugin: never shown even on a whitelist hit;
+ * - builtin /new /clear /compact and plugin commands are unaffected by skill filtering.
  *
- * 挂载方式与 composer-controller.test.ts 同（根容器内渲染，非 Portal，输入事件可达）。
+ * Mounting matches composer-controller.test.ts (rendered inside the root container, no Portal, input events reachable).
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
@@ -24,7 +27,7 @@ import type { ConversationSummary, PluginSummary, Profile, SkillSummary } from '
 import type { HelmStoreValue } from '../src/lib/types.js'
 import { slashMenuSkills } from '../src/conversation/slash-menu-skills.js'
 
-/** 真实用户键入路径：原生 setter 赋值 + 重置 value tracker + 派发 input。 */
+/** Real user typing path: native setter assignment + value tracker reset + input dispatch. */
 function typeInto(ta: HTMLTextAreaElement, text: string): void {
   const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!
   const tracker = (ta as unknown as { _valueTracker?: { getValue(): string; setValue(v: string): void } })._valueTracker
@@ -51,46 +54,46 @@ const CATALOG: SkillSummary[] = [
 ]
 
 // ---------------------------------------------------------------------------
-// 纯模型：slashMenuSkills
+// Pure model: slashMenuSkills
 // ---------------------------------------------------------------------------
 
-test('slashMenuSkills：undefined 全部可见技能；[] 全部隐藏；白名单精确过滤', { timeout: 60_000 }, () => {
+test('slashMenuSkills: undefined -> all visible skills; [] -> all hidden; whitelist filters exactly', { timeout: 60_000 }, () => {
   const enabled = new Set(['builtin:profile', 'builtin:herdr'])
-  // undefined：全部（含启用插件托管的）
+  // undefined: everything (including enabled-plugin managed ones)
   assert.deepEqual(
     slashMenuSkills({ id: 'p', skills: undefined }, CATALOG, enabled).map((s) => s.id),
     ['review', 'tally', 'herdr-tool'],
   )
-  // []：禁用全部
+  // []: disable everything
   assert.deepEqual(slashMenuSkills({ id: 'p', skills: [] }, CATALOG, enabled), [])
-  // 白名单
+  // Whitelist
   assert.deepEqual(
     slashMenuSkills({ id: 'p', skills: ['review'] }, CATALOG, enabled).map((s) => s.id),
     ['review'],
   )
 })
 
-test('slashMenuSkills：缺少 Profile 先不展示技能（不意外放开全部）', { timeout: 60_000 }, () => {
+test('slashMenuSkills: a missing Profile shows no skills yet (never accidentally exposing all)', { timeout: 60_000 }, () => {
   const enabled = new Set(['builtin:profile'])
-  assert.deepEqual(slashMenuSkills(undefined, CATALOG, enabled), [], 'Profile 缺失 -> 空技能列表')
+  assert.deepEqual(slashMenuSkills(undefined, CATALOG, enabled), [], 'missing Profile -> empty skill list')
 })
 
-test('slashMenuSkills：停用插件托管技能恒不可用（即使白名单命中）', { timeout: 60_000 }, () => {
+test('slashMenuSkills: skills of a disabled plugin are always unavailable (even on a whitelist hit)', { timeout: 60_000 }, () => {
   const disabled = new Set(['builtin:profile'])
   assert.deepEqual(
     slashMenuSkills({ id: 'p', skills: undefined }, CATALOG, disabled).map((s) => s.id),
     ['review', 'tally'],
-    '停用插件托管技能被移除',
+    'disabled-plugin managed skills are removed',
   )
   assert.deepEqual(
     slashMenuSkills({ id: 'p', skills: ['herdr-tool', 'review'] }, CATALOG, disabled).map((s) => s.id),
     ['review'],
-    '白名单命中停用托管技能同样不可用',
+    'whitelisted skills of a disabled plugin stay unavailable',
   )
 })
 
 // ---------------------------------------------------------------------------
-// 交互：真实 Composer '/' 斜杠浮层按当前会话 Profile 过滤
+// Interaction: the real Composer '/' slash popover filters by the current conversation's Profile
 // ---------------------------------------------------------------------------
 
 const { Composer } = await import('../src/conversation/Composer.js')
@@ -107,6 +110,7 @@ function makeStore(conversation: ConversationSummary, opts: MountOptions): HelmS
   return {
     authReady: true, authConfigured: true, authenticated: true, authError: null,
     connectionError: null, loadErrors: {}, sseConnected: true, theme: 'dark' as const, themePreference: 'system' as const,
+    locale: 'en' as const,
     conversations: [conversation], conversationDetails: {}, conversationLives: {}, conversationArtifacts: {},
     pendingAsks: [], resolvedAsksByConv: {},
     plugins: opts.plugins ?? [
@@ -171,11 +175,11 @@ async function mountComposer(
   }
 }
 
-test('交互：profile.skills 未设置 -> 全部可见技能进入斜杠浮层；内置命令不受影响', { timeout: 60_000 }, async () => {
+test('interaction: profile.skills unset -> all visible skills enter the slash popover; builtin commands unaffected', { timeout: 60_000 }, async () => {
   const { typeSlash, unmount } = await mountComposer(conv(1, 'coder'), { profiles: [{ id: 'coder', tags: [] }] })
   try {
     const popover = await typeSlash('/')
-    assert.ok(popover, "'/' 弹出斜杠浮层")
+    assert.ok(popover, "'/' opens the slash popover")
     const text = popover!.textContent ?? ''
     assert.match(text, /\/new/)
     assert.match(text, /\/compact/)
@@ -187,7 +191,7 @@ test('交互：profile.skills 未设置 -> 全部可见技能进入斜杠浮层�
   }
 })
 
-test('交互：profile.skills=[] -> 无任何技能，仅内置命令', { timeout: 60_000 }, async () => {
+test('interaction: profile.skills=[] -> no skills at all, only builtin commands', { timeout: 60_000 }, async () => {
   const { typeSlash, unmount } = await mountComposer(conv(2, 'coder'), {
     profiles: [{ id: 'coder', tags: [], skills: [] }],
   })
@@ -202,7 +206,7 @@ test('交互：profile.skills=[] -> 无任何技能，仅内置命令', { timeou
   }
 })
 
-test('交互：白名单 profile -> 仅白名单内技能；停用插件托管技能即使命中白名单也不出现', { timeout: 60_000 }, async () => {
+test('interaction: whitelisted profile -> only whitelisted skills; disabled-plugin managed skills never appear even on whitelist hits', { timeout: 60_000 }, async () => {
   const plugins = [
     { id: 'builtin:profile', name: 'assistant', locked: true, enabled: true, hooks: [], actions: [], tools: [] },
     { id: 'builtin:herdr', name: 'herdr', locked: false, enabled: false, hooks: [], actions: [], tools: [] },
@@ -215,34 +219,36 @@ test('交互：白名单 profile -> 仅白名单内技能；停用插件托管�
     const popover = await typeSlash('/')
     assert.ok(popover)
     const text = popover!.textContent ?? ''
-    assert.doesNotMatch(text, /\/skill:review/, '白名单外技能不出现')
-    assert.match(text, /\/skill:tally/, '白名单内技能出现')
-    assert.doesNotMatch(text, /\/skill:herdr-tool/, '停用插件托管技能即使白名单命中也不出现')
+    assert.doesNotMatch(text, /\/skill:review/, 'skills outside the whitelist never appear')
+    assert.match(text, /\/skill:tally/, 'skills inside the whitelist appear')
+    assert.doesNotMatch(text, /\/skill:herdr-tool/, 'disabled-plugin managed skills never appear even on whitelist hits')
   } finally {
     await unmount()
   }
 })
 
-test('交互：缺少当前 Profile -> 先不展示任何技能（宁缺勿放开）', { timeout: 60_000 }, async () => {
+test('interaction: current Profile missing -> no skills shown yet (better absent than overexposed)', { timeout: 60_000 }, async () => {
   const { typeSlash, unmount } = await mountComposer(conv(4, 'ghost'), { profiles: [{ id: 'coder', tags: [] }] })
   try {
     const popover = await typeSlash('/')
     assert.ok(popover)
     const text = popover!.textContent ?? ''
-    assert.match(text, /\/new/, '内置命令不受影响')
-    assert.doesNotMatch(text, /skill:/, 'Profile 缺失时不展示技能')
+    assert.match(text, /\/new/, 'builtin commands unaffected')
+    assert.doesNotMatch(text, /skill:/, 'no skills shown while the Profile is missing')
   } finally {
     await unmount()
   }
 })
 
-test('交互：切换 Profile（模拟 store 刷新）依赖动态更新', { timeout: 60_000 }, async () => {
-  // 同一会话 profileId 下 store 数据变化（如保存后 refreshAssets）：白名单收紧后浮层随之更新。
-  // 该行为经 useMemo([store.profiles, conversation.profileId, store.skills, enabledPluginIds]) 依赖链保证，
-  // 纯模型层验证同一输入换不同 profile 的结果差异（分屏 / 菜单切换场景共用此函数）。
+test('interaction: switching Profile (simulating a store refresh) updates dependencies dynamically', { timeout: 60_000 }, async () => {
+  // Store data changing under the same conversation profileId (e.g. refreshAssets after a save): once the
+  // whitelist tightens, the popover follows. The behavior is guaranteed by the
+  // useMemo([store.profiles, conversation.profileId, store.skills, enabledPluginIds]) dependency chain; the
+  // pure-model layer verifies the result difference of the same input under different profiles (split view /
+  // menu switching share this function).
   const enabled = new Set(['builtin:profile'])
   const a = slashMenuSkills({ id: 'a', skills: undefined }, CATALOG, enabled).map((s) => s.id)
   const b = slashMenuSkills({ id: 'b', skills: ['tally'] }, CATALOG, enabled).map((s) => s.id)
   assert.deepEqual(a, ['review', 'tally'])
-  assert.deepEqual(b, ['tally'], '同会话切换绑定 Profile 后技能集合随 profile.skills 变化')
+  assert.deepEqual(b, ['tally'], 'after switching the bound Profile of the same conversation, the skill set follows profile.skills')
 })

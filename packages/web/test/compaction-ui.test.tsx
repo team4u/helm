@@ -1,10 +1,16 @@
 /**
- * 上下文精简进行中反馈、Busy 排队控件与 `/compact <instructions>` 回归测试（真实 DOM 挂载 + 纯函数）：
- * - parseCompactSlashCommand 与 isSessionManageCommand 对 `/compact` 及附带指令的解析；
- * - ConversationTimeline 渲染 pending compaction 分割线（`正在精简上下文…` + `.spin-slow` loader）及与排队消息的顺序；
- * - Composer 在 `status='idle' && contextUsage.compacting=true` 下切入 busy 态（停止按钮、插话/排队控件、占位符与 `精简中…` 只读状态）；
- * - `/compact <instructions>` 透传 `instructions` 参数；`compacting=true` 时重复 `/compact` 提示进行中且不发请求；
- * - ConversationPane 顶栏「更多操作」菜单在精简中禁用并显示 `正在精简上下文…` + loader，且透传 pending 分割线。
+ * Regression for in-progress context-compaction feedback, busy queueing controls and
+ * `/compact <instructions>` (real DOM mount + pure functions):
+ * - parseCompactSlashCommand and isSessionManageCommand parsing of `/compact` and its
+ *   optional instructions;
+ * - ConversationTimeline rendering the pending compaction divider (`正在精简上下文…` +
+ *   the `.spin-slow` loader) and its ordering against queued messages;
+ * - Composer switching to busy state under `status='idle' && contextUsage.compacting=true`
+ *   (stop button, steer/queue controls, placeholder and the `精简中…` read-only status);
+ * - `/compact <instructions>` forwards the `instructions` param; a repeated `/compact`
+ *   while `compacting=true` notices in-progress and sends no request;
+ * - the ConversationPane top-bar "more actions" menu disables during compaction showing
+ *   `正在精简上下文…` + loader, and passes the pending divider through.
  */
 import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
@@ -26,7 +32,7 @@ import {
 try {
   GlobalRegistrator.register()
 } catch {
-  // 已注册
+  // Registered
 }
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
 const { createRoot } = await import('react-dom/client')
@@ -136,10 +142,10 @@ function installApiStub(captured: CapturedRequest[]): void {
 }
 
 // ---------------------------------------------------------------------------
-// 1. 纯函数：parseCompactSlashCommand & isSessionManageCommand
+// 1. Pure functions: parseCompactSlashCommand & isSessionManageCommand
 // ---------------------------------------------------------------------------
 
-test('parseCompactSlashCommand 与 isSessionManageCommand：精确识别 /compact 与可选 instructions', { timeout: 60_000 }, () => {
+test('parseCompactSlashCommand & isSessionManageCommand: exact /compact recognition with optional instructions', { timeout: 60_000 }, () => {
   assert.deepEqual(parseCompactSlashCommand('/compact'), {})
   assert.deepEqual(parseCompactSlashCommand('/compact   '), {})
   assert.deepEqual(parseCompactSlashCommand('  /compact  '), {})
@@ -158,10 +164,10 @@ test('parseCompactSlashCommand 与 isSessionManageCommand：精确识别 /compac
 })
 
 // ---------------------------------------------------------------------------
-// 2. ConversationTimeline：pending compaction divider 渲染与指纹
+// 2. ConversationTimeline: pending compaction divider rendering and fingerprint
 // ---------------------------------------------------------------------------
 
-test('ConversationTimeline：compacting=true 时渲染「正在精简上下文…」与旋转 loader，并排在排队消息前', { timeout: 60_000 }, async () => {
+test('ConversationTimeline: compacting=true renders the in-progress divider with spinner ahead of queued messages', { timeout: 60_000 }, async () => {
   ;(globalThis as { ResizeObserver?: unknown }).ResizeObserver = NoopResizeObserver
   const conversation = makeConversation({
     status: 'idle',
@@ -206,18 +212,18 @@ test('ConversationTimeline：compacting=true 时渲染「正在精简上下文�
   })
 
   const dividerLabel = host.querySelector('.context-divider-label')
-  assert.ok(dividerLabel !== null, '必须渲染上下文分割线标签')
+  assert.ok(dividerLabel !== null, 'the context divider label must render')
   assert.match(dividerLabel.textContent ?? '', /Compacting context…/)
-  assert.ok(dividerLabel.querySelector('svg.spin-slow') !== null, 'pending 分割线须渲染 spin-slow loader 图标')
+  assert.ok(dividerLabel.querySelector('svg.spin-slow') !== null, 'the pending divider must render the spin-slow loader icon')
 
-  // DOM 顺序：分割线必须在排队中的人类消息之前
+  // DOM order: the divider must precede queued human messages
   const innerHtml = host.querySelector('.timeline-inner')?.innerHTML ?? ''
   const dividerPos = innerHtml.indexOf('Compacting context…')
   const queuedPos = innerHtml.indexOf('精简完继续修改')
-  assert.ok(dividerPos >= 0 && queuedPos > dividerPos, 'pending 分割线应在排队消息之前渲染')
+  assert.ok(dividerPos >= 0 && queuedPos > dividerPos, 'the pending divider renders before queued messages')
 })
 
-test('ConversationTimeline：contentFingerprint 包含 compacting 状态以维持贴底锚定', { timeout: 60_000 }, async () => {
+test('ConversationTimeline: contentFingerprint includes the compacting state to keep the bottom anchor', { timeout: 60_000 }, async () => {
   ;(globalThis as { ResizeObserver?: unknown }).ResizeObserver = NoopResizeObserver
   const timelineSrc = readFileSync(new URL('../src/conversation/ConversationTimeline.tsx', import.meta.url), 'utf8')
   assert.match(timelineSrc, /contextUsage\?\.compacting === true \? 1 : 0/)
@@ -249,7 +255,7 @@ test('ConversationTimeline：contentFingerprint 包含 compacting 状态以维�
   Object.defineProperty(scroller, 'clientHeight', { configurable: true, get: () => 200 })
   Object.defineProperty(scroller, 'scrollHeight', { configurable: true, get: () => scrollHeight })
 
-  // compacting 变为 true：内容增加后自动贴底到新 scrollHeight
+  // compacting flips to true: after content grows, auto-stick to the new scrollHeight
   scrollHeight = 260
   const compactingConv = makeConversation({
     status: 'idle',
@@ -261,14 +267,14 @@ test('ConversationTimeline：contentFingerprint 包含 compacting 状态以维�
     )
   })
 
-  assert.equal(scroller.scrollTop, 260, 'compacting 状态切换后贴底滚动应跟随到新底部')
+  assert.equal(scroller.scrollTop, 260, 'after the compacting flip the bottom-stick scroll follows the new bottom')
 })
 
 // ---------------------------------------------------------------------------
-// 3. Composer：compacting=true 时切换 busy 控件、占位符与只读「精简中…」
+// 3. Composer: compacting=true switches to busy controls, placeholder and the read-only compacting status
 // ---------------------------------------------------------------------------
 
-test('Composer：status=idle 且 compacting=true 时切换为 busy/stop/queue 控件，且保持「精简中…」无 svg', { timeout: 60_000 }, async () => {
+test('Composer: status=idle && compacting=true switches to busy/stop/queue controls while keeping the svg-free compacting status', { timeout: 60_000 }, async () => {
   ;(globalThis as { ResizeObserver?: unknown }).ResizeObserver = NoopResizeObserver
   const captured: CapturedRequest[] = []
   installApiStub(captured)
@@ -288,26 +294,26 @@ test('Composer：status=idle 且 compacting=true 时切换为 busy/stop/queue �
     root.render(e(HostStoreProviders, { value: store }, e(Composer, { conversation, prefill: null })))
   })
 
-  // .composer-context-status 保持无 <svg> 与精确文案
+  // .composer-context-status stays free of <svg> with exact copy
   const statusEl = host.querySelector<HTMLElement>('.composer-context-status')
   assert.ok(statusEl !== null)
   assert.equal(statusEl.textContent, 'Compacting…')
   assert.ok(statusEl.querySelector('svg') === null)
 
-  // 占位符切到 busy 态
+  // Placeholder switches to the busy variant
   const ta = host.querySelector<HTMLTextAreaElement>('textarea.composer-textarea')!
   assert.equal(ta.placeholder, getComposerPlaceholder(true, false))
 
-  // 空草稿显示停止按钮
+  // Empty draft shows the stop button
   const abortBtn = host.querySelector<HTMLButtonElement>('button.composer-abort-button[aria-label="Stop the current execution"]')
-  assert.ok(abortBtn !== null, 'compacting 时空草稿应显示停止当前执行按钮')
+  assert.ok(abortBtn !== null, 'with an empty draft while compacting, the stop button must show')
 
-  // 输入文本后出现插话/排队分流控件，Enter 发送 steer，⌘+Enter 发送 followUp
+  // With text typed, steer/queue split controls appear; Enter sends steer, ⌘+Enter sends followUp
   await act(async () => {
     typeInto(ta, '精简后跟进')
   })
   const steerBtn = host.querySelector<HTMLButtonElement>('button.composer-steer-action')
-  assert.ok(steerBtn !== null, 'compacting 时非空草稿应显示插话引导分流按钮')
+  assert.ok(steerBtn !== null, 'with a non-empty draft while compacting, the steer split button must show')
 
   await act(async () => {
     ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
@@ -327,10 +333,10 @@ test('Composer：status=idle 且 compacting=true 时切换为 busy/stop/queue �
 })
 
 // ---------------------------------------------------------------------------
-// 4. Composer：/compact <instructions> 转发与重复提交守卫
+// 4. Composer: /compact <instructions> forwarding and the repeat-submit guard
 // ---------------------------------------------------------------------------
 
-test('Composer：/compact <instructions> 转发 instructions，/compact 重复提交在 compacting=true 时拦截并提示', { timeout: 60_000 }, async () => {
+test('Composer: /compact <instructions> forwards instructions; a repeat submit at compacting=true is blocked with a notice', { timeout: 60_000 }, async () => {
   ;(globalThis as { ResizeObserver?: unknown }).ResizeObserver = NoopResizeObserver
   const captured: CapturedRequest[] = []
   installApiStub(captured)
@@ -363,7 +369,7 @@ test('Composer：/compact <instructions> 转发 instructions，/compact 重复�
   assert.equal(ta.value, '')
   assert.ok(store.notices.some((n) => n.title === 'Compaction submitted'))
 
-  // 2) /compact + 仅空白：不带 instructions
+  // 2) /compact + whitespace only: no instructions carried
   await act(async () => {
     typeInto(ta, '/compact   ')
   })
@@ -375,7 +381,7 @@ test('Composer：/compact <instructions> 转发 instructions，/compact 重复�
   assert.equal(captured[1]!.path, '/api/conversations/1/compact')
   assert.deepEqual(captured[1]!.body, {})
 
-  // 3) compacting=true 时再次提交 /compact 或 /compact extra：拦截不发请求并提示「上下文精简正在进行中」
+  // 3) Submitting /compact or /compact extra again at compacting=true: blocked, no request, in-progress notice
   const compactingConv = makeConversation({ status: 'idle', contextUsage: { tokens: null, contextWindow: 100_000, compacting: true } })
   await act(async () => {
     root.render(e(HostStoreProviders, { value: store }, e(Composer, { conversation: compactingConv, prefill: null })))
@@ -388,19 +394,19 @@ test('Composer：/compact <instructions> 转发 instructions，/compact 重复�
     ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
   })
   await act(async () => {})
-  assert.equal(captured.length, 2, 'compacting=true 时不得发送重复 /compact 或 /input 请求')
-  assert.equal(ta.value, '', '草稿应被清空')
+  assert.equal(captured.length, 2, 'no duplicate /compact or /input request may be sent at compacting=true')
+  assert.equal(ta.value, '', 'the draft must be cleared')
   assert.ok(
     store.notices.some((n) => n.level === 'info' && n.title === 'Context compaction in progress' && n.conversationId === 1),
-    '应推送「Context compaction in progress」info 通知',
+    'an info notice "Context compaction in progress" must be pushed',
   )
 })
 
 // ---------------------------------------------------------------------------
-// 5. ConversationPane：更多菜单禁用与「正在精简上下文…」，并透传 pending 分割线
+// 5. ConversationPane: more-menu disable with the in-progress copy, and the pending divider passthrough
 // ---------------------------------------------------------------------------
 
-test('ConversationPane：compacting=true 时菜单项禁用显示「正在精简上下文…」与旋转 loader，时间线渲染 pending 分割线', { timeout: 60_000 }, async () => {
+test('ConversationPane: at compacting=true the menu item disables showing the in-progress copy with spinner; the timeline renders the pending divider', { timeout: 60_000 }, async () => {
   ;(globalThis as { ResizeObserver?: unknown }).ResizeObserver = NoopResizeObserver
   const compactCalls: string[] = []
   let activeConversations: ConversationSummary[] = [
@@ -457,10 +463,10 @@ test('ConversationPane：compacting=true 时菜单项禁用显示「正在精简
     await new Promise((resolve) => setTimeout(resolve, 30))
   })
 
-  // 时间线也应渲染 pending compaction divider
+  // The timeline must also render the pending compaction divider
   assert.match(host.querySelector('.context-divider-label')?.textContent ?? '', /Compacting context…/)
 
-  // 打开「更多会话操作」菜单
+  // Open the "more conversation actions" menu
   const menuBtn = document.querySelector<HTMLButtonElement>('.pane-more-menu button[aria-label="More conversation actions"]')
   assert.ok(menuBtn !== null)
   await act(async () => {
@@ -469,12 +475,12 @@ test('ConversationPane：compacting=true 时菜单项禁用显示「正在精简
 
   const items = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')]
   const compactItem = items.find((el) => el.textContent?.includes('Compacting context…'))
-  assert.ok(compactItem !== undefined, '菜单项在 compacting=true 时应显示「正在精简上下文…」')
-  assert.equal(compactItem.getAttribute('aria-disabled'), 'true', '菜单项在 compacting=true 时应禁用')
-  assert.ok(compactItem.querySelector('svg.spin-slow') !== null, '菜单项应包含旋转 loader 图标')
+  assert.ok(compactItem !== undefined, 'at compacting=true the menu item shows the in-progress copy')
+  assert.equal(compactItem.getAttribute('aria-disabled'), 'true', 'at compacting=true the menu item must be disabled')
+  assert.ok(compactItem.querySelector('svg.spin-slow') !== null, 'the menu item must contain the spinner loader icon')
 
   await act(async () => {
     compactItem.click()
   })
-  assert.equal(compactCalls.length, 0, '禁用态点击不得发出 /compact 请求')
+  assert.equal(compactCalls.length, 0, 'a disabled click must not issue a /compact request')
 })

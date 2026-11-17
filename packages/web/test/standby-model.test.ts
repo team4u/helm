@@ -1,7 +1,8 @@
 /**
- * 待命草稿存储与首发编排纯逻辑测试（standby-model.ts）：
- * 覆盖同步去重、步骤顺序（create -> patch -> upload -> submit）、失败锚点保留、
- * 重试复用（不重复 create / 不重复上传）、环境与创建入参组装、附件上限。
+ * Pure-logic tests for standby draft storage and the first-send pipeline (standby-model.ts):
+ * covers synchronous dedupe, step order (create -> patch -> upload -> submit), failure-anchor
+ * retention, retry reuse (no duplicate create / no duplicate upload), environment and create
+ * input assembly, and the attachment size cap.
  */
 import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
@@ -108,7 +109,7 @@ async function run(key: string, profileId: string, deps: StandbySendDeps): Promi
   return executeStandbySend(key, profileId, deps)
 }
 
-test('同步去重：sending 标记后的第二次调用直接 busy，不重复 create', { timeout: 60_000 }, async () => {
+test('synchronous dedupe: a second call after the sending flag is claimed returns busy with no duplicate create', { timeout: 60_000 }, async () => {
   const key = standbyDraftKey({ panel: 'primary', profileId: 'assistant' })
   const log = makeLog()
   let releaseCreate!: () => void
@@ -122,15 +123,15 @@ test('同步去重：sending 标记后的第二次调用直接 busy，不重复 
   updateStandbyDraft(key, { text: 'hello' })
   const first = run(key, 'assistant', deps)
   const second = await run(key, 'assistant', deps)
-  assert.equal(second, 'busy', '在途第二次调用被同步拒绝')
+  assert.equal(second, 'busy', 'the in-flight second call is rejected synchronously')
   releaseCreate()
-  // first 的后续步骤（submit）会执行
+  // The first call's remaining steps (submit) still run
   await first
   assert.equal(log.creates.length, 1)
   assert.equal(log.submits.length, 1)
 })
 
-test('步骤顺序：create -> patch thinkingLevel -> 逐个上传 -> submit 携带附件', { timeout: 60_000 }, async () => {
+test('step order: create -> patch thinkingLevel -> per-file upload -> submit carries attachments', { timeout: 60_000 }, async () => {
   const key = standbyDraftKey({ panel: 'primary', profileId: 'assistant' })
   const log = makeLog()
   const { draft } = admitStandbyFiles(getStandbyDraft(key), [makeFile('a.txt'), makeFile('b.txt')])
@@ -143,10 +144,10 @@ test('步骤顺序：create -> patch thinkingLevel -> 逐个上传 -> submit 携
   assert.equal(log.submits.length, 1)
   assert.deepEqual(log.submits[0]!.payload.attachments, ['art-1', 'art-2'])
   assert.deepEqual(log.navigations, [9])
-  assert.equal(getStandbyDraft(key).text, '', '成功后草稿清空')
+  assert.equal(getStandbyDraft(key).text, '', 'the draft clears on success')
 })
 
-test('thinkingLevel 未设置不 patch；环境未定制不携带', { timeout: 60_000 }, async () => {
+test('no thinkingLevel patch when unset; no environment fields when not customized', { timeout: 60_000 }, async () => {
   const key = standbyDraftKey({ panel: 'primary', profileId: 'assistant' })
   const log = makeLog()
   updateStandbyDraft(key, { text: '默认配置' })
@@ -156,7 +157,7 @@ test('thinkingLevel 未设置不 patch；环境未定制不携带', { timeout: 6
   assert.equal(log.submits[0]!.payload.attachments, undefined)
 })
 
-test('create 失败：failed、无锚点、草稿保留；重试重新 create', { timeout: 60_000 }, async () => {
+test('create failure: failed, no anchor, draft preserved; retry re-creates', { timeout: 60_000 }, async () => {
   const key = standbyDraftKey({ panel: 'primary', profileId: 'assistant' })
   const log = makeLog()
   log.failures.create = new Error('boom')
@@ -165,28 +166,28 @@ test('create 失败：failed、无锚点、草稿保留；重试重新 create', 
   assert.equal(first, 'failed')
   assert.equal(log.errors[0]?.conversationId, undefined)
   const draft = getStandbyDraft(key)
-  assert.equal(draft.text, '第一条', '草稿保留')
-  assert.equal(draft.conversationId, undefined, '未创建成功不产生锚点')
-  assert.equal(draft.sending, false, '失败后复位 sending')
+  assert.equal(draft.text, '第一条', 'the draft is preserved')
+  assert.equal(draft.conversationId, undefined, 'no anchor without a successful create')
+  assert.equal(draft.sending, false, 'sending resets after failure')
   const second = await run(key, 'assistant', makeDeps(log))
   assert.equal(second, 'sent')
   assert.equal(log.creates.length, 2)
 })
 
-test('submit 失败于 create 之后：保留真实 ID；重试不重复 create', { timeout: 60_000 }, async () => {
+test('submit failure after create: the real id is kept; retry never re-creates', { timeout: 60_000 }, async () => {
   const key = standbyDraftKey({ panel: 'primary', profileId: 'assistant' })
   const log = makeLog()
   log.failures.submit = new Error('submit boom')
   updateStandbyDraft(key, { text: '会创建但失败' })
   assert.equal(await run(key, 'assistant', makeDeps(log)), 'failed')
-  assert.equal(getStandbyDraft(key).conversationId, 9, '真实会话 ID 保留')
+  assert.equal(getStandbyDraft(key).conversationId, 9, 'the real conversation id is kept')
   assert.notEqual(getStandbyDraft(key).error, null)
   assert.equal(await run(key, 'assistant', makeDeps(log)), 'sent')
-  assert.equal(log.creates.length, 1, '重试复用会话，不重复创建')
+  assert.equal(log.creates.length, 1, 'retry reuses the conversation without re-creating')
   assert.equal(log.submits.length, 2)
 })
 
-test('上传部分失败：已上传转正；重试只补传缺的文件', { timeout: 60_000 }, async () => {
+test('partial upload failure: uploaded files are finalized; retry uploads only the missing files', { timeout: 60_000 }, async () => {
   const key = standbyDraftKey({ panel: 'primary', profileId: 'assistant' })
   const log = makeLog()
   log.failures.uploadNames = ['b.txt']
@@ -195,23 +196,23 @@ test('上传部分失败：已上传转正；重试只补传缺的文件', { tim
   assert.equal(await run(key, 'assistant', makeDeps(log)), 'failed')
   assert.equal(getStandbyDraft(key).conversationId, 9)
   const afterFail = getStandbyDraft(key)
-  assert.deepEqual(afterFail.localFiles.map((f) => f.name), ['b.txt'], '失败文件留在本地暂存')
-  assert.deepEqual(afterFail.uploaded.map((u) => u.name), ['a.txt'], '成功文件已转正')
+  assert.deepEqual(afterFail.localFiles.map((f) => f.name), ['b.txt'], 'the failed file stays in local staging')
+  assert.deepEqual(afterFail.uploaded.map((u) => u.name), ['a.txt'], 'the successful file is finalized')
   log.failures.uploadNames = undefined
   assert.equal(await run(key, 'assistant', makeDeps(log)), 'sent')
-  assert.deepEqual(log.uploads.map((u) => u.name), ['a.txt', 'b.txt'], '重试只补传 b.txt')
-  assert.equal(log.submits.length, 1, '上传失败时首次未走到 submit')
+  assert.deepEqual(log.uploads.map((u) => u.name), ['a.txt', 'b.txt'], 'retry uploads only b.txt')
+  assert.equal(log.submits.length, 1, 'the failed first attempt never reached submit')
   assert.deepEqual(log.submits[0]!.payload.attachments, ['art-1', 'art-2'])
 })
 
-test('用户已切走：不导航改后台通知；仍查看时才 replace 导航', { timeout: 60_000 }, async () => {
+test('user switched away: no navigation, a background notice instead; replace-navigation only while still viewing', { timeout: 60_000 }, async () => {
   const awayKey = standbyDraftKey({ panel: 'primary', profileId: 'assistant' })
   const awayLog = makeLog()
   awayLog.viewing = false
   updateStandbyDraft(awayKey, { text: '后台完成' })
   await run(awayKey, 'assistant', makeDeps(awayLog))
-  assert.deepEqual(awayLog.navigations, [], '不抢新导航')
-  assert.deepEqual(awayLog.backgroundNotices, [9], '发出后台通知')
+  assert.deepEqual(awayLog.navigations, [], 'never hijacks navigation')
+  assert.deepEqual(awayLog.backgroundNotices, [9], 'a background notice goes out')
 
   const hereKey = standbyDraftKey({ panel: 'split', profileId: 'assistant' })
   const hereLog = makeLog()
@@ -221,7 +222,7 @@ test('用户已切走：不导航改后台通知；仍查看时才 replace 导�
   assert.deepEqual(hereLog.backgroundNotices, [])
 })
 
-test('成功清空后 finally 不复活空记录', { timeout: 60_000 }, async () => {
+test('after a successful clear, finally never revives the empty record', { timeout: 60_000 }, async () => {
   const key = standbyDraftKey({ panel: 'primary', profileId: 'assistant' })
   const log = makeLog()
   updateStandbyDraft(key, { text: '清理校验' })
@@ -233,7 +234,7 @@ test('成功清空后 finally 不复活空记录', { timeout: 60_000 }, async ()
   })
 })
 
-test('buildStandbyCreateInit：环境/模型仅在显式设置时携带', { timeout: 60_000 }, () => {
+test('buildStandbyCreateInit: environment/model ride along only when explicitly set', { timeout: 60_000 }, () => {
   assert.deepEqual(buildStandbyCreateInit('p', { envCustomized: false, envNodeId: undefined, envCwd: undefined, model: undefined }), { profileId: 'p' })
   assert.deepEqual(
     buildStandbyCreateInit('p', { envCustomized: true, envNodeId: 'remote', envCwd: ' /w ', model: '' }),
@@ -245,14 +246,14 @@ test('buildStandbyCreateInit：环境/模型仅在显式设置时携带', { time
   )
 })
 
-test('standbyEnvError：未定制恒通过；定制后沿用绝对路径校验', { timeout: 60_000 }, () => {
+test('standbyEnvError: always passes when not customized; applies the absolute-path validation once customized', { timeout: 60_000 }, () => {
   assert.equal(standbyEnvError({ envCustomized: false, envNodeId: undefined, envCwd: undefined }), null)
   assert.equal(standbyEnvError({ envCustomized: true, envNodeId: 'r', envCwd: '' }), 'Enter the working directory on the target node (absolute path)')
   assert.equal(standbyEnvError({ envCustomized: true, envNodeId: 'r', envCwd: 'relative/path' }), 'Working directory must be an absolute path (POSIX / or Windows drive letter)')
   assert.equal(standbyEnvError({ envCustomized: true, envNodeId: 'r', envCwd: '/abs' }), null)
 })
 
-test('admitStandbyFiles：15MiB 上限拒绝并保留接受项', { timeout: 60_000 }, () => {
+test('admitStandbyFiles: rejects above the 15 MiB cap and keeps accepted items', { timeout: 60_000 }, () => {
   const big = makeFile('big.bin')
   Object.defineProperty(big, 'size', { value: 16 * 1024 * 1024 })
   const small = makeFile('small.txt')
@@ -263,44 +264,44 @@ test('admitStandbyFiles：15MiB 上限拒绝并保留接受项', { timeout: 60_0
   assert.equal(draft.localFiles.length, 1)
 })
 
-test('inheritedEnvOf：空值不继承，local 节点按缺省处理由调用方决定', { timeout: 60_000 }, () => {
+test('inheritedEnvOf: empty values are not inherited; the local node default is the caller decision', { timeout: 60_000 }, () => {
   assert.deepEqual(inheritedEnvOf({}), {})
   assert.deepEqual(inheritedEnvOf({ nodeId: 'remote', cwd: '/w' }), { nodeId: 'remote', cwd: '/w' })
   assert.deepEqual(inheritedEnvOf({ nodeId: '', cwd: '' }), {})
 })
 
-test('clearStandbyDraft：不存在的键清理不广播报错', { timeout: 60_000 }, () => {
+test('clearStandbyDraft: clearing an absent key broadcasts no error', { timeout: 60_000 }, () => {
   clearStandbyDraft('missing:key')
   assert.equal(getStandbyDraft('missing:key').text, '')
 })
 
-test('standbyManageAction：/new 清草稿，/clear 与 /compact 需已有会话，其余为普通输入', { timeout: 60_000 }, () => {
+test('standbyManageAction: /new clears the draft; /clear and /compact need an existing conversation; the rest is plain input', { timeout: 60_000 }, () => {
   assert.deepEqual(standbyManageAction('/new'), { kind: 'clear-draft' })
   assert.deepEqual(standbyManageAction('  /new  '), { kind: 'clear-draft' })
   assert.deepEqual(standbyManageAction('/clear'), { kind: 'needs-conversation', command: '/clear' })
   assert.deepEqual(standbyManageAction('/compact'), { kind: 'needs-conversation', command: '/compact' })
   assert.deepEqual(standbyManageAction('/compact 保留架构决策'), { kind: 'needs-conversation', command: '/compact' })
   assert.equal(standbyManageAction('/definitely-not-registered'), null)
-  assert.equal(standbyManageAction('请帮我执行 /new'), null, '非精确命中不拦截')
+  assert.equal(standbyManageAction('请帮我执行 /new'), null, 'non-exact hits are not intercepted')
 })
 
-test('standbyDraftKey：完整入口坐标无歧义，空值规范化', { timeout: 60_000 }, () => {
+test('standbyDraftKey: unambiguous full entry coordinate, empty values normalized', { timeout: 60_000 }, () => {
   const plain = standbyDraftKey({ panel: 'primary', profileId: 'assistant' })
   const r1 = standbyDraftKey({ panel: 'primary', profileId: 'assistant', nodeId: 'r1', cwd: '/a' })
   const r2 = standbyDraftKey({ panel: 'primary', profileId: 'assistant', nodeId: 'r2', cwd: '/b' })
   assert.notEqual(plain, r1)
   assert.notEqual(r1, r2)
-  // 空串等价于未设置；主/分屏同坐标不同键
+  // Empty strings equal unset; primary/split same coordinates yield different keys
   assert.equal(standbyDraftKey({ panel: 'primary', profileId: 'p', nodeId: '', cwd: '' }), plain.replace('assistant', 'p'))
   assert.notEqual(standbyDraftKey({ panel: 'split', profileId: 'assistant', nodeId: 'r1', cwd: '/a' }), r1)
   assert.notEqual(
     standbyDraftKey({ panel: 'primary', profileId: 'qa-helper', nodeId: 'node', cwd: '/a' }),
     standbyDraftKey({ panel: 'primary', profileId: 'qa', nodeId: 'helper-node', cwd: '/a' }),
-    'React 实例与草稿必须共用无歧义坐标键，不能用连字符拼接不同字段',
+    'React instances and drafts must share the unambiguous coordinate key, not hyphen-joined fields',
   )
 })
 
-test('resetEnvStandbyDraft：清除环境并转移正文；目标已有草稿不覆盖', { timeout: 60_000 }, () => {
+test('resetEnvStandbyDraft: clears the environment and moves the text; never overwrites an existing target draft', { timeout: 60_000 }, () => {
   const from = standbyDraftKey({ panel: 'primary', profileId: 'p', nodeId: 'r1', cwd: '/a' })
   const to = standbyDraftKey({ panel: 'primary', profileId: 'p' })
   updateStandbyDraft(from, { text: '跟随正文', envCustomized: true, envNodeId: 'r1', envCwd: '/a' })
@@ -309,9 +310,9 @@ test('resetEnvStandbyDraft：清除环境并转移正文；目标已有草稿不
   assert.equal(moved.text, '跟随正文')
   assert.equal(moved.envCustomized, false)
   assert.equal(moved.envNodeId, undefined)
-  assert.equal(getStandbyDraft(from).text, '', '旧坐标记录随转移移除')
+  assert.equal(getStandbyDraft(from).text, '', 'the old-coordinate record is removed by the move')
 
-  // 目标已有草稿：不覆盖、返回 false，源草稿保留
+  // Target already holds a draft: no overwrite, returns false, the source draft is preserved
   const from2 = standbyDraftKey({ panel: 'split', profileId: 'p', nodeId: 'r1', cwd: '/a' })
   updateStandbyDraft(from2, { text: '分屏草稿' })
   updateStandbyDraft(standbyDraftKey({ panel: 'split', profileId: 'p' }), { text: '已有默认草稿' })
@@ -320,7 +321,7 @@ test('resetEnvStandbyDraft：清除环境并转移正文；目标已有草稿不
   assert.equal(getStandbyDraft(from2).text, '分屏草稿')
 })
 
-test('世代作废：reset 后在途回包返回 stale，不写入锚点不提交不通知', { timeout: 60_000 }, async () => {
+test('epoch voiding: after a reset, in-flight responses return stale — no anchor write, no submit, no notice', { timeout: 60_000 }, async () => {
   const key = standbyDraftKey({ panel: 'primary', profileId: 'assistant' })
   const log = makeLog()
   let releaseCreate!: () => void
@@ -336,18 +337,18 @@ test('世代作废：reset 后在途回包返回 stale，不写入锚点不提�
   resetStandbyDrafts()
   releaseCreate()
   assert.equal(await task, 'stale')
-  assert.equal(getStandbyDraft(key).text, '', '回包不得复活正文')
-  assert.equal(getStandbyDraft(key).conversationId, undefined, '不得写入锚点')
+  assert.equal(getStandbyDraft(key).text, '', 'the response must not revive the text')
+  assert.equal(getStandbyDraft(key).conversationId, undefined, 'no anchor write')
   assert.equal(log.submits.length, 0)
-  assert.equal(log.errors.length, 0, '不发通知')
-  assert.deepEqual(log.navigations, [], '不导航')
+  assert.equal(log.errors.length, 0, 'no notices sent')
+  assert.deepEqual(log.navigations, [], 'no navigation')
 
-  // 新世代同键新草稿：旧任务收尾不得覆盖其 sending 状态
+  // A new-epoch draft under the same key: the old task's cleanup must not overwrite its sending state
   updateStandbyDraft(key, { text: '新世代草稿' })
   assert.equal(getStandbyDraft(key).sending, false)
 })
 
-test('世代作废：upload 等待期 reset 后不继续 submit、已上传转正作废', { timeout: 60_000 }, async () => {
+test('epoch voiding: a reset during the upload wait stops the submit; finalized uploads are voided', { timeout: 60_000 }, async () => {
   const key = standbyDraftKey({ panel: 'primary', profileId: 'assistant' })
   const log = makeLog()
   let releaseUpload!: () => void
@@ -365,13 +366,14 @@ test('世代作废：upload 等待期 reset 后不继续 submit、已上传转�
   resetStandbyDrafts()
   releaseUpload()
   assert.equal(await task, 'stale')
-  assert.equal(log.submits.length, 0, '不继续 submit')
-  assert.equal(getStandbyDraft(key).uploaded.length, 0, '回包不得复活附件')
+  assert.equal(log.submits.length, 0, 'no further submit')
+  assert.equal(getStandbyDraft(key).uploaded.length, 0, 'the response must not revive attachments')
 })
 
-test('admitStandbyFiles：伪 File 普通对象在录入边界拒绝，真实 File 正常暂存', { timeout: 60_000 }, () => {
-  // 合成事件携带的普通对象（仅 name/size 字段，无 arrayBuffer）：曾混入草稿并在
-  // 首发 uploadArtifact 的 file.arrayBuffer() 同步抛错，打断已锚定链路（浏览器实测）。
+test('admitStandbyFiles: fake-File plain objects are rejected at admission; real Files stage normally', { timeout: 60_000 }, () => {
+  // Plain objects riding synthetic events (name/size fields only, no arrayBuffer): they once sneaked
+  // into drafts and threw synchronously at file.arrayBuffer() during the first send's uploadArtifact,
+  // cutting the anchored chain in half (verified in a browser).
   const fake = { name: 'fake.txt', size: 10, type: 'text/plain' } as unknown as File
   const readableButNotBlob = {
     name: 'fake-readable.txt', size: 10, type: 'text/plain',
@@ -380,10 +382,10 @@ test('admitStandbyFiles：伪 File 普通对象在录入边界拒绝，真实 Fi
   const real = makeFile('real.txt')
   const realBlobLike = Object.assign(new Blob(['blob']), { name: 'blob-named.txt' }) as unknown as File
   const { draft, accepted, rejected } = admitStandbyFiles(getStandbyDraft('x'), [fake, readableButNotBlob, real, realBlobLike])
-  assert.deepEqual(accepted.map((f) => f.name), ['real.txt', 'blob-named.txt'], '真实 Blob/File 均可暂存')
+  assert.deepEqual(accepted.map((f) => f.name), ['real.txt', 'blob-named.txt'], 'real Blobs/Files both stage')
   assert.equal(rejected.length, 2)
   assert.equal(rejected[0]!.file, fake)
-  assert.equal(rejected[1]!.file, readableButNotBlob, '仅伪造 arrayBuffer 方法仍不是 Blob')
-  assert.ok(rejected[0]!.reason.includes('Unsupported attachment source'), '显式给出用户可读原因')
-  assert.equal(draft.localFiles.length, 2, '伪对象绝不进入 localFiles')
+  assert.equal(rejected[1]!.file, readableButNotBlob, 'faking only the arrayBuffer method is still not a Blob')
+  assert.ok(rejected[0]!.reason.includes('Unsupported attachment source'), 'a user-readable reason is given explicitly')
+  assert.equal(draft.localFiles.length, 2, 'fake objects never enter localFiles')
 })
