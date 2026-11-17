@@ -26,7 +26,7 @@ import type { AgentSpawnRequest, ConversationPatch, ConversationSummary } from '
 import { HelmError, sanitizeAgentNamespacedMeta } from '@helm/protocol'
 import type { Harness } from '@earendil-works/pi-durable'
 import type { Models } from '@earendil-works/pi-ai'
-import { parseModelRef } from './models.js'
+import { parseModelRef, type ModelRefParts } from './models.js'
 import { normalizeSessionCwd, trustedPlatformFromEnvFabric } from './target-cwd.js'
 import { resolveSpawnTargetChain } from './spawn-target.js'
 import {
@@ -132,6 +132,11 @@ export interface NativeSpawnDeps extends HelmToolDeps {
   assertModelEnabled?(provider: string, modelId: string): void
   /** Global default reasoning effort; uses SDK off if unset. */
   resolveThinkingLevel?(): string | undefined
+  /**
+   * Per-model thinking default lookup (`config.json.modelThinkingLevels`): ranks between explicit effort
+   * (or same-model parent override on forks) and the Profile level, mirroring the conversation chain.
+   */
+  modelThinkingLevelOf?(model: ModelRefParts): string | undefined
   /** `agentId -> child convId` (resume mapping, stable within process). */
   agentSessions: Map<string, number>
   /**
@@ -665,6 +670,7 @@ async function createChildConversation(
     parentSummary,
     defaultModel: deps.resolveModel,
     defaultThinkingLevel: deps.resolveThinkingLevel,
+    modelThinkingLevelOf: deps.modelThinkingLevelOf,
     modelsForClamp: deps.modelsForClamp?.(),
   })
   // Reject disabled models before creating the conversation (`409 model_disabled`), covering all resolution paths.

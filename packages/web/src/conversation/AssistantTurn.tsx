@@ -61,10 +61,6 @@ function AssistantTurnContent({ turn, conversation, siblingCalls, isLatestTurn =
   const { t } = useWebLocale()
   const activeToolCallIds = useContext(ToolActivityContext)?.activeToolCallIds
   const [forking, setForking] = useState(false)
-  const lastText = useMemo(() => {
-    const texts = turn.segments.filter((s) => s.kind === 'text') as Array<{ kind: 'text'; text: string }>
-    return texts.map((t) => t.text).join('\n\n')
-  }, [turn.segments])
   // 流式正文提示：live 回合的最后一个文本段是仍在增长的真 live 文本（流式增量
   // 总并入末段），传 streaming 启用 MarkdownView 流式渲染路径；已结算回合与
   // 其他静态 Markdown 不启用。
@@ -74,6 +70,12 @@ function AssistantTurnContent({ turn, conversation, siblingCalls, isLatestTurn =
     }
     return -1
   }, [turn.segments])
+  // 回合末尾复制按钮仅复制最后一个助手文本回复，避免把工具调用前的过程旁白混入剪贴板。
+  const lastText = useMemo(() => {
+    if (lastTextSegIndex < 0) return ''
+    const seg = turn.segments[lastTextSegIndex]
+    return seg?.kind === 'text' ? seg.text : ''
+  }, [turn.segments, lastTextSegIndex])
 
   const forkFromHere = async (): Promise<void> => {
     const entryId = turn.entryIds.length > 0 ? turn.entryIds[turn.entryIds.length - 1]! : undefined

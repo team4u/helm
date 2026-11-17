@@ -28,6 +28,7 @@ import { ComposerSendControls } from './ComposerSendControls.js'
 import { Tooltip } from '../ui/Tooltip.js'
 import { useComposerController } from './composer-controller.js'
 import { autoGrowTextarea, useComposerPopovers, useElementWidthResize } from './use-composer-popovers.js'
+import { useConversationDirtySink } from './conversation-window-model.js'
 import {
   canConfigureSessionEnv,
   busyEnterMode,
@@ -118,6 +119,7 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
   // 发送管线（草稿 / 编辑锚点 / 附件上传 / 提交与失败恢复 / 环境阻塞）。
   // 版本自动刷新挂起判定：实例级脏状态上报键（主屏/分屏/抽屉可同屏渲染同一会话）。
   const composerDirtyKey = useId()
+  const dirtySink = useConversationDirtySink()
   const {
     text,
     attachments,
@@ -149,6 +151,7 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
     envConfigurable,
     working,
     dirtyKey: composerDirtyKey,
+    dirtySink,
   })
 
   const widgets = groupedUi.composerWidgets.filter((w) => matchesUiScope(conversation, w.spec.scope))

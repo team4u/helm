@@ -1,20 +1,20 @@
 /**
- * Automatic thinking level clamping on model switch based on target model capabilities (real SQLite + pi-durable + faux provider).
+ * Thinking level resolution and clamping on model switches based on target model capabilities (real SQLite + pi-durable + faux provider).
  *
  * Mirrors pi coding agent setModel -> setThinkingLevel semantics: passes through when target model capabilities are unknown
  * (without fabricating capabilities), and clamps down along SDK-supported levels when the target model supports fewer levels.
  *
  * Covers:
+ * - Model switches without a simultaneous explicit thinking change clear the stale conversation override so the new
+ *   model's own default chain (per-model default > Profile > global) resolves fresh; explicit overrides still clamp
+ *   to the target model while the model stays unchanged;
  * - Real reasoning model A (thinkingLevelMap declares up to max) -> model B (only up to high):
- *   conversation with explicit max override switched to B has summary.thinkingLevel / thinkingLevelOverride /
- *   SDK agent.thinkingLevel all clamped to high;
- * - Explicit max override + Profile model aligned A -> B: override/effective/SDK all become high,
- *   and the clamped value persists—later title-only updates keep the level, switching back to A stays high;
- * - Inherited effective level (no override) clamps too: global/Profile max becomes high on B;
+ *   inherited levels and per-model defaults clamp to high on B and recover on A;
  * - Empty string (unconfigured) must never be mistakenly clamped to 'off': preserves inheritance chain semantics;
  * - Faux test model (reasoning: false, no thinkingLevelMap, unknown capability) contract preserved:
  *   any inherited level passes through verbatim (consistent with runtime-thinking-config.test.ts baseline);
- * - spawn clamps effort for new subagents by target model capability; resume also clamps explicit effort.
+ * - spawn clamps effort for new subagents by target model capability; resume model switches without explicit
+ *   effort also re-resolve through the per-model default chain.
  */
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -142,20 +142,46 @@ async function assertThinking(kernel: KernelRuntime, id: number, effective: stri
   assert.equal((await sdkAgent(kernel, id)).thinkingLevel, effective || 'off', 'real SDK state must match mirror')
 }
 
-it('switch from A (max) to B (high max): summary, override, and SDK agent all clamp to high', { timeout: 60_000 }, async (t) => {
+it('explicit override clamps while the model stays; a model switch without thinking change clears the stale override', { timeout: 60_000 }, async (t) => {
   const { kernel } = await fixture(t)
   await kernel.setDefaultModel('faux-cap-a/model-a')
   const conv = await kernel.createConversation()
   await kernel.updateConversation(conv.id, { thinkingLevel: 'max' })
   await assertThinking(kernel, conv.id, 'max', 'max')
 
-  // Switch to model B: max is unsupported -> clamps to high (nearest lower SDK-supported level).
-  await kernel.updateConversation(conv.id, { model: 'faux-cap-b/model-b' })
-  await assertThinking(kernel, conv.id, 'high', 'high')
+  // Title-only updates never recompute or drift the explicit override.
+  await kernel.updateConversation(conv.id, { title: 'Updated title' })
+  await assertThinking(kernel, conv.id, 'max', 'max')
 
-  // Switch back to A: clamped high is still supported by A, so it stays unchanged (pi setThinkingLevel persists clamped value).
+  // Switching to model B without a thinking change drops the override chosen for A; nothing else
+  // is configured, so the effective level resolves to unconfigured ('' mirror, SDK off).
+  await kernel.updateConversation(conv.id, { model: 'faux-cap-b/model-b' })
+  await assertThinking(kernel, conv.id, '', undefined)
+  // Switching back to A does not resurrect the old override.
   await kernel.updateConversation(conv.id, { model: 'faux-cap-a/model-a' })
+  await assertThinking(kernel, conv.id, '', undefined)
+
+  // A simultaneous explicit thinking level survives a model switch (clamped to the target model).
+  await kernel.updateConversation(conv.id, { model: 'faux-cap-b/model-b', thinkingLevel: 'max' })
   await assertThinking(kernel, conv.id, 'high', 'high')
+})
+
+it('model switch clears the old override so the new model per-model default takes effect', { timeout: 60_000 }, async (t) => {
+  const { kernel } = await fixture(t)
+  await kernel.setDefaultModel('faux-cap-a/model-a')
+  await kernel.setModelThinkingDefault('faux-cap-b/model-b', 'minimal')
+  const conv = await kernel.createConversation()
+  // Explicit override on A: max.
+  await kernel.updateConversation(conv.id, { thinkingLevel: 'max' })
+  await assertThinking(kernel, conv.id, 'max', 'max')
+
+  // Switch to B: the A-chosen override no longer shadows B's own per-model default.
+  await kernel.updateConversation(conv.id, { model: 'faux-cap-b/model-b' })
+  await assertThinking(kernel, conv.id, 'minimal', undefined)
+
+  // Switching back to A (no per-model default for A) falls through to unconfigured.
+  await kernel.updateConversation(conv.id, { model: 'faux-cap-a/model-a' })
+  await assertThinking(kernel, conv.id, '', undefined)
 })
 
 it('inheritance chain (no override) clamps too: global max becomes high on B and restores max on A', { timeout: 60_000 }, async (t) => {
@@ -209,9 +235,10 @@ it('explicit max override + Profile model A->B alignment: override/effective/SDK
   await kernel.updateConversation(conv.id, { title: 'Updated title' })
   await assertThinking(kernel, conv.id, 'high', 'high')
 
-  // Switch back to model A: clamped persisted high is supported by A and remains unchanged.
+  // An explicit conversation model switch back to A clears the override (no simultaneous thinking change):
+  // the chain re-resolves through Profile.thinkingLevel (medium), which A supports as-is.
   await kernel.updateConversation(conv.id, { model: 'faux-cap-a/model-a' })
-  await assertThinking(kernel, conv.id, 'high', 'high')
+  await assertThinking(kernel, conv.id, 'medium', undefined)
 })
 
 it('empty string (unconfigured) is not mistakenly clamped to off; off semantics remain intact', { timeout: 60_000 }, async (t) => {
@@ -268,8 +295,8 @@ it('spawn creates child clamped by target model capability; resume also clamps e
   })
   await assertThinking(kernel, childB, 'high', 'high')
 
-  // Resume: switching model to A without specifying effort preserves clamped high in mirror (also supported by A),
-  // neither rolling back nor lifting.
+  // Resume: switching model to A without specifying effort re-resolves through the default chain —
+  // the clamped-high override chosen for B is dropped and the global fallback (low, supported by A) applies.
   capA.core.setResponses([fauxAssistantMessage('A resume')])
   await kernel.spawnAgent({
     parentConversationId: 1,
@@ -277,5 +304,5 @@ it('spawn creates child clamped by target model capability; resume also clamps e
     resume: String(childB),
     model: 'faux-cap-a/model-a',
   })
-  await assertThinking(kernel, childB, 'high', 'high')
+  await assertThinking(kernel, childB, 'low', undefined)
 })

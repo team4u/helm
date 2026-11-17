@@ -93,6 +93,16 @@ export const conversationMessages = {
   'conv.thinking.expandThinking': { en: 'Expand thinking', 'zh-CN': '展开思考过程' },
   'conv.thinking.activeLabel': { en: 'Thinking…', 'zh-CN': '正在思考…' },
   'conv.thinking.label': { en: 'Thinking', 'zh-CN': '思考过程' },
+  'conv.thinking.modelTime': { en: 'Model {duration}', 'zh-CN': '模型 {duration}' },
+  'conv.thinking.modelTimeTitle': {
+    en: 'Cumulative model response time of the responses folded into this group (thinking plus tool calls, no visible reply text); not wall-clock elapsed time',
+    'zh-CN': '本组所折叠模型响应的累计耗时（含思考与工具调用、无可见正文）；非墙钟流逝时间',
+  },
+  'conv.thinking.toolsTime': { en: 'Tools {duration}', 'zh-CN': '工具 {duration}' },
+  'conv.thinking.toolsTimeTitle': {
+    en: 'Cumulative tool execution time in this group; parallel tools each count their own execution, so this is not wall-clock elapsed time',
+    'zh-CN': '本组内工具累计执行时间；并行工具各计自身执行时长，并非墙钟流逝时间',
+  },
 
   // --- Assistant turn footer / model identity ------------------------------------
   'conv.model.boundarySwitchedTo': { en: 'Effective model switched to {model}', 'zh-CN': '实际生成模型切换为 {model}' },

@@ -32,7 +32,6 @@ export {
   type WorkflowSpawnRequest,
   type WorkflowSpawnResult,
   type WorkflowGateResult,
-  type WorkflowControl,
   type WorkflowScriptRef,
   type WorkflowScriptSource,
 } from './runtime.js'

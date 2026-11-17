@@ -1,6 +1,6 @@
 /**
  * 共享插件客户端编译与全局命名空间挂载基础设施：
- * 供 builtin-clients.ts 与 workflow-client.ts 复用，避免重复声明 React/SDK 全局桥与 data: ESM 导入逻辑。
+ * 供 builtin-clients.ts 等 Web 宿主测试复用，避免重复声明 React/SDK 全局桥与 data: ESM 导入逻辑。
  */
 import * as React from 'react'
 import * as ReactJsxRuntime from 'react/jsx-runtime'

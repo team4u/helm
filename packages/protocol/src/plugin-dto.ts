@@ -182,6 +182,13 @@ export interface PublicPluginDoc {
   value: unknown
 }
 
+export interface PluginDocOptions {
+  /** true 时文档进入公共快照与 plugin.doc.updated 事件；默认私有。 */
+  public?: boolean
+  /** false 时文档仅驻留进程内存（零 SQLite 读写，随插件停用/会话删除/重启释放），仍受 2 MiB 校验并正常推送公共 SSE；默认 true。 */
+  durable?: boolean
+}
+
 /** Static persistent resource occupancy items declared by plugin services (used by the pre-disable inUse check). */
 export interface PluginInUseItem {
   /** Occupied resource category identifier (e.g. 'cron_job', 'webhook_endpoint', 'profile_runtime', 'profile_model'). */

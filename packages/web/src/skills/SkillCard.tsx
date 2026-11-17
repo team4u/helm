@@ -124,9 +124,12 @@ export function SkillCard({
             <span>{copied ? t('skills.card.copied') : slashCommand}</span>
           </button>
           {refCount > 0 && (
-            <span className="primary-card-pill" title={t('skills.card.referenceFiles', { count: refCount })}>
+            <span
+              className="primary-card-pill tabular-nums"
+              title={t('skills.card.referenceFiles', { count: refCount })}
+            >
               <HelmIcon name="file-text" size={11} />
-              <span>{t('skills.card.referenceFiles', { count: refCount })}</span>
+              <span aria-label={t('skills.card.referenceFiles', { count: refCount })}>{refCount}</span>
             </span>
           )}
         </div>

@@ -168,6 +168,13 @@ export interface WorkflowRunSummary {
   updatedAt: number
   result?: unknown
   error?: string
+  /** 结构化错误码（如 validation_error / workflow_action_uncertain / crash_recovery_limit / secret_grant_expired_on_restart 等；取代错误文本子串猜测）。 */
+  errorCode?: string
+  /** 引擎权威判定的可续跑标记（仅 status='failed' 且账本/规格完整可恢复且未被活跃接管时为 true）。 */
+  resumable?: boolean
+  /** 投影分片瘦身：runs 会话分片剥离大体积原始 result 时保留的单行截断预览与存在标记（完整 result 经 inspect 动作按需读取）。 */
+  resultPreview?: string
+  hasResult?: boolean
   nodes?: WorkflowNodeState[]
   /** 观察用时间线（phase / log）；跨重启从 summary 旁文件恢复。 */
   progress?: WorkflowProgressEntry[]

@@ -1,17 +1,8 @@
 /**
- * 受管 worktree 清理状态机（worktree.ts 拆分模块，WorktreeAllocator 机制层；
- * 总体诚实性纪律见 worktree.ts 模块头）。
- *
- * - `cleanupWorktree`：选择器解析已登记记录 + 占用检查 + per-repo 串行锁
- *   （锁函数经参数注入，同仓库不同 worktree 也串行）+ 锁内重读记录、权威
- *   worktree list 的 path/branch/head 归属匹配、realpath canonical 校验 +
- *   脏工作区保护（未提交修改或未合入提交且未显式 force 时拒绝；状态命令
- *   失败显式报错，绝不假成功）+ 真实 `git worktree remove` / `git branch
- *   -d|-D`（分支删除部分失败先固化 removed 事实、可重试）；目录缺失经节点
- *   真实 fs stat 证明时显式 worktree_missing 并保留登记（绝不全仓 prune
- *   他人的登记）；分支名严格校验 helm 受管前缀；
- * - `assertPathUnusedByProcesses`：删除前进程占用快照检查（force 不可绕
- *   过；只诊断与拒绝，绝不自动终止进程）。
+ * 受管 worktree 清理状态机：
+ * - `cleanupWorktree`：选择器解析已登记记录 + 占用检查 + per-repo 串行锁 + 锁内权威归属与 realpath 校验 +
+ *   脏工作区/未合入保护 + 进程占用检查 + `git worktree remove` / `git branch -d|-D`（分支删除失败先固化 removed 可重试）；
+ * - `assertPathUnusedByProcesses`：删除前进程占用快照检查（`force` 不可绕过，只诊断拒绝不自动杀进程）。
  */
 import { HelmError, type NodePathUsage } from '@helm/protocol'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -27,18 +18,11 @@ import {
   resolveRepoAuthority,
   type RepoAuthority,
 } from './worktree-git.js'
-import type { ManagedWorktreeRecord, WorktreeStore } from './worktree-store.js'
+import { validateWorktreeSelector, type ManagedWorktreeRecord, type WorktreeStore } from './worktree-store.js'
 import { ownerMismatchError } from './worktree-inspect.js'
 import type { CleanupInput, CleanupResult, WorktreeAllocatorDeps } from './worktree.js'
 
-/** 允许清理的分支前缀（helm 受管命名空间；绝不碰人类分支）。 */
 const MANAGED_BRANCH_PREFIXES = ['helm/spawn-', 'helm/wf-'] as const
-
-function pathContains(basePath: string, candidatePath: string): boolean {
-  const base = normalizePathValue(basePath).replace(/\/$/, '')
-  const probe = normalizePathValue(candidatePath).replace(/\/$/, '')
-  return probe === base || probe.startsWith(`${base}/`)
-}
 
 /**
  * 持久持有锁占用拦截（force 不可绕过）：目标记录自身或同节点路径重叠的
@@ -59,7 +43,7 @@ function assertWorktreeNotHeld(
               other.status === 'active' &&
               other.hold !== undefined &&
               other.nodeId === record.nodeId &&
-              (pathContains(record.path, other.path) || pathContains(other.path, record.path)),
+              (store.containsPath(record.path, other.path) || store.containsPath(other.path, record.path)),
           )
   if (held === undefined || held.hold === undefined) return
   const safeLabel = redact(held.hold.label)
@@ -81,29 +65,6 @@ function assertWorktreeNotHeld(
   )
 }
 
-  /**
-   * 删除前进程占用快照检查（per-repo 锁内、真实 git worktree remove 前的
-   * 最后一道屏障；force 不可绕过）。
-   *
-   * 完整性语义（结构性盲区与扫描异常按 errno 分治）：快照 complete 由
-   * 扫描方区分——可观测集合内的非权限类读取异常（EIO 等）或扫描上限
-   * 触发时 complete=false；权限不可观测的进程（跨 uid 或 non-dumpable，
-   * 如 systemd --user——属主自己也读不了）计入 unobservable 并在
-   * diagnostics 如实呈现，不影响 complete——与 Hub 同 uid 的普通可转储
-   * 进程（helm 派生的子代理/git/shell）永远可观测，保护面不受影响。
-   * - 探测端口缺失 / 探测失败（节点离线、守护进程版本不支持、平台不支持、
-   *   权限、超时）→ worktree_process_check_failed（不能证明 0 占用就不能
-   *   删除，绝不静默跳过、绝不当作干净；force 也不可绕过）；
-   * - 无命中的不完整快照最多复查两次（进程 exec/退出期间可能瞬时拒读）；
-   *   只有新的完整零占用快照可放行，持续不完整仍携带 diagnostics 拒绝
-   *   （盲区不触发复查——unobservable 不计入完整性判定）；
-   * - 命中（cwd / 打开 fd 引用 worktree 或其子目录）→ worktree_process_in_use
-   *   （409，含 PID/进程名/引用路径，路径与诊断均经 redact 脱敏；进程名
-   *   与 PID 非机密）；只诊断与拒绝，绝不自动 kill/发键；命中且快照同时
-   *   不完整时仍报 in_use（占用事实已成立），details 附 complete 状态。
-   * 快照是删除前一次性观测而非跨进程互斥：扫描之后新启动的进程不在
-   * 保护范围（并发竞争如实存在，由调用方文档口径承担）。
-   */
 export async function assertPathUnusedByProcesses(
   deps: Pick<WorktreeAllocatorDeps, 'inspectPathUsage'>,
   redact: (text: string) => string,
@@ -122,8 +83,6 @@ export async function assertPathUnusedByProcesses(
   let usage: NodePathUsage
   try {
     usage = await probe(record.nodeId, record.path, signal)
-    // /proc 的 exec/退出窗口可能短暂拒读；复查必须重新取得完整快照，
-    // 不能凭重试次数、进程身份或延时把未知占用当作安全。实际命中立即拒绝。
     for (
       let attempt = 0;
       attempt < 2 && usage.complete !== true && usage.matchedTotal === 0 && usage.processes.length === 0;
@@ -183,7 +142,6 @@ export async function assertPathUnusedByProcesses(
   }
 }
 
-/** 清理一个受管 worktree（行为契约与错误码不变，见方法内注释）。 */
 export async function cleanupWorktree(
   deps: WorktreeAllocatorDeps,
   store: WorktreeStore,
@@ -191,21 +149,7 @@ export async function cleanupWorktree(
   withRepoLock: <T>(nodeId: string, canonicalCommonDir: string, fn: () => Promise<T>) => Promise<T>,
   input: CleanupInput,
 ): Promise<CleanupResult> {
-  // 选择器校验：worktreeId 单用；conversationId/path 择一；nodeId 仅搭 path。
-  if (input.worktreeId === undefined && input.conversationId === undefined && input.path === undefined) {
-    throw new HelmError('validation_error', 'cleanup 需提供 worktreeId、conversationId 或 path 之一', 400)
-  }
-  if (input.worktreeId !== undefined && (input.conversationId !== undefined || input.path !== undefined)) {
-    throw new HelmError('validation_error', 'worktreeId 与 conversationId/path 互斥（worktreeId 单独使用）', 400)
-  }
-  if (input.nodeId !== undefined && input.path === undefined) {
-    throw new HelmError('validation_error', 'nodeId 仅可与 path 搭配使用（跨节点同名路径消歧）', 400)
-  }
-  if (input.conversationId !== undefined && input.path !== undefined) {
-    throw new HelmError('validation_error', 'conversationId 与 path 择一提供', 400)
-  }
-  // mergedInto 严格形状校验（argv 直跑无 shell 注入面，但必须拒绝范围
-  // 操作符与以 - 开头的值，防止意外解析成其他引用或选项）。
+  validateWorktreeSelector(input, 'cleanup')
   if (input.mergedInto !== undefined) {
     if (
       typeof input.mergedInto !== 'string' ||
@@ -219,14 +163,14 @@ export async function cleanupWorktree(
     ) {
       throw new HelmError(
         'validation_error',
-        `mergedInto 必须是不含空白与范围操作符（.. ~ ^ :）且不以 - 开头的非空分支/提交名`,
+        'mergedInto 必须是不含空白与范围操作符（.. ~ ^ :）且不以 - 开头的非空分支/提交名',
         400,
         { mergedInto: input.mergedInto },
       )
     }
   }
 
-  const record = store.resolveCleanupRecord(input)
+  const record = store.resolveRecord(input, 'cleanup')
   if (!MANAGED_BRANCH_PREFIXES.some((prefix) => record.branch.startsWith(prefix))) {
     throw new HelmError(
       'validation_error',
@@ -236,8 +180,6 @@ export async function cleanupWorktree(
     )
   }
 
-  // 幂等：已清理记录直接 removed:false；分支删除曾部分失败且本次要求
-  // deleteBranch 时可重试（branchDeleted 状态与诊断保留在记录上）。
   if (record.status === 'removed') {
     let branchDeleted = record.branchDeleted === true
     if (input.deleteBranch === true && !branchDeleted) {
@@ -251,9 +193,6 @@ export async function cleanupWorktree(
       }
       const authority = await resolveRepoAuthority(deps, record.nodeId, record.repoRoot, input.signal)
       await withRepoLock(record.nodeId, authority.canonicalCommonDir, async () => {
-        // 与主路径同规则解析「已合入」参考（显式 mergedInto 优先，不存在
-        // 显式拒绝；其次 baseBranch；再主 HEAD）；确认已全部合入时统一 -D
-        // 删除（参考非 main 时 git branch -d 的上游合入检查会拒绝）。
         const referenceHead = await resolveMergeReferenceHead(
           deps,
           record.nodeId,
@@ -280,7 +219,11 @@ export async function cleanupWorktree(
             return { ...clean, branchDeleted: true }
           })
         } else {
-          store.updateRecord(record.id, (r) => ({ ...r, branchDeleted: false, branchDeleteError: (del.failureOutput ?? '').slice(0, 2000) }))
+          store.updateRecord(record.id, (r) => ({
+            ...r,
+            branchDeleted: false,
+            branchDeleteError: (del.failureOutput ?? '').slice(0, 2000),
+          }))
           throw new HelmError(
             'branch_delete_failed',
             `重试删除分支 ${record.branch} 失败（登记保持 removed，可再次重试）：\n${(del.failureOutput ?? '').trim()}`,
@@ -293,9 +236,11 @@ export async function cleanupWorktree(
     return { removed: false, worktreeId: record.id, path: record.path, branch: record.branch, nodeId: record.nodeId, branchDeleted }
   }
 
-  // 占用检查（锁外快速失败；锁内还会以最新记录复查）。
   assertWorktreeNotHeld(store, redact, record)
-  if (record.conversationId !== undefined && deps.isConversationWorking?.(record.conversationId) === true) {
+  const checkWorking = deps.isConversationWorking ?? ((id) => store.isConversationWorking(id))
+  const checkPathInUse = deps.isPathInUse ?? ((n, p) => store.isPathInUse(n, p))
+
+  if (record.conversationId !== undefined && checkWorking(record.conversationId)) {
     throw new HelmError(
       'worktree_in_use',
       `worktree '${record.path}' 关联的子代理仍在运行中，拒绝清理`,
@@ -303,7 +248,7 @@ export async function cleanupWorktree(
       { path: record.path, conversationId: record.conversationId },
     )
   }
-  if (deps.isPathInUse?.(record.nodeId, record.path) === true) {
+  if (checkPathInUse(record.nodeId, record.path)) {
     throw new HelmError(
       'worktree_in_use',
       `worktree '${record.path}'（节点 ${record.nodeId}）仍被引用，拒绝清理`,
@@ -312,9 +257,6 @@ export async function cleanupWorktree(
     )
   }
 
-  // 目录存在性证明：仅节点真实 fs stat（或后续权威 worktree 登记）可证明
-  // 缺失；探测失败 fail closed。缺失时显式 worktree_missing 并保留登记
-  //（绝不全仓 prune 其他节点的登记，也绝不假成功）。
   if (!(await dirExistsOnNode(deps, record.nodeId, record.path))) {
     throw new HelmError(
       'worktree_missing',
@@ -324,7 +266,6 @@ export async function cleanupWorktree(
     )
   }
 
-  // 权威 repo 信息（external 记录首次清理时解析并持久化主工作树）。
   let authority: RepoAuthority
   if (record.repoRoot !== '') {
     authority = await resolveRepoAuthority(deps, record.nodeId, record.repoRoot, input.signal)
@@ -336,7 +277,6 @@ export async function cleanupWorktree(
 
   let outcome: { removed: boolean; branchDeleted: boolean } | undefined
   await withRepoLock(record.nodeId, authority.canonicalCommonDir, async () => {
-    // 锁内以最新记录为准（并发清理/状态变更在此收敛）。
     const fresh = store.findById(record.id)
     if (fresh === undefined) {
       throw new HelmError('not_found', `受管 worktree 记录 ${record.id} 不存在（文档状态不一致）`, 404, { id: record.id })
@@ -345,9 +285,8 @@ export async function cleanupWorktree(
       outcome = { removed: false, branchDeleted: fresh.branchDeleted === true }
       return
     }
-    // 在用复查（锁内最新事实；force 不可越过）。
     assertWorktreeNotHeld(store, redact, fresh)
-    if (fresh.conversationId !== undefined && deps.isConversationWorking?.(fresh.conversationId) === true) {
+    if (fresh.conversationId !== undefined && checkWorking(fresh.conversationId)) {
       throw new HelmError(
         'worktree_in_use',
         `worktree '${fresh.path}' 关联的子代理仍在运行中，拒绝清理`,
@@ -355,7 +294,7 @@ export async function cleanupWorktree(
         { path: fresh.path, conversationId: fresh.conversationId },
       )
     }
-    if (deps.isPathInUse?.(fresh.nodeId, fresh.path) === true) {
+    if (checkPathInUse(fresh.nodeId, fresh.path)) {
       throw new HelmError(
         'worktree_in_use',
         `worktree '${fresh.path}'（节点 ${fresh.nodeId}）仍被引用，拒绝清理`,
@@ -364,7 +303,6 @@ export async function cleanupWorktree(
       )
     }
 
-    // 锁内重新取证权威登记，做 path/branch/head 归属匹配。
     const locked = await resolveRepoAuthority(deps, fresh.nodeId, fresh.repoRoot !== '' ? fresh.repoRoot : fresh.path, input.signal)
     const entries = locked.entries
     const mainEntry = entries[0]!
@@ -373,7 +311,7 @@ export async function cleanupWorktree(
       throw ownerMismatchError(
         fresh,
         'not_in_worktree_list',
-        `不在权威 worktree 登记中（目录仍存在：路径上的内容已不受本仓库管理）`,
+        '不在权威 worktree 登记中（目录仍存在：路径上的内容已不受本仓库管理）',
         { registeredEntries: entries.map((e) => redact(e.path)).slice(0, 20) },
       )
     }
@@ -381,7 +319,6 @@ export async function cleanupWorktree(
       throw ownerMismatchError(fresh, 'main_worktree', '指向主工作树（主工作树绝不清除）', { mainPath: redact(mainEntry.path) })
     }
     if (match.locked) {
-      // locked 是所有者显式加锁：force 只能越过 dirty/unmerged，不可越过。
       throw new HelmError(
         'worktree_locked',
         `worktree '${fresh.path}'（节点 ${fresh.nodeId}）已被 git worktree lock 锁定${match.lockedReason !== undefined ? `（${redact(match.lockedReason)}）` : ''}，拒绝清理（请先解锁）`,
@@ -408,7 +345,6 @@ export async function cleanupWorktree(
       throw ownerMismatchError(fresh, 'head_unreadable', '的权威登记 HEAD 缺失（工作树状态不可信）', { authorityHead: match.head })
     }
 
-    // realpath canonical 校验：登记路径不得经软链跳到主工作树或其他工作树。
     const canonicalRecord = await canonicalPathOnNode(deps, fresh.nodeId, fresh.path)
     const canonicalMain = await canonicalPathOnNode(deps, fresh.nodeId, mainEntry.path)
     if (canonicalRecord === canonicalMain) {
@@ -429,12 +365,6 @@ export async function cleanupWorktree(
       }
     }
 
-    // 脏工作区保护（force=false；external 记录同样检查；合入参考优先
-    // 显式 mergedInto，其次记录 baseBranch，再主工作树 HEAD——不以
-    // baseCommit 缺失为由跳过）。ignored 文件也计入：实测 git worktree remove 无
-    // --force 也会删除仅含 ignored 内容（.env 等）的 worktree，默认检查
-    // 必须显式拦下（force 允许显式清除）。状态命令失败显式报错，绝不
-    // 当作干净或目录缺失。
     let dirtyFiles: string[] = []
     let unmergedCommits = 0
     if (input.force !== true) {
@@ -478,12 +408,8 @@ export async function cleanupWorktree(
       }
     }
 
-    // 删除前进程占用快照（per-repo 锁内、真实 remove 前的最后一道屏障；
-    // force 不可绕过——force 只授权丢弃文件，不授权拆除运行中进程脚下的
-    // 目录）。只诊断与拒绝，绝不自动终止进程。
     await assertPathUnusedByProcesses(deps, redact, fresh, input.signal)
 
-    // 真实移除（不 prune、不猜测缺失；失败显式报错）。
     const remove = await gitExec(
       deps,
       fresh.nodeId,
@@ -500,12 +426,6 @@ export async function cleanupWorktree(
       )
     }
 
-    // 分支删除：锁内已确认相对 referenceHead 全部合入（unmergedCommits
-    // === 0；force 路径恒为 0）或显式 force 时统一 -D——referenceHead 非
-    // main 时 git branch -d 的上游/HEAD 合入检查不认参考，会拒绝实际已
-    // 合入的分支。部分失败先固化 worktree 已 removed 事实（branchDeleted
-    // 状态与诊断保留，可重试），再显式报错——绝不把已消失的树永远留在
-    // active，也不掩盖分支删除失败。
     let branchDeleted = false
     if (input.deleteBranch === true) {
       const del = await deleteManagedBranch(

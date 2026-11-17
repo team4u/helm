@@ -10,12 +10,37 @@
 
 import { HelmError, type HelmPluginContext } from '@helm/protocol'
 import type { ExternalSteerRequest, ExternalSteerResult } from '../contracts.js'
-import { isAncestorOrSelf } from '../lineage.js'
-import { HERDR_STEER_CONTROLS, type HerdrTransport } from './contracts.js'
+import { HERDR_STEER_CONTROLS, targetNodeId, type HerdrTransport } from './contracts.js'
 import type { HerdrExecutor } from './executor.js'
-import { nodeIdOf, type ManagedPane, type PaneRegistry } from './panes.js'
-import { parseAgentResult, parsePaneRead } from './rpc.js'
-import { isValidNodeId } from './transport.js'
+import type { ManagedPane, PaneRegistry } from './panes.js'
+
+interface HerdrActionHelpers {
+  isValidNodeId: (id: string) => boolean
+  parseAgentResult: typeof import('./rpc.js').parseAgentResult
+  parsePaneRead: typeof import('./rpc.js').parsePaneRead
+  isAncestorOrSelf: typeof import('../lineage.js').isAncestorOrSelf
+}
+
+let actionHelpersPromise: Promise<HerdrActionHelpers> | undefined
+
+function loadActionHelpers(): Promise<HerdrActionHelpers> {
+  actionHelpersPromise ??= Promise.all([
+    import('./transport.js'),
+    import('./rpc.js'),
+    import('../lineage.js'),
+  ])
+    .then(([transport, rpc, lineage]) => ({
+      isValidNodeId: transport.isValidNodeId,
+      parseAgentResult: rpc.parseAgentResult,
+      parsePaneRead: rpc.parsePaneRead,
+      isAncestorOrSelf: lineage.isAncestorOrSelf,
+    }))
+    .catch((err) => {
+      actionHelpersPromise = undefined
+      throw err
+    })
+  return actionHelpersPromise
+}
 
 /** The actions' minimal dependency surface on the plugin main (herdr.ts). */
 export interface HerdrActionsDeps {
@@ -32,10 +57,11 @@ export interface HerdrActionsDeps {
 }
 
 /** Pane disambiguation resolution: an explicit 409 when the registry hits same-ID panes on multiple nodes. */
-function resolvePane(registry: PaneRegistry | undefined, input: { paneId: string; nodeId?: string }): ManagedPane {
-  if (registry === undefined) {
-    throw new HelmError('not_found', `pane ${input.paneId} is not managed by builtin:herdr`, 404, { paneId: input.paneId })
-  }
+function resolvePane(
+  registry: PaneRegistry,
+  input: { paneId: string; nodeId?: string },
+  isValidNodeId: (id: string) => boolean,
+): ManagedPane {
   if (input.nodeId !== undefined && input.nodeId !== '') {
     if (!isValidNodeId(input.nodeId)) {
       throw new HelmError('validation_error', `nodeId '${input.nodeId}' is invalid`, 400, { nodeId: input.nodeId })
@@ -56,9 +82,9 @@ function resolvePane(registry: PaneRegistry | undefined, input: { paneId: string
   if (candidates.length > 1) {
     throw new HelmError(
       'pane_ambiguous',
-      `pane ${input.paneId} exists on multiple nodes (${candidates.map((p) => nodeIdOf(p) ?? 'local').join(', ')}); disambiguate with the nodeId field`,
+      `pane ${input.paneId} exists on multiple nodes (${candidates.map((p) => targetNodeId(p.target) ?? 'local').join(', ')}); disambiguate with the nodeId field`,
       409,
-      { paneId: input.paneId, nodeIds: candidates.map((p) => nodeIdOf(p) ?? 'local') },
+      { paneId: input.paneId, nodeIds: candidates.map((p) => targetNodeId(p.target) ?? 'local') },
     )
   }
   return candidates[0]!
@@ -83,7 +109,7 @@ export function registerHerdrActions(ctx: HelmPluginContext, deps: HerdrActionsD
       return {
         panes: registry
           ? registry.all().map((p) => ({
-              nodeId: nodeIdOf(p) ?? 'local',
+              nodeId: targetNodeId(p.target) ?? 'local',
               paneId: p.paneId,
               agentName: p.agentName,
               outcome: p.outcome,
@@ -116,7 +142,12 @@ export function registerHerdrActions(ctx: HelmPluginContext, deps: HerdrActionsD
       additionalProperties: false,
     },
     async handler(input) {
-      const pane = resolvePane(deps.registry(), input)
+      const registry = deps.registry()
+      if (registry === undefined) {
+        throw new HelmError('not_found', `pane ${input.paneId} is not managed by builtin:herdr`, 404, { paneId: input.paneId })
+      }
+      const { isValidNodeId, parsePaneRead } = await loadActionHelpers()
+      const pane = resolvePane(registry, input, isValidNodeId)
       const read = parsePaneRead(
         await deps.transport().call(pane.target, 'agent.read', {
           target: pane.paneId,
@@ -125,7 +156,7 @@ export function registerHerdrActions(ctx: HelmPluginContext, deps: HerdrActionsD
           format: 'text',
         }),
       )
-      return { paneId: pane.paneId, nodeId: nodeIdOf(pane) ?? 'local', text: deps.redact(read.text) }
+      return { paneId: pane.paneId, nodeId: targetNodeId(pane.target) ?? 'local', text: deps.redact(read.text) }
     },
   })
 
@@ -148,7 +179,12 @@ export function registerHerdrActions(ctx: HelmPluginContext, deps: HerdrActionsD
       additionalProperties: false,
     },
     async handler(input) {
-      const pane = resolvePane(deps.registry(), input)
+      const registry = deps.registry()
+      if (registry === undefined) {
+        throw new HelmError('not_found', `pane ${input.paneId} is not managed by builtin:herdr`, 404, { paneId: input.paneId })
+      }
+      const { isValidNodeId, parseAgentResult } = await loadActionHelpers()
+      const pane = resolvePane(registry, input, isValidNodeId)
       // Real protocol (server source agents.rs:35-41): agent.focus returns
       // ResponseResult::AgentInfo { agent } (agent_info), not ok.
       const info = parseAgentResult(
@@ -159,12 +195,12 @@ export function registerHerdrActions(ctx: HelmPluginContext, deps: HerdrActionsD
       if (info.focused !== true) {
         throw new HelmError(
           'herdr_focus_failed',
-          `agent.focus returned focused=false (pane ${pane.paneId}@${nodeIdOf(pane) ?? 'local'})`,
+          `agent.focus returned focused=false (pane ${pane.paneId}@${targetNodeId(pane.target) ?? 'local'})`,
           502,
-          { paneId: pane.paneId, nodeId: nodeIdOf(pane) ?? 'local' },
+          { paneId: pane.paneId, nodeId: targetNodeId(pane.target) ?? 'local' },
         )
       }
-      return { paneId: pane.paneId, nodeId: nodeIdOf(pane) ?? 'local', focused: true }
+      return { paneId: pane.paneId, nodeId: targetNodeId(pane.target) ?? 'local', focused: true }
     },
   })
 
@@ -218,6 +254,7 @@ export function registerHerdrActions(ctx: HelmPluginContext, deps: HerdrActionsD
           409,
         )
       }
+      const { isValidNodeId, isAncestorOrSelf } = await loadActionHelpers()
       // Exact managed-node targeting: an explicit nodeId must match the registration (the same pane on a
       // different node is not accepted; 'local' folds to the local default).
       if (input.nodeId !== 'local' && !isValidNodeId(input.nodeId)) {
@@ -256,7 +293,7 @@ export function registerHerdrActions(ctx: HelmPluginContext, deps: HerdrActionsD
       return {
         steered: true as const,
         executionId: pane.paneId,
-        nodeId: nodeIdOf(pane) ?? 'local',
+        nodeId: targetNodeId(pane.target) ?? 'local',
         stateChangeSeq,
         ownership: 'helm' as const,
         guardLevel: 'preflight' as const,

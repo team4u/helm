@@ -140,6 +140,21 @@
   position: relative;
 }
 
+/* 会话窗口保活舞台：Activity 不产生宿主节点，.helm-pane 是舞台直接子节点；
+ * 隐藏窗口由 react-dom 写 display:none!important 折叠，可见窗口按原 .helm-pane 布局填充。
+ * 主屏为非会话目标时舞台整体折叠，让位给待命页/视图/中心页。 */
+.conversation-window-stage {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.conversation-window-stage.is-idle {
+  display: none;
+}
+
 .helm-split-pane {
   flex: 1;
   min-width: 0;

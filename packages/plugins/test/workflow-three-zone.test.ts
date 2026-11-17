@@ -289,36 +289,49 @@ describe('Workflow 三区零重复与无损呈现', () => {
       ],
     }
 
+    const runningSubagentRun: WorkflowRunSummary = {
+      id: 'wf_tray_sub_11',
+      name: 'subagent',
+      conversationId: 1,
+      status: 'running',
+      kind: 'subagent',
+      createdAt: 1_700_000_000_000,
+      updatedAt: 1_700_000_002_000,
+      nodes: [{ id: 'subagent-0', label: 'subagent', kind: 'agent', status: 'running', conversationId: 11 }],
+    }
+
     const harness = createHostHarness({
       conversationId: 1,
       conversations: [
         createConv({ id: 1, ownedBy: 'human' }),
         createConv({ id: 11, parentConversationId: 1, status: 'working', title: '执行测试子会话' }),
+        createConv({ id: 99, parentConversationId: 1, ownedBy: 'human', status: 'working', title: '人类分叉分支（无 WorkflowRun）' }),
       ],
-      runsByConversation: { 1: [] },
+      runsByConversation: { 1: [runningSubagentRun] },
     })
 
     const mounted = harness.mountNode(e(mod.WorkflowActiveTray, { conversation: createConv({ id: 1, ownedBy: 'human' }) }))
     try {
-      // 1. 仅存在 1 个 running 子会话，未进 runs 时也按 executionTree 展示 32px HUD 且可打开子会话抽屉
+      // 1. 存在 subagent WorkflowRun 时展示 32px HUD 且可打开子会话抽屉；无 WorkflowRun 的人类分叉 #99 绝不混入
       assert.ok(mounted.container.querySelector('.workflow-active-tray-bar') !== null, '有在途子会话时应渲染 32px HUD')
-      const initToggle = mounted.container.querySelector('button[aria-expanded]') as HTMLButtonElement
+      const initToggle = mounted.container.querySelector('button.workflow-active-tray-bar-toggle') as HTMLButtonElement
       act(() => {
         initToggle.click()
       })
-      const viewChildBtn = [...mounted.container.querySelectorAll('.workflow-active-tray-list button')].find((b) =>
-        b.textContent?.includes('View'),
-      )
-      assert.ok(viewChildBtn !== undefined, '独立在途子会话行应有查看按钮')
+      assert.equal(mounted.container.textContent?.includes('人类分叉分支'), false, '无 WorkflowRun 的分叉会话不得混入活动托盘')
+      const childRowMain = ([...mounted.container.querySelectorAll('.workflow-active-tray-row')].find((r) =>
+        (r.textContent ?? '').includes('执行测试子会话'),
+      ) as HTMLElement | undefined)?.querySelector('button.workflow-active-tray-row-main') as HTMLButtonElement | undefined
+      assert.ok(childRowMain !== undefined, '独立在途子会话行主体是真实详情入口按钮')
       act(() => {
-        ;(viewChildBtn as HTMLButtonElement).click()
+        childRowMain.click()
       })
       assert.equal(harness.log.drawers.at(-1), 11)
       act(() => {
         initToggle.click()
       })
 
-      // 2. 全部 idle / settled 时归零返回 null（0px）
+      // 2. runs 清空（仅剩无 WorkflowRun 的分叉 #99 仍在 working）或全部 settled 时归零返回 null（0px）
       harness.port.conversations[1]!.status = 'idle'
       harness.setRuns(1, [])
       assert.ok(mounted.container.querySelector('.workflow-active-tray') === null, '无在途任务时应返回 null（0px）')
@@ -331,9 +344,10 @@ describe('Workflow 三区零重复与无损呈现', () => {
       assert.ok(trayBar !== null, '运行中工作流应显示托盘栏')
       assert.ok(mounted.container.textContent?.includes('1/2'), '应展示进度计数 1/2')
 
-      // 点击展开托盘列表
-      const toggleBtn = mounted.container.querySelector('button[aria-expanded]') as HTMLButtonElement | null
-      assert.ok(toggleBtn !== null, '应有展开托盘列表按钮')
+      // 横栏主体真实按钮展开托盘列表（无独立展开按钮，Workbench 为同级 sibling）
+      const toggleBtn = mounted.container.querySelector('button.workflow-active-tray-bar-toggle') as HTMLButtonElement | null
+      assert.ok(toggleBtn !== null, '横栏主体即展开开关')
+      assert.equal(toggleBtn.tagName, 'BUTTON')
       assert.equal(toggleBtn.getAttribute('aria-expanded'), 'false')
       act(() => {
         toggleBtn.click()
@@ -362,10 +376,13 @@ describe('Workflow 三区零重复与无损呈现', () => {
       assert.ok(harness.log.workbenchTabs.includes('plugin:builtin:workflow/tasks'))
       assert.equal(harness.log.workbenchOpens.at(-1), true)
 
-      const detailBtn = [...list.querySelectorAll('button')].find((b) => b.textContent?.includes('Details'))
-      assert.ok(detailBtn !== undefined, '工作流在途行应有详情定位按钮')
+      // 工作流在途行主体点击定位工作台（不再有独立 Details 按钮）
+      const wfRowMain = ([...list.querySelectorAll('.workflow-active-tray-row')].find((r) =>
+        (r.textContent ?? '').includes('构建与测试流水线'),
+      ) as HTMLElement | undefined)?.querySelector('button.workflow-active-tray-row-main') as HTMLButtonElement | undefined
+      assert.ok(wfRowMain !== undefined, '工作流在途行主体存在')
       act(() => {
-        detailBtn.click()
+        wfRowMain!.click()
       })
       assert.equal(harness.log.workbenchTabs.at(-1), 'plugin:builtin:workflow/tasks')
 
@@ -549,6 +566,17 @@ describe('Workflow 三区零重复与无损呈现', () => {
       ],
     }
 
+    const runStandalone: WorkflowRunSummary = {
+      id: 'wf_standalone_31',
+      name: 'subagent',
+      conversationId: 1,
+      status: 'completed',
+      kind: 'subagent',
+      createdAt: 1_700_000_006_000,
+      updatedAt: 1_700_000_008_000,
+      nodes: [{ id: 'subagent-0', label: 'subagent', kind: 'agent', status: 'done', conversationId: 31 }],
+    }
+
     const harness = createHostHarness({
       conversationId: 1,
       conversations: [createConv({ id: 1 }), childConv, standaloneChild],
@@ -556,7 +584,7 @@ describe('Workflow 三区零重复与无损呈现', () => {
         30: { ...childConv, entries: [] },
         31: { ...standaloneChild, entries: entriesWithTask },
       },
-      runsByConversation: { 1: [runOlder, runTarget] },
+      runsByConversation: { 1: [runOlder, runStandalone, runTarget] },
     })
 
     // 1. 时间线 WorkflowToolView 仅渲染 26px .trace-row，点击触发聚焦 + 打开工作台
@@ -639,7 +667,7 @@ describe('Workflow 三区零重复与无损呈现', () => {
       createdAt,
       data: {
         origin: 'trigger',
-        meta: { kind, backgroundRunId: payload.runId },
+        meta: { kind, backgroundRunId: payload.runId, report: payload },
         text: `[后台任务回报]\n${JSON.stringify(payload)}`,
       },
     })
@@ -1067,9 +1095,10 @@ describe('Workflow 三区零重复与无损呈现', () => {
       createdAt: 1_700_000_050_000,
       data: { origin: 'trigger', meta, text },
     })
+    const reportPayload = { runId: 'wf_locale', status: 'completed', result: '审校结论：全部通过' }
     const entry = makeReportEntry(
-      { kind: 'subagent_report', backgroundRunId: 'wf_locale' },
-      `[后台任务回报]\n${JSON.stringify({ runId: 'wf_locale', status: 'completed', result: '审校结论：全部通过' })}`,
+      { kind: 'subagent_report', backgroundRunId: 'wf_locale', report: reportPayload },
+      `[后台任务回报]\n${JSON.stringify(reportPayload)}`,
     )
     const childConv = createConv({
       id: 60,

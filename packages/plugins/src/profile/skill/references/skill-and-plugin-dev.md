@@ -1,5 +1,37 @@
 # Skill and Plugin Bootstrap Development Reference
 
+## Plugin source and build modes
+
+Do not treat "development" and "build" as plugin enablement states. They describe where plugin code and frontend assets come from; a plugin can be enabled or disabled in either mode.
+
+### Built-in plugins in the Helm repository
+
+- `pnpm dev` launches the Hub from TypeScript sources through `tsx` (`scripts/run-hub.mjs`); workspace mappings resolve `@helm/plugins` to `packages/plugins/src`. Built-in UI clients therefore use their source `client/` directories and the host's runtime compiler.
+- `pnpm build` builds package `dist/` output. The `@helm/plugins` build also copies built-in `client/` assets and precompiles declared UI modules into `packages/plugins/dist/<plugin>/dist-client/`. The built-in asset resolver supports both source and built package locations.
+- This is the repository's built-in plugin pipeline. `helm plugins build` is not the command for building `@helm/plugins` or the Hub.
+
+### External plugins
+
+External plugin backend entries remain plugin source files: TypeScript is transpiled and loaded by the Hub at runtime. `helm plugins build` does **not** compile, package, or deploy that backend code.
+
+The frontend has two modes:
+
+| Mode | Source/artifact | When to use it |
+| :--- | :--- | :--- |
+| Runtime compilation | `clientRoot` source, compiled by the Hub's injected esbuild provider and cached by the host | Normal local development; edit source, run `doctor`, then `reload` the registered plugin as needed |
+| Prebuilt client | Static `dist-client/` bundle with manifest and hashed modules, produced by `helm plugins build` | Prepare a deployable frontend when the target host should not need runtime esbuild or frontend npm dependency installation |
+
+Build and verify a prebuilt frontend locally:
+
+```bash
+helm plugins doctor /absolute/path/to/my-plugin
+helm plugins build /absolute/path/to/my-plugin
+```
+
+By default, `build` writes `<plugin dir>/dist-client/`; `--out <dir>` selects another output location, which must be declared with `clientDist` in the plugin manifest/package Helm metadata if it is not the conventional `dist-client/` directory. The Hub recognizes a valid conventional or declared prebuilt bundle and uses it instead of runtime compilation; it does not silently fall back to `clientRoot` when that prebuilt bundle is selected but invalid or stale. Rebuild after changing frontend source, and run `doctor` against the source before shipping. `build` is local and does not contact or update the Hub.
+
+`doctor` validates source and performs real client compilation; it does not substitute for checking that a separately generated prebuilt directory is current. Keep `clientRoot` as the source of truth and distribute the intended `dist-client/` artifact with the plugin when using prebuilt mode.
+
 ## Bootstrapping skills (~/.helm/skills/<id>/)
 
 Skills are operation manuals the model loads on demand; keep SKILL.md short and put details in references/. All paths below live under the Hub data directory; when HELM_DATA_DIR is configured, use that directory. Bash running on a remote node must not treat the local ~/.helm as the Hub's asset directory.
@@ -189,7 +221,7 @@ Key points:
 - Managed installs: `helm plugins install <source>` supports four sources -- `npm:<spec>`, `git:<repo>@<ref>`, HTTPS Git URLs, and local paths (resolved and fetched by the Hub server; a local path means a path on the Hub host); `helm plugins update <id>` updates, `helm plugins remove <id> [--yes]` removes (a destructive operation requiring confirmation; use --yes non-interactively); install records (PluginPackageRecord) are persisted by the installer, and PluginSummary carries optional managed metadata. Installing and enabling executes trusted plugin code inside the Hub process, with no sandbox -- install only trusted sources. The hand-managed directory route (init + rescan) remains available.
 - Enable: `helm plugins enable my-plugin`; after editing entry code use `helm plugins reload my-plugin` for a controlled hot reload (static self-check precheck first; on failure the old instance stays untouched; no Hub restart needed). Disable/enable only rebuilds the lifecycle of existing definitions. Disabling or uninstalling with in-flight tasks is explicitly refused (409 plugin_has_live_tasks).
 - Do not restart the Hub inside your own turn; finish delivering results first, then schedule the process restart.
-- Frontend React components (client.tsx) compile dynamically via esbuild and may import react / react-dom / lucide-react / @helm/plugin-client (host-shared instances; never bundle a second React). @helm/plugin-client additionally shares the accessible foundation components: Switch, Select, MultiSelect, Checkbox, Tabs/TabsList/TabsTrigger/TabsContent, SegmentedControl, HelmIcon, ViewBoundary, Callout, Dialog/DialogPortal/DialogOverlay/DialogContent/DialogTitle/DialogDescription/DialogClose/DialogTrigger, MarkdownView, MarkdownText, CodeBlockView, CopyButton, PluginSlot, plus the lightweight layout primitives Screen (page container + header), ScreenSection (sectioning), DataTable (composable table shell with unified loading/empty; thead/rows expressed as children JSX), KvGrid (items: Array<{key,value}> key-value overview), and the generic formatting pure functions formatTime (MM-DD HH:mm), formatCompactTimestamp (MM-DD HH:mm:ss), formatDurationMs (millisecond duration summary), formatBytes (human-readable bytes, base 1024) -- prefer reusing these primitives and formatters for common structures instead of building native controls, duplicate formatters, or new CSS themes.
+- Frontend React components (client.tsx) compile dynamically via esbuild and may import react / react-dom / lucide-react / @helm/plugin-client (host-shared instances; never bundle a second React). @helm/plugin-client additionally shares the accessible foundation components: Switch, Select, MultiSelect, Checkbox, Tabs/TabsList/TabsTrigger/TabsContent, SegmentedControl, HelmIcon, ViewBoundary, Callout, Dialog/DialogPortal/DialogOverlay/DialogContent/DialogTitle/DialogDescription/DialogClose/DialogTrigger, MarkdownView, MarkdownText, CodeBlockView, CopyButton, PluginSlot, StatusLight (unified status light: visually dot-only for card main status slots; the localized label is the screen-reader accessible name, never visible status text; tone comes from normalizeStatusLightTone over the raw status word), normalizeStatusLightTone, plus the lightweight layout primitives Screen (page container + header), ScreenSection (sectioning), DataTable (composable table shell with unified loading/empty; thead/rows expressed as children JSX), KvGrid (items: Array<{key,value}> key-value overview), and the generic formatting pure functions formatTime (MM-DD HH:mm), formatCompactTimestamp (MM-DD HH:mm:ss), formatDurationMs (millisecond duration summary), formatBytes (human-readable bytes, base 1024) -- prefer reusing these primitives and formatters for common structures instead of building native controls, duplicate formatters, or new CSS themes.
 - Shared hooks: usePluginLocale() resolves the active `en` / `zh-CN` UI locale; usePluginTranslator() returns a stable translator for localized display copy; useToolActivity(callId, active) reports background tool activity of the owning timeline turn; usePluginDoc(name, pluginId?) reactively subscribes to public global docs (cross-plugin addressing supported); usePluginSessionDoc(name, {conversationId?, pluginId?}?) subscribes to public session docs per current conversation (multi-component shared subscription; unsubscribes at zero references; first-frame restore on reconnect); useConversations() for all conversation summaries; useConversation(id) for a single conversation's live view (summary/detail/live/pendingAsks); usePlugins() for a reactive snapshot of the host plugin list and Screen contributions (plugins + screens, live-synced via SSE -- app-center-style views use it to sense installed apps and their main views' enablement); usePluginConfig<T>() for the current plugin's reactive non-secret configuration (`PluginSummary.publicConfig`, excluding all `secret: true` fields; returns `{}` when unset; usable inside `<PluginUiView>`); <PluginSlot name> declares child slots; usePluginContext() provides callAction(actionId, input, {pluginId?, conversationId?}) (cross-plugin capable), submitInput(text, {conversationId?, whenBusy?}), openScreen/openSplitScreen/openConversationDrawer/openArtifact/openWorkbench, notify, and more.
 - Plugin view styles live in a local .css inside clientRoot (imported; esbuild merges it into the preserved export __helmClientCss, with the host managing injection and reclamation); never write the host's styles.css.
 - UI copy strictly forbids Emoji; icons use lucide icon names.

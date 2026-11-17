@@ -5,80 +5,370 @@
  * - ./superagent/contracts.ts: 领域模型、状态机契约、边界守卫与配置校验
  * - ./superagent/recall.ts: RecallGraph 记忆图谱断言、增删检与 rewind 联动
  * - ./superagent/settlement.ts: Worker 回合终态摘要提取、时间线摘要与脱敏
- * - ./superagent/actions.ts: 派工、检视、召回、订阅、归档动作与中枢模型工具
- * - ./superagent/hooks.ts: L0 确定性路由、L1 认知路由与结算汇报 Hook
  * - ./superagent/ui.ts: 前端侧栏、挂件、药丸、工具视图与全屏视图声明
- * - ./superagent/watchdog.ts: 两层巡检看门狗组合根（装配 watchdog-core/activity/
- *   dedup/tick/classify/ops/guards/tools 同级子模块）
+ * - ./superagent/runtime-bootstrap.ts: 按需动态加载的运行时装配根（actions /
+ *   hooks / assets / watchdog 及 8 个 watchdog-* 子模块），仅在插件启用时加载，
+ *   默认停用注册零重模块解析开销。
  */
 import {
-  HelmError,
-  type ConversationDetail,
-  type ConversationSummary,
-  type HelmHostApi,
-  type MaybePromise,
+  type ConversationScope,
+  type HelmPluginContext,
   type PluginDefinition,
 } from '@helm/protocol'
 import { resolvePluginClientAssets } from './asset-paths.js'
-import { registerSuperAgentWatchdog } from './superagent/watchdog.js'
 import {
   DEFAULT_CONFIG,
   INDEX_DOC_NAME,
   RECALL_DOC_NAME,
-  REWIND_REPLAY_PAGE_SIZE,
+  ROUTER_TOOL_SCOPE,
   ROUTING_DOC_NAME,
   SUBSCRIPTIONS_DOC_NAME,
   SUPERAGENT_PLUGIN_ID,
-  SUPERAGENT_PROFILE_ID,
-  SUPERAGENT_PROFILE_IDS,
   WATCHDOG_PROFILE_ID,
-  assertIndexDoc,
-  assertSubscriptionsDoc,
-  resolveSuperAgentConfig,
   type RecallGraphDoc,
   type RouterModeDoc,
-  type SuperAgentConfig,
-  type SuperAgentCoordinator,
   type SuperAgentDocs,
   type SuperAgentIndexDoc,
   type ThreadSubscriptionDoc,
 } from './superagent/contracts.js'
-import {
-  SUPERAGENT_PROFILE_ASSET,
-  WATCHDOG_PLAYBOOK_SKILL_ASSET,
-  WATCHDOG_PROFILE_ASSET,
-  ensureProfileDir,
-  ensureSkillDir,
-  type AssetHostPorts,
-} from './superagent/assets.js'
-import {
-  assertRecallDoc,
-  removeRecallNodesByInputs,
-  rewindOmittedInputIds,
-} from './superagent/recall.js'
-import { registerSuperAgentActions } from './superagent/actions.js'
-import { registerSuperAgentHooks } from './superagent/hooks.js'
 import { registerSuperAgentUi } from './superagent/ui.js'
-import { asConversationEntryEvent } from './superagent/contracts.js'
+import type { WatchdogDedupDoc } from './superagent/watchdog-dedup.js'
+import type {
+  SuperAgentRuntimeController,
+  SuperAgentRuntimeModule,
+} from './superagent/runtime-bootstrap.js'
 
 // ---------------------------------------------------------------------------
-// 自举资产
+// 声明期轻量元数据（工具与动作 Schema；执行期委托至懒加载运行时）
 // ---------------------------------------------------------------------------
 
-/** 自举 superagent/watchdog Profile 与 watchdog-playbooks 技能包（逐文件幂等）。 */
-async function bootstrapAssets(host: Pick<HelmHostApi, 'profiles' | 'skills'> & AssetHostPorts): Promise<void> {
-  await ensureProfileDir(host, SUPERAGENT_PROFILE_ASSET)
-  await ensureProfileDir(host, WATCHDOG_PROFILE_ASSET)
-  await ensureSkillDir(host, WATCHDOG_PLAYBOOK_SKILL_ASSET)
-  for (const id of SUPERAGENT_PROFILE_IDS) {
-    if ((await host.profiles.get(id)) === undefined) {
-      throw new HelmError(
-        'superagent_bootstrap_failed',
-        `自举后 Profile ${id} 仍不可读（profile.json 缺失或损坏）`,
-        500,
-        { pluginId: SUPERAGENT_PLUGIN_ID, profileId: id },
-      )
-    }
+const WORKER_ID_SCHEMA: Record<string, unknown> = { type: 'integer', minimum: 1 }
+
+const WORKER_ID_INPUT_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: { workerConversationId: WORKER_ID_SCHEMA },
+  required: ['workerConversationId'],
+  additionalProperties: false,
+}
+
+const DISPATCH_INPUT_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: {
+    prompt: { type: 'string', minLength: 1 },
+    profileId: { type: 'string', minLength: 1, maxLength: 64, pattern: '^[^\\s/\\\\]+$' },
+    title: { type: 'string', minLength: 1, maxLength: 80 },
+    threadKey: { type: 'string', minLength: 1, maxLength: 200 },
+    cwd: { type: 'string', minLength: 1 },
+    nodeId: { type: 'string', minLength: 1, maxLength: 64, pattern: '^[^\\s/\\\\]+$' },
+  },
+  required: ['prompt'],
+  additionalProperties: false,
+}
+
+const RECALL_INPUT_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: { query: { type: 'string' }, limit: { type: 'integer', minimum: 1, maximum: 100 } },
+  additionalProperties: false,
+}
+
+const SUBSCRIBE_INPUT_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: { threadKey: { type: 'string', minLength: 1, maxLength: 200 }, workerConversationId: WORKER_ID_SCHEMA },
+  required: ['threadKey', 'workerConversationId'],
+  additionalProperties: false,
+}
+
+const WATCHDOG_SCOPE: ConversationScope = { profileIds: [WATCHDOG_PROFILE_ID] }
+
+const WATCHDOG_INSPECT_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: {
+    conversationId: { type: 'integer', minimum: 1, description: 'Native target conversation ID (positive integer)' },
+    probe: {
+      type: 'object',
+      properties: {
+        targetKind: { type: 'string', enum: ['external'] },
+        nodeId: { type: 'string', minLength: 1, description: "External target node ID (defaults to 'local')" },
+        targetId: { type: 'string', minLength: 1 },
+      },
+      required: ['targetKind', 'targetId'],
+      additionalProperties: false,
+    },
+  },
+  additionalProperties: false,
+}
+
+const WATCHDOG_INSPECT_OUTPUT_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: {
+    kind: { type: 'string', enum: ['conversation', 'external'] },
+    conversation: {
+      type: 'object',
+      properties: {
+        activeProcesses: {
+          type: 'array',
+          description: 'Process-occupancy snapshot of the conversation working directory (nodeId ?? local, cwd) (redacted; omitted when probing fails)',
+          items: {
+            type: 'object',
+            properties: {
+              pid: { type: 'integer', minimum: 1 },
+              name: { type: 'string', description: 'Process name (omitted when reading fails)' },
+              source: { type: 'string', enum: ['cwd', 'fd'] },
+              path: { type: 'string', description: 'Referrer absolute path (redacted)' },
+            },
+            required: ['pid', 'source', 'path'],
+            additionalProperties: false,
+          },
+        },
+      },
+    },
+    entries: { type: 'array', items: { type: 'object' } },
+    probe: { type: 'object' },
+  },
+  required: ['kind'],
+  additionalProperties: false,
+}
+
+const WATCHDOG_RECOVER_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: {
+    conversationId: { type: 'integer', minimum: 1 },
+    hint: { type: 'string', minLength: 1, description: 'Recovery hint text (submitted to the target conversation with agent origin)' },
+    expectedStateSeq: {
+      type: 'integer',
+      minimum: 0,
+      description: 'Optional CAS watermark (live stateChangeSeq from watchdog_inspect); when provided, rejects if the target state has advanced',
+    },
+  },
+  required: ['conversationId', 'hint'],
+  additionalProperties: false,
+}
+
+const WATCHDOG_ABORT_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: {
+    conversationId: { type: 'integer', minimum: 1 },
+    reason: { type: 'string', minLength: 1 },
+    expectedStateSeq: {
+      type: 'integer',
+      minimum: 0,
+      description: 'Optional CAS watermark (live stateChangeSeq from watchdog_inspect); when provided, rejects if the target state has advanced',
+    },
+  },
+  required: ['conversationId'],
+  additionalProperties: false,
+}
+
+const WATCHDOG_MUTATION_OUTPUT_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: {
+    conversationId: { type: 'integer', minimum: 1 },
+    submitted: { type: 'boolean' },
+    aborted: { type: 'boolean' },
+  },
+  required: ['conversationId'],
+  additionalProperties: false,
+}
+
+interface DeclarativeToolSpec {
+  name: string
+  description: string
+  inputSchema: Record<string, unknown>
+  scope: ConversationScope
+}
+
+interface DeclarativeActionSpec {
+  id: string
+  description: string
+  idempotent?: boolean
+  inputSchema: Record<string, unknown>
+  outputSchema: Record<string, unknown>
+  scope?: ConversationScope
+}
+
+const TOOL_SPECS: ReadonlyArray<DeclarativeToolSpec> = [
+  {
+    name: 'dispatch_worker',
+    description:
+      'Spawn a background worker conversation to execute a task without blocking (returns workerConversationId immediately, without waiting for the model turn to finish). Optionally pin an expert Profile via profileId and bind an event subscription via threadKey.',
+    inputSchema: DISPATCH_INPUT_SCHEMA,
+    scope: ROUTER_TOOL_SCOPE,
+  },
+  {
+    name: 'inspect_worker',
+    description: "Read a background worker's recent timeline summary and artifact list.",
+    inputSchema: WORKER_ID_INPUT_SCHEMA,
+    scope: ROUTER_TOOL_SCOPE,
+  },
+  {
+    name: 'recall_context',
+    description: 'Search the RecallGraph memory graph (filters historical task-summary nodes by keywords, multiple words AND-combined).',
+    inputSchema: RECALL_INPUT_SCHEMA,
+    scope: ROUTER_TOOL_SCOPE,
+  },
+  {
+    name: 'subscribe_thread',
+    description: 'Bind a threadKey event subscription to the given background worker (conflicts are explicitly rejected, never preempted).',
+    inputSchema: SUBSCRIBE_INPUT_SCHEMA,
+    scope: ROUTER_TOOL_SCOPE,
+  },
+  {
+    name: 'watchdog_inspect',
+    description:
+      'Read the real details of an inspection target: conversationId returns the native conversation summary and recent timeline (ownership checked live); probe returns the latest external-target probe facts (read-only; never pretends to control external panes).',
+    inputSchema: WATCHDOG_INSPECT_SCHEMA,
+    scope: WATCHDOG_SCOPE,
+  },
+  {
+    name: 'watchdog_recover',
+    description:
+      'Submit a recovery hint to an owned (helm/bot) native conversation (agent origin, without waiting for a model turn); ownership is atomically rechecked at the effect point via the kernel guarded port; human targets are rejected.',
+    inputSchema: WATCHDOG_RECOVER_SCHEMA,
+    scope: WATCHDOG_SCOPE,
+  },
+  {
+    name: 'watchdog_abort',
+    description:
+      'Abort an owned (helm/bot) native conversation; ownership is atomically rechecked at the effect point via the kernel guarded port; human/root/hub/watchdog-itself are rejected. External panes can only be aborted indirectly via their owned parent conversation.',
+    inputSchema: WATCHDOG_ABORT_SCHEMA,
+    scope: WATCHDOG_SCOPE,
+  },
+]
+
+const ACTION_SPECS: ReadonlyArray<DeclarativeActionSpec> = [
+  {
+    id: 'dispatch_worker',
+    description: 'Spawn a background worker without blocking (hub conversation or manual HTTP/CLI calls).',
+    inputSchema: DISPATCH_INPUT_SCHEMA,
+    outputSchema: {
+      type: 'object',
+      properties: { workerConversationId: { type: 'number' } },
+      required: ['workerConversationId'],
+      additionalProperties: false,
+    },
+  },
+  {
+    id: 'inspect_worker',
+    description: "Read a background worker's recent timeline summary and artifact list.",
+    idempotent: true,
+    inputSchema: WORKER_ID_INPUT_SCHEMA,
+    outputSchema: { type: 'object' },
+  },
+  {
+    id: 'recall_context',
+    description: 'Search the RecallGraph memory graph.',
+    idempotent: true,
+    inputSchema: RECALL_INPUT_SCHEMA,
+    outputSchema: { type: 'object' },
+  },
+  {
+    id: 'subscribe_thread',
+    description: 'Bind a threadKey event subscription to the given background worker.',
+    inputSchema: SUBSCRIBE_INPUT_SCHEMA,
+    outputSchema: { type: 'object' },
+  },
+  {
+    id: 'archive_worker',
+    description: 'Archive a finished worker: unbinds subscriptions and swaps the worker tag for worker-archived (hub conversation or manual calls).',
+    inputSchema: WORKER_ID_INPUT_SCHEMA,
+    outputSchema: {
+      type: 'object',
+      properties: { archived: { type: 'boolean' } },
+      required: ['archived'],
+      additionalProperties: false,
+    },
+  },
+  {
+    id: 'set_router_mode',
+    description: 'Persistently change the hub router convergence mode (writes the plugin config routerMode, effective immediately).',
+    inputSchema: {
+      type: 'object',
+      properties: { enabled: { type: 'boolean' } },
+      required: ['enabled'],
+      additionalProperties: false,
+    },
+    outputSchema: {
+      type: 'object',
+      properties: { routerMode: { type: 'boolean' } },
+      required: ['routerMode'],
+      additionalProperties: false,
+    },
+  },
+  {
+    id: 'watchdog_inspect',
+    description: 'Read the real details of an inspection target (native conversation or the latest external probe facts, read-only)',
+    idempotent: true,
+    inputSchema: WATCHDOG_INSPECT_SCHEMA,
+    outputSchema: WATCHDOG_INSPECT_OUTPUT_SCHEMA,
+    scope: WATCHDOG_SCOPE,
+  },
+  {
+    id: 'watchdog_recover',
+    description: 'Submit a recovery hint to an owned native conversation (agent origin, without waiting for a model turn; ownership atomically rechecked via the kernel guarded port)',
+    inputSchema: WATCHDOG_RECOVER_SCHEMA,
+    outputSchema: WATCHDOG_MUTATION_OUTPUT_SCHEMA,
+    scope: WATCHDOG_SCOPE,
+  },
+  {
+    id: 'watchdog_abort',
+    description: 'Abort an owned native conversation (human/root/hub/watchdog-itself rejected; ownership atomically rechecked via the kernel guarded port)',
+    inputSchema: WATCHDOG_ABORT_SCHEMA,
+    outputSchema: WATCHDOG_MUTATION_OUTPUT_SCHEMA,
+    scope: WATCHDOG_SCOPE,
+  },
+  {
+    id: 'watchdog_tick',
+    description: 'Manually trigger one watchdog inspection round (collects native-conversation and external probe facts and runs the rule table)',
+    idempotent: false,
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        timestamp: { type: 'number' },
+        conversations: { type: 'integer', minimum: 0 },
+        probes: { type: 'integer', minimum: 0 },
+        skipped: { type: 'boolean' },
+      },
+      required: ['timestamp', 'conversations', 'probes'],
+      additionalProperties: false,
+    },
+    scope: WATCHDOG_SCOPE,
+  },
+]
+
+let runtimeModulePromise: Promise<SuperAgentRuntimeModule> | undefined
+
+function loadSuperAgentRuntimeModule(): Promise<SuperAgentRuntimeModule> {
+  runtimeModulePromise ??= import('./superagent/runtime-bootstrap.js').catch((err) => {
+    runtimeModulePromise = undefined
+    throw err
+  })
+  return runtimeModulePromise
+}
+
+function registerDeclarativeCapabilities(
+  ctx: HelmPluginContext,
+  ensureRuntime: () => Promise<SuperAgentRuntimeController>,
+): void {
+  for (const spec of TOOL_SPECS) {
+    ctx.tool({
+      name: spec.name,
+      description: spec.description,
+      inputSchema: spec.inputSchema,
+      scope: spec.scope,
+      execute: async (input, context) => (await ensureRuntime()).executeTool(spec.name, input, context),
+    })
+  }
+  for (const spec of ACTION_SPECS) {
+    ctx.action({
+      id: spec.id,
+      description: spec.description,
+      ...(spec.idempotent !== undefined ? { idempotent: spec.idempotent } : {}),
+      inputSchema: spec.inputSchema,
+      outputSchema: spec.outputSchema,
+      ...(spec.scope !== undefined ? { scope: spec.scope } : {}),
+      handler: async (input, context) => (await ensureRuntime()).invokeAction(spec.id, input, context),
+    })
   }
 }
 
@@ -98,240 +388,56 @@ export function createSuperAgentPlugin(): PluginDefinition {
     version: '0.1.0',
     ...resolvePluginClientAssets(SUPERAGENT_PLUGIN_ID, 'superagent', 'superagent_plugin_client_missing'),
     definePlugin(ctx) {
-      let active = false
-      let shutdown = false
-      let dispatchChain: Promise<unknown> = Promise.resolve()
-      let docs: SuperAgentDocs | undefined
-      let releases: Array<() => void> = []
-      const liveTasks = new Map<string, number>()
-      let routerId: number | undefined
-      let watchdogId: number | undefined
-      const settlingWorkers = new Map<number, number>()
-      const rewindEpochs = new Map<number, number>()
-      let entriesUnsubscribe: (() => void) | undefined
+      let runtime: SuperAgentRuntimeController | undefined
+      let runtimePromise: Promise<SuperAgentRuntimeController> | undefined
 
-      const countLabel = (label: string, delta: number): void => {
-        const next = (liveTasks.get(label) ?? 0) + delta
-        if (next > 0) liveTasks.set(label, next)
-        else liveTasks.delete(label)
-      }
-
-      async function track<T>(label: string, task: () => MaybePromise<T>): Promise<T> {
-        if (shutdown) {
-          throw new HelmError('plugin_disabled', `builtin:superagent 已停用，拒绝后台任务 ${label}`, 409, {
-            pluginId: SUPERAGENT_PLUGIN_ID,
-          })
-        }
-        countLabel(label, +1)
-        try {
-          return await task()
-        } finally {
-          countLabel(label, -1)
-        }
-      }
-
-      const logDiagnostic = (message: string): void => {
-        console.error(`[superagent] ${ctx.host.redact(message)}`)
-      }
-
-      const reportError = (title: string, detail: unknown): void => {
-        const message = detail instanceof Error ? detail.message : String(detail)
-        const body = ctx.host.redact(`${title}：${message}`)
-        try {
-          ctx.host.emitEvent('notification', { type: 'notification', level: 'error', title: ctx.host.redact(title), body })
-        } catch (eventErr) {
-          logDiagnostic(`superagent 事件上报失败：${eventErr instanceof Error ? eventErr.message : String(eventErr)}`)
-        }
-        const target = routerId
-        if (target === undefined || shutdown || ctx.host.isClosing) return
-        void track('report-error', async () => {
-          try {
-            await ctx.host.submitInput(target, body, { origin: 'agent', whenBusy: 'steer' })
-          } catch (err) {
-            logDiagnostic(`superagent 错误报告投递失败：${err instanceof Error ? err.message : String(err)}`)
-          }
-        })
-      }
-
-      const getConfig = (): SuperAgentConfig =>
-        resolveSuperAgentConfig(ctx.getConfig() as Record<string, unknown>)
-      const getRouterConversationId = (): number | undefined => routerId
-      const getWatchdogConversationId = (): number | undefined => watchdogId
-
-      docs = {
+      const docs: SuperAgentDocs = {
         index: ctx.doc<SuperAgentIndexDoc>(INDEX_DOC_NAME, { version: 1, workers: [] }, { public: true }),
         subscriptions: ctx.doc<ThreadSubscriptionDoc>(SUBSCRIPTIONS_DOC_NAME, { version: 1, subscriptions: [] }, { public: true }),
         recall: ctx.doc<RecallGraphDoc>(RECALL_DOC_NAME, { version: 1, nodes: [] }, { public: true }),
         routing: ctx.doc<RouterModeDoc>(ROUTING_DOC_NAME, { version: 1, routerMode: DEFAULT_CONFIG.routerMode }, { public: true }),
       }
+      const watchdogDedupDoc = ctx.doc<WatchdogDedupDoc>('watchdog-dedup', { version: 1, fired: {} })
 
-      let routingConfigSnapshot = ''
-      const syncRoutingDoc = (): void => {
-        const raw = ctx.getConfig() as Record<string, unknown>
-        const snapshot = JSON.stringify(raw)
-        if (snapshot === routingConfigSnapshot) return
-        docs!.routing.set({ version: 1, routerMode: resolveSuperAgentConfig(raw).routerMode })
-        routingConfigSnapshot = snapshot
+      async function ensureRuntime(): Promise<SuperAgentRuntimeController> {
+        if (runtime !== undefined) return runtime
+        runtimePromise ??= loadSuperAgentRuntimeModule()
+          .then((mod) => {
+            runtime = mod.createSuperAgentRuntime({ ctx, docs, watchdogDedupDoc })
+            return runtime
+          })
+          .catch((err) => {
+            runtimePromise = undefined
+            throw err
+          })
+        return runtimePromise
       }
 
-      const readIndex = (): SuperAgentIndexDoc => assertIndexDoc(docs!.index.get())
-      const readSubscriptions = (): ThreadSubscriptionDoc => assertSubscriptionsDoc(docs!.subscriptions.get())
-
-      const updateIndex = (fn: (doc: SuperAgentIndexDoc) => SuperAgentIndexDoc): SuperAgentIndexDoc => {
-        const next = fn(readIndex())
-        assertIndexDoc(next)
-        docs!.index.set(next)
-        return next
-      }
-
-      const updateSubscriptions = (fn: (doc: ThreadSubscriptionDoc) => ThreadSubscriptionDoc): ThreadSubscriptionDoc => {
-        const next = fn(readSubscriptions())
-        assertSubscriptionsDoc(next)
-        docs!.subscriptions.set(next)
-        return next
-      }
-
-      const isRegisteredWorker = (conversationId: number): boolean => {
-        if (!readIndex().workers.some((w) => w.conversationId === conversationId)) return false
-        try {
-          return ctx.host.getConversation(conversationId).tags.includes('worker')
-        } catch (err) {
-          if (err instanceof HelmError && err.code === 'not_found') return false
-          throw err
-        }
-      }
-
-      const readConversationOrUndefined = (id: number | undefined): ConversationSummary | undefined => {
-        if (!Number.isInteger(id) || (id as number) <= 0) return undefined
-        try {
-          return ctx.host.getConversation(id as number)
-        } catch (err) {
-          if (err instanceof HelmError && err.code === 'not_found') return undefined
-          throw err
-        }
-      }
-
-      const ensureResidentConversation = async (
-        kind: 'router' | 'watchdog',
-        profileId: string,
-        recordedId: number | undefined,
-      ): Promise<number> => {
-        const existing = readConversationOrUndefined(recordedId)
-        if (existing !== undefined) {
-          if (existing.profileId !== profileId) {
-            throw new HelmError(
-              'superagent_resident_conversation_conflict',
-              `插件常驻会话（${kind}）记录为 #${recordedId}，但该会话当前 profileId 是 '${existing.profileId}'（期望 '${profileId}'）；拒绝占用，请人工核对该会话或修正插件 doc index`,
-              409,
-              {
-                pluginId: SUPERAGENT_PLUGIN_ID,
-                kind,
-                conversationId: recordedId,
-                expectedProfileId: profileId,
-                actualProfileId: existing.profileId,
-              },
-            )
-          }
-          return existing.id
-        }
-        const created = await ctx.host.createConversation({
-          title: kind === 'router' ? 'SuperAgent 中枢' : '巡检看门狗',
-          profileId,
-        })
-        updateIndex((doc) => ({
-          ...doc,
-          ...(kind === 'router' ? { routerConversationId: created.id } : { watchdogConversationId: created.id }),
-        }))
-        return created.id
-      }
-
-      const handleRewindMarker = (conversationId: number, entry: { id: string; kind: string; data?: unknown }): void => {
-        const omitted = rewindOmittedInputIds(entry as unknown as Parameters<typeof rewindOmittedInputIds>[0])
-        if (omitted === undefined) {
-          reportError(
-            'RecallGraph rewind 联动失败',
-            new HelmError(
-              'superagent_rewind_payload_invalid',
-              `会话 #${conversationId} 的 helm.rewind 标记载荷非法（omittedInputIds 缺失或含非字符串项），已跳过 RecallGraph 清理，请人工核对`,
-              500,
-              { pluginId: SUPERAGENT_PLUGIN_ID, conversationId, entryId: entry.id },
-            ),
-          )
-          return
-        }
-        rewindEpochs.set(conversationId, (rewindEpochs.get(conversationId) ?? 0) + 1)
-        try {
-          const removed = removeRecallNodesByInputs(docs!.recall, conversationId, new Set(omitted))
-          if (removed.length > 0) {
-            logDiagnostic(`helm.rewind 联动删除 RecallGraph 节点 ${removed.join(', ')}（会话 #${conversationId}）`)
-          }
-        } catch (err) {
-          reportError(`RecallGraph rewind 联动失败（会话 #${conversationId}）`, err)
-        }
-      }
-
-      const replayMissedRewinds = async (): Promise<void> => {
-        const doc = docs!.recall.get()
-        assertRecallDoc(doc)
-        const conversationIds = [...new Set(doc.nodes.map((n) => n.conversationId))]
-        for (const conversationId of conversationIds) {
-          let cursor: string | undefined = undefined
-          const omitted = new Set<string>()
-          for (;;) {
-            let page: ConversationDetail
-            try {
-              page = await ctx.host.getConversationDetail(conversationId, {
-                limit: REWIND_REPLAY_PAGE_SIZE,
-                ...(cursor !== undefined ? { cursor } : {}),
-              })
-            } catch (err) {
-              if (err instanceof HelmError && err.code === 'not_found') break
-              throw err
-            }
-            for (const entry of page.entries) {
-              const ids = rewindOmittedInputIds(entry)
-              if (ids !== undefined) for (const id of ids) omitted.add(id)
-            }
-            if (page.nextCursor === undefined) break
-            cursor = page.nextCursor
-          }
-          if (omitted.size === 0) continue
-          rewindEpochs.set(conversationId, (rewindEpochs.get(conversationId) ?? 0) + 1)
-          const removed = removeRecallNodesByInputs(docs!.recall, conversationId, omitted)
-          if (removed.length > 0) {
-            logDiagnostic(`启用补偿：会话 #${conversationId} 停用期间 rewind 删除节点 ${removed.join(', ')}`)
-          }
-        }
-      }
-
-      const coordinator: SuperAgentCoordinator = {
-        isActive: () => active,
-        isShutdown: () => shutdown,
-        getConfig,
-        getRouterConversationId,
-        getWatchdogConversationId,
-        getDocs: () => docs!,
-        readIndex,
-        readSubscriptions,
-        updateIndex,
-        updateSubscriptions,
-        isRegisteredWorker,
-        readConversationOrUndefined,
-        reportError,
-        syncRoutingDoc,
-        enqueueDispatch: <T>(fn: () => Promise<T>): Promise<T> => {
-          const task = dispatchChain.then(fn, fn)
-          dispatchChain = task.catch(() => undefined)
-          return task
-        },
-        settlingWorkers,
-        rewindEpochs,
-      }
-
-      // 注册子模块能力
-      registerSuperAgentActions(ctx, coordinator)
-      registerSuperAgentHooks(ctx, coordinator)
+      // 声明 UI、配置、工具、动作与 Hook 壳（零重模块静态导入）
       registerSuperAgentUi(ctx)
+      registerDeclarativeCapabilities(ctx, ensureRuntime)
+
+      // 核心路由/结算 Hook（未启动前 active=false，直接放行）
+      ctx.hook.onTrigger((envelope) => runtime?.runTrigger(envelope))
+      ctx.hook.onBeforeTurn((turn) => runtime?.runCoreBeforeTurn(turn))
+      ctx.hook.onToolCall((payload) => runtime?.runCoreToolCall(payload))
+      ctx.hook.onTurnSettled(async (payload) => {
+        await runtime?.runCoreTurnSettled(payload)
+      })
+
+      // Watchdog 会话守卫 Hook（按原注册顺序挂载于核心 Hook 之后）
+      ctx.hook.onTurnSettled(async (payload) => {
+        const rt = await ensureRuntime()
+        await rt.runWatchdogTurnSettled(payload)
+      })
+      ctx.hook.onBeforeTurn(async (turn) => {
+        const rt = await ensureRuntime()
+        return rt.runWatchdogBeforeTurn(turn)
+      })
+      ctx.hook.onToolCall(async (payload) => {
+        const rt = await ensureRuntime()
+        return rt.runWatchdogToolCall(payload)
+      })
 
       // 注册配置 Schema
       ctx.configSchema({
@@ -379,82 +485,42 @@ export function createSuperAgentPlugin(): PluginDefinition {
         },
       })
 
-      // 注册核心服务
+      // 注册双服务（按原声明顺序：superagent-core 先于 superagent-watchdog）
       ctx.service({
         id: 'superagent-core',
         liveTasks() {
-          const labels = [...liveTasks.keys()]
-          if (!active) return labels
-          const busyIds = new Set<number>()
-          for (const w of readIndex().workers) busyIds.add(w.conversationId)
-          for (const resident of [routerId, watchdogId]) {
-            if (resident !== undefined) busyIds.add(resident)
-          }
-          for (const id of busyIds) {
-            try {
-              const s = ctx.host.getConversation(id)
-              if (s.status === 'working' || s.status === 'blocked') labels.push(`worker-run:${id}`)
-            } catch (err) {
-              if (err instanceof HelmError && err.code === 'not_found') continue
-              throw err
-            }
-          }
-          return labels
+          return runtime ? runtime.coreLiveTasks() : []
+        },
+        async prepare() {
+          await ensureRuntime()
         },
         async start() {
-          shutdown = false
-          await bootstrapAssets({
-            profileDirectory: (id) => ctx.host.profiles.directory(id),
-            skillDirectory: (id) => ctx.host.skills.directory(id),
-            atomicWriteFile: (path, content) => ctx.host.atomicWriteFile(path, content),
-            profiles: ctx.host.profiles,
-            skills: ctx.host.skills,
-          })
-          assertRecallDoc(docs!.recall.get())
-          readSubscriptions()
-          const index = readIndex()
-          const router = await ensureResidentConversation('router', SUPERAGENT_PROFILE_ID, index.routerConversationId)
-          const watchdog = await ensureResidentConversation('watchdog', WATCHDOG_PROFILE_ID, index.watchdogConversationId)
-          releases.push(ctx.host.manageConversation(router))
-          releases.push(ctx.host.manageConversation(watchdog))
-          ctx.host.markConversationOwnership(router, 'helm')
-          ctx.host.markConversationOwnership(watchdog, 'helm')
-          routerId = router
-          watchdogId = watchdog
-          await replayMissedRewinds()
-          entriesUnsubscribe = ctx.host.onEvent('conversation.entry', (payload) => {
-            if (!active || shutdown) return
-            const event = asConversationEntryEvent(payload)
-            if (event === undefined) {
-              logDiagnostic(`conversation.entry 事件载荷非法被丢弃：${JSON.stringify(payload)?.slice(0, 120)}`)
-              return
-            }
-            if (event.entry.kind !== 'helm.rewind') return
-            handleRewindMarker(event.conversationId, event.entry)
-          })
-          syncRoutingDoc()
-          active = true
+          const rt = await ensureRuntime()
+          await rt.startCore()
         },
         async stop() {
-          shutdown = true
-          active = false
-          entriesUnsubscribe?.()
-          entriesUnsubscribe = undefined
-          for (const release of releases) release()
-          releases = []
-          routerId = undefined
-          watchdogId = undefined
-          settlingWorkers.clear()
-          rewindEpochs.clear()
+          if (runtime === undefined && runtimePromise !== undefined) {
+            await runtimePromise.catch(() => undefined)
+          }
+          await runtime?.stopCore()
         },
       })
 
-      // 挂载 Watchdog
-      registerSuperAgentWatchdog(ctx, {
-        getConfig,
-        getRouterConversationId,
-        getWatchdogConversationId,
-        track,
+      ctx.service({
+        id: 'superagent-watchdog',
+        liveTasks() {
+          return runtime ? runtime.watchdogLiveTasks() : []
+        },
+        async start() {
+          const rt = await ensureRuntime()
+          await rt.startWatchdog()
+        },
+        async stop() {
+          if (runtime === undefined && runtimePromise !== undefined) {
+            await runtimePromise.catch(() => undefined)
+          }
+          await runtime?.stopWatchdog()
+        },
       })
     },
   }

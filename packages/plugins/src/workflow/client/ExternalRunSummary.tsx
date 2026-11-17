@@ -4,13 +4,14 @@
  * subagent entry. Running foreground-sync runs carry a "Move to background"
  * action (detach).
  */
+import { useId, useState } from 'react'
 import type { ReactNode } from 'react'
-import { formatCompactTimestamp, formatDurationMs, usePluginContext, usePluginLocale, usePluginTranslator } from '@helm/plugin-client'
+import { StatusLight, formatCompactTimestamp, formatDurationMs, usePluginContext, usePluginLocale, usePluginTranslator } from '@helm/plugin-client'
 import type { WorkflowRunSummary } from '../../contracts.js'
 import { useElapsedNowMs } from './hooks.ts'
-import { SPIN } from './presentation.ts'
 import { Icon } from './WorkflowIcon.tsx'
 import { isPlaceholderNodeLabel, isPlaceholderRunName } from './model-format.ts'
+import { executionLightStatus } from './model-execution-status.ts'
 import { subagentBadge, runFailureFallbackLabel } from './model-subagent-card.ts'
 import { canDetachForegroundRun, resolveRunElapsedMs, type DetachViewerScope } from './model-run.ts'
 import {
@@ -21,7 +22,16 @@ import {
   actionDetachFailed,
   EXTERNAL_TITLE,
   externalBackgroundTaskLabel,
+  executionStatusLabel,
+  nodeStatusLabel,
+  runStatusLabel,
   externalErrorJoiner,
+  META_KV_CREATED,
+  META_KV_LOCATION,
+  META_KV_RUN_ID,
+  META_KV_WORKTREE,
+  META_TOGGLE_ARIA,
+  META_TOGGLE_LABEL,
   externalIdleLine,
   externalNodeFailedLabel,
   externalRunningNodes,
@@ -41,6 +51,8 @@ export function ExternalRunSummary(props: {
   const ctx = usePluginContext()
   const locale = usePluginLocale()
   const t = usePluginTranslator()
+  const [metaOpen, setMetaOpen] = useState(false)
+  const metaId = useId()
   const { run, worktree, toolStatus, executionId, nodeId, effectiveCwd } = props
   const nodes = run?.nodes ?? []
   const running = nodes.filter((n) => n.status === 'running').length
@@ -68,7 +80,7 @@ export function ExternalRunSummary(props: {
   return (
     <div className="subagent-live-card subagent-external-card">
       <div className="subagent-live-header">
-        <Icon name={failedState ? 'x' : active ? 'loader' : 'bot'} size={13} className={active ? SPIN : undefined} />
+        <Icon name="bot" size={13} />
         <span className="subagent-live-title" title={primaryTitle ?? t(EXTERNAL_TITLE)}>
           <span className="subagent-live-title-text">{primaryTitle ?? t(EXTERNAL_TITLE)}</span>
           {primaryTitle !== undefined ? <span className="badge badge-neutral">{t(EXTERNAL_TITLE)}</span> : null}
@@ -80,7 +92,15 @@ export function ExternalRunSummary(props: {
             {worktree.branch}
           </span>
         ) : null}
-        <span className={`badge ${badge.badge}`}>{badge.label}</span>
+        {(() => {
+          const lightStatus = executionLightStatus(badge.status, run, failed !== undefined)
+          return (
+            <StatusLight
+              status={lightStatus}
+              label={lightStatus === 'aborted' ? runStatusLabel('aborted', locale) : badge.label}
+            />
+          )
+        })()}
         {elapsedMs !== undefined ? (
           <span className="subagent-live-elapsed tabular-nums">{formatDurationMs(elapsedMs)}</span>
         ) : null}
@@ -104,26 +124,53 @@ export function ExternalRunSummary(props: {
       </div>
       <div className="subagent-live-stream subagent-external-body">
         {run !== undefined || nodeId !== undefined || effectiveCwd !== undefined || worktree !== undefined ? (
-          <div className="subagent-live-meta-row">
-            {run !== undefined ? <span className="subagent-live-meta-item mono">{run.id}</span> : null}
-            {run !== undefined ? (
-              <span className="subagent-live-meta-item tabular-nums">{formatCompactTimestamp(run.createdAt)}</span>
-            ) : null}
-            {nodeId !== undefined || effectiveCwd !== undefined ? (
-              <span className="subagent-live-meta-item mono">
-                {[nodeId, effectiveCwd].filter((s) => s !== undefined && s !== '').join(':')}
-              </span>
-            ) : null}
-            {worktree !== undefined ? (
-              <span className="subagent-live-meta-item mono">{`${worktree.branch} (${worktree.path})`}</span>
-            ) : null}
+          /* 机器元数据（runId / 创建时间 / node:cwd / worktree）收进原地展开：真实按钮 + aria-expanded。 */
+          <div className="subagent-live-meta">
+            <button
+              type="button"
+              className="btn btn-ghost btn-xs subagent-live-meta-toggle"
+              aria-expanded={metaOpen}
+              aria-controls={metaId}
+              aria-label={t(META_TOGGLE_ARIA)}
+              title={t(META_TOGGLE_LABEL)}
+              onClick={() => setMetaOpen((v) => !v)}
+            >
+              <Icon name={metaOpen ? 'chevron-down' : 'chevron-right'} size={11} />
+              <Icon name="info" size={11} />
+            </button>
+            <div id={metaId} hidden={!metaOpen} className="subagent-live-meta-row">
+              {run !== undefined ? (
+                <span className="subagent-live-meta-item mono">
+                  <span className="subagent-live-meta-key">{t(META_KV_RUN_ID)}</span>
+                  {run.id}
+                </span>
+              ) : null}
+              {run !== undefined ? (
+                <span className="subagent-live-meta-item tabular-nums">
+                  <span className="subagent-live-meta-key">{t(META_KV_CREATED)}</span>
+                  {formatCompactTimestamp(run.createdAt)}
+                </span>
+              ) : null}
+              {nodeId !== undefined || effectiveCwd !== undefined ? (
+                <span className="subagent-live-meta-item mono">
+                  <span className="subagent-live-meta-key">{t(META_KV_LOCATION)}</span>
+                  {[nodeId, effectiveCwd].filter((s) => s !== undefined && s !== '').join(':')}
+                </span>
+              ) : null}
+              {worktree !== undefined ? (
+                <span className="subagent-live-meta-item mono">
+                  <span className="subagent-live-meta-key">{t(META_KV_WORKTREE)}</span>
+                  {`${worktree.branch} (${worktree.path})`}
+                </span>
+              ) : null}
+            </div>
           </div>
         ) : null}
         {nodes.length > 0 ? (
           <div className="workflow-node-list">
             {nodes.map((n) => (
               <div key={n.id} className="workflow-node-line">
-                <Icon name={n.status === 'running' ? 'loader' : n.status === 'failed' ? 'x' : n.status === 'done' ? 'check' : 'circle'} size={11} className={n.status === 'running' ? SPIN : undefined} />
+                <StatusLight status={n.status} label={nodeStatusLabel(n.status, locale)} />
                 <span className="workflow-node-label">{n.label ?? n.id}</span>
                 {n.executionId !== undefined ? <span className="subagent-external-exec">{n.executionId}</span> : null}
               </div>

@@ -184,7 +184,7 @@ button, a, input, select, textarea { touch-action: manipulation; }
     padding-top: 8px;
   }
   .helm-panes > .helm-pane > .pane-topbar,
-  .helm-primary-pane > .helm-pane > .pane-topbar { padding-left: max(48px, calc(env(safe-area-inset-left) + 44px)); }
+  .helm-primary-pane .helm-pane > .pane-topbar { padding-left: max(48px, calc(env(safe-area-inset-left) + 44px)); }
   /* 一级中心（角色/模型/技能/节点/插件）顶栏同样为左上角悬浮汉堡让位 */
   .primary-center-topbar { padding-left: max(48px, calc(env(safe-area-inset-left) + 44px)); }
   /* 移动端重连浮动胶囊避开左上角固定 .mobile-nav-toggle 并尊重顶部安全区 */

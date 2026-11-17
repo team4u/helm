@@ -33,7 +33,10 @@ function nodeTextPreview(text: string): string {
     : text
 }
 
-export function toSummary(record: RunRecord): WorkflowRunSummary {
+export function toSummary(
+  record: RunRecord,
+  options?: { resumable?: boolean },
+): WorkflowRunSummary {
   return {
     id: record.id,
     name: record.name,
@@ -50,6 +53,8 @@ export function toSummary(record: RunRecord): WorkflowRunSummary {
     updatedAt: record.updatedAt,
     ...(record.result !== undefined ? { result: record.result } : {}),
     ...(record.error !== undefined ? { error: record.error } : {}),
+    ...(record.errorCode !== undefined ? { errorCode: record.errorCode } : {}),
+    ...(options?.resumable !== undefined ? { resumable: options.resumable } : {}),
     ...(record.nodes !== undefined ? { nodes: record.nodes } : {}),
     ...(record.progress !== undefined ? { progress: record.progress } : {}),
     ...(record.replayedFrom !== undefined ? { replayedFrom: record.replayedFrom } : {}),

@@ -11,31 +11,23 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import * as React from 'react'
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
-import { act } from 'react'
 import type { ConversationSummary, PluginClientContext as PluginClientContextType, ScreenProps, WorkbenchPanelProps } from '@helm/protocol'
-// 类型引用（test-only）：workflow/herdr 共享契约归属 @helm/plugins（自 @helm/protocol
-// 迁出，见 devDependency）；纯类型零运行时耦合，不放宽生产包边界。
-import type { WorkflowRunSummary } from '@helm/plugins/contracts'
-
-// 先注册 DOM 全局对象再导入 react-dom / @helm/plugin-client（保证 Radix Popover 等 useLayoutEffect 识别 DOM 环境）。
-GlobalRegistrator.register()
-const { createRoot } = await import('react-dom/client')
-const { PluginClientContext, resolveLocalizedText } = await import('@helm/plugin-client')
-const {
+import type { WorkflowRunSummary } from '../src/contracts.js'
+import {
+  React,
+  SDK,
+  act,
+  createRoot,
   importWorkflowClientModule,
   importWorkflowModels,
   mountSharedPluginNamespaces,
   setWorkflowClientStub,
-} = await import('./helpers/workflow-client.js')
+} from './helpers/workflow-client-harness.js'
 
 const e = React.createElement
+const { PluginClientContext, resolveLocalizedText } = SDK
 
 mountSharedPluginNamespaces()
-// React 19 act 环境：事件处理器在 act 外静默抑制更新断言；显式开启
-;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
-;(globalThis as Record<string, unknown>).React = React
 const m = await importWorkflowModels()
 
 // ---------------------------------------------------------------------------
@@ -212,8 +204,8 @@ async function mountClient(
 function buttonByText(scope: ParentNode, text: string): HTMLButtonElement {
   const buttons = [...scope.querySelectorAll('button')] as HTMLButtonElement[]
   const found = buttons.find((b) => (b.textContent ?? '').includes(text))
-  assert.ok(found !== null, `应存在含「${text}」的按钮（实得：${buttons.map((b) => b.textContent).join(' | ')}）`)
-  return found!
+  assert.ok(found !== undefined, `应存在含「${text}」的按钮（实得：${buttons.map((b) => b.textContent).join(' | ')}）`)
+  return found
 }
 
 const LIST_RESULT = {
@@ -316,8 +308,8 @@ test('详情抽屉：深链 wf 参数直开；get 只读源码渲染、无编辑
 
     // 运行区：无可用会话时禁用运行按钮（不伪造目标）。
     const runButton = [...drawer.querySelectorAll('button')].find((b) => (b.textContent ?? '').trim() === 'Run')
-    assert.ok(runButton !== null, '抽屉应提供运行按钮')
-    assert.equal(runButton!.disabled, true, '未选择目标会话前运行按钮必须禁用')
+    assert.ok(runButton !== undefined, '抽屉应提供运行按钮')
+    assert.equal(runButton.disabled, true, '未选择目标会话前运行按钮必须禁用')
 
     // 删除两步确认：第一步仅出现确认文案，确认后调用 delete、刷新 list、清理 wf 参数。
     await act(async () => {
@@ -383,12 +375,12 @@ test('运行卡「保存为工作流」：内联 run 显示并调用 save fromRu
     const inlineWrap = host.querySelector<HTMLElement>('[data-run-id="wf_inline"]')
     const savedWrap = host.querySelector<HTMLElement>('[data-run-id="wf_saved"]')
     const subagentWrap = host.querySelector<HTMLElement>('[data-run-id="wf_bg"]')
-    assert.ok(inlineWrap && savedWrap && subagentWrap, '三个 run 均应在工作台渲染')
+    assert.ok(inlineWrap !== null && savedWrap !== null && subagentWrap !== null, '三个 run 均应在工作台渲染')
 
     // subagent running run 只有中止，无更多操作与保存入口；completed savedRun 有更多操作（重放）但无保存入口。
     assert.ok(subagentWrap.querySelector('button[aria-label="More actions"]') === null)
     const savedMore = savedWrap.querySelector<HTMLButtonElement>('button[aria-label="More actions"]')
-    assert.ok(savedMore)
+    assert.ok(savedMore !== null)
     act(() => {
       savedMore.click()
     })
@@ -399,7 +391,7 @@ test('运行卡「保存为工作流」：内联 run 显示并调用 save fromRu
 
     // inline completed run 打开 ··· 更多操作后仅此处提供「保存为工作流」。
     const inlineMore = inlineWrap.querySelector<HTMLButtonElement>('button[aria-label="More actions"]')
-    assert.ok(inlineMore)
+    assert.ok(inlineMore !== null)
     act(() => {
       inlineMore.click()
     })

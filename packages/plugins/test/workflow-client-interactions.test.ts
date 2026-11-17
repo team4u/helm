@@ -3,28 +3,26 @@
  *
  * - 一体化整卡点击 / 回车触发 ctx.openConversationDrawer（不跳主屏、不开分屏）；
  * - 工作流节点内嵌子代理卡同样走统一抽屉入口；
- * - 中止 / 清理按钮 stopPropagation（点击按钮不触发整卡打开抽屉）。
+ * - 中止 / 清理按钮 stopPropagation（点击按钮不触发整卡打开抽屉）；
+ * - 前台同步「转入后台」detach、单卡恢复、工作台顶栏批量 resume_failed。
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import * as React from 'react'
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
-import { act } from 'react'
-import { createRoot } from 'react-dom/client'
 import type { ConversationSummary, PluginClientContext as PluginClientContextType } from '@helm/protocol'
-import { PluginClientContext, resolveLocalizedText } from '@helm/plugin-client'
 import {
+  React,
+  SDK,
+  act,
+  createRoot,
   importWorkflowClientModule,
   mountSharedPluginNamespaces,
   setWorkflowClientStub,
-} from './helpers/workflow-client.js'
+} from './helpers/workflow-client-harness.js'
 
 const e = React.createElement
+const { PluginClientContext, resolveLocalizedText } = SDK
 
-GlobalRegistrator.register()
 mountSharedPluginNamespaces()
-// React 19 act 环境：事件处理器在 act 外静默抑制更新断言；显式开启
-;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 
 function summary(id: number, status: ConversationSummary['status']): ConversationSummary {
   return {
@@ -116,8 +114,8 @@ async function mountClient(
   await act(async () => {})
   return {
     host,
-    rerender: async (element) => {
-      await act(async () => { root?.render(e(PluginClientContext.Provider, { value: ctx }, element)) })
+    rerender: async (next) => {
+      await act(async () => { root?.render(e(PluginClientContext.Provider, { value: ctx }, next)) })
     },
     unmount: () => {
       act(() => root?.unmount())
@@ -159,24 +157,19 @@ test('时间线单行与工作台整卡均点击触发 openConversationDrawer（
     // 工作台内的一体化整卡（SubagentLiveCard）：点击 / 回车 / 空格统一打开抽屉。
     spy.drawerCalls.length = 0
     await rerender(e(SubagentLiveCard, { childConversationId: 11, toolStatus: 'running' }))
-    const card = host.querySelector('.subagent-card-clickable') as HTMLElement | null
+    const card = host.querySelector('.subagent-card-clickable') as HTMLButtonElement | null
     assert.ok(card !== null, '工作台一体化整卡必须渲染 subagent-card-clickable')
+    assert.equal(card.tagName, 'BUTTON', '整卡主体是真实导航 button（元数据披露/动作为同级结构，无嵌套交互）')
+    assert.equal(card.querySelectorAll('button').length, 0, '导航按钮内无嵌套交互')
     act(() => {
       card!.click()
     })
-    assert.deepEqual(spy.drawerCalls, [11], '点击整卡必须调用 openConversationDrawer(11)')
+    assert.deepEqual(spy.drawerCalls, [11], '点击整卡主体必须调用 openConversationDrawer(11)')
     assert.deepEqual(spy.screenCalls, [], '不得调用 openScreen 跳主屏')
     assert.deepEqual(spy.splitCalls, [], '不得调用 openSplitScreen 开分屏')
-    spy.drawerCalls.length = 0
-    act(() => {
-      card!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
-    })
-    assert.deepEqual(spy.drawerCalls, [11], '回车必须同样触发抽屉入口')
-    spy.drawerCalls.length = 0
-    const space = new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true })
-    act(() => { card!.dispatchEvent(space) })
-    assert.deepEqual(spy.drawerCalls, [11], '空格必须同样触发抽屉入口')
-    assert.equal(space.defaultPrevented, true, '空格打开卡片时不得滚动页面')
+    // 真实 button 的 Enter/Space 由 UA 原生激活；此处验证可聚焦性。
+    card!.focus()
+    assert.ok(host.ownerDocument.activeElement === card, '整卡主体按钮可聚焦（回车/空格原生触发）')
   } finally {
     unmount()
   }
@@ -184,8 +177,19 @@ test('时间线单行与工作台整卡均点击触发 openConversationDrawer（
 
 test('时间线单行与工作台紧凑卡均有实时内容也不内联展开（统一点击进抽屉）', { timeout: 60_000 }, async () => {
   const child = { ...summary(11, 'working'), parentConversationId: 1, parentToolCallId: 'compact-call' }
+  const compactRun = {
+    id: 'wf_compact',
+    name: '本次任务',
+    conversationId: 1,
+    kind: 'subagent' as const,
+    status: 'running' as const,
+    createdAt: 1,
+    updatedAt: 2,
+    parentToolCallId: 'compact-call',
+    nodes: [{ id: 'agent', kind: 'agent' as const, status: 'running' as const, conversationId: 11 }],
+  }
   setWorkflowClientStub({
-    docValue: { runs: [] },
+    docValue: { runs: [compactRun] },
     conversations: [child],
     conversation: (id) => id === 11 ? {
       summary: child,
@@ -196,8 +200,8 @@ test('时间线单行与工作台紧凑卡均有实时内容也不内联展开�
   })
   const spy = makeSpyCtx()
   const mod = await importWorkflowClientModule()
-  const Tool = mod.SubagentToolView as React.ComponentType<Record<string, unknown>>
-  const Panel = mod.WorkflowWorkbenchPanel as React.ComponentType<Record<string, unknown>>
+  const Tool = mod['SubagentToolView'] as React.ComponentType<Record<string, unknown>>
+  const Panel = mod['WorkflowWorkbenchPanel'] as React.ComponentType<Record<string, unknown>>
   const { host, rerender, unmount } = await mountClient(spy, e(Tool, {
     callId: 'compact-call', toolName: 'subagent', status: 'running', conversationId: 1,
     input: { prompt: '本次任务' }, result: '原始工具输出', artifactRef: 'art_original',
@@ -206,19 +210,24 @@ test('时间线单行与工作台紧凑卡均有实时内容也不内联展开�
     assert.ok(host.querySelector('.subagent-live-stream') === null, '不能显示内联实时流')
     assert.ok(host.querySelector('.subagent-live-card-expanded') === null, '不能使用展开态样式')
     assert.ok(host.querySelector('details') === null, '不能提供原始调用详情的展开入口')
-    assert.ok(host.querySelector('[aria-expanded]') === null, '不能有展开控件')
+    // 展开控件仅允许出现在机器元数据披露（.subagent-live-meta）上；实时流不得内联展开。
+    const expandables = [...host.querySelectorAll('[aria-expanded]')] as HTMLElement[]
+    assert.ok(
+      expandables.every((el) => el.closest('.subagent-live-meta') !== null),
+      '不能有元数据披露之外的展开控件',
+    )
   }
   try {
     assertCompact()
     const traceBtn = host.querySelector('button.workflow-trace-row-btn') as HTMLElement
-    assert.ok(traceBtn)
+    assert.ok(traceBtn !== null)
     await act(async () => { traceBtn.click() })
     assert.deepEqual(spy.drawerCalls, [11], '时间线行点击仅打开抽屉')
     assertCompact()
     await rerender(e(Panel, { conversation: summary(1, 'idle') }))
     assertCompact()
     const workbenchCard = host.querySelector('.subagent-card-clickable') as HTMLElement
-    assert.ok(workbenchCard)
+    assert.ok(workbenchCard !== null)
     await act(async () => { workbenchCard.click() })
     assert.deepEqual(spy.drawerCalls, [11, 11], '工作台整卡点击同样仅打开抽屉')
     assertCompact()
@@ -230,19 +239,20 @@ test('历史续接行不展开详情，点击统一打开子会话抽屉', { tim
   setWorkflowClientStub({ conversations: [child] })
   const spy = makeSpyCtx()
   const mod = await importWorkflowClientModule()
-  const Tool = mod.SubagentToolView as React.ComponentType<Record<string, unknown>>
-  const oldResult = JSON.stringify({ execution: { conversationId: 11 } })
+  const Tool = mod['SubagentToolView'] as React.ComponentType<Record<string, unknown>>
+  const oldOutput = { execution: { conversationId: 11 } }
+  const oldResult = JSON.stringify(oldOutput)
   const { host, unmount } = await mountClient(spy, e(Tool, {
     callId: 'old-call', toolName: 'subagent', status: 'error', isError: true, conversationId: 1,
-    input: { prompt: '首次任务' }, result: oldResult,
+    input: { prompt: '首次任务' }, result: oldResult, structuredOutput: oldOutput,
     siblingCalls: [
-      { callId: 'old-call', toolName: 'subagent', status: 'error', result: oldResult },
+      { callId: 'old-call', toolName: 'subagent', status: 'error', result: oldResult, structuredOutput: oldOutput },
       { callId: 'new-call', toolName: 'subagent', status: 'running', input: { resume: '11' } },
     ],
   }))
   try {
     const row = host.querySelector('button.trace-row') as HTMLButtonElement
-    assert.ok(row)
+    assert.ok(row !== null)
     assert.equal(row.tagName, 'BUTTON', '原生 button 支持回车/空格触发')
     assert.equal(row.classList.contains('trace-row-error'), true)
     assert.match(row.textContent!, /Resumed below/)
@@ -273,11 +283,12 @@ test('外部子代理在工作台渲染摘要（无原生子会话且不虚构�
   setWorkflowClientStub({ conversations: [], docValue: { runs: [externalRun] } })
   const spy = makeSpyCtx()
   const mod = await importWorkflowClientModule()
-  const Tool = mod.SubagentToolView as React.ComponentType<Record<string, unknown>>
-  const Panel = mod.WorkflowWorkbenchPanel as React.ComponentType<Record<string, unknown>>
+  const Tool = mod['SubagentToolView'] as React.ComponentType<Record<string, unknown>>
+  const Panel = mod['WorkflowWorkbenchPanel'] as React.ComponentType<Record<string, unknown>>
+  const extOut = { execution: { executionId: 'pane-42' } }
   const { host, rerender, unmount } = await mountClient(spy, e(Tool, {
     callId: 'external-call', toolName: 'subagent', status: 'done', conversationId: 1,
-    input: { prompt: '外部任务' }, result: JSON.stringify({ execution: { executionId: 'pane-42' } }),
+    input: { prompt: '外部任务' }, result: JSON.stringify(extOut), structuredOutput: extOut,
   }))
   try {
     const row = host.querySelector('button.workflow-trace-row-btn') as HTMLElement | null
@@ -326,7 +337,7 @@ test('工作流时间线点击定位工作台，工作台节点内嵌子代理�
   )
   try {
     const toolRow = host.querySelector('button.workflow-trace-row-btn') as HTMLElement | null
-    assert.ok(toolRow, '工作流时间线渲染紧凑单行')
+    assert.ok(toolRow !== null, '工作流时间线渲染紧凑单行')
     act(() => {
       toolRow!.click()
     })
@@ -380,11 +391,11 @@ test('中止 / 清理按钮 stopPropagation：点击按钮不触发整卡打开�
       abortBtn!.click()
     })
     assert.deepEqual(actionCalls.map(([id]) => id), ['abort'], '按钮必须触发 abort 动作')
-    const cleanup = host.querySelector('[aria-label="Clean up isolated worktree"]') as HTMLElement
-    assert.ok(cleanup)
-    await act(async () => { cleanup.click() })
+    const cleanup = host.querySelector('[aria-label="Clean up isolated worktree"]') as HTMLElement | null
+    assert.ok(cleanup !== null)
+    await act(async () => { cleanup!.click() })
     assert.deepEqual(actionCalls, [['abort', { runId: 'wf_bg' }], ['cleanup_worktree', { path: '/wt/x' }]])
-    for (const button of [abortBtn!, cleanup]) {
+    for (const button of [abortBtn!, cleanup!]) {
       for (const key of ['Enter', ' ']) {
         act(() => { button.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })) })
       }
@@ -405,7 +416,7 @@ test('详情加载失败可重试；内嵌详情、重试与产物操作的点�
   const artifacts: string[] = []
   spy.openArtifact = (id) => { artifacts.push(id) }
   const mod = await importWorkflowClientModule()
-  const Card = mod.SubagentLiveCard as React.ComponentType<Record<string, unknown>>
+  const Card = mod['SubagentLiveCard'] as React.ComponentType<Record<string, unknown>>
   const { host, unmount } = await mountClient(spy, e(Card, {
     childConversationId: 11, toolStatus: 'done', expanded: true,
     callDetails: { input: { resume: 11, prompt: '原始续接指令' }, result: '原始结果', artifactRef: 'art_full' },
@@ -414,16 +425,16 @@ test('详情加载失败可重试；内嵌详情、重试与产物操作的点�
     assert.match(host.textContent!, /Load failed.*网关超时/)
     const retry = host.querySelector('[aria-label="Reload subagent details"]') as HTMLElement
     const details = host.querySelector('details')!
-    const summary = details.querySelector('summary')!
-    await act(async () => { retry.click(); summary.click() })
+    const sum = details.querySelector('summary')!
+    await act(async () => { retry.click(); sum.click() })
     assert.equal(reloads, 1)
-    const artifact = details.querySelector('button') as HTMLElement
-    assert.ok(artifact)
-    await act(async () => { artifact.click() })
+    const artifact = details.querySelector('button') as HTMLElement | null
+    assert.ok(artifact !== null)
+    await act(async () => { artifact!.click() })
     assert.deepEqual(artifacts, ['art_full'])
     assert.match(details.textContent!, /"resume": 11/)
     assert.match(details.textContent!, /原始结果/)
-    for (const control of [retry, summary, artifact]) {
+    for (const control of [retry, sum, artifact!]) {
       for (const key of ['Enter', ' ']) {
         act(() => { control.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })) })
       }
@@ -440,7 +451,7 @@ test('工具输出从未返回到对象再到文本时保留 hook 顺序，调�
   setWorkflowClientStub()
   const spy = makeSpyCtx()
   const mod = await importWorkflowClientModule('ToolCallDetailsInline.tsx')
-  const Details = mod.ToolCallDetailsInline as React.ComponentType<Record<string, unknown>>
+  const Details = mod['ToolCallDetailsInline'] as React.ComponentType<Record<string, unknown>>
   const artifacts: string[] = []
   spy.openArtifact = (id) => { artifacts.push(id) }
   const { host, rerender, unmount } = await mountClient(spy, e(Details, { input: { prompt: '任务' } }))
@@ -471,7 +482,7 @@ test('前台同步运行卡「转入后台」点击调用 detach 动作（工作
   }
   const spy = makeSpyCtx()
   const mod = await importWorkflowClientModule('WorkflowRunCard.tsx')
-  const Body = mod.WorkflowRunCardBody as React.ComponentType<Record<string, unknown>>
+  const Body = mod['WorkflowRunCardBody'] as React.ComponentType<Record<string, unknown>>
   const { host, unmount } = await mountClient(
     spy,
     e(Body, {
@@ -481,7 +492,7 @@ test('前台同步运行卡「转入后台」点击调用 detach 动作（工作
   )
   try {
     const detach = [...host.querySelectorAll('button')].find((b) => b.textContent?.includes('Move to background')) as HTMLElement | undefined
-    assert.ok(detach, '前台同步工作流卡应渲染转入后台按钮')
+    assert.ok(detach !== undefined, '前台同步工作流卡应渲染转入后台按钮')
     await act(async () => { detach!.click() })
     assert.deepEqual(spy.actionCalls, [{ actionId: 'detach', input: { runId: 'wf_fg_x' } }], '点击必须调用 detach 动作并携带 runId')
     assert.deepEqual(spy.drawerCalls, [], '点击转入后台不得打开抽屉')
@@ -491,7 +502,7 @@ test('前台同步运行卡「转入后台」点击调用 detach 动作（工作
     setWorkflowClientStub({ conversations: [child] })
     const spy2 = makeSpyCtx()
     const indexMod = await importWorkflowClientModule()
-    const Card = indexMod.SubagentLiveCard as React.ComponentType<Record<string, unknown>>
+    const Card = indexMod['SubagentLiveCard'] as React.ComponentType<Record<string, unknown>>
     const sub = await mountClient(
       spy2,
       e(Card, {
@@ -502,7 +513,7 @@ test('前台同步运行卡「转入后台」点击调用 detach 动作（工作
     )
     try {
       const btn = [...sub.host.querySelectorAll('button')].find((b) => b.textContent?.includes('Move to background')) as HTMLElement | undefined
-      assert.ok(btn, '前台同步子代理卡应渲染转入后台按钮')
+      assert.ok(btn !== undefined, '前台同步子代理卡应渲染转入后台按钮')
       await act(async () => { btn!.click() })
       assert.deepEqual(spy2.actionCalls, [{ actionId: 'detach', input: { runId: 'wf_fg_sub' } }])
       assert.deepEqual(spy2.drawerCalls, [])
@@ -522,6 +533,7 @@ test('后台子代理卡单卡「恢复」：点击派发 run 续接参数、防
     conversationId: 1,
     kind: 'subagent' as const,
     status: 'failed' as const,
+    resumable: true,
     error: '上游网关超时',
     createdAt: 1,
     updatedAt: 2,
@@ -622,6 +634,7 @@ test('DSL 工作流卡 resumedByRunId 已接管时隐藏「断点恢复」按钮
     conversationId: 1,
     kind: 'workflow' as const,
     status: 'failed' as const,
+    resumable: true,
     error: '节点失败',
     createdAt: 1,
     updatedAt: 2,
@@ -674,6 +687,7 @@ test('工作台顶栏「恢复失败 (N)」显隐、防连点、resume_failed �
       conversationId: 1,
       kind: 'workflow' as const,
       status: 'failed' as const,
+      resumable: true,
       error: 'gate exit 1',
       createdAt: 1,
       updatedAt: 2,
@@ -685,6 +699,7 @@ test('工作台顶栏「恢复失败 (N)」显隐、防连点、resume_failed �
       conversationId: 1,
       kind: 'subagent' as const,
       status: 'failed' as const,
+      resumable: true,
       error: 'timeout',
       createdAt: 3,
       updatedAt: 4,
@@ -697,7 +712,9 @@ test('工作台顶栏「恢复失败 (N)」显隐、防连点、resume_failed �
       conversationId: 1,
       kind: 'workflow' as const,
       status: 'failed' as const,
-      error: 'workflow_action_uncertain: action left dangling',
+      resumable: false,
+      errorCode: 'workflow_action_uncertain',
+      error: 'action left dangling',
       createdAt: 5,
       updatedAt: 6,
       nodes: [{ id: 'a', kind: 'action' as const, status: 'failed' as const }],
@@ -708,6 +725,7 @@ test('工作台顶栏「恢复失败 (N)」显隐、防连点、resume_failed �
       conversationId: 1,
       kind: 'workflow' as const,
       status: 'failed' as const,
+      resumable: false,
       resumedByRunId: 'wf_new',
       createdAt: 7,
       updatedAt: 8,
@@ -719,6 +737,7 @@ test('工作台顶栏「恢复失败 (N)」显隐、防连点、resume_failed �
       conversationId: 11,
       kind: 'workflow' as const,
       status: 'failed' as const,
+      resumable: true,
       createdAt: 9,
       updatedAt: 10,
       nodes: [{ id: 'a', kind: 'action' as const, status: 'failed' as const }],
@@ -815,7 +834,30 @@ test('WorkflowActiveTray：展开行主显可读任务名并次显 #id，回退�
   const namedChild = { ...summary(11, 'working'), parentConversationId: 1, title: '排查构建失败', doing: 'bash: pnpm test', updatedAt: 100 }
   const plainChild = { ...summary(12, 'working'), parentConversationId: 1, title: 'subagent 12', updatedAt: 50 }
   setWorkflowClientStub({
-    docValue: { runs: [] },
+    docValue: {
+      runs: [
+        {
+          id: 'wf_tray_11',
+          kind: 'subagent',
+          name: '排查构建失败',
+          conversationId: 1,
+          status: 'running',
+          createdAt: 1,
+          updatedAt: 100,
+          nodes: [{ id: 'a11', kind: 'agent', status: 'running', conversationId: 11 }],
+        },
+        {
+          id: 'wf_tray_12',
+          kind: 'subagent',
+          name: 'subagent',
+          conversationId: 1,
+          status: 'running',
+          createdAt: 1,
+          updatedAt: 50,
+          nodes: [{ id: 'a12', kind: 'agent', status: 'running', conversationId: 12 }],
+        },
+      ],
+    },
     conversations: [namedChild, plainChild],
     conversation: () => ({ summary: undefined, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} }),
   })
@@ -824,8 +866,9 @@ test('WorkflowActiveTray：展开行主显可读任务名并次显 #id，回退�
   const Tray = mod['WorkflowActiveTray'] as React.ComponentType<Record<string, unknown>>
   const { host, unmount } = await mountClient(spy, e(Tray, { conversation: summary(1, 'working') }))
   try {
-    const toggle = host.querySelector('button[aria-expanded]') as HTMLButtonElement | null
+    const toggle = host.querySelector('button.workflow-active-tray-bar-toggle') as HTMLButtonElement | null
     assert.ok(toggle !== null)
+    assert.equal(toggle.tagName, 'BUTTON', '横栏主体是真实 button（无嵌套交互）')
     await act(async () => { toggle.click() })
     const rows = [...host.querySelectorAll('.workflow-active-tray-row')]
     assert.equal(rows.length, 2)
@@ -894,6 +937,231 @@ test('SubagentToolView：.trace-tool-name 主显任务名、次显 #id 与 @prof
     assert.equal(host.querySelector('.trace-tool-name')?.textContent, 'Subagent #12', '无任何名称来源时回退 Subagent #12')
     assert.ok(host.querySelector('.workflow-trace-id') === null, '回退已含 #12 时不得重复渲染 #12')
     assert.ok(host.querySelector('.trace-tool-summary') === null, '无附加上下文时不渲染空 summary')
+  } finally {
+    unmount()
+  }
+})
+
+test('WorkflowActiveTray 清亮化：横栏主体真实按钮切换、Workbench 为同级 sibling，主状态纯灯无可见状态文字', { timeout: 60_000 }, async () => {
+  setWorkflowClientStub({
+    docValue: {
+      runs: [
+        {
+          id: 'wf_tray_bar',
+          kind: 'subagent',
+          name: '清理依赖',
+          conversationId: 1,
+          status: 'running',
+          createdAt: 1,
+          updatedAt: 100,
+          nodes: [{ id: 'a11', kind: 'agent', status: 'running', conversationId: 11 }],
+        },
+      ],
+    },
+    conversations: [{ ...summary(11, 'working'), parentConversationId: 1, title: '清理依赖', updatedAt: 100 }],
+    conversation: () => ({ summary: undefined, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} }),
+  })
+  const spy = makeSpyCtx()
+  const mod = await importWorkflowClientModule('index.tsx')
+  const Tray = mod['WorkflowActiveTray'] as React.ComponentType<Record<string, unknown>>
+  const { host, unmount } = await mountClient(spy, e(Tray, { conversation: summary(1, 'working') }))
+  try {
+    const bar = host.querySelector('.workflow-active-tray-bar') as HTMLElement | null
+    const toggle = host.querySelector('button.workflow-active-tray-bar-toggle') as HTMLButtonElement | null
+    assert.ok(bar !== null && toggle !== null)
+    assert.equal(toggle.getAttribute('aria-expanded'), 'false')
+    // 合法结构：横栏容器不是交互元素；Workbench 是同级 sibling button，不嵌套在开关内。
+    assert.equal(bar.querySelectorAll('.workflow-active-tray-bar-toggle > button').length, 0, '开关按钮内无嵌套 button')
+    const wbBtn = [...bar.querySelectorAll(':scope > button')].find((b) => (b.textContent ?? '').includes('Workbench')) as HTMLButtonElement | undefined
+    assert.ok(wbBtn !== undefined, 'Workbench 为横栏同级 sibling button')
+    // 主状态纯灯：无 spinner、无可見状态文字（计数只作为可访问名称）。
+    assert.ok(toggle.querySelector('.helm-status-light .status-dot-working') !== null, '主状态为统一状态灯')
+    assert.equal(toggle.querySelectorAll('.helm-status-light').length, 1, '主状态只渲染一盏灯')
+    assert.equal(toggle.querySelector('.spin-slow') === null, true, '主状态不再用 spinner')
+    assert.equal((toggle.querySelector('.helm-status-light')?.getAttribute('aria-label') ?? '').includes('running'), true, '状态词转为可访问名称')
+    assert.ok(toggle.querySelector('.helm-status-light > .helm-sr-only') !== null, '可访问名称经屏幕阅读器专用文本承载（无可見 label）')
+    // 主体按钮点击展开；再点击收起；键盘 Enter 同样切换。
+    await act(async () => { toggle.click() })
+    assert.equal(toggle.getAttribute('aria-expanded'), 'true')
+    assert.ok(host.querySelector('.workflow-active-tray-list') !== null)
+    await act(async () => { toggle.click() })
+    assert.equal(toggle.getAttribute('aria-expanded'), 'false')
+    toggle.focus()
+    assert.ok(host.ownerDocument.activeElement === toggle, '开关为可聚焦真实 button（Enter/Space 由 UA 原生激活）')
+    await act(async () => { toggle.click() })
+    assert.equal(toggle.getAttribute('aria-expanded'), 'true')
+    // 点击同级 Workbench 不影响展开态。
+    await act(async () => { wbBtn.click() })
+    assert.equal(toggle.getAttribute('aria-expanded'), 'true', '点击 Workbench 不触发横栏展开切换')
+    assert.equal(spy.workbenchCalls.length, 1, 'Workbench 打开调用一次')
+  } finally {
+    unmount()
+  }
+})
+
+test('WorkflowActiveTray 清亮化：展开行主体真实按钮进抽屉/工作台，无查看按钮，中止为同级 sibling', { timeout: 60_000 }, async () => {
+  setWorkflowClientStub({
+    docValue: {
+      runs: [
+        {
+          id: 'wf_tray_conv',
+          kind: 'subagent',
+          name: '子代理任务',
+          conversationId: 1,
+          status: 'running',
+          createdAt: 1,
+          updatedAt: 100,
+          nodes: [{ id: 'a11', kind: 'agent', status: 'running', conversationId: 11 }],
+        },
+        {
+          id: 'wf_tray_ext',
+          kind: 'external',
+          name: '外部执行',
+          conversationId: 1,
+          status: 'running',
+          createdAt: 1,
+          updatedAt: 100,
+          nodes: [{ id: 'a12', kind: 'action', status: 'running', nodeId: 'remote-node' }],
+        },
+      ],
+    },
+    conversations: [{ ...summary(11, 'working'), parentConversationId: 1, title: '子代理任务', updatedAt: 100 }],
+    conversation: () => ({ summary: undefined, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} }),
+  })
+  const spy = makeSpyCtx()
+  const mod = await importWorkflowClientModule('index.tsx')
+  const Tray = mod['WorkflowActiveTray'] as React.ComponentType<Record<string, unknown>>
+  const { host, unmount } = await mountClient(spy, e(Tray, { conversation: summary(1, 'working') }))
+  try {
+    const bar = host.querySelector('button.workflow-active-tray-bar-toggle') as HTMLButtonElement
+    await act(async () => { bar.click() })
+    const rows = [...host.querySelectorAll('.workflow-active-tray-row')] as HTMLElement[]
+    assert.equal(rows.length, 2)
+    // 不再有单独的「查看/Details」文字按钮。
+    for (const row of rows) {
+      for (const btn of [...row.querySelectorAll('button')]) {
+        const text = btn.textContent ?? ''
+        assert.equal(/^(View|Details|查看|详情)$/.test(text.trim()), false, `行内不得保留独立详情按钮：${text}`)
+      }
+    }
+    // 有 conversationId 的行：行主体真实按钮点击打开抽屉。
+    const convRow = rows.find((r) => r.textContent?.includes('子代理任务'))
+    assert.ok(convRow !== undefined)
+    const convMain = convRow.querySelector('button.workflow-active-tray-row-main') as HTMLButtonElement | null
+    assert.ok(convMain !== null, '行主体是真实 button')
+    await act(async () => { convMain.click() })
+    assert.deepEqual(spy.drawerCalls, [11], '整行点击进 ConversationDrawer')
+    // 无 conversationId 的外部行：行主体点击定位工作台 run；中止为同级 sibling button。
+    const extRow = rows.find((r) => r.textContent?.includes('外部执行'))
+    assert.ok(extRow !== undefined)
+    const extMain = extRow.querySelector('button.workflow-active-tray-row-main') as HTMLButtonElement
+    assert.equal(extMain.querySelectorAll('button').length, 0, '行主体按钮内无嵌套交互')
+    spy.workbenchCalls.length = 0
+    await act(async () => { extMain.click() })
+    assert.equal(spy.workbenchCalls.length, 1, '整行点击打开工作台')
+    // 行主体为可聚焦真实 button（Enter/Space 由 UA 原生激活）。
+    extMain.focus()
+    assert.ok(host.ownerDocument.activeElement === extMain, '行主体按钮可聚焦')
+    // 中止为同级 sibling 真实按钮：点击不触发整行导航。
+    spy.workbenchCalls.length = 0
+    const abortBtn = extRow.querySelector('.workflow-active-tray-row-actions button.btn-danger') as HTMLButtonElement | null
+    assert.ok(abortBtn !== null, '外部 run 行保留中止按钮（同级 sibling）')
+    await act(async () => { abortBtn!.click() })
+    assert.equal(spy.actionCalls.filter((c) => c.actionId === 'abort').length, 1, '中止动作派发一次')
+    assert.equal(spy.workbenchCalls.length, 0, '点中止不触发整行工作台导航')
+    assert.equal(spy.drawerCalls.length, 1, '点中止不触发抽屉')
+  } finally {
+    unmount()
+  }
+})
+
+test('WorkflowRunCardBody 头部整块可点展开：主体真实按钮切换，动作按钮为同级 sibling 不触发切换', { timeout: 60_000 }, async () => {
+  setWorkflowClientStub({
+    docValue: {
+      runs: [
+        {
+          id: 'wf_hdr_toggle',
+          kind: 'workflow',
+          name: '头部展开工作流',
+          conversationId: 1,
+          status: 'completed',
+          createdAt: 1_000,
+          updatedAt: 2_000,
+          nodes: [{ id: 'a', kind: 'action', status: 'done', label: '落盘动作' }],
+        },
+      ],
+    },
+    conversations: [],
+    conversation: () => ({ summary: undefined, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} }),
+  })
+  const spy = makeSpyCtx()
+  const mod = await importWorkflowClientModule('index.tsx')
+  const Panel = mod['WorkflowWorkbenchPanel'] as React.ComponentType<Record<string, unknown>>
+  const { host, unmount } = await mountClient(spy, e(Panel, { conversation: summary(1, 'idle') }))
+  try {
+    const main = host.querySelector('button.workflow-run-header-main') as HTMLButtonElement | null
+    assert.ok(main !== null, '头部主体为真实展开开关按钮')
+    assert.equal(main.querySelectorAll('button').length, 0, '开关内无嵌套交互')
+    // 非首个/非运行中的 run 默认收起。
+    assert.equal(main.getAttribute('aria-expanded'), 'false', '默认收起')
+    const body = host.querySelector('.workflow-run-card [id][hidden]') as HTMLElement | null
+    assert.ok(body !== null, '卡体区域存在且默认隐藏')
+    await act(async () => { main.click() })
+    assert.equal(main.getAttribute('aria-expanded'), 'true', '点击头部主体整块展开')
+    assert.equal(body!.hidden, false, '展开后卡体可见')
+    // 已结算 run 无中止按钮；「更多」弹层按钮为同级 sibling，点击不切换展开态。
+    const siblingBtns = [...host.querySelectorAll('.workflow-run-header > button')] as HTMLButtonElement[]
+    const nonMain = siblingBtns.find((b) => !b.classList.contains('workflow-run-header-main'))
+    if (nonMain !== undefined) {
+      await act(async () => { nonMain.click() })
+      assert.equal(main.getAttribute('aria-expanded'), 'true', '点击动作按钮不触发头部展开切换')
+    }
+    // 键盘可达：主体按钮可聚焦（Enter/Space 由 UA 原生激活）。
+    main.focus()
+    assert.ok(host.ownerDocument.activeElement === main, '头部主体按钮可聚焦')
+  } finally {
+    unmount()
+  }
+})
+
+test('执行卡结构：元数据披露与动作区均在导航按钮之外的同级结构（无嵌套交互）', { timeout: 60_000 }, async () => {
+  const child11 = { ...summary(11, 'working'), parentConversationId: 1, parentToolCallId: 'call-nested' }
+  setWorkflowClientStub({
+    docValue: {
+      runs: [
+        {
+          id: 'wf_nested',
+          kind: 'subagent',
+          name: '嵌套结构检查',
+          conversationId: 1,
+          status: 'running',
+          createdAt: 1,
+          updatedAt: 100,
+          nodes: [{ id: 'a11', kind: 'agent', status: 'running', conversationId: 11 }],
+        },
+      ],
+    },
+    conversations: [child11],
+    conversation: () => ({ summary: undefined, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} }),
+  })
+  const spy = makeSpyCtx()
+  const mod = await importWorkflowClientModule('index.tsx')
+  const Panel = mod['WorkflowWorkbenchPanel'] as React.ComponentType<Record<string, unknown>>
+  const { host, unmount } = await mountClient(spy, e(Panel, { conversation: summary(1, 'working') }))
+  try {
+    const navBtn = host.querySelector('button.subagent-card-clickable') as HTMLButtonElement | null
+    assert.ok(navBtn !== null, '导航主体为真实按钮')
+    const metaToggle = host.querySelector('button.subagent-live-meta-toggle') as HTMLButtonElement | null
+    assert.ok(metaToggle !== null, '元数据披露入口存在')
+    assert.ok(metaToggle !== null && navBtn !== null && !navBtn.contains(metaToggle), '元数据披露不在导航按钮内部（同级结构）')
+    const abortBtn = host.querySelector('.subagent-live-actions button.btn-danger') as HTMLButtonElement | null
+    if (abortBtn !== null) {
+      assert.ok(!navBtn!.contains(abortBtn), '动作按钮不在导航按钮内部（同级结构）')
+    }
+    // 展开元数据不影响导航；点击导航仍打开抽屉。
+    await act(async () => { metaToggle!.click() })
+    await act(async () => { navBtn!.click() })
+    assert.deepEqual(spy.drawerCalls, [11], '点击导航主体仍打开子会话抽屉')
   } finally {
     unmount()
   }

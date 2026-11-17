@@ -1,8 +1,8 @@
 /**
  * Pure logic for the builtin:workflow client: SubagentWorkflow tool call ↔
- * run precise association, workflow run card phase grouping / log beacons /
- * node summaries / action availability and node stats (formerly
- * workflow-card-model.ts; zero React/DOM dependencies).
+ * run precise association (structuredOutput + parentToolCallId, zero regex
+ * scraping), workflow run card phase grouping / log beacons / node summaries /
+ * action availability and node stats (zero React/DOM dependencies).
  */
 import { DEFAULT_HELM_LOCALE, resolveLocalizedText, type HelmLocale } from '@helm/plugin-client'
 import type { ConversationSummary } from '@helm/protocol'
@@ -19,12 +19,39 @@ import {
   traceResumeFallbackLabel,
 } from './copy.ts'
 
-/** Precisely extract the run id field from tool output JSON (`"id":"wf_xxx"`; no substring/prefix matching). */
-const WORKFLOW_RUN_ID_IN_RESULT_RE = /"id"\s*:\s*"([^"]+)"/
+function parseJsonObject(source: unknown): Record<string, unknown> | undefined {
+  if (source !== null && typeof source === 'object' && !Array.isArray(source)) {
+    return source as Record<string, unknown>
+  }
+  if (typeof source !== 'string') return undefined
+  const trimmed = source.trim()
+  if (!trimmed.startsWith('{')) return undefined
+  try {
+    const parsed: unknown = JSON.parse(trimmed)
+    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function extractWorkflowRunIdFromPayload(source: unknown): string | undefined {
+  const obj = parseJsonObject(source)
+  if (obj === undefined) return undefined
+  const summary = obj['summary']
+  if (summary !== null && typeof summary === 'object' && !Array.isArray(summary)) {
+    const summaryId = (summary as Record<string, unknown>)['id']
+    if (typeof summaryId === 'string' && summaryId !== '') return summaryId
+  }
+  if (typeof obj['id'] === 'string' && obj['id'] !== '') return obj['id']
+  if (typeof obj['runId'] === 'string' && obj['runId'] !== '') return obj['runId']
+  return undefined
+}
 
 /** Resolve the workflow run linked to a SubagentWorkflow tool call (precise association, never guess "latest"). */
 export function resolveWorkflowRunForTool(
-  input: { callId: string | undefined; result?: unknown },
+  input: { callId: string | undefined; structuredOutput?: unknown; result?: unknown },
   parentConversationId: number,
   workflowRuns: ReadonlyArray<WorkflowRunSummary>,
 ): WorkflowRunSummary | undefined {
@@ -34,31 +61,24 @@ export function resolveWorkflowRunForTool(
     )
     if (byCallId !== undefined) return byCallId
   }
-  if (typeof input.result === 'string') {
-    const runId = WORKFLOW_RUN_ID_IN_RESULT_RE.exec(input.result)?.[1]
-    if (runId !== undefined) {
-      const matched = workflowRuns.find(
-        (r) => r.conversationId === parentConversationId && r.id === runId,
-      )
-      if (matched !== undefined) return matched
-    }
+  const runId =
+    extractWorkflowRunIdFromPayload(input.structuredOutput) ??
+    extractWorkflowRunIdFromPayload(input.result)
+  if (runId !== undefined) {
+    return workflowRuns.find((r) => r.conversationId === parentConversationId && r.id === runId)
   }
   return undefined
 }
 
-/** Whether a SubagentWorkflow tool result text is a background dispatch handle (not the final settlement). */
-export function isBackgroundWorkflowResultHandle(result: unknown): boolean {
-  if (typeof result !== 'string') return false
-  const trimmed = result.trim()
-  if (!trimmed.startsWith('{')) return false
-  try {
-    const parsed: unknown = JSON.parse(trimmed)
-    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return false
-    const record = parsed as Record<string, unknown>
-    return record['background'] === true
-  } catch {
-    return false
-  }
+/** Whether a SubagentWorkflow tool output is a background dispatch handle (not the final settlement). */
+export function isBackgroundWorkflowResultHandle(
+  structuredOutput: unknown,
+  fallbackResult?: unknown,
+): boolean {
+  const record =
+    parseJsonObject(structuredOutput) ??
+    (fallbackResult !== undefined ? parseJsonObject(fallbackResult) : undefined)
+  return record?.['background'] === true
 }
 
 /** Readable display name for a workflow run: non-placeholder name > first line of description > run.id. */
@@ -94,10 +114,9 @@ export function resolveWorkflowToolFallbackLabel(input: unknown, locale: HelmLoc
 }
 
 // ---------------------------------------------------------------------------
-// Workflow card pure logic (formerly workflow-card-model.ts)
+// Workflow card pure logic
 // ---------------------------------------------------------------------------
 
-/** Whether the collapsed node row has extra detail worth expanding. */
 export function hasNodeExtraDetail(node: WorkflowNodeState): boolean {
   return node.agentType !== undefined || node.executionId !== undefined || node.nodeId !== undefined ||
     node.effectiveCwd !== undefined || node.gateCommand !== undefined || node.prompt !== undefined
@@ -118,7 +137,6 @@ function firstLine(text: string): string {
   return nl === -1 ? text : text.slice(0, nl)
 }
 
-/** Compact one-line preview of a node's output. */
 export function formatNodeOutputPreview(output: unknown, maxChars = 80): string | undefined {
   if (output === undefined || output === null) return undefined
   if (typeof output === 'string') {
@@ -136,7 +154,6 @@ export function formatNodeOutputPreview(output: unknown, maxChars = 80): string 
   return truncateWithEllipsis(serialized, maxChars)
 }
 
-/** Collapsed node row main summary (duration renders separately on the right). */
 export function resolveNodeSummaryText(
   node: WorkflowNodeState,
   childDoing?: string,
@@ -174,7 +191,6 @@ export function resolveNodeSummaryText(
   return { text: resolveLocalizedText(NODE_QUEUED, locale), isError: false }
 }
 
-/** Phase-grouped node view model. */
 export interface WorkflowPhaseSection {
   key: string
   index: number
@@ -186,12 +202,6 @@ export interface WorkflowPhaseSection {
   totalCount: number
 }
 
-/**
- * Phase group status: running wins visibility, then failed; only full
- * settlement (done / skipped everywhere) counts as done — while pending
- * (unexecuted) nodes exist the run is still in progress, and a terminated run
- * must not fake completion either (pending must not be masked by done).
- */
 function sectionStatus(
   nodes: WorkflowNodeState[],
   runStatus: WorkflowRunSummary['status'],
@@ -203,7 +213,6 @@ function sectionStatus(
   return runStatus === 'running' ? 'running' : 'pending'
 }
 
-/** Build the phase-grouped node view (no node is filtered out). */
 export function buildWorkflowPhaseSections(run: WorkflowRunSummary, locale: HelmLocale = DEFAULT_HELM_LOCALE): WorkflowPhaseSection[] {
   const nodes = run.nodes ?? []
   const allNodes = [...nodes]
@@ -282,27 +291,50 @@ export function buildWorkflowPhaseSections(run: WorkflowRunSummary, locale: Helm
   return sections
 }
 
-/** Script log() beacon line. */
 export interface WorkflowLogLine {
   key: string
   at: number
   message: string
 }
 
-/** Extract script log() beacons. */
 export function extractWorkflowLogs(run: WorkflowRunSummary): WorkflowLogLine[] {
   return (run.progress ?? [])
     .filter((p): p is Extract<typeof p, { kind: 'log' }> => p.kind === 'log')
     .map((p, idx) => ({ key: `log:${idx}:${p.at}`, at: p.at, message: p.message }))
 }
 
-/** Checkpoint-resume availability: only failed or aborted DSL-orchestrated workflows not yet superseded by a resume run. */
-export function canResumeWorkflowRun(run: WorkflowRunSummary): boolean {
+const NON_RESUMABLE_ERROR_CODES: ReadonlySet<string> = new Set([
+  'workflow_action_uncertain',
+  'crash_recovery_limit',
+  'secret_grant_expired_on_restart',
+  'validation_error',
+  'syntax_error',
+])
+
+function isNonResumableRun(run: Pick<WorkflowRunSummary, 'errorCode' | 'error'>): boolean {
+  if (run.errorCode !== undefined && NON_RESUMABLE_ERROR_CODES.has(run.errorCode)) {
+    return true
+  }
+  if (run.error === undefined) return false
+  const normalized = run.error.toLowerCase()
   return (
-    run.kind !== 'subagent' &&
-    (run.status === 'failed' || run.status === 'aborted') &&
-    run.resumedByRunId === undefined
+    normalized.includes('workflow_action_uncertain') ||
+    normalized.includes('crash_recovery_limit') ||
+    normalized.includes('secret_grant_expired_on_restart') ||
+    normalized.includes('validation_error') ||
+    normalized.includes('workflow script has a syntax error')
   )
+}
+
+/** Checkpoint-resume availability: honors authoritative `run.resumable` on failed runs when present. */
+export function canResumeWorkflowRun(run: WorkflowRunSummary): boolean {
+  if (run.kind === 'subagent') return false
+  if (run.resumedByRunId !== undefined) return false
+  if (run.status === 'failed') {
+    if (typeof run.resumable === 'boolean') return run.resumable
+    return !isNonResumableRun(run)
+  }
+  return run.status === 'aborted' && !isNonResumableRun(run)
 }
 
 function hasRunExecutionHandle(run: WorkflowRunSummary): boolean {
@@ -313,35 +345,20 @@ function hasRunExecutionHandle(run: WorkflowRunSummary): boolean {
   )
 }
 
-/** 后台子代理单卡恢复可用判定：subagent 失败或中止、未被接管且具备可续接执行句柄。 */
 export function canResumeSubagentRun(
   run: WorkflowRunSummary | undefined,
   hasExecutionHandle: boolean,
 ): boolean {
-  if (run === undefined) return false
-  if (run.kind !== 'subagent') return false
-  if (run.status !== 'failed' && run.status !== 'aborted') return false
+  if (run === undefined || run.kind !== 'subagent') return false
   if (run.resumedByRunId !== undefined) return false
-  return hasExecutionHandle || hasRunExecutionHandle(run)
-}
-
-function isNonResumableRunError(error: string | undefined): boolean {
-  if (error === undefined) return false
-  const normalized = error.toLowerCase()
-  return (
-    normalized.includes('workflow_action_uncertain') ||
-    normalized.includes('[crash_recovery_limit]') ||
-    normalized.includes('crash_recovery_limit') ||
-    normalized.includes('secret_grant_expired_on_restart') ||
-    normalized.includes('[validation_error]') ||
-    normalized.includes('validation_error') ||
-    normalized.includes('workflow script has a syntax error')
-  )
+  if (run.status === 'failed' && typeof run.resumable === 'boolean') return run.resumable
+  if (run.status !== 'failed' && run.status !== 'aborted') return false
+  return (hasExecutionHandle || hasRunExecutionHandle(run)) && !isNonResumableRun(run)
 }
 
 /**
- * 筛选当前会话下可自动批量恢复的失败记录（排除已被接管、不可自动恢复错误
- * 及无续接句柄的后台单子代理）。
+ * Filter failed runs under `conversationId` that can be batch-resumed:
+ * prefers authoritative `run.resumable` when present on the summary.
  */
 export function listResumableFailedRuns(
   runs: ReadonlyArray<WorkflowRunSummary>,
@@ -355,7 +372,11 @@ export function listResumableFailedRuns(
     if (run.conversationId !== conversationId) continue
     if (run.status !== 'failed') continue
     if (run.resumedByRunId !== undefined) continue
-    if (isNonResumableRunError(run.error)) continue
+    if (typeof run.resumable === 'boolean') {
+      if (run.resumable) result.push(run)
+      continue
+    }
+    if (isNonResumableRun(run)) continue
     if (run.kind === 'subagent' && !hasRunExecutionHandle(run)) continue
     result.push(run)
   }
@@ -367,7 +388,6 @@ export interface ResumeFailedSummaryView {
   skippedCount: number
 }
 
-/** 严格解析 resume_failed 动作结果（非法形状返回 undefined，绝不猜计数）。 */
 export function parseResumeFailedResult(raw: unknown): ResumeFailedSummaryView | undefined {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return undefined
   const record = raw as Record<string, unknown>
@@ -386,28 +406,11 @@ export function parseResumeFailedResult(raw: unknown): ResumeFailedSummaryView |
   return { resumedCount: resumed.length, skippedCount: skipped.length }
 }
 
-/**
- * "Move to background" viewer scope: the current viewing conversation (the
- * timeline is the initiating conversation; the workbench is the panel
- * conversation) plus its ownership. ownedBy defaults to human (the kernel
- * default); foreground-sync runs of bot/helm (automation) conversations hide
- * the button — the server refuses automation ownership anyway (prevents early
- * settlement), so the frontend hides it honestly instead of showing a doomed
- * entry point.
- */
 export interface DetachViewerScope {
   conversationId?: number
   ownedBy?: string
 }
 
-/**
- * Foreground-sync run "move to background" availability: only running
- * foreground-sync runs (syncForeground marked and not yet detached) with an
- * explicit runId, where the current viewing conversation is the initiating
- * conversation and is human-owned (or defaults to human); hidden across
- * conversations / elsewhere in the workbench — the server still rechecks
- * authorization.
- */
 export function canDetachForegroundRun(run: WorkflowRunSummary, viewer: DetachViewerScope | undefined): boolean {
   return (
     run.status === 'running' &&
@@ -419,26 +422,10 @@ export function canDetachForegroundRun(run: WorkflowRunSummary, viewer: DetachVi
   )
 }
 
-/**
- * Completed-run replay availability: non-subagent completed DSL runs
- * (including inline scripts). resumeFromRunId is also valid for completed
- * runs: the engine reuses the original script source (saved definitions
- * re-read the latest file; inline keeps its source) and the original args
- * (explicit args override), and the new run keeps the original conversation.
- * The journal cache only reuses prefix nodes whose call payloads are exactly
- * identical; real re-execution starts at the first mismatch — no promise that
- * changed args hit the cache, and nodes with external side effects re-run
- * honestly.
- */
 export function canReplayWorkflowRun(run: WorkflowRunSummary): boolean {
   return run.kind !== 'subagent' && run.status === 'completed'
 }
 
-// ---------------------------------------------------------------------------
-// Workbench node stats helpers
-// ---------------------------------------------------------------------------
-
-/** Node stat suffix: short model name + compact token count. */
 export function formatWorkflowNodeStats(node: WorkflowNodeState): string[] {
   const segments: string[] = []
   const model = formatShortModelName(node.model)
@@ -449,17 +436,6 @@ export function formatWorkflowNodeStats(node: WorkflowNodeState): string[] {
   return segments
 }
 
-// ---------------------------------------------------------------------------
-// Total duration resolution (real recorded boundaries only, never fabricate 0ms / made-up values)
-// ---------------------------------------------------------------------------
-
-/**
- * Run total duration: while running with a valid client clock (nowMs >=
- * createdAt) it advances with nowMs; otherwise (including SSR first frame
- * without a clock) it freezes at updatedAt - createdAt, the latest snapshot —
- * both are real boundaries; invalid differences return undefined (callers
- * omit honestly).
- */
 export function resolveRunElapsedMs(
   run: Pick<WorkflowRunSummary, 'status' | 'createdAt' | 'updatedAt'>,
   nowMs?: number,
@@ -475,13 +451,6 @@ export function resolveRunElapsedMs(
   return Number.isFinite(settled) && settled >= 0 ? settled : undefined
 }
 
-/**
- * In-run node duration: running advances dynamically with startedAt + nowMs
- * (omitted honestly without a clock or a start point, keeping SSR
- * deterministic); settled freezes at the persisted durationMs; with no real
- * boundary (neither startedAt nor durationMs) it is omitted — a made-up 0ms
- * is never shown.
- */
 export function resolveNodeElapsedMs(
   node: Pick<WorkflowNodeState, 'status' | 'startedAt' | 'durationMs'>,
   nowMs?: number,

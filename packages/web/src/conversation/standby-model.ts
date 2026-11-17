@@ -271,24 +271,27 @@ export function resolveStandbyEffectiveModel(
 
 /**
  * Resolve the standby pane's effective thinking level: explicit draft
- * override > Profile binding > global default level, converged into the
- * current model's supported list (falling back to off or the first supported
- * level when unsupported).
+ * override > per-model default for the effective model > Profile binding >
+ * global default level, converged into the current model's supported list
+ * (falling back to off or the first supported level when unsupported).
  */
 export function resolveStandbyThinkingLevel(
   levels: ReadonlyArray<string>,
   draftLevel: string | undefined,
+  perModelDefaultLevel: string | undefined,
   profileLevel: string | undefined,
   globalDefaultLevel: string | undefined,
 ): string {
   const raw =
     draftLevel !== undefined && draftLevel !== ''
       ? draftLevel
-      : profileLevel !== undefined && profileLevel !== ''
-        ? profileLevel
-        : globalDefaultLevel !== undefined && globalDefaultLevel !== ''
-          ? globalDefaultLevel
-          : ''
+      : perModelDefaultLevel !== undefined && perModelDefaultLevel !== ''
+        ? perModelDefaultLevel
+        : profileLevel !== undefined && profileLevel !== ''
+          ? profileLevel
+          : globalDefaultLevel !== undefined && globalDefaultLevel !== ''
+            ? globalDefaultLevel
+            : ''
   return resolveEffectiveThinkingLevel(levels, raw)
 }
 

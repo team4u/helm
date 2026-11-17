@@ -129,7 +129,11 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
 
   // When the store carries no global default model, read /api/models/default
   // on demand to complete the model & thinking-level inheritance chain.
-  const [fetchedDefaultModelInfo, setFetchedDefaultModelInfo] = useState<{ defaultModel: string; defaultThinkingLevel: string } | null>(null)
+  const [fetchedDefaultModelInfo, setFetchedDefaultModelInfo] = useState<{
+    defaultModel: string
+    defaultThinkingLevel: string
+    modelThinkingLevels?: Record<string, string>
+  } | null>(null)
   const defaultModelGenRef = useRef(0)
   const refreshDefaultModelInfo = useCallback(async (): Promise<void> => {
     if (defaultModelInfo !== undefined) return
@@ -147,6 +151,7 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
         setFetchedDefaultModelInfo({
           defaultModel: info.defaultModel,
           defaultThinkingLevel: info.defaultThinkingLevel,
+          ...(info.modelThinkingLevels !== undefined ? { modelThinkingLevels: info.modelThinkingLevels } : {}),
         })
       }
     } catch {
@@ -463,7 +468,7 @@ interface StandbyComposerProps {
   draftKey: string
   draft: StandbyDraftState
   profile: Profile
-  defaultModelInfo: { defaultModel: string; defaultThinkingLevel: string } | null
+  defaultModelInfo: { defaultModel: string; defaultThinkingLevel: string; modelThinkingLevels?: Record<string, string> } | null
   envError: string | null
   /** create has locked a real conversation: model/thinking/environment are
    * fixed with it and accept no further edits. */
@@ -528,6 +533,7 @@ function StandbyComposer({
   const effectiveThinkingLevel = resolveStandbyThinkingLevel(
     currentLevels,
     draft.thinkingLevel,
+    effectiveModel !== undefined ? defaultModelInfo?.modelThinkingLevels?.[effectiveModel] : undefined,
     profile.thinkingLevel,
     defaultModelInfo?.defaultThinkingLevel,
   )
@@ -821,7 +827,7 @@ function StandbyModelPicker({
   draftKey: string
   draft: StandbyDraftState
   profile: Profile
-  defaultModelInfo: { defaultModel: string; defaultThinkingLevel: string } | null
+  defaultModelInfo: { defaultModel: string; defaultThinkingLevel: string; modelThinkingLevels?: Record<string, string> } | null
   disabled: boolean
   isSplit?: boolean
   onCatalogRefreshed: () => Promise<void>
@@ -843,6 +849,7 @@ function StandbyModelPicker({
   const effectiveThinkingLevel = resolveStandbyThinkingLevel(
     currentLevels,
     draft.thinkingLevel,
+    effectiveModel !== undefined ? defaultModelInfo?.modelThinkingLevels?.[effectiveModel] : undefined,
     profile.thinkingLevel,
     defaultModelInfo?.defaultThinkingLevel,
   )
