@@ -27,7 +27,7 @@ import assert from 'node:assert/strict'
 import { createHelm } from '../../hub/src/app.js'
 import { createWorkflowPlugin } from '../src/workflow.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
-import { makeFauxModels } from './helpers/plugin-test-env.js'
+import { makeFauxProvider } from './helpers/plugin-test-env.js'
 
 type App = Awaited<ReturnType<typeof createHelm>>
 
@@ -113,8 +113,8 @@ after(() => {
 describe('subagent 工具 background 缺省（权威 ownership 判定）', { timeout: 60_000 }, () => {
   it('人类交互会话缺省后台：立即返回 runId/running；后台完成后父会话恰收一次 subagent_report 汇报', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'bg1')
-    const { models, faux } = makeFauxModels()
-    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
+    const faux = makeFauxProvider()
+    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
     try {
       // faux 全共享 FIFO 队列：首个必须 toolCall；其后消费点（父工具结果回合 /
       // 后台子代理回合 / 汇报触发的父回合）次序不确定——一律供给良性文本。
@@ -167,8 +167,8 @@ describe('subagent 工具 background 缺省（权威 ownership 判定）', { tim
 
   it('人类交互会话显式 background:false：同步路径携带业务结果（durable 前台 run，可 detach）', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'bg2')
-    const { models, faux } = makeFauxModels()
-    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
+    const faux = makeFauxProvider()
+    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
     try {
       faux.setResponses([
         fauxAssistantMessage(
@@ -201,8 +201,8 @@ describe('subagent 工具 background 缺省（权威 ownership 判定）', { tim
 
   it('helm-owned 会话缺省同步；显式 background:true 显式拒绝（不派生、不建 run、不静默改写）', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'bg3')
-    const { models, faux } = makeFauxModels()
-    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
+    const faux = makeFauxProvider()
+    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
     try {
       // 自动化会话：受管子代理/驻留 Worker 派生登记即标 helm——直接以内核权威
       // 归属标记构造（与真实派生同权：ownership doc 是唯一判定源）。
@@ -262,8 +262,8 @@ describe('SubagentWorkflow 工具 background 缺省', { timeout: 60_000 }, () =>
 
   it('人类交互会话缺省后台：立即返回 background:true + running summary；结算后父会话恰收一次 workflow_report', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'wfbg1')
-    const { models, faux } = makeFauxModels()
-    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
+    const faux = makeFauxProvider()
+    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
     try {
       faux.setResponses([
         fauxAssistantMessage(
@@ -305,8 +305,8 @@ describe('SubagentWorkflow 工具 background 缺省', { timeout: 60_000 }, () =>
 
   it('helm-owned 会话缺省同步：等待终态返回 summary（status completed + result）；显式 background:true 显式拒绝', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'wfbg2')
-    const { models, faux } = makeFauxModels()
-    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
+    const faux = makeFauxProvider()
+    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
     try {
       app.kernel.markConversationOwnership(1, 'helm')
       const fastScript = 'export const meta = { name: "sync-default-wf", description: "t" }\nreturn 7'
@@ -376,8 +376,8 @@ describe('同步运行 detach 转后台（subagent / SubagentWorkflow 工具链�
 
   it('同步 subagent 阻塞等待中 detach：工具立即返回后台句柄，run 继续并恰收一次汇报', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'fgdetach1')
-    const { models, faux } = makeFauxModels()
-    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
+    const faux = makeFauxProvider()
+    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
     try {
       const gate = makeGate()
       faux.setResponses([
@@ -432,8 +432,8 @@ describe('同步运行 detach 转后台（subagent / SubagentWorkflow 工具链�
 
   it('helm 归属会话的前台 run 拒绝 detach（automation 同步等待防早结算）', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'fgdetach2')
-    const { models, faux } = makeFauxModels()
-    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
+    const faux = makeFauxProvider()
+    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
     try {
       app.kernel.markConversationOwnership(1, 'helm')
       const gate = makeGate()
@@ -466,8 +466,8 @@ describe('同步运行 detach 转后台（subagent / SubagentWorkflow 工具链�
 
   it('同步 SubagentWorkflow 阻塞等待中 detach：返回后台句柄形状，终态 steer 汇报', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'fgdetach3')
-    const { models, faux } = makeFauxModels()
-    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
+    const faux = makeFauxProvider()
+    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
     try {
       // 人类交互会话显式同步工作流（automation 拒绝已由上一用例覆盖）：脚本带
       // agent 节点（子会话经 gate 挂起），run 停留在 running 供 detach。

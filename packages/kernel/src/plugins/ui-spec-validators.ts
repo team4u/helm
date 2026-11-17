@@ -1,19 +1,15 @@
 /**
- * ui-spec-validators.ts:registerUi each surface declaration pure validate and dispatch table.
+ * ui-spec-validators.ts: per-surface `registerUi` validation and two-phase dispatch table.
  *
- * registry(ui-registry.ts) retreat is store + dispatch: through use pre- (pure object / id /
- * priority|order),scope and client reference validate in registerUi this body;surface
- * dedicated belong rule by split before one by one chunk order split is two phase - -
- * - early chunk (UI action / commandPalette / profile.runtime / plugin.slot) first at
- *   scope and client reference validate execute;
- * - late phase chunk (timeline.renderer / markdown.codeBlock / tool.view /
- *   artifact.previewer / composer.completer / workbench.panel) in client
- *   reference validate after execute.
- * two phase divide only is keep split before error priority one by one byte etc. price (the same spec also step in
- * surface rule and scope/client rule when, throws first after do not change), without semantics difference other.
- * all validate all is pure function (UI action delete spec.target is unique input archive one
- * side effect, and split before consistent), error code / message / details and split before one by one character keep.
+ * Mechanical shape/type/pattern/unknown-key rules use precompiled TypeBox validators; cross-field
+ * semantics (actionId vs client exclusivity, commandPalette slash reservations/duplicates,
+ * profile.runtime kind duplicates, slot two-segment split, artifact array uniqueness, and
+ * unsafe prototype keys) remain explicit. Two-phase dispatch (`validateUiSpecEarly` before
+ * scope/client checks, `validateUiSpecLate` after) preserves original error precedence.
  */
+import { Type, type TObject, type TProperties } from 'typebox';
+import { Compile, type Validator } from 'typebox/compile';
+import type { TLocalizedValidationError } from 'typebox/error';
 import {
   HelmError,
   RESERVED_SLASH_COMMANDS,
@@ -23,113 +19,141 @@ import {
 } from '@helm/protocol';
 import { isPlainObject } from './shared.js';
 
-/** host keep command slash trigger term (skill: prefix whole keep), plugin must not occupy. */
+/** Host-reserved command slash triggers (`skill:` prefix is also reserved). */
 const RESERVED_COMMAND_SLASH: ReadonlySet<string> = new Set(RESERVED_SLASH_COMMANDS);
 
-/** UI action three class target to register surface mapping (unify UiActionSpec.target semantics;plugin-host and registry shared use). */
+/** UI action target -> registered surface mapping (shared by plugin-context and validation). */
 export const UI_ACTION_SURFACES: Readonly<Record<UiActionSpec['target'], string>> = {
   'conversation:header': 'conversation.header.action',
   'conversation:row': 'conversation.row.action',
   'timeline:entry': 'timeline.entry.action',
 };
 
-/** reverse inspect table: register surface -> UI action target(dispatch key i.e. three action surface). */
 const UI_ACTION_TARGET_BY_SURFACE: Readonly<Record<string, UiActionSpec['target']>> = Object.fromEntries(
   (Object.keys(UI_ACTION_SURFACES) as Array<UiActionSpec['target']>).map((key) => [UI_ACTION_SURFACES[key], key]),
 );
 
-/**
- * artifact.previewer specification MIME: small write type/subtype precise value or explicit type/* through match.
- * reject 'asterisk slash asterisk'(equals swallow all artifact and without trim decide intent meaning), parameter, before suffix/glob and large write form
- * - - match rule must precise can pre- phase, frontend trim decide and kernel validate shared use the same fact source.
- */
-const CANONICAL_MIME_PATTERN = /^[a-z0-9][a-z0-9!#$&^_.+-]*\/(?:[a-z0-9][a-z0-9!#$&^_.+-]*|\*)$/;
-
-/** artifact.previewer file suffix: small write, before lead point, can many segment (such as .tar.gz), without path segment and wildcard. */
-const ARTIFACT_EXTENSION_PATTERN = /^\.[a-z0-9]+(?:\.[a-z0-9]+)*$/;
-
-/** completion source doc form document name (and docs/sessionDocs list the same naming constraint). */
-const COMPLETER_DOC_NAME_PATTERN = /^[A-Za-z0-9._-]+$/;
-
-/**
- * completion source itemsField: security top-level key character collection (refuse __proto__/constructor/prototype).
- * only character collection restrict also do not enough, prototype pollute key name single in completion source validate in separate reject.
- */
-const COMPLETER_ITEMS_FIELD_PATTERN = /^[A-Za-z0-9_$][A-Za-z0-9_$-]{0,127}$/;
-
 const UNSAFE_TOP_LEVEL_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
-/** validate context:registry in dispatch point once construct, one by one validate only read. */
 export interface UiSpecContext {
   pluginId: string;
-  /** declaration entry name (such as timelineRenderer), error message locate use. */
   fnName: string;
-  /** this time register surface(UI action validate based on its reverse inspect target). */
   surface: string;
-  /** plugin define provide clientRoot(client reference ownership check use; default means not provide). */
   clientRoot?: string;
-  /** host is otherwise inject build port (client reference availability check use). */
   hasBuildProvider: boolean;
-  /** this plugin registered UI contribution (commandPalette slash / profile.runtime kind plugin inside dedupe). */
   siblings: readonly PluginUiContribution[];
 }
 
 export type UiSpecValidator = (spec: Record<string, unknown>, id: string, ctx: UiSpecContext) => void;
 
-/**
- * artifact.previewer match declaration list public validate: non-empty string array, one by one items legal, without duplicate.
- */
-function assertArtifactMatchList(
-  pluginId: string,
-  fnName: string,
+// ---------------------------------------------------------------------------
+// Reusable TypeBox schemas & compiled validator helper
+// ---------------------------------------------------------------------------
+
+const NonEmptyString = Type.String({ minLength: 1 });
+const ActionIdNoDotSchema = Type.String({ minLength: 1, pattern: '^[^.]+$' });
+const CommandActionIdSchema = Type.String({ pattern: '^[A-Za-z0-9_-]+$' });
+const CommandSlashSchema = Type.String({ pattern: '^[a-z0-9][a-z0-9:_-]{0,63}$' });
+const RuntimeKindSchema = Type.String({ pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$' });
+const MarkdownLanguageSchema = Type.String({ pattern: '^[a-z0-9][a-z0-9-]{0,31}$' });
+/** Canonical MIME: lowercase `type/subtype` or `type/<wildcard>` (rejects global wildcard, parameters, globs, uppercase). */
+const CanonicalMimeSchema = Type.String({
+  pattern: '^[a-z0-9][a-z0-9!#$&^_.+-]*\\/(?:[a-z0-9][a-z0-9!#$&^_.+-]*|\\*)$',
+});
+/** Lowercase leading-dot multi-segment extension (e.g. `.md`, `.tar.gz`); rejects path segments/wildcards. */
+const ArtifactExtensionSchema = Type.String({ pattern: '^\\.[a-z0-9]+(?:\\.[a-z0-9]+)*$' });
+const COMPLETER_DOC_NAME_PATTERN = /^[A-Za-z0-9._-]+$/;
+const CompleterDocNameSchema = Type.String({ pattern: COMPLETER_DOC_NAME_PATTERN.source });
+const CompleterItemsFieldSchema = Type.String({ pattern: '^[A-Za-z0-9_$][A-Za-z0-9_$-]{0,127}$' });
+
+interface DiagnosticError {
+  message: string;
+  details?: Record<string, unknown>;
+}
+
+type DiagnosticResolver = (
+  errors: readonly TLocalizedValidationError[],
+  spec: Record<string, unknown>,
   id: string,
-  field: 'mimeTypes' | 'extensions',
-  values: unknown,
-  isValid: (value: string) => boolean,
-  expect: string,
+  ctx: UiSpecContext,
+) => DiagnosticError;
+
+function runCompiledUiSchema<T extends TProperties>(
+  validator: Validator<TProperties, TObject<T>>,
+  spec: Record<string, unknown>,
+  id: string,
+  ctx: UiSpecContext,
+  resolveError: DiagnosticResolver,
 ): void {
-  if (values === undefined) return;
-  if (!Array.isArray(values) || values.length === 0 || values.some((v) => typeof v !== 'string')) {
-    throw new HelmError(
-      'invalid_ui_spec',
-      `plugin ${pluginId} ui.${fnName}  ${field} must be non-empty string array`,
-      400,
-      { pluginId, id, field },
-    );
+  if (validator.Check(spec)) return;
+  const { message, details } = resolveError(validator.Errors(spec), spec, id, ctx);
+  throw new HelmError('invalid_ui_spec', message, 400, details);
+}
+
+/** Picks the first matching error path according to an explicit precedence list. */
+function findErrorByPathPrefix(
+  errors: readonly TLocalizedValidationError[],
+  prefixes: readonly string[],
+): TLocalizedValidationError | undefined {
+  for (const prefix of prefixes) {
+    const match = errors.find((e) => e.instancePath === prefix || e.instancePath.startsWith(`${prefix}/`));
+    if (match) return match;
   }
-  for (const value of values as string[]) {
-    if (!isValid(value)) {
-      throw new HelmError(
-        'invalid_ui_spec',
-        `plugin ${pluginId} ui.${fnName}  ${field} items "${value}" illegal (${expect})`,
-        400,
-        { pluginId, id, field, value },
-      );
-    }
-  }
-  const unique = new Set(values as string[]);
-  if (unique.size !== values.length) {
-    throw new HelmError('invalid_ui_spec', `plugin ${pluginId} ui.${fnName}  ${field} contains duplicate items`, 400, {
-      pluginId,
-      id,
-      field,
-    });
+  return errors[0];
+}
+
+function assertUniqueStrings(
+  values: readonly string[],
+  pluginId: string,
+  message: string,
+  details: Record<string, unknown>,
+): void {
+  if (new Set(values).size !== values.length) {
+    throw new HelmError('invalid_ui_spec', `plugin ${pluginId} ${message}`, 400, details);
   }
 }
 
-/**
- * UI action unify validate (conversation:header / conversation:row / timeline:entry):
- * actionId / client two at least provide its one (otherwise host cannot render also cannot execute).
- * side effect:target field and surface duplicate (surface already carry semantics), register input side remove
- * avoid store ambiguity (and split before consistent).
- */
+// ---------------------------------------------------------------------------
+// Early phase validators
+// ---------------------------------------------------------------------------
+
+const UI_ACTION_BASE_PROPS = {
+  actionId: Type.Optional(ActionIdNoDotSchema),
+  actionPluginId: Type.Optional(NonEmptyString),
+};
+
+const UI_ACTION_CHECKERS: Readonly<Record<UiActionSpec['target'], Validator<TProperties, TObject>>> = {
+  'conversation:header': Compile(
+    Type.Object({
+      ...UI_ACTION_BASE_PROPS,
+      placement: Type.Optional(Type.Enum(['toolbar', 'menu'] as const)),
+      kinds: Type.Optional(Type.Never()),
+      roles: Type.Optional(Type.Never()),
+    }),
+  ),
+  'conversation:row': Compile(
+    Type.Object({
+      ...UI_ACTION_BASE_PROPS,
+      placement: Type.Optional(Type.Never()),
+      kinds: Type.Optional(Type.Never()),
+      roles: Type.Optional(Type.Never()),
+    }),
+  ),
+  'timeline:entry': Compile(
+    Type.Object({
+      ...UI_ACTION_BASE_PROPS,
+      placement: Type.Optional(Type.Never()),
+      kinds: Type.Optional(Type.Array(NonEmptyString, { minItems: 1 })),
+      roles: Type.Optional(Type.Array(Type.Enum(['user', 'assistant'] as const), { minItems: 1 })),
+    }),
+  ),
+};
+
 function validateUiActionSpec(spec: Record<string, unknown>, id: string, ctx: UiSpecContext): void {
-  const { pluginId, fnName } = ctx;
+  const { pluginId } = ctx;
   const target = UI_ACTION_TARGET_BY_SURFACE[ctx.surface];
   if (target === undefined) return;
-  const actionId = spec['actionId'];
-  const hasClient = spec['client'] !== undefined;
-  if (actionId === undefined && !hasClient) {
+  if (spec['actionId'] === undefined && spec['client'] === undefined) {
     throw new HelmError(
       'invalid_ui_spec',
       `plugin ${pluginId} ui.action(${target}) must at least provide actionId or client of one`,
@@ -137,105 +161,76 @@ function validateUiActionSpec(spec: Record<string, unknown>, id: string, ctx: Ui
       { pluginId, id },
     );
   }
-  if (actionId !== undefined && (typeof actionId !== 'string' || actionId.length === 0 || actionId.includes('.'))) {
-    throw new HelmError(
-      'invalid_ui_spec',
-      `plugin ${pluginId} ui.action  actionId must be non-empty and excludes point number action id(across plugin please use actionPluginId)`,
-      400,
-      { pluginId, id },
-    );
-  }
-  const actionPluginId = spec['actionPluginId'];
-  if (actionPluginId !== undefined && (typeof actionPluginId !== 'string' || actionPluginId.length === 0)) {
-    throw new HelmError(
-      'invalid_ui_spec',
-      `plugin ${pluginId} ui.action  actionPluginId must be non-empty plugin id`,
-      400,
-      { pluginId, id },
-    );
-  }
-  // placement only conversation:header allows;kinds/roles only timeline:entry allows.
-  if (target !== 'conversation:header') {
-    const placement = spec['placement'];
-    if (placement !== undefined) {
-      throw new HelmError(
-        'invalid_ui_spec',
-        `plugin ${pluginId} ui.action(${target}) disallows placement(only conversation:header support)`,
-        400,
-        { pluginId, id },
-      );
+  runCompiledUiSchema(UI_ACTION_CHECKERS[target], spec, id, ctx, (errors) => {
+    const err = findErrorByPathPrefix(errors, ['/actionId', '/actionPluginId', '/placement', '/kinds', '/roles']);
+    const p = err?.instancePath ?? '';
+    if (p.startsWith('/actionId')) {
+      return {
+        message: `plugin ${pluginId} ui.action  actionId must be non-empty and excludes point number action id(across plugin please use actionPluginId)`,
+        details: { pluginId, id },
+      };
     }
-  } else {
-    const placement = spec['placement'];
-    if (placement !== undefined && placement !== 'toolbar' && placement !== 'menu') {
-      throw new HelmError(
-        'invalid_ui_spec',
-        `plugin ${pluginId} ui.action  placement only allows 'toolbar' | 'menu'`,
-        400,
-        { pluginId, id },
-      );
+    if (p.startsWith('/actionPluginId')) {
+      return { message: `plugin ${pluginId} ui.action  actionPluginId must be non-empty plugin id`, details: { pluginId, id } };
     }
-  }
-  if (target === 'timeline:entry') {
-    const kinds = spec['kinds'];
-    if (
-      kinds !== undefined &&
-      (!Array.isArray(kinds) || kinds.length === 0 || kinds.some((k) => typeof k !== 'string' || k.length === 0))
-    ) {
-      throw new HelmError(
-        'invalid_ui_spec',
-        `plugin ${pluginId} ui.action(timeline:entry) kinds must be non-empty string array`,
-        400,
-        { pluginId, id },
-      );
+    if (p.startsWith('/placement')) {
+      return {
+        message:
+          target !== 'conversation:header'
+            ? `plugin ${pluginId} ui.action(${target}) disallows placement(only conversation:header support)`
+            : `plugin ${pluginId} ui.action  placement only allows 'toolbar' | 'menu'`,
+        details: { pluginId, id },
+      };
     }
-    const roles = spec['roles'];
-    if (roles !== undefined) {
-      if (!Array.isArray(roles) || roles.length === 0 || roles.some((r) => r !== 'user' && r !== 'assistant')) {
-        throw new HelmError(
-          'invalid_ui_spec',
-          `plugin ${pluginId} ui.action(timeline:entry) roles only allows 'user' | 'assistant' non-empty array`,
-          400,
-          { pluginId, id },
-        );
-      }
+    if (p.startsWith('/kinds')) {
+      return {
+        message:
+          target !== 'timeline:entry'
+            ? `plugin ${pluginId} ui.action(${target}) disallows kinds(only timeline:entry support)`
+            : `plugin ${pluginId} ui.action(timeline:entry) kinds must be non-empty string array`,
+        details: { pluginId, id },
+      };
     }
-  } else {
-    const kinds = spec['kinds'];
-    if (kinds !== undefined) {
-      throw new HelmError(
-        'invalid_ui_spec',
-        `plugin ${pluginId} ui.action(${target}) disallows kinds(only timeline:entry support)`,
-        400,
-        { pluginId, id },
-      );
+    if (p.startsWith('/roles')) {
+      return {
+        message:
+          target !== 'timeline:entry'
+            ? `plugin ${pluginId} ui.action(${target}) disallows roles(only timeline:entry support)`
+            : `plugin ${pluginId} ui.action(timeline:entry) roles only allows 'user' | 'assistant' non-empty array`,
+        details: { pluginId, id },
+      };
     }
-    const roles = spec['roles'];
-    if (roles !== undefined) {
-      throw new HelmError(
-        'invalid_ui_spec',
-        `plugin ${pluginId} ui.action(${target}) disallows roles(only timeline:entry support)`,
-        400,
-        { pluginId, id },
-      );
-    }
-  }
+    return { message: `plugin ${pluginId} ui.action(${target}) invalid spec: ${err?.message ?? 'unknown'}`, details: { pluginId, id } };
+  });
+  // `target` duplicates the registered surface name; strip to avoid storage ambiguity.
   delete spec['target'];
 }
 
-/** commandPalette:slash trigger term format, host keep term and plugin inside same name dedupe; command can trigger. */
+const COMMAND_PALETTE_CHECKER = Compile(
+  Type.Object({
+    slash: Type.Optional(CommandSlashSchema),
+    actionId: Type.Optional(CommandActionIdSchema),
+    actionPluginId: Type.Optional(NonEmptyString),
+  }),
+);
+
 function validateCommandPaletteSpec(spec: Record<string, unknown>, id: string, ctx: UiSpecContext): void {
   const { pluginId } = ctx;
-  const slash = spec['slash'];
-  if (slash !== undefined) {
-    if (typeof slash !== 'string' || !/^[a-z0-9][a-z0-9:_-]{0,63}$/.test(slash)) {
-      throw new HelmError(
-        'invalid_ui_spec',
-        `plugin ${pluginId} ui.command  slash must match /^[a-z0-9][a-z0-9:_-]{0,63}$/(excludes before lead /)`,
-        400,
-        { pluginId, id, slash: String(slash) },
-      );
+  runCompiledUiSchema(COMMAND_PALETTE_CHECKER, spec, id, ctx, (errors) => {
+    const err = findErrorByPathPrefix(errors, ['/slash', '/actionId', '/actionPluginId']);
+    if (err?.instancePath.startsWith('/slash')) {
+      return {
+        message: `plugin ${pluginId} ui.command  slash must match /^[a-z0-9][a-z0-9:_-]{0,63}$/(excludes before lead /)`,
+        details: { pluginId, id, slash: String(spec['slash']) },
+      };
     }
+    if (err?.instancePath.startsWith('/actionId')) {
+      return { message: `plugin ${pluginId} ui.command  actionId must be legal action identifier` };
+    }
+    return { message: `plugin ${pluginId} ui.command  actionPluginId must be non-empty plugin id`, details: { pluginId, id } };
+  });
+  const slash = spec['slash'] as string | undefined;
+  if (slash !== undefined) {
     if (RESERVED_COMMAND_SLASH.has(slash) || slash.startsWith('skill:')) {
       throw new HelmError(
         'invalid_ui_spec',
@@ -244,11 +239,8 @@ function validateCommandPaletteSpec(spec: Record<string, unknown>, id: string, c
         { pluginId, id, slash },
       );
     }
-    // plugin inside same name slash directly reject (across plugin conflict in commit point final inspect).
     for (const u of ctx.siblings) {
-      if (u.surface !== 'commandPalette') continue;
-      const other = (u.spec as { slash?: unknown }).slash;
-      if (other === slash) {
+      if (u.surface === 'commandPalette' && (u.spec as { slash?: unknown }).slash === slash) {
         throw new HelmError('duplicate_command_slash', `plugin ${pluginId} duplicate declaration slash trigger term /${slash}`, 409, {
           pluginId,
           slash,
@@ -257,14 +249,10 @@ function validateCommandPaletteSpec(spec: Record<string, unknown>, id: string, c
     }
   }
   const actionId = spec['actionId'];
-  if (actionId !== undefined && (typeof actionId !== 'string' || !/^[A-Za-z0-9_-]+$/.test(actionId))) {
-    throw new HelmError('invalid_ui_spec', `plugin ${pluginId} ui.command  actionId must be legal action identifier`, 400);
-  }
   if (slash !== undefined && actionId === undefined) {
     throw new HelmError('invalid_ui_spec', `plugin ${pluginId} ui.command declaration slash when must bind set actionId`, 400);
   }
-  const hasClient = spec['client'] !== undefined;
-  if (actionId === undefined && !hasClient) {
+  if (actionId === undefined && spec['client'] === undefined) {
     throw new HelmError(
       'invalid_ui_spec',
       `plugin ${pluginId} ui.command must at least provide actionId or client of one (command must can trigger)`,
@@ -272,54 +260,32 @@ function validateCommandPaletteSpec(spec: Record<string, unknown>, id: string, c
       { pluginId, id },
     );
   }
-  const actionPluginId = spec['actionPluginId'];
-  if (actionPluginId !== undefined && (typeof actionPluginId !== 'string' || actionPluginId.length === 0)) {
-    throw new HelmError(
-      'invalid_ui_spec',
-      `plugin ${pluginId} ui.command  actionPluginId must be non-empty plugin id`,
-      400,
-      { pluginId, id },
-    );
-  }
 }
 
-/** profile.runtime:kind required and format legal; duplicate kind plugin inside directly reject (across plugin conflict in commit point final inspect). */
+const PROFILE_RUNTIME_KIND_CHECKER = Compile(Type.Object({ kind: RuntimeKindSchema }));
+const PROFILE_RUNTIME_SUGGESTIONS_CHECKER = Compile(
+  Type.Object({ agentSuggestions: Type.Optional(Type.Array(NonEmptyString)) }),
+);
+
 function validateProfileRuntimeSpec(spec: Record<string, unknown>, id: string, ctx: UiSpecContext): void {
   const { pluginId } = ctx;
-  const kind = spec['kind'];
-  if (typeof kind !== 'string' || kind.length === 0 || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(kind)) {
-    throw new HelmError(
-      'invalid_ui_spec',
-      `plugin ${pluginId} ui.profileRuntime  kind must match /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/`,
-      400,
-      { pluginId, id, kind: String(kind) },
-    );
-  }
-  const label = spec['label'];
-  if (parseNonEmptyLocalizedText(label) === undefined) {
+  runCompiledUiSchema(PROFILE_RUNTIME_KIND_CHECKER, spec, id, ctx, () => ({
+    message: `plugin ${pluginId} ui.profileRuntime  kind must match /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/`,
+    details: { pluginId, id, kind: String(spec['kind']) },
+  }));
+  if (parseNonEmptyLocalizedText(spec['label']) === undefined) {
     throw new HelmError('invalid_ui_spec', `plugin ${pluginId} ui.profileRuntime need to non-empty display label`, 400, {
       pluginId,
       id,
     });
   }
-  const agentSuggestions = spec['agentSuggestions'];
-  if (
-    agentSuggestions !== undefined &&
-    (!Array.isArray(agentSuggestions) ||
-      agentSuggestions.some((s) => typeof s !== 'string' || s.length === 0))
-  ) {
-    throw new HelmError(
-      'invalid_ui_spec',
-      `plugin ${pluginId} ui.profileRuntime  agentSuggestions must be non-empty string array`,
-      400,
-      { pluginId, id },
-    );
-  }
-  // plugin inside duplicate kind directly reject (across plugin conflict in commit point final inspect).
+  runCompiledUiSchema(PROFILE_RUNTIME_SUGGESTIONS_CHECKER, spec, id, ctx, () => ({
+    message: `plugin ${pluginId} ui.profileRuntime  agentSuggestions must be non-empty string array`,
+    details: { pluginId, id },
+  }));
+  const kind = spec['kind'] as string;
   for (const u of ctx.siblings) {
-    if (u.surface !== 'profile.runtime') continue;
-    const other = (u.spec as { kind?: unknown }).kind;
-    if (other === kind) {
+    if (u.surface === 'profile.runtime' && (u.spec as { kind?: unknown }).kind === kind) {
       throw new HelmError(
         'duplicate_profile_runtime_kind',
         `plugin ${pluginId} duplicate declaration profile.runtime kind "${kind}"`,
@@ -330,18 +296,17 @@ function validateProfileRuntimeSpec(spec: Record<string, unknown>, id: string, c
   }
 }
 
-/** plugin.slot:target must exactly has a '/', two segment all is legal identifier. */
+const PLUGIN_SLOT_CHECKER = Compile(
+  Type.Object({ target: Type.String({ minLength: 1, maxLength: 512 }) }),
+);
+
 function validateSlotSpec(spec: Record<string, unknown>, id: string, ctx: UiSpecContext): void {
   const { pluginId } = ctx;
-  const target = spec['target'];
-  if (typeof target !== 'string' || target.length === 0 || target.length > 512) {
-    throw new HelmError(
-      'invalid_ui_spec',
-      `plugin ${pluginId} ui.slot  target must be non-empty string (<ownerPluginId>/<slotName>)`,
-      400,
-      { pluginId, id },
-    );
-  }
+  runCompiledUiSchema(PLUGIN_SLOT_CHECKER, spec, id, ctx, () => ({
+    message: `plugin ${pluginId} ui.slot  target must be non-empty string (<ownerPluginId>/<slotName>)`,
+    details: { pluginId, id },
+  }));
+  const target = spec['target'] as string;
   const slash = target.indexOf('/');
   if (slash <= 0 || slash !== target.lastIndexOf('/')) {
     throw new HelmError(
@@ -363,49 +328,42 @@ function validateSlotSpec(spec: Record<string, unknown>, id: string, ctx: UiSpec
   }
 }
 
-/** timeline.renderer:matchMeta only allows { renderer: non-empty string }. */
-function validateTimelineRendererSpec(spec: Record<string, unknown>, _id: string, ctx: UiSpecContext): void {
-  const { pluginId, fnName } = ctx;
-  const matchMeta = spec['matchMeta'];
-  if (matchMeta !== undefined) {
-    if (
-      !isPlainObject(matchMeta) ||
-      Object.keys(matchMeta).some((k) => k !== 'renderer') ||
-      typeof matchMeta.renderer !== 'string' ||
-      matchMeta.renderer.length === 0
-    ) {
-      throw new HelmError(
-        'invalid_ui_spec',
-        `plugin ${pluginId} ui.timelineRenderer  matchMeta only allows { renderer: non-empty string }`,
-        400,
-      );
-    }
+// ---------------------------------------------------------------------------
+// Late phase validators
+// ---------------------------------------------------------------------------
+
+const TIMELINE_RENDERER_CHECKER = Compile(
+  Type.Object({
+    matchMeta: Type.Optional(Type.Object({ renderer: NonEmptyString }, { additionalProperties: false })),
+  }),
+);
+
+function validateTimelineRendererSpec(spec: Record<string, unknown>, id: string, ctx: UiSpecContext): void {
+  const { pluginId } = ctx;
+  if (spec['matchMeta'] !== undefined && !isPlainObject(spec['matchMeta'])) {
+    throw new HelmError('invalid_ui_spec', `plugin ${pluginId} ui.timelineRenderer  matchMeta only allows { renderer: non-empty string }`, 400);
   }
+  runCompiledUiSchema(TIMELINE_RENDERER_CHECKER, spec, id, ctx, () => ({
+    message: `plugin ${pluginId} ui.timelineRenderer  matchMeta only allows { renderer: non-empty string }`,
+  }));
 }
 
-/** markdown.codeBlock:languages non-empty small write identifier array, without duplicate; must declaration client component reference. */
+const MARKDOWN_CODE_BLOCK_CHECKER = Compile(
+  Type.Object({
+    languages: Type.Array(MarkdownLanguageSchema, { minItems: 1 }),
+  }),
+);
+
 function validateMarkdownCodeBlockSpec(spec: Record<string, unknown>, id: string, ctx: UiSpecContext): void {
   const { pluginId } = ctx;
-  const languages = spec['languages'];
-  if (
-    !Array.isArray(languages) ||
-    languages.length === 0 ||
-    languages.some((l) => typeof l !== 'string' || !/^[a-z0-9][a-z0-9-]{0,31}$/.test(l))
-  ) {
-    throw new HelmError(
-      'invalid_ui_spec',
-      `plugin ${pluginId} ui.markdownCodeBlock  languages must be non-empty string array (each items is small write language identifier, match /^[a-z0-9][a-z0-9-]{0,31}$/)`,
-      400,
-      { pluginId, id },
-    );
-  }
-  const unique = new Set(languages as string[]);
-  if (unique.size !== languages.length) {
-    throw new HelmError('invalid_ui_spec', `plugin ${pluginId} ui.markdownCodeBlock  languages contains duplicate items`, 400, {
-      pluginId,
-      id,
-    });
-  }
+  runCompiledUiSchema(MARKDOWN_CODE_BLOCK_CHECKER, spec, id, ctx, () => ({
+    message: `plugin ${pluginId} ui.markdownCodeBlock  languages must be non-empty string array (each items is small write language identifier, match /^[a-z0-9][a-z0-9-]{0,31}$/)`,
+    details: { pluginId, id },
+  }));
+  assertUniqueStrings(spec['languages'] as string[], pluginId, 'ui.markdownCodeBlock  languages contains duplicate items', {
+    pluginId,
+    id,
+  });
   if (spec['client'] === undefined) {
     throw new HelmError(
       'invalid_ui_spec',
@@ -416,95 +374,172 @@ function validateMarkdownCodeBlockSpec(spec: Record<string, unknown>, id: string
   }
 }
 
-/** tool.view:replaceRow boolean;toolNames non-empty string array. */
+const TOOL_VIEW_CHECKER = Compile(
+  Type.Object({
+    replaceRow: Type.Optional(Type.Boolean()),
+    toolNames: Type.Array(NonEmptyString, { minItems: 1 }),
+  }),
+);
+
 function validateToolViewSpec(spec: Record<string, unknown>, id: string, ctx: UiSpecContext): void {
   const { pluginId } = ctx;
-  const replaceRow = spec['replaceRow'];
-  if (replaceRow !== undefined && typeof replaceRow !== 'boolean') {
-    throw new HelmError(
-      'invalid_ui_spec',
-      `plugin ${pluginId} ui.toolView  replaceRow must be boolean value (actual:${typeof replaceRow})`,
-      400,
-      { pluginId, id },
-    );
-  }
-  const toolNames = spec['toolNames'];
-  if (
-    !Array.isArray(toolNames) ||
-    toolNames.length === 0 ||
-    toolNames.some((t) => typeof t !== 'string' || t.length === 0)
-  ) {
-    throw new HelmError(
-      'invalid_ui_spec',
-      `plugin ${pluginId} ui.toolView  toolNames must be non-empty string array`,
-      400,
-      { pluginId, id },
-    );
-  }
+  runCompiledUiSchema(TOOL_VIEW_CHECKER, spec, id, ctx, (errors) => {
+    const err = findErrorByPathPrefix(errors, ['/replaceRow', '/toolNames']);
+    if (err?.instancePath.startsWith('/replaceRow')) {
+      return {
+        message: `plugin ${pluginId} ui.toolView  replaceRow must be boolean value (actual:${typeof spec['replaceRow']})`,
+        details: { pluginId, id },
+      };
+    }
+    return { message: `plugin ${pluginId} ui.toolView  toolNames must be non-empty string array`, details: { pluginId, id } };
+  });
 }
 
-/** artifact.previewer: non-empty label and specification MIME/suffix match declaration list. */
+const ARTIFACT_PREVIEWER_CHECKER = Compile(
+  Type.Object({
+    mimeTypes: Type.Optional(Type.Array(CanonicalMimeSchema, { minItems: 1 })),
+    extensions: Type.Optional(Type.Array(ArtifactExtensionSchema, { minItems: 1 })),
+  }),
+);
+
+const ARTIFACT_MATCH_EXPECT: Readonly<Record<'mimeTypes' | 'extensions', string>> = {
+  mimeTypes: 'only allows small write type/subtype precise value or type/* through match, disallows */*, parameter,glob and large write',
+  extensions: 'only allows small write, before lead point, can many segment suffix (such as .md,.tar.gz), excludes path segment and wildcard',
+};
+
 function validateArtifactPreviewerSpec(spec: Record<string, unknown>, id: string, ctx: UiSpecContext): void {
   const { pluginId, fnName } = ctx;
-  const label = spec['label'];
-  if (parseNonEmptyLocalizedText(label) === undefined) {
+  if (parseNonEmptyLocalizedText(spec['label']) === undefined) {
     throw new HelmError('invalid_ui_spec', `plugin ${pluginId} ui.artifactPreviewer need to non-empty display label`, 400, {
       pluginId,
       id,
     });
   }
-  assertArtifactMatchList(
-    pluginId,
-    fnName,
-    id,
-    'mimeTypes',
-    spec['mimeTypes'],
-    (value) => CANONICAL_MIME_PATTERN.test(value) && value !== '*/*',
-    'only allows small write type/subtype precise value or type/* through match, disallows */*, parameter,glob and large write',
-  );
-  assertArtifactMatchList(
-    pluginId,
-    fnName,
-    id,
-    'extensions',
-    spec['extensions'],
-    (value) => ARTIFACT_EXTENSION_PATTERN.test(value),
-    'only allows small write, before lead point, can many segment suffix (such as .md,.tar.gz), excludes path segment and wildcard',
-  );
+  runCompiledUiSchema(ARTIFACT_PREVIEWER_CHECKER, spec, id, ctx, (errors) => {
+    const err = findErrorByPathPrefix(errors, ['/mimeTypes', '/extensions']);
+    const field: 'mimeTypes' | 'extensions' = err?.instancePath.startsWith('/extensions') ? 'extensions' : 'mimeTypes';
+    const seg = err?.instancePath.slice(`/${field}/`.length);
+    if (seg !== undefined && seg !== '' && /^\d+$/.test(seg)) {
+      const value = (spec[field] as unknown[])[Number(seg)];
+      if (typeof value === 'string') {
+        return {
+          message: `plugin ${pluginId} ui.${fnName}  ${field} items "${value}" illegal (${ARTIFACT_MATCH_EXPECT[field]})`,
+          details: { pluginId, id, field, value },
+        };
+      }
+    }
+    return {
+      message: `plugin ${pluginId} ui.${fnName}  ${field} must be non-empty string array`,
+      details: { pluginId, id, field },
+    };
+  });
+  for (const field of ['mimeTypes', 'extensions'] as const) {
+    const list = spec[field] as string[] | undefined;
+    if (list !== undefined) {
+      assertUniqueStrings(list, pluginId, `ui.${fnName}  ${field} contains duplicate items`, { pluginId, id, field });
+    }
+  }
 }
 
-/** composer.completer:label/trigger/completion source shape and mutual exclusion (forbid client view track). */
+const COMPLETER_TRIGGER_AND_SOURCE_CHECKER = Compile(
+  Type.Object({
+    trigger: Type.Enum(['@', '#', ':'] as const),
+    source: Type.Union([
+      Type.Object(
+        {
+          kind: Type.Literal('action'),
+          actionId: ActionIdNoDotSchema,
+          actionPluginId: Type.Optional(NonEmptyString),
+        },
+        { additionalProperties: false },
+      ),
+      Type.Object(
+        {
+          kind: Type.Enum(['doc', 'sessionDoc'] as const),
+          name: CompleterDocNameSchema,
+          itemsField: CompleterItemsFieldSchema,
+        },
+        { additionalProperties: false },
+      ),
+    ]),
+  }),
+);
+
 function validateComposerCompleterSpec(spec: Record<string, unknown>, id: string, ctx: UiSpecContext): void {
   const { pluginId } = ctx;
-  const label = spec['label'];
-  if (parseNonEmptyLocalizedText(label) === undefined) {
+  if (parseNonEmptyLocalizedText(spec['label']) === undefined) {
     throw new HelmError('invalid_ui_spec', `plugin ${pluginId} ui.composerCompleter need to non-empty display label`, 400, {
       pluginId,
       id,
     });
   }
-  // '/' keep to host command and skill completion; host unify render, do not accept client view track.
-  const forbidden = ['client'] as const;
-  for (const field of forbidden) {
-    if (spec[field] !== undefined) {
-      throw new HelmError(
-        'invalid_ui_spec',
-        `plugin ${pluginId} ui.composerCompleter disallows declaration ${field}(completion by host unify render, only accept declaration style data source)`,
-        400,
-        { pluginId, id, field },
-      );
-    }
-  }
-  const trigger = spec['trigger'];
-  if (trigger !== '@' && trigger !== '#' && trigger !== ':') {
+  // '/' is reserved for host command and skill completion; completer renders uniformly without client track.
+  if (spec['client'] !== undefined) {
     throw new HelmError(
       'invalid_ui_spec',
-      `plugin ${pluginId} ui.composerCompleter  trigger only allows '@' | '#' | ':'('/' keep to command and skill)`,
+      `plugin ${pluginId} ui.composerCompleter disallows declaration client(completion by host unify render, only accept declaration style data source)`,
       400,
-      { pluginId, id, trigger: String(trigger) },
+      { pluginId, id, field: 'client' },
     );
   }
-  const source = spec['source'];
+  runCompiledUiSchema(COMPLETER_TRIGGER_AND_SOURCE_CHECKER, spec, id, ctx, (errors) => {
+    const triggerErr = findErrorByPathPrefix(errors, ['/trigger']);
+    if (triggerErr?.instancePath.startsWith('/trigger')) {
+      return {
+        message: `plugin ${pluginId} ui.composerCompleter  trigger only allows '@' | '#' | ':'('/' keep to command and skill)`,
+        details: { pluginId, id, trigger: String(spec['trigger']) },
+      };
+    }
+    const source = spec['source'];
+    if (!isPlainObject(source)) {
+      return {
+        message: `plugin ${pluginId} ui.composerCompleter need to source({ kind: 'action' | 'doc' | 'sessionDoc', ... })`,
+        details: { pluginId, id },
+      };
+    }
+    const kind = source['kind'];
+    if (kind === 'action') {
+      if (Object.keys(source).some((k) => k !== 'kind' && k !== 'actionId' && k !== 'actionPluginId')) {
+        return {
+          message: `plugin ${pluginId} ui.composerCompleter  action source only allows { kind, actionId, actionPluginId? }, must not mix doc source field`,
+          details: { pluginId, id },
+        };
+      }
+      if (typeof source['actionId'] !== 'string' || source['actionId'].length === 0 || source['actionId'].includes('.')) {
+        return {
+          message: `plugin ${pluginId} ui.composerCompleter  actionId must be non-empty and excludes point number action id(across plugin please use actionPluginId)`,
+          details: { pluginId, id },
+        };
+      }
+      return {
+        message: `plugin ${pluginId} ui.composerCompleter  actionPluginId must be non-empty plugin id`,
+        details: { pluginId, id },
+      };
+    }
+    if (kind === 'doc' || kind === 'sessionDoc') {
+      if (Object.keys(source).some((k) => k !== 'kind' && k !== 'name' && k !== 'itemsField')) {
+        return {
+          message: `plugin ${pluginId} ui.composerCompleter  ${kind} source only allows { kind, name, itemsField }, must not mix action source field`,
+          details: { pluginId, id },
+        };
+      }
+      if (typeof source['name'] !== 'string' || !COMPLETER_DOC_NAME_PATTERN.test(source['name'])) {
+        return {
+          message: `plugin ${pluginId} ui.composerCompleter  ${kind} source name must be this plugin public document name (allows character A-Za-z0-9._-)`,
+          details: { pluginId, id, name: String(source['name']) },
+        };
+      }
+      return {
+        message: `plugin ${pluginId} ui.composerCompleter  itemsField must be security top-level key (refuse __proto__/constructor/prototype and very rule character)`,
+        details: { pluginId, id, itemsField: String(source['itemsField']) },
+      };
+    }
+    return {
+      message: `plugin ${pluginId} ui.composerCompleter  source.kind only allows 'action' | 'doc' | 'sessionDoc'`,
+      details: { pluginId, id, kind: String(kind) },
+    };
+  });
+  const source = spec['source'] as Record<string, unknown>;
   if (!isPlainObject(source)) {
     throw new HelmError(
       'invalid_ui_spec',
@@ -513,120 +548,71 @@ function validateComposerCompleterSpec(spec: Record<string, unknown>, id: string
       { pluginId, id },
     );
   }
-  const kind = source['kind'];
-  if (kind === 'action') {
-    const sourceKeys = Object.keys(source);
-    if (sourceKeys.some((k) => k !== 'kind' && k !== 'actionId' && k !== 'actionPluginId')) {
-      throw new HelmError(
-        'invalid_ui_spec',
-        `plugin ${pluginId} ui.composerCompleter  action source only allows { kind, actionId, actionPluginId? }, must not mix doc source field`,
-        400,
-        { pluginId, id },
-      );
-    }
-    const actionId = source['actionId'];
-    if (typeof actionId !== 'string' || actionId.length === 0 || actionId.includes('.')) {
-      throw new HelmError(
-        'invalid_ui_spec',
-        `plugin ${pluginId} ui.composerCompleter  actionId must be non-empty and excludes point number action id(across plugin please use actionPluginId)`,
-        400,
-        { pluginId, id },
-      );
-    }
-    const actionPluginId = source['actionPluginId'];
-    if (actionPluginId !== undefined && (typeof actionPluginId !== 'string' || actionPluginId.length === 0)) {
-      throw new HelmError(
-        'invalid_ui_spec',
-        `plugin ${pluginId} ui.composerCompleter  actionPluginId must be non-empty plugin id`,
-        400,
-        { pluginId, id },
-      );
-    }
-  } else if (kind === 'doc' || kind === 'sessionDoc') {
-    const sourceKeys = Object.keys(source);
-    if (sourceKeys.some((k) => k !== 'kind' && k !== 'name' && k !== 'itemsField')) {
-      throw new HelmError(
-        'invalid_ui_spec',
-        `plugin ${pluginId} ui.composerCompleter  ${kind} source only allows { kind, name, itemsField }, must not mix action source field`,
-        400,
-        { pluginId, id },
-      );
-    }
-    const name = source['name'];
-    if (typeof name !== 'string' || !COMPLETER_DOC_NAME_PATTERN.test(name)) {
-      throw new HelmError(
-        'invalid_ui_spec',
-        `plugin ${pluginId} ui.composerCompleter  ${kind} source name must be this plugin public document name (allows character A-Za-z0-9._-)`,
-        400,
-        { pluginId, id, name: String(name) },
-      );
-    }
-    const itemsField = source['itemsField'];
-    if (
-      typeof itemsField !== 'string' ||
-      !COMPLETER_ITEMS_FIELD_PATTERN.test(itemsField) ||
-      UNSAFE_TOP_LEVEL_KEYS.has(itemsField)
-    ) {
-      throw new HelmError(
-        'invalid_ui_spec',
-        `plugin ${pluginId} ui.composerCompleter  itemsField must be security top-level key (refuse __proto__/constructor/prototype and very rule character)`,
-        400,
-        { pluginId, id, itemsField: String(itemsField) },
-      );
-    }
-  } else {
+  if (
+    (source['kind'] === 'doc' || source['kind'] === 'sessionDoc') &&
+    UNSAFE_TOP_LEVEL_KEYS.has(source['itemsField'] as string)
+  ) {
     throw new HelmError(
       'invalid_ui_spec',
-      `plugin ${pluginId} ui.composerCompleter  source.kind only allows 'action' | 'doc' | 'sessionDoc'`,
+      `plugin ${pluginId} ui.composerCompleter  itemsField must be security top-level key (refuse __proto__/constructor/prototype and very rule character)`,
       400,
-      { pluginId, id, kind: String(kind) },
+      { pluginId, id, itemsField: String(source['itemsField']) },
     );
   }
 }
 
-/** workbench.panel:badge only allows declaration style field shape (doc subscribe + counter/color tune field name). */
+const WORKBENCH_PANEL_CHECKER = Compile(
+  Type.Object({
+    badge: Type.Optional(
+      Type.Object(
+        {
+          doc: NonEmptyString,
+          countField: Type.Optional(NonEmptyString),
+          toneField: Type.Optional(NonEmptyString),
+          byConversationField: Type.Optional(NonEmptyString),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+  }),
+);
+
 function validateWorkbenchPanelSpec(spec: Record<string, unknown>, id: string, ctx: UiSpecContext): void {
   const { pluginId } = ctx;
-  const badge = spec['badge'];
-  if (badge !== undefined) {
-    if (
-      !isPlainObject(badge) ||
-      Object.keys(badge).some(
-        (k) => k !== 'doc' && k !== 'countField' && k !== 'toneField' && k !== 'byConversationField',
-      )
-    ) {
-      throw new HelmError(
-        'invalid_ui_spec',
-        `plugin ${pluginId} ui.workbenchPanel  badge only allows { doc, countField?, toneField?, byConversationField? }`,
-        400,
-      );
-    }
-    if (typeof badge.doc !== 'string' || badge.doc.length === 0) {
-      throw new HelmError(
-        'invalid_ui_spec',
-        `plugin ${pluginId} ui.workbenchPanel  badge.doc must be non-empty string (subscribe this plugin public doc name)`,
-        400,
-        { pluginId, id },
-      );
+  if (spec['badge'] !== undefined && !isPlainObject(spec['badge'])) {
+    throw new HelmError(
+      'invalid_ui_spec',
+      `plugin ${pluginId} ui.workbenchPanel  badge only allows { doc, countField?, toneField?, byConversationField? }`,
+      400,
+    );
+  }
+  runCompiledUiSchema(WORKBENCH_PANEL_CHECKER, spec, id, ctx, (errors) => {
+    const err = findErrorByPathPrefix(errors, ['/badge/doc', '/badge/countField', '/badge/toneField', '/badge/byConversationField', '/badge']);
+    const p = err?.instancePath ?? '';
+    if (p === '/badge/doc') {
+      return {
+        message: `plugin ${pluginId} ui.workbenchPanel  badge.doc must be non-empty string (subscribe this plugin public doc name)`,
+        details: { pluginId, id },
+      };
     }
     for (const field of ['countField', 'toneField', 'byConversationField'] as const) {
-      const value = badge[field];
-      if (value !== undefined && (typeof value !== 'string' || value.length === 0)) {
-        throw new HelmError(
-          'invalid_ui_spec',
-          `plugin ${pluginId} ui.workbenchPanel  badge.${field} must be non-empty string field name`,
-          400,
-          { pluginId, id, field },
-        );
+      if (p === `/badge/${field}`) {
+        return {
+          message: `plugin ${pluginId} ui.workbenchPanel  badge.${field} must be non-empty string field name`,
+          details: { pluginId, id, field },
+        };
       }
     }
-  }
+    return {
+      message: `plugin ${pluginId} ui.workbenchPanel  badge only allows { doc, countField?, toneField?, byConversationField? }`,
+    };
+  });
 }
 
-/**
- * early surface validate (scope and client reference through use validate before dispatch):
- * UI action three surface,commandPalette,profile.runtime,plugin.slot.
- */
+// ---------------------------------------------------------------------------
+// Two-phase dispatch tables
+// ---------------------------------------------------------------------------
+
 const EARLY_VALIDATORS: Readonly<Record<string, UiSpecValidator>> = {
   [UI_ACTION_SURFACES['conversation:header']]: validateUiActionSpec,
   [UI_ACTION_SURFACES['conversation:row']]: validateUiActionSpec,
@@ -636,11 +622,6 @@ const EARLY_VALIDATORS: Readonly<Record<string, UiSpecValidator>> = {
   'plugin.slot': validateSlotSpec,
 };
 
-/**
- * late phase surface validate (client reference through use validate after dispatch):timeline.renderer,
- * markdown.codeBlock,tool.view,artifact.previewer,composer.completer,
- * workbench.panel.
- */
 const LATE_VALIDATORS: Readonly<Record<string, UiSpecValidator>> = {
   'timeline.renderer': validateTimelineRendererSpec,
   'markdown.codeBlock': validateMarkdownCodeBlockSpec,
@@ -650,7 +631,6 @@ const LATE_VALIDATORS: Readonly<Record<string, UiSpecValidator>> = {
   'workbench.panel': validateWorkbenchPanelSpec,
 };
 
-/** early phase dispatch: without for should validate surface(sidebar/screen etc.) directly via. */
 export function validateUiSpecEarly(
   surface: string,
   spec: Record<string, unknown>,
@@ -660,7 +640,6 @@ export function validateUiSpecEarly(
   EARLY_VALIDATORS[surface]?.(spec, id, ctx);
 }
 
-/** late phase phase dispatch: without for should validate surface directly via. */
 export function validateUiSpecLate(
   surface: string,
   spec: Record<string, unknown>,

@@ -34,7 +34,7 @@ import type { AgentSpawnRequest } from '@helm/protocol'
 import { parseWorkflowSpawnMeta } from '../src/contracts.js'
 import { KernelRuntime } from '../../kernel/src/runtime/index.js'
 import { WorkflowService, type WorkflowServiceHost, type WorkflowStateStore } from '../src/workflow/engine/service.js'
-import { makeFauxModels, type FauxProviderHandle } from './helpers/plugin-test-env.js'
+import { makeFauxProvider, type FauxProviderHandle } from './helpers/plugin-test-env.js'
 
 const timeout = { timeout: 60_000 } as const
 
@@ -249,12 +249,12 @@ interface RealEnv {
 
 /** 真 KernelRuntime + faux；runGate 包装计数（fallback sentinel）。 */
 async function openRealEnv(dataDir: string): Promise<RealEnv> {
-  const { models, faux } = makeFauxModels()
+  const faux = makeFauxProvider()
   const kernel = await KernelRuntime.open({
     dataDir,
     cwd: dataDir,
     model: 'faux/faux-1',
-    models,
+    providers: [faux.provider],
     autoResume: false,
   })
   const originalRunGate = kernel.runGate.bind(kernel)

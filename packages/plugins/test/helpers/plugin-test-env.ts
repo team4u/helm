@@ -125,6 +125,11 @@ export class MemoryConfigStore implements PluginConfigStore {
   }
 }
 
+/** 创建官方 `fauxProvider` 句柄（配合 `KernelRuntimeOptions.providers` 注入，不阻断插件 `ctx.provider`）。 */
+export function makeFauxProvider(options?: RegisterFauxProviderOptions): FauxProviderHandle {
+  return fauxProvider(options)
+}
+
 /** 创建挂载 `fauxProvider` 的真实 `Models` 集合与控制句柄。 */
 export function makeFauxModels(options?: RegisterFauxProviderOptions): {
   models: ReturnType<typeof createModels>

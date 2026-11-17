@@ -51,18 +51,21 @@ export function assertDefinition(definition: PluginDefinition): void {
     throw new HelmError('invalid_plugin_definition', `plugin ${definition.id} missing definePlugin function`, 400);
   }
   normalizeDependencies(definition);
-  if (
-    definition.clientRoot !== undefined &&
-    (typeof definition.clientRoot !== 'string' ||
-      !isCrossPlatformAbsolutePath(definition.clientRoot) ||
-      definition.clientRoot.split(/[\\/]/).includes('..'))
-  ) {
-    throw new HelmError(
-      'invalid_plugin_definition',
-      `plugin ${definition.id}  clientRoot must be excludes .. segment across platform absolute directory path (POSIX /,Windows symbol or UNC)`,
-      400,
-      { pluginId: definition.id },
-    );
+  for (const field of ['clientRoot', 'prebuiltClientDir'] as const) {
+    const value = definition[field];
+    if (
+      value !== undefined &&
+      (typeof value !== 'string' ||
+        !isCrossPlatformAbsolutePath(value) ||
+        value.split(/[\\/]/).includes('..'))
+    ) {
+      throw new HelmError(
+        'invalid_plugin_definition',
+        `Plugin ${definition.id} ${field} must be a cross-platform absolute directory path without '..' segments (POSIX /, Windows drive, or UNC)`,
+        400,
+        { pluginId: definition.id, field },
+      );
+    }
   }
 }
 

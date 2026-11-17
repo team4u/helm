@@ -37,7 +37,7 @@ import { after, before, describe, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createHelm } from '../src/app.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
-import { makeFauxModels, type FauxProviderHandle } from './helpers/hub-test-env.js'
+import { makeFauxProvider, type FauxProviderHandle } from './helpers/hub-test-env.js'
 
 let rootDir: string
 
@@ -118,8 +118,8 @@ async function spawnChain(
 describe('workflow subagent deep contract (by default cap 2)', { timeout: 60_000 }, () => {
   test('top-level conversation derive one layer: register depth=1/parent chain/sub- tree cap=2; one layer subagent turn keep subagent/SubagentWorkflow', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'depth1')
-    const { models, faux } = makeFauxModels()
-    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
+    const faux = makeFauxProvider()
+    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
     try {
       // top-level: derive a subagent (real original generate spawn, true sub-conversation; explicit sync wait for result).
       faux.setResponses([
@@ -174,8 +174,8 @@ describe('workflow subagent deep contract (by default cap 2)', { timeout: 60_000
 
   test('one layer subagent via subagent tool continue dispatch two layer: register depth=2/parent chain; two layer subagent turn strip dispatch work tool', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'depth2')
-    const { models, faux } = makeFauxModels()
-    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
+    const faux = makeFauxProvider()
+    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
     try {
       // model consume order (sync spawn one by one layer await, order determine):
       // top-level toolUse(subagent) → one layer subagent toolUse(subagent) → two layer subagent text
@@ -239,8 +239,8 @@ describe('workflow subagent deep contract (by default cap 2)', { timeout: 60_000
 
   test('two layer subagent reject again derive:spawnAgent 403 subagent_depth_exceeded(contains fact);run action set to two layer by refuse and without run record; one layer compare group let through', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'depth3')
-    const { models, faux } = makeFauxModels()
-    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
+    const faux = makeFauxProvider()
+    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
     try {
       const child1 = (await spawnChain(app, faux, [1]))[0]!
       const child2 = (await spawnChain(app, faux, [child1]))[0]!
@@ -297,8 +297,8 @@ describe('workflow subagent deep contract (by default cap 2)', { timeout: 60_000
 
   test('one layer subagent can run SubagentWorkflow:run action let through, node derive sub-conversation register depth=2', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'depth4')
-    const { models, faux } = makeFauxModels()
-    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
+    const faux = makeFauxProvider()
+    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
     try {
       const child1 = (await spawnChain(app, faux, [1]))[0]!
       faux.setResponses([fauxAssistantMessage('engine node subagent answer')])
@@ -331,8 +331,8 @@ describe('workflow subagent deep contract (by default cap 2)', { timeout: 60_000
 
   test('managed subagent explicit background:true: explicit reject (guard against early compute), do not derive, do not create run; sync default still available', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'depth5')
-    const { models, faux } = makeFauxModels()
-    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
+    const faux = makeFauxProvider()
+    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
     try {
       const child1 = (await spawnChain(app, faux, [1]))[0]!
       // one layer subagent is helm-owned automatically conversation: explicit background:true must explicit errors,
@@ -399,8 +399,8 @@ describe('workflow subagent deep contract (by default cap 2)', { timeout: 60_000
 
   test('fork conversation (has parentConversationId) do not by mistakenly damage: tool complete,spawn and run action available', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'depth6')
-    const { models, faux } = makeFauxModels()
-    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
+    const faux = makeFauxProvider()
+    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
     try {
       // top-level complete a turn (provide can fork item).
       faux.setResponses([fauxAssistantMessage('top-level answer')])
@@ -439,8 +439,8 @@ describe('workflow subagent deep contract (by default cap 2)', { timeout: 60_000
 
   test('SuperAgent worker do not by mistakenly damage:dispatch_worker create conversation can normal derive subagent', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'depth7')
-    const { models, faux } = makeFauxModels()
-    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
+    const faux = makeFauxProvider()
+    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
     try {
       await app.kernel.plugins.enable('builtin:superagent')
       const dispatched = (await app.kernel.plugins.invokeAction('builtin:superagent', 'dispatch_worker', {
@@ -469,8 +469,8 @@ describe('workflow subagent deep contract (by default cap 2)', { timeout: 60_000
   test('restart restore: deep fact across restarts durable, two layer still by refuse, one layer still can dispatch new two layer', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'depth8')
     {
-      const { models, faux } = makeFauxModels()
-      const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
+      const faux = makeFauxProvider()
+      const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
       try {
         const child1 = (await spawnChain(app, faux, [1]))[0]!
         await spawnChain(app, faux, [child1])
@@ -480,8 +480,8 @@ describe('workflow subagent deep contract (by default cap 2)', { timeout: 60_000
     }
     // restart: the same dataDir, register table fact takes effect.
     {
-      const { models, faux } = makeFauxModels()
-      const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
+      const faux = makeFauxProvider()
+      const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
       try {
         const child1 = app.kernel.listConversations().find((c) => c.parentConversationId === 1)
         assert.ok(child1, 'after restart one layer sub-conversation mirror should restore')
@@ -517,8 +517,8 @@ describe('workflow subagent deep contract (by default cap 2)', { timeout: 60_000
     const dir = join(rootDir, 'depth9')
     let legacyChildId = 0
     {
-      const { models, faux } = makeFauxModels()
-      const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
+      const faux = makeFauxProvider()
+      const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
       try {
         const child1 = (await spawnChain(app, faux, [1]))[0]!
         legacyChildId = child1
@@ -539,9 +539,9 @@ describe('workflow subagent deep contract (by default cap 2)', { timeout: 60_000
         },
       })
     }
-    const { models } = makeFauxModels()
+    const faux = makeFauxProvider()
     await assert.rejects(
-      () => createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never }),
+      () => createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] }),
       /深度登记无效/,
     )
   })
@@ -552,8 +552,8 @@ describe('workflow subagent deep contract (by default cap 2)', { timeout: 60_000
 
   test('explicit deep grant:maxSubagentDepth=3 when three layer available, three layer is leaf; new register inherit grant cap', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'depth10')
-    const { models, faux } = makeFauxModels()
-    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
+    const faux = makeFauxProvider()
+    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
     try {
       faux.setResponses([fauxAssistantMessage('one layer answer')])
       let grantedChild = 0
@@ -633,8 +633,8 @@ describe('workflow subagent deep contract (by default cap 2)', { timeout: 60_000
   test('plugin config maxSubagentDepth can read write, across restarts durable, illegal count value explicit reject derive', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'depth11')
     {
-      const { models, faux } = makeFauxModels()
-      const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
+      const faux = makeFauxProvider()
+      const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
       try {
         assert.equal(app.kernel.plugins.getConfig('builtin:workflow').maxSubagentDepth, 2)
         for (const invalid of [0, 99, 2.5, Number.NaN]) {
@@ -655,8 +655,8 @@ describe('workflow subagent deep contract (by default cap 2)', { timeout: 60_000
         await app.close()
       }
     }
-    const { models, faux } = makeFauxModels()
-    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models: models as never })
+    const faux = makeFauxProvider()
+    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
     try {
       assert.equal(app.kernel.plugins.getConfig('builtin:workflow').maxSubagentDepth, 1)
       const child = (await spawnChain(app, faux, [1]))[0]!

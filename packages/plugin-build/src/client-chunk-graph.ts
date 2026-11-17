@@ -1,32 +1,32 @@
 /**
- * client.tsx compile artifact chunk diagram rule plan (pure function, without IO / without esbuild dependency).
+ * Pure-function async chunk graph planner for plugin `client.tsx` compilation (no I/O, no esbuild dependency).
  *
- * input is Pass 1 metafile basename -> output metadata mapping (only consume imports edge),
- * output code split which must module set divide and pre- dependency topology order. from client-compiler.ts 
- * embed set closed package extract is top-level pure function, convenient at for divide / reference counter / topology sort do unit test;
- * iterate order and original implement one by one statement consistent (Set iterate order reference and artifact register order and chunks key order,
- * must not heavy arrange).
+ * Consumes Pass 1 metafile basename -> output metadata mapping (reading `imports` edges only) and computes
+ * the module partitioning for code splitting plus prerequisite topological order. Extracted from
+ * `client-compiler.ts` as pure functions so partitioning, reference counting, and topological sorting can
+ * be unit-tested independently. Iteration order matches the original inline algorithm statement-for-statement
+ * (preserving Set iteration order for registration and `chunks` keys).
  */
 import { basename } from 'node:path';
 
-/** metafile output between dependency edge (esbuild outputs[].imports structure sub- collection). */
+/** Dependency edge between metafile outputs (subset of esbuild `outputs[].imports`). */
 export interface ChunkImportEdge {
   path: string;
   kind: string;
   external?: boolean;
 }
 
-/** chunk diagram node: this module only consume static/motion state import edge. */
+/** Chunk graph node: only static and dynamic import edges are inspected. */
 export interface ChunkGraphNode {
   imports?: ReadonlyArray<ChunkImportEdge>;
 }
 
-/** chunk diagram: artifact basename -> node metadata (esbuild metafile outputs structure sub- collection). */
+/** Chunk graph: output basename -> node metadata. */
 export type ChunkGraph = ReadonlyMap<string, ChunkGraphNode>;
 
 /**
- * entry static import closed package (contains entry itself): by imports declaration order deep takes precedence expand,
- * only accept diagram in store in basename(virtual artifact of outside input does not participate divide).
+ * Entry static import closure (includes the entry itself): depth-first traversal following static
+ * `import-statement` edges, keeping only basenames present in the output graph.
  */
 export function collectStaticImportClosure(graph: ChunkGraph, entry: string): Set<string> {
   const closure = new Set<string>([entry]);
@@ -48,9 +48,8 @@ export function collectStaticImportClosure(graph: ChunkGraph, entry: string): Se
 }
 
 /**
- * can reach motion state import target set: first scan baseClosure each member motion state import, again for each motion state
- * target broad iterate its static closed package continue discover motion state import (motion state link on static dependency no longer enter baseClosure,
- * by each async unit bear connect).
+ * Reachable dynamic import targets: scans dynamic imports inside `baseClosure`, then breadth-first
+ * traverses each target's static closure to discover transitive dynamic imports.
  */
 export function collectDynamicImportTargets(
   graph: ChunkGraph,
@@ -96,28 +95,26 @@ export function collectDynamicImportTargets(
   return dynamicTargets;
 }
 
-/** package rule plan result: sharing async chunk set and each async unit pre- sharing dependency topology order. */
+/** Partitioning plan: shared async chunks plus prerequisite topological order per dynamic unit. */
 export interface AsyncChunkPlan {
-  /** by ≥2 async unit reference (contains pass dependency) module: mention is sharing chunk, via naming empty between bridge register. */
+  /** Modules referenced by >= 2 async units (including transitive dependencies), registered via namespace bridge. */
   sharedAsyncChunks: Set<string>;
-  /** async unit -> load the unit before must first seek value sharing chunk list (dependency in before). */
+  /** Async unit -> ordered list of prerequisite shared chunks (dependencies precede consumers). */
   chunkDeps: Record<string, string[]>;
 }
 
 /**
- * async unit divide and pre- dependency topology sort:
- * 1. seek each motion state target exclusive static closed package (exclude baseClosure member);
- * 2. for closed package member do reference counter, by ≥2 unit reference mention is sharing chunk, and along its static dependency
- *    pass accept other sharing chunk;
- * 3. each unit collect its need to sharing chunk(contains pass), by static dependency after order DFS topology sort
- *    (dependency first at use seek value).
+ * Partition async units and topologically sort shared prerequisites:
+ * 1. Compute each dynamic target's exclusive static closure (excluding `baseClosure` members);
+ * 2. Reference-count across dynamic closures; promote modules referenced by >= 2 units to `sharedAsyncChunks`
+ *    and transitively include their static dependencies;
+ * 3. For each dynamic unit, topologically sort its required shared chunks via post-order DFS.
  */
 export function computeAsyncChunkPlan(
   graph: ChunkGraph,
   baseClosure: ReadonlySet<string>,
   dynamicTargets: ReadonlySet<string>,
 ): AsyncChunkPlan {
-  // each async unit exclusive static closed package (excludes unit itself)
   const dynStaticClosures = new Map<string, Set<string>>();
   for (const d of dynamicTargets) {
     const closure = new Set<string>();
@@ -138,7 +135,6 @@ export function computeAsyncChunkPlan(
     dynStaticClosures.set(d, closure);
   }
 
-  // reference counter: by multiple async unit exclusive closed package reference module mention is sharing chunk
   const refCount = new Map<string, number>();
   for (const [, closure] of dynStaticClosures) {
     for (const chunk of closure) {
@@ -164,7 +160,6 @@ export function computeAsyncChunkPlan(
   };
   for (const chunk of Array.from(sharedAsyncChunks)) addSharedDeps(chunk);
 
-  // each async unit pre- sharing dependency table (sharing chunk between by topology order arrange column, dependency in before)
   const chunkDeps: Record<string, string[]> = {};
   for (const d of dynamicTargets) {
     const staticClosure = dynStaticClosures.get(d) ?? new Set<string>();

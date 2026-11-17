@@ -99,18 +99,28 @@ export class PluginDocRegistry {
   ) {}
 
   /**
-   * Enforces the serialized byte limit before writing storage/memory or emitting public events.
-   * Inputs should already have passed `jsonClone` so cycles/undefined/non-JSON values fail there first.
+   * Validates JSON serializability and enforces the byte limit in a single `JSON.stringify` pass,
+   * returning the serialized JSON string so durable stores can persist it without re-serializing.
    */
-  private assertWithinLimit(
+  private serializeBoundedJson(
     pluginId: string,
     kind: 'doc' | 'sessionDoc',
     name: string,
     value: unknown,
+    maxBytes = this.options.maxDocJsonBytes ?? PLUGIN_DOC_MAX_JSON_BYTES,
     extraDetails?: Record<string, unknown>,
-  ): void {
-    const maxBytes = this.options.maxDocJsonBytes ?? PLUGIN_DOC_MAX_JSON_BYTES;
-    const json = JSON.stringify(value);
+  ): string {
+    let json: string | undefined;
+    try {
+      json = JSON.stringify(value);
+    } catch (error) {
+      throw new HelmError(
+        'invalid_json_value',
+        `Plugin ${pluginId} ${kind} ${name} value cannot be serialized to JSON: ${error instanceof Error ? error.message : String(error)}`,
+        400,
+        { pluginId, name, kind, ...(extraDetails ?? {}) },
+      );
+    }
     // Defensive backstop: `jsonClone` already rejects undefined/functions/cycles.
     if (json === undefined) {
       throw new HelmError(
@@ -129,14 +139,12 @@ export class PluginDocRegistry {
         { pluginId, name, kind, bytes, maxBytes, ...(extraDetails ?? {}) },
       );
     }
+    return json;
   }
 
   private getTransientDoc(pluginId: string, name: string, initial: unknown): unknown {
     const map = this.transientDocs.get(pluginId);
-    if (map?.has(name)) {
-      return jsonClone(map.get(name));
-    }
-    return jsonClone(initial);
+    return structuredClone(map?.has(name) ? map.get(name) : initial);
   }
 
   private setTransientDoc(pluginId: string, name: string, value: unknown): void {
@@ -180,10 +188,10 @@ export class PluginDocRegistry {
     if (byName.size === 0) this.transientSessionDocs.delete(pluginId);
   }
 
-  private readDocValue(pluginId: string, name: string, reg: DocRegistration): unknown {
-    return reg.durable
-      ? jsonClone(this.store.get(`${pluginId}:${name}`, reg.initial as never))
-      : this.getTransientDoc(pluginId, name, reg.initial);
+  private readDocValue(pluginId: string, name: string, durable: boolean, initial: unknown): unknown {
+    return durable
+      ? jsonClone(this.store.get(`${pluginId}:${name}`, initial as never))
+      : this.getTransientDoc(pluginId, name, initial);
   }
 
   registerDoc<TState>(
@@ -219,22 +227,21 @@ export class PluginDocRegistry {
     const key = `${pluginId}:${name}`;
     const store = this.store;
     const normalizedInitial = jsonClone(initial);
-    this.assertWithinLimit(pluginId, 'doc', name, normalizedInitial);
+    this.serializeBoundedJson(pluginId, 'doc', name, normalizedInitial);
 
     const readCurrent = (): TState =>
-      durable
-        ? jsonClone(store.get<TState>(key, normalizedInitial))
-        : (this.getTransientDoc(pluginId, name, normalizedInitial) as TState);
+      this.readDocValue(pluginId, name, durable, normalizedInitial) as TState;
 
     const writeNext = (safe: TState): void => {
       // Enforce payload limit before touching storage/memory or emitting public events.
-      this.assertWithinLimit(pluginId, 'doc', name, safe);
+      this.serializeBoundedJson(pluginId, 'doc', name, safe);
       if (durable) {
         store.set(key, safe);
+        if (isPublic) this.emitDocUpdated(pluginId, name, safe);
       } else {
         this.setTransientDoc(pluginId, name, safe);
+        if (isPublic) this.emitDocUpdated(pluginId, name, structuredClone(safe));
       }
-      if (isPublic) this.emitDocUpdated(pluginId, name, jsonClone(safe));
     };
 
     const handle: PluginDocHandle<TState> = {
@@ -314,7 +321,7 @@ export class PluginDocRegistry {
 
     const isPublic = opts?.public === true;
     const normalizedInitial = jsonClone(initial);
-    this.assertWithinLimit(pluginId, 'sessionDoc', name, normalizedInitial);
+    this.serializeBoundedJson(pluginId, 'sessionDoc', name, normalizedInitial);
     const handle = this.createSessionDocHandle(
       pluginId,
       name,
@@ -342,7 +349,8 @@ export class PluginDocRegistry {
   /**
    * Builds a `sessionDoc` handle guarded by `assertUsable` (host epoch & stop window) plus tuple checks
    * (`conversationId` must be a positive safe integer belonging to an existing conversation). Values are
-   * always JSON deep-cloned, and public docs emit `plugin.session_doc.updated` (`deleted: true` sends initial value).
+   * always JSON deep-cloned on input and isolated on reads, and public docs emit `plugin.session_doc.updated`
+   * (`deleted: true` sends initial value).
    */
   private createSessionDocHandle<TState>(
     pluginId: string,
@@ -369,29 +377,33 @@ export class PluginDocRegistry {
         pluginId,
         name,
         conversationId,
-        value: jsonClone(value),
+        value,
         ...(deleted === true ? { deleted: true } : {}),
       });
     };
     const readRaw = (conversationId: number): TState => {
       if (!durable) {
         const byConv = this.transientSessionDocs.get(pluginId)?.get(name);
-        return byConv?.has(conversationId)
-          ? jsonClone(byConv.get(conversationId) as TState)
-          : jsonClone(initial);
+        return structuredClone(
+          byConv?.has(conversationId) ? (byConv.get(conversationId) as TState) : initial,
+        );
       }
       const raw = store!.get(pluginId, name, conversationId);
-      return raw === undefined ? jsonClone(initial) : (JSON.parse(raw) as TState);
+      return raw === undefined ? structuredClone(initial) : (JSON.parse(raw) as TState);
     };
     const writeNext = (conversationId: number, safe: TState): void => {
       // Enforce payload limit before touching storage/memory or emitting public events.
-      this.assertWithinLimit(pluginId, 'sessionDoc', name, safe, { conversationId });
+      const maxBytes = this.options.maxDocJsonBytes ?? PLUGIN_DOC_MAX_JSON_BYTES;
+      const json = this.serializeBoundedJson(pluginId, 'sessionDoc', name, safe, maxBytes, {
+        conversationId,
+      });
       if (durable) {
-        store!.put(pluginId, name, conversationId, JSON.stringify(safe));
+        store!.put(pluginId, name, conversationId, json);
+        if (isPublic) emit(conversationId, safe);
       } else {
         this.setTransientSessionDoc(pluginId, name, conversationId, safe);
+        if (isPublic) emit(conversationId, structuredClone(safe));
       }
-      emit(conversationId, jsonClone(safe));
     };
     const assertTupleUsable = (conversationId: number): void => {
       assertUsable();
@@ -401,7 +413,7 @@ export class PluginDocRegistry {
     return {
       get: (conversationId) => {
         assertTupleUsable(conversationId);
-        return jsonClone(readRaw(conversationId));
+        return readRaw(conversationId);
       },
       set: (conversationId, next) => {
         assertTupleUsable(conversationId);
@@ -409,7 +421,7 @@ export class PluginDocRegistry {
       },
       update: (conversationId, fn) => {
         assertTupleUsable(conversationId);
-        writeNext(conversationId, jsonClone(fn(jsonClone(readRaw(conversationId)))));
+        writeNext(conversationId, jsonClone(fn(readRaw(conversationId))));
       },
       delete: (conversationId) => {
         assertTupleUsable(conversationId);
@@ -419,7 +431,7 @@ export class PluginDocRegistry {
           this.deleteTransientSessionDocEntry(pluginId, name, conversationId);
         }
         // Deleting an unwritten or existing entry emits `deleted: true` with the initial value.
-        emit(conversationId, jsonClone(initial), true);
+        if (isPublic) emit(conversationId, structuredClone(initial), true);
       },
       listConversationIds: () => {
         assertUsable();
@@ -510,7 +522,7 @@ export class PluginDocRegistry {
     return {
       pluginId,
       name,
-      value: this.readDocValue(pluginId, name, reg),
+      value: this.readDocValue(pluginId, name, reg.durable, reg.initial),
     };
   }
 
@@ -567,7 +579,7 @@ export class PluginDocRegistry {
         pluginId,
         name,
         conversationId,
-        value: byConv?.has(conversationId) ? jsonClone(byConv.get(conversationId)) : jsonClone(reg.initial),
+        value: structuredClone(byConv?.has(conversationId) ? byConv.get(conversationId) : reg.initial),
       };
     }
     const sessionStore = this.options.sessionStore;
@@ -585,7 +597,7 @@ export class PluginDocRegistry {
       pluginId,
       name,
       conversationId,
-      value: raw === undefined ? jsonClone(reg.initial) : JSON.parse(raw),
+      value: raw === undefined ? structuredClone(reg.initial) : JSON.parse(raw),
     };
   }
 
@@ -600,7 +612,7 @@ export class PluginDocRegistry {
         out.push({
           pluginId,
           name,
-          value: this.readDocValue(pluginId, name, reg),
+          value: this.readDocValue(pluginId, name, reg.durable, reg.initial),
         });
       }
     }

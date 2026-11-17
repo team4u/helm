@@ -311,3 +311,80 @@ test('default cap constant is 2 MiB; unserializable values keep existing explici
   circular.self = circular
   throwsCode(() => h.set(circular), 'invalid_json_value')
 })
+
+test('sessionDoc set/update serializes JSON once and preserves full isolation across transient/durable/emit boundaries', { timeout: 60_000 }, () => {
+  const sStore = new MemorySessionDocStore()
+  const emittedSession: Array<{ value: { nested: { n: number } }; deleted?: boolean }> = []
+  const emittedGlobal: Array<{ nested: { n: number } }> = []
+  const registry = new PluginDocRegistry(
+    new MemoryDocStore(),
+    (_pluginId, _name, value) => {
+      emittedGlobal.push(value as { nested: { n: number } })
+    },
+    {
+      sessionStore: sStore,
+      assertConversationExists: () => {},
+      emitSessionDocUpdated: (doc) => {
+        emittedSession.push({ value: doc.value as { nested: { n: number } }, deleted: doc.deleted })
+      },
+    },
+  )
+
+  const durableSess = registry.registerSessionDoc('p:opt', 'durable', { nested: { n: 0 } }, { public: true }, () => {})
+  const transientSess = registry.registerSessionDoc(
+    'p:opt',
+    'transient',
+    { nested: { n: 0 } },
+    { public: true, durable: false },
+    () => {},
+  )
+  const transientDoc = registry.registerDoc(
+    'p:opt',
+    'tglobal',
+    { nested: { n: 0 } },
+    { public: true, durable: false },
+    () => {},
+  )
+
+  // Single JSON.stringify pass per write (reused for both 2 MiB check and store.put).
+  const origStringify = JSON.stringify
+  let stringifyCalls = 0
+  JSON.stringify = ((...args: Parameters<typeof JSON.stringify>) => {
+    stringifyCalls += 1
+    return origStringify(...args)
+  }) as typeof JSON.stringify
+  try {
+    durableSess.set(1, { nested: { n: 10 } })
+    assert.equal(stringifyCalls, 1, 'sessionDoc.set must serialize JSON only once')
+    durableSess.update(1, (cur) => ({ nested: { n: cur.nested.n + 5 } }))
+    assert.equal(stringifyCalls, 2, 'sessionDoc.update must serialize JSON only once')
+  } finally {
+    JSON.stringify = origStringify
+  }
+  assert.equal(sStore.get('p:opt', 'durable', 1), '{"nested":{"n":15}}')
+  assert.deepEqual(durableSess.get(1), { nested: { n: 15 } })
+
+  // Transient isolation: mutating caller input, get() output, update() argument, and emitted payloads must not corrupt state.
+  const input = { nested: { n: 1 } }
+  transientSess.set(1, input)
+  input.nested.n = 999
+  emittedSession.at(-1)!.value.nested.n = 888
+  const read1 = transientSess.get(1)
+  read1.nested.n = 777
+  assert.deepEqual(transientSess.get(1), { nested: { n: 1 } })
+
+  transientSess.update(1, (cur) => {
+    cur.nested.n = 555
+    return { nested: { n: 2 } }
+  })
+  assert.deepEqual(transientSess.get(1), { nested: { n: 2 } })
+
+  transientSess.delete(1)
+  emittedSession.at(-1)!.value.nested.n = 666
+  assert.deepEqual(transientSess.get(1), { nested: { n: 0 } })
+
+  transientDoc.set({ nested: { n: 3 } })
+  emittedGlobal.at(-1)!.nested.n = 444
+  transientDoc.get().nested.n = 333
+  assert.deepEqual(transientDoc.get(), { nested: { n: 3 } })
+})

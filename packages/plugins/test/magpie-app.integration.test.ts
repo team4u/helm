@@ -9,6 +9,7 @@ import { createHelm } from '../../hub/src/app.js'
 import { startHub } from '../../kernel/src/http/index.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
 import { runCli } from '../../cli/src/index.js'
+import { makeFauxProvider } from './helpers/plugin-test-env.js'
 
 // 真实 app / HTTP / CLI / PluginHost；唯一受控边界是本地 Magpie HTTP 服务。
 async function gatewayFixture() {
@@ -83,16 +84,38 @@ async function gatewayFixture() {
   }
 }
 
-test('Magpie 默认停用：插件配置可发现，供应商、动作与 UI 不注册', { timeout: 60_000 }, async () => {
+test('Magpie 默认启用：启动即注册 provider、actions 与 settings.panel / commandPalette UI，且与 KernelRuntimeOptions.providers 共存', { timeout: 60_000 }, async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'helm-magpie-default-'))
-  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir })
+  const faux = makeFauxProvider()
+  const app = await createHelm({
+    buildProvider: createPluginBuildProvider(),
+    dataDir,
+    cwd: dataDir,
+    model: 'faux/faux-1',
+    providers: [faux.provider],
+  })
   try {
     const plugin = app.kernel.plugins.list().find((item) => item.id === 'builtin:magpie')
     assert.ok(plugin)
-    assert.equal(plugin.enabled, false)
-    assert.ok(!app.kernel.listModelProviders().some((provider) => provider.id === 'magpie'))
-    assert.ok(!app.kernel.plugins.listUi().some((item) => item.pluginId === plugin.id))
-    assert.ok(!app.kernel.plugins.listActions().some((item) => item.pluginId === plugin.id))
+    assert.equal(plugin.enabled, true)
+
+    const providers = app.kernel.listModelProviders()
+    const magpie = providers.find((provider) => provider.id === 'magpie')
+    assert.ok(magpie)
+    assert.equal(magpie.pluginId, 'builtin:magpie')
+    assert.equal(magpie.dynamic, true)
+    assert.ok(providers.some((provider) => provider.id === 'faux'))
+
+    const actions = app.kernel.plugins
+      .listActions()
+      .filter((action) => action.pluginId === plugin.id)
+      .map((action) => action.id)
+      .sort()
+    assert.deepEqual(actions, ['group', 'groups', 'quota', 'refresh', 'status'])
+
+    const ui = app.kernel.plugins.listUi().filter((item) => item.pluginId === plugin.id)
+    assert.ok(ui.some((item) => item.surface === 'settings.panel'))
+    assert.ok(ui.some((item) => item.surface === 'commandPalette'))
     assert.equal(app.kernel.plugins.getConfigSchema(plugin.id).apiKey?.secret, true)
   } finally {
     await app.close()
@@ -100,17 +123,17 @@ test('Magpie 默认停用：插件配置可发现，供应商、动作与 UI 不
   }
 })
 
-test('Magpie 经真实组合层注册、刷新、HTTP/CLI、缓存重启与停用；密钥不出站', { timeout: 60_000 }, async () => {
+test('Magpie 经真实组合层默认启用→配置切换→刷新/HTTP/CLI→缓存重启→停用→重启用；密钥不出站', { timeout: 60_000 }, async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'helm-magpie-app-'))
   const gateway = await gatewayFixture()
+  const gateway2 = await gatewayFixture()
   let app: Awaited<ReturnType<typeof createHelm>> | undefined
   let hub: Awaited<ReturnType<typeof startHub>> | undefined
   let releaseCredential: (() => void) | undefined
   try {
     app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir })
+    assert.equal(app.kernel.plugins.list().find((plugin) => plugin.id === 'builtin:magpie')?.enabled, true)
     await app.kernel.plugins.setConfig('builtin:magpie', { gatewayUrl: gateway.root, apiKey: gateway.token })
-    assert.equal(gateway.requests.length, 0, '配置停用插件不应连接网关')
-    await app.kernel.plugins.enable('builtin:magpie')
     await app.kernel.plugins.invokeAction('builtin:magpie', 'refresh', {})
     const summary = app.kernel.listModelProviders().find((provider) => provider.id === 'magpie')
     assert.ok(summary)
@@ -183,17 +206,33 @@ test('Magpie 经真实组合层注册、刷新、HTTP/CLI、缓存重启与停�
     app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir })
     assert.equal(app.kernel.plugins.list().find((plugin) => plugin.id === 'builtin:magpie')?.enabled, true)
     assert.equal(app.kernel.listModelProviders().find((provider) => provider.id === 'magpie')?.modelCount, 3, '重启离线恢复目录')
-    // 等待本周期目录刷新终态，再检查闲置插件的正常停用路径。
+    // 等待本周期目录刷新终态，再检查停用、停用期配置切换不连网关、以及重启用恢复路径。
     await app.kernel.refreshModels({ providers: ['magpie'] })
     // 会话 #1 曾使用 magpie/* 模型（conversation_model 占用）：知情后 force 停用。
     await app.kernel.plugins.disable('builtin:magpie', { force: true })
     assert.ok(!app.kernel.listModelProviders().some((provider) => provider.id === 'magpie'))
     assert.ok(!(await app.kernel.listModels()).models.some((model) => model.provider === 'magpie'))
     assert.ok(!app.kernel.plugins.listUi().some((item) => item.pluginId === 'builtin:magpie'))
+    assert.ok(!app.kernel.plugins.listActions().some((action) => action.pluginId === 'builtin:magpie'))
+
+    // 停用状态下切换配置不得连接新网关
+    await app.kernel.plugins.setConfig('builtin:magpie', { gatewayUrl: gateway2.root, apiKey: gateway2.token })
+    assert.equal(gateway2.requests.length, 0, '配置停用插件不应连接网关')
+
+    // 重启用：恢复 provider、动作与 UI，并从新网关刷新目录
+    await app.kernel.plugins.enable('builtin:magpie')
+    await app.kernel.plugins.invokeAction('builtin:magpie', 'refresh', {})
+    const reenabled = app.kernel.listModelProviders().find((provider) => provider.id === 'magpie')
+    assert.ok(reenabled)
+    assert.equal(reenabled.modelCount, 3)
+    assert.ok(gateway2.requests.includes('/v1/models'))
+    assert.ok(app.kernel.plugins.listUi().some((item) => item.pluginId === 'builtin:magpie' && item.surface === 'settings.panel'))
+    assert.ok(app.kernel.plugins.listActions().some((action) => action.pluginId === 'builtin:magpie' && action.id === 'refresh'))
   } finally {
     await hub?.close()
     releaseCredential?.()
     await app?.close()
+    await gateway2.close()
     await gateway.close()
     await rm(dataDir, { recursive: true, force: true })
   }

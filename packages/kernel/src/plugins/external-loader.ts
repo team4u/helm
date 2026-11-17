@@ -44,11 +44,12 @@
  *   directory (escapes are rejected). This check enforces a path-boundary convention only; plugin code runs
  *   with full host permissions and is not a security sandbox.
  */
-import { readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { lstatSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
   HelmError,
+  PREBUILT_CLIENT_DIR_NAME,
   parseNonEmptyLocalizedText,
   type LocalizedText,
   type PluginBuildProvider,
@@ -61,11 +62,13 @@ import { isBuiltinPluginDataDirName } from './plugin-dir-name.js';
 import {
   MANIFEST_PLUGIN_ID_PATTERN,
   readHelmClientDependencies,
+  readHelmClientDist,
   readHelmClientRoot,
   readHelmField,
   readManifest,
   readManifestOptional,
 } from './plugin-manifest.js';
+import { readPrebuiltClientManifest } from './ui-registry.js';
 
 /** Minimal host surface required for loading (structurally compatible with PluginHost for isolated tests). */
 export interface ExternalPluginHost {
@@ -372,6 +375,90 @@ export function assertExternalDefinition(candidate: unknown, dirPath: string): P
  *   relative paths inside the plugin directory (escapes reject explicitly); preserve absolute paths.
  *   Path bounds enforce a convention only and do not constitute a security sandbox.
  */
+function assertContainedInPluginDir(
+  dirPath: string,
+  dirReal: string,
+  rawPath: string,
+  resolvedPath: string,
+  fieldLabel: string,
+): void {
+  const relLexical = relative(dirReal, resolvedPath);
+  if (relLexical === '..' || relLexical.startsWith(`..${sep}`) || isAbsolute(relLexical)) {
+    throw new HelmError(
+      'invalid_plugin_definition',
+      `External plugin ${dirPath} ${fieldLabel} escapes plugin directory: ${rawPath}`,
+      400,
+      { dirPath, [fieldLabel]: rawPath },
+    );
+  }
+  try {
+    const targetReal = realpathSync(resolvedPath);
+    const relReal = relative(dirReal, targetReal);
+    if (relReal === '..' || relReal.startsWith(`..${sep}`) || isAbsolute(relReal)) {
+      throw new HelmError(
+        'invalid_plugin_definition',
+        `External plugin ${dirPath} ${fieldLabel} symlink escapes plugin directory: ${rawPath}`,
+        400,
+        { dirPath, [fieldLabel]: rawPath },
+      );
+    }
+  } catch (err) {
+    if (err instanceof HelmError) throw err;
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      throw new HelmError(
+        'invalid_plugin_definition',
+        `External plugin ${dirPath} ${fieldLabel} cannot be accessed: ${err instanceof Error ? err.message : String(err)}`,
+        400,
+        { dirPath, [fieldLabel]: rawPath },
+      );
+    }
+  }
+}
+
+function resolveExternalPrebuiltClientDir(
+  dirPath: string,
+  dirReal: string,
+  pluginId: string,
+  codePrebuiltDir: unknown,
+): string | undefined {
+  if (codePrebuiltDir !== undefined && codePrebuiltDir !== '') {
+    if (typeof codePrebuiltDir !== 'string') {
+      throw new HelmError(
+        'invalid_plugin_definition',
+        `External plugin ${dirPath} prebuiltClientDir must be a non-empty string`,
+        400,
+        { dirPath, prebuiltClientDir: String(codePrebuiltDir) },
+      );
+    }
+    const resolvedPrebuilt = resolve(dirPath, codePrebuiltDir);
+    assertContainedInPluginDir(dirPath, dirReal, codePrebuiltDir, resolvedPrebuilt, 'prebuiltClientDir');
+    const { rootReal } = readPrebuiltClientManifest(resolvedPrebuilt, pluginId);
+    return rootReal;
+  }
+  const helmClientDist = readHelmClientDist(dirPath);
+  if (helmClientDist !== undefined) {
+    const resolvedDist = resolve(dirPath, helmClientDist);
+    assertContainedInPluginDir(dirPath, dirReal, helmClientDist, resolvedDist, 'clientDist');
+    const { rootReal } = readPrebuiltClientManifest(resolvedDist, pluginId);
+    return rootReal;
+  }
+  const defaultDist = join(dirPath, PREBUILT_CLIENT_DIR_NAME);
+  try {
+    lstatSync(defaultDist);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw new HelmError(
+      'prebuilt_client_invalid',
+      `External plugin ${dirPath} ${PREBUILT_CLIENT_DIR_NAME} cannot be accessed: ${err instanceof Error ? err.message : String(err)}`,
+      400,
+      { dirPath, prebuiltClientDir: defaultDist },
+    );
+  }
+  assertContainedInPluginDir(dirPath, dirReal, PREBUILT_CLIENT_DIR_NAME, defaultDist, PREBUILT_CLIENT_DIR_NAME);
+  const { rootReal } = readPrebuiltClientManifest(defaultDist, pluginId);
+  return rootReal;
+}
+
 export function normalizeDefinition(definition: PluginDefinition, dirPath: string): PluginDefinition {
   const normalized = { ...definition };
   delete normalized.locked;
@@ -400,25 +487,34 @@ export function normalizeDefinition(definition: PluginDefinition, dirPath: strin
   } else {
     delete normalized.dependencies;
   }
+  const dirReal = realpathSync(dirPath);
+  const resolvedPrebuilt = resolveExternalPrebuiltClientDir(
+    dirPath,
+    dirReal,
+    definition.id,
+    normalized.prebuiltClientDir,
+  );
+  if (resolvedPrebuilt !== undefined) {
+    normalized.prebuiltClientDir = resolvedPrebuilt;
+  } else {
+    delete normalized.prebuiltClientDir;
+  }
   const clientRoot = normalized.clientRoot;
   if (clientRoot === undefined || clientRoot === '') {
-    // not explicit declaration: can via plugin.json clientRoot or package.json helm.clientRoot declaration; otherwise by default plugin directory itself
+    // When not explicitly declared, read `plugin.json` / `package.json#helm.clientRoot`;
+    // only default to the plugin directory itself if no prebuilt `dist-client` bundle exists.
     const helmClientRoot = readHelmClientRoot(dirPath);
     if (helmClientRoot !== undefined) {
       const resolvedRoot = resolve(dirPath, helmClientRoot);
-      const rel = relative(realpathSync(dirPath), resolvedRoot);
-      if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
-        throw new HelmError(
-          'invalid_plugin_definition',
-          `External plugin ${dirPath} manifest clientRoot escapes plugin directory: ${helmClientRoot}`,
-          400,
-          { dirPath, clientRoot: helmClientRoot },
-        );
-      }
+      assertContainedInPluginDir(dirPath, dirReal, helmClientRoot, resolvedRoot, 'clientRoot');
       normalized.clientRoot = resolvedRoot;
       return normalized;
     }
-    normalized.clientRoot = dirPath;
+    if (normalized.prebuiltClientDir === undefined) {
+      normalized.clientRoot = dirPath;
+    } else {
+      delete normalized.clientRoot;
+    }
     return normalized;
   }
   if (typeof clientRoot !== 'string' || clientRoot.length === 0) {
@@ -431,15 +527,7 @@ export function normalizeDefinition(definition: PluginDefinition, dirPath: strin
   }
   if (!isAbsolute(clientRoot)) {
     const resolvedRoot = resolve(dirPath, clientRoot);
-    const rel = relative(realpathSync(dirPath), resolvedRoot);
-    if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
-      throw new HelmError(
-        'invalid_plugin_definition',
-        `External plugin ${dirPath} relative clientRoot escapes plugin directory: ${clientRoot}`,
-        400,
-        { dirPath, clientRoot },
-      );
-    }
+    assertContainedInPluginDir(dirPath, dirReal, clientRoot, resolvedRoot, 'clientRoot');
     normalized.clientRoot = resolvedRoot;
   }
   return normalized;

@@ -415,3 +415,65 @@ test('plugins init: rejects invalid names and non-empty directory unless --force
   const body3 = JSON.parse(r3.out) as { dir: string }
   assert.ok(body3.dir.startsWith(parent))
 })
+
+test('plugins build: local prebuilt bundle compilation (--json, --out, --module, clientDependencies, and error guards)', { timeout: 60_000 }, async (t) => {
+  const dataDir = useTempDir(t, 'helm-cli-build-')
+  const env = makeCliEnv('http://127.0.0.1:1', dataDir)
+
+  // 1. Scaffold via `plugins init`, then prebuild locally with `plugins build` (no Hub calls).
+  const initRes = await runCliCaptured(['plugins', 'init', 'built-pl', '--json'], env)
+  assert.equal(initRes.code, 0, initRes.err)
+  const { dir: pluginDir } = JSON.parse(initRes.out) as { dir: string }
+
+  const buildRes = await runCliCaptured(['plugins', 'build', pluginDir, '--json'], env)
+  assert.equal(buildRes.code, 0, buildRes.err)
+  const buildBody = JSON.parse(buildRes.out) as {
+    pluginId: string
+    outDir: string
+    manifestPath: string
+    manifest: { version: number; modules: Record<string, { entryFile: string; contentHash: string; exports: string[] }> }
+    totalBytes: number
+  }
+  assert.equal(buildBody.pluginId, 'built-pl')
+  assert.equal(buildBody.outDir, path.join(pluginDir, 'dist-client'))
+  assert.equal(buildBody.manifest.version, 1)
+  const entry = buildBody.manifest.modules['index.tsx']
+  assert.ok(entry && entry.exports.includes('SamplePanel'))
+  assert.ok(await fsp.stat(path.join(buildBody.outDir, entry.entryFile)))
+  assert.ok(await fsp.stat(path.join(buildBody.outDir, `${entry.entryFile}.gz`)))
+
+  // 2. --out override + --module + clientDependencies + human output
+  const depDir = path.join(pluginDir, 'node_modules', 'tiny-cli-dep')
+  await fsp.mkdir(depDir, { recursive: true })
+  await fsp.writeFile(path.join(depDir, 'package.json'), JSON.stringify({ name: 'tiny-cli-dep', main: 'index.js' }))
+  await fsp.writeFile(path.join(depDir, 'index.js'), 'export const tag = "bundled-dep-tag"\n')
+  await fsp.writeFile(
+    path.join(pluginDir, 'plugin.json'),
+    JSON.stringify({ id: 'built-pl', main: 'index.ts', clientRoot: './client', clientDependencies: ['tiny-cli-dep'] }),
+  )
+  await fsp.writeFile(
+    path.join(pluginDir, 'client', 'index.tsx'),
+    "import { tag } from 'tiny-cli-dep'\nexport function SamplePanel() { return tag }\n",
+  )
+  const customOut = path.join(dataDir, 'custom-out')
+  const build2 = await runCliCaptured(['plugins', 'build', '--dir', pluginDir, '--out', customOut, '--module', 'index.tsx'], env)
+  assert.equal(build2.code, 0, build2.err)
+  assert.ok(build2.out.includes('Built 1 client module(s) for built-pl'))
+  const manifest2 = JSON.parse(await fsp.readFile(path.join(customOut, 'manifest.json'), 'utf8')) as {
+    modules: Record<string, { entryFile: string }>
+  }
+  const compiledCode = await fsp.readFile(path.join(customOut, manifest2.modules['index.tsx']!.entryFile), 'utf8')
+  assert.match(compiledCode, /bundled-dep-tag/)
+
+  // 3. Reject missing target directory and escaping clientRoot explicitly
+  const missing = await runCliCaptured(['plugins', 'build', path.join(dataDir, 'does-not-exist'), '--json'], env)
+  assert.notEqual(missing.code, 0)
+  assert.equal(parseCliError(missing).code, 'client_root_invalid')
+
+  const badPlugin = path.join(dataDir, 'escape-pl')
+  await fsp.mkdir(badPlugin, { recursive: true })
+  await fsp.writeFile(path.join(badPlugin, 'plugin.json'), JSON.stringify({ id: 'escape-pl', clientRoot: '../outside' }))
+  const escaping = await runCliCaptured(['plugins', 'build', badPlugin, '--json'], env)
+  assert.notEqual(escaping.code, 0)
+  assert.equal(parseCliError(escaping).code, 'invalid_plugin_definition')
+})

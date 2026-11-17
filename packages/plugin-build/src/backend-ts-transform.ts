@@ -1,12 +1,12 @@
 /**
- * backend TS transpile implement (PluginBuildProvider.transformBackendTs).
+ * Backend TypeScript transpilation implementation (`PluginBuildProvider.transformBackendTs`).
  *
- * semantics and original kernel backend-ts-loader inline esbuild transformSync fully consistent:
- * .ts/.mts/.cts -> loader 'ts',.tsx -> loader 'tsx',jsx automatic,
- * format esm,target node20,sourcefile points to real source file (diagnose locate).
+ * Semantics match esbuild `transformSync` directly:
+ * `.ts`/`.mts`/`.cts` -> loader `'ts'`, `.tsx` -> loader `'tsx'`, automatic JSX runtime,
+ * ESM output, target `node20`, and `sourcefile` pointing to the real source file for diagnostics.
  *
- * transpile error original on throw (esbuild error object carries errors[].location), by kernel load hook
- * wrap is HelmError('plugin_load_failed')- - this layer does not second wrap, keep diagnose complete.
+ * Syntax errors propagate verbatim (preserving esbuild's `errors[].location`), and the kernel
+ * loader hook wraps them into `HelmError('plugin_load_failed')` without discarding diagnostics.
  */
 import { transformSync } from 'esbuild';
 import type { PluginBackendTsTransform } from '@helm/protocol';

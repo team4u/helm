@@ -54,7 +54,7 @@
  * - ./workflow/ui.ts: frontend UI extension point declarations
  */
 import { HelmError, type PluginDefinition } from '@helm/protocol'
-import { resolvePluginClientRoot } from './asset-paths.js'
+import { resolvePluginClientAssets } from './asset-paths.js'
 import {
   WORKFLOW_PLUGIN_ID,
   WORKFLOW_RUNS_DOC,
@@ -92,7 +92,7 @@ export function createWorkflowPlugin(): PluginDefinition {
     },
     icon: 'workflow',
     version: '0.1.0',
-    clientRoot: resolvePluginClientRoot(WORKFLOW_PLUGIN_ID, 'workflow', 'workflow_plugin_client_missing'),
+    ...resolvePluginClientAssets(WORKFLOW_PLUGIN_ID, 'workflow', 'workflow_plugin_client_missing'),
     definePlugin(ctx) {
       // ---- Conversation-sharded public doc: runs (each parent conversation writes only its own run list) ----
       // Not in the global first frame / global SSE; the frontend pulls and incrementally updates per conversation via the dedicated subscription stream.

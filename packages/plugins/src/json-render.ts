@@ -12,7 +12,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { HelmError, type PluginDefinition } from '@helm/protocol'
-import { resolvePluginClientRoot } from './asset-paths.js'
+import { resolvePluginClientAssets } from './asset-paths.js'
 
 export const JSON_RENDER_PLUGIN_ID = 'builtin:json-render'
 
@@ -51,7 +51,7 @@ export function createJsonRenderPlugin(): PluginDefinition {
     },
     icon: 'layout',
     version: '0.1.0',
-    clientRoot: resolvePluginClientRoot(JSON_RENDER_PLUGIN_ID, 'json-render', 'json_render_client_missing'),
+    ...resolvePluginClientAssets(JSON_RENDER_PLUGIN_ID, 'json-render', 'json_render_client_missing'),
     definePlugin(ctx) {
       ctx.ui.markdownCodeBlock({
         id: 'json-cards',

@@ -10,7 +10,7 @@
  */
 
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
-import type { Models, ModelsStore } from '@earendil-works/pi-ai'
+import type { Models, ModelsStore, Provider } from '@earendil-works/pi-ai'
 import { Harness, createRegistry, type Registry, type SessionEnd } from '@earendil-works/pi-durable'
 import { HelmError } from '@helm/protocol'
 import { CredentialService, ProviderService, ensureDataDir, resolveDataDir } from '../services/index.js'
@@ -36,6 +36,11 @@ export interface KernelBootOptions {
   hubUrl?: string
   autoResume?: boolean
   models?: Models
+  /**
+   * Initial runtime providers injected alongside built-in providers before plugin activation
+   * (mutually exclusive with `models`).
+   */
+  providers?: ReadonlyArray<Provider>
   nodeUpgradeTimeoutMs?: number
   /** Machine-level shared skill roots scanned together (defaults to `defaultExternalSkillRoots()`, i.e.
    * `~/.agents/skills`; pass `[]` for full test isolation). */
@@ -77,6 +82,13 @@ export interface BootstrappedKernelContext {
 export async function bootstrapKernelRuntime(
   options: KernelBootOptions = {},
 ): Promise<BootstrappedKernelContext> {
+  if (options.models !== undefined && options.providers !== undefined) {
+    throw new HelmError(
+      'validation_error',
+      'KernelRuntimeOptions.models and KernelRuntimeOptions.providers are mutually exclusive',
+      400,
+    )
+  }
   const dataDir = resolveDataDir(options.dataDir)
   await ensureDataDir(dataDir)
   const database = await openHelmDatabase(dataDir)

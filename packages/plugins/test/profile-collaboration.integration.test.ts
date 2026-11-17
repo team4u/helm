@@ -47,7 +47,7 @@ import {
 import { createHelm } from '../../hub/src/app.js'
 import { startHub } from '../../kernel/src/http/index.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
-import { makeFauxModels, type FauxProviderHandle } from './helpers/plugin-test-env.js'
+import { makeFauxProvider, type FauxProviderHandle } from './helpers/plugin-test-env.js'
 
 import assert from 'node:assert/strict'
 
@@ -84,9 +84,9 @@ interface CollabEnv {
 
 async function makeCollabEnv(): Promise<CollabEnv> {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-profile-collab-'))
-  const { models, faux } = makeFauxModels()
+  const faux = makeFauxProvider()
   // 真实组合入口：真 SQLite + 真 PluginHost + 真 builtin:profile/workflow/memory。
-  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider] })
   const kernel = app.kernel
 
   // 委派目标与被排除角色（save 的 system 字段原子同步至 SYSTEM.md）。

@@ -34,7 +34,7 @@ import { HelmError, type PluginDefinition } from '@helm/protocol'
 import { createHelm } from '../../hub/src/app.js'
 import { startHub } from '../../kernel/src/http/index.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
-import { makeFauxModels, type FauxProviderHandle } from './helpers/plugin-test-env.js'
+import { makeFauxProvider, type FauxProviderHandle } from './helpers/plugin-test-env.js'
 
 import assert from 'node:assert/strict'
 
@@ -64,8 +64,8 @@ interface WfEnv {
 
 async function makeWfEnv(): Promise<WfEnv> {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-wf-e2e-'))
-  const { models, faux } = makeFauxModels()
-  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+  const faux = makeFauxProvider()
+  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider] })
 
   const echoCalls: string[] = []
   await app.kernel.plugins!.register({
@@ -235,8 +235,8 @@ test('工作流2: action() 经 PluginHost 动作总线共享 Schema 校验——
 test('工作流3: turn_settled 钩子收集 completed/failed/aborted 三态各一次，inputs origin 精确记录', { timeout: 60_000 }, async () => {
   // aborted 场景需要真实在途流：慢速 token 流（1 tok/s）确保 abort 时回合仍在流式中。
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-wf-e2e-'))
-  const { models, faux } = makeFauxModels({ tokensPerSecond: 1, tokenSize: { min: 1, max: 1 } })
-  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+  const faux = makeFauxProvider({ tokensPerSecond: 1, tokenSize: { min: 1, max: 1 } })
+  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider] })
   try {
     const settled: Array<{ outcome: string; origins: string[]; conversationId: number; error?: string }> = []
     await app.kernel.plugins!.register({

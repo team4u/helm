@@ -25,7 +25,10 @@ import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { PluginHost, type PluginDocStore, type PluginHostBackend } from '@helm/kernel';
+import type { createMermaidPlugin } from '@helm/plugins/mermaid';
+import { createPluginHostBackendFixture } from '../../kernel/test/helpers/plugin-host-backend.js';
 
 const payloadPkgRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const repoRoot = path.resolve(payloadPkgRoot, '../..');
@@ -140,6 +143,9 @@ test('payload publish package contract: the dist root package.json is a standalo
   assert.equal(distPkg.dependencies['@helm/plugin-build'], 'file:./plugin-build.tgz');
   assert.equal(distPkg.dependencies['@helm/plugin-client'], 'file:./plugin-client.tgz');
   assert.equal(distPkg.dependencies['@helm/env-io'], 'file:./env-io.tgz');
+  assert.equal(distPkg.dependencies['mermaid'], undefined, 'mermaid must live in devDependencies only, never in payload runtime dependencies');
+  const pluginsStagedPkg = JSON.parse(readFileSync(path.join(stagingDir, 'plugins/package.json'), 'utf-8'));
+  assert.equal(pluginsStagedPkg.dependencies?.['mermaid'], undefined, 'staged plugins/package.json must not declare mermaid runtime dependency');
   const RUNTIME_DIRS = ['kernel', 'plugins', 'hub', 'plugin-build', 'plugin-client', 'env-io', 'protocol'];
   const runtimeDeps = Object.fromEntries(
     RUNTIME_DIRS.map((dir) => {
@@ -212,6 +218,13 @@ test('payload layout: hub/kernel/plugins/protocol/cli/web dist mirrors, assets i
   }
   const clients = expectedAssetDirs().filter((rel) => rel.endsWith('/client'));
   assert.ok(clients.length >= 9, `unexpected built-in plugin client directory count: ${clients.length}`);
+  for (const rel of clients) {
+    const pluginName = rel.split('/')[0]!;
+    assert.ok(
+      existsSync(path.join(stagingDir, 'plugins/dist', pluginName, 'dist-client/manifest.json')),
+      `built-in plugin prebuilt dist-client manifest missing for ${pluginName}`,
+    );
+  }
 
   assert.ok(existsSync(path.join(stagingDir, 'hub/dist/main.js')), 'hub dist is missing the main.js entry');
   assert.ok(existsSync(path.join(stagingDir, 'kernel/dist/http/hub.js')), 'kernel dist is missing http/hub.js');
@@ -487,3 +500,66 @@ test('end-to-end: npm pack → isolated npm install → check → start really l
 function mkdirSyncRecursive(dir: string) {
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 }
+
+test('payload prebuilt mermaid: unpacked plugins.tgz serves mermaid & chunks without node_modules/mermaid or buildProvider', { timeout: 60_000 }, async () => {
+  const outsideRoot = mkdtempSync(path.join(path.dirname(repoRoot), 'helm-payload-mermaid-'));
+  try {
+    const isoPlugins = path.join(outsideRoot, 'plugins');
+    const isoProtocol = path.join(outsideRoot, 'plugins/node_modules/@helm/protocol');
+    const isoAjv = path.join(outsideRoot, 'plugins/node_modules/ajv');
+    const dataDir = path.join(outsideRoot, 'data');
+    mkdirSyncRecursive(isoPlugins);
+    mkdirSyncRecursive(isoProtocol);
+    mkdirSyncRecursive(dataDir);
+
+    // Unpack packed plugins.tgz & protocol.tgz outside repoRoot (so repo node_modules/mermaid is unreachable).
+    runCommand('tar', ['-xzf', path.join(stagingDir, 'plugins.tgz'), '-C', isoPlugins, '--strip-components=1'], outsideRoot, 30_000);
+    runCommand('tar', ['-xzf', path.join(stagingDir, 'protocol.tgz'), '-C', isoProtocol, '--strip-components=1'], outsideRoot, 30_000);
+    assert.ok(existsSync(path.join(isoPlugins, 'dist/mermaid/dist-client/manifest.json')), 'plugins.tgz must carry mermaid dist-client');
+    // Supply protocol's lightweight runtime peer/dep `ajv` only if imported; note mermaid imports only @helm/protocol (`HelmError`).
+    const ajvReal = realpathSync(path.join(repoRoot, 'packages/protocol/node_modules/ajv'));
+    cpSync(ajvReal, isoAjv, { recursive: true });
+
+    const mod = (await import(pathToFileURL(path.join(isoPlugins, 'dist/mermaid.js')).href)) as {
+      createMermaidPlugin: typeof createMermaidPlugin;
+    };
+    const def = mod.createMermaidPlugin();
+    assert.equal(def.npmDependencies, undefined, 'prebuilt payload mermaid must not declare runtime npmDependencies');
+    assert.ok(def.prebuiltClientDir?.endsWith('dist-client'));
+
+    const docMap = new Map<string, unknown>();
+    const docs: PluginDocStore = {
+      get: <T>(key: string, initial: T): T => (docMap.has(key) ? (docMap.get(key) as T) : initial),
+      set: <T>(key: string, value: T): void => {
+        docMap.set(key, value);
+      },
+      deletePlugin: (p: string): void => {
+        for (const k of [...docMap.keys()]) {
+          if (k.startsWith(`${p}:`)) docMap.delete(k);
+        }
+      },
+      flush: async (): Promise<void> => {},
+    };
+    const backend: PluginHostBackend = {
+      ...createPluginHostBackendFixture(),
+      emitEvent: () => {},
+    };
+    const host = new PluginHost({ dataDir, docs, host: backend }); // Intentionally NO buildProvider!
+    try {
+      await host.register(def, { enabled: true });
+      const bundle = await host.getClientModule('builtin:mermaid', 'index.tsx');
+      assert.match(bundle.code, /MermaidCodeBlock/);
+      const flowChunkName = Object.keys(bundle.chunks ?? {}).find((k) => k.includes('flowDiagram'));
+      assert.ok(flowChunkName, 'expected flowDiagram chunk in prebuilt mermaid bundle');
+      const chunk = await host.getClientModule('builtin:mermaid', 'index.tsx', {
+        chunk: flowChunkName,
+        hash: bundle.contentHash,
+      });
+      assert.ok(chunk.code.length > 0);
+    } finally {
+      await host.dispose();
+    }
+  } finally {
+    rmSync(outsideRoot, { recursive: true, force: true });
+  }
+});

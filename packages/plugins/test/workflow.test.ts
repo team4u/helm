@@ -41,7 +41,7 @@ import { extractMeta, WorkflowMetaError } from '../src/workflow/engine/meta.js'
 import { type WorkflowEntry, type WorkflowActionEntry } from '../src/workflow/engine/progress.js'
 import { normalizeWorkflowArgs, runWorkflow, type WorkflowHost, type WorkflowSpawnResult } from '../src/workflow/engine/runtime.js'
 import { WorkflowService, type WorkflowServiceHost, type WorkflowStateStore } from '../src/workflow/engine/service.js'
-import { deferred, makeFauxModels } from './helpers/plugin-test-env.js'
+import { deferred, makeFauxProvider } from './helpers/plugin-test-env.js'
 
 const timeout = { timeout: 60_000 } as const
 
@@ -2217,13 +2217,13 @@ describe('workflow real-SDK integration (faux provider)', () => {
     const { fauxAssistantMessage } = await import('@earendil-works/pi-ai/providers/faux')
 
     const dataDir = mkdtempSync(join(tmpdir(), 'wf-sdk-'))
-    const { models, faux } = makeFauxModels()
+    const faux = makeFauxProvider()
 
     const runtime = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(),
       dataDir,
       cwd: dataDir,
       model: 'faux/faux-1',
-      models,
+      providers: [faux.provider],
       autoResume: false,
     })
     try {
@@ -2314,8 +2314,8 @@ describe('workflow real-SDK integration (faux provider)', () => {
     const { createHelm } = await import('../../hub/src/app.js')
     const { createPluginBuildProvider } = await import('@helm/plugin-build')
     const dataDir = mkdtempSync(join(tmpdir(), 'wf-exec-cleanup-'))
-    const { models } = makeFauxModels()
-    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+    const faux = makeFauxProvider()
+    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider] })
     // 插件化后编排引擎仅经 builtin:workflow 动作总线驱动（不再暴露 app.workflows）。
     const workflows = app.kernel.plugins!
     const runWorkflow = (request: Record<string, unknown>) =>
@@ -2372,13 +2372,13 @@ describe('workflow real-SDK integration (faux provider)', () => {
     const { KernelRuntime } = await import('../../kernel/src/runtime/index.js')
 
     const dataDir = mkdtempSync(join(tmpdir(), 'wf-env-exec-real-'))
-    const { models } = makeFauxModels()
+    const faux = makeFauxProvider()
 
     const runtime = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(),
       dataDir,
       cwd: dataDir,
       model: 'faux/faux-1',
-      models,
+      providers: [faux.provider],
       autoResume: false,
     })
     try {

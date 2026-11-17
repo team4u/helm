@@ -32,7 +32,7 @@ import { openHelmDatabase } from '../../kernel/src/runtime/sqlite.js'
 import { HelmStore } from '../../kernel/src/runtime/store.js'
 import { EventHub } from '../../kernel/src/runtime/events.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
-import { makeConversationSummary, makeFauxModels, useTempDir } from './helpers/plugin-test-env.js'
+import { makeConversationSummary, makeFauxProvider, useTempDir } from './helpers/plugin-test-env.js'
 
 /** 慢速脚本：每个 agent 调用真实 spawn 子会话（faux 子会话脚本慢速流式输出）。 */
 const SLOW_SCRIPT =
@@ -44,12 +44,12 @@ const FAST_SCRIPT =
 
 test('工具链精确关联：parentToolCallId 经受信 context 注入 run，双并行不串扰，重启保留', { timeout: 60_000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), 'helm-wf-calllink-'))
-  const { models, faux } = makeFauxModels()
+  const faux = makeFauxProvider()
   const app = await createHelm({ buildProvider: createPluginBuildProvider(),
     dataDir: dir,
     cwd: dir,
     model: 'faux/faux-1',
-    models: models as never,
+    providers: [faux.provider],
   })
   try {
     // --- 1. 快速 run：完成后 summary.parentToolCallId 即真实工具 callId ---
@@ -112,11 +112,12 @@ test('工具链精确关联：parentToolCallId 经受信 context 注入 run，�
   }
 
   // --- 3. 重启（同 dataDir）：历史 run 的 parentToolCallId 持久保留 ---
+  const fauxReopened = makeFauxProvider()
   const reopened = await createHelm({ buildProvider: createPluginBuildProvider(),
     dataDir: dir,
     cwd: dir,
     model: 'faux/faux-1',
-    models: models as never,
+    providers: [fauxReopened.provider],
   })
   const listRunsReopened = () =>
     (reopened.kernel.plugins.invokeAction('builtin:workflow', 'runs', {}) as Promise<{ runs: Array<{ id: string; name: string; parentToolCallId?: string; status: string }> }>).then((r) => r.runs)
@@ -190,8 +191,8 @@ test('run 动作 inputSchema 不得注入 parentToolCallId（additionalPropertie
   // additionalProperties:false——语义冒充在动作边界被拒绝，内部元数据仅
   // 受信工具上下文（PluginToolContext.callId）可注入。
   const dataDir = useTempDir(t, 'helm-wf-schema-')
-  const { models } = makeFauxModels()
-  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models: models as never })
+  const faux = makeFauxProvider()
+  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider] })
   try {
     const manifests = app.kernel.plugins.listActions()
     const runManifest = manifests.find((m) => m.pluginId === 'builtin:workflow' && m.id === 'run')

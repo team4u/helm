@@ -221,7 +221,9 @@ for (const component of ['hub', 'kernel', 'plugins', 'plugin-build', 'plugin-cli
 // contents on the consumer side; if directory assets landed after packing, skill/assets/client would be
 // silently lost.
 const builtinSrc = path.join(repoRoot, 'packages/plugins/src');
+const builtinDist = path.join(repoRoot, 'packages/plugins/dist');
 const copiedAssets = [];
+const missingPrebuilt = [];
 for (const ent of readdirSync(builtinSrc, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
   if (!ent.isDirectory()) continue;
   for (const sub of RUNTIME_ASSET_SUBDIRS) {
@@ -230,6 +232,20 @@ for (const ent of readdirSync(builtinSrc, { withFileTypes: true }).sort((a, b) =
     cpSync(from, path.join(stagingDir, 'plugins/dist', ent.name, sub), { recursive: true });
     copiedAssets.push(`${ent.name}/${sub}`);
   }
+  if (existsSync(path.join(builtinSrc, ent.name, 'client'))) {
+    const distClientFrom = path.join(builtinDist, ent.name, 'dist-client');
+    const distClientManifest = path.join(distClientFrom, 'manifest.json');
+    if (!existsSync(distClientManifest)) {
+      missingPrebuilt.push(`${ent.name}/dist-client/manifest.json`);
+    } else {
+      cpSync(distClientFrom, path.join(stagingDir, 'plugins/dist', ent.name, 'dist-client'), { recursive: true });
+      copiedAssets.push(`${ent.name}/dist-client`);
+    }
+  }
+}
+if (missingPrebuilt.length > 0) {
+  console.error(`[payload] built-in plugin prebuilt dist-client missing (rebuild @helm/plugins first):\n${missingPrebuilt.map((m) => `- ${m}`).join('\n')}`);
+  process.exit(1);
 }
 
 // Directory-shaped file: dependencies produce junctions pointing into staging on Windows; archive installs are safe to move.

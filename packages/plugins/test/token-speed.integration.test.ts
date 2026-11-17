@@ -24,7 +24,7 @@ import { createPluginBuildProvider } from '@helm/plugin-build'
 import { createHelm } from '../../hub/src/app.js'
 import { openHelmDatabase } from '../../kernel/src/runtime/sqlite.js'
 import { TOKEN_SPEED_DOC, TOKEN_SPEED_PLUGIN_ID, type TokenSpeedStatus } from '../src/token-speed/contracts.js'
-import { cleanupDir, makeFauxModels, makeTempDir, type FauxProviderHandle } from './helpers/plugin-test-env.js'
+import { cleanupDir, makeFauxProvider, makeTempDir, type FauxProviderHandle } from './helpers/plugin-test-env.js'
 
 /** 480 字符 ≈ 120 tokens，tokensPerSecond=240 → 约 500ms 真实流式生成（跨越采样窗口）。 */
 const STREAM_TEXT = 'x'.repeat(480)
@@ -39,13 +39,13 @@ interface Env {
 
 async function makeEnv(): Promise<Env> {
   const dataDir = await makeTempDir('helm-token-speed-it-')
-  const { models, faux } = makeFauxModels({ tokensPerSecond: 240 })
+  const faux = makeFauxProvider({ tokensPerSecond: 240 })
   const app = await createHelm({
     buildProvider: createPluginBuildProvider(),
     dataDir,
     cwd: dataDir,
     model: 'faux/faux-1',
-    models,
+    providers: [faux.provider],
   })
   return {
     dataDir,

@@ -5,7 +5,8 @@
 export * from './plugin-host.js';
 export { reloadExternalPlugin, type ExternalPluginHost, type ReloadablePluginHost } from './external-loader.js';
 export { loadExternalPlugins, rescanExternalPlugins } from './scan-visitor.js';
-export { readHelmClientDependencies } from './plugin-manifest.js';
+export { readHelmClientDependencies, readHelmClientDist } from './plugin-manifest.js';
+export { readPrebuiltClientManifest, readPrebuiltClientBundle, type LoadedPrebuiltClientManifest } from './ui-registry.js';
 export { registerPluginTsRoot, nextPluginGeneration, type BackendTsTransformFn } from './backend-ts-loader.js';
 export { doctorPluginDir } from './plugin-doctor.js';
 export { PluginPackageManager, defaultPackageRunner, tailLines, type PackageRunner, type PackageManagerHost, type PluginPackageManagerOptions } from './package-manager.js';

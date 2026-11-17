@@ -1,13 +1,16 @@
 /**
- * @helm/plugin-build - - plugin build port (PluginBuildProvider) by default implement.
+ * @helm/plugin-build — default implementation of the plugin build port (`PluginBuildProvider`).
  *
- * by produce product composition root (hub) explicit inject kernel PluginHost(PluginHostOptions.buildProvider);
- * this package only dependency @helm/protocol contract and esbuild, do not reverse dependency kernel / hub / web.
+ * Injected explicitly into the kernel `PluginHost` (`PluginHostOptions.buildProvider`) by the product
+ * composition root (`@helm/hub`). Depends only on `@helm/protocol` and `esbuild`, with zero reverse
+ * dependency on `kernel`, `hub`, or `web`.
  *
- * capability:
- * - compileClientModule:client.tsx -> browser ESM artifact (sharing dependency shim,CSS,
- *   subject to control npm dependency, code split, content hash cache,gzip pre- compress; implement see client-compiler.ts);
- * - transformBackendTs: external plugin backend TS source -> ESM(module hooks bottom seat transpile function).
+ * Capabilities:
+ * - `compileClientModule`: compiles `client.tsx` into browser ESM (shared dependency shims, CSS
+ *   bundling, controlled npm dependencies, code splitting, content-hash disk/memory cache, pre-gzip);
+ * - `buildPluginClientBundleDir`: compiles client entry modules into a static `dist-client/` directory
+ *   with `manifest.json`, `.mjs`/`.js` bundles, and `.gz` artifacts;
+ * - `transformBackendTs`: synchronously transpiles external plugin backend TypeScript to ESM.
  */
 import type { PluginBuildProvider } from '@helm/protocol';
 import { transformBackendTs } from './backend-ts-transform.js';
@@ -25,10 +28,11 @@ export {
   type ClientCompileResult,
   type ClientNpmRoot,
 } from './client-compiler.js';
-// test dedicated use entry:Node process inside execute compile artifact when explicit install chunk bridge (produce compile path do not change write globalThis)
+export { buildPluginClientBundleDir } from './prebuilt-client.js';
+// Test-only utility: installs the Node chunk bridge on `globalThis` when executing split bundles in Node.
 export { installNodeChunkBridge } from './node-chunk-bridge.js';
 
-/** construct by default plugin build port (client compile + backend TS transpile; the same esbuild instance). */
+/** Creates the default plugin build port (client compiler + backend TS transpiler). */
 export function createPluginBuildProvider(): PluginBuildProvider {
   return {
     compileClientModule: (request) =>

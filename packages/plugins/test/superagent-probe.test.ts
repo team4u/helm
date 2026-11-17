@@ -45,7 +45,7 @@ import { createPluginBuildProvider } from '@helm/plugin-build'
 import {
   MemoryConfigStore,
   MemoryDocStore,
-  makeFauxModels,
+  makeFauxProvider,
   type FauxProviderHandle,
 } from './helpers/plugin-test-env.js'
 
@@ -54,12 +54,12 @@ import {
 // ---------------------------------------------------------------------------
 
 async function openRuntime(dir: string): Promise<KernelRuntime & { __faux: FauxProviderHandle }> {
-  const { models, faux } = makeFauxModels()
+  const faux = makeFauxProvider()
   const runtime = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(),
     dataDir: dir,
     cwd: dir,
     model: 'faux/faux-1',
-    models,
+    providers: [faux.provider],
   })
   return Object.assign(runtime, { __faux: faux })
 }
