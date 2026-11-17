@@ -1493,6 +1493,7 @@ test('artifacts list + content real content-type/disposition/byte; unknown 404',
   const content = await call(handler, 'GET', `/api/artifacts/${meta.id}/content?inline=1`)
   assert.equal(content.status, 200)
   assert.equal(content.headers.get('content-type'), 'text/markdown')
+  assert.equal(content.headers.get('cache-control'), 'private, max-age=31536000, immutable')
   assert.equal(content.headers.get('content-disposition'), 'inline; filename="note.md"; filename*=UTF-8\'\'note.md')
   assert.ok(content.text.includes('# artifact'))
   const missing = await call(handler, 'GET', '/api/artifacts/no-such-id/content')
@@ -1520,6 +1521,7 @@ test('artifacts two enter system by byte original return (do not rotate string)'
   const res = await call(handler, 'GET', `/api/artifacts/${meta.id}/content`)
   assert.equal(res.status, 200)
   assert.equal(res.headers.get('content-length'), '8')
+  assert.equal(res.headers.get('cache-control'), 'private, max-age=31536000, immutable')
   // directly request original byte (do not via call()  text/JSON parse path)
   const direct = await handler(new Request(`http://127.0.0.1:3202/api/artifacts/${meta.id}/content`, {
     headers: { authorization: `Bearer ${token}` },

@@ -49,8 +49,11 @@ export interface ClientModuleOptions {
   isDisposed: () => boolean;
 }
 
+export type ClientLifecycleLookup = Pick<ClientModuleOptions, 'getPluginLifecycle' | 'dataDir' | 'isDisposed'>;
+
 export class UiRegistry {
   private ui = new Map<string, PluginUiContribution[]>();
+  private clientHashes = new Map<string, Map<string, string>>();
 
   constructor(private readonly buildProvider?: PluginBuildProvider) {}
 
@@ -256,31 +259,74 @@ export class UiRegistry {
     return list.map((u) => ({ ...u, spec: structuredClone(u.spec) }));
   }
 
-  async getClientModule(
+  /** Distinct client module references declared by this plugin's UI contributions (in declaration order). */
+  getDeclaredClientModules(pluginId: string): string[] {
+    const list = this.ui.get(pluginId);
+    if (!list || list.length === 0) return [];
+    const seen = new Set<string>();
+    const modules: string[] = [];
+    for (const contribution of list) {
+      const client = (contribution.spec as { client?: { module?: unknown } }).client;
+      if (client && typeof client.module === 'string' && !seen.has(client.module)) {
+        seen.add(client.module);
+        modules.push(client.module);
+      }
+    }
+    return modules;
+  }
+
+  /** Return a snapshot of cached client module hashes (`moduleRef -> contentHash`), or undefined if none compiled. */
+  getClientHashes(pluginId: string): Record<string, string> | undefined {
+    const hashes = this.clientHashes.get(pluginId);
+    if (!hashes || hashes.size === 0) return undefined;
+    return Object.fromEntries(hashes);
+  }
+
+  /**
+   * Compile every declared client UI module for `pluginId` during registration/enable/reload
+   * and cache the resulting `contentHash` map on `UiRegistry`. Failures propagate without
+   * swallowing or fabricating hashes.
+   */
+  async precompileClientModules(pluginId: string, options: ClientLifecycleLookup): Promise<void> {
+    if (options.isDisposed()) {
+      throw new HelmError('plugin_host_disposed', 'PluginHost already dispose', 409);
+    }
+    const modules = this.getDeclaredClientModules(pluginId);
+    if (modules.length === 0) {
+      this.clientHashes.delete(pluginId);
+      return;
+    }
+    const compiled = await Promise.all(
+      modules.map(async (moduleRef) => {
+        const bundle = await this.compileModuleChecked(pluginId, moduleRef, options, 'defining-or-idle');
+        return [moduleRef, bundle.contentHash] as const;
+      }),
+    );
+    if (options.isDisposed()) {
+      throw new HelmError('plugin_host_disposed', 'PluginHost already dispose', 409);
+    }
+    const hashes = new Map<string, string>();
+    for (const [moduleRef, contentHash] of compiled) {
+      hashes.set(moduleRef, contentHash);
+    }
+    this.clientHashes.set(pluginId, hashes);
+  }
+
+  private async compileModuleChecked(
     pluginId: string,
     moduleRef: string,
-    options: ClientModuleOptions,
+    options: ClientLifecycleLookup,
+    allowedPhases: 'idle-only' | 'defining-or-idle',
   ): Promise<PluginClientBundle> {
     if (options.isDisposed()) {
       throw new HelmError('plugin_host_disposed', 'PluginHost already dispose', 409);
     }
     assertModuleRefShape(pluginId, moduleRef);
-    if (options.chunk !== undefined) {
-      if (
-        typeof options.chunk !== 'string' ||
-        !/^[A-Za-z0-9._-]+\.js$/.test(options.chunk) ||
-        options.chunk.includes('..')
-      ) {
-        throw new HelmError(
-          'invalid_client_module',
-          `plugin ${pluginId}  chunk module name illegal (must match /^[A-Za-z0-9._-]+\\.js$/ and excludes ..):${String(options.chunk)}`,
-          400,
-          { pluginId, chunk: String(options.chunk) },
-        );
-      }
-    }
     const info = options.getPluginLifecycle(pluginId);
-    if (!info || !info.enabled || info.phase !== 'idle') {
+    const phaseOk =
+      info !== undefined &&
+      ((info.enabled && info.phase === 'idle') || (allowedPhases === 'defining-or-idle' && info.phase === 'defining'));
+    if (!phaseOk) {
       throw new HelmError('plugin_client_unavailable', `plugin ${pluginId} not enabled, do not provide client module`, 409, {
         pluginId,
         module: moduleRef,
@@ -313,13 +359,15 @@ export class UiRegistry {
       npmRoots,
     });
     const current = options.getPluginLifecycle(pluginId);
+    const currentPhaseOk =
+      current !== undefined &&
+      ((current.enabled && current.phase === 'idle') ||
+        (allowedPhases === 'defining-or-idle' && current.phase === 'defining'));
     if (
       options.isDisposed() ||
-      !current ||
+      !currentPhaseOk ||
       current.identity !== identity ||
-      current.epoch !== epoch ||
-      !current.enabled ||
-      current.phase !== 'idle'
+      current.epoch !== epoch
     ) {
       throw new HelmError(
         'plugin_client_unavailable',
@@ -328,9 +376,49 @@ export class UiRegistry {
         { pluginId, module: moduleRef },
       );
     }
+    if (typeof result.contentHash !== 'string' || result.contentHash.length === 0) {
+      throw new HelmError(
+        'client_compile_failed',
+        `plugin ${pluginId} client module ${moduleRef} produced invalid empty contentHash`,
+        500,
+        { pluginId, module: moduleRef },
+      );
+    }
+    return result;
+  }
 
+  async getClientModule(
+    pluginId: string,
+    moduleRef: string,
+    options: ClientModuleOptions,
+  ): Promise<PluginClientBundle> {
+    if (options.isDisposed()) {
+      throw new HelmError('plugin_host_disposed', 'PluginHost already dispose', 409);
+    }
+    assertModuleRefShape(pluginId, moduleRef);
     if (options.chunk !== undefined) {
-      if (options.hash !== undefined && options.hash !== result.contentHash) {
+      if (
+        typeof options.chunk !== 'string' ||
+        !/^[A-Za-z0-9._-]+\.js$/.test(options.chunk) ||
+        options.chunk.includes('..')
+      ) {
+        throw new HelmError(
+          'invalid_client_module',
+          `plugin ${pluginId}  chunk module name illegal (must match /^[A-Za-z0-9._-]+\\.js$/ and excludes ..):${String(options.chunk)}`,
+          400,
+          { pluginId, chunk: String(options.chunk) },
+        );
+      }
+    }
+    const result = await this.compileModuleChecked(pluginId, moduleRef, options, 'idle-only');
+    // Keep precompiled hash map aligned when a declared module is recompiled after source edit.
+    const trackedHashes = this.clientHashes.get(pluginId);
+    if (trackedHashes?.has(moduleRef)) {
+      trackedHashes.set(moduleRef, result.contentHash);
+    }
+
+    if (options.hash !== undefined && (options.hash.length === 0 || options.hash !== result.contentHash)) {
+      if (options.chunk !== undefined) {
         throw new HelmError(
           'client_chunk_stale',
           `plugin ${pluginId} request chunk hash (${options.hash}) and when before artifact hash (${result.contentHash}) does not match`,
@@ -338,6 +426,15 @@ export class UiRegistry {
           { pluginId, module: moduleRef, chunk: options.chunk, hash: options.hash, currentHash: result.contentHash },
         );
       }
+      throw new HelmError(
+        'client_module_stale',
+        `plugin ${pluginId} request client module hash (${options.hash}) and current artifact hash (${result.contentHash}) does not match`,
+        409,
+        { pluginId, module: moduleRef, hash: options.hash, currentHash: result.contentHash },
+      );
+    }
+
+    if (options.chunk !== undefined) {
       const chunkData = result.chunks?.[options.chunk];
       if (!chunkData) {
         throw new HelmError(
@@ -361,9 +458,11 @@ export class UiRegistry {
   clear(pluginId: string): void {
     const list = this.ui.get(pluginId);
     if (list) list.length = 0;
+    this.clientHashes.delete(pluginId);
   }
 
   removePlugin(pluginId: string): void {
     this.ui.delete(pluginId);
+    this.clientHashes.delete(pluginId);
   }
 }

@@ -251,9 +251,10 @@ export function validateUiDeclarations(
 export function summaryWithManagedPackage(
   state: PluginState,
   capabilityRegistry: CapabilityRegistry,
+  uiRegistry: UiRegistry,
   packageStore?: PluginPackageManagerStore,
 ): PluginSummary {
-  const base = pluginSummaryOf(state, capabilityRegistry);
+  const base = pluginSummaryOf(state, capabilityRegistry, uiRegistry);
   const record = packageStore?.getRecord(base.id);
   if (record === undefined || base.id.startsWith('builtin:')) return base;
   return {

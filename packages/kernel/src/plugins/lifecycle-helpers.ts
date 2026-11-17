@@ -9,6 +9,7 @@ import {
 } from '@helm/protocol';
 import type { CapabilityRegistry } from './capability-registry.js';
 import type { PluginTaskTracker } from './tracking.js';
+import type { UiRegistry } from './ui-registry.js';
 import {
   isCrossPlatformAbsolutePath,
   toJsonSafeError,
@@ -408,8 +409,11 @@ export function wrapEnableError(
 export function pluginSummaryOf(
   state: PluginState,
   capabilityRegistry: CapabilityRegistry,
+  uiRegistry?: UiRegistry,
 ): PluginSummary {
   const failed = state.lastError !== undefined;
+  const active = state.enabled && state.phase === 'idle';
+  const clientHashes = active ? uiRegistry?.getClientHashes(state.definition.id) : undefined;
   return {
     id: state.definition.id,
     name: state.definition.name ?? state.definition.id,
@@ -424,6 +428,7 @@ export function pluginSummaryOf(
     hooks: state.enabled ? [...state.hooks] : [],
     actions: state.enabled ? capabilityRegistry.getActionIds(state.definition.id) : [],
     tools: state.enabled ? capabilityRegistry.getToolNames(state.definition.id) : [],
+    ...(clientHashes !== undefined ? { clientHashes } : {}),
   };
 }
 

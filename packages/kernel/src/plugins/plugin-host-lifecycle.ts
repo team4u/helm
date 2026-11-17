@@ -35,12 +35,23 @@ import {
 import { assertProvidersIdle, registerProviders } from './provider-coordinator.js';
 import { assertNoLiveTasks } from './service-coordinator.js';
 import type { PluginHostBackend, PluginProviderPort, PluginState } from './types.js';
+import type { ClientLifecycleLookup } from './ui-registry.js';
 
 export interface PluginLifecycleContext extends PluginTransitionContext {
   host: PluginHostBackend;
   providers?: PluginProviderPort;
   servicesStarted: boolean;
   createPluginContext: (state: PluginState, epoch: number) => HelmPluginContext;
+  getPluginLifecycle: ClientLifecycleLookup['getPluginLifecycle'];
+  isDisposed: () => boolean;
+}
+
+async function precompilePluginClientModules(state: PluginState, ctx: PluginLifecycleContext): Promise<void> {
+  await ctx.uiRegistry.precompileClientModules(state.definition.id, {
+    getPluginLifecycle: ctx.getPluginLifecycle,
+    dataDir: ctx.dataDir,
+    isDisposed: ctx.isDisposed,
+  });
 }
 
 function assertPluginIdle(
@@ -130,6 +141,7 @@ export async function runRegisterTransaction(
     try {
       // commit point final inspect first at mount, then sync placement enabled+idle avoid manifest first expose out capability
       assertEnableCommitChecks(state, ctx);
+      await precompilePluginClientModules(state, ctx);
       await registerProviders(state, ctx.providers);
       await activatePluginServices(state, ctx.servicesStarted);
       commitEnabled(state);
@@ -200,6 +212,7 @@ export async function runEnableTransaction(
   try {
     await runDefinition(state, ctx);
     ctx.uiRegistry.assertCrossPluginUnique(pluginId, getActiveEnabledPluginIds(ctx.plugins));
+    await precompilePluginClientModules(state, ctx);
     await registerProviders(state, ctx.providers);
     await activatePluginServices(state, ctx.servicesStarted);
     await persistEnabled(ctx.configStore, state, true);

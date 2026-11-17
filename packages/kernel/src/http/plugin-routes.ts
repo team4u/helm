@@ -354,8 +354,22 @@ async function serveClientModule(
     ...(chunk !== undefined ? { chunk } : {}),
     ...(hash !== undefined ? { hash } : {}),
   })
+  if (hash !== undefined && (hash.length === 0 || hash !== compiled.contentHash)) {
+    throw new HelmError(
+      chunk !== undefined ? 'client_chunk_stale' : 'client_module_stale',
+      `plugin ${pluginId} client module ${moduleRef} hash (${hash}) does not match current artifact hash (${compiled.contentHash})`,
+      409,
+      {
+        pluginId,
+        module: moduleRef,
+        ...(chunk !== undefined ? { chunk } : {}),
+        hash,
+        currentHash: compiled.contentHash,
+      },
+    )
+  }
   const etag = chunk !== undefined ? `"${compiled.contentHash}:${chunk}"` : `"${compiled.contentHash}"`
-  const isImmutable = chunk !== undefined && hash !== undefined && hash === compiled.contentHash
+  const isImmutable = hash !== undefined && hash.length > 0 && hash === compiled.contentHash
   const cacheControl = isImmutable ? 'private, max-age=31536000, immutable' : 'private, no-cache'
 
   const ifNoneMatch = request.headers.get('if-none-match')

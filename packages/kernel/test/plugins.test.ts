@@ -4,7 +4,7 @@
  */
 import test, { beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { SecretStash, AuthService } from '../src/services/index.js';
 import { createHubHandler, type KernelRuntimeLike } from '../src/http/index.js';
@@ -841,9 +841,12 @@ test('routing declaration relative path: host concatenate to plugin naming empty
 
 test('UI seven class ten function unify collect can serialization spec; cannot serialization spec reject', { timeout: 60_000 }, async () => {
   const host = makeHost();
+  const uiClientRoot = join(dataDir, 'p-ui-client');
+  mkdirSync(uiClientRoot, { recursive: true });
+  writeFileSync(join(uiClientRoot, 'index.tsx'), 'export function Graph() { return null; }\n');
   await host.register({
     id: 'p:ui',
-    clientRoot: process.cwd(),
+    clientRoot: uiClientRoot,
     definePlugin: (ctx) => {
       ctx.ui.sidebarItem({ id: 'home', label: 'person assist', target: 'conversation:1' });
       ctx.ui.sidebarSection({ id: 'workers', label: 'Worker' });
@@ -2165,5 +2168,278 @@ test('client module compile in-flight regression: same ID unload after re- regis
   await assert.rejects(
     compilingPromise,
     (err: unknown) => err instanceof HelmError && err.code === 'plugin_client_unavailable',
+  );
+});
+
+// ---------------------------------------------------------------------------
+// clientHashes precompilation lifecycle, hot reload, and client.mjs ?hash= immutable cache
+// ---------------------------------------------------------------------------
+
+test('clientHashes: precompiled on register/enable, carried in list/get/plugin.changed, cleared on disable/unregister', { timeout: 60_000 }, async (t) => {
+  const host = makeHost();
+  t.after(() => host.dispose());
+
+  const changedSummaries = () =>
+    eventPayloads
+      .filter((e) => e.type === 'plugin.changed')
+      .map((e) => (e.payload as { plugin: { id: string; enabled: boolean; status: string; clientHashes?: Record<string, string> } }).plugin);
+
+  // 1. Plugin without client UI modules never carries clientHashes.
+  await host.register({
+    id: 'p:no-client-ui',
+    definePlugin: (ctx) => {
+      ctx.ui.sidebarItem({ id: 'home', label: 'Home', target: 'conversation:1' });
+    },
+  });
+  assert.equal(host.get('p:no-client-ui')?.clientHashes, undefined);
+  assert.equal(host.list().find((p) => p.id === 'p:no-client-ui')?.clientHashes, undefined);
+  assert.equal(changedSummaries().at(-1)?.clientHashes, undefined);
+
+  // 2. Plugin with multiple declared client modules (including duplicate moduleRef across surfaces).
+  const clientRoot = join(dataDir, 'hashes-client');
+  mkdirSync(join(clientRoot, 'panels'), { recursive: true });
+  writeFileSync(join(clientRoot, 'index.tsx'), 'export function MainScreen() { return "v1"; }\nexport function SideWidget() { return "w1"; }\n');
+  writeFileSync(join(clientRoot, 'panels', 'Extra.tsx'), 'export function ExtraPanel() { return "e1"; }\n');
+
+  const multiUiDef: PluginDefinition = {
+    id: 'p:multi-client',
+    clientRoot,
+    definePlugin: (ctx) => {
+      ctx.ui.screen({ id: 'main', label: 'Main', client: { module: 'index.tsx', export: 'MainScreen' } });
+      ctx.ui.composerWidget({ id: 'widget', client: { module: 'index.tsx', export: 'SideWidget' } });
+      ctx.ui.workbenchPanel({ id: 'extra', label: 'Extra', client: { module: 'panels/Extra.tsx', export: 'ExtraPanel' } });
+    },
+  };
+
+  // Registered disabled: must NOT precompile or expose clientHashes.
+  await host.register(multiUiDef, { enabled: false });
+  assert.equal(host.get('p:multi-client')?.clientHashes, undefined);
+  assert.equal(changedSummaries().at(-1)?.clientHashes, undefined);
+
+  // Enable: precompiles every declared moduleRef and publishes hashes in list/get/plugin.changed.
+  await host.enable('p:multi-client');
+  const mainCompiled = await host.getClientModule('p:multi-client', 'index.tsx');
+  const extraCompiled = await host.getClientModule('p:multi-client', 'panels/Extra.tsx');
+  const expectedHashes = {
+    'index.tsx': mainCompiled.contentHash,
+    'panels/Extra.tsx': extraCompiled.contentHash,
+  };
+  assert.deepEqual(host.get('p:multi-client')?.clientHashes, expectedHashes);
+  assert.deepEqual(host.list().find((p) => p.id === 'p:multi-client')?.clientHashes, expectedHashes);
+  assert.deepEqual(changedSummaries().at(-1)?.clientHashes, expectedHashes);
+
+  // Disable: clears clientHashes immediately across get/list/plugin.changed.
+  await host.disable('p:multi-client');
+  assert.equal(host.get('p:multi-client')?.clientHashes, undefined);
+  assert.equal(host.list().find((p) => p.id === 'p:multi-client')?.clientHashes, undefined);
+  assert.equal(changedSummaries().at(-1)?.clientHashes, undefined);
+
+  // Modify source while disabled and re-enable: updated module gets new hash.
+  writeFileSync(join(clientRoot, 'index.tsx'), 'export function MainScreen() { return "v2-updated"; }\nexport function SideWidget() { return "w2"; }\n');
+  await host.enable('p:multi-client');
+  const mainV2 = await host.getClientModule('p:multi-client', 'index.tsx');
+  assert.notEqual(mainV2.contentHash, mainCompiled.contentHash);
+  assert.deepEqual(host.get('p:multi-client')?.clientHashes, {
+    'index.tsx': mainV2.contentHash,
+    'panels/Extra.tsx': extraCompiled.contentHash,
+  });
+
+  // Unregister: plugin.changed clears clientHashes.
+  await host.unregister('p:multi-client');
+  const afterUnregister = changedSummaries().at(-1)!;
+  assert.equal(afterUnregister.id, 'p:multi-client');
+  assert.equal(afterUnregister.enabled, false);
+  assert.equal(afterUnregister.clientHashes, undefined);
+});
+
+test('clientHashes: precompile failure preserves explicit error and isolated failure diagnostic without fabricating hashes', { timeout: 60_000 }, async (t) => {
+  const host = makeHost();
+  t.after(() => host.dispose());
+
+  const brokenRoot = join(dataDir, 'broken-client');
+  mkdirSync(brokenRoot, { recursive: true });
+  writeFileSync(join(brokenRoot, 'index.tsx'), 'export const Broken = (((\n');
+
+  const brokenDef = (id: string): PluginDefinition => ({
+    id,
+    clientRoot: brokenRoot,
+    definePlugin: (ctx) => {
+      ctx.ui.screen({ id: 'main', label: 'Main', client: { module: 'index.tsx', export: 'Broken' } });
+    },
+  });
+
+  // Non-isolated register rejects explicitly and leaves no plugin residue.
+  await assert.rejects(
+    host.register(brokenDef('p:broken-strict')),
+    (err: unknown) => err instanceof HelmError && err.code === 'client_compile_failed',
+  );
+  assert.equal(host.get('p:broken-strict'), undefined);
+
+  // Isolated external register degrades to failed status without clientHashes.
+  await host.register(brokenDef('ext-broken-isolated'), { isolateFailure: true });
+  const isolated = host.get('ext-broken-isolated');
+  assert.equal(isolated?.enabled, false);
+  assert.equal(isolated?.status, 'failed');
+  assert.equal(isolated?.error?.code, 'client_compile_failed');
+  assert.equal(isolated?.clientHashes, undefined);
+
+  // Broken source introduced while disabled makes enable() fail and roll back cleanly.
+  const toggleRoot = join(dataDir, 'toggle-client');
+  mkdirSync(toggleRoot, { recursive: true });
+  writeFileSync(join(toggleRoot, 'index.tsx'), 'export function Ok() { return null; }\n');
+  await host.register(
+    {
+      id: 'ext-toggle-broken',
+      clientRoot: toggleRoot,
+      definePlugin: (ctx) => {
+        ctx.ui.screen({ id: 'main', label: 'Main', client: { module: 'index.tsx', export: 'Ok' } });
+      },
+    },
+    { enabled: false },
+  );
+  writeFileSync(join(toggleRoot, 'index.tsx'), 'export const Bad = (((\n');
+  await assert.rejects(
+    host.enable('ext-toggle-broken'),
+    (err: unknown) => err instanceof HelmError && err.code === 'client_compile_failed',
+  );
+  const rolledBack = host.get('ext-toggle-broken');
+  assert.equal(rolledBack?.enabled, false);
+  assert.equal(rolledBack?.status, 'failed');
+  assert.equal(rolledBack?.clientHashes, undefined);
+});
+
+test('clientHashes: reloadExternalPlugin recompiles and emits updated clientHashes immediately', { timeout: 60_000 }, async (t) => {
+  const host = makeHost();
+  t.after(() => host.dispose());
+
+  const pluginDir = join(dataDir, 'plugins', 'ext-hash-reload');
+  mkdirSync(join(pluginDir, 'client'), { recursive: true });
+  writeFileSync(
+    join(pluginDir, 'plugin.json'),
+    JSON.stringify({ id: 'ext-hash-reload', main: 'index.mjs', clientRoot: './client' }),
+  );
+  writeFileSync(
+    join(pluginDir, 'index.mjs'),
+    `export default {
+  id: 'ext-hash-reload',
+  name: 'Ext Hash Reload',
+  definePlugin(ctx) {
+    ctx.ui.screen({ id: 'main', label: 'Main', client: { module: 'index.tsx', export: 'MainScreen' } });
+  },
+}
+`,
+  );
+  writeFileSync(join(pluginDir, 'client', 'index.tsx'), 'export function MainScreen() { return "rel-v1"; }\n');
+
+  const rescan = await host.rescanExternalPlugins();
+  assert.ok(rescan.registered.includes('ext-hash-reload'));
+  assert.equal(host.get('ext-hash-reload')?.clientHashes, undefined);
+
+  await host.enable('ext-hash-reload');
+  const hashV1 = host.get('ext-hash-reload')?.clientHashes?.['index.tsx'];
+  assert.ok(hashV1 && hashV1.length > 0);
+  assert.equal(hashV1, (await host.getClientModule('ext-hash-reload', 'index.tsx')).contentHash);
+
+  // Edit client.tsx on disk and trigger reloadExternalPlugin.
+  writeFileSync(join(pluginDir, 'client', 'index.tsx'), 'export function MainScreen() { return "rel-v2"; }\n');
+  eventPayloads.length = 0;
+  const reloaded = await host.reloadExternalPlugin('ext-hash-reload');
+  assert.equal(reloaded.wasEnabled, true);
+  const hashV2 = reloaded.summary.clientHashes?.['index.tsx'];
+  assert.ok(hashV2 && hashV2.length > 0);
+  assert.notEqual(hashV2, hashV1);
+  assert.deepEqual(host.get('ext-hash-reload')?.clientHashes, { 'index.tsx': hashV2 });
+  assert.deepEqual(host.list().find((p) => p.id === 'ext-hash-reload')?.clientHashes, { 'index.tsx': hashV2 });
+
+  const changed = eventPayloads
+    .filter((e) => e.type === 'plugin.changed')
+    .map((e) => (e.payload as { plugin: { id: string; enabled: boolean; clientHashes?: Record<string, string> } }).plugin)
+    .filter((p) => p.id === 'ext-hash-reload');
+  assert.ok(changed.some((p) => p.enabled && p.clientHashes?.['index.tsx'] === hashV2));
+});
+
+test('HTTP client.mjs main module ?hash=: immutable cache on match, 304 on ETag, 409 client_module_stale on mismatch, no-cache without hash', { timeout: 60_000 }, async (t) => {
+  const auth = new AuthService(dataDir);
+  const httpHost = makeHost();
+  t.after(() => httpHost.dispose());
+
+  const clientRoot = join(dataDir, 'http-client-hash');
+  mkdirSync(clientRoot, { recursive: true });
+  writeFileSync(join(clientRoot, 'index.tsx'), 'export function Screen() { return "immutable-ok"; }\n');
+
+  await httpHost.register({
+    id: 'p:http-hash',
+    clientRoot,
+    definePlugin: (ctx) => {
+      ctx.ui.screen({ id: 'main', label: 'Main', client: { module: 'index.tsx', export: 'Screen' } });
+    },
+  });
+
+  const expectedHash = httpHost.get('p:http-hash')?.clientHashes?.['index.tsx'];
+  assert.ok(expectedHash && expectedHash.length > 0);
+
+  const kernel = {
+    dataDir,
+    auth,
+    events: { response: () => new Response(null, { status: 204 }) },
+    plugins: httpHost,
+  } as unknown as KernelRuntimeLike;
+  const handler = createHubHandler(kernel);
+  const setup = await handler(new Request('http://127.0.0.1:3202/api/auth/setup', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ password: 'pw-client-hash-test' }),
+  }));
+  assert.equal(setup.status, 200);
+  const token = ((await setup.json()) as { token: string }).token;
+  const callClient = (query: string, opts?: { method?: string; headers?: Record<string, string> }) =>
+    handler(new Request(`http://127.0.0.1:3202/api/plugins/p%3Ahttp-hash/client.mjs?${query}`, {
+      method: opts?.method ?? 'GET',
+      headers: { authorization: `Bearer ${token}`, ...(opts?.headers ?? {}) },
+    }));
+
+  // 1. Without ?hash=: private, no-cache (200 and 304).
+  const unhashed = await callClient('module=index.tsx');
+  assert.equal(unhashed.status, 200);
+  assert.equal(unhashed.headers.get('cache-control'), 'private, no-cache');
+  assert.equal(unhashed.headers.get('etag'), `"${expectedHash}"`);
+  assert.equal(unhashed.headers.get('x-helm-client-hash'), expectedHash);
+  const unhashed304 = await callClient('module=index.tsx', { headers: { 'if-none-match': `"${expectedHash}"` } });
+  assert.equal(unhashed304.status, 304);
+  assert.equal(unhashed304.headers.get('cache-control'), 'private, no-cache');
+
+  // 2. With matching ?hash=: private, max-age=31536000, immutable (200, gzip, HEAD, and 304).
+  const immutableRes = await callClient(`module=index.tsx&hash=${encodeURIComponent(expectedHash)}`);
+  assert.equal(immutableRes.status, 200);
+  assert.equal(immutableRes.headers.get('cache-control'), 'private, max-age=31536000, immutable');
+  assert.equal(immutableRes.headers.get('etag'), `"${expectedHash}"`);
+  assert.equal(immutableRes.headers.get('x-helm-client-hash'), expectedHash);
+  assert.match(await immutableRes.text(), /immutable-ok/);
+
+  const immutableHead = await callClient(`module=index.tsx&hash=${encodeURIComponent(expectedHash)}`, { method: 'HEAD' });
+  assert.equal(immutableHead.status, 200);
+  assert.equal(immutableHead.headers.get('cache-control'), 'private, max-age=31536000, immutable');
+
+  const immutable304 = await callClient(`module=index.tsx&hash=${encodeURIComponent(expectedHash)}`, {
+    headers: { 'if-none-match': `"${expectedHash}"` },
+  });
+  assert.equal(immutable304.status, 304);
+  assert.equal(immutable304.headers.get('cache-control'), 'private, max-age=31536000, immutable');
+  assert.equal(immutable304.headers.get('etag'), `"${expectedHash}"`);
+
+  // 3. With mismatched or empty ?hash= (even if If-None-Match matches the stale hash): explicit 409 client_module_stale.
+  for (const staleQuery of ['module=index.tsx&hash=stale-hash-000', 'module=index.tsx&hash=']) {
+    const staleRes = await callClient(staleQuery, { headers: { 'if-none-match': '"stale-hash-000"' } });
+    assert.equal(staleRes.status, 409);
+    assert.notEqual(staleRes.headers.get('cache-control'), 'private, max-age=31536000, immutable');
+    const staleBody = (await staleRes.json()) as { error?: { code?: string; details?: { currentHash?: string } } };
+    assert.equal(staleBody.error?.code, 'client_module_stale');
+    assert.equal(staleBody.error?.details?.currentHash, expectedHash);
+  }
+
+  // 4. Direct PluginHost.getClientModule also enforces 409 client_module_stale on main module hash mismatch.
+  await assert.rejects(
+    httpHost.getClientModule('p:http-hash', 'index.tsx', { hash: 'stale-hash-000' }),
+    (err: unknown) => err instanceof HelmError && err.code === 'client_module_stale' && err.status === 409,
   );
 });

@@ -39,6 +39,7 @@ export async function handleArtifactsDomain(
     const headers: Record<string, string> = {
       'content-type': metadata.mimeType,
       'content-length': String(buffer.byteLength),
+      'cache-control': 'private, max-age=31536000, immutable',
     }
     const disposition = inline ? 'inline' : 'attachment'
     const fallbackName = metadata.name.replace(/[^\x20-\x7e]|["\\]/g, '_')

@@ -237,14 +237,14 @@ export class PluginHost {
   list(): PluginSummary[] {
     this.assertNotDisposed();
     return [...this.plugins.values()].map((s) =>
-      summaryWithManagedPackage(s, this.capabilityRegistry, this.packageStore),
+      summaryWithManagedPackage(s, this.capabilityRegistry, this.uiRegistry, this.packageStore),
     );
   }
 
   get(pluginId: string): PluginSummary | undefined {
     this.assertNotDisposed();
     const s = this.plugins.get(pluginId);
-    return s ? summaryWithManagedPackage(s, this.capabilityRegistry, this.packageStore) : undefined;
+    return s ? summaryWithManagedPackage(s, this.capabilityRegistry, this.uiRegistry, this.packageStore) : undefined;
   }
 
   assertProviderAvailable(pluginId: string): void {
@@ -332,6 +332,19 @@ export class PluginHost {
 
   // --- client.tsx compile artifact and public document ----------------------------------------
 
+  private getPluginLifecycle = (id: string) => {
+    const s = this.plugins.get(id);
+    if (!s) return undefined;
+    return {
+      identity: s,
+      enabled: s.enabled,
+      phase: s.phase,
+      epoch: s.epoch,
+      clientRoot: s.definition.clientRoot,
+      npmDependencies: s.definition.npmDependencies,
+    };
+  };
+
   async getClientModule(
     pluginId: string,
     moduleRef: string,
@@ -341,18 +354,7 @@ export class PluginHost {
     return this.uiRegistry.getClientModule(pluginId, moduleRef, {
       chunk: options?.chunk,
       hash: options?.hash,
-      getPluginLifecycle: (id) => {
-        const s = this.plugins.get(id);
-        if (!s) return undefined;
-        return {
-          identity: s,
-          enabled: s.enabled,
-          phase: s.phase,
-          epoch: s.epoch,
-          clientRoot: s.definition.clientRoot,
-          npmDependencies: s.definition.npmDependencies,
-        };
-      },
+      getPluginLifecycle: this.getPluginLifecycle,
       dataDir: this.options.dataDir,
       isDisposed: () => this.disposed,
     });
@@ -560,6 +562,8 @@ export class PluginHost {
       servicesStarted: this.servicesStarted,
       emitPluginChanged: (state) => this.emitPluginChanged(state),
       createPluginContext: (state, epoch) => this.createContext(state, epoch),
+      getPluginLifecycle: this.getPluginLifecycle,
+      isDisposed: () => this.disposed,
     };
   }
 
@@ -616,7 +620,7 @@ export class PluginHost {
   private emitPluginChanged(state: PluginState): void {
     this.options.host.emitEvent('plugin.changed', {
       type: 'plugin.changed',
-      plugin: summaryWithManagedPackage(state, this.capabilityRegistry, this.packageStore),
+      plugin: summaryWithManagedPackage(state, this.capabilityRegistry, this.uiRegistry, this.packageStore),
       ui: state.enabled && state.phase === 'idle' ? this.uiRegistry.getUiByPlugin(state.definition.id) : [],
     });
   }

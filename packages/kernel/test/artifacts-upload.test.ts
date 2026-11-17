@@ -417,3 +417,26 @@ test('artifact read reject across conversation metadata and symlink out of bound
     await cleanupDir(root)
   }
 })
+
+test('HTTP GET /api/artifacts/:id/content: returns private immutable cache header on 200 (attachment and inline) and omits it on 404', { timeout: 60_000 }, async () => {
+  const bytes = Uint8Array.from([11, 22, 33, 44])
+  const uploaded = await call('POST', '/api/conversations/1/artifacts?name=cached.bin&mimeType=application/octet-stream', {
+    headers: { 'content-type': 'application/octet-stream' },
+    body: bytes as unknown as BodyInit,
+  })
+  assert.equal(uploaded.status, 201)
+  const artifactId = uploaded.body.id as string
+
+  for (const suffix of ['', '?inline=1']) {
+    const res = await handler(new Request(`http://127.0.0.1:3202/api/artifacts/${artifactId}/content${suffix}`, {
+      headers: { authorization: `Bearer ${token}` },
+    }))
+    assert.equal(res.status, 200)
+    assert.equal(res.headers.get('cache-control'), 'private, max-age=31536000, immutable')
+    assert.deepEqual([...new Uint8Array(await res.arrayBuffer())], [...bytes])
+  }
+
+  const missing = await call('GET', '/api/artifacts/missing-cache-id/content')
+  assert.equal(missing.status, 404)
+  assert.notEqual(missing.headers.get('cache-control'), 'private, max-age=31536000, immutable')
+})
