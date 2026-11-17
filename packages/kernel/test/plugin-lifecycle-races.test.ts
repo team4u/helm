@@ -36,6 +36,7 @@ import {
   MemoryDocStore,
   assertRejectsCode,
   cleanupDir,
+  deferred,
   makeConversationSummary,
   makeTempDir,
 } from './helpers.js';
@@ -143,8 +144,26 @@ let dataDir: string;
 let docs: MemoryDocStore;
 let events: string[];
 
-function makeHost(config?: PluginConfigStore): PluginHost {
-  return new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: makeHostApi(events), docs, config });
+interface MakeHostOpts {
+  config?: PluginConfigStore;
+  deferServices?: boolean;
+  backend?: Partial<PluginHostBackend>;
+}
+
+function isConfigStore(value: PluginConfigStore | MakeHostOpts | undefined): value is PluginConfigStore {
+  return Boolean(value && typeof value === 'object' && 'get' in value && typeof value.get === 'function');
+}
+
+function makeHost(configOrOpts?: PluginConfigStore | MakeHostOpts): PluginHost {
+  const opts: MakeHostOpts = isConfigStore(configOrOpts) ? { config: configOrOpts } : (configOrOpts ?? {});
+  return new PluginHost({
+    buildProvider: createPluginBuildProvider(),
+    dataDir,
+    host: { ...makeHostApi(events), ...(opts.backend ?? {}) },
+    docs,
+    ...(opts.config !== undefined ? { config: opts.config } : {}),
+    ...(opts.deferServices === true ? { deferServices: true } : {}),
+  });
 }
 
 beforeEach(async () => {
@@ -455,4 +474,231 @@ test('writing when plugins field is corrupt throws config_corrupt explicitly wit
   );
   const raw = JSON.parse(readFileSync(configPath, 'utf8')) as Record<string, unknown>;
   assert.equal(raw['plugins'], 'corrupt', 'corrupt content preserved as-is');
+});
+
+// ---------------------------------------------------------------------------
+// 4. Disable gate TOCTOU & plugin_in_use recovery
+// ---------------------------------------------------------------------------
+
+test('disable gate TOCTOU: task entering during inUse collection window is caught 409 by second gate', { timeout: 60_000 }, async () => {
+  const host = makeHost();
+  try {
+    let releaseInUse!: () => void;
+    let inUsePending = true;
+    const actionGate = deferred<void>();
+    await host.register({
+      id: 'p:toctou',
+      definePlugin: (ctx) => {
+        ctx.service({
+          id: 'svc',
+          start() {},
+          stop() {},
+          // Pause inUse once (fabricates await window in collectPluginInUse); return empty afterward so
+          // final test teardown disable does not block forever.
+          inUse: () => {
+            if (!inUsePending) return [];
+            return new Promise<void>((resolve) => {
+              releaseInUse = () => { inUsePending = false; resolve(); };
+            }).then(() => []);
+          },
+        });
+        ctx.action({
+          id: 'hang',
+          description: 'hanging action',
+          inputSchema: { type: 'object', additionalProperties: false },
+          outputSchema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'], additionalProperties: false },
+          handler: () => actionGate.promise.then(() => ({ ok: true })),
+        });
+      },
+    }, { enabled: true });
+
+    // Start disable first (pauses inside inUse), then start an in-flight action inside that window
+    const disabling = host.disable('p:toctou');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const invoking = host.invokeAction('p:toctou', 'hang', {});
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(host.activeTaskCount('p:toctou') >= 1, true, 'action started in window must count as live task');
+
+    // Release inUse returning empty: second gate must catch the action entered during window -> 409
+    releaseInUse();
+    await assertRejectsCode(() => disabling, 'plugin_has_live_tasks', 409);
+    const summary = host.get('p:toctou');
+    assert.equal(summary?.enabled, true);
+    actionGate.resolve();
+    await invoking;
+    await host.disable('p:toctou');
+    assert.equal(host.get('p:toctou')?.enabled, false);
+  } finally {
+    await host.dispose();
+  }
+});
+
+test('disable gate plugin_in_use rejection leaves state enabled+idle so subsequent calls work', { timeout: 60_000 }, async () => {
+  const host = makeHost();
+  try {
+    await host.register({
+      id: 'p:inuse',
+      definePlugin: (ctx) => {
+        ctx.service({
+          id: 'svc',
+          start() {},
+          stop() {},
+          inUse: () => [{ kind: 'job', id: 'j1', label: 'busy' }],
+        });
+        ctx.action({
+          id: 'ping',
+          description: 'probe action',
+          inputSchema: { type: 'object', additionalProperties: false },
+          outputSchema: { type: 'object', properties: { pong: { type: 'boolean' } }, required: ['pong'], additionalProperties: false },
+          handler: () => ({ pong: true }),
+        });
+      },
+    }, { enabled: true });
+
+    await assertRejectsCode(() => host.disable('p:inuse'), 'plugin_in_use', 409);
+    assert.equal(host.get('p:inuse')?.enabled, true);
+    // Gate rejection is not terminal: plugin keeps serving
+    const out = await host.invokeAction('p:inuse', 'ping', {});
+    assert.deepEqual(out, { pong: true });
+    await host.disable('p:inuse', { force: true });
+    assert.equal(host.get('p:inuse')?.enabled, false);
+  } finally {
+    await host.dispose();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// 5. Startup barrier RW gate & single-flight retry
+// ---------------------------------------------------------------------------
+
+test('concurrent register(enabled) during barrier starts its service without being skipped (gate waits for barrier)', { timeout: 60_000 }, async () => {
+  const host = makeHost({ deferServices: true });
+  try {
+    const marks: string[] = [];
+    const prepareGate = deferred<void>();
+    await host.register({
+      id: 'p:a',
+      definePlugin: (ctx) => {
+        ctx.service({
+          id: 'svc-a',
+          prepare: () => prepareGate.promise,
+          start: () => { marks.push('a-start'); },
+          stop: () => { marks.push('a-stop'); },
+        });
+      },
+    }, { enabled: true });
+
+    const starting = host.start();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    // Barrier in flight (A's prepare paused): concurrently register and enable B
+    const registeringB = host.register({
+      id: 'p:b',
+      definePlugin: (ctx) => {
+        ctx.service({
+          id: 'svc-b',
+          start: () => { marks.push('b-start'); },
+          stop: () => { marks.push('b-stop'); },
+        });
+      },
+    }, { enabled: true });
+
+    prepareGate.resolve();
+    await starting;
+    await registeringB;
+    assert.deepEqual(marks, ['a-start', 'b-start']);
+    assert.equal(host.get('p:b')?.enabled, true);
+  } finally {
+    await host.dispose();
+  }
+});
+
+test('concurrent disable during barrier never resurrects service (stop runs after barrier start)', { timeout: 60_000 }, async () => {
+  const host = makeHost({ deferServices: true });
+  try {
+    const marks: string[] = [];
+    const prepareGate = deferred<void>();
+    await host.register({
+      id: 'p:revive',
+      definePlugin: (ctx) => {
+        ctx.service({
+          id: 'svc',
+          prepare: () => prepareGate.promise,
+          start: () => { marks.push('start'); },
+          stop: () => { marks.push('stop'); },
+        });
+      },
+    }, { enabled: true });
+
+    const starting = host.start();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const disabling = host.disable('p:revive');
+    prepareGate.resolve();
+    await starting;
+    await disabling;
+    assert.deepEqual(marks, ['start', 'stop']);
+    assert.equal(host.get('p:revive')?.enabled, false);
+  } finally {
+    await host.dispose();
+  }
+});
+
+test('stop() during barrier waits for barrier completion before stopping instead of returning early', { timeout: 60_000 }, async () => {
+  const host = makeHost({ deferServices: true });
+  try {
+    const marks: string[] = [];
+    const prepareGate = deferred<void>();
+    await host.register({
+      id: 'p:stopwait',
+      definePlugin: (ctx) => {
+        ctx.service({
+          id: 'svc',
+          prepare: () => prepareGate.promise,
+          start: () => { marks.push('start'); },
+          stop: () => { marks.push('stop'); },
+        });
+      },
+    }, { enabled: true });
+
+    const starting = host.start();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const stopping = host.stop();
+    prepareGate.resolve();
+    await starting;
+    await stopping;
+    assert.deepEqual(marks, ['start', 'stop']);
+  } finally {
+    await host.dispose();
+  }
+});
+
+test('start() single-flight failure clears cached rejection so retries succeed', { timeout: 60_000 }, async () => {
+  const host = makeHost({ deferServices: true });
+  try {
+    const marks: string[] = [];
+    let failNextStart = true;
+    await host.register({
+      id: 'p:barrier-retry',
+      definePlugin: (ctx) => {
+        ctx.service({
+          id: 'svc',
+          start: () => {
+            if (failNextStart) {
+              failNextStart = false;
+              throw new Error('first startup failed');
+            }
+            marks.push('start');
+          },
+          stop: () => { marks.push('stop'); },
+        });
+      },
+    }, { enabled: true });
+
+    await assert.rejects(host.start(), /first startup failed/);
+    await host.start();
+    assert.deepEqual(marks, ['start']);
+    await host.stop();
+    assert.deepEqual(marks, ['start', 'stop']);
+  } finally {
+    await host.dispose();
+  }
 });
