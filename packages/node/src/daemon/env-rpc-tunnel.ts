@@ -1,11 +1,7 @@
 /**
- * node side TCP tunnel handle (nodeTunnelOpen / nodeTunnelAbort):Hub request in
- * node side to target host:port(host default 127.0.0.1, by this node parse and connect) establish
- * TCP, and daemon layer inject openTunnelStream double work stream (WS tunnel,hubUrl/token
- * etc. credentials by daemon layer seal closed) double to pipe- - this layer zero credentials.draining/disposed reject
- * new tunnel (draining is node_draining,disposed is aborted);TCP in tunnel
- * grasp manually during pause,pipe after do not lose first package;dispose destroy all tunnel TCP/double work stream and wait for
- * settle. subject to guard and dispose arrange empty connect line by env-rpc-server group install.
+ * Node-side TCP tunnel handler (`nodeTunnelOpen` / `nodeTunnelAbort`): opens a local TCP socket to
+ * `host:port` (default `127.0.0.1`) and pipes it bidirectionally to the daemon-injected WS tunnel
+ * duplex stream (`openTunnelStream`). Credentials stay out of this layer.
  */
 
 import net from 'node:net';
@@ -13,17 +9,11 @@ import type { Duplex } from 'node:stream';
 import type { RpcEnvError, RpcResult } from '@helm/protocol';
 import { drainingRejection, invalidInput, isRecord, rpcFail } from './env-rpc-shared.js';
 
-/** tunnel establish (TCP connect + double work stream grasp manually) total pre- compute, self subject to start compute (non- segment stack add). */
 const TUNNEL_OPEN_DEFAULT_MS = 15_000;
-/** target host default value: node local machine loopback (and since has loopback semantics compatibility). */
 const TUNNEL_DEFAULT_HOST = '127.0.0.1';
-/** host cap:IPv6 text form most long about 45 character, host name generally ≤253; fit remaining. */
 const TUNNEL_HOST_MAX_CHARS = 255;
 
-/**
- * host boundary validate: non-empty string,≤255 character, without control character/first tail whitespace;
- * illegal i.e. throw invalid(never static default change write or fall back loopback).
- */
+/** Validate optional tunnel target host (non-empty <=255 chars, no whitespace or control characters). */
 const assertValidTunnelHost = (raw: unknown): string | undefined => {
   if (raw === undefined) return undefined;
   if (typeof raw !== 'string' || raw.length === 0 || raw.length > TUNNEL_HOST_MAX_CHARS) {
@@ -32,8 +22,6 @@ const assertValidTunnelHost = (raw: unknown): string | undefined => {
       { code: 'invalid' },
     );
   }
-  // control character (contains NUL/CR/LF/Tab) and any whitespace (contains internal space) one rule reject:
-  // host name disallows whitespace (guard against parse ambiguity and inject).
   for (let i = 0; i < raw.length; i++) {
     const code = raw.charCodeAt(i);
     if (code < 0x20 || code === 0x7f || code === 0x20) {
@@ -50,42 +38,27 @@ interface ActiveTunnel {
   tunnelId: string;
   tcp: net.Socket;
   duplex?: Duplex;
-  /** create connect cancel: grasp manually in abort immediately failed, do not etc. to pre- compute exhausted. */
   controller: AbortController;
-  /** double end destroy after resolve(dispose arrange empty use). */
   lifecycle: Promise<void>;
   settle(): void;
 }
 
-/** tunnel handle dependency (host inject transfer and connect lifecycle state query). */
 export interface TunnelHandlerOptions {
-  /**
-   * open tunnel double work stream (daemon layer inject: connect Hub  /ws/node-tunnel and complete grasp manually).
-   * signal used to cancel in-flight create connect (nodeTunnelAbort / dispose): implement should as soon as possible
-   * reject and destroy underlying asset; this layer only consume double work stream, zero credentials.
-   */
+  /** Opens the daemon-authenticated WS tunnel duplex stream for `tunnelId`. */
   openTunnelStream?: (tunnelId: string, signal?: AbortSignal) => Promise<Duplex>;
-  /** host disposed state query (connect level terminal state: refuse new is aborted). */
   isDisposed(): boolean;
-  /** host draining state query (upgrade arrange empty: refuse new is node_draining). */
   isDraining(): boolean;
 }
 
-/** tunnel handle handle:RPC implement side + dispose destroy hook and arrange empty inside omit. */
 export interface TunnelHandler {
-  /** open tunnel (strictly validate reference;draining/disposed/connect failed structure refuse new). */
   nodeTunnelOpen(raw: unknown): Promise<RpcResult<null>>;
-  /** cancel in-flight tunnel (grasp manually in or already establish): destroy the tunnel TCP/WS and immediately return. */
   nodeTunnelAbort(tunnelId: string): Promise<void>;
-  /** dispose hook: destroy all tunnel TCP/double work stream and compute lifecycle (teardown idempotent). */
   destroyAllTunnels(): void;
-  /** in-flight tunnel amount (arrange empty inside omit; contains TCP already start not complete grasp manually tunnel). */
   getActiveTunnelCount(): number;
-  /** dispose arrange empty wait for tunnel lifecycle promise set (reference, arrange empty when expand snapshot). */
   getTunnelWaiters(): Set<Promise<void>>;
 }
 
-/** create tunnel handle: a connect proxy a instance, state mutual do not sharing. */
+/** Create a per-connection tunnel handler. */
 export function createTunnelHandler(options: TunnelHandlerOptions): TunnelHandler {
   const { openTunnelStream, isDisposed, isDraining } = options;
   const activeTunnels = new Map<string, ActiveTunnel>();
@@ -100,15 +73,13 @@ export function createTunnelHandler(options: TunnelHandlerOptions): TunnelHandle
     return tunnel;
   };
 
-  /** destroy single tunnel (idempotent):abort create connect, destroy TCP/double work stream and compute lifecycle. */
+  /** Abort handshake and tear down both ends of a tunnel idempotently. */
   const teardownTunnel = (tunnel: ActiveTunnel): void => {
     if (activeTunnels.get(tunnel.tunnelId) !== tunnel) return;
     activeTunnels.delete(tunnel.tunnelId);
     tunnel.controller.abort(new Error('tunnel aborted'));
-    try { tunnel.tcp.destroy(); } catch { /* already destroy */ }
+    try { tunnel.tcp.destroy(); } catch { /* already destroyed */ }
     if (tunnel.duplex !== undefined) {
-      // duplexify without error listen when destroy will with not handle 'error' crash process;
-      // honor bottom listen after destroy(sync throw and async rejection all absorb).
       tunnel.duplex.once('error', () => undefined);
       try { void Promise.resolve(tunnel.duplex.destroy()).catch(() => undefined); } catch { /* sync throw */ }
     }
@@ -117,7 +88,6 @@ export function createTunnelHandler(options: TunnelHandlerOptions): TunnelHandle
   };
 
   const nodeTunnelOpenCore = async (raw: unknown): Promise<RpcResult<null>> => {
-    // boundary strictly validate:plain object, field blank name single, value domain - - unknown field one rule reject.
     if (!isRecord(raw) || Array.isArray(raw)) return invalidInput('nodeTunnelOpen input must be a plain object');
     const unknownFields = Object.keys(raw).filter(
       (key) => key !== 'tunnelId' && key !== 'port' && key !== 'timeoutMs' && key !== 'host',
@@ -146,7 +116,7 @@ export function createTunnelHandler(options: TunnelHandlerOptions): TunnelHandle
     if (typeof openTunnelStream !== 'function') {
       return {
         ok: false,
-        error: { code: 'not_supported', message: 'node daemon not config tunnel transfer (openTunnelStream missing), reject nodeTunnelOpen: do not fabricate tunnel' },
+        error: { code: 'not_supported', message: 'node daemon has no tunnel transport configured (openTunnelStream missing); refusing nodeTunnelOpen' },
       };
     }
     if (activeTunnels.has(tunnelId)) {
@@ -155,19 +125,16 @@ export function createTunnelHandler(options: TunnelHandlerOptions): TunnelHandle
     if (isDraining() || isDisposed()) {
       return {
         ok: false,
-        // draining refuse new is stable code node_draining;disposed is connect level terminal state, keep aborted.
         error: isDisposed()
           ? { code: 'aborted', message: 'server disposed' }
           : drainingRejection('tunnels'),
       };
     }
-    // total pre- compute self subject to start compute (TCP connect and WS grasp manually shared use, non- each 15s).
+    // Single overall budget spanning TCP connect + WS handshake.
     const budgetMs = typeof rawTimeout === 'number' ? Math.floor(rawTimeout) : TUNNEL_OPEN_DEFAULT_MS;
-    // target host:port by Hub designate: node negative duty parse and connect (net.connect support host name and IP text).
     const target = `${host}:${port}`;
     const tcp = net.connect({ host, port });
     const tunnel = newTunnel(tunnelId, tcp);
-    // unify settle: the whole establish process (TCP connect + WS grasp manually) only compute once.
     let settled = false;
     let settleResult: (result: RpcResult<null>) => void = () => undefined;
     const rpcResult = new Promise<RpcResult<null>>((resolve) => { settleResult = resolve; });
@@ -177,7 +144,6 @@ export function createTunnelHandler(options: TunnelHandlerOptions): TunnelHandle
       clearTimeout(budgetTimer);
       settleResult(result);
     };
-    // TCP error archive one connect_failed(protocol NodeTunnelErrorCode; system code keep in message, do not outside overflow to code).
     const connectFailed = (detail: string): RpcEnvError => ({
       code: 'connect_failed',
       message: `tunnel TCP connect to ${target} failed: ${detail}`,
@@ -186,19 +152,15 @@ export function createTunnelHandler(options: TunnelHandlerOptions): TunnelHandle
       settleOnce({ ok: false, error: { code: 'timeout', message: `tunnel open timed out after ${budgetMs}ms (${target})` } });
       teardownTunnel(tunnel);
     }, budgetMs);
-    // error self socket create start hang unify handle (connect after success do not excerpt except): grasp manually wait for phase/
-    // pipe phase socket error unify settle+teardown, never not catch crash process.
     const onTcpError = (error: Error): void => {
       if (activeTunnels.get(tunnelId) !== tunnel) return;
       settleOnce({ ok: false, error: connectFailed(error.message) });
       teardownTunnel(tunnel);
     };
     tcp.on('error', onTcpError);
-    // TCP connect (shared use total pre- compute): failed/timeout destroy and return structure error (such as port reject).
     try {
       await new Promise<void>((resolve, reject) => {
         tcp.once('connect', () => resolve());
-        // onTcpError already unify settle; this where only guard against promise pending.
         tcp.once('error', (error) => reject(connectFailed(error.message)));
         tunnel.controller.signal.addEventListener(
           'abort',
@@ -207,8 +169,6 @@ export function createTunnelHandler(options: TunnelHandlerOptions): TunnelHandle
         );
       });
     } catch {
-      // abort(nodeTunnelAbort/dispose) or failed to connect: detail already settle;teardown
-      // after such as return (abort semantics takes precedence, not settle extreme path by failed to connect fall back).
       if (!settled) {
         settleOnce(
           tunnel.controller.signal.aborted
@@ -219,14 +179,11 @@ export function createTunnelHandler(options: TunnelHandlerOptions): TunnelHandle
       teardownTunnel(tunnel);
       return await rpcResult;
     }
-    // paused TCP:openTunnelStream grasp manually during buffer for end first batch data,pipe after do not lose first package.
+    // Pause TCP while the WS tunnel handshake runs so early server banners are buffered, not dropped.
     tcp.pause();
-    // hang without operation readable keep underlying uv_read probe for end EOF/RST(never invoke tcp.read(),
-    // ensure grasp manually phase receives first package byte continue in readableBuffer in supply pipe consume).
+    // Attach a no-op readable listener so libuv still detects peer EOF/RST during the handshake.
     const keepPollingForEof = (): void => {};
     tcp.on('readable', keepPollingForEof);
-    // double work stream grasp manually (shared use total pre- compute, pass signal:abort immediately failed do not etc. pre- compute; late to
-    // resolve stream immediately destroy guard against leak leak).
     let handshakeDone = false;
     const onHandshakePeerClosed = (): void => {
       if (handshakeDone || activeTunnels.get(tunnelId) !== tunnel) return;
@@ -247,7 +204,7 @@ export function createTunnelHandler(options: TunnelHandlerOptions): TunnelHandle
     const streamPromise = Promise.resolve(openTunnelStream(tunnelId, tunnel.controller.signal));
     void streamPromise.then(
       (late) => { if (handshakeDone || activeTunnels.get(tunnelId) !== tunnel) late.destroy(); },
-      () => undefined, // failed path by under way await branch unify handle
+      () => undefined,
     );
     let duplex: Duplex;
     try {
@@ -270,7 +227,6 @@ export function createTunnelHandler(options: TunnelHandlerOptions): TunnelHandle
       return await rpcResult;
     }
     if (settled || activeTunnels.get(tunnelId) !== tunnel) {
-      // create connect during already timeout/abort: late to reach stream immediately destroy, never pipe to already destroy TCP.
       handshakeDone = true;
       cleanupHandshakeListeners();
       duplex.destroy();
@@ -280,9 +236,7 @@ export function createTunnelHandler(options: TunnelHandlerOptions): TunnelHandle
     cleanupHandshakeListeners();
     tunnel.duplex = duplex;
     settleOnce({ ok: true, value: null });
-    // normal end away pipe  end semantics: for end end → duplex readable end →
-    // duplex.pipe(tcp) trigger tcp.end()(flush complete response after FIN)→ close destroy
-    // double end;error/close/aborted only then immediately destroy two end, do not pinch assert flush in data.
+    // Let normal FIN/EOF propagate through `pipe()` before tearing down; force-destroy on error/close/abort.
     const teardown = (): void => teardownTunnel(tunnel);
     duplex.once('error', teardown);
     duplex.once('close', teardown);
@@ -298,7 +252,6 @@ export function createTunnelHandler(options: TunnelHandlerOptions): TunnelHandle
     teardownTunnel(tunnel);
   };
 
-  /** cancel in-flight tunnel (grasp manually in or already establish): immediately destroy TCP/WS and return. */
   const nodeTunnelAbort = async (tunnelId: string): Promise<void> => {
     teardownTunnelById(tunnelId);
   };

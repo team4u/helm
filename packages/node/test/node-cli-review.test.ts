@@ -1,19 +1,21 @@
 /**
- * helm-node CLI background control review review test (convenient carry control IPC contract verify).
+ * Acceptance review tests for `helm-node` CLI background control (portable control IPC contract).
  *
- * all away real many process: real detached child process (stdio IPC ready on report + durable control
- * UDS)+ real Hub fixture(http.Server + WebSocketServer + birpc).
- * independent CLI child process case verify across process control, the rest case via process inside entry locate boundary behavior.
+ * Exercises real multi-process lifecycles: detached daemon child processes (stdio IPC readiness +
+ * persistent control UDS) and a real Hub fixture (`http.Server` + `WebSocketServer` + `birpc`).
+ * Dedicated CLI subprocess cases verify cross-process control while in-process entry calls pinpoint
+ * edge conditions.
  *
- * override:
- * 1. start -d / stop / status / restart all link: ready state semantics (registered only
- *    from real ACK),stop after process real exit and pid file delete,status present unknown
- *    and diagnose;
- * 2. security boundary:argv/env without token; unknown instance nonce reject and do not kill process; control channel cannot
- *    reach but pid store when stop/start explicit failed and keep pid file; duplicate start reject;
- * 3. failed such as:spawn failed, child process i.e. retreat do not fake succeeded;node.pid new contract validate;
- * 4. service: template/install behavior archive service test; this where only verify CLI entry choose compile artifact
- *    (source code run without dist artifact when explicit hint pnpm build).
+ * Covers:
+ * 1. `start -d` / `stop` / `status` / `restart` end-to-end: `state=registered` originates strictly
+ *    from a genuine Hub ACK, `stop` terminates the process and removes PID files, and `status`
+ *    truthfully reports `unknown` with diagnostics;
+ * 2. Security boundaries: no tokens in argv/env, unknown instance nonces rejected without killing
+ *    processes, unreachable control channel with live PID fails explicitly while preserving PID files,
+ *    and duplicate starts reject;
+ * 3. Honest failures: spawn failure and immediate child exit never report false success; new `node.pid`
+ *    schema validation;
+ * 4. `service`: prefers compiled `dist/` entry and prompts `pnpm build` when missing.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -45,13 +47,12 @@ interface Captured {
   code: number;
 }
 
-/** memory IO entry; and real child process CLI test respectively override, cannot mutual each other alternative. */
+/** In-memory I/O entry; complements (and does not replace) standalone CLI child-process tests. */
 async function runCli(argv: string[], io: Partial<NodeCliIo> = {}): Promise<Captured> {
   let out = '';
   let err = '';
   const code = await runNodeCli(argv, {
-    // strip except host managed HELM_* variable: by test CLI start identity/Hub/data directory semantics only by
-    // test explicit argv and node.json identity decide, do not by host conversation environment hijack.
+    // Strip host-managed HELM_* variables so CLI startup reflects only test argv and node.json.
     env: sanitizedHostEnv(),
     out: (t) => (out += t),
     err: (t) => (err += t),
@@ -102,7 +103,7 @@ async function startHubFixture(options: { expectedToken: string; reject?: boolea
           return true;
         },
         onEnvExecOutput(_event: EnvExecOutputEvent): void {
-          // this file do not test env forwarding.
+          // Env forwarding is not exercised in this suite.
         },
       };
       const rpc = createBirpc(local, {
@@ -116,7 +117,7 @@ async function startHubFixture(options: { expectedToken: string; reject?: boolea
               const parsed: unknown = JSON.parse(text);
               if (parsed !== null && typeof parsed === 'object') callback(parsed);
             } catch {
-              // non- JSON frame.
+              // Ignore non-JSON frames.
             }
           });
         },
@@ -141,7 +142,7 @@ async function startHubFixture(options: { expectedToken: string; reject?: boolea
   };
 }
 
-/** read child process store state (real process.kill(pid, 0)). */
+/** Probe child liveness via `process.kill(pid, 0)`. */
 const realIsAlive = (pid: number): boolean => {
   try {
     process.kill(pid, 0);
@@ -151,15 +152,15 @@ const realIsAlive = (pid: number): boolean => {
   }
 };
 
-/** wait for condition into establish (real apply test polling, non- fixed sleep; condition can async). */
+/** Poll until condition holds (supports async predicates), failing explicitly on timeout. */
 const waitFor = (condition: () => boolean | Promise<boolean>, timeoutMs: number, what: string): Promise<void> =>
-  kitWaitFor(condition, { timeoutMs, intervalMs: 100, message: `wait timed out:${what}` });
+  kitWaitFor(condition, { timeoutMs, intervalMs: 100, message: `wait timed out: ${what}` });
 
 // ---------------------------------------------------------------------------
-// 1. all link:start -d / status / stop / restart(real many process + real Hub)
+// 1. End-to-end: start -d / status / stop / restart (real multi-process + Hub)
 // ---------------------------------------------------------------------------
 
-test('start -d / status / stop:registered from real register,stop after real exit and clean pid', { timeout: 60_000 }, async (t) => {
+test('start -d / status / stop: registered comes from genuine ACK, stop exits cleanly and removes pid', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helm-review-lifecycle-');
   t.after(async () => {
     await runCli(['stop', '--data-dir', dir, '--json']).catch(() => undefined);
@@ -177,12 +178,12 @@ test('start -d / status / stop:registered from real register,stop after real exi
   const payload = JSON.parse(start.out) as { ok: boolean; pid: number; state: string; logPath: string };
   assert.equal(payload.ok, true);
   assert.ok(payload.pid > 0);
-  assert.equal(payload.state, 'registered', 'can reach Hub under state must from real register ACK');
+  assert.equal(payload.state, 'registered', 'state must come from real registration ACK when Hub is reachable');
 
-  // Hub indeed receives register
-  await waitFor(() => hub.registrations.length >= 1, 10_000, 'Hub receives register');
+  // Hub received registration
+  await waitFor(() => hub.registrations.length >= 1, 10_000, 'Hub receives registration');
 
-  // node.pid new contract:pid + instanceId + endpoint,0600
+  // node.pid new contract: pid + instanceId + endpoint, 0600
   const record = JSON.parse(await fs.readFile(path.join(dir, 'node.pid'), 'utf8')) as {
     pid: number;
     instanceId: string;
@@ -192,14 +193,14 @@ test('start -d / status / stop:registered from real register,stop after real exi
   assert.match(record.instanceId, /^[0-9a-f]{32}$/);
   assert.match(record.endpoint, /^\/tmp\/helm-node-[0-9a-f]{16}\.sock$/);
   const pidStat = await fs.stat(path.join(dir, 'node.pid'));
-  // Windows without POSIX mode(NTFS away ACL), skip 0600 pattern assertion.
+  // Skip 0600 mode check on Windows (NTFS uses ACLs instead of POSIX modes).
   if (process.platform !== 'win32') assert.equal(pidStat.mode & 0o777, 0o600);
-  assert.ok(realIsAlive(record.pid), 'daemon should real store');
+  assert.ok(realIsAlive(record.pid), 'daemon should genuinely be alive');
 
-  // control end point socket file real store in
-  await waitFor(() => fs.stat(record.endpoint).then(() => true, () => false), 5_000, 'control socket ');
+  // Control endpoint socket file exists on disk
+  await waitFor(() => fs.stat(record.endpoint).then(() => true, () => false), 5_000, 'control socket created');
 
-  // again invoke entry:status present real run state.
+  // Calling status again reports actual live running state.
   const status = await runCli(['status', '--data-dir', dir, '--json']);
   assert.equal(status.code, 0, status.err);
   const statusPayload = JSON.parse(status.out) as { pid: number; pidAlive: boolean; state: string };
@@ -207,26 +208,26 @@ test('start -d / status / stop:registered from real register,stop after real exi
   assert.equal(statusPayload.pidAlive, true);
   assert.equal(statusPayload.state, 'registered');
 
-  // stop via IPC request background process clean up, confirm pid and socket Profile disappear.
+  // stop requests graceful cleanup via IPC and verifies pid/socket removal.
   const stop = await runCli(['stop', '--data-dir', dir, '--json']);
   assert.equal(stop.code, 0, stop.err);
   assert.equal(JSON.parse(stop.out).outcome, 'stopped');
-  assert.equal(realIsAlive(record.pid), false, 'process should real exit (via control channel graceful stop)');
-  assert.equal(await fs.stat(path.join(dir, 'node.pid')).then(() => true, () => false), false, 'pid file should delete');
+  assert.equal(realIsAlive(record.pid), false, 'process should actually exit via control-channel stop');
+  assert.equal(await fs.stat(path.join(dir, 'node.pid')).then(() => true, () => false), false, 'pid file should be removed');
   await waitFor(
     () => fs.stat(record.endpoint).then(() => false, () => true),
     5_000,
-    'control socket should clean up',
+    'control socket should be removed',
   );
 
-  // stop after status back to without background process
+  // status after stop shows no running background daemon
   const after = await runCli(['status', '--data-dir', dir, '--json']);
   const afterPayload = JSON.parse(after.out) as { pid: number | null; pidAlive: boolean };
   assert.equal(afterPayload.pid, null);
   assert.equal(afterPayload.pidAlive, false);
 });
 
-test('three independent CLI child process can start, query and stop the same background node instance', { timeout: 60_000 }, async (t) => {
+test('three independent CLI child processes can start, query, and stop the same daemon instance', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helm-cli-processes-');
   const hub = await startHubFixture({ expectedToken: 'cli-process:s' });
   t.after(async () => { await runCli(['stop', '--data-dir', dir, '--json']); await hub.close(); await fs.rm(dir, { recursive: true, force: true }); });
@@ -236,7 +237,7 @@ test('three independent CLI child process can start, query and stop the same bac
     let out = ''; let err = '';
     child.stdout.on('data', (chunk) => { out += chunk.toString() });
     child.stderr.on('data', (chunk) => { err += chunk.toString() });
-    const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('CLI child process not in pre- compute inside exit')) }, 20_000);
+    const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('CLI child process did not exit within budget')) }, 20_000);
     child.once('error', (error) => { clearTimeout(timer); reject(error) });
     child.once('close', (code) => { clearTimeout(timer); resolve({ code: code ?? 1, out, err }) });
   });
@@ -252,7 +253,7 @@ test('three independent CLI child process can start, query and stop the same bac
   await assert.rejects(fs.stat(path.join(dir, 'node.pid')), { code: 'ENOENT' });
 });
 
-test('restart: old instance via control channel real exit, new instance register succeeded', { timeout: 60_000 }, async (t) => {
+test('restart: old instance exits cleanly over control channel and new instance registers', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helm-review-restart-');
   t.after(async () => {
     await runCli(['stop', '--data-dir', dir, '--json']).catch(() => undefined);
@@ -275,23 +276,23 @@ test('restart: old instance via control channel real exit, new instance register
   assert.equal(payload.previousPid, firstPid);
   assert.notEqual(payload.pid, firstPid);
   assert.equal(payload.state, 'registered');
-  assert.equal(realIsAlive(firstPid), false, 'old process should already real exit');
-  assert.ok(realIsAlive(payload.pid), 'new process should store');
+  assert.equal(realIsAlive(firstPid), false, 'old process should have exited');
+  assert.ok(realIsAlive(payload.pid), 'new process should be alive');
 
-  // restart after old instance control socket already clean, new socket can inspect
+  // After restart old socket is removed and new socket responds
   const status = await runCli(['status', '--data-dir', dir, '--json']);
   const statusPayload = JSON.parse(status.out) as { pid: number; state: string };
   assert.equal(statusPayload.pid, payload.pid);
   assert.equal(statusPayload.state, 'registered');
 });
 
-test('start -d:Hub cannot reach when state=starting(such as present offline run state, do not fake call registered)', { timeout: 60_000 }, async (t) => {
+test('start -d reports state=starting truthfully when Hub is unreachable without claiming registered', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helm-review-startd-offline-');
   t.after(async () => {
     await runCli(['stop', '--data-dir', dir, '--json']).catch(() => undefined);
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
   });
-  // 127.0.0.1:1 port will not accept connect (daemon will continuous backoff reconnect)
+  // Nothing listens on 127.0.0.1:1 (daemon keeps backing off and retrying)
   await bindIdentityFromJoinToken(dir, 'rev-off:s', 'http://127.0.0.1:1');
 
   const r = await runCli(['start', '-d', '--data-dir', dir, '--json']);
@@ -300,19 +301,19 @@ test('start -d:Hub cannot reach when state=starting(such as present offline run 
   assert.equal(payload.ok, true);
   assert.equal(payload.state, 'starting');
   assert.match(payload.message, /not yet complete/);
-  assert.ok(realIsAlive(payload.pid), 'offline when daemon should store reconnect');
+  assert.ok(realIsAlive(payload.pid), 'daemon should remain alive and reconnect while offline');
 
-  // status same present starting
+  // status also reports starting
   const status = await runCli(['status', '--data-dir', dir, '--json']);
   const statusPayload = JSON.parse(status.out) as { state: string };
   assert.equal(statusPayload.state, 'starting');
 });
 
 // ---------------------------------------------------------------------------
-// 2. security boundary: without token argv/env; unknown nonce reject; cannot reach keep pid; duplicate start reject
+// 2. Security boundaries: no token in argv/env, unknown nonce rejection, keep pid when unreachable, reject duplicate start
 // ---------------------------------------------------------------------------
 
-test('start -d:argv and env all without token; child process argv only start --data-dir [--hub]', { timeout: 60_000 }, async (t) => {
+test('start -d passes no token in argv or env; child argv contains only start --data-dir [--hub]', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helm-review-notoken-');
   t.after(async () => {
     await runCli(['stop', '--data-dir', dir, '--json']).catch(() => undefined);
@@ -335,18 +336,18 @@ test('start -d:argv and env all without token; child process argv only start --d
 
   const r = await runCli(['start', '-d', '--data-dir', dir, '--json'], { spawnDaemon: wrappedSpawn });
   assert.equal(r.code, 0, r.err);
-  // argv without token: only CLI entry + start --data-dir <dir>(--hub not explicit when do not pass,token from node.json read)
-  assert.ok(!JSON.stringify(capturedArgs).includes('s3cret'), 'argv must not contains token secret');
-  assert.ok(!JSON.stringify(capturedArgs).includes('rev-nt:'), 'argv must not contains token prefix');
+  // No token in argv: only CLI entry + start --data-dir <dir> (token read from node.json)
+  assert.ok(!JSON.stringify(capturedArgs).includes('s3cret'), 'argv must not contain token secret');
+  assert.ok(!JSON.stringify(capturedArgs).includes('rev-nt:'), 'argv must not contain token prefix');
   assert.ok(capturedArgs.includes('start'));
   assert.ok(capturedArgs.includes(dir));
-  // env without token(instanceId/endpoint is local machine control information, allows store in)
-  assert.ok(!JSON.stringify(capturedEnv ?? {}).includes('s3cret'), 'env must not contains token secret');
-  assert.ok((capturedEnv?.['HELM_NODE_INSTANCE_ID'] ?? '').length >= 16, 'instanceId via env pass');
-  assert.ok((capturedEnv?.['HELM_NODE_CONTROL_ENDPOINT'] ?? '').length > 0, 'endpoint via env pass');
+  // No token in env (instanceId/endpoint are local control metadata)
+  assert.ok(!JSON.stringify(capturedEnv ?? {}).includes('s3cret'), 'env must not contain token secret');
+  assert.ok((capturedEnv?.['HELM_NODE_INSTANCE_ID'] ?? '').length >= 16, 'instanceId passed via env');
+  assert.ok((capturedEnv?.['HELM_NODE_CONTROL_ENDPOINT'] ?? '').length > 0, 'endpoint passed via env');
 });
 
-test('control channel: unknown instance nonce reject (do not kill without closure process),pid file keep', { timeout: 60_000 }, async (t) => {
+test('control channel rejects unknown instance nonce without harming unrelated processes and preserves pid file', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helm-review-nonce-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
@@ -366,7 +367,7 @@ test('control channel: unknown instance nonce reject (do not kill without closur
     endpoint: string;
   };
 
-  // directly for real control end point error nonce  stop: must by reject (instance_mismatch), process do not subject to affect
+  // Stop sent directly to real control endpoint with wrong nonce must reject with instance_mismatch without harming process
   const hostile = await new Promise<{ ok: boolean; error?: string } | null>((resolve) => {
     let buffer = '';
     const socket = net.connect(record.endpoint);
@@ -392,18 +393,18 @@ test('control channel: unknown instance nonce reject (do not kill without closur
       resolve(null);
     });
   });
-  assert.ok(hostile !== null, 'control end point should reply');
+  assert.ok(hostile !== null, 'control endpoint should respond');
   assert.equal(hostile!.ok, false);
   assert.equal(hostile!.error, 'instance_mismatch');
-  await waitFor(() => realIsAlive(pid), 2_000, 'error nonce under process must store');
+  await waitFor(() => realIsAlive(pid), 2_000, 'process must stay alive on wrong nonce');
 
-  // pid file still keep, normal stop still valid
+  // pid file remains intact and legitimate stop still works
   const stop = await runCli(['stop', '--data-dir', dir, '--json']);
   assert.equal(stop.code, 0, stop.err);
   assert.equal(realIsAlive(pid), false);
 });
 
-test('duplicate start reject (instance via control channel verify,already_running)', { timeout: 60_000 }, async (t) => {
+test('duplicate start is rejected after control channel verification (already_running)', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helm-review-dup-');
   t.after(async () => {
     await runCli(['stop', '--data-dir', dir, '--json']).catch(() => undefined);
@@ -422,21 +423,21 @@ test('duplicate start reject (instance via control channel verify,already_runnin
   const dup = await runCli(['start', '-d', '--data-dir', dir, '--json']);
   assert.equal(dup.code, 1);
   assert.equal(JSON.parse(dup.err).error.code, 'already_running');
-  assert.ok(realIsAlive(pid), 'duplicate start attempt must not affect store instance');
+  assert.ok(realIsAlive(pid), 'duplicate start attempt must not disrupt running instance');
 
-  // lock already release (can again normal stop)
+  // Lock is released (subsequent stop works normally)
   const stop = await runCli(['stop', '--data-dir', dir, '--json']);
   assert.equal(stop.code, 0, stop.err);
 });
 
-test('control channel cannot reach but pid store:stop and start all reject and keep pid file', { timeout: 60_000 }, async (t) => {
+test('unreachable control channel with live pid rejects both stop and start while keeping pid file', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helm-review-unreach-');
   t.after(async () => {
-    // use real store this test process occupy pid: directly clean pid file (test wrap-up)
+    // Cleanup removes dir since pid points to this live test process
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
   });
   await bindIdentityFromJoinToken(dir, 'rev-unreach:s', 'http://127.0.0.1:1');
-  // occupy:pid points to this test process (store),endpoint points to missing socket
+  // Placeholder pid targeting current live test process with nonexistent socket endpoint
   const fakeEndpoint = path.join(dir, 'no-such.sock');
   await fs.writeFile(
     path.join(dir, 'node.pid'),
@@ -447,24 +448,24 @@ test('control channel cannot reach but pid store:stop and start all reject and k
   const stop = await runCli(['stop', '--data-dir', dir, '--json']);
   assert.equal(stop.code, 1);
   const stopEnvelope = JSON.parse(stop.err) as { error: { message: string } };
-  assert.match(stopEnvelope.error.message, /control channel cannot reach/);
-  assert.match(stopEnvelope.error.message, /reject to not via identity verify process send signal/);
-  assert.equal(await fs.stat(path.join(dir, 'node.pid')).then(() => true, () => false), true, 'pid file must keep');
+  assert.match(stopEnvelope.error.message, /control channel unreachable/);
+  assert.match(stopEnvelope.error.message, /refusing to signal an unverified process/);
+  assert.equal(await fs.stat(path.join(dir, 'node.pid')).then(() => true, () => false), true, 'pid file must be preserved');
 
   const start = await runCli(['start', '-d', '--data-dir', dir, '--json']);
   assert.equal(start.code, 1);
   const startEnvelope = JSON.parse(start.err) as { error: { message: string } };
-  assert.match(startEnvelope.error.message, /control channel cannot reach|cannot verify can security override/);
-  assert.equal(await fs.stat(path.join(dir, 'node.pid')).then(() => true, () => false), true, 'pid file must keep');
+  assert.match(startEnvelope.error.message, /control channel is unreachable|cannot verify identity safely/);
+  assert.equal(await fs.stat(path.join(dir, 'node.pid')).then(() => true, () => false), true, 'pid file must be preserved');
 });
 
-test('pid indeed already death:stop by stale clean up,start clean up after normal start', { timeout: 60_000 }, async (t) => {
+test('dead pid: stop cleans up as stale and start recovers normally', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helm-review-stale-');
   t.after(async () => {
     await runCli(['stop', '--data-dir', dir, '--json']).catch(() => undefined);
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
   });
-  // find a already exit pid:spawn a i.e. retreat child process
+  // Obtain an exited pid via a short-lived child process
   const dead = spawn(process.execPath, ['-e', 'process.exit(0)'], { stdio: 'ignore' });
   const deadPid = await new Promise<number>((resolve) => {
     dead.once('exit', () => resolve(dead.pid ?? 0));
@@ -484,29 +485,29 @@ test('pid indeed already death:stop by stale clean up,start clean up after norma
   assert.equal(await fs.stat(path.join(dir, 'node.pid')).then(() => true, () => false), false);
 });
 
-test('broken pid file and leftover start lock: explicit errors, not silently clean up', { timeout: 60_000 }, async (t) => {
+test('corrupt pid file and leftover start lock fail explicitly without silent removal', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helm-review-badpid-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
   });
-  // old edition pure number pid Profile: structure illegal explicit errors
+  // Legacy plain-numeric pid file: invalid schema errors explicitly
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(path.join(dir, 'node.pid'), '999999998\n', 'utf8');
   const legacy = await runCli(['stop', '--data-dir', dir, '--json']);
   assert.equal(legacy.code, 1);
-  assert.match(JSON.parse(legacy.err).error.message, /illegal|corrupt/);
-  assert.equal(await fs.stat(path.join(dir, 'node.pid')).then(() => true, () => false), true, 'not silently clean up');
+  assert.match(JSON.parse(legacy.err).error.message, /invalid|corrupt/);
+  assert.equal(await fs.stat(path.join(dir, 'node.pid')).then(() => true, () => false), true, 'must not silently remove');
 
-  // broken JSON
+  // Corrupt JSON
   await fs.writeFile(path.join(dir, 'node.pid'), '{broken', 'utf8');
   const broken = await runCli(['stop', '--data-dir', dir, '--json']);
   assert.equal(broken.code, 1);
   assert.match(JSON.parse(broken.err).error.message, /corrupt/);
 
-  // leftover start lock: explicit diagnose (not silently delete),stop do not subject to affect
+  // Leftover start lock: explicit diagnostic without silent deletion; stop still respects existing corrupt pid
   await fs.writeFile(path.join(dir, 'node.start.lock'), '', 'utf8');
   const lockStop = await runCli(['stop', '--data-dir', dir, '--json']);
-  assert.equal(lockStop.code, 1); // broken pid file still in → errors while non- clean up
+  assert.equal(lockStop.code, 1); // Corrupt pid file still causes explicit failure
   const hub = await startHubFixture({ expectedToken: 'rev-lock:s' });
   t.after(async () => {
     await hub.close();
@@ -515,15 +516,15 @@ test('broken pid file and leftover start lock: explicit errors, not silently cle
   await bindIdentityFromJoinToken(dir, 'rev-lock:s', hub.url);
   const lockStart = await runCli(['start', '-d', '--data-dir', dir, '--json']);
   assert.equal(lockStart.code, 1);
-  assert.match(JSON.parse(lockStart.err).error.message, /concurrency start conflict|node\.start\.lock/);
-  assert.equal(await fs.stat(path.join(dir, 'node.start.lock')).then(() => true, () => false), true, 'leftover lock not silently delete');
+  assert.match(JSON.parse(lockStart.err).error.message, /concurrent start conflict|node\.start\.lock/);
+  assert.equal(await fs.stat(path.join(dir, 'node.start.lock')).then(() => true, () => false), true, 'leftover lock must not be silently removed');
 });
 
 // ---------------------------------------------------------------------------
-// 3. failed such as:spawn failed / child process i.e. retreat / ready timeout
+// 3. Honest failures: spawn failure / immediate child exit / ready timeout
 // ---------------------------------------------------------------------------
 
-test('start -d:node can execute missing → spawn error explicit errors, do not fake succeeded', { timeout: 60_000 }, async (t) => {
+test('start -d fails explicitly on missing node binary without fake success', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helm-review-spawn-err-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
@@ -544,17 +545,17 @@ test('start -d:node can execute missing → spawn error explicit errors, do not 
   const r = await runCli(['start', '-d', '--data-dir', dir, '--json'], { spawnDaemon: badSpawn });
   assert.equal(r.code, 1);
   assert.match(JSON.parse(r.err).error.message, /spawn|failed to start|ENOENT/);
-  // failed do not pid Profile
+  // No pid file written on failure
   assert.equal(await fs.stat(path.join(dir, 'node.pid')).then(() => true, () => false), false);
 });
 
-test('start -d: child process i.e. retreat (entry script missing)→ explicit errors attach log tail part, do not write pid', { timeout: 60_000 }, async (t) => {
+test('start -d fails with log tail on immediate child exit without writing pid', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helm-review-exit-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
   });
   await bindIdentityFromJoinToken(dir, 'rev-exit:s', 'http://127.0.0.1:1');
-  // use real defaultSpawnDaemon but argv points to missing script: child process immediately exit,ready forever do not occur
+  // Use real defaultSpawnDaemon pointing to missing entry: child exits immediately before ready report
   const { defaultSpawnDaemon } = await import('../src/cli.js');
   const badEntry: NonNullable<NodeCliIo['spawnDaemon']> = async (options) => {
     const args = [...options.args];
@@ -567,29 +568,29 @@ test('start -d: child process i.e. retreat (entry script missing)→ explicit er
   });
   assert.equal(r.code, 1);
   const message = JSON.parse(r.err).error.message as string;
-  assert.ok(/immediately exit|not on report ready/.test(message), `should report i.e. retreat or ready timeout: ${message}`);
-  assert.equal(await fs.stat(path.join(dir, 'node.pid')).then(() => true, () => false), false, 'i.e. retreat must not write pid');
+  assert.ok(/exited immediately|did not report ready/.test(message), `should report immediate exit or ready timeout: ${message}`);
+  assert.equal(await fs.stat(path.join(dir, 'node.pid')).then(() => true, () => false), false, 'immediate exit must not write pid');
 });
 
-test('start -d:node.log failed to open (by directory occupy)→ explicit error', { timeout: 60_000 }, async (t) => {
+test('start -d fails explicitly when node.log cannot be opened (blocked by directory)', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helm-review-logfail-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
   });
   const dataDir = path.join(dir, 'data');
   await fs.mkdir(dataDir, { recursive: true });
-  await fs.mkdir(path.join(dataDir, 'node.log'), { recursive: true }); // node.log is directory → open failed
+  await fs.mkdir(path.join(dataDir, 'node.log'), { recursive: true }); // Directory named node.log blocks open
   await bindIdentityFromJoinToken(dataDir, 'rev-log:s', 'http://127.0.0.1:1');
   const r = await runCli(['start', '-d', '--data-dir', dataDir, '--json']);
   assert.equal(r.code, 1);
-  assert.match(JSON.parse(r.err).error.message, /open log file failed/);
+  assert.match(JSON.parse(r.err).error.message, /failed to open log file/);
 });
 
 // ---------------------------------------------------------------------------
-// 4. after startup child process IPC clean exit (without orphan child socket / without token leak leak enter log)
+// 4. Clean child IPC exit after startup (no orphan control socket or token leaks)
 // ---------------------------------------------------------------------------
 
-test('start -d: normal start stop after without orphan child control socket,node.log excludes token', { timeout: 60_000 }, async (t) => {
+test('start -d clean start/stop leaves no orphan control socket and leaks no token into node.log', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helm-review-clean-');
   t.after(async () => {
     await runCli(['stop', '--data-dir', dir, '--json']).catch(() => undefined);
@@ -606,46 +607,46 @@ test('start -d: normal start stop after without orphan child control socket,node
   const record = JSON.parse(await fs.readFile(path.join(dir, 'node.pid'), 'utf8')) as { endpoint: string };
   const stop = await runCli(['stop', '--data-dir', dir, '--json']);
   assert.equal(stop.code, 0, stop.err);
-  // this instance control socket already clean up (concurrency test file instance mutual do not interference, do not global scan /tmp)
+  // Control socket for this instance is cleaned up (scoped so parallel tests do not interfere)
   await waitFor(
     () => fs.stat(record.endpoint).then(() => false, () => true),
     5_000,
-    'control socket should clean up',
+    'control socket should be removed',
   );
   assert.notEqual(record.endpoint, undefined);
-  // log without leaking token
+  // Log must not leak token
   const log = await fs.readFile(path.join(dir, 'node.log'), 'utf8').catch(() => '');
-  assert.ok(!log.includes('s3cret-value'), 'node.log must not contains token secret');
+  assert.ok(!log.includes('s3cret-value'), 'node.log must not contain token secret');
 });
 
 // ---------------------------------------------------------------------------
-// 5. service entry choose: compile artifact takes precedence, source code run without dist explicit hint
+// 5. Service entry selection: compiled dist takes precedence; prompts pnpm build when missing
 // ---------------------------------------------------------------------------
 
-test('service install entry: source code run and without dist artifact → explicit hint pnpm build(do not generate cannot start service)', { timeout: 60_000 }, async (t) => {
+test('service install entry prefers dist and prompts pnpm build when running from source without dist', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helm-review-svc-entry-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
   });
   const { resolveServiceEntry } = await import('../src/cli.js');
-  // source code entry and same package without dist artifact (isolated temp directory)→ explicit hint first pnpm build
+  // Source entry without dist artifact in isolated temp dir -> explicit pnpm build prompt
   const pkgSrc = path.join(dir, 'pkg', 'src', 'cli.ts');
   await fs.mkdir(path.dirname(pkgSrc), { recursive: true });
   await fs.writeFile(pkgSrc, '', 'utf8');
-  assert.throws(() => resolveServiceEntry(pkgSrc), /pnpm build|compile artifact/);
-  // fabricate dist artifact store in → return dist path
+  assert.throws(() => resolveServiceEntry(pkgSrc), /pnpm build|compiled artifact/);
+  // Fabricated dist artifact exists -> returns dist path
   const distDir = path.join(dir, 'pkg', 'dist');
   await fs.mkdir(distDir, { recursive: true });
   const fakeDist = path.join(distDir, 'cli.js');
   await fs.writeFile(fakeDist, '', 'utf8');
   const resolved = resolveServiceEntry(pkgSrc);
   assert.equal(resolved, fakeDist);
-  // serviceEntry inject override (CLI does not store in decide, by inject way negative duty)
+  // serviceEntry override (CLI trusts injected path without existence probe)
   const r = await runCli(['service', 'status', '--data-dir', dir, '--json'], { serviceEntry: fakeDist });
   assert.equal(r.code, 0, r.err);
 });
 
-test('connect foreground: register complete before output connect in, register after output real state,Ctrl+C graceful exit', { timeout: 60_000 }, async (t) => {
+test('connect foreground prints connecting before registration, ready state after, and exits cleanly on Ctrl+C', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helm-review-connect-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
@@ -658,7 +659,7 @@ test('connect foreground: register complete before output connect in, register a
   const runPromise = runCli(['connect', hub.url, '--token', 'rev-conn:s', '--data-dir', dir], {
     out: (text) => {
       outputs.push(text);
-      // registered output after simulated Ctrl+C(forwardSignals already take over clean up)
+      // After registered banner prints, simulate Ctrl+C (forwardSignals handles cleanup)
       if (text.includes('registered')) {
         setTimeout(() => process.kill(process.pid, 'SIGINT'), 200);
       }
@@ -666,12 +667,12 @@ test('connect foreground: register complete before output connect in, register a
   });
   const r = await runPromise;
   assert.equal(r.code, 0, r.err);
-  assert.match(outputs[0] ?? '', /connect in/, 'first output must be connect in while non- connected');
-  assert.ok(outputs.some((text) => text.includes('registered and start work')));
-  assert.ok(!outputs.some((text) => text.includes('connected ')), 'must not output connected false state');
+  assert.match(outputs[0] ?? '', /connecting/, 'first line must say connecting rather than connected');
+  assert.ok(outputs.some((text) => text.includes('registered and ready')));
+  assert.ok(!outputs.some((text) => text.includes('connected ')), 'must not print bogus connected status');
 });
 
-test('connect --once: once attempt i.e. exit; authentication reject when such as report failed', { timeout: 60_000 }, async (t) => {
+test('connect --once exits after single attempt and reports auth rejection truthfully', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helm-review-once-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
@@ -688,7 +689,7 @@ test('connect --once: once attempt i.e. exit; authentication reject when such as
 });
 
 // ---------------------------------------------------------------------------
-// 6. service: inject execute one by one step verify (zero host side effect:serviceHome → temp directory)
+// 6. service: step-by-step verification with injected executor (zero host side effects via temp serviceHome)
 // ---------------------------------------------------------------------------
 
 const okExec: ServiceExec = {
@@ -698,7 +699,7 @@ const failExec: ServiceExec = {
   run: async () => ({ code: 1, stdout: '', stderr: 'permission denied' }),
 };
 
-test('install:targetPath  serviceHome temp directory, zero host side effect', { timeout: 60_000 }, async (t) => {
+test('install places targetPath under temp serviceHome with zero host side effects', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helm-review-svc-');
   const home = await tempDir('helm-review-svc-home-');
   t.after(async () => {
@@ -712,11 +713,11 @@ test('install:targetPath  serviceHome temp directory, zero host side effect', { 
     serviceHome: home,
   });
   assert.equal(installed.ok, true, installed.message);
-  assert.ok(installed.targetPath!.startsWith(home), `targetPath must serviceHome: ${installed.targetPath}`);
+  assert.ok(installed.targetPath!.startsWith(home), `targetPath must fall inside serviceHome: ${installed.targetPath}`);
   assert.equal(
     await fs.stat(installed.targetPath!).then(() => true, () => false),
     true,
-    'platform takes effect file should write',
+    'active platform unit file should be written',
   );
 
   const status = await getNodeServiceStatus(cliEntry, dir, { execCommand: okExec, platform: 'linux', serviceHome: home });
@@ -732,11 +733,11 @@ test('install:targetPath  serviceHome temp directory, zero host side effect', { 
   assert.equal(
     await fs.stat(installed.targetPath!).then(() => true, () => false),
     false,
-    'unload after platform takes effect file should delete',
+    'active platform unit file should be deleted after uninstall',
   );
 });
 
-test('install:daemon-reload / register command failed one by one step explicit errors, config keep', { timeout: 60_000 }, async (t) => {
+test('install fails explicitly when daemon-reload or registration fails and preserves config', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helm-review-svc-cmdfail-');
   const home = await tempDir('helm-review-svc-cmdfail-home-');
   t.after(async () => {
@@ -745,7 +746,7 @@ test('install:daemon-reload / register command failed one by one step explicit e
   });
   const cliEntry = path.join(dir, 'cli.js');
 
-  // daemon-reload failed (only systemctl command failed)
+  // daemon-reload failure (systemctl command fails)
   const reloadFail: ServiceExec = {
     run: async (_cmd, args) => {
       if (args.includes('daemon-reload')) return { code: 1, stdout: '', stderr: 'reload failed' };
@@ -756,20 +757,20 @@ test('install:daemon-reload / register command failed one by one step explicit e
     installNodeService(cliEntry, dir, { execCommand: reloadFail, platform: 'linux', serviceHome: home }),
     /daemon-reload|reload failed/,
   );
-  // Profile copy still in (supply diagnose/retry)
+  // Staged config copy preserved for diagnosis and retry
   assert.equal(
     await fs.stat(path.join(dir, 'service', 'helm-node.service')).then(() => true, () => false),
     true,
   );
 
-  // register command failed
+  // Registration command failure
   await assert.rejects(
     installNodeService(cliEntry, dir, { execCommand: failExec, platform: 'linux', serviceHome: home }),
-    /system register|permission denied/,
+    /service registration|permission denied/,
   );
 });
 
-test('uninstall: deregister command failed → keep config and errors (does not pretend to be uninstalled)', { timeout: 60_000 }, async (t) => {
+test('uninstall preserves configs and throws when deregistration fails instead of pretending uninstalled', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helm-review-svc-unfail-');
   const home = await tempDir('helm-review-svc-unfail-home-');
   t.after(async () => {
@@ -777,14 +778,14 @@ test('uninstall: deregister command failed → keep config and errors (does not 
     await fs.rm(home, { recursive: true, force: true });
   });
   const cliEntry = path.join(dir, 'cli.js');
-  // first succeeded install
+  // Install cleanly first
   await installNodeService(cliEntry, dir, { execCommand: okExec, platform: 'linux', serviceHome: home });
-  // deregister failed
+  // Deregistration fails
   await assert.rejects(
     uninstallNodeService(cliEntry, dir, { execCommand: failExec, platform: 'linux', serviceHome: home }),
-    /platform deregister failed|permission denied/,
+    /platform deregistration failed|permission denied/,
   );
-  // config keep (contains platform takes effect file)
+  // Config files preserved (including active platform file)
   assert.equal(
     await fs.stat(path.join(home, '.config/systemd/user/helm-node.service')).then(() => true, () => false),
     true,
@@ -795,7 +796,7 @@ test('uninstall: deregister command failed → keep config and errors (does not 
   );
 });
 
-test('status: three state zone (installed/running/unknown), query failed explicit diagnose', { timeout: 60_000 }, async (t) => {
+test('status distinguishes installed/running/unknown and diagnoses query failures explicitly', { timeout: 60_000 }, async (t) => {
   const dir = await tempDir('helm-review-svc-status-');
   const home = await tempDir('helm-review-svc-status-home-');
   t.after(async () => {
@@ -804,22 +805,22 @@ test('status: three state zone (installed/running/unknown), query failed explici
   });
   const cliEntry = path.join(dir, 'cli.js');
 
-  // not installed:installed false(even if state command sound call active)
+  // Not installed: installed=false even if status command says active
   const notInstalled = await getNodeServiceStatus(cliEntry, dir, {
     execCommand: okExec,
     platform: 'linux',
     serviceHome: home,
   });
   assert.equal(notInstalled.installed, false);
-  assert.match(notInstalled.detail ?? '', /takes effect file missing/);
+  assert.match(notInstalled.detail ?? '', /active unit file is missing/);
 
-  // installed + active → running
+  // Installed + active -> running
   await installNodeService(cliEntry, dir, { execCommand: okExec, platform: 'linux', serviceHome: home });
   const running = await getNodeServiceStatus(cliEntry, dir, { execCommand: okExec, platform: 'linux', serviceHome: home });
   assert.equal(running.installed, true);
   assert.equal(running.running, 'running');
 
-  // installed + inactive → stopped
+  // Installed + inactive -> stopped
   const inactiveExec: ServiceExec = {
     run: async () => ({ code: 3, stdout: 'inactive', stderr: '' }),
   };
@@ -831,7 +832,7 @@ test('status: three state zone (installed/running/unknown), query failed explici
   assert.equal(stoppedStatus.installed, true);
   assert.equal(stoppedStatus.running, 'stopped');
 
-  // query failed (command cannot execute)→ unknown + explicit diagnose
+  // Query command fails -> unknown + explicit diagnostic
   const brokenExec: ServiceExec = {
     run: async () => ({ code: null, stdout: '', stderr: 'systemctl: command not found' }),
   };
@@ -842,10 +843,10 @@ test('status: three state zone (installed/running/unknown), query failed explici
   });
   assert.equal(unknownStatus.installed, true);
   assert.equal(unknownStatus.running, 'unknown');
-  assert.match(unknownStatus.detail ?? '', /state query command failed/);
+  assert.match(unknownStatus.detail ?? '', /status query command failed/);
 });
 
-test('renderServiceSpec:serviceHome override three platform targetPath;unsupported errors', { timeout: 60_000 }, () => {
+test('renderServiceSpec applies serviceHome override across platforms and rejects unsupported ones', { timeout: 60_000 }, () => {
   const opts = { cliEntryPath: '/opt/cli.js', dataDir: '/opt/data', serviceHome: '/srv/fake-home' } as const;
   assert.equal(renderServiceSpec({ ...opts, platform: 'darwin' }).targetPath, '/srv/fake-home/Library/LaunchAgents/ai.helm.node.plist');
   assert.equal(renderServiceSpec({ ...opts, platform: 'linux' }).targetPath, '/srv/fake-home/.config/systemd/user/helm-node.service');
@@ -853,7 +854,7 @@ test('renderServiceSpec:serviceHome override three platform targetPath;unsupport
   assert.throws(() => renderServiceSpec({ ...opts, platform: 'sunos' }), /unsupported platform/);
 });
 
-test('unknown parameter --json: output error message seal; redundant location parameter reject', { timeout: 60_000 }, async () => {
+test('unknown command with --json emits error envelope and rejects trailing args', { timeout: 60_000 }, async () => {
   const r = await runCli(['bogus', 'extra', '--json']);
   assert.equal(r.code, 1);
   const envelope = JSON.parse(r.err) as { error: { code: string; message: string } };
@@ -861,9 +862,9 @@ test('unknown parameter --json: output error message seal; redundant location pa
   assert.match(envelope.error.message, /unknown command/);
 });
 
-test('isDirectRun:pnpm symlink invoke when identify path (bin smoke)', { timeout: 60_000 }, async () => {
+test('isDirectRun resolves real path when invoked via pnpm symlink (bin smoke)', { timeout: 60_000 }, async () => {
   const selfPath = new URL(import.meta.url).pathname;
-  assert.equal(isDirectRun(selfPath), false, 'test module is not CLI entry');
+  assert.equal(isDirectRun(selfPath), false, 'test file is not the CLI entry');
   assert.equal(isDirectRun('/definitely/not/this/file.js'), false);
   assert.equal(isDirectRun(undefined), false);
 });

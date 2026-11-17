@@ -1,12 +1,12 @@
 /**
- * daemon run body (foreground connect/start and subject to control background shared use):
- * - register before only output connect in;registered only from real daemon register ACK, not complete is starting;
- * - subject to control pattern (control): first listen control server(daemon not ready also can reply status/reject fabricate
- *   stop),daemon register result set after via stdio IPC on report ready and disconnect;stop request
- *   → abort → handle.close()(wait for execute environment clean up)→ reply → closure server and socket;
- * - upgrade choose pattern (HELM_NODE_PENDING_ACTIVATION): real registered after keep IPC
- *   etc. activate, receives and context consistent only then confirmUpgrade(detail see awaitActivate);
- * - exit path finally clean up all asset (handle, control server, signal listener).
+ * Daemon runtime loop shared by foreground `connect` and controlled background `start`:
+ * - Prints "connecting" before registration completes; "registered" is reported only after Hub ACK.
+ * - In controlled mode (`control`), starts the control IPC server before connecting so `status`
+ *   works even before registration, reports readiness over stdio IPC (`helm-node.ready`), and on
+ *   `stop` aborts, awaits `handle.close()`, replies, and closes the control server.
+ * - In upgrade candidate mode (`HELM_NODE_PENDING_ACTIVATION`), holds parent stdio IPC after
+ *   registration until `helm-node.activate` arrives and passes context validation (`awaitActivate`).
+ * - Always cleans up `handle`, control server, and signal listeners on exit.
  */
 import process from 'node:process';
 import { logPathOf, readPidRecord, writePidRecord, removePidFile, type NodeCliIo } from './cli-context.js';
@@ -26,10 +26,10 @@ import {
   type CandidateUpgradeHandoff,
 } from './daemon/upgrade-handoff.js';
 
-/** daemon handle (latency import type alias; avoid entry layer static dependency daemon). */
+/** Lazy type alias for the daemon handle so entry-layer code does not statically pull in `daemon/index`. */
 type DaemonHandle = Awaited<ReturnType<(typeof import('./daemon/index.js'))['runNodeDaemonHandle']>>;
 
-/** foreground signal take over: return unload function (try/finally guarantee listener clean up). */
+/** Hook SIGINT/SIGTERM to `controller.abort()` and return a cleanup callback. */
 function forwardSignals(controller: AbortController): () => void {
   const stop = (): void => controller.abort();
   process.once('SIGINT', stop);
@@ -40,7 +40,7 @@ function forwardSignals(controller: AbortController): () => void {
   };
 }
 
-/** ready on report (subject to control instance to parent process; choose keep IPC etc. activate do not disconnect). */
+/** Report readiness to the parent process; candidates keep IPC open until activation completes. */
 function reportReady(control: { instanceId: string } | undefined, pendingActivation: boolean, state: DaemonReadyState): void {
   if (control === undefined || process.send === undefined) return;
   try {
@@ -51,27 +51,24 @@ function reportReady(control: { instanceId: string } | undefined, pendingActivat
       state,
     } satisfies { type: 'helm-node.ready'; pid: number; instanceId: string; state: DaemonReadyState });
   } catch {
-    // parent side channel already close: ordinary subject to control instance ignore (daemon continue store reconnect).
+    // Parent IPC channel already closed; normal controlled instances keep running and reconnecting.
   }
   if (!pendingActivation) {
     try {
       if (process.connected && process.disconnect !== undefined) process.disconnect();
     } catch {
-      // disconnected.
+      // Already disconnected.
     }
   }
 }
 
-/** choose receives activate and itself context core for conclusion. */
 type ActivateCheck = { kind: 'accept' } | { kind: 'reject'; reason: string; abort: boolean };
 
-/** core for activate:pid/attemptId/upgrade version context inconsistent choose never commit. */
+/** Verify that the activate message's PID, attemptId, and version context match this candidate process. */
 function checkActivate(activate: ActivateMessage, handoff: CandidateUpgradeHandoff, selfPid: number): ActivateCheck {
   if (activate.pid !== selfPid || (handoff.attemptId !== undefined && activate.attemptId !== handoff.attemptId)) {
-    return { kind: 'reject', reason: 'activate context and this process inconsistent', abort: false };
+    return { kind: 'reject', reason: 'activate context does not match this candidate process', abort: false };
   }
-  // upgrade context core for:activate carry previousVersion/version must and choose start
-  // env inject this time upgrade context fully consistent, inconsistent never confirmUpgrade.
   if (
     handoff.previousVersion === undefined ||
     handoff.targetVersion === undefined ||
@@ -80,25 +77,25 @@ function checkActivate(activate: ActivateMessage, handoff: CandidateUpgradeHando
   ) {
     return {
       kind: 'reject',
-      abort: true, // context does not match: do not commit, choose exit hand over parent side security rollback
+      abort: true, // Context mismatch: never commit; exit so the parent rolls back safely.
       reason:
-        `upgrade context inconsistent:activate previousVersion=${activate.previousVersion} version=${activate.version}` +
-        `, choose env previousVersion=${handoff.previousVersion ?? '(missing)'} targetVersion=${handoff.targetVersion ?? '(missing)'}`,
+        `upgrade context mismatch: activate previousVersion=${activate.previousVersion} version=${activate.version}, ` +
+        `candidate env previousVersion=${handoff.previousVersion ?? '(missing)'} targetVersion=${handoff.targetVersion ?? '(missing)'}`,
     };
   }
   return { kind: 'accept' };
 }
 
-/** to parent process send activate-rejected(parent side on disconnect static default). */
+/** Notify parent that activation was rejected (best-effort; ignored if parent disconnected). */
 function sendRejected(attemptId: string, reason: string): void {
   try {
     process.send?.({ type: 'helm-node.activate-rejected', attemptId, reason });
   } catch {
-    // parent side disconnected.
+    // Parent disconnected.
   }
 }
 
-/** choose confirm activate:confirmUpgrade local after commit back activated and detach parent IPC. */
+/** Call `confirmUpgrade` locally, notify parent `activated`, and detach parent IPC. */
 async function confirmAndDetach(handle: DaemonHandle | undefined, activate: ActivateMessage, abort: () => void): Promise<void> {
   try {
     if (handle !== undefined) {
@@ -112,30 +109,29 @@ async function confirmAndDetach(handle: DaemonHandle | undefined, activate: Acti
     try {
       process.send?.({ type: 'helm-node.activated', attemptId: activate.attemptId });
     } catch {
-      // parent side ACK lose: local machine already activate, choose continue store (idempotent retry Hub commit).
+      // Parent lost the ACK, but local activation succeeded; candidate stays alive and retries Hub commit.
     }
-    // detach parent IPC: activate after parent exit does not affect choose.
+    // Detach parent IPC so the parent exiting cannot affect the newly activated candidate.
     try {
       if (process.connected && process.disconnect !== undefined) process.disconnect();
     } catch {
-      // disconnected.
+      // Already disconnected.
     }
   } catch (error) {
     sendRejected(activate.attemptId, error instanceof Error ? error.message : String(error));
-    abort(); // confirmUpgrade failed: choose self row exit, parent side security rollback
+    abort(); // confirmUpgrade failed: candidate exits so parent rolls back safely.
   }
 }
 
 /**
- * choose etc. activate: parent disconnect/timeout reject (inactive i.e. exit, do not to Hub disguise committed);
- * receives legal activate after core for context - - inconsistent back refuse (context does not match also exit hand over parent side
- * rollback), consistent then confirmUpgrade back activated and detach parent IPC.
+ * Wait for `helm-node.activate` in candidate mode; rejects on parent disconnect or timeout so an
+ * unactivated candidate exits instead of claiming success to the Hub.
  */
 function awaitActivate(handle: DaemonHandle | undefined, handoff: CandidateUpgradeHandoff, controller: AbortController): Promise<void> {
   return new Promise((resolve, reject) => {
     const fail = (reason: string): void => {
       cleanup();
-      reject(new Error(`choose wait for activate failed:${reason}(inactive i.e. exit, do not to Hub disguise committed)`));
+      reject(new Error(`candidate failed waiting for activation: ${reason} (unactivated candidate exiting)`));
     };
     const onMessage = (message: unknown): void => {
       const activate = parseActivateMessage(message);
@@ -152,8 +148,8 @@ function awaitActivate(handle: DaemonHandle | undefined, handoff: CandidateUpgra
       void confirmAndDetach(handle, activate, () => controller.abort());
       resolve();
     };
-    const onDisconnect = (): void => fail('parent IPC channel disconnect');
-    const timer = setTimeout(() => fail(`wait for activate timeout (${CANDIDATE_ACTIVATE_WAIT_MS}ms)`), CANDIDATE_ACTIVATE_WAIT_MS);
+    const onDisconnect = (): void => fail('parent IPC channel disconnected');
+    const timer = setTimeout(() => fail(`activation wait timed out (${CANDIDATE_ACTIVATE_WAIT_MS}ms)`), CANDIDATE_ACTIVATE_WAIT_MS);
     const cleanup = (): void => {
       clearTimeout(timer);
       process.removeListener('message', onMessage);
@@ -164,7 +160,7 @@ function awaitActivate(handle: DaemonHandle | undefined, handoff: CandidateUpgra
   });
 }
 
-/** real run version pre- take (current.json takes precedence); failed static default omit version field. */
+/** Prefetch the daemon's own package version for synchronous `status` reporting; returns undefined on failure. */
 async function prefetchNodeVersion(): Promise<string | undefined> {
   try {
     const { getNodeVersion } = await import('./daemon/upgrader.js');
@@ -174,7 +170,7 @@ async function prefetchNodeVersion(): Promise<string | undefined> {
   }
 }
 
-/** pair create and listen control server: version listen before pre- take once (status response sync read, avoid each request motion state import). */
+/** Start the per-instance control server before connecting so `status` is available immediately. */
 async function setupControlServer(args: {
   control: { instanceId: string; endpoint: string };
   handle: () => DaemonHandle | undefined;
@@ -197,10 +193,9 @@ async function setupControlServer(args: {
       const handle = args.handle();
       if (handle !== undefined) await handle.close();
     },
-    // upgrade request (local machine can message source): forwarding handle.upgrade; response attach pid/instanceId/result.
     onUpgrade: (input: unknown): Promise<unknown> => {
       const handle = args.handle();
-      if (handle === undefined) return Promise.reject(new Error('daemon not ready, reject upgrade request'));
+      if (handle === undefined) return Promise.reject(new Error('daemon not ready; rejecting upgrade request'));
       const record = (input ?? {}) as Record<string, unknown>;
       return handle.upgrade(
         {
@@ -219,13 +214,13 @@ async function setupControlServer(args: {
   } catch (error) {
     args.detachSignals();
     throw new Error(
-      `control channel listen failed (${args.control.endpoint}):${error instanceof Error ? error.message : String(error)}`,
+      `control channel failed to listen (${args.control.endpoint}): ${error instanceof Error ? error.message : String(error)}`,
     );
   }
   return server;
 }
 
-/** wait for abort signal set (already abort immediately return). */
+/** Wait until `controller.signal` aborts (resolves immediately if already aborted). */
 function waitAborted(controller: AbortController): Promise<void> {
   return new Promise<void>((resolve) => {
     if (controller.signal.aborted) {
@@ -236,14 +231,13 @@ function waitAborted(controller: AbortController): Promise<void> {
   });
 }
 
-/** asset clean up:handle.close failed such as record is failed exit code, do not because already activate while swallow wrong. */
+/** Clean up daemon handle and control server; propagates `handle.close()` failures as non-zero exit. */
 async function cleanupDaemonRun(handle: DaemonHandle | undefined, controlServer: ControlServer | undefined): Promise<string | undefined> {
   let stopFailure: string | undefined;
   if (handle !== undefined) {
     try {
       await handle.close();
     } catch (error) {
-      // choose already activate after close exception does not affect committed stream process (Hub commit idempotent retry).
       stopFailure = error instanceof Error ? error.message : String(error);
     }
   }
@@ -267,7 +261,6 @@ export async function runDaemonProcess(options: {
   let handle: DaemonHandle | undefined;
   let stopFailure: string | undefined;
 
-  // upgrade choose pattern: real registered after keep stdio IPC etc. activate; parent disconnect/timeout exit.
   const handoff = parseUpgradeHandoffEnv(io.env);
   const pendingActivation = io.env?.['HELM_NODE_PENDING_ACTIVATION'] === '1' && handoff !== undefined;
   let upgradeReplaced = false;
@@ -285,14 +278,14 @@ export async function runDaemonProcess(options: {
   }
 
   if (!json && control === undefined) {
-    io.out(`helm-node connect in ${hubUrl}(nodeId=${nodeId}); register after completion start work,Ctrl+C exit\n`);
+    io.out(`helm-node connecting to ${hubUrl} (nodeId=${nodeId}); will begin serving once registration completes (Ctrl+C to exit)\n`);
   }
   try {
     handle = await runNodeDaemonHandle(
       { hubUrl, token },
       {
         dataDir,
-        // subject to control instance only then access upgrade handover (foreground connect without prepare when upgrade unsupported).
+        // Only controlled instances support upgrade handoffs.
         ...(control !== undefined
           ? {
               prepareUpgradeReplacement: (release, context) =>
@@ -307,7 +300,7 @@ export async function runDaemonProcess(options: {
                 }),
               onUpgradeReplaced: () => {
                 upgradeReplaced = true;
-                // latency exit: to upgrade response conflict refresh remaining amount, after old daemon graceful let.
+                // Delay exit briefly so the upgrade control response flushes cleanly.
                 setTimeout(() => controller.abort(), UPGRADE_EXIT_DELAY_MS).unref?.();
               },
             }
@@ -318,19 +311,18 @@ export async function runDaemonProcess(options: {
     );
     const registered = await handle.waitUntilRegistered(10_000);
     if (control !== undefined) {
-      // ready on report: parent process based on this write pid Profile; parent already on exit ignore (daemon continue store reconnect).
       reportReady(control, pendingActivation, registered ? 'registered' : 'starting');
     } else if (!json) {
       io.out(
         registered
-          ? `registered and start work (${hubUrl})\n`
-          : 'not yet complete register (Hub temporary cannot reach when daemon continuous backoff reconnect), diagnose see stderr log\n',
+          ? `registered and ready (${hubUrl})\n`
+          : 'registration pending (daemon will keep reconnecting with backoff if Hub is unreachable); see stderr logs\n',
       );
     }
     if (pendingActivation) {
-      // choose:starting cannot commit - - such as exit (parent side by failed to start rollback), never disguise ready.
+      // Unregistered candidates must not activate; exit so the parent rolls back cleanly.
       if (!registered) {
-        throw new Error('upgrade choose not complete real register (starting), reject enter await activate wait for');
+        throw new Error('upgrade candidate did not complete Hub registration (state=starting); refusing to await activation');
       }
       await awaitActivate(handle, handoff!, controller);
     }

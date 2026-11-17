@@ -1,13 +1,12 @@
 /**
- * env-rpc system column module sharing pure error message seal and validate assist manually: main server side
- * (env-rpc-server),Herdr IPC bridge (env-rpc-ipc) and TCP tunnel handle
- * (env-rpc-tunnel) single point shared use, error code/message semantics zero duplicate.
+ * Shared RPC error envelope and validation helpers used by `env-rpc-server`, `env-rpc-ipc`,
+ * and `env-rpc-tunnel` so error codes and formatting share one source of truth.
  */
 import type { RpcEnvError, RpcResult } from '@helm/protocol';
 
 export type RpcErrorCode = RpcEnvError['code'];
 
-/** upgrade arrange empty refuse new error message seal: stable code node_draining + person class can read diagnose. */
+/** Standard `node_draining` error envelope returned when rejecting new work during upgrade drain. */
 export const drainingRejection = (what: string): RpcEnvError => ({
   code: 'node_draining',
   message: `daemon is draining (upgrade in progress), rejecting new ${what}`,

@@ -4,18 +4,18 @@ import { join } from 'node:path'
 import { useTempDir } from '@helm/test-kit/node'
 import { getNodeServiceStatus, renderServiceSpec } from '../src/daemon/service.js'
 
-test('systemd parameter respectively escaping quotes,specifier and environment expand', { timeout: 60_000 }, () => {
+test('systemd args individually escape quotes, specifiers, and env expansion', { timeout: 60_000 }, () => {
   const spec = renderServiceSpec({
     platform: 'linux', nodePath: '/usr/bin/node', cliEntryPath: '/opt/helm/cli.js',
     dataDir: '/tmp/中文 %h $HOME "quoted"', serviceHome: '/tmp/home',
   })
-  assert.ok(spec.content.includes('%%h'), 'hundred number cannot trigger systemd specifier')
-  assert.ok(spec.content.includes('$$HOME'), 'dollar symbol cannot trigger systemd environment expand')
-  assert.ok(spec.content.includes('\\"quoted\\"'), 'parameter inside quotes must escaping')
+  assert.ok(spec.content.includes('%%h'), 'percent sign must not trigger systemd specifier expansion')
+  assert.ok(spec.content.includes('$$HOME'), 'dollar sign must not trigger systemd environment expansion')
+  assert.ok(spec.content.includes('\\"quoted\\"'), 'quotes inside argument must be escaped')
   assert.throws(() => renderServiceSpec({ platform: 'linux', cliEntryPath: '/tmp/cli.js', dataDir: 'bad\nExecStart=/evil' }), /control character/)
 })
 
-test('Windows register use task plan XML, parameter without going through cmd expand', { timeout: 60_000 }, () => {
+test('Windows registration uses Task Scheduler XML so args skip cmd expansion', { timeout: 60_000 }, () => {
   const spec = renderServiceSpec({
     platform: 'win32', nodePath: 'C:\\Program Files\\node.exe', cliEntryPath: 'C:\\helm\\cli.js',
     dataDir: 'C:\\中文 %USERPROFILE% & $x\\', serviceHome: '/tmp/home',
@@ -29,16 +29,16 @@ test('Windows register use task plan XML, parameter without going through cmd ex
   assert.equal(spec.installCmd.includes('/TR'), false)
 })
 
-test('Windows install state with platform task query is allow, query failed explicit is unknown', { timeout: 60_000 }, async (t) => {
+test('Windows install status follows platform task query and reports unknown on query failure', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-service-proof-')
   const options = { platform: 'win32' as const, serviceHome: join(dir, 'home') }
   const actual = await getNodeServiceStatus('/tmp/cli.js', dir, { ...options, execCommand: { run: async () => ({ code: 0, stdout: '"HelmNode","Running"', stderr: '' }) } })
-  assert.equal(actual.installed, true, 'no local XML copy also can has registered platform task')
+  assert.equal(actual.installed, true, 'a registered platform task can exist without a local XML copy')
   assert.equal(actual.running, 'running')
   const failure = await getNodeServiceStatus('/tmp/cli.js', dir, { ...options, execCommand: { run: async () => ({ code: 1, stdout: '', stderr: 'Access is denied' }) } })
   assert.equal(failure.installed, null)
   assert.equal(failure.running, 'unknown')
-  assert.match(failure.detail ?? '', /state query command failed/)
+  assert.match(failure.detail ?? '', /status query command failed/)
 })
 
 test('Windows service queries recognize localized status and missing-task messages', { timeout: 60_000 }, async (t) => {
@@ -59,7 +59,7 @@ test('Windows service queries recognize localized status and missing-task messag
   }
 })
 
-test('launchctl single task dictionary in PID means real run state', { timeout: 60_000 }, async (t) => {
+test('PID in launchctl single-task dictionary indicates actual running state', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-launchctl-proof-')
   const status = await getNodeServiceStatus('/tmp/cli.js', dir, {
     platform: 'darwin', serviceHome: dir,

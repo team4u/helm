@@ -1,9 +1,9 @@
 /**
- * @helm/env-io:kernel and @helm/node sharing execute implement package.
+ * @helm/env-io: shared execution I/O primitives used by both `@helm/kernel` and `@helm/node`.
  *
- * protocol only keep can serial RPC shape (NodePathUsage etc.); real file system /
- * process table access, environment variable large small write original language and host machine Shell probe ownership this package, by two end
- * (Hub local machine and remote node daemon) dependency the same implement, never each duplicate one set semantics.
+ * `@helm/protocol` keeps only serializable RPC shapes (`NodePathUsage`, etc.); actual filesystem
+ * and procfs access, case-aware environment variable primitives, and host shell probing live here
+ * so the Hub host and remote node daemon share a single implementation.
  */
 export * from './path-usage.js'
 export * from './node-path-usage-io.js'

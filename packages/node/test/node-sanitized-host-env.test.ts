@@ -1,8 +1,8 @@
 /**
- * sanitizedHostEnv contract test: lock host carry managed HELM_* variable when, test child process
- * environment base bottom must strip except all managed variable, keep ordinary variable, and do not change process.env
- * semantics. this is packages/node test in Helm hosting host environment (bash etc. managed tool day however
- * inject HELM_* execute environment) under stable via before mention.
+ * Contract tests for `sanitizedHostEnv`: ensures that when the host carries
+ * managed `HELM_*` variables, the test child-process baseline strips every managed
+ * variable, preserves ordinary variables, and never mutates `process.env`.
+ * This keeps `packages/node` tests stable even inside a Helm-managed host shell.
  */
 
 import { test } from 'node:test';
@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import process from 'node:process';
 import { HOST_MANAGED_HELM_ENV_NAMES, sanitizedHostEnv } from './helpers/sanitized-env.js';
 
-/** in process.env on temporary write variable and in test after end precise restore (contains originally not set key). */
+/** Temporarily set keys on `process.env` and restore exact prior values (including unset keys) afterward. */
 function withEnv(vars: Record<string, string>, run: () => void): void {
   const saved = new Map<string, string | undefined>();
   for (const key of Object.keys(vars)) saved.set(key, process.env[key]);
@@ -25,38 +25,38 @@ function withEnv(vars: Record<string, string>, run: () => void): void {
   }
 }
 
-test('host hold has all managed HELM_* variable when,sanitizedHostEnv strip except after leaves no residue any managed variable', { timeout: 60_000 }, () => {
+test('sanitizedHostEnv leaves no managed HELM_* variables when host defines all of them', { timeout: 60_000 }, () => {
   const fixture: Record<string, string> = {};
   for (const name of HOST_MANAGED_HELM_ENV_NAMES) fixture[name] = `host-managed-${name.toLowerCase()}`;
   let result: NodeJS.ProcessEnv | undefined;
   withEnv(fixture, () => {
     result = sanitizedHostEnv();
-    // process.env itself do not by assist manually change
+    // Helper must not mutate process.env itself
     for (const name of HOST_MANAGED_HELM_ENV_NAMES) {
-      assert.equal(process.env[name], fixture[name], `assist manually must not change process.env  ${name}`);
+      assert.equal(process.env[name], fixture[name], `helper must not mutate process.env.${name}`);
     }
   });
   assert.ok(result !== undefined);
   for (const name of HOST_MANAGED_HELM_ENV_NAMES) {
-    assert.equal(name in result, false, `managed variable ${name} must by strip except`);
-    assert.equal(result[name], undefined, `managed variable ${name} must not leftover value`);
+    assert.equal(name in result, false, `managed variable ${name} must be stripped`);
+    assert.equal(result[name], undefined, `managed variable ${name} must have no remaining value`);
   }
 });
 
-test('sanitizedHostEnv keep ordinary variable (PATH etc. local machine tool chain) and each time return independent copy', { timeout: 60_000 }, () => {
+test('sanitizedHostEnv preserves ordinary variables like PATH and returns an independent copy each call', { timeout: 60_000 }, () => {
   const a = sanitizedHostEnv();
   const b = sanitizedHostEnv();
-  assert.notEqual(a, b, 'each time invoke return independent copy, caller can security override');
-  assert.equal(a['PATH'] ?? a['Path'], process.env['PATH'] ?? process.env['Path'], 'PATH must keep');
-  if (process.env['HOME'] !== undefined) assert.equal(a['HOME'], process.env['HOME'], 'HOME must keep');
+  assert.notEqual(a, b, 'each call should return an independent copy safe for callers to mutate');
+  assert.equal(a['PATH'] ?? a['Path'], process.env['PATH'] ?? process.env['Path'], 'PATH must be preserved');
+  if (process.env['HOME'] !== undefined) assert.equal(a['HOME'], process.env['HOME'], 'HOME must be preserved');
   a['TEST_ONLY_MUTATION'] = 'x';
-  assert.equal(b['TEST_ONLY_MUTATION'], undefined, 'copy between mutual does not affect');
+  assert.equal(b['TEST_ONLY_MUTATION'], undefined, 'mutations must not leak across copies');
   delete a['TEST_ONLY_MUTATION'];
 });
 
-test('managed variable large small write change body same strip except (Windows env name large small write do not sensitive semantics)', { timeout: 60_000 }, () => {
-  // only set change body name, do not and canonical name and use (Windows on process.env large small write do not sensitive,
-  // same name change body essence is the same slot;Linux on is independent key, two kinds of platform all must by strip except).
+test('sanitizedHostEnv strips case variants of managed variables (Windows case-insensitive env semantics)', { timeout: 60_000 }, () => {
+  // Set only variant names without canonical names (on Windows process.env is case-insensitive,
+  // whereas on Linux they are distinct keys; both platforms must strip them).
   const variants = { helm_token: 'lower-host-token', Helm_Hub_Url: 'mixed-host-url', helm_node_instance_id: 'lower-instance' };
   let result: NodeJS.ProcessEnv | undefined;
   withEnv(variants, () => {
@@ -64,18 +64,18 @@ test('managed variable large small write change body same strip except (Windows 
   });
   assert.ok(result !== undefined);
   for (const key of Object.keys(variants)) {
-    assert.equal(key in result, false, `large small write change body ${key} must by strip except`);
+    assert.equal(key in result, false, `case variant ${key} must be stripped`);
   }
 });
 
-test('test explicit override takes precedence: with sanitizedHostEnv is base bottom expand after override managed variable by test value takes effect', { timeout: 60_000 }, () => {
+test('explicit test overrides take precedence over sanitizedHostEnv baseline', { timeout: 60_000 }, () => {
   const fixture = { HELM_HUB_URL: 'http://host-real-hub:3202', HELM_VERSION_OVERRIDE: 'host-9.9.9' };
   let composed: NodeJS.ProcessEnv | undefined;
   withEnv(fixture, () => {
-    // and test inside real use method consistent: base bottom expand after override fixture explicit value
+    // Spread sanitizedHostEnv baseline first, then apply explicit test overrides
     composed = { ...sanitizedHostEnv(), HELM_HUB_URL: 'http://127.0.0.1:fixture', HELM_VERSION_OVERRIDE: '0.1.0' };
   });
   assert.ok(composed !== undefined);
-  assert.equal(composed['HELM_HUB_URL'], 'http://127.0.0.1:fixture', 'test explicit HELM_HUB_URL must takes effect');
-  assert.equal(composed['HELM_VERSION_OVERRIDE'], '0.1.0', 'test explicit HELM_VERSION_OVERRIDE must takes effect');
+  assert.equal(composed['HELM_HUB_URL'], 'http://127.0.0.1:fixture', 'explicit test HELM_HUB_URL must take effect');
+  assert.equal(composed['HELM_VERSION_OVERRIDE'], '0.1.0', 'explicit test HELM_VERSION_OVERRIDE must take effect');
 });

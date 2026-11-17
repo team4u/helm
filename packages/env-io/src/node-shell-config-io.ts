@@ -1,5 +1,5 @@
 /**
- * Node.js original generate adapt layer: is shell-config.ts provide real file system and child process probe.
+ * Native Node.js adapter providing filesystem and child-process probing for shell-config.ts.
  */
 import { spawn } from 'node:child_process'
 import { constants } from 'node:fs'
@@ -9,8 +9,8 @@ import { join } from 'node:path'
 import { getEnvEntry } from './process-env.js'
 import { resolveShellConfigWithIo, type ResolveShellResult, type ShellProbeIo } from './shell-config.js'
 
-/** terminate probe child process tree (only used to timeout clean up itself spawn out short life probe command). */
-export function killProbeProcessTree(pid: number): void {
+/** Terminate a process tree (taskkill /F /T on Windows; process-group SIGKILL on POSIX). */
+export function killProcessTree(pid: number): void {
   if (process.platform === 'win32') {
     try {
       const systemRoot = getEnvEntry(process.env, 'SystemRoot', 'win32') ?? 'C:\\Windows'
@@ -19,9 +19,10 @@ export function killProbeProcessTree(pid: number): void {
         detached: true,
         windowsHide: true,
       })
+      // A failed spawn emits 'error' asynchronously; consume it to avoid crashing Node.
       child.once('error', () => {})
     } catch {
-      // ignore clean up failed.
+      // Ignore cleanup errors.
     }
     return
   }
@@ -31,7 +32,7 @@ export function killProbeProcessTree(pid: number): void {
     try {
       process.kill(pid, 'SIGKILL')
     } catch {
-      // process already exit.
+      // Process already dead.
     }
   }
 }
@@ -55,7 +56,7 @@ async function execProbeCommand(
       return
     }
     const timeout = setTimeout(() => {
-      if (child.pid !== undefined) killProbeProcessTree(child.pid)
+      if (child.pid !== undefined) killProcessTree(child.pid)
     }, timeoutMs)
     child.stdout?.setEncoding('utf8')
     child.stdout?.on('data', (chunk: string) => {
@@ -89,7 +90,7 @@ async function safeRealpath(targetPath: string): Promise<string | null> {
   }
 }
 
-/** create based on when before Node.js host ShellProbeIo, allows test override part field. */
+/** Build a ShellProbeIo backed by the current Node.js host, allowing tests to override specific fields. */
 export function createNodeShellProbeIo(overrides: Partial<ShellProbeIo> = {}): ShellProbeIo {
   return {
     platform: overrides.platform ?? process.platform,
@@ -101,7 +102,7 @@ export function createNodeShellProbeIo(overrides: Partial<ShellProbeIo> = {}): S
   }
 }
 
-/** parse host machine available bash config (Hub local machine and @helm/node shared use the same probe implement). */
+/** Resolve available host bash configuration (shared by the Hub local runtime and @helm/node). */
 export async function resolveHostShellConfig(
   customShellPath?: string,
   io?: ShellProbeIo,

@@ -1,41 +1,17 @@
 #!/usr/bin/env node
 /**
- * helm-node CLI entry (parameter parse + command dispatch).
+ * `helm-node` CLI entrypoint (argument parsing and command dispatch).
  *
- * - runNodeCli(argv, io) is unique test/embed entry; directly runtime (argv[1] path
- *   equals this module path, compatibility pnpm bin symlink) only then automatically execute.
- * - command:connect / start / stop / restart / status / upgrade / service install|uninstall|status / --help.
- * - --json global takes effect: succeeded stdout JSON, failed stderr JSON error message seal + non-zero exit code.
- * - background control (across platform, independent of /proc, do not to any PID signal):
- *   . each time background start generate random instanceId;node.pid = { pid, instanceId, endpoint }
- *     (0600 atomic write).daemon child process self hold control IPC(Unix: /tmp/helm-node-<hash>.sock;
- *     Windows: \\.\pipe\helm-node-<hash>), single row JSON ≤4KiB, carries idle timeout, verify
- *     instanceId, only accept status/stop- - never to without closure process send signal or keystroke.
- *   . start -d use Node original generate stdio IPC on report ready (helm-node.ready), child process argv
- *     only `start --data-dir <dir> [--hub <url>]`, without token;token one rule from 0600
- *     node.json read.instanceId/endpoint via HELM_NODE_INSTANCE_ID /
- *     HELM_NODE_CONTROL_ENDPOINT environment variable pass (local machine instance control information, does not enter log).
- *   . stop only for via instanceId verify control end point stop:daemon first complete execute environment
- *     clean up (handle.close) again confirm exit, after only then delete pid file; control channel cannot reach and
- *     pid store when explicit failed and keep pid file;pid indeed already death only then by stale clean up.
- * - start -d with node.start.lock(O_CREAT|O_EXCL) guard against concurrency start, hold lock to pid Profile
- *   complete; leftover lock explicit diagnose, not silently delete.
- * - foreground connect/start register before only output connect in;state=registered only from real
- *   daemon register ACK, not complete is starting; control server only supply background instance start.
- * - upgrade handover: subject to control daemon inject prepareUpgradeReplacement(stdio IPC pull start choose
- *   release,activate/activated local machine commit protocol); control channel upgrade request forwarding to
- *   handle.upgrade(local machine can message source); upgrade after success old daemon latency exit let. choose with
- *   HELM_NODE_UPGRADE_ATTEMPT + pendingActivation start, real registered after keep
- *   IPC etc. activate, receives after validate previousVersion/targetVersion and this time upgrade context
- *   consistent only then confirmUpgrade(inconsistent do not commit and back refuse); activate after handle.close failed also
- *   such as record failed exit code, do not because already activate while swallow wrong.
- * - foreground start(without control env) into is stable launcher: itself keep and cycle trace
- *   node.pid points to when before instance (upgrade swap pid after automatically trace new daemon),SIGTERM/INT
- *   via control channel stop when before instance and wait for stop result set after only then exit - -systemd main PID do not because
- *   old daemon exit while kill the whole cgroup.stop and pid clean up all by instanceId CAS validate.
- *
- * implement layer:cli-context(io/pid Profile),control(control channel),launcher(background
- * start and trace),daemon-process(daemon run body),commands/(each command handler).
+ * - `runNodeCli(argv, io)` is the sole testable/embeddable entrypoint; direct execution runs only
+ *   when `argv[1]` resolves to this module (supporting pnpm `.bin` symlinks).
+ * - Commands: `connect`, `start`, `stop`, `restart`, `status`, `upgrade`, `doctor`, `service`, `--help`.
+ * - `--json` applies globally: JSON on stdout for success, JSON error envelope on stderr with exit code 1.
+ * - Background control uses a per-instance IPC endpoint (`pid + instanceId + endpoint` in `node.pid`)
+ *   instead of blindly sending signals to arbitrary PIDs.
+ * - `start -d` reports readiness over native Node stdio IPC (`helm-node.ready`) and reads tokens from
+ *   `0600` `node.json` (never passing tokens in argv).
+ * - Foreground `start` without control env vars acts as a stable launcher (for systemd/launchd),
+ *   tracking `node.pid` across upgrade handoffs and stopping the active instance cleanly on SIGTERM/SIGINT.
  */
 
 import path from 'node:path';
@@ -48,44 +24,44 @@ import { defaultSpawnDaemon } from './launcher.js';
 import { COMMANDS } from './commands/index.js';
 import type { ParsedCli } from './commands/shared.js';
 
-// history export (test and @helm/node package exit dependency): symbol already migration until layer module, this where keep again export.
+// Re-exported for tests and `@helm/node` consumers after modularization.
 export { defaultSpawnDaemon } from './launcher.js';
 export { resolveServiceEntry } from './service-entry.js';
 export { controlEndpoint, type DaemonReadyState } from './control.js';
 export type { NodeCliIo, PidRecord } from './cli-context.js';
 
-const USAGE = `helm-node - helm across platform subject to control node daemon
+const USAGE = `helm-node - cross-platform managed node daemon for helm
 
-use method: helm-node <command> [options]
+Usage: helm-node <command> [options]
 
-command:
-  connect <hubUrl> --token <token>   bind set JOIN token and foreground run (--once only attempt register once)
-  start [-d|--daemon]                start daemon (-d background detached, write <dataDir>/node.pid)
-  stop                               stop background daemon (via control channel verify identity after graceful stop)
-  restart                               after restart stage daemon (first confirm stop succeeded again pull new process)
-  status                                output identity bind set state, background process and run state summary
-  upgrade [--check] [--version <ver>]   self upgrade (--check only query; execute must managed daemon in run)
-  doctor                                zero side effect only read self inspect (identity 0600 / permission / Hub connect through / Herdr IPC)
-  service install|uninstall|status   open machine self start service manage (launchd / systemd --user / schtasks)
+Commands:
+  connect <hubUrl> --token <token>      Bind JOIN token and run in foreground (--once exits after one attempt)
+  start [-d|--daemon]                   Start daemon (-d runs detached in background, writing <dataDir>/node.pid)
+  stop                                  Stop background daemon gracefully via verified control channel
+  restart                               Restart background daemon (stops cleanly before starting replacement)
+  status                                Show identity binding, background process, and runtime state summary
+  upgrade [--check] [--version <ver>]   Self-upgrade (--check only queries; executing requires a managed daemon)
+  doctor                                Read-only diagnostics (identity 0600 / privileges / Hub reachability / Herdr IPC)
+  service install|uninstall|status      Manage OS startup service (launchd / systemd --user / schtasks)
 
-through use option:
+Options:
   --token <token>        JOIN token (nodeId:secret)
-  --hub <url>            Hub address
-  --data-dir <dir>       data directory (by default $HELM_DATA_DIR or ~/.helm)
-  --json                 machine can read JSON output
-  --once                 connect pattern under only attempt register once i.e. exit
-  --version <ver>        upgrade designate target version (strictly SemVer)
-  --registry <url>       upgrade npm registry source (by default official or HELM_NPM_REGISTRY)
-  --check                upgrade only check available update (do not start daemon, do not upgrade)
-  --force                upgrade force (exceeds guard against fall back/cool down phase/same version restrict)
-  --help, -h             show help
+  --hub <url>            Hub URL
+  --data-dir <dir>       Data directory (defaults to $HELM_DATA_DIR or ~/.helm)
+  --json                 Machine-readable JSON output
+  --once                 In connect mode, exit immediately after the first registration attempt
+  --version <ver>        Target version for upgrade (strict SemVer)
+  --registry <url>       npm registry URL for upgrade (defaults to official or HELM_NPM_REGISTRY)
+  --check                Check available updates without starting a daemon or upgrading
+  --force                Force upgrade (bypass downgrade guard, cooldown, and same-version check)
+  --help, -h             Show this help
 
-environment variable: HELM_DATA_DIR(by default ~/.helm). HELM_HUB_URL . HERDR_SOCKET_PATH
+Environment variables: HELM_DATA_DIR (default ~/.helm), HELM_HUB_URL, HERDR_SOCKET_PATH
 `;
 
 const VALUE_FLAGS = ['token', 'hub', 'data-dir', 'version', 'registry'] as const;
 const BOOL_FLAGS = ['once', 'help', 'daemon', 'd', 'check', 'force'] as const;
-/** each command legal option set; unknown option/redundant location parameter one rule explicit errors. */
+/** Allowed options per command; unknown options or extra positional arguments fail explicitly. */
 const COMMAND_FLAGS: Record<string, ReadonlySet<string>> = {
   connect: new Set(['token', 'hub', 'data-dir', 'json', 'once']),
   start: new Set(['token', 'hub', 'data-dir', 'json', 'daemon', 'd']),
@@ -96,7 +72,7 @@ const COMMAND_FLAGS: Record<string, ReadonlySet<string>> = {
   doctor: new Set(['hub', 'data-dir', 'json']),
   service: new Set(['hub', 'data-dir', 'json']),
 };
-/** each command location parameter count (connect can carries hubUrl;service exactly a sub- command; the rest 0). */
+/** Expected positional argument counts per command. */
 const COMMAND_POSITIONALS: Record<string, { min: number; max: number }> = {
   connect: { min: 1, max: 1 },
   start: { min: 0, max: 0 },
@@ -139,7 +115,7 @@ function parseCli(argv: readonly string[]): ParsedCli {
         if (raw === undefined || raw === '') {
           const next = argv[i + 1];
           if (next === undefined || next.startsWith('-')) {
-            throw new UsageError(`--${name} missing value`);
+            throw new UsageError(`--${name} requires a value`);
           }
           raw = next;
           i += 1;
@@ -148,13 +124,13 @@ function parseCli(argv: readonly string[]): ParsedCli {
       } else if ((BOOL_FLAGS as readonly string[]).includes(name)) {
         flags.set(name, true);
       } else {
-        throw new UsageError(`unknown option --${name}(helm-node --help view use method)`);
+        throw new UsageError(`unknown option --${name} (run helm-node --help for usage)`);
       }
       i += 1;
       continue;
     }
     if (token.startsWith('-') && token !== '-') {
-      throw new UsageError(`unknown option ${token}(helm-node --help view use method)`);
+      throw new UsageError(`unknown option ${token} (run helm-node --help for usage)`);
     }
     positional.push(token);
     i += 1;
@@ -162,37 +138,37 @@ function parseCli(argv: readonly string[]): ParsedCli {
   return { command: positional[0] ?? '', positional: positional.slice(1), flags, json, help };
 }
 
-/** parse after validate: unknown command, redundant location parameter, do not belongs to the command option all explicit errors. */
+/** Validate parsed CLI command, allowed flags, positional counts, and mutual exclusions. */
 function validateCli(parsed: ParsedCli): void {
   if (parsed.help) return;
   if (parsed.command === '') {
-    throw new UsageError('missing command (helm-node --help view use method)');
+    throw new UsageError('missing command (run helm-node --help for usage)');
   }
   const allowed = COMMAND_FLAGS[parsed.command];
   if (allowed === undefined) {
-    throw new UsageError(`unknown command:helm-node ${parsed.command}(helm-node --help view use method)`, 'unknown_command');
+    throw new UsageError(`unknown command: helm-node ${parsed.command} (run helm-node --help for usage)`, 'unknown_command');
   }
   for (const name of parsed.flags.keys()) {
     if (!allowed.has(name)) {
-      throw new UsageError(`command ${parsed.command} unsupported --${name}(helm-node --help view use method)`);
+      throw new UsageError(`command ${parsed.command} does not support --${name} (run helm-node --help for usage)`);
     }
   }
   const range = COMMAND_POSITIONALS[parsed.command]!;
   if (parsed.positional.length < range.min || parsed.positional.length > range.max) {
     throw new UsageError(
-      `command ${parsed.command} need to ${range.min === range.max ? String(range.min) : `${range.min}-${range.max}`} location parameter, got ${parsed.positional.length}(helm-node --help view use method)`,
+      `command ${parsed.command} expects ${range.min === range.max ? String(range.min) : `${range.min}-${range.max}`} positional argument(s), got ${parsed.positional.length} (run helm-node --help for usage)`,
     );
   }
   if (parsed.command === 'service') {
     const action = parsed.positional[0];
     if (action !== 'install' && action !== 'uninstall' && action !== 'status') {
-      throw new UsageError(`service need to install|uninstall|status sub- command, got ${JSON.stringify(action ?? '(empty)')}`);
+      throw new UsageError(`service requires subcommand install|uninstall|status, got ${JSON.stringify(action ?? '(empty)')}`);
     }
   }
   if (parsed.command === 'upgrade') {
-    // --check is pure query: and designate/force execute mutual exclusion, guard against mistakenly solve is check and upgrade.
+    // `--check` is read-only; forbid combining with `--version` or `--force` to avoid ambiguity.
     if (parsed.flags.get('check') === true && (parsed.flags.get('version') !== undefined || parsed.flags.get('force') === true)) {
-      throw new UsageError('upgrade --check and --version/--force mutual exclusion (--check only query do not execute upgrade)');
+      throw new UsageError('upgrade --check is mutually exclusive with --version and --force (--check only queries)');
     }
   }
 }
@@ -250,7 +226,7 @@ export async function runNodeCli(argv: readonly string[] = [], ioInput: Partial<
   }
 }
 
-/** directly run decide:argv[1] path === this module path (compatibility pnpm .bin symlink invoke). */
+/** Returns true when `entryArgv` resolves to this module (supporting pnpm `.bin` symlinks). */
 export function isDirectRun(entryArgv = process.argv[1]): boolean {
   if (entryArgv === undefined) return false;
   try {

@@ -1,11 +1,11 @@
 /**
- * instance control channel: across platform end point naming, single request client and daemon side IPC server.
+ * Per-instance control channel: cross-platform endpoint naming, single-shot client, and daemon IPC server.
  *
- * - end point:sha256(dataDir+instanceId) short hash;Unix UDS / Windows named pipe;
- * - protocol: single row JSON ≤64KiB, carries idle/request pre- compute, verify instanceId, only accept
- *   status/stop/upgrade- - never to without closure process send signal or keystroke;
- * - client failed to connect/timeout/response illegal one rule return null(caller zone cannot reach and
- *   by reject);ok response attach carries expectation pid/instanceId when validate consistency.
+ * - Endpoint: short sha256(dataDir + instanceId) hash (`Unix UDS` / `Windows named pipe`).
+ * - Protocol: newline-delimited JSON <= 64 KiB with request/idle timeouts; validates `instanceId`
+ *   and accepts only `status`, `stop`, and `upgrade` (never sends signals to unverified PIDs).
+ * - Client returns `null` on connect failure, timeout, or invalid response, and validates `pid` /
+ *   `instanceId` against expectations when provided.
  */
 import { createHash } from 'node:crypto';
 import fsp from 'node:fs/promises';
@@ -13,46 +13,46 @@ import net from 'node:net';
 import process from 'node:process';
 import { UsageError } from './cli-context.js';
 
-/** background daemon ready state:registered=completed Hub register;starting=process store continuous reconnect (can diagnose). */
+/** Background daemon readiness state: `registered` (Hub registration succeeded) or `starting` (reconnecting). */
 export type DaemonReadyState = 'registered' | 'starting';
 
-/** ready on report total pre- compute. */
+/** Total timeout waiting for daemon readiness reporting. */
 export const READY_TIMEOUT_MS = 45_000;
-/** control channel connect/response/idle pre- compute (status query,stop request channel layer cap). */
+/** Control-channel connect, response, and idle timeout for status/stop requests. */
 export const CONTROL_TIMEOUT_MS = 5_000;
-/** stop request total pre- compute:daemon must first complete handle.close execute environment clean up again reply. */
+/** Total timeout for `stop`: daemon must finish `handle.close()` cleanup before replying. */
 export const CONTROL_STOP_TIMEOUT_MS = 15_000;
-/** control protocol single row cap (byte);upgrade request carry input, fit when increase large. */
+/** Maximum single-line control frame size (bytes), sized to carry upgrade request options. */
 export const CONTROL_MAX_LINE_BYTES = 64_096;
-/** upgrade request total pre- compute: must greater than install most long when limit (npm install 10 minute). */
+/** Total timeout for `upgrade`: exceeds max npm install time (10 minutes). */
 export const CONTROL_UPGRADE_TIMEOUT_MS = 11 * 60_000;
-/** stop by accept after wait for process real exit cap. */
+/** Timeout waiting for the daemon process to exit after accepting `stop`. */
 export const STOP_EXIT_TIMEOUT_MS = 10_000;
-/** old daemon upgrade after commit latency exit time: to response conflict refresh remaining amount. */
+/** Delay before the old daemon exits after committing an upgrade so the RPC response flushes. */
 export const UPGRADE_EXIT_DELAY_MS = 100;
 
 /**
- * control end point:sha256(dataDir + instanceId) short hash naming, avoid path over long and collision.
- * Unix: /tmp/helm-node-<hash>.sock;Windows: \\.\pipe\helm-node-<hash>.
+ * Derive deterministic control endpoint from `sha256(dataDir + '\0' + instanceId)`.
+ * Unix: `/tmp/helm-node-<hash>.sock`; Windows: `\\.\pipe\helm-node-<hash>`.
  */
 export function controlEndpoint(dataDir: string, instanceId: string): string {
   const hash = createHash('sha256').update(`${dataDir}\0${instanceId}`).digest('hex').slice(0, 16);
   return process.platform === 'win32' ? `\\\\.\\pipe\\helm-node-${hash}` : `/tmp/helm-node-${hash}.sock`;
 }
 
-/** control channel response:ok=true when contains real pid/instanceId/state;ok=false when contains error;upgrade attach result. */
+/** Control-channel response payload. */
 export interface ControlResponse {
   ok: boolean;
   pid?: number;
   instanceId?: string;
   state?: DaemonReadyState | 'stopping';
-  /** status response attach carries run version (daemon real on report, via getNodeVersion read). */
+  /** Running version reported by the daemon (via `getNodeVersion()`). */
   version?: string;
   result?: unknown;
   error?: string;
 }
 
-/** control channel request payload (upgrade carry upgrade reference). */
+/** Control-channel request payload. */
 export interface ControlRequest {
   type: 'status' | 'stop' | 'upgrade';
   instanceId: string;
@@ -60,9 +60,8 @@ export interface ControlRequest {
 }
 
 /**
- * control channel client: single connect single request (one row JSON request, one row JSON response).
- * failed to connect/timeout/response illegal one rule return null(caller zone cannot reach and by reject);
- * ok response attach carries expectation pid/instanceId when verify consistency (local machine credentials cannot mistakenly stop another instance).
+ * Send a single control request and await one JSON response line.
+ * Returns `null` on connect failure, timeout, malformed payload, or mismatched `expect` identity.
  */
 export async function controlRequest(
   endpoint: string,
@@ -99,8 +98,7 @@ export async function controlRequest(
           finish(null);
           return;
         }
-        // identity verify:ok response must from Profile points to the same instance (pid/instanceId inconsistent
-        // treated as invalid response - - local machine credentials cannot mistakenly operation another instance).
+        // Identity verification: an `ok` response must belong to the expected PID/instanceId.
         if (parsed.ok === true && expect !== undefined) {
           if (expect.pid !== undefined && parsed.pid !== expect.pid) { finish(null); return }
           if (expect.instanceId !== undefined && parsed.instanceId !== expect.instanceId) { finish(null); return }
@@ -115,34 +113,33 @@ export async function controlRequest(
 }
 
 /**
- * control channel upgrade response result validate (boundary where Schema validate): must be contains ok===true,
- * boolean upgraded, non-empty string previousVersion/targetVersion, positive integer pid(new instance)
- * object; illegal or ok:false throw UsageError, never illegal artifact when succeeded output.
+ * Boundary validation for control-channel upgrade results: requires `ok === true`, boolean
+ * `upgraded`, non-empty `previousVersion`/`targetVersion`, and positive integer `pid` when upgraded.
  */
 export function validateUpgradeResult(
   raw: unknown,
 ): { previousVersion: string; targetVersion: string; upgraded: boolean; pid?: number } {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-    throw new UsageError('upgrade response result is not legal object (reject fabricate succeeded, please use helm-node status verify actual state)', 'invalid_upgrade_result');
+    throw new UsageError('upgrade response is not a valid object (refusing to assume success; check actual state with helm-node status)', 'invalid_upgrade_result');
   }
   const record = raw as Record<string, unknown>;
   if (record['ok'] !== true) {
     throw new UsageError(
-      `upgrade response result ok do not is true(${JSON.stringify(record['ok'] ?? '(missing)')}, reject fabricate succeeded)`,
+      `upgrade response ok is not true (${JSON.stringify(record['ok'] ?? '(missing)')}; refusing to assume success)`,
       'invalid_upgrade_result',
     );
   }
   if (typeof record['upgraded'] !== 'boolean') {
-    throw new UsageError('upgrade response result missing boolean upgraded field (reject fabricate succeeded)', 'invalid_upgrade_result');
+    throw new UsageError('upgrade response is missing boolean field upgraded (refusing to assume success)', 'invalid_upgrade_result');
   }
   for (const key of ['previousVersion', 'targetVersion'] as const) {
     if (typeof record[key] !== 'string' || (record[key] as string) === '') {
-      throw new UsageError(`upgrade response result missing non-empty string ${key}(reject fabricate succeeded)`, 'invalid_upgrade_result');
+      throw new UsageError(`upgrade response is missing non-empty string ${key} (refusing to assume success)`, 'invalid_upgrade_result');
     }
   }
   const pid = record['pid'];
   if ((record['upgraded'] || pid !== undefined) && (typeof pid !== 'number' || !Number.isSafeInteger(pid) || pid <= 0)) {
-    throw new UsageError('upgrade response result missing new instance positive integer pid(reject fabricate succeeded)', 'invalid_upgrade_result');
+    throw new UsageError('upgrade response is missing positive integer pid for replacement instance (refusing to assume success)', 'invalid_upgrade_result');
   }
   return {
     previousVersion: record['previousVersion'] as string,
@@ -152,7 +149,7 @@ export function validateUpgradeResult(
   };
 }
 
-/** daemon side control server: only accept status/stop/upgrade;instanceId does not match one rule reject and does not affect process. */
+/** Daemon-side control IPC server accepting `status`, `stop`, and `upgrade` for its `instanceId`. */
 export interface ControlServer {
   listening: Promise<void>;
   close(): Promise<void>;
@@ -163,16 +160,16 @@ export function createControlServer(options: {
   instanceId: string;
   onStatus: () => { pid: number; state: DaemonReadyState; version?: string };
   onStop: () => Promise<void>;
-  /** upgrade request (local machine can message source); return result follow response pass-through, upgrade in-flight when reject stop/restart. */
+  /** Local trusted upgrade handler; passes result through and rejects `stop` while in flight. */
   onUpgrade?: (input: unknown) => Promise<unknown>;
-  /** upgrade in-flight probe (busy when reject stop/restart, old control end point continue available). */
+  /** True while an upgrade is in flight (causes `stop` to return `upgrade_in_progress`). */
   isUpgrading?: () => boolean;
 }): ControlServer {
   const { endpoint, instanceId, onStatus, onStop, onUpgrade, isUpgrading } = options;
   const sockets = new Set<net.Socket>();
   let stopping = false;
   let closed = false;
-  /** stop handle chain (contains reply conflict refresh and self clean up):close() must first etc. it complete, guard against reply by destroy. */
+  /** Tracks active stop handling (including response flush) so `close()` does not destroy the reply early. */
   let stopChain: Promise<void> | undefined;
   const socketFile = process.platform === 'win32' ? undefined : endpoint;
 
@@ -184,13 +181,13 @@ export function createControlServer(options: {
     sockets.clear();
     await new Promise<void>((resolve) => {
       server.close(() => resolve());
-      // close call back in server not listen/already closure when may different step return: fall back immediately resolve.
+      // `server.close` callback may be deferred if not listening; resolve immediately as fallback.
       if (!server.listening) resolve();
     });
     if (socketFile !== undefined) await fsp.rm(socketFile, { force: true }).catch(() => undefined);
   };
 
-  /** stop handle chain: etc. reply truly conflict refresh to for end after again closure server(destroy will discard not conflict refresh buffer). */
+  /** Execute stop callback and flush response to peer before closing the server. */
   const runStopAndClose = async (socket: net.Socket, replyAndWait: (payload: Record<string, unknown>) => Promise<void>): Promise<void> => {
     try {
       await onStop();
@@ -198,14 +195,14 @@ export function createControlServer(options: {
     } catch (error) {
       await replyAndWait({
         ok: false,
-        error: `stop clean up failed:${error instanceof Error ? error.message : String(error)}`,
+        error: `stop cleanup failed: ${error instanceof Error ? error.message : String(error)}`,
       }).catch(() => undefined);
     }
     socket.destroy();
     await closeSelf();
   };
 
-  /** upgrade reply chain: long resident execute and wait for conflict refresh (pre- compute far greater than idle timeout). */
+  /** Execute long-running upgrade request and flush reply before destroying the socket. */
   const runUpgradeReply = async (
     socket: net.Socket,
     replyAndWait: (payload: Record<string, unknown>) => Promise<void>,
@@ -242,7 +239,7 @@ export function createControlServer(options: {
         socket.destroy();
       }
     };
-    /** same reply, but wait for data truly conflict refresh (stop/upgrade path destroy socket before must guarantee reply can reach). */
+    /** Reply and wait for `socket.end` flush so stop/upgrade responses reach the caller before destroy. */
     const replyAndWait = (payload: Record<string, unknown>): Promise<void> =>
       new Promise((resolve) => {
         const done = (): void => {
@@ -277,7 +274,7 @@ export function createControlServer(options: {
         reply({ ok: false, error: 'bad_request' });
         return;
       }
-      // identity threshold:instanceId inconsistent one rule reject (never trigger stop, guard against mistakenly kill without closure instance).
+      // Identity guard: reject any request whose instanceId does not match this daemon instance.
       if (request === null || typeof request !== 'object' || request.instanceId !== instanceId) {
         reply({ ok: false, error: 'instance_mismatch' });
         return;
@@ -292,18 +289,18 @@ export function createControlServer(options: {
           reply({ ok: false, error: 'stopping' });
           return;
         }
-        // upgrade in-flight: explicit reject stop(choose may already take over responsibility), old control end point continue available.
+        // Reject `stop` while an upgrade is in flight (candidate may already have taken over).
         if (isUpgrading?.() === true) {
           reply({ ok: false, error: 'upgrade_in_progress' });
           return;
         }
         stopping = true;
-        server.close(() => undefined); // immediately stop accept new connect; store amount connect by this branch reply
+        server.close(() => undefined); // Stop accepting new connections; active connection replies via `stopChain`.
         stopChain = runStopAndClose(socket, replyAndWait);
         return;
       }
       if (request.type === 'upgrade') {
-        // upgrade pre- compute far greater than idle timeout: subject to after first clean idle, long resident to reply complete.
+        // Upgrades outlast the idle timeout; clear idle timer once accepted.
         if (onUpgrade === undefined) {
           reply({ ok: false, error: 'upgrade_not_supported' });
           return;
@@ -332,7 +329,6 @@ export function createControlServer(options: {
   return {
     listening,
     close: async (): Promise<void> => {
-      // first etc. in-flight stop chain (contains reply conflict refresh) complete, again hard clean up - - otherwise reply will by destroy lose.
       if (stopChain !== undefined) await stopChain.catch(() => undefined);
       await closeSelf();
     },

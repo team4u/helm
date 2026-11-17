@@ -1,18 +1,13 @@
 /**
- * helm-node self upgrade engine:npm double package (@helm/node + @helm/cli) version install transaction.
+ * `helm-node` self-upgrade engine: atomic dual-package (`@helm/node` + `@helm/cli`) release staging
+ * and replacement handoff.
  *
- * design want point (and botd upgrade engine same source but more strictly):
- * - double package same version install: once release also fixed @helm/node and @helm/cli precise
- *   version, each validate registry metadata dist.integrity(sha512) after download tarball
- *   and validate hash, again with local tgz offline install to the same staging directory;
- * - choose directory immutable:`releases/<ver>/<uuid>/`, forever do not delete (contains is now run
- *   same version directory); version `.complete` points to complete choose and cache validate entry;
- * - JSON record (current.json / update-blocked.json / .complete) only ENOENT
- *   return null, corrupt and IO error explicit throw (honest error discipline); one rule 0600 atomic write;
- * - commit point semantics:`prepareReplacement` return"registered but inactive"choose,
- *   `replacement.commit()`(write pid, activate and etc. new daemon back report) only then is
- *   unique commit point; only start/register do not when act commit;commit failed away abort + rollback +
- *   write blocked + solve except new command gate, never static default fall back or fabricate PID.
+ * - Stages immutable release directories under `releases/<ver>/<uuid>/` verified against registry
+ *   SHA-512 SRI integrity before offline npm installation, marked with `.complete`.
+ * - Persists `current.json` / `update-blocked.json` atomically (`0600`), throwing explicitly on
+ *   corruption or I/O errors (`null` only on `ENOENT`).
+ * - Commits strictly at `replacement.commit()`, rolling back and writing cooldown blocks on failure,
+ *   while refusing rollback on `UpgradeCommitUnconfirmedError`.
  */
 import fs, { type FileHandle } from 'node:fs/promises';
 import rawFs from 'node:fs';
@@ -32,33 +27,25 @@ import { killProcessTree } from './local-env.js';
 
 const DEFAULT_REGISTRY = 'https://registry.npmjs.org';
 
-/** input illegal/policy reject (caller can mapping 4xx). */
+/** Policy/input rejection (callers map to 4xx / RPC `invalid`). */
 export class UpgradeRejectedError extends Error {}
 
 /**
- * commit result not confirm:activate already out, choose may already to Hub on report commit, only local machine
- * confirm lose (such as ACK timeout). this is special branch - - do not abort, do not rollback current, do not write
- * blocked; keep new current and draining gate, notify onScheduleShutdown let old host
- * exit, to on throw"new version already choose, activate result not confirm"while non- rollback. choose receives
- * activate after keep activate and idempotent retry Hub commit;Hub only based on receives commit decide
- * succeeded, avoid Hub already succeeded yet because local ACK timeout by reverse rollback.
+ * Thrown when `activate` was written to the candidate IPC channel, so the candidate may have already
+ * committed to the Hub while local confirmation was lost. Callers must NOT abort or roll back.
  */
 export class UpgradeCommitUnconfirmedError extends Error {}
 
-// - - fixed interface - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-
-/** ready choose release(cannot change directory + already validate entry). */
 export interface StagedNodeRelease {
   version: string;
-  /** cannot change choose directory (releases/<ver>/<uuid>). */
+  /** Immutable release directory (`releases/<ver>/<uuid>`). */
   releaseDir: string;
-  /** @helm/node guard entry (dist/cli.js) absolute path. */
+  /** Absolute path to `@helm/node`'s `dist/cli.js` entrypoint. */
   entryPath: string;
-  /** @helm/cli managed helm client bin directory (node_modules/.bin) absolute path. */
+  /** Absolute path to `node_modules/.bin` containing the staged `helm` CLI binary. */
   cliBinDir: string;
 }
 
-/** completed Hub register, wait for activate replace daemon;commit() is unique commit point. */
 export interface PreparedNodeReplacement {
   pid: number;
   commit(): Promise<void>;
@@ -77,7 +64,7 @@ export interface PerformNodeUpgradeOptions {
     release: StagedNodeRelease,
     context: { attemptId: string; previousVersion: string; targetVersion: string },
   ) => Promise<PreparedNodeReplacement>;
-  /** arrange empty opening path call back: return still must wait for converge in-flight operation count (exec + tunnel + once IPC call). */
+  /** Returns count of in-flight operations to drain before spawning replacement. */
   getActiveExecCount?: () => number;
   setDraining?: (value: boolean) => void;
   drainTimeoutMs?: number;
@@ -87,9 +74,9 @@ export interface PerformNodeUpgradeOptions {
 export interface StageReleaseOptions {
   registryUrl?: string;
   fetchFn?: typeof fetch;
-  /** only single test inject: return each other for staging entry and bin directory; validate without path escape. */
+  /** Test-only extractor returning relative paths inside `stagingDir` (validated against traversal). */
   stageExtractor?: (stagingDir: string, targetVersion: string) => Promise<{ entryPath: string; cliBinDir: string }>;
-  /** force heavy install: skip .complete cache re- use, generate new cannot change choose (never delete since has choose, contains is now run same version directory). */
+  /** Bypass `.complete` cache and build a new immutable release directory without deleting older ones. */
   force?: boolean;
 }
 
@@ -112,25 +99,22 @@ export interface BlockedReleaseRecord {
   at: string;
 }
 
-// - - version - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-
-/** strictly SemVer parse/compare unique implement at @helm/protocol/semver; this where only keep this engine error message seal (UpgradeRejectedError → RPC invalid). */
 function requireStrictVersion(input: string, label: string): void {
   if (!isStrictSemver(input)) {
     throw new UpgradeRejectedError(
-      `illegal SemVer version number (${label}):"${input}"(want seek strictly x.y.z[-pre][+build], disallows v prefix)`,
+      `invalid SemVer version (${label}): "${input}" (expected strict x.y.z[-pre][+build] without v prefix)`,
     );
   }
 }
 
-/** strictly SemVer compare (pre- publish priority: formal edition > pre- publish; number segment by count value, character parent segment by ASCII;build metadata by specification does not participate compare). invalid input throw UpgradeRejectedError. */
+/** Strict SemVer comparison; throws `UpgradeRejectedError` on invalid input. */
 export function compareSemver(a: string, b: string): number {
   requireStrictVersion(a, 'a');
   requireStrictVersion(b, 'b');
   return compareStrictSemverShared(a, b);
 }
 
-/** Web/UI allows ` v1.0.0 ` form:trim and remove a v/V prefix, again strictly validate. */
+/** Trim whitespace, strip an optional leading `v`/`V`, and validate strict SemVer. */
 export function normalizeTargetVersion(input: string): string {
   const trimmed = stripSemverVPrefix(input);
   requireStrictVersion(trimmed, 'targetVersion');
@@ -139,7 +123,7 @@ export function normalizeTargetVersion(input: string): string {
 
 let cachedPackageVersion: string | undefined;
 
-/** read itself @helm/node package package.json version (do not read current.json pretend run edition);HELM_VERSION_OVERRIDE used to development override. */
+/** Read `@helm/node`'s own `package.json` version (`HELM_VERSION_OVERRIDE` overrides for dev). */
 export function getNodeVersion(): string {
   const override = process.env.HELM_VERSION_OVERRIDE?.trim();
   if (override) return override;
@@ -149,32 +133,28 @@ export function getNodeVersion(): string {
     try {
       const parsed = JSON.parse(rawFs.readFileSync(pkgPath, 'utf8')) as { version?: unknown };
       if (typeof parsed.version !== 'string' || !isStrictSemver(parsed.version)) {
-        throw new Error(`version field missing or illegal:${JSON.stringify(parsed.version)}`);
+        throw new Error(`version field missing or invalid: ${JSON.stringify(parsed.version)}`);
       }
       version = parsed.version;
     } catch (error) {
-      // read fewer than itself version belongs to install corrupt, explicit errors while is not pretend a by default version.
-      throw new Error(`cannot read @helm/node itself version (${pkgPath}):${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(`failed to read @helm/node version (${pkgPath}): ${error instanceof Error ? error.message : String(error)}`);
     }
     cachedPackageVersion = version;
   }
   return cachedPackageVersion;
 }
 
-/** offline CLI read when before activate entry version:current.json takes precedence, missing fall back itself package version. */
+/** Resolve effective node version for offline CLI status: `current.json` takes precedence over own package version. */
 export async function resolveEffectiveNodeVersion(dataDir: string): Promise<string> {
   const current = await readCurrentRelease(dataDir);
   return current?.version ?? getNodeVersion();
 }
 
-// - - registry allows manifest - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-
 const normalizeRegistry = (url: string | undefined): string => (url ?? '').trim().replace(/\/+$/, '');
 
 /**
- * RPC station registry allows manifest: only official registry or explicit config HELM_NPM_REGISTRY.
- * explicit pass other source when throw UpgradeRejectedError(not silently swap source); not pass return undefined
- * (caller self row away env/by default parse).
+ * RPC registry allowlist: permits only the official npm registry or `HELM_NPM_REGISTRY`.
+ * Rejects any other explicit URL with `UpgradeRejectedError`.
  */
 export function filterRpcRegistryUrl(registryUrl?: string): string | undefined {
   const requested = normalizeRegistry(registryUrl);
@@ -183,15 +163,13 @@ export function filterRpcRegistryUrl(registryUrl?: string): string | undefined {
   const envRegistry = normalizeRegistry(process.env.HELM_NPM_REGISTRY);
   if (envRegistry && requested === envRegistry) return requested;
   throw new UpgradeRejectedError(
-    `reject non- subject to message npm registry:${requested}(only allows ${DEFAULT_REGISTRY} or HELM_NPM_REGISTRY config source)`,
+    `untrusted npm registry rejected: ${requested} (only ${DEFAULT_REGISTRY} or HELM_NPM_REGISTRY is permitted)`,
   );
 }
 
 function resolveRegistryUrl(explicit?: string): string {
   return normalizeRegistry(explicit || process.env.HELM_NPM_REGISTRY || DEFAULT_REGISTRY);
 }
-
-// - - JSON record: only ENOENT return null, corrupt/IO error explicit throw;0600 atomic write - - - -
 
 async function readJsonRecord<T>(filePath: string, validate: (raw: unknown) => T, label: string): Promise<T | null> {
   let raw: string;
@@ -200,16 +178,16 @@ async function readJsonRecord<T>(filePath: string, validate: (raw: unknown) => T
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === 'ENOENT') return null;
-    throw new Error(`read ${label} failed (${filePath}):${code ?? (error instanceof Error ? error.message : String(error))}`);
+    throw new Error(`failed to read ${label} (${filePath}): ${code ?? (error instanceof Error ? error.message : String(error))}`);
   }
   try {
     return validate(JSON.parse(raw));
   } catch (error) {
-    throw new Error(`${label} corrupt (${filePath}):${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`${label} is corrupt (${filePath}): ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
-/** 0600 atomic write: same directory temp file + rename(failed clean up temp file and such as throw). */
+/** Atomic `0600` JSON write via sibling temporary file + rename. */
 async function writeSecureJson(filePath: string, data: unknown): Promise<void> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   const temp = `${filePath}.${randomUUID().slice(0, 8)}.tmp`;
@@ -219,20 +197,20 @@ async function writeSecureJson(filePath: string, data: unknown): Promise<void> {
     await fs.chmod(filePath, 0o600);
   } catch (error) {
     await fs.unlink(temp).catch(() => undefined);
-    throw new Error(`write ${filePath} failed:${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`failed to write ${filePath}: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
 function requireString(raw: Record<string, unknown>, key: string): string {
   const value = raw[key];
   if (typeof value !== 'string' || value === '') {
-    throw new Error(`field ${key} missing or is not non-empty string`);
+    throw new Error(`field ${key} is missing or not a non-empty string`);
   }
   return value;
 }
 
 function validateCurrentRecord(raw: unknown): CurrentReleaseRecord {
-  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('is not object');
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('expected JSON object');
   const rec = raw as Record<string, unknown>;
   const record: CurrentReleaseRecord = {
     version: requireString(rec, 'version'),
@@ -240,13 +218,13 @@ function validateCurrentRecord(raw: unknown): CurrentReleaseRecord {
     updatedAt: requireString(rec, 'updatedAt'),
   };
   if (rec.cliBinDir !== undefined && typeof rec.cliBinDir !== 'string') {
-    throw new Error('field cliBinDir is not string');
+    throw new Error('field cliBinDir must be a string');
   }
   return rec.cliBinDir === undefined ? record : { ...record, cliBinDir: rec.cliBinDir };
 }
 
 function validateBlockedRecord(raw: unknown): BlockedReleaseRecord {
-  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('is not object');
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('expected JSON object');
   const rec = raw as Record<string, unknown>;
   return {
     version: requireString(rec, 'version'),
@@ -284,8 +262,6 @@ export async function clearBlockedRelease(dataDir: string): Promise<void> {
   await fs.rm(blockedReleasePath(dataDir), { force: true });
 }
 
-// - - upgrade check - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-
 export async function checkNodeUpgrade(
   dataDir: string,
   options?: CheckNodeUpgradeOptions,
@@ -299,13 +275,12 @@ export async function checkNodeUpgrade(
   try {
     const data = (await fetchJsonWithTimeout(url, fetchImpl, METADATA_TIMEOUT_MS)) as { version?: unknown };
     if (typeof data.version !== 'string') {
-      throw new Error(`response missing version field:${JSON.stringify(data).slice(0, 200)}`);
+      throw new Error(`response missing version field: ${JSON.stringify(data).slice(0, 200)}`);
     }
     latestVersion = data.version;
   } catch (error) {
-    throw new Error(`query ${url} most new version failed:${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`failed to query latest version at ${url}: ${error instanceof Error ? error.message : String(error)}`);
   }
-  // registry return illegal version is explicit broken data, directly reject while is not carries illness compare.
   requireStrictVersion(latestVersion, 'latest');
 
   const currentVersion =
@@ -320,8 +295,6 @@ export async function checkNodeUpgrade(
   };
 }
 
-// - - staging:npm double package download + validate + local tgz install - - - - - - - - - - - - - - - - - - - -
-
 const METADATA_TIMEOUT_MS = 30_000;
 const TARBALL_TIMEOUT_MS = 180_000;
 const NPM_INSTALL_TIMEOUT_MS = 300_000;
@@ -335,7 +308,7 @@ async function fetchJsonWithTimeout(url: string, fetchImpl: typeof fetch, timeou
     if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
     return await res.json();
   } catch (error) {
-    if (error instanceof Error && error.name === 'AbortError') throw new Error(`request timeout (${timeoutMs}ms)`);
+    if (error instanceof Error && error.name === 'AbortError') throw new Error(`request timed out (${timeoutMs}ms)`);
     throw error;
   } finally {
     clearTimeout(timer);
@@ -356,7 +329,7 @@ async function fetchTarballWithTimeout(
     const body = Buffer.from(await res.arrayBuffer());
     await fs.writeFile(destPath, body, { mode: 0o600 });
   } catch (error) {
-    if (error instanceof Error && error.name === 'AbortError') throw new Error(`download timeout (${timeoutMs}ms)`);
+    if (error instanceof Error && error.name === 'AbortError') throw new Error(`download timed out (${timeoutMs}ms)`);
     throw error instanceof Error ? error : new Error(String(error));
   } finally {
     clearTimeout(timer);
@@ -379,21 +352,21 @@ async function fetchExactManifest(
   try {
     data = (await fetchJsonWithTimeout(url, fetchImpl, METADATA_TIMEOUT_MS)) as typeof data;
   } catch (error) {
-    throw new Error(`get ${pkgName}@${version} metadata failed (${url}):${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`failed to fetch ${pkgName}@${version} metadata (${url}): ${error instanceof Error ? error.message : String(error)}`);
   }
   if (data.name !== pkgName) {
-    throw new Error(`registry metadata package name do not symbol: expectation ${pkgName}, actual ${JSON.stringify(data.name)}`);
+    throw new Error(`registry metadata package name mismatch: expected ${pkgName}, got ${JSON.stringify(data.name)}`);
   }
   if (data.version !== version) {
-    throw new Error(`registry metadata version do not symbol: expectation ${version}, actual ${JSON.stringify(data.version)}`);
+    throw new Error(`registry metadata version mismatch: expected ${version}, got ${JSON.stringify(data.version)}`);
   }
   const integrity = data.dist?.integrity;
   const tarball = data.dist?.tarball;
   if (typeof integrity !== 'string' || !/^sha512-[A-Za-z0-9+/]+={0,2}$/.test(integrity)) {
-    throw new Error(`${pkgName}@${version} metadata missing legal sha512 dist.integrity`);
+    throw new Error(`${pkgName}@${version} metadata missing valid sha512 dist.integrity`);
   }
   if (typeof tarball !== 'string' || !/^https?:\/\//.test(tarball)) {
-    throw new Error(`${pkgName}@${version} metadata missing legal dist.tarball`);
+    throw new Error(`${pkgName}@${version} metadata missing valid dist.tarball`);
   }
   return { integrity, tarball };
 }
@@ -414,29 +387,25 @@ function lastLines(text: string, count: number): string {
 }
 
 /**
- * parse npm entry:Windows on now proxy Node disallows spawn(.cmd, shell:false), therefore
- * do not guess npm.cmd, but rather locate node can execute file beside node_modules/npm/bin/npm-cli.js
- * (official Windows install layout), with [process.execPath, npmCliJs] execute - - without shell,
- * without string concatenate inject. locate fewer than when explicit errors, does not do not security fallback.
+ * Resolve npm invocation without shell interpolation: on Windows, Node prohibits direct `spawn`
+ * of `.cmd` with `shell: false`, so locate `node_modules/npm/bin/npm-cli.js` beside `process.execPath`.
  */
 function resolveNpmCommand(): { command: string; args: string[] } {
   if (process.platform !== 'win32') return { command: 'npm', args: [] };
   const execDir = path.dirname(process.execPath);
   const candidates = [
     path.join(execDir, 'node_modules', 'npm', 'bin', 'npm-cli.js'),
-    path.join(execDir, '..', 'node_modules', 'npm', 'bin', 'npm-cli.js'), // zip layout:node.exe in bin/ under
+    path.join(execDir, '..', 'node_modules', 'npm', 'bin', 'npm-cli.js'),
   ];
   for (const cliJs of candidates) {
     if (rawFs.existsSync(cliJs)) return { command: process.execPath, args: [cliJs] };
   }
   throw new Error(
-    `cannot locate npm entry npm-cli.js(already attempt:${candidates.join(' ; ')}). when before Node forbidden directly spawn npm.cmd, please fix Node install or in PATH in provide official npm layout after retry`,
+    `unable to locate npm entrypoint npm-cli.js (tried: ${candidates.join(' ; ')}); cannot spawn npm.cmd directly without a shell`,
   );
 }
 
-/** run npm(has boundary timeout); failed error contains exit code and output finally 40 row diagnose.
- * POSIX independent process group:npm lifecycle script descendant process and npm same group, timeout whole group SIGKILL
- * (re- use killProcessTree), do not orphan child continue write correct by clean up staging directory. */
+/** Run npm with a hard timeout, killing the entire process group via `killProcessTree` on expiry. */
 export function runNpm(args: string[], cwd: string, timeoutMs: number): Promise<void> {
   let npm: { command: string; args: string[] };
   try {
@@ -457,7 +426,7 @@ export function runNpm(args: string[], cwd: string, timeoutMs: number): Promise<
         shell: false,
       });
     } catch (error) {
-      reject(new Error(`cannot start ${displayCmd}(${npm.command}):${error instanceof Error ? error.message : String(error)}`));
+      reject(new Error(`failed to spawn ${displayCmd} (${npm.command}): ${error instanceof Error ? error.message : String(error)}`));
       return;
     }
     let stdout = '';
@@ -478,18 +447,16 @@ export function runNpm(args: string[], cwd: string, timeoutMs: number): Promise<
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
-      // kill the whole process group (npm + sh + lifecycle script descendant process); single kill npm will orphan child.
       if (child.pid !== undefined) killProcessTree(child.pid);
-      reject(new Error(`${displayCmd} timeout (${timeoutMs}ms) by terminate. output finally ${NPM_OUTPUT_DIAG_LINES} row:\n${lastLines(`${stdout}\n${stderr}`, NPM_OUTPUT_DIAG_LINES)}`));
+      reject(new Error(`${displayCmd} timed out (${timeoutMs}ms) and was terminated; last ${NPM_OUTPUT_DIAG_LINES} lines:\n${lastLines(`${stdout}\n${stderr}`, NPM_OUTPUT_DIAG_LINES)}`));
     }, timeoutMs);
-    child.on('error', (error) => finish(new Error(`${displayCmd} failed to start:${error.message}`)));
-    // use close(while non- exit) ensure stream already arrange empty, diagnose output complete.
+    child.on('error', (error) => finish(new Error(`${displayCmd} failed to start: ${error.message}`)));
     child.on('close', (code) => {
       if (code === 0) finish(null);
       else {
         finish(
           new Error(
-            `${displayCmd} with exit code ${code} failed. output finally ${NPM_OUTPUT_DIAG_LINES} row:\n${lastLines(`${stdout}\n${stderr}`, NPM_OUTPUT_DIAG_LINES)}`,
+            `${displayCmd} failed with exit code ${code}; last ${NPM_OUTPUT_DIAG_LINES} lines:\n${lastLines(`${stdout}\n${stderr}`, NPM_OUTPUT_DIAG_LINES)}`,
           ),
         );
       }
@@ -512,12 +479,11 @@ interface CompleteMarker {
   entryPath: string;
   cliBinDir: string;
   completedAt: string;
-  /** choose source:npm normal install ('npm') or test inject stageExtractor('extractor', re- use when only verify structure). */
   origin?: 'npm' | 'extractor';
 }
 
 function validateCompleteMarker(raw: unknown): CompleteMarker {
-  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('is not object');
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('expected JSON object');
   const rec = raw as Record<string, unknown>;
   const marker: CompleteMarker = {
     version: requireString(rec, 'version'),
@@ -527,22 +493,22 @@ function validateCompleteMarker(raw: unknown): CompleteMarker {
     completedAt: requireString(rec, 'completedAt'),
   };
   if (rec.origin !== undefined && rec.origin !== 'npm' && rec.origin !== 'extractor') {
-    throw new Error(`field origin illegal:${JSON.stringify(rec.origin)}`);
+    throw new Error(`invalid field origin: ${JSON.stringify(rec.origin)}`);
   }
   return rec.origin === undefined ? marker : { ...marker, origin: rec.origin };
 }
 
-/** stageExtractor return relative path must in stagingDir inside (reject absolute path and escape). */
+/** Validate that `stageExtractor`-returned relative paths remain inside `stagingDir`. */
 function resolveInside(stagingDir: string, relative: string, label: string): string {
   if (typeof relative !== 'string' || relative === '') {
-    throw new Error(`stageExtractor return ${label} is not non-empty string`);
+    throw new Error(`stageExtractor returned ${label} that is not a non-empty string`);
   }
   if (path.isAbsolute(relative)) {
-    throw new Error(`stageExtractor return ${label} must be relative path, receives absolute path:${relative}`);
+    throw new Error(`stageExtractor returned absolute path for ${label}, expected relative: ${relative}`);
   }
   const resolved = path.resolve(stagingDir, relative);
   if (resolved !== stagingDir && !resolved.startsWith(stagingDir + path.sep)) {
-    throw new Error(`stageExtractor return ${label} path escape:${relative}(parse is ${resolved})`);
+    throw new Error(`stageExtractor ${label} escapes stagingDir: ${relative} (resolved to ${resolved})`);
   }
   return resolved;
 }
@@ -553,21 +519,17 @@ async function readInstalledPackageJson(pkgDir: string, pkgName: string, version
   try {
     parsed = JSON.parse(await fs.readFile(pkgJsonPath, 'utf8')) as Record<string, unknown>;
   } catch (error) {
-    throw new Error(`install artifact ${pkgName}  package.json cannot read (${pkgJsonPath}):${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`installed package ${pkgName} package.json unreadable (${pkgJsonPath}): ${error instanceof Error ? error.message : String(error)}`);
   }
   if (parsed.name !== pkgName || parsed.version !== version) {
     throw new Error(
-      `install artifact package name/version do not symbol: expectation ${pkgName}@${version}, actual ${String(parsed.name)}@${String(parsed.version)}(${pkgJsonPath})`,
+      `installed package name/version mismatch: expected ${pkgName}@${version}, got ${String(parsed.name)}@${String(parsed.version)} (${pkgJsonPath})`,
     );
   }
   return parsed;
 }
 
-/**
- * cache re- use before strictly re-check:candidate/entry/bin must at this version cannot change directory inside,
- * and double package package.json name/version and entry/bin target still valid (stageExtractor artifact
- * by test path only verify structure and store in). any does not match explicit reject, do not delete old choose.
- */
+/** Revalidate a `.complete` cached release directory before reusing it (never deletes prior releases). */
 async function revalidateCachedRelease(
   dataDir: string,
   targetVersion: string,
@@ -577,7 +539,7 @@ async function revalidateCachedRelease(
   const inside = (candidate: string, base: string, label: string): string => {
     const resolved = path.resolve(candidate);
     if (resolved !== base && !resolved.startsWith(base + path.sep)) {
-      throw new Error(`.complete cache ${label} do not in this version cannot change directory inside:${candidate}(expectation at ${base} under)`);
+      throw new Error(`.complete cache ${label} lies outside immutable release dir: ${candidate} (expected under ${base})`);
     }
     return resolved;
   };
@@ -586,13 +548,12 @@ async function revalidateCachedRelease(
   const entryPath = inside(marker.entryPath, candidateDir, 'entryPath');
   const cliBinDir = inside(marker.cliBinDir, candidateDir, 'cliBinDir');
   if (!(await fileExists(entryPath))) {
-    throw new Error(`.complete cache re- use failed: entry file missing:${entryPath}`);
+    throw new Error(`.complete cache reuse failed: missing entry file ${entryPath}`);
   }
   if (!(await fileExists(cliBinDir))) {
-    throw new Error(`.complete cache re- use failed:bin directory missing:${cliBinDir}`);
+    throw new Error(`.complete cache reuse failed: missing bin directory ${cliBinDir}`);
   }
 
-  // stageExtractor(test inject) artifact only verify structure;npm artifact re- core for double package meta information and entry/bin.
   if (marker.origin !== 'npm') {
     return { version: targetVersion, releaseDir: candidateDir, entryPath, cliBinDir };
   }
@@ -604,10 +565,10 @@ async function revalidateCachedRelease(
   await readInstalledPackageJson(nodePkgDir, nodePkg, targetVersion);
   const cliPkgJson = await readInstalledPackageJson(cliPkgDir, cliPkg, targetVersion);
   if (path.relative(candidateDir, entryPath) !== path.join('node_modules', ...nodePkg.split('/'), 'dist', 'cli.js')) {
-    throw new Error(`.complete cache entry is not ${nodePkg}  dist/cli.js:${entryPath}`);
+    throw new Error(`.complete cache entry is not ${nodePkg}'s dist/cli.js: ${entryPath}`);
   }
   if (!(await fileExists(path.join(cliPkgDir, 'dist', 'index.js')))) {
-    throw new Error(`.complete cache re- use failed:${cliPkg} entry dist/index.js missing (${cliPkgDir})`);
+    throw new Error(`.complete cache reuse failed: ${cliPkg} missing dist/index.js (${cliPkgDir})`);
   }
   const bin = cliPkgJson.bin;
   const binTarget =
@@ -615,10 +576,10 @@ async function revalidateCachedRelease(
       ? (bin as Record<string, string>).helm
       : undefined;
   if (binTarget === undefined) {
-    throw new Error(`.complete cache re- use failed:${cliPkg} package.json missing helm bin declaration`);
+    throw new Error(`.complete cache reuse failed: ${cliPkg} package.json missing helm bin declaration`);
   }
   if (!(await fileExists(path.resolve(cliPkgDir, binTarget)))) {
-    throw new Error(`.complete cache re- use failed:${cliPkg} bin target missing:${binTarget}`);
+    throw new Error(`.complete cache reuse failed: ${cliPkg} bin target missing: ${binTarget}`);
   }
 
   return { version: targetVersion, releaseDir: candidateDir, entryPath, cliBinDir };
@@ -634,8 +595,6 @@ export async function stageReleaseFromNpm(
   const versionRoot = path.join(dataDir, 'releases', targetVersion);
   const completePath = path.join(versionRoot, '.complete');
 
-  // already has complete choose and non- force: strictly re-check cache mark record and artifact after re- use, never delete old choose.
-  // force skip cache re- download install, generate new cannot change choose.
   if (!options?.force) {
     const cached = await readJsonRecord(completePath, validateCompleteMarker, '.complete');
     if (cached && cached.version === targetVersion) {
@@ -657,10 +616,10 @@ export async function stageReleaseFromNpm(
       const entryPath = resolveInside(stagingDir, extracted.entryPath, 'entryPath');
       const cliBinDir = resolveInside(stagingDir, extracted.cliBinDir, 'cliBinDir');
       if (!(await fileExists(entryPath))) {
-        throw new Error(`stageExtractor return entry file missing:${entryPath}`);
+        throw new Error(`stageExtractor entry file missing: ${entryPath}`);
       }
       if (!(await fileExists(cliBinDir))) {
-        throw new Error(`stageExtractor return bin directory missing:${cliBinDir}`);
+        throw new Error(`stageExtractor bin directory missing: ${cliBinDir}`);
       }
       entryRelative = path.relative(stagingDir, entryPath);
       binRelative = path.relative(stagingDir, cliBinDir);
@@ -670,7 +629,6 @@ export async function stageReleaseFromNpm(
       const cliPkg = process.env.HELM_NPM_CLI_PACKAGE || '@helm/cli';
       const fetchImpl = options?.fetchFn ?? fetch;
 
-      // double package each take precise version metadata → download tarball → sha512 validate.
       const downloads = path.join(stagingDir, '.downloads');
       await fs.mkdir(downloads, { recursive: true });
       const tarballPaths: string[] = [];
@@ -680,12 +638,12 @@ export async function stageReleaseFromNpm(
         try {
           await fetchTarballWithTimeout(manifest.tarball, fetchImpl, TARBALL_TIMEOUT_MS, tarballPath);
         } catch (error) {
-          throw new Error(`download ${pkgName}@${targetVersion} tarball failed (${manifest.tarball}):${error instanceof Error ? error.message : String(error)}`);
+          throw new Error(`failed to download ${pkgName}@${targetVersion} tarball (${manifest.tarball}): ${error instanceof Error ? error.message : String(error)}`);
         }
         const actual = await computeSri(tarballPath);
         if (actual !== manifest.integrity) {
           throw new Error(
-            `${pkgName}@${targetVersion} tarball sha512 complete validation failed: expectation ${manifest.integrity}, actual ${actual}`,
+            `${pkgName}@${targetVersion} tarball sha512 integrity check failed: expected ${manifest.integrity}, got ${actual}`,
           );
         }
         tarballPaths.push(tarballPath);
@@ -710,7 +668,6 @@ export async function stageReleaseFromNpm(
         NPM_INSTALL_TIMEOUT_MS,
       );
 
-      // install artifact three heavy validate:package.json name/version + node dist/cli.js + cli dist/index.js and bin target.
       const nodePkgDir = path.join(stagingDir, 'node_modules', ...nodePkg.split('/'));
       const cliPkgDir = path.join(stagingDir, 'node_modules', ...cliPkg.split('/'));
       await readInstalledPackageJson(nodePkgDir, nodePkg, targetVersion);
@@ -718,11 +675,11 @@ export async function stageReleaseFromNpm(
 
       const nodeEntry = path.join(nodePkgDir, 'dist', 'cli.js');
       if (!(await fileExists(nodeEntry))) {
-        throw new Error(`install artifact missing @helm/node guard entry dist/cli.js:${nodeEntry}`);
+        throw new Error(`installed artifact missing @helm/node main entry dist/cli.js: ${nodeEntry}`);
       }
       const cliEntry = path.join(cliPkgDir, 'dist', 'index.js');
       if (!(await fileExists(cliEntry))) {
-        throw new Error(`install artifact missing @helm/cli entry dist/index.js:${cliEntry}`);
+        throw new Error(`installed artifact missing @helm/cli entry dist/index.js: ${cliEntry}`);
       }
       const bin = cliPkgJson.bin;
       const binTarget =
@@ -730,18 +687,17 @@ export async function stageReleaseFromNpm(
           ? (bin as Record<string, string>).helm
           : undefined;
       if (binTarget === undefined) {
-        throw new Error(`@helm/cli install artifact package.json missing helm bin declaration (${path.join(cliPkgDir, 'package.json')})`);
+        throw new Error(`@helm/cli package.json missing helm bin declaration (${path.join(cliPkgDir, 'package.json')})`);
       }
       const binFile = path.resolve(cliPkgDir, binTarget);
       if (!(await fileExists(binFile))) {
-        throw new Error(`@helm/cli bin target file missing:${binFile}`);
+        throw new Error(`@helm/cli bin target file missing: ${binFile}`);
       }
 
       entryRelative = path.relative(stagingDir, nodeEntry);
       binRelative = 'node_modules/.bin';
     }
 
-    // choose directory immutable:staging atomic change name is releases/<ver>/<uuid>, forever do not re- use/delete.
     const candidateDir = path.join(versionRoot, randomUUID());
     await fs.rename(stagingDir, candidateDir);
     const finalEntry = path.join(candidateDir, entryRelative);
@@ -759,21 +715,16 @@ export async function stageReleaseFromNpm(
 
     return { version: targetVersion, releaseDir: candidateDir, entryPath: finalEntry, cliBinDir: finalBin };
   } catch (error) {
-    // only clean up this time staging(not change name half into product); history choose one rule keep. clean up failed
-    // do not swallow: leftover directory attach note to error message (keep original error class do not by wrap, upgrade transaction
-    // dependency instanceof decide rollback semantics).
     try {
       await fs.rm(stagingDir, { recursive: true, force: true });
     } catch (rmError) {
       if (error instanceof Error) {
-        error.message += `;staging clean up failed (${rmError instanceof Error ? rmError.message : String(rmError)}), leftover directory await human handle:${stagingDir}`;
+        error.message += `; staging cleanup failed (${rmError instanceof Error ? rmError.message : String(rmError)}), leftover directory requires manual removal: ${stagingDir}`;
       }
     }
     throw error;
   }
 }
-
-// - - upgrade transaction - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 const UPGRADE_BLOCK_COOLDOWN_MS = (): number => {
   const raw = Number(process.env.HELM_UPGRADE_BLOCK_COOLDOWN_MS);
@@ -782,7 +733,7 @@ const UPGRADE_BLOCK_COOLDOWN_MS = (): number => {
 
 const DRAIN_POLL_INTERVAL_MS = 50;
 
-/** across process upgrade lock:upgrade.lock(O_CREAT|O_EXCL). does not stale lock arbitration, occupy i.e. explicit reject. */
+/** Cross-process exclusive upgrade lock (`upgrade.lock`, `O_CREAT|O_EXCL`). */
 async function withUpgradeLock<T>(dataDir: string, fn: () => Promise<T>): Promise<T> {
   const lockPath = path.join(dataDir, 'upgrade.lock');
   await fs.mkdir(dataDir, { recursive: true });
@@ -792,9 +743,9 @@ async function withUpgradeLock<T>(dataDir: string, fn: () => Promise<T>): Promis
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === 'EEXIST') {
-      throw new UpgradeRejectedError(`upgrade already in in progress (lock file already exists:${lockPath})`);
+      throw new UpgradeRejectedError(`upgrade already in progress (lock file exists: ${lockPath})`);
     }
-    throw new Error(`create upgrade lock failed (${lockPath}):${code ?? (error instanceof Error ? error.message : String(error))}`);
+    throw new Error(`failed to create upgrade lock (${lockPath}): ${code ?? (error instanceof Error ? error.message : String(error))}`);
   }
   try {
     await handle.write(`${process.pid} ${new Date().toISOString()}\n`);
@@ -811,9 +762,8 @@ export async function performNodeUpgrade(
 ): Promise<NodeUpgradeResult> {
   return withUpgradeLock(dataDir, async () => {
     if (!options?.prepareReplacement) {
-      // no managed daemon commit point then no real PID, explicit reject while is not fabricate.
       throw new UpgradeRejectedError(
-        'reject upgrade: not provide prepareReplacement(helm-node upgrade need to managed daemon complete register and activate commit, do not fabricate PID)',
+        'upgrade rejected: prepareReplacement was not provided (requires a managed daemon to register and commit activation; refusing to fabricate a PID)',
       );
     }
 
@@ -838,7 +788,7 @@ export async function performNodeUpgrade(
 
     if (!options?.force && compareSemver(targetVersion, previousVersion) < 0) {
       throw new UpgradeRejectedError(
-        `reject from ${previousVersion} fall back to ${targetVersion}(guard against fall back protect; such as indeed must fall back use force)`,
+        `refusing downgrade from ${previousVersion} to ${targetVersion} (pass force=true to downgrade)`,
       );
     }
 
@@ -847,16 +797,14 @@ export async function performNodeUpgrade(
       const blockedAtMs = Date.parse(blocked.at);
       const withinCooldown = Number.isFinite(blockedAtMs) && Date.now() - blockedAtMs < UPGRADE_BLOCK_COOLDOWN_MS();
       if (withinCooldown) {
-        throw new UpgradeRejectedError(`version ${targetVersion} where at failed cool down phase, reject retry:${blocked.reason}(blocked at ${blocked.at})`);
+        throw new UpgradeRejectedError(`version ${targetVersion} is in failure cooldown, rejecting retry: ${blocked.reason} (blocked at ${blocked.at})`);
       }
     }
 
-    // old current snapshot in enter drain before read:drain after everything failed all away unify rollback path.
     const existingCurrent = await readCurrentRelease(dataDir);
 
     const attemptId = options?.attemptId ?? randomUUID();
     let committed = false;
-    // commit not confirm branch (UpgradeCommitUnconfirmedError) also do not release gate: new version may already activate.
     let keepGate = false;
     let gateReleased = false;
     const releaseGate = async () => {
@@ -864,13 +812,12 @@ export async function performNodeUpgrade(
       gateReleased = true;
       options?.setDraining?.(false);
     };
-    /** write blocked failed do not swallow: attach in error in such as on report. */
     const writeBlockedOrFail = async (reason: string): Promise<string> => {
       try {
         await writeBlockedRelease(dataDir, { version: targetVersion, reason, at: new Date().toISOString() });
-        return `already write version ${targetVersion}  blocked record`;
+        return `recorded blocked release for ${targetVersion}`;
       } catch (blockedError) {
-        return `write blocked record failed (must human handle):${blockedError instanceof Error ? blockedError.message : String(blockedError)}`;
+        return `write blocked record failed (manual cleanup required): ${blockedError instanceof Error ? blockedError.message : String(blockedError)}`;
       }
     };
 
@@ -882,8 +829,6 @@ export async function performNodeUpgrade(
         force: options?.force,
       });
 
-      // enter arrange empty: stop subject to new command (envExec/tunnel/IPC call/IPC subscribe),
-      // wait for already subject to exec and IPC invoke all end (do not strong kill; long resident subscribe without waiting).
       options?.setDraining?.(true);
 
       const getActiveExecCount = options?.getActiveExecCount ?? (() => 0);
@@ -891,7 +836,7 @@ export async function performNodeUpgrade(
       const drainStart = Date.now();
       while (getActiveExecCount() > 0) {
         if (Date.now() - drainStart > drainTimeoutMs) {
-          throw new Error(`wait for in-flight command arrange empty timeout (${drainTimeoutMs}ms, remaining ${getActiveExecCount()} ), this time upgrade already abandon and not do any change`);
+          throw new Error(`timed out draining in-flight operations (${drainTimeoutMs}ms, ${getActiveExecCount()} remaining); upgrade aborted with no changes`);
         }
         await new Promise((resolve) => setTimeout(resolve, DRAIN_POLL_INTERVAL_MS));
       }
@@ -903,13 +848,10 @@ export async function performNodeUpgrade(
         const reason = error instanceof Error ? error.message : String(error);
         const blockedNote = await writeBlockedOrFail(reason);
         throw new Error(
-          `prepare replace daemon failed (upgrade to ${targetVersion} abort,current not change, host keep take over state):${reason};${blockedNote}`,
+          `failed to prepare replacement daemon (upgrade to ${targetVersion} aborted; current unchanged, old host remains active): ${reason}; ${blockedNote}`,
         );
       }
 
-      // commit point: everything may affect into failed file operation (contains clean up blocked) all in commit before complete;
-      // commit is finally fallible commit step, after only remain non- key notify, must not because clean up failed
-      // mistakenly report failed to upgrade (otherwise new process already to Hub back report commit while old process forever long draining).
       try {
         await writeCurrentRelease(dataDir, {
           version: targetVersion,
@@ -921,14 +863,10 @@ export async function performNodeUpgrade(
         await replacement.commit();
       } catch (error) {
         if (error instanceof UpgradeCommitUnconfirmedError) {
-          // special branch:activate already out, choose may already to Hub on report commit, only local machine confirm
-          // lose. reverse rollback will let Hub already succeeded upgrade by local ACK timeout undo - - therefore do not
-          // abort, do not rollback current, do not write blocked; keep new current and gate, old host
-          // let, by choose idempotent retry Hub commit.
           options?.onScheduleShutdown?.(replacement.pid);
           keepGate = true;
           throw new Error(
-            `upgrade to ${targetVersion}: new version already choose, activate result not confirm (${error.message}). do not rollback:current.json already points to ${targetVersion}, choose idempotent retry to Hub commit, old host already arrange exit`,
+            `upgrade to ${targetVersion}: replacement was activated, but confirmation was unconfirmed (${error.message}); not rolling back (current.json points to ${targetVersion}, candidate will retry Hub commit idempotently, old host scheduled to exit)`,
             { cause: error },
           );
         }
@@ -936,35 +874,32 @@ export async function performNodeUpgrade(
         const rollbackNotes: string[] = [];
         try {
           await replacement.abort();
-          rollbackNotes.push('replacement already abort');
+          rollbackNotes.push('replacement aborted');
         } catch (abortError) {
-          rollbackNotes.push(`replacement abort failed:${abortError instanceof Error ? abortError.message : String(abortError)}`);
+          rollbackNotes.push(`replacement abort failed: ${abortError instanceof Error ? abortError.message : String(abortError)}`);
         }
         try {
           if (existingCurrent) {
             await writeCurrentRelease(dataDir, existingCurrent);
-            rollbackNotes.push(`current.json already restore to ${existingCurrent.version}`);
+            rollbackNotes.push(`current.json restored to ${existingCurrent.version}`);
           } else {
             await deleteCurrentRelease(dataDir);
-            rollbackNotes.push('current.json deleted (this before missing)');
+            rollbackNotes.push('current.json deleted (was absent)');
           }
         } catch (restoreError) {
-          rollbackNotes.push(`current.json restore failed:${restoreError instanceof Error ? restoreError.message : String(restoreError)}`);
+          rollbackNotes.push(`current.json restore failed: ${restoreError instanceof Error ? restoreError.message : String(restoreError)}`);
         }
         rollbackNotes.push(await writeBlockedOrFail(reason));
         throw new Error(
-          `upgrade to ${targetVersion} commit failed, already rollback to ${previousVersion}:${reason}; rollback detail situation:${rollbackNotes.join(';')}`,
+          `upgrade to ${targetVersion} commit failed and rolled back to ${previousVersion}: ${reason}; rollback details: ${rollbackNotes.join('; ')}`,
         );
       }
 
-      // commit already into: old host let (gate keep draining, wait for exit); clean up failed no longer affect result.
       committed = true;
       options?.onScheduleShutdown?.(replacement.pid);
 
       return { ok: true, previousVersion, targetVersion, upgraded: true, pid: replacement.pid };
     } finally {
-      // any failed (contains call back throws, read corrupt, write blocked failed) all solve except gate; succeeded and
-      // commit not confirm path do not solve except (old host i.e. exit, new host already take over or may already take over).
       if (!committed && !keepGate) await releaseGate();
     }
   });

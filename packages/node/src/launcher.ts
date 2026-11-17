@@ -1,13 +1,9 @@
 /**
- * background start and trace:start lock,detached spawn(stdio IPC ready on report) and foreground stable
- * launcher(systemd/launchd main process).
- *
- * - start concurrency lock (O_CREAT|O_EXCL) override already has instance verify → spawn → pid Profile all process;
- * - already has pid first away control channel verify: true daemon reject duplicate start;pid store but channel
- *   cannot reach (cannot verify can security override) same reject; indeed already death only then clean up pid continue start;
- * - foreground stable launcher: cycle via node.pid + control channel verify trace when before instance (upgrade
- *   swap pid after automatically trace new daemon);SIGTERM/INT via control channel stop when before instance and wait for
- *   stop result set after only then exit - -systemd main PID do not because old daemon exit while kill the whole cgroup.
+ * Background daemon spawning and foreground launcher loop:
+ * - Start concurrency lock (`O_CREAT|O_EXCL`) guards instance verification -> spawn -> PID recording;
+ * - Verifies existing `node.pid` via the control channel before allowing a fresh start;
+ * - Foreground stable launcher (for systemd/launchd) tracks `node.pid` across upgrade handoffs
+ *   and stops the tracked instance gracefully via the control channel on SIGTERM/SIGINT.
  */
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
@@ -35,18 +31,16 @@ import {
   CONTROL_TIMEOUT_MS,
   READY_TIMEOUT_MS,
   STOP_EXIT_TIMEOUT_MS,
-  type ControlServer,
   type DaemonReadyState,
 } from './control.js';
 
 // ---------------------------------------------------------------------------
-// background start:start lock + detached spawn(stdio IPC ready on report)
+// Background startup: start lock + detached spawn with stdio IPC readiness
 // ---------------------------------------------------------------------------
 
-/** launcher trace when before instance polling interval. */
 const LAUNCHER_POLL_MS = 2_000;
 
-/** background child process ready on report protocol (Node original generate stdio IPC):{ type:'helm-node.ready', pid, instanceId, state }. */
+/** Parse `{ type: 'helm-node.ready', pid, instanceId, state }` over native Node stdio IPC. */
 function parseReadyMessage(message: unknown, instanceId: string): DaemonReadyState | null {
   if (typeof message !== 'object' || message === null) return null;
   const record = message as Record<string, unknown>;
@@ -55,13 +49,11 @@ function parseReadyMessage(message: unknown, instanceId: string): DaemonReadySta
 }
 
 /**
- * background start by default implement (export supply test re- use):
- * 1. open node.log(failed explicit errors, never carries broken fd start);
- * 2. detached spawn:stdio = ['ignore', logFd, logFd, 'ipc']- - ready via Node original generate
- *    IPC channel on report, across platform no need to grasp manually socket;argv without token;instanceId/endpoint
- *    via environment variable pass;
- * 3. ready / spawn error / child process exit three way compete fast, outside add total timeout;
- * 4. any one scoped after immediately clean up parent side fd/IPC channel/timer/listener, do not orphan child handle.
+ * Default detached daemon spawner:
+ * 1. Opens `node.log` explicitly (never launches with a broken fd);
+ * 2. Spawns detached with `stdio = ['ignore', logFd, logFd, 'ipc']` (token never in argv/env);
+ * 3. Races ready message vs spawn error vs early exit within `readyTimeoutMs`;
+ * 4. Cleans up parent fds, IPC channel, timers, and listeners on every exit path.
  */
 export async function defaultSpawnDaemon(options: {
   nodePath: string;
@@ -82,14 +74,13 @@ export async function defaultSpawnDaemon(options: {
   try {
     logHandle = await fsp.open(logFile, 'a');
   } catch (error) {
-    throw new Error(`open log file failed (${logFile}):${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`failed to open log file (${logFile}): ${error instanceof Error ? error.message : String(error)}`);
   }
 
   let child: ReturnType<typeof spawn>;
   try {
-    // instanceId/endpoint already in env in (startDaemon inject): no longer duplicate piece together install.
-    const childEnv = { ...env }
-    for (const key of Object.keys(childEnv)) if (key.toUpperCase() === 'HELM_TOKEN') delete childEnv[key]
+    const childEnv = { ...env };
+    for (const key of Object.keys(childEnv)) if (key.toUpperCase() === 'HELM_TOKEN') delete childEnv[key];
     child = spawn(nodePath, [...execArgv, ...args], {
       detached: true,
       stdio: ['ignore', logHandle.fd, logHandle.fd, 'ipc'],
@@ -97,7 +88,7 @@ export async function defaultSpawnDaemon(options: {
     });
   } catch (error) {
     await logHandle.close().catch(() => undefined);
-    throw new Error(`background process spawn failed:${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`failed to spawn background process: ${error instanceof Error ? error.message : String(error)}`);
   }
 
   type Outcome =
@@ -133,7 +124,7 @@ export async function defaultSpawnDaemon(options: {
     try {
       if (child.connected) child.disconnect();
     } catch {
-      // disconnected.
+      // Already disconnected.
     }
   };
 
@@ -142,33 +133,33 @@ export async function defaultSpawnDaemon(options: {
     child.unref();
     await logHandle.close().catch(() => undefined);
     if (child.pid === undefined) {
-      throw new Error('background process ready on report after pid unavailable (internal error)');
+      throw new Error('background process pid unavailable after ready report (internal error)');
     }
     return { pid: child.pid, readyState: outcome.state, logPath: logFile };
   }
 
-  // failed path: stop this time hold has ChildProcess(self has child process), keep diagnose log.
+  // Failure path: kill only the ChildProcess we own and preserve diagnostic logs.
   try {
     child.kill('SIGKILL');
   } catch {
-    // already exit.
+    // Already exited.
   }
   detachChannel();
   child.unref();
   await logHandle.close().catch(() => undefined);
   const reason =
     outcome.kind === 'error'
-      ? `background process failed to start (spawn error):${outcome.error.message}`
+      ? `background process failed to start (spawn error): ${outcome.error.message}`
       : outcome.kind === 'exit'
-        ? `background process after startup immediately exit (code=${outcome.code ?? 'null'})`
-        : `background process ${readyTimeoutMs}ms inside not on report ready (helm-node.ready)`;
+        ? `background process exited immediately after startup (code=${outcome.code ?? 'null'})`
+        : `background process did not report ready (helm-node.ready) within ${readyTimeoutMs}ms`;
   const tail = await readLogTail(logFile, 40);
-  throw new Error(`${reason}${tail !== '' ? `\n--- ${logFile} finally 40 row ---\n${tail}` : ''}`);
+  throw new Error(`${reason}${tail !== '' ? `\n--- ${logFile} last 40 lines ---\n${tail}` : ''}`);
 }
 
 /**
- * start concurrency lock (O_CREAT|O_EXCL): hold lock override already has instance verify → spawn → pid Profile
- * all process; all branch release; leftover lock explicit diagnose (not silently delete - - may is another start in-flight).
+ * Concurrency lock (`O_CREAT|O_EXCL`) spanning instance check -> spawn -> PID persistence.
+ * Never deletes a pre-existing lock silently because another `start` may be in flight.
  */
 async function withStartLock<T>(dataDir: string, fn: () => Promise<T>): Promise<T> {
   const lockPath = startLockPath(dataDir);
@@ -179,7 +170,7 @@ async function withStartLock<T>(dataDir: string, fn: () => Promise<T>): Promise<
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
       throw new Error(
-        `concurrency start conflict:${lockPath} already exists (another helm-node start is now enter row, or on time start exception exit leftover); confirm without concurrency after startup delete the file retry`,
+        `concurrent start conflict: ${lockPath} already exists (another helm-node start is in progress, or a previous start crashed); confirm no start is running and remove the lock file before retrying`,
       );
     }
     throw error;
@@ -202,15 +193,14 @@ async function readLogTail(logFile: string, maxLines: number): Promise<string> {
   }
 }
 
-/** background child process and parent process same source tsx compile environment which must execArgv(--require/--import loader etc.). */
+/** Inherit loader flags (`--require`/`--import`) while stripping inspector/profiler flags. */
 function inheritExecArgv(): string[] {
   return process.execArgv.filter((arg) => !/^-{1,2}(inspect|debug|cpu-prof|heap-prof)(-brk)?(-[a-z-]+)?(=.*)?$/.test(arg));
 }
 
 /**
- * parse background start target:current.json takes precedence (already upgrade after must run new release entry,
- * broken current explicit errors); without current fall back fixed launcher(itself entry, do not bind any
- * release). also return cliBinDir(has current when inject HELM_CLI_BIN_DIR).
+ * Resolve the daemon launch target: `current.json` takes precedence (so upgraded releases are used);
+ * falls back to `selfEntry` when no release is staged. Broken `current.json` targets fail explicitly.
  */
 async function resolveDaemonLaunchTarget(
   dataDir: string,
@@ -223,13 +213,13 @@ async function resolveDaemonLaunchTarget(
     await fsp.access(current.entryPath);
   } catch {
     throw new Error(
-      `current.json points to entry missing (${current.entryPath},version ${current.version}): upgrade artifact may already corrupt; please fix current.json or re- upgrade, reject fall back old entry start`,
+      `current.json points to a missing entry (${current.entryPath}, version ${current.version}): staged release may be corrupted; fix current.json or re-upgrade instead of falling back to an older entry`,
     );
   }
   return { entryPath: current.entryPath, ...(current.cliBinDir !== undefined ? { cliBinDir: current.cliBinDir } : {}) };
 }
 
-/** already has pid Profile verify: true daemon/pid store but cannot reach all reject; indeed already death clean up after let through. */
+/** Ensure no live daemon or unverified PID owns `node.pid`; cleans up confirmed-dead stale records. */
 async function assertNoLiveInstance(io: NodeCliIo, dataDir: string): Promise<void> {
   const isAlive = isAliveOf(io);
   const existing = await readPidRecord(dataDir);
@@ -237,23 +227,20 @@ async function assertNoLiveInstance(io: NodeCliIo, dataDir: string): Promise<voi
   const response = await controlRequest(existing.endpoint, { type: 'status', instanceId: existing.instanceId });
   if (response !== null && response.ok === true) {
     throw new UsageError(
-      `daemon already in run (pid ${response.pid},state ${response.state ?? 'unknown'},pid file ${pidPath(dataDir)}); reject duplicate start, such as must restart please use helm-node restart`,
+      `daemon is already running (pid ${response.pid}, state ${response.state ?? 'unknown'}, pid file ${pidPath(dataDir)}); use helm-node restart instead`,
       'already_running',
     );
   }
   if (isAlive(existing.pid)) {
     throw new UsageError(
-      `pid ${existing.pid} store but control channel cannot reach (endpoint ${existing.endpoint}): cannot verify can security override, reject start; please first helm-node stop, or human confirm process identity after delete ${pidPath(dataDir)}`,
+      `pid ${existing.pid} is alive, but control channel is unreachable (endpoint ${existing.endpoint}): cannot verify identity safely; run helm-node stop or verify the process manually and remove ${pidPath(dataDir)}`,
       'control_unreachable',
     );
   }
-  // pid indeed already death: Profile expired, clean up after continue.
   await removePidFile(dataDir);
 }
 
-/**
- * background start entry: hold start lock complete already has instance verify → spawn + ready confirm → pid Profile.
- */
+/** Start the daemon detached under `withStartLock` and persist `node.pid`. */
 export async function startDaemon(
   io: NodeCliIo,
   dataDir: string,
@@ -265,17 +252,14 @@ export async function startDaemon(
     const instanceId = randomBytes(16).toString('hex');
     const endpoint = controlEndpoint(dataDir, instanceId);
     const spawnDaemon = io.spawnDaemon ?? defaultSpawnDaemon;
-    // current release takes precedence: already upgrade after start must pull new entry, cannot continue run old launcher.
     const target = await resolveDaemonLaunchTarget(dataDir, cliSelfEntry());
     const args = [target.entryPath, 'start', '--data-dir', dataDir];
     if (effectiveHub !== '') args.push('--hub', effectiveHub);
     const { pid, readyState, logPath } = await spawnDaemon({
       nodePath: process.execPath,
       args,
-      // fixed launcher(itself entry) inherit same source compile environment;release entry is compile artifact, do not carries loader.
       execArgv: target.entryPath === cliSelfEntry() ? inheritExecArgv() : [],
       dataDir,
-      // control identifier via env pass (spawnDaemon receives env i.e. child process complete env).
       env: {
         ...process.env,
         ...(io.env ?? {}),
@@ -290,23 +274,22 @@ export async function startDaemon(
     try {
       await writePidRecord(dataDir, { pid, instanceId, endpoint });
     } catch (error) {
-      const stopped = await controlRequest(endpoint, { type: 'stop', instanceId }, CONTROL_STOP_TIMEOUT_MS, { pid, instanceId })
+      const stopped = await controlRequest(endpoint, { type: 'stop', instanceId }, CONTROL_STOP_TIMEOUT_MS, { pid, instanceId });
       if (!stopped?.ok || !(await waitForExit(pid, STOP_EXIT_TIMEOUT_MS, isAlive))) {
-        throw new AggregateError([error], `PID Profile failed and background process ${pid} cannot confirm stop, must human diagnose`)
+        throw new AggregateError([error], `failed to write PID record and could not confirm background process ${pid} stopped; manual cleanup required`);
       }
-      // only when Profile still points to this time instance only then delete (may already by other write take over, do not mistakenly delete other person Profile).
       await removePidFileIfMatch(dataDir, { pid, instanceId, endpoint });
-      throw error
+      throw error;
     }
     return { pid, logPath, readyState };
   });
 }
 
 // ---------------------------------------------------------------------------
-// foreground stable launcher
+// Foreground stable launcher
 // ---------------------------------------------------------------------------
 
-/** launcher close chain: via control channel stop when before instance and wait for result set (do not early retreat). */
+/** Stop the tracked daemon instance via its control channel and wait for exit + CAS PID cleanup. */
 async function stopTrackedInstance(io: NodeCliIo, dataDir: string, record: PidRecord): Promise<string | undefined> {
   const response = await controlRequest(
     record.endpoint,
@@ -315,25 +298,20 @@ async function stopTrackedInstance(io: NodeCliIo, dataDir: string, record: PidRe
     { pid: record.pid, instanceId: record.instanceId },
   );
   if (response === null || response.ok !== true) {
-    return `stop daemon failed (pid ${record.pid},endpoint ${record.endpoint}):${
-      response === null ? 'control channel cannot reach' : response.error ?? 'unknown'
-    }; daemon continue run, available helm-node stop stop`;
+    return `failed to stop daemon (pid ${record.pid}, endpoint ${record.endpoint}): ${
+      response === null ? 'control channel unreachable' : response.error ?? 'unknown'
+    }; daemon may still be running — use helm-node stop`;
   }
-  // etc. stop result set:daemon real exit and pid Profile by CAS clean up after only then return.
   if (!(await waitForExit(record.pid, STOP_EXIT_TIMEOUT_MS, isAliveOf(io)))) {
-    return `pid ${record.pid} in ${STOP_EXIT_TIMEOUT_MS}ms inside not exit;pid file keep supply diagnose`;
+    return `pid ${record.pid} did not exit within ${STOP_EXIT_TIMEOUT_MS}ms; pid file retained for diagnostics`;
   }
   await removePidFileIfMatch(dataDir, record);
   return undefined;
 }
 
 /**
- * foreground stable launcher(without control env  start,systemd/launchd main process):
- * - invoke startDaemon pull start subject to control background child process, itself keep store;
- * - cycle via node.pid + control channel verify trace when before instance: upgrade swap pid after automatically trace
- *   new daemon(new process by old daemon via upgrade handover pull start and change write pid Profile);
- * - SIGTERM/INT via control channel stop when before instance (verify pid/instanceId consistent) after exit,
- *   never to not via identity verify process signal;
+ * Foreground stable launcher (for systemd/launchd): spawns a controlled daemon child and tracks
+ * `node.pid` across upgrade handoffs, forwarding SIGINT/SIGTERM via the control channel.
  */
 export async function runForegroundLauncher(
   io: NodeCliIo,
@@ -342,31 +320,28 @@ export async function runForegroundLauncher(
   json: boolean,
 ): Promise<number> {
   const isAlive = isAliveOf(io);
-  // env override takes precedence at io inject: real child process launcher cannot connect io, only can via env shrink short polling.
-  const envPollMs = Number(io.env?.HELM_NODE_LAUNCHER_POLL_MS ?? '')
-  const pollMs = Number.isFinite(envPollMs) && envPollMs > 0 ? envPollMs : (io.launcherPollMs ?? LAUNCHER_POLL_MS)
+  const envPollMs = Number(io.env?.HELM_NODE_LAUNCHER_POLL_MS ?? '');
+  const pollMs = Number.isFinite(envPollMs) && envPollMs > 0 ? envPollMs : (io.launcherPollMs ?? LAUNCHER_POLL_MS);
   const started = await startDaemon(io, dataDir, effectiveHub);
   if (!json) {
-    io.out(`helm-node launcher: daemon pid ${started.pid};launcher keep store trace,Ctrl+C stop\n`);
+    io.out(`helm-node launcher: daemon pid ${started.pid}; tracking instance (Ctrl+C to stop)\n`);
   }
   let stopError: string | undefined;
-  /** close chain promise: signal trigger after start, return before must await set (do not let systemd early retreat). */
   let shutdownPromise: Promise<void> | undefined;
   const shutdown = (reason: string): void => {
     if (shutdownPromise !== undefined) return;
     shutdownPromise = (async () => {
       try {
-        // trace when before instance: upgrade after node.pid already points to new daemon(old daemon already exit).
         const record = await readPidRecord(dataDir);
         if (record !== null && isAlive(record.pid)) {
           const error = await stopTrackedInstance(io, dataDir, record);
           if (error !== undefined) {
-            stopError = `launcher receives ${reason}, but ${error}`;
+            stopError = `launcher received ${reason}, but ${error}`;
             return;
           }
         }
       } catch (error) {
-        stopError = `launcher close exception:${error instanceof Error ? error.message : String(error)}`;
+        stopError = `launcher shutdown error: ${error instanceof Error ? error.message : String(error)}`;
       }
     })();
   };
@@ -375,18 +350,17 @@ export async function runForegroundLauncher(
   process.once('SIGINT', onSigint);
   process.once('SIGTERM', onSigterm);
 
-  // trace loop: Profile disappear or long phase cannot verify when such as exit (service manage will restart diagnose).
   for (;;) {
     if (shutdownPromise !== undefined) break;
     let record: PidRecord | null;
     try {
       record = await readPidRecord(dataDir);
     } catch (error) {
-      stopError = `launcher read pid Profile failed:${error instanceof Error ? error.message : String(error)}`;
+      stopError = `launcher failed to read pid record: ${error instanceof Error ? error.message : String(error)}`;
       break;
     }
     if (record === null) {
-      // daemon already stop (stop after pid file by delete):launcher task complete exit.
+      // Daemon stopped cleanly and deleted `node.pid`.
       break;
     }
     if (!isAlive(record.pid)) {
@@ -396,18 +370,13 @@ export async function runForegroundLauncher(
         CONTROL_TIMEOUT_MS,
         { pid: record.pid, instanceId: record.instanceId },
       ).catch(() => null);
-      if (response !== null && response.ok === true) {
-        // pid re- use rare window: Profile consistent and control end point verify via, continue trace.
-      } else {
-        stopError = `daemon pid ${record.pid} already exit and control channel cannot verify;launcher exit (available helm-node start restart)`;
+      if (response === null || response.ok !== true) {
+        stopError = `daemon pid ${record.pid} exited and control channel could not be verified; launcher exiting (run helm-node start to restart)`;
         break;
       }
     }
     await new Promise((resolve) => setTimeout(resolve, pollMs));
   }
-  // signal listener clean up (finally semantics); signal trigger close chain must await set after only then return
-  // (stop result confirm,pid CAS clean up complete, do not let systemd in daemon exit before early retreat);
-  // loop self retreat path (Profile disappear/cannot verify) no need to stop instance, directly return.
   process.removeListener('SIGINT', onSigint);
   process.removeListener('SIGTERM', onSigterm);
   if (shutdownPromise !== undefined) await shutdownPromise;
