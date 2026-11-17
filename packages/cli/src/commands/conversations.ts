@@ -417,10 +417,10 @@ export function conversationsCommands(): CommandSpec[] {
   // ---- conversations fork ----
   cmds.push({
     path: ['conversations', 'fork'],
-    description: 'Fork a conversation from a specified entry (POST /api/conversations/:id/fork)',
+    description: 'Fork a conversation from a specified entry or latest clean anchor (POST /api/conversations/:id/fork)',
     flags: [
       ...convFlags,
-      { name: 'entry-id', type: 'number', required: true, help: 'entry ID to fork from' },
+      { name: 'entry-id', type: 'number', help: 'entry ID to fork from (defaults to latest clean anchor)' },
       { name: 'title', type: 'string', help: 'title for the new conversation (defaults to "<source title> (fork)")' },
     ],
     positional: '[id]',
@@ -428,7 +428,7 @@ export function conversationsCommands(): CommandSpec[] {
       const parsed = parseFlags(
         [
           { name: 'current', type: 'boolean' },
-          { name: 'entry-id', type: 'number', required: true },
+          { name: 'entry-id', type: 'number' },
           { name: 'title', type: 'string' },
         ],
         ctx.args,
@@ -436,10 +436,11 @@ export function conversationsCommands(): CommandSpec[] {
       const id = resolveConversationTarget(parsed.flags, parsed.positionals[0], ctx.env)
       assertNoExtraPositionals(parsed.positionals, 1)
       const entryId = flagValue<number>(parsed.flags, 'entry-id')
-      if (entryId === undefined || !Number.isInteger(entryId) || entryId <= 0) {
+      if (entryId !== undefined && (!Number.isSafeInteger(entryId) || entryId <= 0)) {
         throw new CliError('--entry-id must be a positive integer', 'invalid_flag_value')
       }
-      const body: Record<string, unknown> = { entryId }
+      const body: Record<string, unknown> = {}
+      if (entryId !== undefined) body.entryId = entryId
       const title = flagValue<string>(parsed.flags, 'title')
       if (title !== undefined) body.title = title
       const hub = await ctx.hub()

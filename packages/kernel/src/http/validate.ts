@@ -321,18 +321,18 @@ export function parseConversationCompactBody(body: Record<string, unknown>): { i
 
 const CONVERSATION_FORK_BODY_SCHEMA = Type.Object(
   {
-    entryId: SafePositiveInt,
+    entryId: Type.Optional(SafePositiveInt),
     title: Type.Optional(NonEmptyString),
   },
   { additionalProperties: false },
 )
 
-/** POST /api/conversations/:id/fork: entryId is a required safe positive integer; title is optional 1..200 UTF-16 code units. */
-export function parseConversationForkBody(body: Record<string, unknown>): { entryId: number; title?: string } {
+/** POST /api/conversations/:id/fork: entryId is an optional safe positive integer; title is optional 1..200 UTF-16 code units. */
+export function parseConversationForkBody(body: Record<string, unknown>): { entryId?: number; title?: string } {
   const parsed = parseBodyWithSchema(CONVERSATION_FORK_BODY_SCHEMA, body, 'fork body')
   if (parsed.title !== undefined) requireUtf16LengthAtMost('title', parsed.title, 200)
   return {
-    entryId: parsed.entryId,
+    ...(parsed.entryId !== undefined ? { entryId: parsed.entryId } : {}),
     ...(parsed.title !== undefined ? { title: parsed.title } : {}),
   }
 }

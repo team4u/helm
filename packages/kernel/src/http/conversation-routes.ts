@@ -100,8 +100,8 @@ export async function handleConversationsDomain(
     return jsonOk(redactor, await kernel.compactConversation(id, opts), { status: 202 })
   }
   if (third === 'fork' && method === 'POST' && fourth === undefined) {
-    const body = await readJsonBody(ctx.request)
-    return jsonOk(redactor, await kernel.forkConversation(id, parseConversationForkBody(body)), { status: 201 })
+    const opts = await parseOptionalJsonObjectBody(ctx.request, parseConversationForkBody)
+    return jsonOk(redactor, await kernel.forkConversation(id, opts), { status: 201 })
   }
   if (third === 'artifacts' && method === 'GET' && fourth === undefined) {
     return jsonOk(redactor, await kernel.artifacts.list(id))

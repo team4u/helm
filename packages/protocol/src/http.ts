@@ -31,8 +31,8 @@ export interface CredentialSummary {
 
 /** `POST /api/conversations/:id/fork` request body. */
 export interface ConversationForkRequest {
-  /** Fork anchor entry ID (a positive integer ordinal corresponding to ConversationEntry.id). */
-  entryId: number
+  /** Fork anchor entry ID (a positive integer ordinal corresponding to ConversationEntry.id); defaults to the latest clean anchor when omitted. */
+  entryId?: number
   title?: string
 }
 

@@ -77,12 +77,12 @@ class FakeBackend implements PluginHostBackend {
     this.conversations.set(created.id, created)
     return Promise.resolve(created)
   }
-  forkConversation(id: number, opts: { entryId: number; title?: string }): Promise<ConversationSummary> {
+  forkConversation(id: number, opts?: { entryId?: number; title?: string }): Promise<ConversationSummary> {
     const source = this.conversations.get(id)
     if (source === undefined) throw new HelmError('not_found', `会话不存在: ${id}`, 404)
     const created = makeConversation(this.nextId++, {
       profileId: source.profileId,
-      title: opts.title ?? `${source.title} (分叉)`,
+      title: opts?.title ?? `${source.title} (分叉)`,
       parentConversationId: id,
     })
     this.conversations.set(created.id, created)

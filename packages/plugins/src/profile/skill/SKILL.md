@@ -33,7 +33,7 @@ managedByPlugin: {{MANAGED_BY}}
 - `helm conversations create [--title <t>] [--profile-id <id>] [--node <nodeId>] [--cwd <dir>] [--model <m>] [--tags <t>]`
 - `helm conversations update <id> --title/--model/--thinking/--profile-id/--node/--cwd/--pinned/--unread`
 - `helm conversations reset [id] [--current] [--handoff <text>]` (reset context; handoff becomes the first message)
-- `helm conversations compact [id] [--current]` / `helm conversations fork <id> --entry-id <n> [--title <t>]` / `helm conversations delete <id>`
+- `helm conversations compact [id] [--current]` / `helm conversations fork [id] [--current] [--entry-id <n>] [--title <t>]` / `helm conversations delete <id>`
 - `helm send <id> "<text>"` or `helm send --current "<text>"`: submit input; supports `--wait`, `--when-busy steer|followUp|reject` (default steer when omitted), `--meta <json>`, `--attach <artifactIds>`, `--replace-from <entryId>` (resend overwriting from the given history entry, truncating that entry and everything after); use `--origin agent` when sending on an agent's behalf.
 - `helm ask "<text>"`: one-shot Q&A (internally creates a conversation and waits for the answer; stdout prints only the answer text by default, `--json` outputs `{conversationId,submissionId,entryId,answer,deleted}`); piped stdin content (non-TTY) merges into the prompt automatically; `--profile/--title/--cwd/--model/--tags/--timeout <ms>/--delete-on-success`; on failure the conversation is kept and the error envelope carries a queryable conversationId.
 - `helm conversations withdraw [id] [--current] --submission-id <n>`: withdraw a queued input (returns already_placed/settled honestly when execution started or it already settled).

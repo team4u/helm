@@ -638,12 +638,13 @@ export interface HelmHostApi {
   ): Promise<void>
   createConversation(init: ConversationInit): Promise<ConversationSummary>
   /**
-   * 从源会话指定可见条目分叉新会话（与 POST /api/conversations/:id/fork 同源）。
-   * 源会话或条目不存在抛 404 not_found；entryId 非安全正整数抛 400 validation_error。
+   * 从源会话指定可见条目或最新干净锚点分叉新会话（与 POST /api/conversations/:id/fork 同源）。
+   * 省略 entryId 时自动解析最新已完成干净锚点（无非系统历史抛 409 fork_empty_history）；
+   * 源会话或指定条目不存在抛 404 not_found；显式 entryId 非安全正整数抛 400 validation_error。
    */
   forkConversation(
     id: number,
-    opts: { entryId: number; title?: string },
+    opts?: { entryId?: number; title?: string },
   ): Promise<ConversationSummary>
   listConversations(filter?: ConversationListFilter): ConversationSummary[]
   /** 读取单个会话摘要；不存在时抛 HelmError。 */

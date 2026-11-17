@@ -110,7 +110,7 @@ function makeBackend(over: {
     forkConversation: async (id, opts) => ({
       ...makeConversation(id + 100),
       parentConversationId: id,
-      title: opts.title ?? `conv-${id} (fork)`,
+      title: opts?.title ?? `conv-${id} (fork)`,
     }),
     listConversations: () => [makeConversation(1)],
     getConversation: (id) => makeConversation(id),
@@ -704,6 +704,22 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
 
       const forkedDetail = await runtime.getConversationDetail(forked.id)
       assert.ok(JSON.stringify(forkedDetail.entries).includes('ALPHA-99'))
+
+      const cleanForked = await realHost!.forkConversation(parent.id)
+      assert.equal(cleanForked.parentConversationId, parent.id)
+      assert.equal(cleanForked.title, 'parent conversation (fork)')
+      const cleanForkedDetail = await runtime.getConversationDetail(cleanForked.id)
+      assert.ok(JSON.stringify(cleanForkedDetail.entries).includes('ALPHA-99'))
+
+      const emptyParent = await runtime.createConversation({
+        profileId: 'reviewer',
+        cwd: rtDir,
+        title: 'empty parent',
+      })
+      await assert.rejects(
+        () => realHost!.forkConversation(emptyParent.id),
+        (err: unknown) => err instanceof HelmError && err.status === 409 && err.code === 'fork_empty_history',
+      )
 
       await runtime.plugins.disable('p:fork-real')
       await assert.rejects(

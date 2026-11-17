@@ -750,7 +750,7 @@ export class KernelRuntime {
     return this.conversations.compactConversation(id, opts)
   }
 
-  async forkConversation(id: number, opts: { entryId: number; title?: string }): Promise<ConversationSummary> {
+  async forkConversation(id: number, opts?: { entryId?: number; title?: string }): Promise<ConversationSummary> {
     this.assertWritable()
     return this.conversations.forkConversation(id, opts)
   }

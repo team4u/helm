@@ -256,18 +256,35 @@ test('input body: empty text allowed (202); attachment ID dedupe/empty array, en
   }
 })
 
-test('fork/withdraw: safe positive integer upper bound rejects 2^60; rejects unknown fields and empty title', { timeout: 60_000 }, async () => {
+test('fork/withdraw: optional entryId clean anchor; safe positive integer upper bound rejects 2^60; rejects unknown fields and empty title', { timeout: 60_000 }, async () => {
   const calls = newCallLog()
   const kernel = makeKernel(calls)
   const ok = await call(kernel, 'POST', '/api/conversations/1/fork', { entryId: 5, title: 'fork' })
   assert.equal(ok.status, 201)
   assert.deepEqual(calls.forkConversation![0], [1, { entryId: 5, title: 'fork' }])
+
+  const okOmitted = await call(kernel, 'POST', '/api/conversations/1/fork', {})
+  assert.equal(okOmitted.status, 201)
+  assert.deepEqual(calls.forkConversation![1], [1, {}])
+
+  const okTitleOnly = await call(kernel, 'POST', '/api/conversations/1/fork', { title: 'clean anchor fork' })
+  assert.equal(okTitleOnly.status, 201)
+  assert.deepEqual(calls.forkConversation![2], [1, { title: 'clean anchor fork' }])
+
+  const okNoBody = await call(kernel, 'POST', '/api/conversations/1/fork')
+  assert.equal(okNoBody.status, 201)
+  assert.deepEqual(calls.forkConversation![3], [1, {}])
+
   for (const bad of [
-    {},
     { entryId: 1.5 },
     { entryId: 0 },
+    { entryId: -1 },
     { entryId: 2 ** 60 },
+    { entryId: '5' },
+    { entryId: null },
+    { title: '' },
     { entryId: 1, title: '' },
+    { extra: 2 },
     { entryId: 1, extra: 2 },
   ]) {
     await expect400(kernel, 'POST', '/api/conversations/1/fork', bad)
