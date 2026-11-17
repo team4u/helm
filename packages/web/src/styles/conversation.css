@@ -456,6 +456,7 @@
 
 .msg-ai-body {
   color: var(--prose-fg);
+  font-family: var(--font-sans);
   font-size: 14px;
   line-height: 1.68;
   word-break: break-word;
@@ -638,23 +639,23 @@
   margin-bottom: 0;
 }
 
-/* Markdown 与代码块也用于技能阅读器和产物预览，阅读档仅作用于会话回合。
- * 思考展开体在后文覆盖正文与标题字号，保留紧凑层次。 */
-.msg-ai-block .msg-ai-body {
+/* 会话回合与产物/工作区文件 Markdown 预览共用同一套阅读档排版（15px 正文 + em 标题阶梯）；
+ * 技能阅读器与思考展开体各自保留紧凑字号覆盖。 */
+:is(.msg-ai-block, .artifact-markdown-preview) .msg-ai-body {
   font-size: 15px;
   line-height: 1.65;
 }
 
-.msg-ai-block .msg-ai-body h1 { font-size: 1.35em; }
-.msg-ai-block .msg-ai-body h2 { font-size: 1.2em; }
-.msg-ai-block .msg-ai-body h3 { font-size: 1.08em; }
-.msg-ai-block .msg-ai-body h4 { font-size: 1em; }
+:is(.msg-ai-block, .artifact-markdown-preview) .msg-ai-body h1 { font-size: 1.35em; }
+:is(.msg-ai-block, .artifact-markdown-preview) .msg-ai-body h2 { font-size: 1.2em; }
+:is(.msg-ai-block, .artifact-markdown-preview) .msg-ai-body h3 { font-size: 1.08em; }
+:is(.msg-ai-block, .artifact-markdown-preview) .msg-ai-body h4 { font-size: 1em; }
 
-.msg-ai-block .msg-ai-body li + li {
+:is(.msg-ai-block, .artifact-markdown-preview) .msg-ai-body li + li {
   margin-top: 3px;
 }
 
-.msg-ai-block .msg-ai-body code:not(pre code) {
+:is(.msg-ai-block, .artifact-markdown-preview) .msg-ai-body code:not(pre code) {
   font-size: 0.88em;
 }
 

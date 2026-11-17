@@ -17,6 +17,7 @@ import { ArtifactPreviewModal } from '../src/conversation/ArtifactPreviewModal.j
 import { seedPluginClientModule, resetPluginClientCache } from '../src/lib/plugin-client.js'
 import { makeTestStore } from './helpers/store.js'
 import { HostStoreProviders } from './helpers/host-store.js'
+import { readHostStyles } from './helpers/host-styles.js'
 
 const e = React.createElement
 ;(globalThis as Record<string, unknown>).React = React
@@ -575,4 +576,56 @@ test('Markdown 产物预览期间元数据对象引用刷新时不卸载 Markdow
 
   act(() => { lateRoot.unmount() })
   resetBody()
+})
+
+test('产物 Markdown 预览复用会话回合同一套样式与字体计算契约', { timeout: 60_000 }, async () => {
+  installObjectUrlShim()
+  const markdown = makeArtifact(
+    'art-style-parity',
+    new TextEncoder().encode('# 标题一\n\n## 标题二\n\n正文与 `inline` 代码'),
+    'parity.md',
+    'text/markdown',
+  )
+  installArtifactFetch([markdown])
+  const store = buildStore({ artifacts: [markdown] })
+
+  resetBody()
+  const styleEl = document.createElement('style')
+  styleEl.textContent = readHostStyles()
+  document.head.appendChild(styleEl)
+
+  const convRef = document.createElement('div')
+  convRef.className = 'msg-ai-block'
+  convRef.innerHTML = '<div class="msg-ai-body"><h1>标题一</h1><h2>标题二</h2><p>正文与 <code>inline</code></p></div>'
+  document.body.appendChild(convRef)
+
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = mount(host, store, 'art-style-parity', 7)
+  await flush()
+
+  try {
+    const convBody = convRef.querySelector('.msg-ai-body')!
+    const convH1 = convBody.querySelector('h1')!
+    const convH2 = convBody.querySelector('h2')!
+    const convCode = convBody.querySelector('code')!
+
+    const previewBody = document.querySelector('.artifact-markdown-preview .msg-ai-body')!
+    const previewH1 = previewBody.querySelector('h1')!
+    const previewH2 = previewBody.querySelector('h2')!
+    const previewCode = previewBody.querySelector('code')!
+
+    assert.equal(getComputedStyle(previewBody).fontFamily, getComputedStyle(convBody).fontFamily)
+    assert.equal(getComputedStyle(previewBody).fontSize, getComputedStyle(convBody).fontSize)
+    assert.equal(getComputedStyle(previewBody).lineHeight, getComputedStyle(convBody).lineHeight)
+    assert.equal(getComputedStyle(previewBody).fontSize, '15px')
+    assert.equal(getComputedStyle(previewH1).fontSize, getComputedStyle(convH1).fontSize)
+    assert.equal(getComputedStyle(previewH2).fontSize, getComputedStyle(convH2).fontSize)
+    assert.equal(getComputedStyle(previewCode).fontSize, getComputedStyle(convCode).fontSize)
+    assert.equal(getComputedStyle(previewCode).fontFamily, getComputedStyle(convCode).fontFamily)
+  } finally {
+    act(() => { root.unmount() })
+    styleEl.remove()
+    resetBody()
+  }
 })
