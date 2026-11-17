@@ -1,11 +1,10 @@
 /* ==========================================================================
  * Helm Web UI Design System — Quiet Surface
- * Visual principles:
- * 1. Neutral paper background, 1px hairline borders, translucent tinted buttons, a faint sidebar
- *    selection background and tabular-nums alignment; the Helm full-viewport multi-column split skeleton is kept.
- * 2. Zero-Emoji rule: the whole UI uses plain text + lucide-react vector line icons only.
- * 3. Clear hierarchy: AI prose renders without bubble frames, tool calls stay as quiet
- *    26px single-line traces, business and approval cards stand out.
+ * 视觉原则：
+ * 1. 使用中性纸面底色、1px 发丝边框、半透明着色按钮、淡色侧栏选中背景
+ *    与 tabular-nums 等宽数字对齐；保留 Helm 全视口多栏分屏骨架。
+ * 2. 零 Emoji 铁律：全界面仅使用纯文本 + lucide-react 矢量线性图标。
+ * 3. 层次分明：AI 正文无外框气泡，工具调用 26px 单行静音轨迹，业务卡片与审批卡突出。
  * ========================================================================== */
 
 :root,
@@ -20,7 +19,7 @@
   --bg-active: rgba(28, 28, 33, 0.08);
   --bg-backdrop: rgba(0, 0, 0, 0.28);
 
-  /* Code highlighting: the OKHSL semantic hue mapping borrowed from pi (blue=keywords, yellow=functions, purple=types,
+  /* 代码高亮：借鉴 pi 的 OKHSL 语义色相映射（蓝=关键字、黄=函数、紫=类型、
      blue=variables, orange=strings, green=numbers, gray=comments/punctuation); light theme desaturates one notch (S×0.85)
      for a paper-ink feel while keeping backgrounds ≥4.5:1 */
   --code-bg: #f6f8fa;
@@ -37,7 +36,7 @@
   --code-token-addition: #3a7959;
   --code-token-deletion: #bb3d46;
 
-  /* Tool diff semantic backgrounds (faint line-level tint plus darkened word-level) and the gutter slot */
+  /* 工具差异展示语义底色（行级淡底 + 词级加深）与行号槽 */
   --diff-add-bg: rgba(26, 127, 55, 0.12);
   --diff-remove-bg: rgba(207, 34, 46, 0.1);
   --diff-add-word-bg: rgba(26, 127, 55, 0.32);
@@ -54,7 +53,7 @@
   --fg-subtle: #b9b9c2;
   --fg-on-solid: #ffffff;
 
-  /* Markdown body reading ramp (Soft Ink): body ink de-glared, headings/bold as compact anchors,
+  /* Markdown 正文阅读色阶（Soft Ink）：正文墨阶去眩光，标题/加粗压实锚点，
      List markers and quotes fade to gray; inline code uses a cool indigo ink distinguished only by pill background and monospace font */
   --prose-fg: #2c2d35;
   --prose-strong: #18181d;
@@ -70,19 +69,19 @@
   --border-focus: #4f46e5;
   --line-2: #ececf0;
 
-  /* Segmented control and nav slider-track shadow */
+  /* 分段控制器与导航滑轨阴影 */
   --seg-track: #e6e6eb;
   --seg-thumb: #ffffff;
   --seg-edge: 0 1px 2px rgba(0, 0, 0, 0.12), 0 0 0 0.5px rgba(0, 0, 0, 0.08);
 
-  /* Sidebar interaction and selection palettes */
+  /* 侧栏交互与选中态色阶 */
   --nav-hover-bg: #eeeef3;
   --nav-split-bg: #f2f2f6;
   --nav-active-bg: var(--bg-elevated);
   --nav-active-fg: var(--fg);
   --nav-active-muted: var(--fg-muted);
 
-  /* Primary accent and semantic indicator colors */
+  /* 主强调色与语义指示色 */
   --accent: #4f46e5;
   --accent-bg: #eeedfd;
   --accent-border: rgba(79, 70, 229, 0.25);
@@ -99,20 +98,20 @@
   --err-bg: #fbe9e9;
   --err-border: rgba(214, 69, 69, 0.24);
 
-  /* Shadow layers */
+  /* 阴影层次 */
   --shadow-sm: 0 1px 1px rgba(0, 0, 0, 0.04);
   --shadow-md: 0 2px 8px rgba(20, 22, 30, 0.06), 0 0 0 0.5px rgba(20, 22, 30, 0.1);
   --shadow-lg: 0 16px 44px rgba(20, 22, 30, 0.16), 0 2px 8px rgba(20, 22, 30, 0.06), 0 0 0 0.5px rgba(20, 22, 30, 0.1);
   --pop-bg: rgba(255, 255, 255, 0.94);
 
-  /* Base micro-radius steps */
+  /* 基础微圆角阶梯 */
   --radius-xs: 5px;
   --radius-sm: 7px;
   --radius-md: 10px;
   --radius-lg: 14px;
   --radius-pill: 999px;
 
-  /* Unified desktop-native font stack (graceful fallbacks for Mac / iOS / Win / Linux) */
+  /* 统一桌面原生字体栈 (Mac / iOS / Win / Linux 优雅回退) */
   --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", system-ui, sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, Monaco, Consolas, "Cascadia Mono", monospace;
   --font: var(--font-sans);
@@ -130,7 +129,7 @@
   --bg-active: rgba(255, 255, 255, 0.09);
   --bg-backdrop: rgba(0, 0, 0, 0.55);
 
-  /* Code highlighting: the same pi semantic hue set as the light theme, OKHSL L≈67% for high contrast on dark */
+  /* 代码高亮：与浅色主题同一套 pi 语义色相，OKHSL L≈67% 保证深底高对比 */
   --code-bg: #161b22;
   --code-header-bg: #21262d;
   --code-border: #30363d;
@@ -145,7 +144,7 @@
   --code-token-addition: #68b78d;
   --code-token-deletion: #ea7f81;
 
-  /* Tool diff semantic backgrounds (faint line-level tint plus darkened word-level) and the gutter slot */
+  /* 工具差异展示语义底色（行级淡底 + 词级加深）与行号槽 */
   --diff-add-bg: rgba(46, 160, 67, 0.16);
   --diff-remove-bg: rgba(248, 81, 73, 0.15);
   --diff-add-word-bg: rgba(63, 185, 80, 0.38);
@@ -162,7 +161,7 @@
   --fg-subtle: #56565f;
   --fg-on-solid: #14142a;
 
-  /* Prose keeps the glare-free ink ramp (Halation): only headings/bold brighten, list markers denoised;
+  /* 正文保持墨阶去光晕（Halation）：标题/加粗才提亮，列表符号去噪；
      Inline code uses a cool indigo ink distinguished only by pill background and monospace font */
   --prose-fg: #d9d9e0;
   --prose-strong: #f2f2f7;

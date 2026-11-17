@@ -1,9 +1,9 @@
 /* ==========================================================================
- * Selection and form controls: Select, model pills, Switch/Checkbox and the busy policy
- * Host style shard; the global cascade order is decided by the @import order in src/styles.css.
+ * 选择与表单控件：Select、模型药丸、Switch/Checkbox 与正忙策略
+ * 本文件为宿主样式分片，全局级联顺序由 src/styles.css 的 @import 顺序决定。
  * ========================================================================== */
 /* ==========================================================================
- * Generic dropdown select (Select - Radix UI primitive wrapper)
+ * 通用下拉选择器（Select - Radix UI 原语封装）
  * ========================================================================== */
 
 .helm-select {
@@ -82,7 +82,7 @@
   transform: rotate(180deg);
 }
 
-/* Generic dropdown panel style spec (frosted glass and high-precision shadow) */
+/* 下拉菜单面板通用样式规范（毛玻璃与高精投影） */
 .dropdown-panel {
   background: var(--pop-bg);
   backdrop-filter: blur(24px);
@@ -94,7 +94,7 @@
   box-sizing: border-box;
 }
 
-/* Dropdown panel shared style spec (frosted glass and high-precision shadow) */
+/* 浮层下拉列表 */
 .helm-select-popover {
   position: absolute;
   top: calc(100% + 4px);
@@ -117,7 +117,7 @@
   gap: 1px;
 }
 
-/* Overlay dropdown list */
+/* 多选下拉框专用快捷条与搜索框 */
 .helm-select-actions {
   display: flex;
   align-items: center;
@@ -165,7 +165,7 @@
 }
 
 /* ==========================================================================
- * Model pill picker primitive (Model Chips spec)
+ * 模型药丸选择器原语 (Model Chips 规范)
  * ========================================================================== */
 
 .models,
@@ -175,7 +175,7 @@
   gap: 6px;
 }
 
-/* Top bulk-action bar */
+/* 顶部批量操作栏 */
 .mbulk,
 .model-chips-toolbar {
   display: flex;
@@ -191,7 +191,7 @@
   margin-left: auto;
 }
 
-/* Top batch action bar */
+/* 批量操作按钮 */
 .text.action,
 .model-chips-actions .btn {
   height: 27px;
@@ -224,7 +224,7 @@
   transform: scale(0.96);
 }
 
-/* Batch action buttons */
+/* 平铺药丸容器（绝对无灰框、无外边框、呼吸感平铺） */
 .mchips,
 .model-drawer-tags-wrap {
   display: flex;
@@ -251,7 +251,7 @@
   overflow-y: visible;
 }
 
-/* Tiled pill container (absolutely no gray frame, no outer border, breathing tiled layout) */
+/* 模型胶囊药丸（模型名称严格不加粗，选中态 hover 保持不变） */
 .mchip,
 .model-drawer-tag {
   display: inline-flex;
@@ -272,13 +272,13 @@
   transition: background 120ms, color 120ms, border-color 120ms;
 }
 
-/* Model capsule pill (model name strictly not bold; selected hover stays unchanged) */
+/* 模型名称：严格不加粗 (font-weight: 400) */
 .mchip > span:not(.mtell):not(.badge):not(.mchip-tag):not(.mchip-check),
 .model-drawer-tag > span:not(.mtell):not(.badge):not(.mchip-tag):not(.mchip-check) {
   font-weight: 400 !important;
 }
 
-/* Model name: strictly not bold (font-weight: 400) */
+/* 仅未选中态响应 hover */
 .mchip:not(.on):hover:not(:disabled),
 .model-drawer-tag:not(.on):hover:not(:disabled) {
   color: var(--fg);
@@ -290,7 +290,7 @@
   transform: scale(0.96);
 }
 
-/* Only the unselected state responds to hover */
+/* 激活勾选态（名称不加粗，hover 不变色） */
 .mchip.on,
 .model-drawer-tag.on {
   color: var(--accent) !important;
@@ -299,7 +299,7 @@
   font-weight: 400;
 }
 
-/* Active checked state (name not bold, hover does not change color) */
+/* 选中的药丸：鼠标悬停完全不改变任何样式！保持原样不变色 */
 .mchip.on:hover,
 .model-drawer-tag.on:hover,
 .mchip.on:hover:not(:disabled),
@@ -309,7 +309,7 @@
   border-color: color-mix(in srgb, var(--accent) 45%, transparent) !important;
 }
 
-/* Selected pill: hovering changes absolutely nothing! Stays as-is, no color shift */
+/* 多选药丸勾选指示 (7px 左边距 + 零抖动占位 Check) */
 .mchip.pick,
 .model-drawer-tag.pick {
   padding-left: 7px;
@@ -337,7 +337,7 @@
   visibility: visible;
 }
 
-/* Multi-select pill check indicator (7px left margin + zero-jitter Check placeholder) */
+/* 药丸内标签 (清晰易读规范：字号 10.5px、高度 16px、常规字重 400、微灰胶囊底、内发丝阴影、hover 绝不改变样式) */
 .mchip .badge,
 .mchip .mchip-tag,
 .mchip .mtell,
@@ -361,7 +361,7 @@
   transition: none;
 }
 
-/* Label inside the pill (clarity spec: 10.5px font, 16px height, regular weight 400, faint gray capsule background, inner hairline shadow, hover never changes the style) */
+/* 药丸激活或 hover 时，里面的标签依然保持中性静止，鼠标移上去绝不改变样式 */
 .mchip.on .badge,
 .mchip.on .mchip-tag,
 .mchip.on .mtell,
@@ -380,7 +380,7 @@
   font-weight: 400 !important;
 }
 
-/* When the pill is active or hovered, the inner label stays neutral and still — hovering never changes the style */
+/* 展开与折叠通栏按钮 */
 .mchips-fold {
   display: flex;
   align-items: center;
@@ -419,7 +419,7 @@
   border-radius: 4px;
 }
 
-/* Conversation starter env compact dropdown: exactly the same height (28px) and radius (var(--radius-sm)) as the adjacent cwd input */
+/* 会话起始环境紧凑下拉框：与旁边 cwd 输入框完全等高 (28px) 与等圆角 (var(--radius-sm)) */
 .composer-env-select .helm-select-trigger {
   height: 28px;
   padding: 0 8px;
@@ -550,7 +550,7 @@
   font-size: 11.5px;
 }
 
-/* Draft-state compact save/cancel and inline error/warning hints */
+/* 草稿态紧凑保存/取消与错误/警告行内提示 */
 .composer-env-actions {
   display: inline-flex;
   align-items: center;
@@ -583,7 +583,7 @@
 }
 
 /* ==========================================================================
- * Generic switch and checkbox primitives (Switch and Checkbox)
+ * 通用开关与复选框原语（Switch 与 Checkbox）
  * ========================================================================== */
 
 /* Switch */
@@ -737,7 +737,7 @@
   padding: 8px 10px 0;
 }
 
-/* History message edit banner: minimal line height, soft background, coordinated with the attachment area style */
+/* 历史消息编辑态提示条：极简行高、柔和底色，与附件区风格协调 */
 .composer-edit-banner {
   display: flex;
   align-items: center;
@@ -801,7 +801,7 @@
   outline: none;
   background: transparent;
   resize: none;
-  /* The standby page and the conversation share the input box; the font size stays consistent before and after sending. */
+  /* 待命页与会话共用输入框，保持发送前后字号一致。 */
   font-size: 15px;
   line-height: 1.55;
   overflow-y: auto;
@@ -841,9 +841,9 @@
 .composer-model-button > svg { flex-shrink: 0; }
 .composer-model-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: normal; }
 .composer-model-level { flex-shrink: 0; color: var(--fg-muted); font-size: 11px; white-space: nowrap; }
-/* Context usage read-only state (right of the model picker): not clickable, a tone-only difference.
- * The tone classes share specificity with the base rule (the same .composer-toolbar prefix),
- * and being declared later they override the default gray — otherwise 0,1,0 < 0,2,0 and yellow/red never take effect. */
+/* 上下文用量只读状态（模型选择器右侧）：不可点击，仅色调差异。
+ * 色调类与基础规则同 specificity（.composer-toolbar 前缀一致），
+ * 声明在后覆盖默认灰，否则 0,1,0 < 0,2,0 黄红永远不生效。 */
 .composer-toolbar .composer-context-status {
   display: inline-flex;
   align-items: center;
@@ -858,9 +858,9 @@
 }
 .composer-toolbar .composer-context-status-warn { color: var(--warn); }
 .composer-toolbar .composer-context-status-high { color: var(--err); }
-/* Host status-line plugin slot (next to context usage, e.g. the builtin:token-speed rate contribution):
- * status contributions are not actions, so on mobile they stay in the toolbar status area (not folded into the more menu);
- * shrinkable to protect the send area from squeezing. */
+/* 宿主状态行插件插槽（上下文用量旁，如 builtin:token-speed 速率贡献）
+ * ：状态贡献非操作项，移动端同样保留在工具栏状态区（不收入 more 菜单）；
+ * 可收缩防挤压发送区。 */
 .composer-toolbar .composer-status-slot {
   display: inline-flex;
   align-items: center;
@@ -881,7 +881,7 @@
   text-align: center;
 }
 .composer-thinking-row .btn { flex-shrink: 0; min-height: 32px; }
-/* Profile drawer form thinking-level segmented control: reuses the segmented primitive, only tightening margins and full width */
+/* 角色抽屉表单内思考档位分段按钮组：复用分段原语，仅收敛边距与全宽 */
 .profile-thinking-row {
   margin: 2px 0 4px;
   width: 100%;
@@ -910,7 +910,7 @@
 .composer-toolbar .btn-send.btn-primary:hover:not(:disabled) { background: var(--fg-secondary); color: var(--fg-on-solid); border-color: transparent; }
 .composer-toolbar .btn-send.btn-primary:disabled { opacity: 1; background: var(--bg-muted); color: var(--fg-subtle); }
 
-/* Thinking level segmented control inside the profile drawer form: reuses the segmented primitive, only tightening margins and going full width */
+/* 正忙分体引导/发送主按钮（方案 B） */
 .composer-split-send {
   display: inline-flex;
   align-items: stretch;
@@ -997,7 +997,7 @@
   cursor: not-allowed;
 }
 
-/* Busy split guide/send primary button (plan B) */
+/* 策略选择下拉浮层 */
 .composer-busy-dropdown-content {
   min-width: 230px;
   padding: 5px;

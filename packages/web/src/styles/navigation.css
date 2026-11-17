@@ -1,9 +1,9 @@
 /* ==========================================================================
- * Left navigation: agent standings, conversation rows and status dots
- * Host style shard; the global cascade order is decided by the @import order in src/styles.css.
+ * 左栏导航：智能体站位、会话行与状态点
+ * 本文件为宿主样式分片，全局级联顺序由 src/styles.css 的 @import 顺序决定。
  * ========================================================================== */
 /* ==========================================================================
- * 3. Left navigation
+ * 3. 左栏导航
  * ========================================================================== */
 
 .sidebar-header {
@@ -44,7 +44,7 @@
   text-transform: uppercase;
 }
 
-/* Collapsible group header main button: the header row must also host secondary action buttons (e.g. the archived group's bulk
+/* 可折叠分组头部主按钮：头部行内还需容纳次要操作按钮（如已归档分组的批量
    restore entry); the header itself is no longer a button and the main toggle takes the flexible left area. */
 .sidebar-group-header-toggle {
   flex: 1;
@@ -72,7 +72,7 @@
   flex-shrink: 0;
 }
 
-/* Agent-standing badge inside archived group rows: prevents long names from breaking the row width. */
+/* 已归档分组行内的归属智能体徽标：防长名撑破行宽。 */
 .archived-profile-label {
   max-width: 96px;
   overflow: hidden;
@@ -106,7 +106,7 @@
   color: var(--fg);
 }
 
-/* Owning-agent badge inside archived group rows: prevents long names from breaking the row width. */
+/* 侧栏行级底色由 --nav-row-bg 统一驱动，供绝对定位行尾动作渐变无缝融合 */
 .sidebar-context .nav-item {
   --nav-row-bg: transparent;
   background: var(--nav-row-bg);
@@ -121,7 +121,7 @@
   color: var(--fg);
 }
 
-/* Row-level background is driven uniformly by --nav-row-bg, so the absolutely positioned row-end action gradient blends seamlessly */
+/* 归属父行弱态：子会话激活而父站位未进入待命态时，仅提亮加粗文字，无卡片底与阴影 */
 .agent-standing-row-branch {
   color: var(--fg);
 }
@@ -134,7 +134,7 @@
   font-weight: 600;
 }
 
-/* Parent row weak state: when a child conversation is active but the parent standing has not entered standby, only brighten and bold the text — no card background or shadow */
+/* 分屏非聚焦在场态：柔和底色 + 1px 内描边 */
 .nav-item-split:hover,
 .nav-item-split {
   --nav-row-bg: var(--nav-split-bg);
@@ -155,7 +155,7 @@
   font-weight: 500;
 }
 
-/* The single highlighted solid card: standby lights the parent row, entering a conversation lights the child row */
+/* 唯一高亮实心卡片：待命亮父行、进会话亮子行 */
 .nav-item-active:hover,
 .nav-item-active {
   --nav-row-bg: var(--nav-active-bg);
@@ -178,7 +178,7 @@
   color: var(--nav-active-muted);
 }
 
-/* Split focus ticks and micro badge: echoing the focus bar on the primary-stage panel top edge */
+/* 分屏焦点刻度与微标：与主舞台面板顶缘焦点条呼应 */
 .nav-item-focused {
   position: relative;
 }
@@ -233,8 +233,8 @@
   font-weight: 500;
 }
 
-/* Row-leading status slot: a fixed 10px lamp position with the circle center exactly on the 8 + 5 = 13px axis;
- * the idle empty slot keeps the left edge aligned with cross-row titles and leaves room for the 7px lamp core and its breathing halo. */
+/* 行首状态槽：固定 10px 灯位，圆心精准落在左起 8 + 5 = 13px 轴线上；
+ * idle 空槽保持跨行标题左缘对齐，且为 7px 灯芯与呼吸光晕留足空间。 */
 .nav-status-slot {
   width: 10px;
   margin-left: 0;
@@ -244,8 +244,8 @@
   flex-shrink: 0;
 }
 
-/* Only rows with a lamp slot use the 6px gap (8 + 10 + 6 = 24px), flush with the expanded child list's left edge;
- * settings navigation / view rows never render nav-status-slot, keeping .nav-item-main's base 8px gap. */
+/* 仅带灯槽的行使用 6px 间距（8 + 10 + 6 = 24px），与展开子列表左缘齐平；
+ * 设置导航/视图行不渲染 nav-status-slot，保持 .nav-item-main 基础 8px gap。 */
 .nav-item-main:has(> .nav-status-slot) {
   gap: 6px;
 }
@@ -260,14 +260,14 @@
   flex-shrink: 0;
 }
 
- * settings navigation / view rows render no nav-status-slot and keep the base 8px gap of .nav-item-main. */
+/* 智能体站位：一级 Agent 行 + 缩进的二级历史会话子列表 */
 .agent-standing {
   display: flex;
   flex-direction: column;
   gap: 2px;
 }
 
-/* Agent standings: first-level agent rows + indented second-level history conversation lists */
+/* 1px 竖向引导线正对父行状态灯圆心 13px 轴线；子列表内容从 13 + 1 + 10 = 24px 起排，与父行标题齐平 */
 .agent-standing-group .agent-conversations-list {
   margin: 2px 0 4px 13px;
   padding-left: 10px;
@@ -294,9 +294,9 @@
   font-weight: 500;
 }
 
-/* The 1px vertical guide line aligns with the parent row lamp center on the 13px axis; child list content starts at 13 + 1 + 10 = 24px, flush with the parent row title */
-/* Row hover actions (child conversation rename/delete; standing and view rows' split/new buttons):
- * on hover-capable desktop devices, non-active/non-split rows use absolutely positioned gradient overlays for zero text reflow and zero jitter;
+/* 行级悬停操作（子会话重命名/删除、站位与视图行的分屏按钮与新建按钮）：
+ * 桌面端悬停设备下对非激活/非分屏行采用绝对定位叠加渐变，实现零文字重排、零抖动；
+ * 激活行、分屏行与触屏设备保持常规流内联，避免与 .nav-pane-tag（主/分）重叠碰撞。 */
 .nav-item-row-actions,
 .sidebar-split-action,
 .agent-new-conv-btn {
@@ -415,7 +415,7 @@
   }
 }
 
- * active rows, split rows and touch devices keep the regular inline flow, avoiding collisions with .nav-pane-tag (Main/Split). */
+/* 会话状态圆点与呼吸动效 */
 .status-dot {
   width: 7px;
   height: 7px;
@@ -447,7 +447,7 @@
   box-shadow: 0 0 0 2px var(--err-bg);
 }
 
-/* Conversation status dots and breathing animation:
+/* 后台在途空心环（单灯位）：父会话自身空闲/已完成但后台任务（子代理/工作流）
    While running, it replaces the idle no-light/done green dot as the only status light of the row;
    hollow with a slow breathing animation, clearly distinct from the solid working pulse of the main turn, never impersonating conversation activity. */
 .status-dot-background {
@@ -548,7 +548,7 @@
   opacity: 0.9;
 }
 
-/* Background in-flight hollow ring (single lamp slot): the parent conversation itself is idle/done but background tasks (subagents/workflows)
+/* 系统中心入口已收敛到「设置」空间，sidebar-footer 不再使用（保留类名仅供外部扩展降级）。 */
 .sidebar-theme-toggle {
   width: 28px;
   height: 28px;
@@ -556,7 +556,7 @@
   flex-shrink: 0;
 }
 
-/* System center entries have converged into the "settings" space; sidebar-footer is no longer used (class names kept only for external-extension fallback). */
+/* 对话空间紧凑搜索：过滤智能体（命中会话标题时保留整行） */
 .sidebar-search {
   display: flex;
   align-items: center;
@@ -635,9 +635,9 @@
 }
 
 /* --------------------------------------------------------------------------
-/* Conversation space compact search: filters agents (a title hit keeps the whole conversation row) */
- * Global pending-ask overlay (PendingAsksPanel)
- * Compound selectors (.sidebar-group/.badge/.list/.row prefixes) guarantee override of the later-cascading
+ * 全局待审批浮层（PendingAsksPanel）
+ * 复合选择器（.sidebar-group/.badge/.list/.row 前缀）保证覆盖级联顺序在后的
+ * primitives.css 基础原语规则，视觉与原内联样式完全一致。
  * -------------------------------------------------------------------------- */
 
 .sidebar-group.pending-asks-group {
@@ -696,4 +696,6 @@
   gap: 6px;
   flex-wrap: wrap;
 }
+
+/* 话题切换已回归左栏手风琴（仅展开当前智能体），顶栏恢复单行标题。 */
 

@@ -1,6 +1,9 @@
 /* ==========================================================================
- * Conversation outline quick-nav popover and artifact preview
- * Host style shard; the global cascade order is decided by the @import order in src/styles.css.
+ * 会话大纲快速导航浮层与 Artifact 预览
+ * 本文件为宿主样式分片，全局级联顺序由 src/styles.css 的 @import 顺序决定。
+ * ========================================================================== */
+/* ==========================================================================
+ * 会话大纲快速导航浮层（ConversationOutlinePopover）
  * ========================================================================== */
 
 .artifact-markdown-preview {

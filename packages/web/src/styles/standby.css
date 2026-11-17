@@ -1,10 +1,9 @@
 /* ==========================================================================
- * Standby page (the true draft screen for new conversations)
- * Host style shard; the global cascade order is decided by the @import order in src/styles.css.
+ * 待命页（新会话真草稿屏）
+ * 本文件为宿主样式分片，全局级联顺序由 src/styles.css 的 @import 顺序决定。
  * ========================================================================== */
 /* ---------------------------------------------------------------------------
- * Agent standby page (Agent Standby): reuses the conversation/input visuals,
- * adding only a little layout
+ * 智能体待命页（Agent Standby）：复用会话/输入区视觉，只补少量布局
  * --------------------------------------------------------------------------- */
 .agent-standby-body {
   flex: 1;
