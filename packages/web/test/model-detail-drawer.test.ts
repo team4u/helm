@@ -3,8 +3,9 @@ import { test } from 'node:test'
 import React from 'react'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 
-// 顺序约束：happy-dom 必须先于 react-dom/client 注册，否则 react-dom 19 缓存
-// 原生 addEventListener 引用后，合成事件委托收不到派发的 input/click（onChange 失效）。
+// Ordering constraint: happy-dom must be registered before react-dom/client,
+// otherwise react-dom 19 caches native addEventListener refs and the synthetic
+// event delegation misses dispatched input/click events (onChange breaks).
 GlobalRegistrator.register()
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
 
@@ -12,11 +13,28 @@ const { act } = await import('react')
 const { createRoot } = await import('react-dom/client')
 const { renderToStaticMarkup } = await import('react-dom/server')
 const { ModelDetailDrawer } = await import('../src/models/ModelDetailDrawer.js')
+const { makeTestStore } = await import('./helpers/store.js')
+const { HostStoreProviders } = await import('./helpers/host-store.js')
 import type { ProviderItem, ProviderModelItem } from '../src/models/model-center-model.js'
+import type { ModelDetailDrawerProps as DrawerProps } from '../src/models/ModelDetailDrawer.js'
 
 const e = React.createElement
 
-/** 构造 N 个模型的供应商（offset 区分 ID/名称，便于断言首帧截断边界） */
+/**
+ * Render the drawer inline under the production-shaped provider stack
+ * (store + SDK host ports) so `useWebLocale` resolves the active locale.
+ */
+function renderDrawerHtml(props: Partial<DrawerProps> & { provider: ProviderItem | null }): string {
+  return renderToStaticMarkup(
+    e(
+      HostStoreProviders,
+      { value: makeTestStore() },
+      e(ModelDetailDrawer, { open: true, inline: true, onClose: () => {}, ...props }),
+    ),
+  )
+}
+
+/** Build a provider with N models (offset ids/names to assert the first-frame cutoff). */
 function makeBulkProvider(count: number, enabledIds: string[] = []): ProviderItem {
   const enabled = new Set(enabledIds)
   const models: ProviderModelItem[] = Array.from({ length: count }, (_, i) => ({
@@ -34,7 +52,7 @@ function makeBulkProvider(count: number, enabledIds: string[] = []): ProviderIte
   }
 }
 
-/** 触发 React 受控 input 的 onChange 事件 */
+/** Trigger onChange on a React controlled input. */
 function typeIntoInput(input: HTMLInputElement, text: string): void {
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
   const tracker = (input as unknown as { _valueTracker?: { getValue(): string; setValue(v: string): void } })
@@ -55,7 +73,7 @@ function findButtonByText(container: HTMLElement, text: string): HTMLButtonEleme
 function chipCheckedMap(container: HTMLElement): Map<string, boolean> {
   const map = new Map<string, boolean>()
   for (const chip of container.querySelectorAll<HTMLButtonElement>('button[role="checkbox"]')) {
-    // title 形如 "Model 5 (m-5) - 点击启用/停用"
+    // title looks like "Model 5 (m-5) - click to Enable"
     const title = chip.getAttribute('title') ?? ''
     const id = title.match(/\((.+)\)/)?.[1] ?? title
     map.set(id, chip.getAttribute('aria-checked') === 'true')
@@ -64,51 +82,46 @@ function chipCheckedMap(container: HTMLElement): Map<string, boolean> {
 }
 
 // ---------------------------------------------------------------------------
-// 1. 模型胶囊首帧截断（无过滤且未展开时最多渲染前 80 个，启用项始终保留）
+// 1. Model chip first-frame cutoff (max 80 chips unfiltered and unexpanded;
+//    enabled state never overrides the cutoff)
 // ---------------------------------------------------------------------------
 
-test('ModelDetailDrawer: 大目录未展开时首帧严格截断为 80 个胶囊', { timeout: 60_000 }, () => {
+test('ModelDetailDrawer: huge catalog truncates the first frame to 80 chips before expanding', { timeout: 60_000 }, () => {
   const provider = makeBulkProvider(100, ['m-95'])
 
-  const html = renderToStaticMarkup(
-    e(ModelDetailDrawer, { provider, open: true, inline: true, onClose: () => {} }),
-  )
+  const html = renderDrawerHtml({ provider })
 
-  // 前 80 个（m-0..m-79）正常渲染
+  // The first 80 (m-0..m-79) render normally
   assert.match(html, /Model 0\b/)
   assert.match(html, /Model 79\b/)
-  // 截断线外模型不渲染，即使当前处于启用态；搜索或展开后可定位/查看
+  // Models past the cutoff do not render even while enabled; search or expand
+  // reveals them
   assert.doesNotMatch(html, /Model 81\b/)
   assert.doesNotMatch(html, /Model 95\b/)
   assert.doesNotMatch(html, /Model 99(?![0-9])/)
-  // 省略数量提示：100 - 80 = 20
+  // Hidden-count hint: 100 - 80 = 20
   assert.match(html, /20 hidden/)
-  // 无过滤词时批量按钮保持全量语义文案
+  // Without a filter term the bulk buttons keep whole-list semantics
   assert.match(html, /Enable all/)
   assert.match(html, /Disable all/)
 })
 
-test('ModelDetailDrawer: 小目录（不足 80）无截断提示，有过滤词时完整渲染匹配结果', { timeout: 60_000 }, () => {
-  // 小目录：无省略文案
-  const small = renderToStaticMarkup(
-    e(ModelDetailDrawer, {
-      provider: makeBulkProvider(20, ['m-19']),
-      open: true,
-      inline: true,
-      onClose: () => {},
-    }),
-  )
-  assert.doesNotMatch(small, /省略 \d+ 个/)
+test('ModelDetailDrawer: small catalog (under 80) shows no cutoff hint; a filter term renders all matches', { timeout: 60_000 }, () => {
+  // Small catalog: no hidden-count copy
+  const small = renderDrawerHtml({ provider: makeBulkProvider(20, ['m-19']) })
+  assert.doesNotMatch(small, /\d+ hidden/)
   assert.match(small, /Model 19\b/)
 
-  // 大目录 + 过滤词：visibleModels 直接取 filteredModels，不做截断（在交互测试中验证）
+  // Large catalog + filter term: visibleModels takes filteredModels directly
+  // with no cutoff (verified in the interaction tests below)
 })
 
 // ---------------------------------------------------------------------------
-// 2. 交互：过滤词下的批量启停仅作用于匹配项，保存提交完整清单
+// 2. Interaction: bulk enable/disable under a filter term applies to matches
+//    only; saving submits the complete list
 // ---------------------------------------------------------------------------
 
-test('ModelDetailDrawer: 批量启停随过滤词收窄为「匹配项」，不影响搜索外的模型', { timeout: 60_000 }, async () => {
+test('ModelDetailDrawer: bulk toggles narrow to matches under a filter term and never touch models outside the search', { timeout: 60_000 }, async () => {
   const provider: ProviderItem = {
     id: 'openai',
     name: 'OpenAI',
@@ -130,46 +143,50 @@ test('ModelDetailDrawer: 批量启停随过滤词收窄为「匹配项」，不�
 
   await act(async () => {
     root.render(
-      e(ModelDetailDrawer, {
-        provider,
-        open: true,
-        inline: true,
-        onClose: () => {},
-        onSave: async (_id, data) => {
-          savedPayloads.push(data.models ?? [])
-        },
-      }),
+      e(
+        HostStoreProviders,
+        { value: makeTestStore() },
+        e(ModelDetailDrawer, {
+          provider,
+          open: true,
+          inline: true,
+          onClose: () => {},
+          onSave: async (_id, data) => {
+            savedPayloads.push(data.models ?? [])
+          },
+        }),
+      ),
     )
   })
 
-  // 无过滤词：全量语义按钮
-  assert.ok(findButtonByText(container, 'Disable all'), '无过滤词时应显示「全部停用」')
+  // No filter term: whole-list semantics buttons
+  assert.ok(findButtonByText(container, 'Disable all'), 'without a filter term the whole-list disable button shows')
 
-  // 输入过滤词 gpt：按钮切换为匹配项语义并带数量
+  // Type the filter term gpt: buttons switch to match semantics with a count
   const filterInput = container.querySelector('input[aria-label="Filter models"]') as HTMLInputElement
   assert.ok(filterInput)
   await act(async () => {
     typeIntoInput(filterInput, 'gpt')
   })
   const disableBtn = findButtonByText(container, 'Disable matches')
-  assert.ok(disableBtn, '有过滤词时应显示「停用匹配项」按钮')
+  assert.ok(disableBtn, 'with a filter term the disable-matches button shows')
   assert.match(disableBtn!.textContent ?? '', /Disable matches \(2\)/)
 
-  // 匹配结果完整渲染（过滤场景不截断）
+  // Matches render fully (no cutoff while filtering)
   let chips = chipCheckedMap(container)
   assert.equal(chips.size, 2)
 
-  // 点击停用匹配项：仅 gpt 系模型停用
+  // Click disable-matches: only gpt models get disabled
   await act(async () => {
     disableBtn!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
   })
   chips = chipCheckedMap(container)
   assert.equal(chips.get('gpt-4o'), false)
   assert.equal(chips.get('gpt-4o-mini'), false)
-  // 计数徽章：全量 4 个中剩余 2 个启用
+  // Count badge: 2 of the full 4 remain enabled
   assert.match(container.textContent ?? '', /2 enabled \/ 4 models in total/)
 
-  // 保存提交完整清单：搜索外的 o1 / llama 不受影响
+  // Saving submits the complete list: o1 / llama outside the search stay enabled
   await act(async () => {
     findButtonByText(container, 'Save configuration')!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
   })
@@ -186,7 +203,7 @@ test('ModelDetailDrawer: 批量启停随过滤词收窄为「匹配项」，不�
     ],
   )
 
-  // 启用匹配项恢复匹配结果（同样只动 gpt 系）
+  // Enable-matches restores the matches (again only the gpt family)
   const enableBtn = findButtonByText(container, 'Enable matches')
   assert.ok(enableBtn)
   await act(async () => {
@@ -202,7 +219,7 @@ test('ModelDetailDrawer: 批量启停随过滤词收窄为「匹配项」，不�
   container.remove()
 })
 
-test('ModelDetailDrawer: 无过滤词时批量停用作用于全量模型', { timeout: 60_000 }, async () => {
+test('ModelDetailDrawer: bulk disable without a filter term applies to the whole list', { timeout: 60_000 }, async () => {
   const provider: ProviderItem = {
     id: 'groq',
     name: 'Groq',
@@ -222,15 +239,19 @@ test('ModelDetailDrawer: 无过滤词时批量停用作用于全量模型', { ti
 
   await act(async () => {
     root.render(
-      e(ModelDetailDrawer, {
-        provider,
-        open: true,
-        inline: true,
-        onClose: () => {},
-        onSave: async (_id, data) => {
-          savedPayloads.push(data.models ?? [])
-        },
-      }),
+      e(
+        HostStoreProviders,
+        { value: makeTestStore() },
+        e(ModelDetailDrawer, {
+          provider,
+          open: true,
+          inline: true,
+          onClose: () => {},
+          onSave: async (_id, data) => {
+            savedPayloads.push(data.models ?? [])
+          },
+        }),
+      ),
     )
   })
 
@@ -243,7 +264,7 @@ test('ModelDetailDrawer: 无过滤词时批量停用作用于全量模型', { ti
 
   const payload = savedPayloads[savedPayloads.length - 1]
   assert.ok(payload)
-  assert.equal(payload!.every((m) => m.enabled === false), true, '无过滤词时全部停用应作用于全量')
+  assert.equal(payload!.every((m) => m.enabled === false), true, 'without a filter term disable-all applies to the whole list')
 
   await act(async () => {
     root.unmount()
@@ -252,10 +273,10 @@ test('ModelDetailDrawer: 无过滤词时批量停用作用于全量模型', { ti
 })
 
 // ---------------------------------------------------------------------------
-// 3. 交互：展开后完整渲染全部模型，省略提示消失
+// 3. Interaction: expanding renders every model and clears the hidden hint
 // ---------------------------------------------------------------------------
 
-test('ModelDetailDrawer: 点击展开后渲染全部模型且省略提示消失，再点击折叠恢复截断', { timeout: 60_000 }, async () => {
+test('ModelDetailDrawer: expanding renders all models and clears the hidden hint; collapsing restores the cutoff', { timeout: 60_000 }, async () => {
   const provider = makeBulkProvider(100, ['m-95'])
   const container = document.createElement('div')
   document.body.appendChild(container)
@@ -263,14 +284,18 @@ test('ModelDetailDrawer: 点击展开后渲染全部模型且省略提示消失�
 
   await act(async () => {
     root.render(
-      e(ModelDetailDrawer, { provider, open: true, inline: true, onClose: () => {} }),
+      e(
+        HostStoreProviders,
+        { value: makeTestStore() },
+        e(ModelDetailDrawer, { provider, open: true, inline: true, onClose: () => {} }),
+      ),
     )
   })
 
-  // 初始截断：只渲染前 80 个胶囊
+  // Initial cutoff: only the first 80 chips render
   assert.equal(container.querySelectorAll('button[role="checkbox"]').length, 80)
 
-  // 展开：全部渲染
+  // Expand: everything renders
   await act(async () => {
     findButtonByText(container, 'Expand all')!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
   })
@@ -278,7 +303,7 @@ test('ModelDetailDrawer: 点击展开后渲染全部模型且省略提示消失�
   assert.match(container.textContent ?? '', /Model 99(?![0-9])/)
   assert.doesNotMatch(container.textContent ?? '', /20 hidden/)
 
-  // 折叠：恢复截断与省略提示
+  // Collapse: cutoff and hidden hint return
   await act(async () => {
     findButtonByText(container, 'Collapse list')!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
   })
@@ -292,7 +317,8 @@ test('ModelDetailDrawer: 点击展开后渲染全部模型且省略提示消失�
 })
 
 // ---------------------------------------------------------------------------
-// 4. 思考与上下文窗口标签相邻渲染（复用既有 tags 徽章轨道，零新布局）
+// 4. Thinking and context-window tags render adjacently (reusing the existing
+//    tags badge track; zero new layout)
 // ---------------------------------------------------------------------------
 
 function makeTaggedProvider(): ProviderItem {
@@ -303,41 +329,39 @@ function makeTaggedProvider(): ProviderItem {
     configured: true,
     modelsCount: 2,
     models: [
-      { id: 'glm-4.6', name: 'GLM 4.6', enabled: true, tags: ['Thinking models', '200k 上下文'] },
+      { id: 'glm-4.6', name: 'GLM 4.6', enabled: true, tags: ['Thinking models', '200k context'] },
       { id: 'plain-mini', name: 'Plain Mini', enabled: true },
     ],
   }
 }
 
-test('ModelDetailDrawer SSR: 思考与上下文窗口标签在同一胶囊内相邻渲染且思考在前，未知窗口不加标签', { timeout: 60_000 }, () => {
-  const html = renderToStaticMarkup(
-    e(ModelDetailDrawer, {
-      provider: makeTaggedProvider(),
-      open: true,
-      inline: true,
-      onClose: () => {},
-    }),
-  )
+test('ModelDetailDrawer SSR: thinking and context-window tags render adjacently in one chip, thinking first; unknown windows add none', { timeout: 60_000 }, () => {
+  const html = renderDrawerHtml({ provider: makeTaggedProvider() })
 
-  // 两枚徽章零间隔相邻（同一 map 展开、同一胶囊内），顺序思考在前、窗口在后
+  // The two badges are directly adjacent (same map expansion, same chip);
+  // thinking first, window after
   assert.match(
     html,
-    />Thinking models<\/span><span class="badge mi-effort mchip-tag mtell">200k 上下文<\/span>/,
+    />Thinking models<\/span><span class="badge mi-effort mchip-tag mtell">200k context<\/span>/,
   )
-  assert.ok(html.indexOf('Thinking models') < html.indexOf('200k 上下文'), '思考标签必须排在窗口标签之前')
+  assert.ok(html.indexOf('Thinking models') < html.indexOf('200k context'), 'the thinking tag must precede the window tag')
 
-  // 未知窗口的模型不渲染任何「上下文」徽章，也不产生空标签容器
-  assert.equal((html.match(/上下文/g) ?? []).length, 1, '仅已知窗口模型携带「上下文」标签')
+  // A model with an unknown window renders no context badge and no empty tag container
+  assert.equal((html.match(/context/g) ?? []).length, 1, 'only the known-window model carries a context tag')
 })
 
-test('ModelDetailDrawer DOM: 胶囊徽章按 tags 顺序真实挂载，无标签模型不渲染徽章', { timeout: 60_000 }, async () => {
+test('ModelDetailDrawer DOM: chip badges mount in tags order; untagged models render no badges', { timeout: 60_000 }, async () => {
   const container = document.createElement('div')
   document.body.appendChild(container)
   const root = createRoot(container)
 
   await act(async () => {
     root.render(
-      e(ModelDetailDrawer, { provider: makeTaggedProvider(), open: true, inline: true, onClose: () => {} }),
+      e(
+        HostStoreProviders,
+        { value: makeTestStore() },
+        e(ModelDetailDrawer, { provider: makeTaggedProvider(), open: true, inline: true, onClose: () => {} }),
+      ),
     )
   })
 
@@ -348,12 +372,12 @@ test('ModelDetailDrawer DOM: 胶囊徽章按 tags 顺序真实挂载，无标签
     Array.from(chip.querySelectorAll('span.badge')).map((span) => span.textContent ?? '')
 
   const glm = chips.find((chip) => (chip.getAttribute('title') ?? '').includes('glm-4.6'))
-  assert.ok(glm, '应存在 glm-4.6 胶囊')
-  assert.deepEqual(badgesOf(glm), ['Thinking models', '200k 上下文'])
+  assert.ok(glm, 'the glm-4.6 chip must exist')
+  assert.deepEqual(badgesOf(glm), ['Thinking models', '200k context'])
 
   const plain = chips.find((chip) => (chip.getAttribute('title') ?? '').includes('plain-mini'))
-  assert.ok(plain, '应存在 plain-mini 胶囊')
-  assert.deepEqual(badgesOf(plain), [], '无标签模型不渲染任何徽章')
+  assert.ok(plain, 'the plain-mini chip must exist')
+  assert.deepEqual(badgesOf(plain), [], 'untagged models render no badges')
 
   await act(async () => {
     root.unmount()
@@ -362,12 +386,14 @@ test('ModelDetailDrawer DOM: 胶囊徽章按 tags 顺序真实挂载，无标签
 })
 
 // ---------------------------------------------------------------------------
-// 4. 服务端点编辑性：插件/内置供应商只读，自定义网关可编辑且空值阻断保存
+// 5. Endpoint editability: plugin/built-in providers read-only; custom
+//    gateways editable with an empty value blocking the save
 // ---------------------------------------------------------------------------
 
-test('ModelDetailDrawer: 插件网关服务端点只读展示并指向插件配置（不再假编辑）', { timeout: 60_000 }, () => {
-  // 复现用户场景：在模型界面试图修改 magpie 网关地址——此前该字段可编辑
-  // 但保存链路从不持久化 baseUrl，改了也回默认地址。
+test('ModelDetailDrawer: plugin gateway endpoint renders read-only and points at the plugin configuration (no fake editing)', { timeout: 60_000 }, () => {
+  // Reproduces the user scenario: trying to change the magpie gateway address
+  // in the model UI — the field used to be editable but the save chain never
+  // persisted baseUrl, so edits bounced back to the default address.
   const provider: ProviderItem = {
     id: 'magpie',
     name: 'Magpie',
@@ -380,24 +406,24 @@ test('ModelDetailDrawer: 插件网关服务端点只读展示并指向插件配�
     models: [{ id: 'glm-4.6', name: 'GLM 4.6', enabled: true }],
   }
 
-  const html = renderToStaticMarkup(
-    e(ModelDetailDrawer, { provider, open: true, inline: true, onClose: () => {} }),
-  )
+  const html = renderDrawerHtml({ provider })
 
-  // 无可编辑端点输入框：只读展示当前生效端点
-  assert.doesNotMatch(html, /id="model-drawer-base-url"/, '插件网关端点不得渲染可编辑输入框')
+  // No editable endpoint input: the effective endpoint shows read-only
+  assert.doesNotMatch(html, /id="model-drawer-base-url"/, 'plugin gateway endpoint must not render an editable input')
   assert.match(html, /http:\/\/127\.0\.0\.1:3425\/v1/)
-  // 提示如实指向真正的配置入口（插件配置），不装作已保存
+  // The hint points honestly at the real configuration entry (the plugin
+  // config) instead of pretending the save worked
   assert.match(html, /This endpoint is managed by the configuration of plugin builtin:magpie/)
   assert.match(html, /plugin center/)
-  // 插件网关密钥同样归插件配置管理：内核凭据库写入对插件 auth 不生效，
-  // 不得再渲染假输入框（magpie 的 auth.resolve 只读插件配置 token）
-  assert.doesNotMatch(html, /id="model-drawer-api-key"/, '插件网关密钥不得渲染内核凭据输入框')
+  // The plugin gateway key is likewise owned by the plugin configuration:
+  // kernel vault writes never affect plugin auth, so no fake input renders
+  // (magpie's auth.resolve reads only the plugin config token)
+  assert.doesNotMatch(html, /id="model-drawer-api-key"/, 'plugin gateway key must not render a kernel credential input')
   assert.match(html, /managed by the configuration of plugin builtin:magpie/)
   assert.match(html, /not stored in the kernel credential vault/)
 })
 
-test('ModelDetailDrawer: 内置供应商服务端点只读且提示固定不可改', { timeout: 60_000 }, () => {
+test('ModelDetailDrawer: built-in provider endpoint is read-only with the fixed-endpoint hint', { timeout: 60_000 }, () => {
   const provider: ProviderItem = {
     id: 'ollama',
     name: 'Ollama',
@@ -408,16 +434,14 @@ test('ModelDetailDrawer: 内置供应商服务端点只读且提示固定不可�
     models: [],
   }
 
-  const html = renderToStaticMarkup(
-    e(ModelDetailDrawer, { provider, open: true, inline: true, onClose: () => {} }),
-  )
+  const html = renderDrawerHtml({ provider })
 
   assert.doesNotMatch(html, /id="model-drawer-base-url"/)
   assert.match(html, /http:\/\/127\.0\.0\.1:11434/)
   assert.match(html, /built in and cannot be changed/)
 })
 
-test('ModelDetailDrawer: 自定义网关端点可编辑，清空后保存显式报错且不提交', { timeout: 60_000 }, async () => {
+test('ModelDetailDrawer: custom gateway endpoint editable; saving an empty value fails explicitly without submitting', { timeout: 60_000 }, async () => {
   const provider: ProviderItem = {
     id: 'my-gateway',
     name: 'My Gateway',
@@ -436,34 +460,85 @@ test('ModelDetailDrawer: 自定义网关端点可编辑，清空后保存显式�
 
   await act(async () => {
     root.render(
-      e(ModelDetailDrawer, {
-        provider,
-        open: true,
-        inline: true,
-        onClose: () => {},
-        onSave: async (_id, data) => {
-          saved.push({ baseUrl: data.baseUrl })
-        },
-      }),
+      e(
+        HostStoreProviders,
+        { value: makeTestStore() },
+        e(ModelDetailDrawer, {
+          provider,
+          open: true,
+          inline: true,
+          onClose: () => {},
+          onSave: async (_id, data) => {
+            saved.push({ baseUrl: data.baseUrl })
+          },
+        }),
+      ),
     )
   })
 
-  // 自定义网关保留可编辑输入框
+  // Custom gateway keeps the editable input
   const endpointInput = container.querySelector('input#model-drawer-base-url') as HTMLInputElement
-  assert.ok(endpointInput, '自定义网关应渲染可编辑端点输入框')
+  assert.ok(endpointInput, 'custom gateway must render an editable endpoint input')
 
-  // 清空端点后保存：显式报错，绝不静默提交
+  // Empty the endpoint and save: explicit error, never a silent submit
   await act(async () => {
     typeIntoInput(endpointInput, '')
   })
   await act(async () => {
     findButtonByText(container, 'Save configuration')!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
   })
-  assert.equal(saved.length, 0, '端点为空时不得触发保存回调')
+  assert.equal(saved.length, 0, 'an empty endpoint must not trigger the save callback')
   assert.match(container.textContent ?? '', /custom gateway endpoint cannot be empty/)
 
   await act(async () => {
     root.unmount()
   })
   container.remove()
+})
+
+// ---------------------------------------------------------------------------
+// 6. zh-CN locale rendering
+// ---------------------------------------------------------------------------
+
+test('ModelDetailDrawer zh-CN: renders credentials form, model chips and interpolated counts in Chinese', { timeout: 60_000 }, () => {
+  const provider: ProviderItem = {
+    id: 'openai',
+    name: 'OpenAI',
+    type: 'commercial',
+    configured: true,
+    modelsCount: 2,
+    baseUrl: 'https://api.openai.com/v1',
+    models: [
+      { id: 'gpt-4o', name: 'GPT-4o', tags: ['多模态', '128K'], enabled: true },
+      { id: 'o1', name: 'o1 Reasoning', tags: ['深度推理'], enabled: false },
+    ],
+  }
+
+  const store = makeTestStore({ locale: 'zh-CN' })
+  const html = renderToStaticMarkup(
+    e(
+      HostStoreProviders,
+      { value: store },
+      e(ModelDetailDrawer, { provider, open: true, inline: true, onClose: () => {} }),
+    ),
+  )
+
+  // Drawer chrome and form labels localized
+  assert.match(html, /凭证与连接设置/)
+  assert.match(html, /API 密钥/)
+  assert.match(html, /已配置（留空保持不变）/)
+  assert.match(html, /服务端点/)
+  assert.match(html, /测试连接/)
+
+  // Model chips section with interpolated count badge (1 of 2 enabled)
+  assert.match(html, /模型清单与路由控制/)
+  assert.match(html, /已启用 1 \/ 共 2 个模型/)
+  assert.match(html, /全部启用/)
+  assert.match(html, /全部停用/)
+  // Chip tooltip switches to the zh click-to-disable copy for the enabled chip
+  assert.match(html, /GPT-4o \(gpt-4o\) - 点击停用/)
+
+  // Save action and secret hint localized
+  assert.match(html, /保存配置/)
+  assert.match(html, /密钥密文将安全存储于系统保密箱中/)
 })

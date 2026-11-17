@@ -1,12 +1,16 @@
 /**
- * 节点详情抽屉插件子插槽（builtin:node/detail-section）测试：
- * - client 轨（seedPluginClientModule 缓存注入）与 JSON 轨（@json-render Slot 原语）双轨渲染；
- * - 仅已有节点挂载：接入新节点模式与未选节点不渲染插槽贡献；
- * - 多贡献按 priority 降序、order 升序稳定排序；
- * - 插件停用（贡献从 groupedUi 移除）后贡献即时消失；
- * - 切换节点时 slotProps 不残留上一节点数据；
- * - 节点离线时如实传 isOnline=false；
- * - slotProps 仅含协议 NodeDetailSlotProps 四个公开字段，不泄露接入令牌等凭据。
+ * Node detail drawer plugin slot (builtin:node/detail-section) tests:
+ * - both tracks render: the client track (seedPluginClientModule cache
+ *   injection) and the JSON track (@json-render Slot primitive);
+ * - mounts only for existing nodes: the new-node enrollment mode and the
+ *   no-selection state never render slot contributions;
+ * - multiple contributions sort by priority desc, then order asc, stable;
+ * - contributions vanish immediately when the plugin is disabled (removed from
+ *   groupedUi);
+ * - slotProps never leak the previous node's data after switching nodes;
+ * - an offline node honestly receives isOnline=false;
+ * - slotProps carries exactly the four public protocol NodeDetailSlotProps
+ *   fields — never enrollment tokens or other credentials.
  */
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -86,7 +90,7 @@ function renderDrawer(store: HelmStoreValue, props: { node: NodeInfo | null; isN
   )
 }
 
-/** client 轨探针：序列化全部收到 props（含 undefined 字段如实出现），用于精确断言。 */
+/** Client-track probe: serializes every received prop (undefined fields appear verbatim) for precise assertions. */
 function clientProbeModule(name: string, slug: string): void {
   seedPluginClientModule(name, `${slug}.tsx`, {
     [slug]: (props: Record<string, unknown>) =>
@@ -99,10 +103,10 @@ function clientProbeModule(name: string, slug: string): void {
 }
 
 // ---------------------------------------------------------------------------
-// client 轨渲染
+// Client track rendering
 // ---------------------------------------------------------------------------
 
-test('节点插槽 client 轨：已有节点渲染贡献并如实传递 NodeDetailSlotProps', { timeout: 60_000 }, () => {
+test('node slot client track: existing node renders contributions with faithful NodeDetailSlotProps', { timeout: 60_000 }, () => {
   clientProbeModule('demo:ops', 'NodeOpsSection')
   const store = storeWith([
     {
@@ -113,22 +117,22 @@ test('节点插槽 client 轨：已有节点渲染贡献并如实传递 NodeDeta
   ])
 
   const html = renderDrawer(store, { node: remoteNode() })
-  assert.match(html, /data-probe="NodeOpsSection"/, 'client 轨贡献渲染在抽屉内')
+  assert.match(html, /data-probe="NodeOpsSection"/, 'client-track contribution renders inside the drawer')
   assert.match(
     html,
     /&quot;nodeId&quot;:&quot;worker-gpu-1&quot;/,
-    'slotProps.nodeId 是真实节点 ID',
+    'slotProps.nodeId is the real node ID',
   )
-  assert.match(html, /&quot;isLocal&quot;:false/, '远端节点 isLocal=false')
-  assert.match(html, /&quot;isOnline&quot;:true/, '在线节点 isOnline=true')
-  assert.match(html, /&quot;isNew&quot;:false/, '已有节点 isNew=false')
+  assert.match(html, /&quot;isLocal&quot;:false/, 'remote node isLocal=false')
+  assert.match(html, /&quot;isOnline&quot;:true/, 'online node isOnline=true')
+  assert.match(html, /&quot;isNew&quot;:false/, 'existing node isNew=false')
   assert.doesNotMatch(html, EMOJI_REGEX)
 })
 
-test('节点插槽 client 轨：组件收到真实 slotProps 数据', { timeout: 60_000 }, () => {
+test('node slot client track: component receives the real slotProps data', { timeout: 60_000 }, () => {
   seedPluginClientModule('demo:ops', 'node-data.tsx', {
     NodeData: (props: Record<string, unknown>) =>
-      e('section', { 'data-node-data': String(props['nodeId'] ?? '') }, `节点 ${String(props['nodeId'] ?? '')} 在线=${String(props['isOnline'])}`),
+      e('section', { 'data-node-data': String(props['nodeId'] ?? '') }, `node ${String(props['nodeId'] ?? '')} online=${String(props['isOnline'])}`),
   })
   const store = storeWith([
     slotContribution('demo:ops', 'node-data', {
@@ -137,14 +141,14 @@ test('节点插槽 client 轨：组件收到真实 slotProps 数据', { timeout:
   ])
 
   const html = renderDrawer(store, { node: remoteNode() })
-  assert.match(html, /节点 worker-gpu-1 在线=true/, 'client 轨收到 slotProps 数据')
+  assert.match(html, /node worker-gpu-1 online=true/, 'client track receives slotProps data')
 })
 
 // ---------------------------------------------------------------------------
-// 挂载边界
+// Mount boundaries
 // ---------------------------------------------------------------------------
 
-test('节点插槽挂载边界：接入新节点模式与未选节点不渲染贡献', { timeout: 60_000 }, () => {
+test('node slot mount boundaries: new-node enrollment mode and no-selection render no contributions', { timeout: 60_000 }, () => {
   clientProbeModule('demo:ops', 'NodeOpsSection')
   const store = storeWith([
     {
@@ -154,22 +158,23 @@ test('节点插槽挂载边界：接入新节点模式与未选节点不渲染�
     },
   ])
 
-  // 接入新节点模式（node=null, isNew=true）：仅接入指令，不挂插件插槽
+  // New-node enrollment mode (node=null, isNew=true): enrollment commands
+  // only; the plugin slot never mounts
   const newHtml = renderDrawer(store, { node: null, isNew: true })
-  assert.doesNotMatch(newHtml, /data-probe="NodeOpsSection"/, 'isNew 不挂载节点插槽')
+  assert.doesNotMatch(newHtml, /data-probe="NodeOpsSection"/, 'isNew never mounts the node slot')
 
-  // 未选节点（node=null）：空态提示，不挂插件插槽
+  // No node selected (node=null): empty state, no plugin slot
   const emptyHtml = renderDrawer(store, { node: null })
   assert.match(emptyHtml, /No node selected/)
-  assert.doesNotMatch(emptyHtml, /data-probe="NodeOpsSection"/, '未选节点不挂载节点插槽')
+  assert.doesNotMatch(emptyHtml, /data-probe="NodeOpsSection"/, 'no-selection never mounts the node slot')
 })
 
 // ---------------------------------------------------------------------------
-// 多贡献排序与插件停用
+// Multi-contribution ordering and plugin disabling
 // ---------------------------------------------------------------------------
 
-test('节点插槽多贡献：priority 降序、order 升序稳定排序', { timeout: 60_000 }, () => {
-  const contribModule = (mark: string) => ({ [mark]: () => e('section', { 'data-mark': mark }, `贡献${mark}`) })
+test('node slot multiple contributions: priority desc, order asc, stable', { timeout: 60_000 }, () => {
+  const contribModule = (mark: string) => ({ [mark]: () => e('section', { 'data-mark': mark }, `contrib-${mark}`) })
   seedPluginClientModule('demo:a', 'a1.tsx', contribModule('A'))
   seedPluginClientModule('demo:b', 'b1.tsx', contribModule('B'))
   seedPluginClientModule('demo:c', 'c1.tsx', contribModule('C'))
@@ -180,14 +185,14 @@ test('节点插槽多贡献：priority 降序、order 升序稳定排序', { tim
   ])
 
   const html = renderDrawer(store, { node: remoteNode() })
-  const posB = html.indexOf('贡献B')
-  const posC = html.indexOf('贡献C')
-  const posA = html.indexOf('贡献A')
-  assert.ok(posC !== -1 && posC < posB, 'priority 同分时 order 小者在前（C 先于 B）')
-  assert.ok(posB !== -1 && posB < posA, 'priority 高者在前（B 先于 A）')
+  const posB = html.indexOf('contrib-B')
+  const posC = html.indexOf('contrib-C')
+  const posA = html.indexOf('contrib-A')
+  assert.ok(posC !== -1 && posC < posB, 'on equal priority the smaller order wins (C before B)')
+  assert.ok(posB !== -1 && posB < posA, 'higher priority wins (B before A)')
 })
 
-test('节点插槽插件停用：贡献从 groupedUi 移除后即时消失', { timeout: 60_000 }, () => {
+test('node slot plugin disabled: contribution vanishes immediately once removed from groupedUi', { timeout: 60_000 }, () => {
   clientProbeModule('demo:ops', 'NodeOpsSection')
   const contribution: PluginUiContribution = {
     pluginId: 'demo:ops',
@@ -196,19 +201,20 @@ test('节点插槽插件停用：贡献从 groupedUi 移除后即时消失', { t
   }
 
   const enabled = renderDrawer(storeWith([contribution]), { node: remoteNode() })
-  assert.match(enabled, /data-probe="NodeOpsSection"/, '启用时贡献渲染')
+  assert.match(enabled, /data-probe="NodeOpsSection"/, 'contribution renders while enabled')
 
-  // 插件停用：ui 贡献清空（与宿主 SSE 快照行为一致），贡献即时消失
+  // Plugin disabled: ui contributions cleared (matching the host SSE snapshot
+  // behavior); the contribution vanishes immediately
   const disabled = renderDrawer(storeWith([]), { node: remoteNode() })
-  assert.doesNotMatch(disabled, /data-probe="NodeOpsSection"/, '停用后贡献移除')
-  assert.match(disabled, /System overview/, '抽屉主体不受影响')
+  assert.doesNotMatch(disabled, /data-probe="NodeOpsSection"/, 'contribution removed after disabling')
+  assert.match(disabled, /System overview/, 'the drawer body stays unaffected')
 })
 
 // ---------------------------------------------------------------------------
-// 切换节点 Props 不残留 & 离线如实传 false
+// Node-switch prop hygiene & honest offline state
 // ---------------------------------------------------------------------------
 
-test('节点插槽切换节点：Props 不残留上一节点数据', { timeout: 60_000 }, () => {
+test('node slot node switch: props never leak the previous node data', { timeout: 60_000 }, () => {
   clientProbeModule('demo:ops', 'NodeOpsSection')
   const store = storeWith([
     {
@@ -221,16 +227,16 @@ test('节点插槽切换节点：Props 不残留上一节点数据', { timeout: 
   const first = renderDrawer(store, { node: remoteNode() })
   assert.match(first, /worker-gpu-1/)
 
-  // 切换到本机节点：新渲染只含新节点 ID，不残留 worker-gpu-1
+  // Switch to the local node: the new render carries only the new node ID
   const second = renderDrawer(store, {
     node: remoteNode({ id: 'local', kind: 'local', label: 'Local kernel', online: true }),
   })
-  assert.match(second, /&quot;nodeId&quot;:&quot;local&quot;/, '切换后传递新节点 ID')
-  assert.match(second, /&quot;isLocal&quot;:true/, '切换后 isLocal=true')
-  assert.doesNotMatch(second, /worker-gpu-1/, '不残留上一节点 ID')
+  assert.match(second, /&quot;nodeId&quot;:&quot;local&quot;/, 'the new node ID is passed after switching')
+  assert.match(second, /&quot;isLocal&quot;:true/, 'isLocal=true after switching')
+  assert.doesNotMatch(second, /worker-gpu-1/, 'no previous node ID lingers')
 })
 
-test('节点插槽离线节点：如实传递 isOnline=false', { timeout: 60_000 }, () => {
+test('node slot offline node: honestly passes isOnline=false', { timeout: 60_000 }, () => {
   clientProbeModule('demo:ops', 'NodeOpsSection')
   const store = storeWith([
     {
@@ -244,15 +250,15 @@ test('节点插槽离线节点：如实传递 isOnline=false', { timeout: 60_000
     node: remoteNode({ id: 'worker-offline', online: false, status: 'offline', connected: false }),
   })
   assert.match(html, /&quot;nodeId&quot;:&quot;worker-offline&quot;/)
-  assert.match(html, /&quot;isOnline&quot;:false/, '离线节点如实传 false，不美化状态')
-  assert.match(html, /Offline/, '头部徽章同为离线')
+  assert.match(html, /&quot;isOnline&quot;:false/, 'offline nodes honestly report false, never beautified')
+  assert.match(html, /Offline/, 'the header badge shows offline as well')
 })
 
 // ---------------------------------------------------------------------------
-// 凭据边界
+// Credential boundaries
 // ---------------------------------------------------------------------------
 
-test('节点插槽 slotProps 仅含协议四个公开字段，不含令牌等凭据', { timeout: 60_000 }, () => {
+test('node slot slotProps carries only the four public protocol fields, never tokens or credentials', { timeout: 60_000 }, () => {
   clientProbeModule('demo:ops', 'NodeOpsSection')
   const store = storeWith([
     {
@@ -264,8 +270,8 @@ test('节点插槽 slotProps 仅含协议四个公开字段，不含令牌等凭
 
   const html = renderDrawer(store, { node: remoteNode() })
   const probeMatch = html.match(/data-probe="NodeOpsSection">([\s\S]*?)<\/section>/)
-  assert.ok(probeMatch, '探针节点存在')
-  // HTML 实体还原后解析 props JSON，逐一断言字段集合
+  assert.ok(probeMatch, 'probe node exists')
+  // Decode HTML entities back and parse the props JSON to assert the field set
   const propsJson = probeMatch[1]!
     .replace(/&quot;/g, '"')
     .replace(/&amp;/g, '&')
@@ -275,18 +281,18 @@ test('节点插槽 slotProps 仅含协议四个公开字段，不含令牌等凭
   assert.deepEqual(
     Object.keys(props).sort(),
     ['isLocal', 'isNew', 'isOnline', 'nodeId'],
-    'slotProps 字段集与协议 NodeDetailSlotProps 完全一致',
+    'slotProps fields exactly match the protocol NodeDetailSlotProps',
   )
   assert.equal(props.nodeId, 'worker-gpu-1')
   assert.equal(props.isLocal, false)
   assert.equal(props.isOnline, true)
   assert.equal(props.isNew, false)
-  assert.doesNotMatch(propsJson, /token|secret|credential|guide/i, '插槽 props 不含令牌/凭据/接入指南字段')
+  assert.doesNotMatch(propsJson, /token|secret|credential|guide/i, 'slot props never contain token/credential/enrollment-guide fields')
 })
 
-test('静态扫描: NodeDetailDrawer 源码引用协议插槽常量且 0 Emoji', { timeout: 60_000 }, () => {
+test('static scan: NodeDetailDrawer source references the protocol slot constant and stays Emoji-free', { timeout: 60_000 }, () => {
   const content = readFileSync(join(PKG_ROOT, 'src/nodes/NodeDetailDrawer.tsx'), 'utf-8')
-  assert.match(content, /NODE_DETAIL_SECTION_SLOT/, '宿主插槽名必须引用协议常量而非硬编码字符串')
-  assert.match(content, /ownerPluginId="builtin:node"/, '显式宿主命名空间 builtin:node')
-  assert.doesNotMatch(content, EMOJI_REGEX, '源码 0 Emoji')
+  assert.match(content, /NODE_DETAIL_SECTION_SLOT/, 'the host slot name must reference the protocol constant, never a hardcoded string')
+  assert.match(content, /ownerPluginId="builtin:node"/, 'explicit host namespace builtin:node')
+  assert.doesNotMatch(content, EMOJI_REGEX, 'source is Emoji-free')
 })

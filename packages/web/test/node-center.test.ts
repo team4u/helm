@@ -5,6 +5,7 @@ import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import React, { act } from 'react'
 import { renderToStaticMarkup, renderToString } from 'react-dom/server'
+import type { HelmLocale } from '@helm/protocol/browser'
 import { ensureHappyDom } from './helpers/dom-harness.js'
 
 ensureHappyDom()
@@ -13,7 +14,7 @@ const ReactDOMClient = await import('react-dom/client')
 const PKG_ROOT = fileURLToPath(new URL('..', import.meta.url))
 const e = React.createElement
 
-// 导入待测组件与模型
+// Import the components and models under test
 import {
   buildNodeCategoryCounts,
   filterNodes,
@@ -109,10 +110,10 @@ function mockNodes(): Array<NodeInfo & { kind: 'local' | 'byom'; online: boolean
 }
 
 // ---------------------------------------------------------------------------
-// 1. 模型纯函数测试：搜索过滤、分类计数、在线统计
+// 1. Pure model tests: search filtering, category counting, online metrics
 // ---------------------------------------------------------------------------
 
-test('node-center-model: isNodeOnline 多态判定', { timeout: 60_000 }, () => {
+test('node-center-model: isNodeOnline accepts all three online shapes', { timeout: 60_000 }, () => {
   assert.equal(isNodeOnline({ id: 'a', online: true }), true)
   assert.equal(isNodeOnline({ id: 'b', status: 'online' }), true)
   assert.equal(isNodeOnline({ id: 'c', connected: true }), true)
@@ -120,26 +121,26 @@ test('node-center-model: isNodeOnline 多态判定', { timeout: 60_000 }, () => 
   assert.equal(isNodeOnline({ id: 'e' }), false)
 })
 
-test('node-center-model: isNodeLocal 识别本机', { timeout: 60_000 }, () => {
+test('node-center-model: isNodeLocal detects the local node', { timeout: 60_000 }, () => {
   assert.equal(isNodeLocal({ id: 'local' }), true)
   assert.equal(isNodeLocal({ id: 'any-id', kind: 'local' }), true)
   assert.equal(isNodeLocal({ id: 'worker-1', kind: 'byom' }), false)
 })
 
-test('node-center-model: getNodeDisplayName 名称格式化', { timeout: 60_000 }, () => {
+test('node-center-model: getNodeDisplayName formats display names', { timeout: 60_000 }, () => {
   assert.equal(getNodeDisplayName({ id: 'local', label: '工作区核心' }), '工作区核心')
   assert.equal(getNodeDisplayName({ id: 'local' }), 'Local kernel')
   assert.equal(getNodeDisplayName({ id: 'node-x' }), 'node-x')
 })
 
-test('node-center-model: formatNodePlatformArch 平台与架构组合', { timeout: 60_000 }, () => {
+test('node-center-model: formatNodePlatformArch combines platform and architecture', { timeout: 60_000 }, () => {
   assert.equal(formatNodePlatformArch({ id: '1', platform: 'linux', arch: 'x64' }), 'linux / x64')
   assert.equal(formatNodePlatformArch({ id: '2', os: 'darwin', arch: 'arm64' }), 'darwin / arm64')
   assert.equal(formatNodePlatformArch({ id: '3', platform: 'win32' }), 'win32')
   assert.equal(formatNodePlatformArch({ id: '4' }), '--')
 })
 
-test('node-center-model: buildNodeCategoryCounts 与 summarizeNodes 准确统计各分类指标', { timeout: 60_000 }, () => {
+test('node-center-model: buildNodeCategoryCounts and summarizeNodes count every category metric accurately', { timeout: 60_000 }, () => {
   const nodes = mockNodes()
   const counts = buildNodeCategoryCounts(nodes)
 
@@ -156,7 +157,7 @@ test('node-center-model: buildNodeCategoryCounts 与 summarizeNodes 准确统计
   assert.equal(summary.remote, 2)
 })
 
-test('node-center-model: filterNodes 分类 Tab 过滤', { timeout: 60_000 }, () => {
+test('node-center-model: filterNodes category tab filtering', { timeout: 60_000 }, () => {
   const nodes = mockNodes()
 
   const all = filterNodes(nodes, { query: '', categoryTab: 'all' })
@@ -179,51 +180,55 @@ test('node-center-model: filterNodes 分类 Tab 过滤', { timeout: 60_000 }, ()
   assert.equal(offline[0]?.id, 'worker-offline')
 })
 
-test('node-center-model: filterNodes 多维搜索过滤（id, label, platform, arch, version, os, hostname）', { timeout: 60_000 }, () => {
+test('node-center-model: filterNodes multi-dimensional search (id, label, platform, arch, version, os, hostname)', { timeout: 60_000 }, () => {
   const nodes = mockNodes()
 
-  // 1. 匹配 ID
+  // 1. Match ID
   assert.equal(filterNodes(nodes, { query: 'worker-gpu', categoryTab: 'all' }).length, 1)
 
-  // 2. 匹配 Label
+  // 2. Match label
   assert.equal(filterNodes(nodes, { query: '推理集群', categoryTab: 'all' }).length, 1)
 
-  // 3. 匹配 Platform / OS
+  // 3. Match platform / OS
   assert.equal(filterNodes(nodes, { query: 'darwin', categoryTab: 'all' }).length, 1)
 
-  // 4. 匹配 Arch
+  // 4. Match arch
   assert.equal(filterNodes(nodes, { query: 'arm64', categoryTab: 'all' }).length, 2)
 
-  // 5. 匹配 Version
+  // 5. Match version
   assert.equal(filterNodes(nodes, { query: '0.2.1', categoryTab: 'all' }).length, 1)
 
-  // 6. 匹配 Hostname
+  // 6. Match hostname
   assert.equal(filterNodes(nodes, { query: 'dev-box', categoryTab: 'all' }).length, 1)
 
-  // 7. 搜索无结果
+  // 7. No search hits
   assert.equal(filterNodes(nodes, { query: 'non-existing-keyword', categoryTab: 'all' }).length, 0)
 
-  // 8. 组合搜索与分类过滤
+  // 8. Combined search and category filter
   assert.equal(filterNodes(nodes, { query: 'arm64', categoryTab: 'offline' }).length, 1)
 })
 
 // ---------------------------------------------------------------------------
-// 2. 卡片组件 SSR 渲染与交互测试
+// 2. Card component SSR rendering and interaction tests
 // ---------------------------------------------------------------------------
 
-test('NodeCard: SSR 渲染包含节点名、架构徽章、在线指示器与 0 Emoji', { timeout: 60_000 }, () => {
+test('NodeCard: SSR renders node name, architecture badge, online indicator with zero Emoji', { timeout: 60_000 }, () => {
   const nodes = mockNodes()
   const localNode = nodes[0]!
   const remoteNode = nodes[1]!
   const offlineNode = nodes[2]!
 
-  // 1. 在线本机节点
+  // 1. Online local node
   const localHtml = renderToStaticMarkup(
-    e(NodeCard, {
-      node: localNode,
-      selected: false,
-      onSelect: () => {},
-    }),
+    e(
+      HostStoreProviders,
+      { value: makeTestStore() },
+      e(NodeCard, {
+        node: localNode,
+        selected: false,
+        onSelect: () => {},
+      }),
+    ),
   )
 
   assert.match(localHtml, /primary-card/)
@@ -236,13 +241,17 @@ test('NodeCard: SSR 渲染包含节点名、架构徽章、在线指示器与 0 
   assert.match(localHtml, /read/)
   assert.doesNotMatch(localHtml, EMOJI_REGEX)
 
-  // 2. 选中态类名
+  // 2. Selected-state class names
   const selectedHtml = renderToStaticMarkup(
-    e(NodeCard, {
-      node: remoteNode,
-      selected: true,
-      onSelect: () => {},
-    }),
+    e(
+      HostStoreProviders,
+      { value: makeTestStore() },
+      e(NodeCard, {
+        node: remoteNode,
+        selected: true,
+        onSelect: () => {},
+      }),
+    ),
   )
   assert.match(selectedHtml, /is-selected/)
   assert.match(selectedHtml, /aria-selected="true"/)
@@ -251,20 +260,24 @@ test('NodeCard: SSR 渲染包含节点名、架构徽章、在线指示器与 0 
   assert.match(selectedHtml, /linux \/ arm64/)
   assert.doesNotMatch(selectedHtml, EMOJI_REGEX)
 
-  // 3. 离线节点
+  // 3. Offline node
   const offlineHtml = renderToStaticMarkup(
-    e(NodeCard, {
-      node: offlineNode,
-      selected: false,
-      onSelect: () => {},
-    }),
+    e(
+      HostStoreProviders,
+      { value: makeTestStore() },
+      e(NodeCard, {
+        node: offlineNode,
+        selected: false,
+        onSelect: () => {},
+      }),
+    ),
   )
   assert.match(offlineHtml, /离线/)
   assert.doesNotMatch(offlineHtml, /status-dot-done/)
   assert.doesNotMatch(offlineHtml, EMOJI_REGEX)
 })
 
-test('NodeCard: 点击与 Enter/Space 键盘交互激活 onSelect', { timeout: 60_000 }, () => {
+test('NodeCard: click and Enter/Space keyboard interaction activate onSelect', { timeout: 60_000 }, () => {
   const container = document.createElement('div')
   document.body.appendChild(container)
   const root = ReactDOMClient.createRoot(container)
@@ -274,18 +287,22 @@ test('NodeCard: 点击与 Enter/Space 键盘交互激活 onSelect', { timeout: 6
 
   act(() => {
     root.render(
-      e(NodeCard, {
-        node,
-        selected: false,
-        onSelect: () => {
-          selectCount++
-        },
-      }),
+      e(
+        HostStoreProviders,
+        { value: makeTestStore() },
+        e(NodeCard, {
+          node,
+          selected: false,
+          onSelect: () => {
+            selectCount++
+          },
+        }),
+      ),
     )
   })
 
   const card = container.querySelector('.primary-card') as HTMLElement
-  assert.ok(card, '必须渲染 .primary-card')
+  assert.ok(card, 'must render .primary-card')
 
   act(() => {
     card.click()
@@ -309,10 +326,10 @@ test('NodeCard: 点击与 Enter/Space 键盘交互激活 onSelect', { timeout: 6
 })
 
 // ---------------------------------------------------------------------------
-// 3. 抽屉组件 SSR 渲染测试 (inline={true})
+// 3. Drawer component SSR rendering tests (inline={true})
 // ---------------------------------------------------------------------------
 
-test('NodeDetailDrawer: SSR 渲染系统概览、体检信息、接入命令行与 0 Emoji', { timeout: 60_000 }, () => {
+test('NodeDetailDrawer: SSR renders system overview, health data, enrollment command with zero Emoji', { timeout: 60_000 }, () => {
   const remoteNode = mockNodes()[1]!
   const store = makeTestStore()
 
@@ -329,14 +346,14 @@ test('NodeDetailDrawer: SSR 渲染系统概览、体检信息、接入命令行�
     ),
   )
 
-  // 1. 结构与语义
+  // 1. Structure and semantics
   assert.match(html, /role="dialog"/)
   assert.match(html, /primary-drawer-content/)
   assert.match(html, /GPU 推理集群节点 A/)
   assert.match(html, /worker-gpu-1/)
   assert.match(html, /Online/)
 
-  // 2. 系统概览
+  // 2. System overview
   assert.match(html, /System overview/)
   assert.match(html, /Operating system/)
   assert.match(html, /CPU architecture/)
@@ -344,29 +361,29 @@ test('NodeDetailDrawer: SSR 渲染系统概览、体检信息、接入命令行�
   assert.match(html, /gpu-server-01/)
   assert.match(html, /\/opt\/helm-worker/)
 
-  // 3. 健康体检与资源负载
+  // 3. Health check and resource load
   assert.match(html, /Health check and resource load/)
   assert.match(html, /Health check/)
   assert.match(html, /CPU usage/)
   assert.match(html, /68%/)
   assert.match(html, /System load/)
 
-  // 4. 受控机接入指令与一键接入命令
+  // 4. Controlled machine enrollment command and one-line command
   assert.match(html, /Controlled machine enrollment command/)
   assert.match(html, /helm-node start -d/)
   assert.match(html, /--token/)
   assert.match(html, /Issue access token/)
   assert.match(html, /helm-node doctor/)
 
-  // 5. 注册工具能力
+  // 5. Registered tools
   assert.match(html, /Registered tools/)
   assert.match(html, /env_exec/)
 
-  // 6. 零 Emoji
+  // 6. Zero Emoji
   assert.doesNotMatch(html, EMOJI_REGEX)
 })
 
-test('NodeDetailDrawer: 接入新节点模式 (isNew={true}) 正确渲染', { timeout: 60_000 }, () => {
+test('NodeDetailDrawer: new-node enrollment mode (isNew={true}) renders correctly', { timeout: 60_000 }, () => {
   const html = renderToStaticMarkup(
     e(
       HostStoreProviders,
@@ -388,10 +405,10 @@ test('NodeDetailDrawer: 接入新节点模式 (isNew={true}) 正确渲染', { ti
 })
 
 // ---------------------------------------------------------------------------
-// 4. 节点中心主视图 SSR 渲染与状态联动测试 (inlineDrawer={true})
+// 4. Node center primary view SSR rendering and state wiring (inlineDrawer={true})
 // ---------------------------------------------------------------------------
 
-test('NodeCenter: SSR 渲染顶栏、检索工具栏、分类药丸、网格流与 0 Emoji', { timeout: 60_000 }, () => {
+test('NodeCenter: SSR renders top bar, search toolbar, category pills, grid flow with zero Emoji', { timeout: 60_000 }, () => {
   const store = makeTestStore({
     nodes: mockNodes() as any,
     primaryTarget: { kind: 'nodes' },
@@ -407,13 +424,13 @@ test('NodeCenter: SSR 渲染顶栏、检索工具栏、分类药丸、网格流�
     ),
   )
 
-  // 1. 顶栏
+  // 1. Top bar
   assert.match(html, /primary-center/)
   assert.match(html, /node-center/)
   assert.match(html, /Compute Nodes Center/)
   assert.match(html, /Connect node/)
 
-  // 2. 检索栏与分类药丸
+  // 2. Search bar and category pills
   assert.match(html, /primary-search-box/)
   assert.match(html, /Search node ID, name, platform, version or OS/)
   assert.match(html, /primary-category-pill/)
@@ -423,17 +440,17 @@ test('NodeCenter: SSR 渲染顶栏、检索工具栏、分类药丸、网格流�
   assert.match(html, /Online/)
   assert.match(html, /离线/)
 
-  // 3. 卡片网格
+  // 3. Card grid
   assert.match(html, /primary-center-grid/)
   assert.match(html, /本机开发微内核/)
   assert.match(html, /GPU 推理集群节点 A/)
   assert.match(html, /离线备用计算节点/)
 
-  // 4. 零 Emoji
+  // 4. Zero Emoji
   assert.doesNotMatch(html, EMOJI_REGEX)
 })
 
-test('NodeCenter: 分屏模式支持 isSplit 与 onCloseSplit', { timeout: 60_000 }, () => {
+test('NodeCenter: split mode supports isSplit and onCloseSplit', { timeout: 60_000 }, () => {
   const store = makeTestStore({
     nodes: mockNodes() as any,
     primaryTarget: { kind: 'nodes' },
@@ -458,7 +475,7 @@ test('NodeCenter: 分屏模式支持 isSplit 与 onCloseSplit', { timeout: 60_00
   assert.match(html, /Close split view/)
 })
 
-test('NodeCenter: 选中节点时通过 primaryTarget 唤起抽屉详情', { timeout: 60_000 }, () => {
+test('NodeCenter: selecting a node opens the drawer details via primaryTarget', { timeout: 60_000 }, () => {
   const store = makeTestStore({
     nodes: mockNodes() as any,
     primaryTarget: { kind: 'nodes', nodeId: 'worker-gpu-1' },
@@ -474,13 +491,13 @@ test('NodeCenter: 选中节点时通过 primaryTarget 唤起抽屉详情', { tim
     ),
   )
 
-  // 抽屉被展开
+  // Drawer opened
   assert.match(html, /role="dialog"/)
   assert.match(html, /GPU 推理集群节点 A/)
   assert.match(html, /System overview/)
 })
 
-test('NodeCenter: 空节点列表渲染友好空状态与重置按钮', { timeout: 60_000 }, () => {
+test('NodeCenter: empty node list renders a friendly empty state with reset button', { timeout: 60_000 }, () => {
   const store = makeTestStore({
     nodes: [],
     primaryTarget: { kind: 'nodes' },
@@ -502,10 +519,10 @@ test('NodeCenter: 空节点列表渲染友好空状态与重置按钮', { timeou
 })
 
 // ---------------------------------------------------------------------------
-// 5. 源码静态扫描 0 Emoji 铁律
+// 5. Source static scans: zero-Emoji rules
 // ---------------------------------------------------------------------------
 
-test('静态扫描: nodes/ 目录下所有源码不含内联 style', { timeout: 60_000 }, () => {
+test('static scan: no inline style remains in nodes/ sources', { timeout: 60_000 }, () => {
   const files = [
     'src/nodes/node-center-model.ts',
     'src/nodes/NodeCard.tsx',
@@ -516,16 +533,20 @@ test('静态扫描: nodes/ 目录下所有源码不含内联 style', { timeout: 
   for (const rel of files) {
     const full = join(PKG_ROOT, rel)
     const content = readFileSync(full, 'utf-8')
-    assert.ok(!content.includes('style='), `${rel} 源码不应残留内联 style`)
+    assert.ok(!content.includes('style='), `${rel} sources must not keep inline style`)
   }
 })
 
-test('NodeCard & NodeDetailDrawer: 使用固定右上角 .btn-icon-sm 与统一 .callout-ok / .callout-error', { timeout: 60_000 }, async () => {
+test('NodeCard & NodeDetailDrawer: fixed top-right .btn-icon-sm and unified .callout-ok / .callout-error', { timeout: 60_000 }, async () => {
   const cardHtml = renderToStaticMarkup(
-    e(NodeCard, { node: mockNodes()[1]!, onSelect: () => {} }),
+    e(
+      HostStoreProviders,
+      { value: makeTestStore() },
+      e(NodeCard, { node: mockNodes()[1]!, onSelect: () => {} }),
+    ),
   )
   assert.match(cardHtml, /GPU 推理集群节点 A/)
-  assert.ok(!cardHtml.includes('primary-card-desc'), 'NodeCard 状态徽章组不受 2 行截断容器包裹')
+  assert.ok(!cardHtml.includes('primary-card-desc'), 'NodeCard status badges must not be wrapped by the 2-line clamp container')
 
   const store = makeTestStore({ nodes: mockNodes() as never })
   const container = document.createElement('div')
@@ -551,7 +572,7 @@ test('NodeCard & NodeDetailDrawer: 使用固定右上角 .btn-icon-sm 与统一 
       )
     })
 
-    assert.ok(container.querySelector('.btn-icon-sm'), 'NodeDetailDrawer 关闭按钮应使用 .btn-icon-sm')
+    assert.ok(container.querySelector('.btn-icon-sm'), 'NodeDetailDrawer close button must use .btn-icon-sm')
     const healthBtn = Array.from(container.querySelectorAll('button')).find((b) =>
       b.textContent?.includes('Health check'),
     )
@@ -561,9 +582,107 @@ test('NodeCard & NodeDetailDrawer: 使用固定右上角 .btn-icon-sm 与统一 
     })
     await act(async () => {})
     const errCallout = container.querySelector('.callout.callout-error')
-    assert.ok(errCallout, '健康体检失败应展示统一 .callout-error')
+    assert.ok(errCallout, 'a failed health check must surface the unified .callout-error')
   } finally {
     globalThis.fetch = originalFetch
+    await act(async () => {
+      root.unmount()
+    })
+    container.remove()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// 6. zh-CN locale rendering and live locale switching
+// ---------------------------------------------------------------------------
+
+test('NodeCenter zh-CN: renders center chrome, category pills and NodeDetailDrawer copy in Chinese', { timeout: 60_000 }, () => {
+  const store = makeTestStore({
+    locale: 'zh-CN',
+    nodes: mockNodes() as any,
+    primaryTarget: { kind: 'nodes', nodeId: 'worker-gpu-1' },
+  })
+
+  const html = renderToString(
+    e(
+      HostStoreProviders,
+      { value: store },
+      e(NodeCenter, { inlineDrawer: true }),
+    ),
+  )
+
+  // Center chrome and search placeholder
+  assert.match(html, /计算节点中心/)
+  assert.match(html, /接入节点/)
+  assert.match(html, /搜索节点 ID、名称、平台架构、版本或操作系统…/)
+
+  // Category pills (shared common.* plus domain copy) follow the locale
+  assert.match(html, /全部/)
+  assert.match(html, /本机/)
+  assert.match(html, /远端/)
+  assert.match(html, /在线/)
+  assert.match(html, /离线/)
+
+  // Drawer copy localized (system overview labels + tools section)
+  assert.match(html, /系统概览/)
+  assert.match(html, /操作系统/)
+  assert.match(html, /注册工具能力/)
+  assert.equal(EMOJI_REGEX.test(html), false)
+})
+
+test('NodeCenter locale switch: setLocale re-renders en -> zh-CN -> en in place', { timeout: 60_000 }, async () => {
+  function LocaleSwitchHarness(): React.JSX.Element {
+    const [locale, setLocale] = React.useState<HelmLocale>('en')
+    const store = React.useMemo(
+      () =>
+        makeTestStore({
+          locale,
+          setLocale: (next: HelmLocale) => setLocale(next),
+          nodes: mockNodes() as any,
+          primaryTarget: { kind: 'nodes' },
+        }),
+      [locale],
+    )
+    return e(
+      HostStoreProviders,
+      { value: store },
+      e(NodeCenter, { inlineDrawer: true }),
+      e(
+        'button',
+        { type: 'button', onClick: () => setLocale(locale === 'en' ? 'zh-CN' : 'en') },
+        'switch-locale',
+      ),
+    )
+  }
+
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = ReactDOMClient.createRoot(container)
+
+  try {
+    await act(async () => {
+      root.render(e(LocaleSwitchHarness))
+    })
+    assert.match(container.textContent ?? '', /Compute Nodes Center/)
+    assert.match(container.textContent ?? '', /Remote/, 'en category pill label')
+
+    const switchBtn = Array.from(container.querySelectorAll('button')).find(
+      (b) => b.textContent === 'switch-locale',
+    ) as HTMLButtonElement
+    assert.ok(switchBtn !== undefined, 'locale switch harness button must exist')
+
+    await act(async () => {
+      switchBtn.click()
+    })
+    assert.match(container.textContent ?? '', /计算节点中心/, 'consumers re-render in Chinese immediately')
+    assert.match(container.textContent ?? '', /远端/, 'zh category pill label')
+
+    await act(async () => {
+      switchBtn.click()
+    })
+    assert.match(container.textContent ?? '', /Compute Nodes Center/, 'switching back to en restores English immediately')
+    assert.match(container.textContent ?? '', /Remote/)
+  } finally {
     await act(async () => {
       root.unmount()
     })
