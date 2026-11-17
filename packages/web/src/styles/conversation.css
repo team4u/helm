@@ -326,11 +326,6 @@
   transform: translateY(1px);
 }
 
-.timeline-scroll-bottom-btn:focus-visible {
-  outline: 2px solid var(--focus-ring, var(--accent));
-  outline-offset: 2px;
-}
-
 .timeline-scroll-bottom-dot {
   position: absolute;
   top: 3px;
@@ -448,11 +443,6 @@
 .msg-human-collapse-btn:hover {
   color: var(--fg);
   background: var(--bg-hover);
-}
-
-.msg-human-collapse-btn:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
 }
 
 /* AI 正文（去外框气泡，干净铺在画布底色上） */
@@ -1097,11 +1087,6 @@ pre {
   background: var(--bg-hover);
 }
 
-.trace-row:focus-visible {
-  outline: 2px solid var(--focus-ring, var(--accent));
-  outline-offset: -1px;
-}
-
 .trace-row-chevron {
   color: var(--fg-muted);
   opacity: 0.35;
@@ -1310,10 +1295,6 @@ pre {
 .trace-inline-btn:hover {
   color: var(--fg);
   background: var(--bg-hover);
-}
-.trace-inline-btn:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
 }
 
 /* 行差异表：旧/新行号 + 符号 + 内容；待执行片段形态无行号列 */
@@ -1545,10 +1526,6 @@ pre {
 }
 .pane-title-btn:hover {
   background: var(--bg-hover);
-}
-.pane-title-btn:focus-visible {
-  outline: 2px solid var(--focus-ring, var(--accent));
-  outline-offset: 1px;
 }
 
 .pane-title-popover {
@@ -1812,10 +1789,6 @@ pre {
 .artifact-spill-toggle:hover {
   background: var(--bg-hover);
   color: var(--fg);
-}
-.artifact-spill-toggle:focus-visible {
-  outline: 2px solid var(--focus-ring, var(--accent));
-  outline-offset: 1px;
 }
 .artifact-spill-title {
   font-weight: 500;

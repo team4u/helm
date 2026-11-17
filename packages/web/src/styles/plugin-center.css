@@ -183,11 +183,6 @@
   background: var(--bg-subtle);
 }
 
-.plugin-card:focus-visible {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent);
-}
-
 .plugin-card.is-selected {
   border-color: var(--accent);
   box-shadow: 0 0 0 1px var(--accent);

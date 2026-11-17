@@ -15,7 +15,14 @@
 .version-banner .btn { flex-shrink: 0; }
 .mobile-nav-toggle, .sidebar-backdrop, .mobile-sidebar-close { display: none; }
 .nav-open { border: 0; background: transparent; padding: 0; color: inherit; font: inherit; cursor: pointer; text-align: left; min-height: 22px; }
-button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; }
+button:focus,
+button:focus-visible,
+a:focus,
+a:focus-visible,
+[tabindex]:focus,
+[tabindex]:focus-visible,
+[role="button"]:focus,
+[role="button"]:focus-visible { outline: none; }
 button, a, input, select, textarea { touch-action: manipulation; }
 .msg-human-row:focus, .msg-ai-block:focus { outline: none; }
 .msg-human-row:focus-within .msg-hover-bar,

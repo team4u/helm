@@ -60,6 +60,29 @@ textarea {
   color: inherit;
 }
 
+button:focus,
+button:focus-visible,
+a:focus,
+a:focus-visible,
+[tabindex]:focus,
+[tabindex]:focus-visible,
+[role="button"]:focus,
+[role="button"]:focus-visible,
+[role="menuitem"]:focus,
+[role="menuitem"]:focus-visible,
+[role="option"]:focus,
+[role="option"]:focus-visible,
+[role="tab"]:focus,
+[role="tab"]:focus-visible,
+[role="switch"]:focus,
+[role="switch"]:focus-visible,
+[role="checkbox"]:focus,
+[role="checkbox"]:focus-visible,
+summary:focus,
+summary:focus-visible {
+  outline: none;
+}
+
 button,
 [role="button"],
 [role="tab"] {

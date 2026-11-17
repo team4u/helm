@@ -181,12 +181,6 @@
   background: var(--bg-hover);
 }
 
-.workflow-trace-row-btn:focus-visible,
-.workflow-trace-toggle:focus-visible {
-  outline: 1.5px solid var(--accent);
-  outline-offset: -1px;
-}
-
 .workflow-trace-row-btn .trace-row-left {
   min-width: 0;
   flex: 1;

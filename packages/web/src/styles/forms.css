@@ -45,8 +45,6 @@
 .helm-select-trigger:focus-visible,
 .helm-select-trigger:focus {
   outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
 .helm-select-trigger:disabled {
@@ -621,7 +619,6 @@
 
 .helm-switch:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 2px var(--bg-elevated), 0 0 0 4px var(--accent);
 }
 
 .helm-switch:disabled,
@@ -703,7 +700,6 @@
 
 .helm-checkbox:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 2px var(--bg-elevated), 0 0 0 4px var(--accent);
 }
 
 .helm-checkbox:disabled,

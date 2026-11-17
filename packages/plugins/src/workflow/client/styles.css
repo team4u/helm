@@ -37,11 +37,6 @@
   background: var(--bg-active, var(--bg-elevated));
 }
 
-.subagent-card-clickable:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-
 .subagent-live-header {
   display: flex;
   align-items: center;
@@ -85,12 +80,6 @@
 /* Background report card: the header trigger zone doubles as the collapse toggle (no whole-card click navigation; body text stays selectable and clickable) */
 .subagent-live-toggleable {
   cursor: pointer;
-}
-
-.subagent-live-toggleable:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-  border-radius: var(--radius-xs);
 }
 
 /* Background report sub-rail failure state: error preview visible in red */
@@ -339,9 +328,4 @@
 
 .execution-child-clickable:active {
   background: var(--bg-active, var(--bg-hover));
-}
-
-.execution-child-clickable:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
 }
