@@ -144,6 +144,13 @@ export class KernelRuntime {
   }
 
   static async open(options: KernelRuntimeOptions = {}): Promise<KernelRuntime> {
+    if (options.models !== undefined && options.providers !== undefined) {
+      throw new HelmError(
+        'validation_error',
+        'KernelRuntimeOptions.models and KernelRuntimeOptions.providers are mutually exclusive',
+        400,
+      )
+    }
     const boot = await bootstrapKernelRuntime(options)
     const runtime = new KernelRuntime({
       ...boot,
@@ -154,6 +161,7 @@ export class KernelRuntime {
       seedKeyCache: boot.apiKeyCache,
       autoResume: options.autoResume !== false,
       externalModels: options.models,
+      providers: options.providers,
       externalSkillRoots: options.externalSkillRoots,
       buildProvider: options.buildProvider,
       nodeUpgradeTimeoutMs: options.nodeUpgradeTimeoutMs ?? 120_000,
@@ -252,6 +260,11 @@ export class KernelRuntime {
       }
     })
     await this.modelsRegistry.loadDefaultsFromConfig()
+    if (this.init.providers !== undefined && this.init.externalModels === undefined) {
+      for (const provider of this.init.providers) {
+        await this.modelsRegistry.registerRuntimeProvider(provider)
+      }
+    }
 
     this.svc.toolRegistry.installKernelTools()
     this.svc.hookBridge.install()

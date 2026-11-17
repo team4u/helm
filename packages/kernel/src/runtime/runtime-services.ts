@@ -7,6 +7,7 @@
  * - Maintain clear unidirectional ownership and lifecycles instead of piling 300+ lines of wiring in `KernelRuntime`'s constructor.
  */
 
+import type { Provider } from '@earendil-works/pi-ai'
 import type {
   ConversationInit,
   ConversationInput,
@@ -61,6 +62,8 @@ export interface RuntimeServicesInit extends BootstrappedKernelContext {
   seedKeyCache: Record<string, string>
   autoResume: boolean
   externalModels?: unknown
+  /** Initial runtime providers passed through `KernelRuntimeOptions.providers`. */
+  providers?: ReadonlyArray<Provider>
   /** Machine-level shared skill roots scanned together (defaults to `defaultExternalSkillRoots()`). */
   externalSkillRoots?: readonly string[]
   /** Plugin build port (`KernelBootOptions.buildProvider` passthrough; Hub injects default implementation). */

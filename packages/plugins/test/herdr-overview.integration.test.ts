@@ -35,7 +35,7 @@ import { createHelm } from '../../hub/src/app.js'
 import { startHub } from '../../kernel/src/http/index.js'
 import type { HerdrTarget, HerdrTransport, HerdrCallOptions, HerdrEvent } from '../src/herdr/contracts.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
-import { makeFauxModels, waitFor } from './helpers/plugin-test-env.js'
+import { makeFauxProvider, waitFor } from './helpers/plugin-test-env.js'
 
 const testDir = dirname(fileURLToPath(import.meta.url))
 const repoRoot = join(testDir, '..', '..', '..')
@@ -235,12 +235,12 @@ interface Env {
 }
 
 async function openEnv(dataDir: string, transport: HerdrTransport): Promise<Env> {
-  const { models } = makeFauxModels()
+  const faux = makeFauxProvider()
   // 受控 transport 经真实 UDS 行协议暴露：零参 herdr 插件以配置 socketPath
   // 直连（组合层已无 herdrTransport 注入缝）。
   const socketPath = join(dataDir, 'herdr.sock')
   const served = await serveTransport(transport, socketPath)
-  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider] })
   await app.kernel.plugins.setConfig('builtin:herdr', { socketPath })
   const hub = await startHub({ kernel: app.kernel, port: 0 })
   const setup = await fetch(`${hub.url}/api/auth/setup`, {

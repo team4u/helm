@@ -16,9 +16,8 @@ import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync } from 'no
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fauxAssistantMessage, fauxProvider } from '@earendil-works/pi-ai/providers/faux'
-import { createModels } from '@earendil-works/pi-ai/models'
 import { startHub } from '../../kernel/src/http/index.js'
-import { createHubTestApp, type HubTestApp } from './helpers/hub-test-env.js'
+import { createHubTestApp, makeFauxModels, type HubTestApp } from './helpers/hub-test-env.js'
 
 interface Env {
   dataDir: string
@@ -142,10 +141,7 @@ test('many provider disable collection mutual do not interference; default provi
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-models-filter-multi-'))
   const fauxA = fauxProvider({ models: [{ id: 'faux-1' }, { id: 'faux-2' }] })
   const fauxB = fauxProvider({ provider: 'faux-b', models: [{ id: 'other-1' }] })
-  const models = createModels()
-  models.setProvider(fauxA.provider)
-  models.setProvider(fauxB.provider)
-  const { app } = await createHubTestApp({ dataDir, cwd: dataDir, models })
+  const { app } = await createHubTestApp({ dataDir, cwd: dataDir, providers: [fauxA.provider, fauxB.provider] })
   const hub = await startHub({ kernel: app.kernel, port: 0 })
   try {
     const env: Env = { dataDir, app, hubUrl: hub.url, async close() { await hub.close().catch(() => {}) } }
@@ -394,6 +390,11 @@ test('setDisabledModels update after publish models.changed event (Web client re
     env.app.kernel.events.subscribe((frame) => {
       const event = frame.event as { type: string; payload?: unknown }
       if (event.type === 'models.changed') {
+        const payload = event.payload as { providers?: unknown }
+        // Ignore asynchronous background refresh events emitted by default-enabled builtin:magpie at startup.
+        if (Array.isArray(payload?.providers) && payload.providers.length === 1 && payload.providers[0] === 'magpie') {
+          return
+        }
         seen.push(event.payload as { providers: unknown })
       }
     })
@@ -462,6 +463,31 @@ test('config.json.disabledModels illegal shape: start explicit config_corrupt, n
       },
     )
     assert.equal(existsSync(join(dataDir, 'config.json')), true)
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true })
+  }
+})
+
+test('KernelRuntimeOptions.providers coexists with builtin:magpie and rejects simultaneous models', { timeout: 60_000 }, async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'helm-models-providers-mutex-'))
+  try {
+    const { models, faux } = makeFauxModels()
+    await assert.rejects(
+      () => createHubTestApp({ dataDir, cwd: dataDir, models, providers: [faux.provider] }),
+      (err: unknown) =>
+        err instanceof Error &&
+        (err as { code?: string; status?: number }).code === 'validation_error' &&
+        (err as { status?: number }).status === 400,
+    )
+
+    const { app } = await createHubTestApp({ dataDir, cwd: dataDir })
+    try {
+      const ids = app.kernel.listModelProviders().map((p) => p.id)
+      assert.ok(ids.includes('faux'), 'providers option registers faux runtime provider')
+      assert.ok(ids.includes('magpie'), 'default-enabled builtin:magpie coexists with providers option')
+    } finally {
+      await app.close()
+    }
   } finally {
     rmSync(dataDir, { recursive: true, force: true })
   }

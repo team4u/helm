@@ -27,7 +27,7 @@ export async function createHelm(options: HelmOptions = {}) {
     autoResume: false,
   });
   try {
-    // Default-enabled (8): profile (locked), workflow, memory, json-render, mermaid, apps, triggers, token-speed.
+    // Default-enabled (9): profile (locked), workflow, memory, json-render, mermaid, apps, triggers, magpie, token-speed.
     await kernel.plugins.register(createProfilePlugin());
     await kernel.plugins.register(createWorkflowPlugin());
     await kernel.plugins.register(createMemoryPlugin());
@@ -35,11 +35,11 @@ export async function createHelm(options: HelmOptions = {}) {
     await kernel.plugins.register(createMermaidPlugin());
     await kernel.plugins.register(createAppsPlugin({ hubCwd: options.cwd ?? process.cwd() }));
     await kernel.plugins.register(createTriggersPlugin());
+    await kernel.plugins.register(createMagpiePlugin());
     await kernel.plugins.register(createTokenSpeedPlugin());
-    // Default-disabled (3, opt-in): herdr, superagent, magpie (magpie awaits kernel providers port in Wave 2).
+    // Default-disabled (2, opt-in): herdr, superagent.
     await kernel.plugins.register(createHerdrPlugin(), { enabled: false });
     await kernel.plugins.register(createSuperAgentPlugin(), { enabled: false });
-    await kernel.plugins.register(createMagpiePlugin(), { enabled: false });
     await loadExternalPlugins(kernel.dataDir, kernel.plugins);
     // all tool register after unify prepare -> start, finally restore SDK scheduler.
     await kernel.start();

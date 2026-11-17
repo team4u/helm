@@ -3,12 +3,12 @@ import { test } from 'node:test'
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import { KernelRuntime } from '../../kernel/src/runtime/index.js'
 import type { TurnSettledPayload } from '@helm/protocol'
-import { cleanupDir, deferred, makeFauxModels, makeTempDir, type Deferred } from './helpers/plugin-test-env.js'
+import { cleanupDir, deferred, makeFauxProvider, makeTempDir, type Deferred } from './helpers/plugin-test-env.js'
 
 async function fixture() {
   const dataDir = await makeTempDir('helm-settlement-')
-  const { models, faux } = makeFauxModels()
-  const kernel = await KernelRuntime.open({ dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+  const faux = makeFauxProvider()
+  const kernel = await KernelRuntime.open({ dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider] })
   return { kernel, faux, async close() { try { await kernel.close() } finally { await cleanupDir(dataDir) } } }
 }
 

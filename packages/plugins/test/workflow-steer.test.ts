@@ -31,7 +31,7 @@ import { actionToolAlias } from '../../kernel/src/plugins/capability-registry.js
 import { PluginHost } from '../../kernel/src/plugins/index.js'
 import { PluginHostBackendFixtureBase } from '../../kernel/test/helpers/plugin-host-backend.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
-import { MemoryDocStore, makeFauxModels, useTempDir, waitFor } from './helpers/plugin-test-env.js'
+import { MemoryDocStore, makeFauxProvider, useTempDir, waitFor } from './helpers/plugin-test-env.js'
 
 const timeout = { timeout: 60_000 } as const
 
@@ -1005,8 +1005,8 @@ describe('workflow 插件 steer 动作（端到端）', () => {
 
 it('真实内核：在工具挂起期间纠偏，子代理读到新指令并将最终结果交回后台 run', timeout, async (t) => {
   const dataDir = useTempDir(t, 'wf-steer-native-')
-  const { models, faux } = makeFauxModels()
-  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+  const faux = makeFauxProvider()
+  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider] })
   let releaseTool!: () => void
   const toolGate = new Promise<void>((resolve) => { releaseTool = resolve })
   try {

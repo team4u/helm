@@ -61,7 +61,7 @@ Helm 是极简持久微内核多智能体编排系统：内核只保留持久会
 | [Mermaid 图表渲染](plugins/mermaid.md) | `builtin:mermaid`：聊天内 Mermaid 围栏渲染与停用回退 |
 | [Token 速率徽标](plugins/token-speed.md) | `builtin:token-speed`：输入区实时解码速率 |
 
-默认启用的插件为 `profile`（locked 常驻）、`workflow`、`memory`、`apps`、`json-render`、`mermaid`、`triggers` 与 `token-speed`；默认停用、按需启用的插件为 `herdr`、`superagent` 与 `magpie`。表格按读者主题排序，不以行位置表示启用状态。
+默认启用的插件为 `profile`（locked 常驻）、`workflow`、`memory`、`apps`、`json-render`、`mermaid`、`triggers`、`magpie` 与 `token-speed`；默认停用、按需启用的插件为 `herdr` 与 `superagent`。表格按读者主题排序，不以行位置表示启用状态。
 
 ### 命令手册与开发规范
 

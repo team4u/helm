@@ -23,7 +23,7 @@ import { HelmError } from '@helm/protocol'
 import { createHelm } from '../../hub/src/app.js'
 import { MemoryStore } from '../src/memory/store.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
-import { makeFauxModels, useTempDir, waitFor, type FauxProviderHandle } from './helpers/plugin-test-env.js'
+import { makeFauxProvider, useTempDir, waitFor, type FauxProviderHandle } from './helpers/plugin-test-env.js'
 import {
   parseMutedSources,
   resolveSuperAgentConfig,
@@ -57,8 +57,8 @@ interface TestEnv {
 
 async function makeEnv(): Promise<TestEnv> {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-superagent-'))
-  const { models, faux } = makeFauxModels()
-  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+  const faux = makeFauxProvider()
+  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider] })
   faux.setResponses([])
   const env: TestEnv = {
     dataDir,
@@ -400,13 +400,14 @@ test('superagent6: 重启复用常驻 ID；停用期间被删则重建；Profile
   // 6a. 重启复用
   {
     const dataDir = useTempDir(t, 'helm-superagent-restart-')
-    const { models } = makeFauxModels()
-    const first = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+    const firstFaux = makeFauxProvider()
+    const first = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [firstFaux.provider] })
     await first.kernel.plugins.enable('builtin:superagent')
     const ids1 = await residentIdsRaw(dataDir)
     await first.close()
     // 第二次启动：持久启停状态沿用（enabled），ID 复用
-    const second = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+    const secondFaux = makeFauxProvider()
+    const second = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [secondFaux.provider] })
     try {
       const summary = second.kernel.plugins.list().find((p) => p.id === 'builtin:superagent')!
       assert.equal(summary.enabled, true, '重启后应沿用持久化启用状态')
@@ -1090,8 +1091,8 @@ test('superagent16: UI 贡献——侧栏/分组/胶囊挂件/工具卡/时间�
 
 test('superagent17: 持久 doc 损坏时启用显式失败（不静默重建）', { timeout: 60_000 }, async (t) => {
   const dataDir = useTempDir(t, 'helm-superagent-corrupt-')
-  const { models } = makeFauxModels()
-  const first = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models })
+  const faux1 = makeFauxProvider()
+  const first = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux1.provider] })
   try {
     await first.kernel.plugins.enable('builtin:superagent')
     // 经真实写路径写入坏值（模拟持久损坏）并落盘
@@ -1102,7 +1103,8 @@ test('superagent17: 持久 doc 损坏时启用显式失败（不静默重建）'
   }
   // 重启：持久启停为 true → 注册期 service.start 读入坏 doc，启动显式失败
   // （createHelm 如实 reject，不静默重建、不吞错）。
-  await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models }).then(
+  const faux2 = makeFauxProvider()
+  await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux2.provider] }).then(
     () => assert.fail('损坏 doc 下启动应显式失败'),
     (err: unknown) => {
       assert.ok(err instanceof HelmError, `应为 HelmError，实际 ${String(err)}`)
@@ -1155,8 +1157,8 @@ test('superagent 记忆归属: 已初始化文件被删后重启/superagent 重�
     // 重启整个内核（superagent + memory 均随 createHelm 重新自举）
     const dataDir = env.dataDir
     await env.app.close()
-    const { models: models2, faux: faux2 } = makeFauxModels()
-    const app2 = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', models: models2 })
+    const faux2 = makeFauxProvider()
+    const app2 = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux2.provider] })
     try {
       assert.equal(existsSync(memoryPath), false, '重启自举不得补回已删除的记忆文件')
       // memory 检测：在 superagent 会话跑一回合，应发缺失告警（不重建）

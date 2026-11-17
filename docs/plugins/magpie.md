@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-默认停用，显式 `helm plugins enable builtin:magpie` 启用。Provider 由宿主在服务启动前挂载、停用后注销，插件内不绕宿主手动挂卸。
+默认启用，随 `createHelm()` 启动即挂载，可按需 `helm plugins disable builtin:magpie` 停用。Provider 由宿主在服务启动前挂载、停用后注销，插件内不绕宿主手动挂卸。
 
 ## 能力和入口
 

@@ -53,7 +53,7 @@ import { createHelm } from '../../hub/src/app.js'
 import { startHub } from '../../kernel/src/http/index.js'
 import { createPluginBuildProvider } from '@helm/plugin-build'
 import type { RecallGraphDoc } from '../src/superagent/contracts.js'
-import { deferred, makeFauxModels, waitFor as testWaitFor, type Deferred, type FauxProviderHandle } from './helpers/plugin-test-env.js'
+import { deferred, makeFauxProvider, waitFor as testWaitFor, type Deferred, type FauxProviderHandle } from './helpers/plugin-test-env.js'
 
 import assert from 'node:assert/strict'
 
@@ -93,9 +93,9 @@ interface SuperAgentEnv {
 
 async function makeEnv(dataDir?: string): Promise<SuperAgentEnv> {
   const dir = dataDir ?? mkdtempSync(join(tmpdir(), 'helm-superagent-'))
-  const { models, faux } = makeFauxModels()
+  const faux = makeFauxProvider()
 
-  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', models })
+  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
 
   const requests: SuperAgentEnv['requests'] = []
   faux.setResponses([])
