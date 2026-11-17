@@ -8,7 +8,6 @@ import {
   parseLocationHash,
   serializeHash,
   shouldPushLocationHistory,
-  upgradeLegacyLocationState,
   type WorkspaceLocationState,
 } from '../src/lib/url-hash-model.js'
 import { isSameResolvedTarget, resolveTargetString, type ResolvedTarget } from '../src/lib/types.js'
@@ -293,33 +292,3 @@ test('shouldPushLocationHistory: opening a drawer from each center list pushes; 
   assert.equal(shouldPushLocationHistory(modelA, modelsList), false)
 })
 
-// ---------------------------------------------------------------------------
-// 5. Compatibility parsing: legacy #/c/1?modal=profiles|skills|nodes|providers|plugins smooth upgrades
-// ---------------------------------------------------------------------------
-
-test('upgradeLegacyLocationState: legacy modal params smoothly upgrade to the matching full-screen primary centers', { timeout: 60_000 }, () => {
-  const legacyProfiles = parseLocationHash('#/c/1?modal=profiles&id=watchdog')
-  const upgradedProfiles = upgradeLegacyLocationState(legacyProfiles)
-  assert.deepEqual(upgradedProfiles.primaryTarget, { kind: 'profiles', profileId: 'watchdog' })
-  assert.equal(upgradedProfiles.activeModal, null)
-
-  const legacySkills = parseLocationHash('#/c/1?modal=skills&id=git-commit')
-  const upgradedSkills = upgradeLegacyLocationState(legacySkills)
-  assert.deepEqual(upgradedSkills.primaryTarget, { kind: 'skills', skillId: 'git-commit' })
-  assert.equal(upgradedSkills.activeModal, null)
-
-  const legacyNodes = parseLocationHash('#/c/1?modal=nodes&id=gpu-server')
-  const upgradedNodes = upgradeLegacyLocationState(legacyNodes)
-  assert.deepEqual(upgradedNodes.primaryTarget, { kind: 'nodes', nodeId: 'gpu-server' })
-  assert.equal(upgradedNodes.activeModal, null)
-
-  const legacyProviders = parseLocationHash('#/c/1?modal=providers')
-  const upgradedProviders = upgradeLegacyLocationState(legacyProviders)
-  assert.deepEqual(upgradedProviders.primaryTarget, { kind: 'models' })
-  assert.equal(upgradedProviders.activeModal, null)
-
-  const legacyPlugins = parseLocationHash('#/c/1?modal=plugins&id=builtin:workflow')
-  const upgradedPlugins = upgradeLegacyLocationState(legacyPlugins)
-  assert.deepEqual(upgradedPlugins.primaryTarget, { kind: 'plugins', pluginId: 'builtin:workflow' })
-  assert.equal(upgradedPlugins.activeModal, null)
-})

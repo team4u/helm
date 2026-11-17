@@ -33,7 +33,6 @@ import {
   hashHasPrimaryTarget,
   isSameLocationState,
   parseLocationHash,
-  upgradeLegacyLocationState,
   type WorkspaceLocationState,
 } from './lib/url-hash-model.js'
 import { ScreenHost } from './screens/ScreenHost.js'
@@ -195,7 +194,7 @@ function HelmShellInner() {
     const parsed = parseLocationHash(rawHash)
     return {
       needsHomeLanding: !hashHasPrimaryTarget(rawHash) && parsed.activeModal === null,
-      initialLocation: upgradeLegacyLocationState(parsed),
+      initialLocation: parsed,
     }
   })
   const [landingSettled, setLandingSettled] = useState(!bootLanding.needsHomeLanding)

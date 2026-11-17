@@ -24,7 +24,7 @@ import {
   useThemePreferencesState,
 } from './store-context.js'
 import { applyDocumentLocale } from './theme-preferences.js'
-import { formatLocationHash, hashHasPrimaryTarget, isSameLocationState, parseLocationHash, shouldPushLocationHistory, upgradeLegacyLocationState } from './url-hash-model.js'
+import { formatLocationHash, hashHasPrimaryTarget, isSameLocationState, parseLocationHash, shouldPushLocationHistory } from './url-hash-model.js'
 import { useGlobalShortcuts } from './use-global-shortcuts.js'
 import { useSseEvents } from './use-sse-events.js'
 import { useUnreadSync } from './use-unread-sync.js'
@@ -210,7 +210,7 @@ function HelmStoreEffects({ store, boot }: { store: HelmExternalStore; boot: Sto
 
   useEffect(() => {
     const applyUrlLocation = () => {
-      const parsed = upgradeLegacyLocationState(parseLocationHash(window.location.hash))
+      const parsed = parseLocationHash(window.location.hash)
       if (isSameLocationState(parsed, lastSyncedLocation.current)) return
       store.applyExternalLocation(parsed)
     }
@@ -301,7 +301,7 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     const rawHash = typeof window !== 'undefined' ? window.location.hash : ''
     const parsed = parseLocationHash(rawHash)
     return {
-      location: upgradeLegacyLocationState(parsed),
+      location: parsed,
       needsHomeLanding: !hashHasPrimaryTarget(rawHash) && parsed.activeModal === null,
     }
   })

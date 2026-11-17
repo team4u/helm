@@ -39,7 +39,6 @@ const { renderToString } = await import('react-dom/server')
 const {
   parseLocationHash,
   formatLocationHash,
-  upgradeLegacyLocationState,
 } = await import('../src/lib/url-hash-model.js')
 const { makeTestStore } = await import('./helpers/store.js')
 const { HostStoreProviders } = await import('./helpers/host-store.js')
@@ -176,28 +175,6 @@ test('URL hash contract: four-center round-trip encoding and sub-item deep links
     const formatted = formatLocationHash(parsed)
     assert.equal(formatted, hash, `formatLocationHash round-trip mismatch`)
   }
-})
-
-test('URL hash contract: upgradeLegacyLocationState smoothly upgrades legacy modal params to primary centers', { timeout: 60_000 }, () => {
-  // 1. Legacy profiles modal upgrade
-  const legacyProfiles = upgradeLegacyLocationState(parseLocationHash('#/c/1?modal=profiles&id=superagent'))
-  assert.deepEqual(legacyProfiles.primaryTarget, { kind: 'profiles', profileId: 'superagent' })
-  assert.equal(legacyProfiles.activeModal, null)
-
-  // 2. Legacy providers modal upgrade
-  const legacyProviders = upgradeLegacyLocationState(parseLocationHash('#/c/1?modal=providers'))
-  assert.deepEqual(legacyProviders.primaryTarget, { kind: 'models' })
-  assert.equal(legacyProviders.activeModal, null)
-
-  // 3. Legacy skills modal upgrade
-  const legacySkills = upgradeLegacyLocationState(parseLocationHash('#/c/1?modal=skills&id=helm-cli'))
-  assert.deepEqual(legacySkills.primaryTarget, { kind: 'skills', skillId: 'helm-cli' })
-  assert.equal(legacySkills.activeModal, null)
-
-  // 4. Legacy nodes modal upgrade
-  const legacyNodes = upgradeLegacyLocationState(parseLocationHash('#/c/1?modal=nodes&id=gpu-server'))
-  assert.deepEqual(legacyNodes.primaryTarget, { kind: 'nodes', nodeId: 'gpu-server' })
-  assert.equal(legacyNodes.activeModal, null)
 })
 
 // ---------------------------------------------------------------------------
