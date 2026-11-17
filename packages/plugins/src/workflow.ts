@@ -303,6 +303,16 @@ export function createWorkflowPlugin(): PluginDefinition {
             .filter((r) => r.status === 'running')
             .map((r) => `workflow:${r.id}`)
         },
+        inUse() {
+          return isolation.allocator
+            .list()
+            .filter((r) => r.status === 'active' && r.hold !== undefined)
+            .map((r) => ({
+              kind: 'worktree_hold',
+              id: r.id,
+              label: `worktree "${ctx.host.redact(r.path)}" held by ${r.hold!.pluginId} (${ctx.host.redact(r.hold!.label)})`,
+            }))
+        },
       })
 
       // ---- Model tools: subagent / SubagentWorkflow / cleanup_worktree ----

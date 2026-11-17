@@ -967,3 +967,124 @@ describe('KernelRuntime.spawnAgent({ fork: true }) integration contracts', { tim
     }
   })
 })
+
+describe('KernelRuntime.forkConversation optional entryId clean anchor', { timeout: 60_000 }, () => {
+  it('trims trailing unclosed toolCall when forkConversation(id) omits entryId mid-turn and continues cleanly; empty history throws 409 fork_empty_history', { timeout: 60_000 }, async () => {
+    const dir = join(tmpRoot, 'conv-fork-clean-anchor')
+    const { models, faux } = makeFauxModels({ models: [{ id: 'faux-1', reasoning: true }] })
+
+    const forkedContexts: Array<{ prompt: string; users: string[] }> = []
+    const step: FauxResponseFactory = (context) => {
+      const msgs = context.messages as Array<{ role?: string; content?: unknown; toolCallId?: string }>
+      const users = userMessageTexts(msgs)
+      const lastMsg = msgs.at(-1)
+      if (lastMsg?.role === 'user' && users.at(-1) === 'turn 1: SEED_ONE') {
+        return fauxAssistantMessage('ack SEED_ONE')
+      }
+      if (lastMsg?.role === 'user' && users.at(-1) === 'turn 2: SEED_TWO') {
+        return fauxAssistantMessage(
+          [
+            fauxToolCall('mid_turn_conv_fork', { title: 'worker fork' }, { id: 'call-conv-fork' }),
+            fauxToolCall('sibling_noop', {}, { id: 'call-conv-sibling' }),
+          ],
+          { stopReason: 'toolUse' },
+        )
+      }
+      if (
+        lastMsg?.role === 'user' &&
+        (users.at(-1) === 'continue on default fork' || users.at(-1) === 'continue on worker fork')
+      ) {
+        const prompt = users.at(-1)!
+        assertNoDanglingToolCalls(msgs)
+        assert.ok(!JSON.stringify(msgs).includes('missing_result'), 'forked conversation must not contain missing_result stubs')
+        assert.ok(users.some((t) => t.includes('SEED_ONE')), `${prompt} must inherit completed turn 1`)
+        assert.ok(users.some((t) => t.includes('SEED_TWO')), `${prompt} must inherit turn 2 user message before unclosed toolCall`)
+        forkedContexts.push({ prompt, users })
+        return fauxAssistantMessage(`forked ok: ${prompt}`)
+      }
+      if (lastMsg?.role === 'toolResult') {
+        return fauxAssistantMessage('parent turn 2 done')
+      }
+      throw new Error(`unexpected faux invocation: ${JSON.stringify(msgs)}`)
+    }
+    faux.setResponses(Array.from({ length: 16 }, () => step))
+
+    const kernel = await KernelRuntime.open({
+      dataDir: dir,
+      cwd: dir,
+      models,
+      model: 'faux/faux-1',
+    })
+    try {
+      let capturedForkIds: { defaultId: number; workerId: number } | undefined
+      let pluginHost: HelmHostApi | undefined
+      await kernel.plugins.register({
+        id: 'test:conv-forker',
+        definePlugin(ctx) {
+          pluginHost = ctx.host
+          ctx.tool({
+            name: 'mid_turn_conv_fork',
+            description: 'call forkConversation mid-turn without entryId',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                title: { type: 'string' },
+              },
+            },
+            execute: async (args, context) => {
+              const a = args as { title?: string }
+              const parentId = context.conversationId!
+              const defaultFork = await kernel.forkConversation(parentId)
+              const workerFork = await ctx.host.forkConversation(
+                parentId,
+                a.title !== undefined ? { title: a.title } : undefined,
+              )
+              await kernel.submitInput(defaultFork.id, 'continue on default fork')
+              await kernel.waitForIdle(defaultFork.id)
+              await kernel.submitInput(workerFork.id, 'continue on worker fork')
+              await kernel.waitForIdle(workerFork.id)
+              capturedForkIds = { defaultId: defaultFork.id, workerId: workerFork.id }
+              return { defaultId: defaultFork.id, workerId: workerFork.id }
+            },
+          })
+          ctx.tool({
+            name: 'sibling_noop',
+            description: 'sibling tool in same assistant turn',
+            inputSchema: { type: 'object' },
+            execute: () => ({ ok: true }),
+          })
+        },
+      }, { enabled: true })
+      assert.ok(pluginHost)
+
+      // Missing source conversation checks requireConv first -> 404 not_found (even when entryId is omitted).
+      await assertRejectsCode(() => kernel.forkConversation(999999), 'not_found', 404)
+      await assertRejectsCode(() => pluginHost!.forkConversation(999999), 'not_found', 404)
+
+      // Brand-new empty conversation (system-only / zero user-assistant history) -> 409 fork_empty_history.
+      const emptyConv = await kernel.createConversation({ title: 'empty conversation' })
+      await assertRejectsCode(() => kernel.forkConversation(emptyConv.id), 'fork_empty_history', 409)
+      await assertRejectsCode(() => pluginHost!.forkConversation(emptyConv.id), 'fork_empty_history', 409)
+
+      // Execute Turn 1 (settled) + Turn 2 (mid-turn unclosed toolCall fork).
+      await kernel.submitInput(1, 'turn 1: SEED_ONE')
+      await kernel.waitForIdle(1)
+      await kernel.submitInput(1, 'turn 2: SEED_TWO')
+      await kernel.waitForIdle(1)
+
+      assert.ok(capturedForkIds)
+      assert.equal(forkedContexts.length, 2)
+      assert.equal(await kernel.getLastAssistantText(capturedForkIds!.defaultId), 'forked ok: continue on default fork')
+      assert.equal(await kernel.getLastAssistantText(capturedForkIds!.workerId), 'forked ok: continue on worker fork')
+      assert.equal(kernel.getConversation(capturedForkIds!.workerId).title, 'worker fork')
+      assert.equal(kernel.getConversation(capturedForkIds!.workerId).parentConversationId, 1)
+      assert.equal(await kernel.getLastAssistantText(1), 'parent turn 2 done')
+
+      // Post-reset without handoff has no completed non-system entries -> 409 fork_empty_history.
+      await kernel.resetConversation(emptyConv.id)
+      await assertRejectsCode(() => kernel.forkConversation(emptyConv.id), 'fork_empty_history', 409)
+    } finally {
+      await kernel.close()
+    }
+  })
+})

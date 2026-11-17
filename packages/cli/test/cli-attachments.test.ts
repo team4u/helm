@@ -269,7 +269,7 @@ test('conversations compact: sends instructions in body; supports --current', { 
   assert.deepEqual(hub.recorded.hits.at(-1)!.body, {})
 })
 
-test('conversations fork: requires --entry-id in body; --title optional; supports --current', { timeout: 60_000 }, async (t) => {
+test('conversations fork: --entry-id and --title optional; omits entryId when unset; supports --current; rejects invalid --entry-id', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-attach-')
   const hub = await startMockHub(
     {
@@ -289,8 +289,22 @@ test('conversations fork: requires --entry-id in body; --title optional; support
   assert.equal(r2.code, 0, r2.err)
   assert.deepEqual(hub.recorded.hits.at(-1)!.body, { entryId: 8 })
 
-  // Missing --entry-id: required option check.
-  const r3 = await runCliCaptured(['conversations', 'fork', '4'], env)
-  assert.equal(r3.code, 1)
-  assert.ok(r3.err.includes('missing required option --entry-id'))
+  // Omitting --entry-id sends {} (clean anchor resolved by server).
+  const r3 = await runCliCaptured(
+    ['conversations', 'fork', '--current', '--json'],
+    makeCliEnv(hub.url, dir, { HELM_CONVERSATION_ID: '4' }),
+  )
+  assert.equal(r3.code, 0, r3.err)
+  assert.deepEqual(hub.recorded.hits.at(-1)!.body, {})
+
+  const r4 = await runCliCaptured(['conversations', 'fork', '4', '--title', 'clean title', '--json'], env)
+  assert.equal(r4.code, 0, r4.err)
+  assert.deepEqual(hub.recorded.hits.at(-1)!.body, { title: 'clean title' })
+
+  // Explicit invalid --entry-id values still fail client-side validation.
+  for (const bad of ['0', '-2', '1.5']) {
+    const badRes = await runCliCaptured(['conversations', 'fork', '4', '--entry-id', bad], env)
+    assert.equal(badRes.code, 1)
+    assert.ok(badRes.err.includes('--entry-id must be a positive integer'), badRes.err)
+  }
 })

@@ -325,9 +325,13 @@ test('helm-cli skill assets stay synchronized with UI extensions and runtime cap
     )
   }
 
-  for (const api of ['ctx.sessionDoc', 'composer']) {
+  for (const api of ['ctx.sessionDoc', 'composer', 'ctx.host.forkConversation(id, { entryId?, title? })', 'fork_empty_history']) {
     assert.ok(HELM_CLI_SKILL_AND_PLUGIN_DEV_MD.includes(api), `plugin-dev reference must include ${api}`)
   }
+  assert.ok(
+    HELM_CLI_SKILL_MD.includes('helm conversations fork [id] [--current] [--entry-id <n>] [--title <t>]'),
+    'SKILL.md should document optional --entry-id on helm conversations fork',
+  )
   assert.ok(HELM_CLI_SKILL_AND_PLUGIN_DEV_MD.includes('sp.<key>'), 'should document sp./ssp. deep-link namespaces')
 
   for (const cmdPath of CORE_CLI_COMMAND_PATHS) {

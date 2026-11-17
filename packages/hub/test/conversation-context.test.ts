@@ -273,7 +273,7 @@ test('HTTP reset/compact/fork: status codes, body validation, and error mapping 
     assert.ok(Number.isInteger(compact.body.taskId) && compact.body.taskId > 0)
     assert.equal(compact.body.conversation.id, conv.id)
 
-    // fork: 201 + new conversation summary
+    // fork: 201 + new conversation summary (both explicit entryId and omitted clean anchor)
     const fork = await authCall(env, 'POST', `/api/conversations/${conv.id}/fork`, {
       entryId,
       title: 'HTTP fork',
@@ -281,6 +281,16 @@ test('HTTP reset/compact/fork: status codes, body validation, and error mapping 
     assert.equal(fork.status, 201)
     assert.equal(fork.body.title, 'HTTP fork')
     assert.equal(fork.body.parentConversationId, conv.id)
+
+    const forkCleanAnchor = await authCall(env, 'POST', `/api/conversations/${conv.id}/fork`, {})
+    assert.equal(forkCleanAnchor.status, 201)
+    assert.equal(forkCleanAnchor.body.title, 'HTTP context (fork)')
+    assert.equal(forkCleanAnchor.body.parentConversationId, conv.id)
+
+    const emptyConv = await env.app.kernel.createConversation({ title: 'HTTP empty' })
+    const forkEmpty = await authCall(env, 'POST', `/api/conversations/${emptyConv.id}/fork`, {})
+    assert.equal(forkEmpty.status, 409)
+    assert.equal(forkEmpty.body.error.code, 'fork_empty_history')
 
     // Error paths
     const forkMissing = await authCall(env, 'POST', `/api/conversations/${conv.id}/fork`, {

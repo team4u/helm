@@ -99,6 +99,12 @@ export class WorktreeLeaseStore {
       const leasePath = this.leasePathOf(lease, nodeId)
       if (leasePath !== undefined && this.contains(path, leasePath)) return true
     }
+    // 3) 跨回合持久持有锁（status === 'active' && record.hold !== undefined）。
+    for (const record of this.allocator().list()) {
+      if (record.status !== 'active' || record.hold === undefined) continue
+      if (record.nodeId !== nodeId) continue
+      if (this.contains(path, record.path) || this.contains(record.path, path)) return true
+    }
     return false
   }
 

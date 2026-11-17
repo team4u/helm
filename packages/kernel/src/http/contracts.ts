@@ -305,10 +305,10 @@ export interface KernelRuntimeLike {
     id: number,
     opts?: { instructions?: string },
   ): Promise<ConversationCompactResponse> | ConversationCompactResponse
-  /** Fork a new conversation from the specified entry (inherits profile/cwd/model; parent chain points to source). */
+  /** Fork a new conversation from the specified entry or latest clean anchor (inherits profile/cwd/model; parent chain points to source). */
   forkConversation(
     id: number,
-    opts: { entryId: number; title?: string },
+    opts?: { entryId?: number; title?: string },
   ): Promise<ConversationSummary> | ConversationSummary
 
   listAsks(): Promise<AskSpec[]> | AskSpec[]

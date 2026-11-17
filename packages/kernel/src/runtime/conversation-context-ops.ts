@@ -15,6 +15,7 @@ import type { SecretStash } from '../services/index.js'
 import type { ConversationTracker } from './conversations.js'
 import type { EventHub } from './events.js'
 import { requireConv } from './runtime-helpers.js'
+import { resolveCleanForkAnchor } from './spawn-fork.js'
 import type { HelmStore } from './store.js'
 
 export interface ConversationContextOpsHost {
@@ -83,32 +84,42 @@ export class ConversationContextOps {
   }
 
   /**
-   * Fork a new conversation from a specified entry: calls SDK fork(entryId), registers helm mirror
-   * (inheriting profile/tags/cwd/model/overrides with parent pointing to source), and aligns model.
+   * Fork a new conversation from a specified entry or latest clean anchor: calls SDK fork(entryId),
+   * registers helm mirror (inheriting profile/tags/cwd/model/overrides with parent pointing to source), and aligns model.
    */
-  async forkConversation(id: number, opts: { entryId: number; title?: string }): Promise<ConversationSummary> {
+  async forkConversation(id: number, opts?: { entryId?: number; title?: string }): Promise<ConversationSummary> {
     this.assertOpen()
-    if (!Number.isSafeInteger(opts.entryId) || opts.entryId <= 0) {
-      throw new HelmError('validation_error', `entryId must be a positive safe integer (received ${String(opts.entryId)})`, 400, {
-        entryId: opts.entryId,
-      })
+    const explicitEntryId = opts?.entryId
+    if (explicitEntryId !== undefined && (!Number.isSafeInteger(explicitEntryId) || explicitEntryId <= 0)) {
+      throw new HelmError(
+        'validation_error',
+        `entryId must be a positive safe integer (received ${String(explicitEntryId)})`,
+        400,
+        { entryId: explicitEntryId },
+      )
     }
     const { meta: sourceMeta, conversation: sourceConv } = await this.conversationForContextOp(id)
-    // Verify exact entry existence (min=max=entryId limit 1; missing yields 404).
-    const page = await sourceConv.entries(
-      { minEntryId: opts.entryId as never, maxEntryId: opts.entryId as never, order: 'ascending' },
-      1,
-      undefined,
-      BACKGROUND_CONTEXT,
-    )
-    if (page.items.length === 0 || (page.items[0] as { id: number }).id !== opts.entryId) {
-      throw new HelmError('not_found', `entry ${opts.entryId} does not exist in conversation ${id}`, 404, {
-        conversationId: id,
-        entryId: opts.entryId,
-      })
+    let entryId: number
+    if (explicitEntryId !== undefined) {
+      // Verify exact entry existence (min=max=entryId limit 1; missing yields 404).
+      const page = await sourceConv.entries(
+        { minEntryId: explicitEntryId as never, maxEntryId: explicitEntryId as never, order: 'ascending' },
+        1,
+        undefined,
+        BACKGROUND_CONTEXT,
+      )
+      if (page.items.length === 0 || (page.items[0] as { id: number }).id !== explicitEntryId) {
+        throw new HelmError('not_found', `entry ${explicitEntryId} does not exist in conversation ${id}`, 404, {
+          conversationId: id,
+          entryId: explicitEntryId,
+        })
+      }
+      entryId = explicitEntryId
+    } else {
+      entryId = await resolveCleanForkAnchor(this.host.harness, id)
     }
     const forked = await sourceConv.fork(
-      opts.entryId as never,
+      entryId as never,
       { ownership: { kind: 'ownerless' } },
       BACKGROUND_CONTEXT,
     )
@@ -116,7 +127,7 @@ export class ConversationContextOps {
     const now = Date.now()
     const baseTitle = sourceMeta.title !== '' ? sourceMeta.title : `conversation ${id}`
     const title =
-      opts.title !== undefined && opts.title.trim() !== ''
+      opts?.title !== undefined && opts.title.trim() !== ''
         ? this.host.stash.redact(opts.title.trim())
         : `${baseTitle} (fork)`
     this.host.store.upsertConv({

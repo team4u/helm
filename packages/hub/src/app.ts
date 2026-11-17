@@ -3,6 +3,7 @@ import { createPluginBuildProvider } from '@helm/plugin-build';
 import {
   createProfilePlugin,
   createWorkflowPlugin,
+  createSwarmPlugin,
   createMemoryPlugin,
   createJsonRenderPlugin,
   createMermaidPlugin,
@@ -27,9 +28,10 @@ export async function createHelm(options: HelmOptions = {}) {
     autoResume: false,
   });
   try {
-    // Default-enabled (9): profile (locked), workflow, memory, json-render, mermaid, apps, triggers, magpie, token-speed.
+    // Default-enabled (10): profile (locked), workflow, swarm, memory, json-render, mermaid, apps, triggers, magpie, token-speed.
     await kernel.plugins.register(createProfilePlugin());
     await kernel.plugins.register(createWorkflowPlugin());
+    await kernel.plugins.register(createSwarmPlugin());
     await kernel.plugins.register(createMemoryPlugin());
     await kernel.plugins.register(createJsonRenderPlugin());
     await kernel.plugins.register(createMermaidPlugin());

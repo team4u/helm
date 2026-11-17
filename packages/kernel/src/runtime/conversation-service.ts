@@ -1003,7 +1003,7 @@ export class ConversationService {
     return this.contextOps.compactConversation(id, opts)
   }
 
-  async forkConversation(id: number, opts: { entryId: number; title?: string }): Promise<ConversationSummary> {
+  async forkConversation(id: number, opts?: { entryId?: number; title?: string }): Promise<ConversationSummary> {
     this.assertWritable()
     return this.contextOps.forkConversation(id, opts)
   }
