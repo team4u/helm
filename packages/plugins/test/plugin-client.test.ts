@@ -27,7 +27,8 @@ import { createHubHandler } from '../../kernel/src/http/index.js'
 import type { EventHub, KernelRuntimeLike} from '../../kernel/src/http/index.js'
 import { compilePluginClientModule, createPluginBuildProvider, installNodeChunkBridge } from '@helm/plugin-build'
 import { HelmError, type ConversationSummary } from '@helm/protocol'
-import { MemoryDocStore, makeConversationSummary } from './helpers/plugin-test-env.js'
+import { createMermaidLoader } from '../src/mermaid/client/mermaid-loader.js'
+import { MemoryDocStore, deferred, makeConversationSummary, waitFor } from './helpers/plugin-test-env.js'
 
 // ---------------------------------------------------------------------------
 // 测试基座（真实临时目录 + 真实 services + 真实 PluginHost）
@@ -634,24 +635,195 @@ test('clientRoot 跨平台绝对路径：Windows 盘符合法、foo..bar 目录�
 // 阶段 3（Code Splitting）：按需分包、零膨胀共享 Chunk 桥与端到端渲染
 // ---------------------------------------------------------------------------
 
-test('代码分割与共享 Chunk：builtin:mermaid 主包与异步 chunk 体积收敛，无重复内联膨胀', { timeout: 60_000 }, async () => {
+interface VirtualNode {
+  type: unknown
+  props: Record<string, unknown>
+}
+
+function collectNodes(node: unknown, predicate: (v: VirtualNode) => boolean, out: VirtualNode[] = []): VirtualNode[] {
+  if (Array.isArray(node)) {
+    for (const item of node) collectNodes(item, predicate, out)
+    return out
+  }
+  if (node !== null && typeof node === 'object' && 'props' in node && 'type' in node) {
+    const vnode = node as VirtualNode
+    if (predicate(vnode)) out.push(vnode)
+    if (vnode.props && 'children' in vnode.props) {
+      collectNodes(vnode.props.children, predicate, out)
+    }
+  }
+  return out
+}
+
+function collectText(node: unknown): string {
+  if (typeof node === 'string' || typeof node === 'number') return String(node)
+  if (Array.isArray(node)) return node.map(collectText).join(' ')
+  if (node !== null && typeof node === 'object' && 'props' in node) {
+    const props = (node as VirtualNode).props
+    return collectText(props?.children)
+  }
+  return ''
+}
+
+function createComponentHarness<P>(initialProps: P) {
+  const states: unknown[] = []
+  const refs: Array<{ current: unknown }> = []
+  const memoSlots: Array<{ deps?: unknown[]; value: unknown }> = []
+  const effectSlots: Array<{ deps?: unknown[]; cleanup?: () => void }> = []
+  const pendingEffects: Array<{ slot: number; fn: () => void | (() => void); deps?: unknown[] }> = []
+  let currentProps = initialProps
+  let stateUpdates = 0
+
+  const g = globalThis as Record<string, unknown>
+  const prevReact = g.__helm_shared_react
+  const prevJsx = g.__helm_shared_react_jsx_runtime
+  const prevClient = g.__helm_shared_plugin_client
+
+  const depsChanged = (a?: unknown[], b?: unknown[]): boolean => {
+    if (!a || !b || a.length !== b.length) return true
+    return a.some((v, i) => !Object.is(v, b[i]))
+  }
+
+  let stateIdx = 0
+  let refIdx = 0
+  let memoIdx = 0
+  let effectIdx = 0
+
+  g.__helm_shared_react = {
+    useState: (init: unknown) => {
+      const idx = stateIdx++
+      if (idx >= states.length) {
+        states.push(typeof init === 'function' ? (init as () => unknown)() : init)
+      }
+      const setState = (next: unknown) => {
+        const prev = states[idx]
+        const resolved = typeof next === 'function' ? (next as (p: unknown) => unknown)(prev) : next
+        if (!Object.is(prev, resolved)) {
+          states[idx] = resolved
+          stateUpdates += 1
+        }
+      }
+      return [states[idx], setState]
+    },
+    useRef: (init: unknown) => {
+      const idx = refIdx++
+      if (idx >= refs.length) refs.push({ current: init })
+      return refs[idx]
+    },
+    useCallback: (fn: unknown, deps?: unknown[]) => {
+      const idx = memoIdx++
+      const slot = memoSlots[idx]
+      if (!slot || depsChanged(slot.deps, deps)) {
+        memoSlots[idx] = { deps, value: fn }
+      }
+      return memoSlots[idx]!.value
+    },
+    useMemo: (factory: () => unknown, deps?: unknown[]) => {
+      const idx = memoIdx++
+      const slot = memoSlots[idx]
+      if (!slot || depsChanged(slot.deps, deps)) {
+        memoSlots[idx] = { deps, value: factory() }
+      }
+      return memoSlots[idx]!.value
+    },
+    useEffect: (fn: () => void | (() => void), deps?: unknown[]) => {
+      const idx = effectIdx++
+      const slot = effectSlots[idx]
+      if (!slot || depsChanged(slot.deps, deps)) {
+        pendingEffects.push({ slot: idx, fn, deps })
+      }
+    },
+  }
+  const makeEl = (type: unknown, props: Record<string, unknown>) => ({ type, props })
+  const ui = {
+    HelmIcon: (props: Record<string, unknown>) => ({ type: 'HelmIcon', props }),
+    CopyButton: (props: Record<string, unknown>) => ({ type: 'CopyButton', props }),
+    Callout: (props: Record<string, unknown>) => ({ type: 'Callout', props }),
+    Dialog: (props: Record<string, unknown>) => ({ type: 'Dialog', props }),
+    DialogPortal: (props: Record<string, unknown>) => ({ type: 'DialogPortal', props }),
+    DialogOverlay: (props: Record<string, unknown>) => ({ type: 'DialogOverlay', props }),
+    DialogContent: (props: Record<string, unknown>) => ({ type: 'DialogContent', props }),
+    DialogTitle: (props: Record<string, unknown>) => ({ type: 'DialogTitle', props }),
+    DialogClose: (props: Record<string, unknown>) => ({ type: 'DialogClose', props }),
+  }
+  g.__helm_shared_react_jsx_runtime = { jsx: makeEl, jsxs: makeEl }
+  g.__helm_shared_plugin_client = {
+    usePluginContext: () => ({ theme: 'dark' }),
+    usePluginLocale: () => 'en',
+    usePluginTranslator: () => (lt: Record<string, string>) => lt.en ?? '',
+    resolveLocalizedText: (lt: Record<string, string>, locale: string) => lt[locale] ?? lt.en ?? '',
+    ...ui,
+  }
+
+  const render = (Component: (props: P) => unknown, nextProps: P = currentProps): unknown => {
+    currentProps = nextProps
+    stateIdx = 0
+    refIdx = 0
+    memoIdx = 0
+    effectIdx = 0
+    const tree = Component(currentProps)
+    const toRun = pendingEffects.splice(0, pendingEffects.length)
+    for (const eff of toRun) {
+      effectSlots[eff.slot]?.cleanup?.()
+      const cleanup = eff.fn()
+      effectSlots[eff.slot] = {
+        deps: eff.deps,
+        cleanup: typeof cleanup === 'function' ? cleanup : undefined,
+      }
+    }
+    return tree
+  }
+
+  const unmount = (): void => {
+    for (const slot of effectSlots) {
+      slot?.cleanup?.()
+    }
+    effectSlots.length = 0
+  }
+
+  const restore = (): void => {
+    unmount()
+    g.__helm_shared_react = prevReact
+    g.__helm_shared_react_jsx_runtime = prevJsx
+    g.__helm_shared_plugin_client = prevClient
+  }
+
+  return {
+    render,
+    unmount,
+    restore,
+    ui,
+    getStateUpdates: () => stateUpdates,
+  }
+}
+
+test('代码分割与共享 Chunk：builtin:mermaid 主包不内联核心库且产出异步 chunk，体积大幅收敛', { timeout: 60_000 }, async () => {
   const result = await pluginHost.getClientModule('builtin:mermaid', 'index.tsx')
   assert.ok(result.code.length > 0, '主包代码不能为空')
   assert.ok(result.gzipped, '必须产出 gzipped 字节')
 
-  // 1. builtin:mermaid 主包 .mjs gzip 体积 < 200 KB
+  // 1. builtin:mermaid 主包不内联 mermaid 核心库，gzip 体积收敛至 < 20 KB
   assert.ok(
-    result.gzipped.length < 200 * 1024,
-    `主包 gzip 体积 (${result.gzipped.length} 字节) 必须 < 200 KB`,
+    result.gzipped.length < 20 * 1024,
+    `主包 gzip 体积 (${result.gzipped.length} 字节) 必须 < 20 KB`,
+  )
+  assert.doesNotMatch(result.code, /mermaidAPI|getRegisteredDiagramsMetadata/, '主包不得直接内联 mermaid 核心库')
+  assert.match(result.code, /__helm_import_chunk/, '主包必须通过 __helm_import_chunk 按需加载 mermaid')
+  assert.deepEqual(
+    result.exports.filter((name) => name !== '__helmClientCss'),
+    ['MermaidCodeBlock'],
+    'index.tsx 只导出 MermaidCodeBlock 组件（Fast Refresh 契约）',
   )
 
   const chunks = result.chunks ?? {}
   const chunkEntries = Object.entries(chunks)
   assert.ok(chunkEntries.length > 0, 'mermaid 必须产出异步 chunks')
 
-  // 2. flowDiagram 与 pieDiagram 异步 chunk gzip 体积 < 35 KB
+  // 2. mermaid.core 与 flowDiagram / pieDiagram 异步 chunk 存在且体积受控
+  const coreEntry = chunkEntries.find(([name]) => name.includes('mermaid.core'))
   const flowEntry = chunkEntries.find(([name]) => name.includes('flowDiagram'))
   const pieEntry = chunkEntries.find(([name]) => name.includes('pieDiagram'))
+  assert.ok(coreEntry, '产物中必须包含 mermaid.core 异步 chunk')
   assert.ok(flowEntry, '产物中必须包含 flowDiagram 异步 chunk')
   assert.ok(pieEntry, '产物中必须包含 pieDiagram 异步 chunk')
 
@@ -675,47 +847,365 @@ test('代码分割与共享 Chunk：builtin:mermaid 主包与异步 chunk 体积
   )
 })
 
-test('端到端执行：编译产物在 Node 环境通过 __helm_import_chunk 按需加载图表并渲染有效 SVG', { timeout: 60_000 }, async () => {
+test('端到端执行：编译产物在 Node 环境通过 __helm_import_chunk 按需加载 mermaid 核心与图表并渲染有效 SVG', { timeout: 60_000 }, async () => {
   const { GlobalRegistrator } = await import('@happy-dom/global-registrator')
   GlobalRegistrator.register()
+  const g = globalThis as Record<string, unknown>
+  const prevImportChunk = g.__helm_import_chunk
   try {
-    const result = await pluginHost.getClientModule('builtin:mermaid', 'index.tsx')
-    assert.ok(result.code.length > 0)
+    const indexResult = await pluginHost.getClientModule('builtin:mermaid', 'index.tsx')
+    const loaderResult = await pluginHost.getClientModule('builtin:mermaid', 'mermaid-loader.ts')
+    assert.ok(indexResult.code.length > 0)
+    assert.ok(loaderResult.code.length > 0)
+
     // Node 环境执行产物：显式安装 chunk 桥（生产编译路径不再自动改写 globalThis）
     installNodeChunkBridge([dataDir])
-
-    // 挂载运行时依赖 mock
-    const g = globalThis as Record<string, unknown>
-    g.__helm_shared_react = {
-      useEffect: () => {},
-      useRef: () => ({ current: null }),
-      useState: (v: unknown) => [v, () => {}],
-    }
-    g.__helm_shared_plugin_client = {
-      usePluginContext: () => ({ theme: 'dark' }),
-      HelmIcon: () => null,
-      CopyButton: () => null,
-      Callout: () => null,
+    const realImportChunk = g.__helm_import_chunk as (...args: unknown[]) => Promise<unknown>
+    const loadedChunks: string[] = []
+    g.__helm_import_chunk = (...args: unknown[]) => {
+      loadedChunks.push(String(args[3] ?? ''))
+      return realImportChunk(...args)
     }
 
-    const modUrl = `data:text/javascript;base64,${Buffer.from(result.code, 'utf8').toString('base64')}`
-    const mod = (await import(modUrl)) as {
+    const indexModUrl = `data:text/javascript;base64,${Buffer.from(indexResult.code, 'utf8').toString('base64')}`
+    const indexMod = (await import(indexModUrl)) as {
       MermaidCodeBlock: unknown
-      mermaid: typeof import('mermaid').default
+      mermaid?: unknown
     }
+    assert.equal(typeof indexMod.MermaidCodeBlock, 'function', '必须导出 MermaidCodeBlock 组件')
+    assert.equal(indexMod.mermaid, undefined, 'index.tsx 不得静态导出 mermaid 实例')
+    assert.equal(loadedChunks.length, 0, '模块导入阶段不得触发 mermaid chunk 加载')
 
-    assert.equal(typeof mod.MermaidCodeBlock, 'function', '必须导出 MermaidCodeBlock 组件')
-    assert.ok(mod.mermaid, '必须导出 mermaid 实例')
+    const loaderModUrl = `data:text/javascript;base64,${Buffer.from(loaderResult.code, 'utf8').toString('base64')}`
+    const loaderMod = (await import(loaderModUrl)) as {
+      loadMermaid: () => Promise<typeof import('mermaid').default>
+    }
+    assert.equal(typeof loaderMod.loadMermaid, 'function', 'mermaid-loader.ts 必须导出 loadMermaid')
+    assert.equal(loadedChunks.length, 0, '导入 mermaid-loader 不得提前触发 chunk 加载')
 
-    // 初始化并渲染 flowchart 与 pie 图表，触发按需加载异步 chunk
-    mod.mermaid.initialize({ startOnLoad: false, securityLevel: 'loose' })
+    // 首次调用 loadMermaid() 才通过 __helm_import_chunk 加载 mermaid.core 与共享 chunk
+    const mermaid = await loaderMod.loadMermaid()
+    assert.ok(loadedChunks.some((name) => name.includes('mermaid.core')), 'loadMermaid 必须按需触发 mermaid.core chunk 加载')
 
-    const flowResult = await mod.mermaid.render('test-flow-render', 'graph TD;\nA-->B;')
+    // 初始化并渲染 flowchart 与 pie 图表，触发按需加载图元 chunk
+    mermaid.initialize({ startOnLoad: false, securityLevel: 'loose' })
+
+    const flowResult = await mermaid.render('test-flow-render', 'graph TD;\nA-->B;')
     assert.ok(flowResult.svg.includes('<svg'), 'Flowchart 渲染结果必须包含 <svg')
 
-    const pieResult = await mod.mermaid.render('test-pie-render', 'pie title Pets\n"Dogs" : 386\n"Cats" : 85')
+    const pieResult = await mermaid.render('test-pie-render', 'pie title Pets\n"Dogs" : 386\n"Cats" : 85')
     assert.ok(pieResult.svg.includes('<svg'), 'Pie 图表渲染结果必须包含 <svg')
   } finally {
+    g.__helm_import_chunk = prevImportChunk
+    GlobalRegistrator.unregister()
+  }
+})
+
+test('loadMermaid 单例与并发去重、失败清除缓存后可重试', { timeout: 60_000 }, async () => {
+  const fakeMermaid = {
+    initialize: () => {},
+    render: async () => ({ svg: '<svg></svg>' }),
+  } as unknown as typeof import('mermaid').default
+
+  // 1. 并发去重：在途请求共享同一 Promise，解析后后续复用
+  const pendingImport = deferred<{ default: typeof fakeMermaid }>()
+  let calls = 0
+  const loader1 = createMermaidLoader(() => {
+    calls += 1
+    return pendingImport.promise
+  })
+  const p1 = loader1.load()
+  const p2 = loader1.load()
+  const p3 = loader1.load()
+  assert.equal(calls, 1, '并发 load() 只能触发一次底层 import')
+  assert.ok(p1 === p2 && p2 === p3, '并发 load() 必须返回同一 Promise 实例')
+
+  pendingImport.resolve({ default: fakeMermaid })
+  const [m1, m2, m3] = await Promise.all([p1, p2, p3])
+  assert.ok(m1 === fakeMermaid && m2 === fakeMermaid && m3 === fakeMermaid)
+  assert.ok((await loader1.load()) === fakeMermaid)
+  assert.equal(calls, 1, '已成功后再次 load() 不得重复 import')
+
+  // 2. 异步失败后清空缓存：第二次重试重新触发 import 并恢复成功
+  let attempt = 0
+  const loader2 = createMermaidLoader(async () => {
+    attempt += 1
+    if (attempt === 1) throw new Error('chunk fetch timeout')
+    return { default: fakeMermaid }
+  })
+  const [r1, r2] = await Promise.allSettled([loader2.load(), loader2.load()])
+  assert.equal(r1.status, 'rejected')
+  assert.equal(r2.status, 'rejected')
+  assert.match((r1 as PromiseRejectedResult).reason.message, /chunk fetch timeout/)
+  assert.equal(attempt, 1, '首次失败的并发调用共享同一 attempt')
+
+  const [ok1, ok2] = await Promise.all([loader2.load(), loader2.load()])
+  assert.equal(attempt, 2, '失败后清空缓存，重试必须重新触发 import（且并发重试同样去重）')
+  assert.ok(ok1 === fakeMermaid && ok2 === fakeMermaid)
+
+  // 3. 同步抛错与非法模块形状也必须清空缓存以便重试
+  let syncAttempt = 0
+  const loader3 = createMermaidLoader(() => {
+    syncAttempt += 1
+    if (syncAttempt === 1) throw new Error('sync load failure')
+    if (syncAttempt === 2) return Promise.resolve({} as never)
+    return Promise.resolve(fakeMermaid)
+  })
+  await assert.rejects(() => loader3.load(), /sync load failure/)
+  await assert.rejects(() => loader3.load(), /missing initialize\/render/)
+  assert.ok((await loader3.load()) === fakeMermaid)
+  assert.equal(syncAttempt, 3)
+})
+
+test('MermaidCodeBlock 编译产物交互状态：加载态、chunk 失败后展示可恢复重试并成功恢复及 unmount stale 守卫', { timeout: 60_000 }, async () => {
+  const result = await pluginHost.getClientModule('builtin:mermaid', 'index.tsx')
+  const g = globalThis as Record<string, unknown>
+  const prevImportChunk = g.__helm_import_chunk
+
+  let chunkCalls = 0
+  let mode: 'fail' | 'succeed' | 'hang' = 'fail'
+  let hangDeferred = deferred<{ default: unknown }>()
+  let callDeferred = deferred<void>()
+
+  g.__helm_import_chunk = async () => {
+    chunkCalls += 1
+    const cur = callDeferred
+    if (mode === 'fail') {
+      queueMicrotask(() => cur.resolve())
+      throw new Error('chunk offline')
+    }
+    if (mode === 'hang') {
+      cur.resolve()
+      return await hangDeferred.promise
+    }
+    queueMicrotask(() => cur.resolve())
+    return {
+      default: {
+        initialize() {},
+        async render() {
+          return { svg: '<svg data-ok="inline"></svg>' }
+        },
+      },
+    }
+  }
+
+  // 必须在 import 编译产物之前挂载 __helm_shared_*（esbuild 顶层 __toESM 在模块求值时绑定）
+  const harness = createComponentHarness({
+    language: 'mermaid',
+    code: 'graph TD;\nRETRY-->TEST;',
+  })
+  try {
+    const modUrl = `data:text/javascript;base64,${Buffer.from(result.code, 'utf8').toString('base64')}#${Math.random()}`
+    const mod = (await import(modUrl)) as {
+      MermaidCodeBlock: (props: { language: string; code: string }) => unknown
+    }
+
+    // 1. 首次渲染呈现清晰加载态
+    let tree = harness.render(mod.MermaidCodeBlock)
+    const loadingIcons = collectNodes(tree, (n) => n.type === harness.ui.HelmIcon && n.props.name === 'loader')
+    assert.ok(loadingIcons.length > 0, '加载期间应显示 loader 图标')
+    assert.match(collectText(tree), /Rendering Mermaid diagram/)
+
+    // 等待首次 chunk 加载失败并更新状态
+    await callDeferred.promise
+    await waitFor(() => harness.getStateUpdates() >= 1)
+    assert.equal(chunkCalls, 1)
+
+    tree = harness.render(mod.MermaidCodeBlock)
+    const errorCallouts = collectNodes(tree, (n) => n.type === harness.ui.Callout && n.props.tone === 'err')
+    assert.equal(errorCallouts.length, 1, '加载失败必须显式显示错误 Callout')
+    assert.match(collectText(tree), /chunk offline/)
+
+    const retryBtn = collectNodes(
+      tree,
+      (n) => n.type === 'button' && collectText(n).includes('Retry'),
+    )[0]
+    assert.ok(retryBtn && typeof retryBtn.props.onClick === 'function', '失败态必须提供 Retry 按钮')
+
+    // 2. 点击重试：切回加载态并重新发起 chunk 请求恢复渲染
+    mode = 'succeed'
+    callDeferred = deferred<void>()
+    ;(retryBtn.props.onClick as () => void)()
+
+    tree = harness.render(mod.MermaidCodeBlock)
+    assert.match(collectText(tree), /Rendering Mermaid diagram/, '点击重试后应立即回到加载态')
+    const updatesAfterRetryStart = harness.getStateUpdates()
+
+    await callDeferred.promise
+    await waitFor(() => harness.getStateUpdates() > updatesAfterRetryStart)
+    assert.equal(chunkCalls, 2, '失败清除缓存后点击重试必须再次调用 __helm_import_chunk')
+
+    tree = harness.render(mod.MermaidCodeBlock)
+    const svgHost = collectNodes(
+      tree,
+      (n) => n.type === 'div' && n.props.className === 'mermaid-svg-host',
+    )[0]
+    assert.ok(svgHost, '重试成功后应渲染 SVG 宿主节点')
+    assert.equal(
+      (svgHost.props.dangerouslySetInnerHTML as { __html?: string })?.__html,
+      '<svg data-ok="inline"></svg>',
+    )
+
+    // 3. unmount stale 守卫：独立模块实例在 loadMermaid() 在途期间卸载，迟到解析不得写回状态
+    const staleHarness = createComponentHarness({
+      language: 'mermaid',
+      code: 'graph TD;\nUNMOUNT-->GUARD;',
+    })
+    try {
+      const staleModUrl = `data:text/javascript;base64,${Buffer.from(result.code, 'utf8').toString('base64')}#${Math.random()}`
+      const staleMod = (await import(staleModUrl)) as {
+        MermaidCodeBlock: (props: { language: string; code: string }) => unknown
+      }
+      mode = 'hang'
+      hangDeferred = deferred<{ default: unknown }>()
+      callDeferred = deferred<void>()
+      staleHarness.render(staleMod.MermaidCodeBlock)
+      await callDeferred.promise
+
+      const updatesBeforeUnmount = staleHarness.getStateUpdates()
+      staleHarness.unmount()
+      hangDeferred.resolve({
+        default: {
+          initialize() {},
+          async render() {
+            return { svg: '<svg data-stale="1"></svg>' }
+          },
+        },
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+      assert.equal(staleHarness.getStateUpdates(), updatesBeforeUnmount, 'unmount 后迟到解析不得回写组件状态')
+    } finally {
+      staleHarness.restore()
+    }
+  } finally {
+    harness.restore()
+    g.__helm_import_chunk = prevImportChunk
+  }
+})
+
+test('MermaidPreviewModal 编译产物状态：独立按需加载 mermaid，失败可重试且 unmount 守卫生效', { timeout: 60_000 }, async () => {
+  const { GlobalRegistrator } = await import('@happy-dom/global-registrator')
+  GlobalRegistrator.register()
+  const g = globalThis as Record<string, unknown>
+  const prevImportChunk = g.__helm_import_chunk
+
+  try {
+    const modalResult = await pluginHost.getClientModule('builtin:mermaid', 'MermaidPreviewModal.tsx')
+    assert.doesNotMatch(modalResult.code, /mermaidAPI|getRegisteredDiagramsMetadata/, '预览弹窗不得内联 mermaid 核心库')
+    assert.match(modalResult.code, /__helm_import_chunk/)
+
+    let chunkCalls = 0
+    let mode: 'fail' | 'succeed' | 'hang' = 'fail'
+    let hangDeferred = deferred<{ default: unknown }>()
+    let callDeferred = deferred<void>()
+
+    g.__helm_import_chunk = async () => {
+      chunkCalls += 1
+      const cur = callDeferred
+      if (mode === 'fail') {
+        queueMicrotask(() => cur.resolve())
+        throw new Error('modal chunk failed')
+      }
+      if (mode === 'hang') {
+        cur.resolve()
+        return await hangDeferred.promise
+      }
+      queueMicrotask(() => cur.resolve())
+      return {
+        default: {
+          initialize() {},
+          async render() {
+            return { svg: '<svg viewBox="0 0 120 80"></svg>' }
+          },
+        },
+      }
+    }
+
+    const harness = createComponentHarness({
+      code: 'graph TD;\nM1-->M2;',
+      svg: null as string | null,
+      onClose: () => {},
+    })
+    try {
+      const modUrl = `data:text/javascript;base64,${Buffer.from(modalResult.code, 'utf8').toString('base64')}#${Math.random()}`
+      const mod = (await import(modUrl)) as {
+        MermaidPreviewModal: (props: { code: string; svg?: string | null; onClose: () => void }) => unknown
+      }
+
+      let tree = harness.render(mod.MermaidPreviewModal)
+      assert.match(collectText(tree), /Rendering/, '弹窗无 svg 时应展示加载提示')
+
+      await callDeferred.promise
+      await waitFor(() => harness.getStateUpdates() >= 1)
+      assert.equal(chunkCalls, 1)
+
+      tree = harness.render(mod.MermaidPreviewModal)
+      const errCallout = collectNodes(tree, (n) => n.type === harness.ui.Callout && n.props.tone === 'err')
+      assert.equal(errCallout.length, 1, '弹窗加载失败应展示错误 Callout')
+      assert.match(collectText(tree), /modal chunk failed/)
+
+      const retryBtn = collectNodes(
+        tree,
+        (n) => n.type === 'button' && collectText(n).includes('Retry'),
+      )[0]
+      assert.ok(retryBtn && typeof retryBtn.props.onClick === 'function', '弹窗错误态应提供 Retry 按钮')
+
+      mode = 'succeed'
+      callDeferred = deferred<void>()
+      ;(retryBtn.props.onClick as () => void)()
+      tree = harness.render(mod.MermaidPreviewModal)
+      assert.match(collectText(tree), /Rendering/, '点击弹窗重试后应回到加载态')
+      const updatesAfterRetryStart = harness.getStateUpdates()
+
+      await callDeferred.promise
+      await waitFor(() => harness.getStateUpdates() > updatesAfterRetryStart)
+      assert.equal(chunkCalls, 2)
+
+      tree = harness.render(mod.MermaidPreviewModal)
+      const svgLayer = collectNodes(
+        tree,
+        (n) => n.type === 'div' && n.props.className === 'mermaid-svg-layer',
+      )[0]
+      assert.ok(svgLayer, '弹窗重试成功后应渲染 SVG 图层')
+
+      // unmount stale 守卫：独立模块实例在 loadMermaid() 在途期间卸载，迟到解析不得写回状态
+      const staleHarness = createComponentHarness({
+        code: 'graph TD;\nM1-->M3;',
+        svg: null as string | null,
+        onClose: () => {},
+      })
+      try {
+        const staleModUrl = `data:text/javascript;base64,${Buffer.from(modalResult.code, 'utf8').toString('base64')}#${Math.random()}`
+        const staleMod = (await import(staleModUrl)) as {
+          MermaidPreviewModal: (props: { code: string; svg?: string | null; onClose: () => void }) => unknown
+        }
+        mode = 'hang'
+        hangDeferred = deferred<{ default: unknown }>()
+        callDeferred = deferred<void>()
+        staleHarness.render(staleMod.MermaidPreviewModal)
+        await callDeferred.promise
+        const updatesBeforeUnmount = staleHarness.getStateUpdates()
+        staleHarness.unmount()
+        hangDeferred.resolve({
+          default: {
+            initialize() {},
+            async render() {
+              return { svg: '<svg viewBox="0 0 10 10"></svg>' }
+            },
+          },
+        })
+        await Promise.resolve()
+        await Promise.resolve()
+        assert.equal(staleHarness.getStateUpdates(), updatesBeforeUnmount, '弹窗 unmount 后迟到解析不得更新状态')
+      } finally {
+        staleHarness.restore()
+      }
+    } finally {
+      harness.restore()
+    }
+  } finally {
+    g.__helm_import_chunk = prevImportChunk
     GlobalRegistrator.unregister()
   }
 })

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
+  Callout,
   HelmIcon,
   Dialog,
   DialogClose,
@@ -11,7 +12,7 @@ import {
   usePluginLocale,
   usePluginTranslator,
 } from '@helm/plugin-client'
-import mermaid from 'mermaid'
+import { loadMermaid } from './mermaid-loader.ts'
 import { getMermaidConfig } from './mermaid-theme.ts'
 import {
   MERMAID_ACTUAL_TITLE,
@@ -23,6 +24,8 @@ import {
   MERMAID_FIT_WIDTH,
   MERMAID_FIT_WIDTH_TITLE,
   MERMAID_PREVIEW_TITLE,
+  MERMAID_RENDER_FAILED,
+  MERMAID_RETRY,
   MERMAID_VIEW_DIAGRAM,
   MERMAID_VIEW_SOURCE,
   MERMAID_ZOOM_IN_TITLE,
@@ -76,6 +79,7 @@ export function MermaidPreviewModal({ code, svg, onClose }: MermaidPreviewModalP
   const [error, setError] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
   const [isDragging, setIsDragging] = useState(false)
+  const [retryCount, setRetryCount] = useState(0)
   const stageRef = useRef<HTMLDivElement | null>(null)
   const planeRef = useRef<HTMLDivElement | null>(null)
   const offsetRef = useRef(offset)
@@ -83,6 +87,7 @@ export function MermaidPreviewModal({ code, svg, onClose }: MermaidPreviewModalP
   const rafIdRef = useRef<number | null>(null)
   const lastThemeRef = useRef(theme)
   const lastCodeRef = useRef(code)
+  const lastRetryRef = useRef(retryCount)
   const seqRef = useRef(0)
 
   const activePointersRef = useRef<Map<number, { x: number; y: number }>>(new Map())
@@ -124,35 +129,48 @@ export function MermaidPreviewModal({ code, svg, onClose }: MermaidPreviewModalP
   // Sync a non-empty external svg prop into renderedSvg when it updates.
   useEffect(() => {
     if (svg) {
+      seqRef.current += 1
       setRenderedSvg(svg)
       setError(null)
     }
   }, [svg])
 
   // Re-render inside the modal when no svg was provided, the theme changed,
-  // or the code changed.
+  // the code changed, or the user requested a retry.
   useEffect(() => {
     const isThemeChanged = lastThemeRef.current !== theme
     const isCodeChanged = lastCodeRef.current !== code
+    const isRetryRequested = lastRetryRef.current !== retryCount
     lastThemeRef.current = theme
     lastCodeRef.current = code
+    lastRetryRef.current = retryCount
 
-    // Reuse the passed-in svg directly at init when neither theme nor code changed.
-    if (svg && !isThemeChanged && !isCodeChanged) return
+    // Reuse the passed-in svg directly when neither theme, code, nor retry changed.
+    if (svg && !isThemeChanged && !isCodeChanged && !isRetryRequested) return
+
+    if (isThemeChanged || isCodeChanged || isRetryRequested) {
+      setRenderedSvg(null)
+      setError(null)
+    }
 
     let cancelled = false
     const seq = ++seqRef.current
+    const isStale = (): boolean => cancelled || seqRef.current !== seq
+
     void (async () => {
       try {
+        const mermaid = await loadMermaid()
+        if (isStale()) return
         mermaid.initialize(getMermaidConfig(theme))
         const id = `helm-mermaid-modal-${theme}-${seq}-${Math.random().toString(36).slice(2, 8)}`
         const { svg: out } = await mermaid.render(id, code)
-        if (!cancelled && seqRef.current === seq) {
+        if (!isStale()) {
           setRenderedSvg(out)
           setError(null)
         }
       } catch (err) {
-        if (!cancelled && seqRef.current === seq) {
+        if (!isStale()) {
+          setRenderedSvg(null)
           setError(err instanceof Error ? err.message : String(err))
         }
       }
@@ -160,7 +178,7 @@ export function MermaidPreviewModal({ code, svg, onClose }: MermaidPreviewModalP
     return () => {
       cancelled = true
     }
-  }, [code, svg, theme])
+  }, [code, svg, theme, retryCount])
 
   // Extract the true intrinsic width/height from the SVG's viewBox.
   const intrinsicSize = useMemo<{ width: number; height: number } | null>(() => {
@@ -532,7 +550,7 @@ export function MermaidPreviewModal({ code, svg, onClose }: MermaidPreviewModalP
             <pre className="code-block-pre selectable mermaid-source-pre">
               <code>{code}</code>
             </pre>
-          ) : (
+          ) : renderedSvg !== null ? (
             <div
               ref={stageRef}
               className="mermaid-modal-stage"
@@ -553,19 +571,44 @@ export function MermaidPreviewModal({ code, svg, onClose }: MermaidPreviewModalP
                   willChange: isDragging ? 'transform' : 'auto',
                 }}
               >
-                {renderedSvg !== null ? (
-                  <div
-                    className="mermaid-svg-layer"
-                    style={{
-                      width: intrinsicSize ? `${intrinsicSize.width}px` : 'auto',
-                      height: intrinsicSize ? `${intrinsicSize.height}px` : 'auto',
-                    }}
-                    dangerouslySetInnerHTML={{ __html: renderedSvg }}
-                  />
-                ) : (
-                  <span className="mermaid-status-hint">{mermaidModalStatus(error, locale)}</span>
-                )}
+                <div
+                  className="mermaid-svg-layer"
+                  style={{
+                    width: intrinsicSize ? `${intrinsicSize.width}px` : 'auto',
+                    height: intrinsicSize ? `${intrinsicSize.height}px` : 'auto',
+                  }}
+                  dangerouslySetInnerHTML={{ __html: renderedSvg }}
+                />
               </div>
+            </div>
+          ) : error !== null ? (
+            <div className="mermaid-modal-status">
+              <Callout tone="err" title={t(MERMAID_RENDER_FAILED)}>
+                <div className="mermaid-error-body">
+                  <span className="selectable">{error}</span>
+                  <div className="mermaid-error-actions">
+                    <button
+                      type="button"
+                      className="btn btn-sm"
+                      onClick={() => {
+                        setError(null)
+                        setRenderedSvg(null)
+                        setRetryCount((n) => n + 1)
+                      }}
+                    >
+                      <HelmIcon name="refresh-cw" size={12} />
+                      {t(MERMAID_RETRY)}
+                    </button>
+                  </div>
+                </div>
+              </Callout>
+            </div>
+          ) : (
+            <div className="mermaid-modal-status">
+              <span className="mermaid-status-hint">
+                <HelmIcon name="loader" size={14} className="spin-slow" />
+                {mermaidModalStatus(null, locale)}
+              </span>
             </div>
           )}
         </div>

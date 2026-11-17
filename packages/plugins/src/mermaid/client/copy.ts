@@ -14,6 +14,7 @@ export const MERMAID_ZOOM_IN: LocalizedText = { en: 'Zoom in', 'zh-CN': '放大�
 export const MERMAID_COPY_SOURCE: LocalizedText = { en: 'Copy source', 'zh-CN': '复制源码' }
 export const MERMAID_RENDER_FAILED: LocalizedText = { en: 'Mermaid render failed', 'zh-CN': 'Mermaid 渲染失败' }
 export const MERMAID_RENDERING: LocalizedText = { en: 'Rendering Mermaid diagram...', 'zh-CN': '正在渲染 Mermaid 图表...' }
+export const MERMAID_RETRY: LocalizedText = { en: 'Retry', 'zh-CN': '重试' }
 
 /** Preview modal chrome. */
 export const MERMAID_PREVIEW_TITLE: LocalizedText = { en: 'Mermaid preview', 'zh-CN': 'Mermaid 图预览' }
