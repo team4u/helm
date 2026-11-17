@@ -1,13 +1,13 @@
 /**
- * builtin:triggers CLI top-level command mapping test (cron/webhook).
+ * `builtin:triggers` CLI top-level command mapping tests (cron/webhook).
  *
- * and cli.test.ts same discipline: temporary HTTP server simulated Hub contract (real fetch boundary),
- * manifest by already confirm plugin action contract construct (seven action + cli.command semantics path),
- * verify motion state command generate top-level `helm cron ...` / `helm webhook ...`,flag convert,
- * --json,--current and error message seal. simulated is HTTP contract; real Hub end-to-end collection into
- * by main proxy in implement together after run (kernel/test/triggers.test.ts override host side).
+ * Follows the same discipline as cli.test.ts: temporary HTTP server mocks Hub contract
+ * (real fetch boundary) with manifests mirroring the plugin action schema (7 actions +
+ * semantic cli.command paths) to verify top-level `helm cron ...` / `helm webhook ...`,
+ * flag conversion, --json, --current, and error envelopes. Full Hub E2E runs separately
+ * (kernel/test/triggers.test.ts covers the host side).
  *
- * runner: tsx --test; each items explicit timeout: 60_000.
+ * runner: tsx --test; every test has explicit timeout: 60_000.
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -33,7 +33,7 @@ const TRIGGER_ACTION_IDS = [
   'webhook_delete',
 ] as const
 
-/** contract manifest: and plugin implement same schema(field name/type one one for should). */
+/** Contract manifest matching the plugin's exact field names and types. */
 function triggersManifests(): ActionManifest[] {
   const cronTarget = {
     targetConversationId: { type: 'number' },
@@ -44,7 +44,7 @@ function triggersManifests(): ActionManifest[] {
     {
       pluginId: 'builtin:triggers',
       id: 'cron_list',
-      description: 'column out cron task',
+      description: 'List cron tasks',
       inputSchema: { type: 'object', properties: {} },
       outputSchema: { type: 'object' },
       cli: { command: ['cron', 'list'] },
@@ -52,7 +52,7 @@ function triggersManifests(): ActionManifest[] {
     {
       pluginId: 'builtin:triggers',
       id: 'cron_create',
-      description: 'create cron task',
+      description: 'Create cron task',
       inputSchema: {
         type: 'object',
         properties: {
@@ -73,7 +73,7 @@ function triggersManifests(): ActionManifest[] {
     {
       pluginId: 'builtin:triggers',
       id: 'cron_delete',
-      description: 'delete cron task',
+      description: 'Delete a cron job',
       inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
       outputSchema: { type: 'object' },
       cli: { command: ['cron', 'delete'] },
@@ -81,7 +81,7 @@ function triggersManifests(): ActionManifest[] {
     {
       pluginId: 'builtin:triggers',
       id: 'cron_trigger',
-      description: 'manually trigger once cron task (explicit new event, non- plan patch run)',
+      description: 'Manually trigger a cron job once (new event, not scheduled catch-up)',
       inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
       outputSchema: { type: 'object' },
       cli: { command: ['cron', 'trigger'] },
@@ -89,7 +89,7 @@ function triggersManifests(): ActionManifest[] {
     {
       pluginId: 'builtin:triggers',
       id: 'webhook_list',
-      description: 'column out webhook',
+      description: 'List webhooks',
       inputSchema: { type: 'object', properties: {} },
       outputSchema: { type: 'object' },
       cli: { command: ['webhook', 'list'] },
@@ -97,7 +97,7 @@ function triggersManifests(): ActionManifest[] {
     {
       pluginId: 'builtin:triggers',
       id: 'webhook_create',
-      description: 'create webhook(secret only human HTTP/CLI config, do not via model forwarding)',
+      description: 'Create a webhook (configure secrets manually via HTTP/CLI, never through model)',
       inputSchema: {
         type: 'object',
         properties: {
@@ -116,7 +116,7 @@ function triggersManifests(): ActionManifest[] {
     {
       pluginId: 'builtin:triggers',
       id: 'webhook_delete',
-      description: 'delete webhook',
+      description: 'Delete webhook',
       inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
       outputSchema: { type: 'object' },
       cli: { command: ['webhook', 'delete'] },
@@ -124,7 +124,7 @@ function triggersManifests(): ActionManifest[] {
   ]
 }
 
-/** start carries builtin:triggers action contract simulated Hub. */
+/** Starts a mock Hub exposing the builtin:triggers action contract. */
 async function startTriggersHub(
   t: CleanupRegistrar,
   actionResponse?: (actionId: string, body: unknown) => { status?: number; body?: unknown },
@@ -138,7 +138,7 @@ async function startTriggersHub(
   return startMockHub(routes, { defaultActions: triggersManifests(), autoRegisterCleanup: t })
 }
 
-test('cron sub- command family: top-level path, required validate, type convert and --json', { timeout: 60_000 }, async (t) => {
+test('cron subcommand family: top-level path, required flag validation, type coercion, and --json', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-triggers-cli-')
   const hub = await startTriggersHub(t, (actionId, body) => {
     if (actionId === 'cron_list') return { body: { jobs: [{ id: 'nightly', schedule: '0 3 * * *', text: 'aggregate', timezone: 'UTC', enabled: true, catchUp: false, nextRunAt: null }] } }
@@ -154,14 +154,14 @@ test('cron sub- command family: top-level path, required validate, type convert 
   assert.equal(JSON.parse(list.out).jobs[0]?.id, 'nightly')
   assert.equal(hub.hits.at(-1)?.path, '/api/actions/builtin%3Atriggers/cron_list')
 
-  // cron create: required + optional all amount (boolean/number/string each type via flag convert)
+  // cron create: full set of required + optional flags (boolean/number/string coercion)
   const created = await runCliCaptured(
     [
       'cron', 'create',
       '--id', 'ci-watch',
       '--schedule', '*/5 * * * *',
-      '--text', 'check CI state and gather report',
-      '--description', 'five minute inspection',
+      '--text', 'check CI status and summarize',
+      '--description', '5-minute check',
       '--timezone', 'Asia/Shanghai',
       '--catch-up',
       '--target-conversation-id', '7',
@@ -175,8 +175,8 @@ test('cron sub- command family: top-level path, required validate, type convert 
     input: {
       id: 'ci-watch',
       schedule: '*/5 * * * *',
-      text: 'check CI state and gather report',
-      description: 'five minute inspection',
+      text: 'check CI status and summarize',
+      description: '5-minute check',
       timezone: 'Asia/Shanghai',
       catchUp: true,
       targetConversationId: 7,
@@ -184,12 +184,12 @@ test('cron sub- command family: top-level path, required validate, type convert 
     },
   })
 
-  // missing required: explicit missing_required_flag
+  // Missing required flag: explicit missing_required_flag error
   const missing = await runCliCaptured(['cron', 'create', '--id', 'x', '--json'], env)
   assert.equal(missing.code, 1)
   assert.equal(parseCliError(missing).code, 'missing_required_flag')
 
-  // unknown flag reject
+  // Rejects unknown flags
   const unknown = await runCliCaptured(['cron', 'create', '--id', 'x', '--schedule', '* * * * *', '--text', 't', '--bogus', '--json'], env)
   assert.equal(unknown.code, 1)
   assert.equal(parseCliError(unknown).code, 'unknown_flag')
@@ -203,7 +203,7 @@ test('cron sub- command family: top-level path, required validate, type convert 
   assert.deepEqual(JSON.parse(del.out), { deleted: true })
 })
 
-test('webhook sub- command family:create/list/delete top-level path and body shape', { timeout: 60_000 }, async (t) => {
+test('webhook subcommand family: create/list/delete top-level path and body shape', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-triggers-cli-')
   const hub = await startTriggersHub(t, (actionId, body) => {
     if (actionId === 'webhook_create') return { body: { webhook: { id: (body as { input: { id: string } }).input.id, hasSecret: true } } }
@@ -212,13 +212,13 @@ test('webhook sub- command family:create/list/delete top-level path and body sha
   })
   const env = makeCliEnv(hub.url, dir)
 
-  const created = await runCliCaptured(['webhook', 'create', '--id', 'ci', '--secret', 'WHSECRET_CLI_PROBE', '--description', 'CI call back', '--json'], env)
+  const created = await runCliCaptured(['webhook', 'create', '--id', 'ci', '--secret', 'WHSECRET_CLI_PROBE', '--description', 'CI callback', '--json'], env)
   assert.equal(created.code, 0, created.err)
   const hit = hub.hits.find((h) => h.path === '/api/actions/builtin%3Atriggers/webhook_create')!
   assert.deepEqual(hit.body, {
-    input: { id: 'ci', secret: 'WHSECRET_CLI_PROBE', description: 'CI call back' },
+    input: { id: 'ci', secret: 'WHSECRET_CLI_PROBE', description: 'CI callback' },
   })
-  // return metadata excludes secret original text (server side contract; this where verify CLI original pass-through server side output)
+  // Returned metadata omits raw secret (server contract; CLI passes server output through verbatim)
   assert.doesNotMatch(created.out, /WHSECRET_CLI_PROBE/)
 
   const list = await runCliCaptured(['webhook', 'list', '--json'], env)
@@ -230,42 +230,42 @@ test('webhook sub- command family:create/list/delete top-level path and body sha
   assert.deepEqual(JSON.parse(del.out), { deleted: true })
 })
 
-test('cron/webhook action support --current attach carries conversation context;--input whole commit', { timeout: 60_000 }, async (t) => {
+test('cron/webhook actions support --current conversation context and --input full submission', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-triggers-cli-')
   const hub = await startTriggersHub(t)
   const env = makeCliEnv(hub.url, dir, { HELM_CONVERSATION_ID: '5' })
 
-  // --current: human conversation context attach carries (cron manage action excludes secret, can security carry)
+  // --current: injects conversation context (cron list has no secrets)
   const cur = await runCliCaptured(['cron', 'list', '--current', '--json'], env)
   assert.equal(cur.code, 0, cur.err)
   assert.deepEqual(hub.hits.at(-1)?.body, { input: {}, conversationId: 5 })
 
-  // --input whole commit (contains optional field), do not and property flag mix use
+  // --input submits full payload (with optional fields) without mixing property flags
   const whole = await runCliCaptured(
-    ['cron', 'create', '--input', '{"id":"w","schedule":"0 * * * *","text":"whole package","catchUp":true}', '--json'],
+    ['cron', 'create', '--input', '{"id":"w","schedule":"0 * * * *","text":"full payload","catchUp":true}', '--json'],
     env,
   )
   assert.equal(whole.code, 0, whole.err)
   assert.deepEqual(hub.hits.at(-1)?.body, {
-    input: { id: 'w', schedule: '0 * * * *', text: 'whole package', catchUp: true },
+    input: { id: 'w', schedule: '0 * * * *', text: 'full payload', catchUp: true },
   })
 
-  // mutual exclusion reject
+  // Mutual exclusion rejected
   const mixed = await runCliCaptured(['cron', 'create', '--input', '{"id":"w"}', '--id', 'w', '--json'], env)
   assert.equal(mixed.code, 1)
   assert.equal(parseCliError(mixed).code, 'conflicting_flags')
 
-  // redundant location parameter reject (action without location parameter semantics)
+  // Extra positional argument rejected (actions do not accept positionals here)
   const extra = await runCliCaptured(['cron', 'trigger', 'stray', '--id', 'x', '--json'], env)
   assert.equal(extra.code, 1)
   assert.equal(parseCliError(extra).code, 'unexpected_positional')
 })
 
-test('help column out cron/webhook top-level command; server side error message seal original on throw', { timeout: 60_000 }, async (t) => {
+test('help lists cron/webhook top-level commands and forwards server error envelopes', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-triggers-cli-')
   const hub = await startTriggersHub(t, () => ({
     status: 409,
-    body: { error: { code: 'triggers_job_exists', message: 'task already exists' } },
+    body: { error: { code: 'triggers_job_exists', message: 'job already exists' } },
   }))
   const env = makeCliEnv(hub.url, dir)
 
@@ -275,30 +275,30 @@ test('help column out cron/webhook top-level command; server side error message 
     assert.match(help.out, new RegExp(cmd.replace(/ /g, ' ')), `help should contain ${cmd}`)
   }
 
-  // sub- command level help render flag
+  // Subcommand help displays flags
   const sub = await runCliCaptured(['cron', 'create', '--help'], env)
   assert.equal(sub.code, 0)
   assert.match(sub.out, /--schedule/)
   assert.match(sub.out, /--catch-up/)
   assert.match(sub.out, /--target-conversation-id/)
 
-  // 409 error message seal → non-zero exit + stderr JSON
+  // 409 error envelope -> non-zero exit + JSON on stderr
   const dup = await runCliCaptured(['cron', 'create', '--id', 'd', '--schedule', '* * * * *', '--text', 't', '--json'], env)
   assert.equal(dup.code, 1)
   assert.equal(parseCliError(dup).code, 'triggers_job_exists')
 })
 
-test('cron and webhook do not and core command conflict:conversations etc. core command do not subject to manifest affect', { timeout: 60_000 }, async (t) => {
+test('cron and webhook do not conflict with core commands like conversations', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-triggers-cli-')
   const hub = await startTriggersHub(t)
-  // re- use the same server append core routing cannot row (startTriggersHub only mapping actions),
-  // this where verify is command parse layer: core command prefix store in when manifest declaration do not preempt.
+  // Cannot reuse same mock server for core routes (startTriggersHub only mounts action routes);
+  // verifies command resolution: manifest declarations never shadow core prefixes.
   const env = makeCliEnv(hub.url, dir)
 
-  // cron/webhook do not in core command table: motion state parse after normal execute (hit action end point)
+  // cron/webhook are not in the core command table: dispatched dynamically to action endpoints
   const r = await runCliCaptured(['cron', 'list', '--json'], env)
   assert.equal(r.code, 0, r.err)
-  // illegal sub- command explicit unknown_command(is not static default when cron list execute)
+  // Invalid subcommand fails explicitly with unknown_command (never silently falls back to cron list)
   const bad = await runCliCaptured(['cron', 'bogus', '--json'], env)
   assert.equal(bad.code, 1)
   assert.equal(parseCliError(bad).code, 'unknown_command')

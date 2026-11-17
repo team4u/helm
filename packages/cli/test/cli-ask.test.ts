@@ -1,8 +1,8 @@
 /**
- * helm ask unit test: temporary HTTP server simulated Hub contract (real fetch boundary).
- * override: basically link (create+wait for+output),stdin pipeline and, empty input reject, failed to create,
- * generate failed keep conversation,--delete-on-success,--timeout validate and wait timed out,
- * wait response strong validate (malformed do not delete conversation, empty text legal).
+ * Unit tests for `helm ask`: mock HTTP server simulating Hub contract (real fetch boundary).
+ * Covers basic chain (create + wait + output), piped stdin merge, empty input rejection, creation error,
+ * keeping conversation on turn error, --delete-on-success, --timeout validation and wait timeout,
+ * and strict wait response validation (malformed keeps conversation; empty text is valid).
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -16,11 +16,11 @@ import {
   useTempDir,
 } from './helpers/cli-harness.js'
 
-/** TTY replace body:readAll by invoke i.e. failed (TTY under never read pipeline). */
+/** TTY stand-in: fails if readAll is called (never reads piped stdin in TTY mode). */
 function ttyStdin(): StdinSource {
   return {
     isTTY: true,
-    readAll: () => Promise.reject(new Error('TTY under must not read stdin')),
+    readAll: () => Promise.reject(new Error('must not read stdin when stdin is a TTY')),
   }
 }
 
@@ -28,7 +28,7 @@ function pipedStdin(text: string): StdinSource {
   return { isTTY: false, readAll: () => Promise.resolve(text) }
 }
 
-/** simulated ConversationInputResult:text is protocol right threat answer (kernel stash.redact after return). */
+/** Mock ConversationInputResult: text is the authoritative protocol answer (redacted by kernel secretStash). */
 const waitResult = (answer: string, conversationId = 9): ConversationInputResult => ({
   conversationId,
   submissionId: 'sub-1',
@@ -42,7 +42,7 @@ const waitResult = (answer: string, conversationId = 9): ConversationInputResult
 
 const createdSummary = (id = 9) => ({ id, title: 't', profileId: 'default', tags: [] })
 
-test('ask basically link: create conversation + ?wait=1 wait for;--json structure, person class pattern only out answer text', { timeout: 60_000 }, async (t) => {
+test('ask basic flow: create conversation + ?wait=1; --json returns structured envelope, human mode outputs answer text only', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-ask-test-')
   const hub = await startMockHub(
     {
@@ -74,14 +74,14 @@ test('ask basically link: create conversation + ?wait=1 wait for;--json structur
   assert.equal(human.code, 0, human.err)
   assert.equal(human.out, 'answer body text\n')
 
-  // --help do not trigger touch Hub
+  // --help does not touch Hub
   const help = await runCliCaptured(['ask', '--help'], env, { stdin: ttyStdin() })
   assert.equal(help.code, 0, help.err)
-  assert.ok(help.out.includes('once question answer'), help.out)
+  assert.ok(help.out.includes('One-shot Q&A'), help.out)
   assert.equal(hub.hits.length, 4)
 })
 
-test('ask stdin pipeline: and location parameter empty row concatenate, can independent into prompt;TTY do not read', { timeout: 60_000 }, async (t) => {
+test('ask piped stdin: joins with positional prompt using blank line; usable standalone; skipped in TTY', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-ask-test-')
   const hub = await startMockHub(
     {
@@ -91,16 +91,16 @@ test('ask stdin pipeline: and location parameter empty row concatenate, can inde
     { autoRegisterCleanup: t },
   )
   const env = makeCliEnv(hub.url, dir)
-  await runCliCaptured(['ask', 'explain or fewer content'], env, { stdin: pipedStdin('file content') })
+  await runCliCaptured(['ask', 'explain this content'], env, { stdin: pipedStdin('file content') })
   const combined = hub.hits.find((h) => h.path === '/api/conversations/9/input?wait=1')!
-  assert.deepEqual(combined.body, { text: 'explain or fewer content\n\nfile content', whenBusy: 'reject' })
+  assert.deepEqual(combined.body, { text: 'explain this content\n\nfile content', whenBusy: 'reject' })
 
   await runCliCaptured(['ask'], env, { stdin: pipedStdin('only stdin') })
   const stdinOnly = hub.hits.filter((h) => h.path === '/api/conversations/9/input?wait=1').at(-1)!
   assert.deepEqual(stdinOnly.body, { text: 'only stdin', whenBusy: 'reject' })
 })
 
-test('ask empty input and redundant location parameter explicit reject (do not trigger touch Hub)', { timeout: 60_000 }, async (t) => {
+test('ask empty input and extra positional args reject explicitly without contacting Hub', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-ask-test-')
   const hub = await startMockHub({}, { autoRegisterCleanup: t })
   const env = makeCliEnv(hub.url, dir)
@@ -123,13 +123,13 @@ test('ask empty input and redundant location parameter explicit reject (do not t
   assert.equal(hub.hits.length, 0)
 })
 
-test('ask failed to create: original on throws mistakenly message seal (without conversation can refer)', { timeout: 60_000 }, async (t) => {
+test('ask creation failure: passes through upstream error message (without conversationId)', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-ask-test-')
   const hub = await startMockHub(
     {
       'POST /api/conversations': () => ({
         status: 400,
-        body: { error: { code: 'validation_error', message: 'cwd must be absolute path' } },
+        body: { error: { code: 'validation_error', message: 'cwd must be an absolute path' } },
       }),
     },
     { autoRegisterCleanup: t },
@@ -138,18 +138,18 @@ test('ask failed to create: original on throws mistakenly message seal (without 
   assert.equal(res.code, 1)
   const err = parseCliError(res)
   assert.equal(err.code, 'validation_error')
-  assert.equal(err.message, 'cwd must be absolute path')
+  assert.equal(err.message, 'cwd must be an absolute path')
   assert.equal(res.out, '')
 })
 
-test('ask generate failed: keep conversation, error contains can inspect ID and details.conversationId', { timeout: 60_000 }, async (t) => {
+test('ask generation failure: keeps conversation and error includes inspectable ID and details.conversationId', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-ask-test-')
   const hub = await startMockHub(
     {
       'POST /api/conversations': () => ({ status: 201, body: createdSummary(9) }),
       'POST /api/conversations/9/input?wait=1': () => ({
         status: 502,
-        body: { error: { code: 'turn_failed', message: 'conversation 9 this round not obtain answer (provider_error: remaining quota do not enough)', details: { conversationId: 9, reason: 'provider_error' } } },
+        body: { error: { code: 'turn_failed', message: 'conversation 9 did not receive an answer on this turn (provider_error: insufficient remaining quota)', details: { conversationId: 9, reason: 'provider_error' } } },
       }),
     },
     { autoRegisterCleanup: t },
@@ -166,7 +166,7 @@ test('ask generate failed: keep conversation, error contains can inspect ID and 
   assert.equal(res.out, '')
 })
 
-test('ask --delete-on-success: after success delete; failed to delete keep conversation and explicit errors', { timeout: 60_000 }, async (t) => {
+test('ask --delete-on-success: deletes on success; keeps conversation and errors explicitly if delete fails', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-ask-test-')
   const okHub = await startMockHub(
     {
@@ -188,7 +188,7 @@ test('ask --delete-on-success: after success delete; failed to delete keep conve
       'POST /api/conversations/9/input?wait=1': () => ({ body: waitResult('answer') }),
       'DELETE /api/conversations/9': () => ({
         status: 409,
-        body: { error: { code: 'conversation_managed_by_plugin', message: 'conversation by enabled plugin hosting, forbidden delete' } },
+        body: { error: { code: 'conversation_managed_by_plugin', message: 'conversation is managed by an enabled plugin and cannot be deleted' } },
       }),
     },
     { autoRegisterCleanup: t },
@@ -197,23 +197,23 @@ test('ask --delete-on-success: after success delete; failed to delete keep conve
   assert.equal(failRes.code, 1)
   const err = parseCliError<{ conversationId: number }>(failRes)
   assert.equal(err.code, 'conversation_managed_by_plugin')
-  assert.ok(err.message.includes('answer already acquire'), err.message)
+  assert.ok(err.message.includes('answer received'), err.message)
   assert.ok(err.message.includes('#9'), err.message)
   assert.equal(err.details?.conversationId, 9)
   assert.equal(failRes.out, '')
 })
 
-test('ask wait response strong validate:malformed/null/conversation do not symbol explicit invalid_response and never delete;text empty string legal', { timeout: 60_000 }, async (t) => {
+test('ask strictly validates wait response: malformed/null/mismatched conversation returns invalid_response without deleting; empty text is valid', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-ask-test-')
   const badCases: Array<{ name: string; body: unknown }> = [
     { name: 'empty object', body: {} },
     { name: 'null', body: null },
-    { name: 'conversationId do not symbol', body: { ...waitResult('answer'), conversationId: 8 } },
-    { name: 'submissionId empty string', body: { ...waitResult('answer'), submissionId: '' } },
-    { name: 'text non- string', body: { ...waitResult('answer'), text: 42 } },
-    { name: 'entry missing', body: { conversationId: 9, submissionId: 'sub-1', text: 'answer' } },
-    { name: 'entry.id empty string', body: { ...waitResult('answer'), entry: { id: '', kind: 'pi.assistant' } } },
-    { name: 'entry.kind missing', body: { ...waitResult('answer'), entry: { id: 'e1' } } },
+    { name: 'mismatched conversationId', body: { ...waitResult('answer'), conversationId: 8 } },
+    { name: 'empty submissionId', body: { ...waitResult('answer'), submissionId: '' } },
+    { name: 'non-string text', body: { ...waitResult('answer'), text: 42 } },
+    { name: 'missing entry', body: { conversationId: 9, submissionId: 'sub-1', text: 'answer' } },
+    { name: 'empty entry.id', body: { ...waitResult('answer'), entry: { id: '', kind: 'pi.assistant' } } },
+    { name: 'missing entry.kind', body: { ...waitResult('answer'), entry: { id: 'e1' } } },
   ]
   for (const { name, body } of badCases) {
     const hub = await startMockHub({
@@ -223,21 +223,21 @@ test('ask wait response strong validate:malformed/null/conversation do not symbo
     })
     try {
       const res = await runCliCaptured(['ask', 'hi', '--delete-on-success', '--json'], makeCliEnv(hub.url, dir), { stdin: ttyStdin() })
-      assert.equal(res.code, 1, `${name} should failed, got stdout:${res.out}`)
+      assert.equal(res.code, 1, `${name} should fail, got stdout: ${res.out}`)
       const err = parseCliError<{ conversationId: number }>(res)
-      assert.equal(err.code, 'invalid_response', `${name}:${err.message}`)
-      assert.ok(err.message.includes('#9'), `${name}:${err.message}`)
-      assert.ok(err.message.includes('helm conversations get 9'), `${name}:${err.message}`)
+      assert.equal(err.code, 'invalid_response', `${name}: ${err.message}`)
+      assert.ok(err.message.includes('#9'), `${name}: ${err.message}`)
+      assert.ok(err.message.includes('helm conversations get 9'), `${name}: ${err.message}`)
       assert.equal(err.details?.conversationId, 9, name)
       assert.equal(res.out, '', name)
-      // validation failed never delete conversation (contains --delete-on-success)
+      // Never delete the conversation when validation fails (even with --delete-on-success)
       assert.ok(!hub.hits.some((h) => h.method === 'DELETE'), `${name}: must not DELETE`)
     } finally {
       await hub.close()
     }
   }
 
-  // text empty string is legal answer: succeeded delete,stdout without fabricate content
+  // Empty string text is a valid answer: deletes cleanly and emits no fabricated stdout
   const emptyHub = await startMockHub(
     {
       'POST /api/conversations': () => ({ status: 201, body: createdSummary(9) }),
@@ -263,7 +263,7 @@ test('ask wait response strong validate:malformed/null/conversation do not symbo
   assert.equal(human.out, '')
 })
 
-test('ask --timeout: illegal value reject; wait timed out after conversation keep and to out ID', { timeout: 60_000 }, async (t) => {
+test('ask --timeout: invalid values rejected; timeout keeps conversation and reports ID', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-ask-test-')
   const hub = await startMockHub(
     {
@@ -276,7 +276,7 @@ test('ask --timeout: illegal value reject; wait timed out after conversation kee
             resolve()
           })
         })
-        return { body: waitResult('late to answer') }
+        return { body: waitResult('delayed answer') }
       },
     },
     { autoRegisterCleanup: t },

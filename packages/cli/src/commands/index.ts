@@ -1,7 +1,7 @@
 /**
- * static core command layer aggregate: by REST asset domain aggregate coreCommands().
- * dispatch layer (index.ts) use this table precise match core command - - manage side fault isolated base.
- * workflows / worktrees domain already strip is builtin:workflow plugin action (motion state command).
+ * Static core command registry: aggregates coreCommands() across REST resource domains.
+ * The dispatcher (index.ts) uses this table for exact core command matching — the basis for management-plane fault isolation.
+ * The workflows / worktrees domains have been extracted into builtin:workflow plugin actions (dynamic commands).
  */
 import { CORE_CLI_COMMAND_PATHS } from '@helm/protocol'
 import type { CommandSpec } from './shared.js'
@@ -23,14 +23,14 @@ import { apiCommands } from './api.js'
 
 export type { CommandContext, CommandSpec } from './shared.js'
 export {
-  // type/contract
-  // - - count value and location parameter - -
+  // types / helpers
+  // -- numeric & positional args --
   parsePositiveInt,
   requirePositional,
   assertNoExtraPositionals,
-  // - - conversation target - -
+  // -- conversation target --
   resolveConversationTarget,
-  // - - flag value rule whole - -
+  // -- flag value normalization --
   coerceTags,
   coerceMetaFlag,
   requireJsonInput,
@@ -38,11 +38,11 @@ export {
   repeatedValues,
   parseKeyValues,
   parseScalarValue,
-  // - - authentication - -
+  // -- authentication --
   readPasswordFromStdin,
   authAndSave,
   resolvePasswordFlag,
-  // - - output/enumeration - -
+  // -- output / enums --
   printResult,
   printPlainText,
   enumFlag,
@@ -51,9 +51,9 @@ export {
 } from './shared.js'
 
 /**
- * static command table complete validate: path all etc. unique + mutual do not is prefix.
- * matchCommand  exact[0] only take first hit, duplicate/prefix conflict will by static default swallow - -
- * must in aggregate where explicit expose is internal error, guard against not come new increase command collide path after silently wrong routing.
+ * Static command table integrity check: all paths must be identical-unique and prefix-disjoint.
+ * Since matchCommand returns only the first match in exact[0], duplicate or prefix collisions would
+ * be silently swallowed — expose them explicitly here so future commands cannot misroute quietly.
  */
 function assertCommandTableValid(commands: readonly CommandSpec[]): void {
   const seen = new Map<string, string>()
@@ -62,7 +62,7 @@ function assertCommandTableValid(commands: readonly CommandSpec[]): void {
     const dup = seen.get(key)
     if (dup !== undefined) {
       throw new CliError(
-        `static command table internal error: path duplicate "${key}"(${dup} and ${cmd.description}), will by matchCommand static default swallow`,
+        `static command table internal error: duplicate path "${key}" (${dup} and ${cmd.description}), which matchCommand would silently shadow`,
         'command_table_conflict',
       )
     }
@@ -73,7 +73,7 @@ function assertCommandTableValid(commands: readonly CommandSpec[]): void {
       if (cmd === other || other.path.length >= cmd.path.length) continue
       if (other.path.every((seg, i) => seg === cmd.path[i])) {
         throw new CliError(
-          `static command table internal error: path prefix conflict "${cmd.path.join(' ')}" swallow "${other.path.join(' ')}"`,
+          `static command table internal error: path prefix conflict "${cmd.path.join(' ')}" shadows "${other.path.join(' ')}"`,
           'command_table_conflict',
         )
       }
@@ -83,7 +83,7 @@ function assertCommandTableValid(commands: readonly CommandSpec[]): void {
   for (const key of seen.keys()) {
     if (!expected.has(key)) {
       throw new CliError(
-        `static command table internal error: new increase command "${key}" not sync register until @helm/protocol CORE_CLI_COMMAND_PATHS(and inside placement helm-cli skill)`,
+        `static command table internal error: new command "${key}" is not registered in @helm/protocol CORE_CLI_COMMAND_PATHS (and the built-in helm-cli skill)`,
         'command_table_conflict',
       )
     }
@@ -91,7 +91,7 @@ function assertCommandTableValid(commands: readonly CommandSpec[]): void {
   for (const key of expected) {
     if (!seen.has(key)) {
       throw new CliError(
-        `static command table internal error:CORE_CLI_COMMAND_PATHS in "${key}" in coreCommands() in missing`,
+        `static command table internal error: "${key}" from CORE_CLI_COMMAND_PATHS is missing in coreCommands()`,
         'command_table_conflict',
       )
     }

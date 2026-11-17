@@ -1,8 +1,8 @@
 /**
- * profiles --skills/--all-skills CLI test: temporary HTTP server simulated Hub contract.
- * override:create/update blank name single write,[] disable,--all-skills delete key restore all,
- * mutual exclusion and illegal list local reject, merge base bottom keep node/cwd/runtime/tags,
- * --input whole replace and combine override,--json output and --help help.
+ * CLI tests for `profiles --skills/--all-skills`: mock HTTP server simulating Hub contract.
+ * Covers allowlist writes in create/update, [] disabling all skills, --all-skills removing the key,
+ * mutual exclusion and invalid list local validation, merge preserving node/cwd/runtime/tags,
+ * --input full replacement vs merge, --json output, and --help text.
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -14,7 +14,7 @@ import {
   useTempDir,
 } from './helpers/cli-harness.js'
 
-/** simulated Hub side already has Profile(contains runtime/tags/nodeId/cwd and old skills blank name single). */
+/** Mock existing Profile on Hub (includes runtime/tags/nodeId/cwd and prior skills allowlist). */
 const EXISTING_WORKER = {
   id: 'worker',
   name: 'Worker',
@@ -28,24 +28,24 @@ const EXISTING_WORKER = {
   system: '# SYSTEM',
 }
 
-test('profiles create --skills: blank name single write body;[] means without skill', { timeout: 60_000 }, async (t) => {
+test('profiles create --skills: writes allowlist to body; [] disables all skills', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-profiles-skills-')
   const hub = await startMockHub({ 'POST /api/profiles': (body) => ({ body }) }, { autoRegisterCleanup: t })
   const env = makeCliEnv(hub.url, dir)
 
-  const r = await runCliCaptured(['profiles', 'create', 'reviewer', '--name', 'review member', '--skills', '["git-commit"]', '--json'], env)
+  const r = await runCliCaptured(['profiles', 'create', 'reviewer', '--name', 'Reviewer', '--skills', '["git-commit"]', '--json'], env)
   assert.equal(r.code, 0, r.err)
   const hit = hub.hits.find((h) => h.method === 'POST' && h.path === '/api/profiles')!
-  assert.deepEqual(hit.body, { id: 'reviewer', name: 'review member', skills: ['git-commit'] })
-  assert.deepEqual(JSON.parse(r.out), { id: 'reviewer', name: 'review member', skills: ['git-commit'] })
+  assert.deepEqual(hit.body, { id: 'reviewer', name: 'Reviewer', skills: ['git-commit'] })
+  assert.deepEqual(JSON.parse(r.out), { id: 'reviewer', name: 'Reviewer', skills: ['git-commit'] })
 
-  // empty array = explicit disable all skill (key must store in and is [], must not by discard or rotate undefined)
+  // Empty array = explicitly disable all skills (key must exist as [], never dropped or set undefined)
   const empty = await runCliCaptured(['profiles', 'create', 'minimal', '--skills', '[]', '--json'], env)
   assert.equal(empty.code, 0, empty.err)
   assert.deepEqual(hub.hits.at(-1)?.body, { id: 'minimal', skills: [] })
 })
 
-test('profiles update --skills:GET merge after only replace skills,nodeId/cwd/runtime/tags all keep', { timeout: 60_000 }, async (t) => {
+test('profiles update --skills: GET-merges and replaces only skills while keeping nodeId/cwd/runtime/tags', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-profiles-skills-')
   const hub = await startMockHub(
     {
@@ -68,12 +68,12 @@ test('profiles update --skills:GET merge after only replace skills,nodeId/cwd/ru
     runtime: EXISTING_WORKER.runtime,
     skills: ['git-commit'],
   })
-  // GET carries back system all text do not back pass (strip rule do not change;MEMORY.md by builtin:memory manage)
+  // Full system text returned by GET is stripped and not echoed back (MEMORY.md is managed by builtin:memory)
   const body = put.body as Record<string, unknown>
   assert.equal('system' in body, false)
 })
 
-test('profiles update --skills "[]": empty array pass-through (disable all, do not lose key)', { timeout: 60_000 }, async (t) => {
+test('profiles update --skills "[]": passes empty array through (disables all without dropping key)', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-profiles-skills-')
   const hub = await startMockHub(
     {
@@ -86,12 +86,12 @@ test('profiles update --skills "[]": empty array pass-through (disable all, do n
   assert.equal(r.code, 0, r.err)
   const put = hub.hits.find((h) => h.method === 'PUT')!
   assert.deepEqual((put.body as Record<string, unknown>).skills, [])
-  // the rest bind set field still in
+  // Remaining bindings are preserved
   assert.equal((put.body as Record<string, unknown>).nodeId, 'node-a')
   assert.equal((put.body as Record<string, unknown>).cwd, '/srv/work')
 })
 
-test('profiles update --all-skills: delete merge after skills key restore all available skill', { timeout: 60_000 }, async (t) => {
+test('profiles update --all-skills: deletes merged skills key to restore all available skills', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-profiles-skills-')
   const hub = await startMockHub(
     {
@@ -104,14 +104,14 @@ test('profiles update --all-skills: delete merge after skills key restore all av
   assert.equal(r.code, 0, r.err)
   const put = hub.hits.find((h) => h.method === 'PUT')!
   const body = put.body as Record<string, unknown>
-  assert.equal('skills' in body, false, 'skills key must by delete (undefined = all skill)')
+  assert.equal('skills' in body, false, 'skills key must be deleted (undefined = all skills)')
   assert.equal(body.nodeId, 'node-a')
   assert.equal(body.cwd, '/srv/work')
   assert.deepEqual(body.runtime, EXISTING_WORKER.runtime)
   assert.deepEqual(body.tags, ['ci'])
 })
 
-test('--skills and --all-skills mutual exclusion:create/update all local reject conflicting_flags(do not request)', { timeout: 60_000 }, async (t) => {
+test('--skills and --all-skills mutual exclusion: create/update reject locally with conflicting_flags', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-profiles-skills-')
   const hub = await startMockHub({ 'POST /api/profiles': (body) => ({ body }) }, { autoRegisterCleanup: t })
   const env = makeCliEnv(hub.url, dir)
@@ -119,14 +119,14 @@ test('--skills and --all-skills mutual exclusion:create/update all local reject 
   const create = await runCliCaptured(['profiles', 'create', 'x', '--skills', '["a"]', '--all-skills', '--json'], env)
   assert.equal(create.code, 1)
   assert.equal(parseCliError(create).code, 'conflicting_flags')
-  assert.equal(hub.hits.filter((h) => h.path === '/api/profiles').length, 0, 'mutual exclusion error must in request before reject')
+  assert.equal(hub.hits.filter((h) => h.path === '/api/profiles').length, 0, 'mutual exclusion must reject before sending HTTP request')
 
   const update = await runCliCaptured(['profiles', 'update', 'x', '--skills', '["a"]', '--all-skills', '--json'], env)
   assert.equal(update.code, 1)
   assert.equal(parseCliError(update).code, 'conflicting_flags')
 })
 
-test('illegal --skills list local reject: non- string array / non- array JSON', { timeout: 60_000 }, async (t) => {
+test('invalid --skills list rejected locally: non-string array / non-array JSON', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-profiles-skills-')
   const hub = await startMockHub({}, { autoRegisterCleanup: t })
   const env = makeCliEnv(hub.url, dir)
@@ -148,11 +148,11 @@ test('illegal --skills list local reject: non- string array / non- array JSON', 
   assert.equal(parseCliError(update).code, 'invalid_flag_value')
 })
 
-test('--input whole replace semantics keep:skills key original pass-through; and semantics flag combine when override for should field', { timeout: 60_000 }, async (t) => {
+test('--input preserves full-replacement semantics; semantic flags override matching fields when combined', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-profiles-skills-')
   const hub = await startMockHub({ 'PUT /api/profiles/solo': (body) => ({ body }) }, { autoRegisterCleanup: t })
 
-  // --input separate use: all amount replace,skills original (contains undefined semantics: do not carries skills key)
+  // --input alone: full replacement, skills passed as-is (omitting skills keeps it undefined)
   const whole = await runCliCaptured(
     ['profiles', 'update', 'solo', '--input', '{"name":"Solo","nodeId":"node-b","cwd":"/w"}', '--json'],
     makeCliEnv(hub.url, dir),
@@ -162,7 +162,7 @@ test('--input whole replace semantics keep:skills key original pass-through; and
   assert.deepEqual(put.body, { name: 'Solo', nodeId: 'node-b', cwd: '/w', id: 'solo' })
   assert.equal(hub.hits.some((h) => h.method === 'GET'), false, 'pure --input does not trigger GET merge')
 
-  // --input carry skills and --skills same to: semantics flag override for should field
+  // --input with skills + --skills: semantic flag overrides matching field
   const hub2 = await startMockHub(
     {
       'GET /api/profiles/solo': () => ({ body: { id: 'solo', name: 'Solo', skills: ['old'] } }),
@@ -179,7 +179,7 @@ test('--input whole replace semantics keep:skills key original pass-through; and
   const put2 = hub2.hits.find((h) => h.method === 'PUT')!
   assert.deepEqual((put2.body as Record<string, unknown>).skills, ['git-commit'])
 
-  // --input carry skills and --all-skills same to: merge layer first assignment, semantics layer delete key, eventually without skills
+  // --input with skills + --all-skills: merge layer sets it, semantic layer deletes the key -> no skills key
   const withAll = await runCliCaptured(
     ['profiles', 'update', 'solo', '--input', '{"skills":["from-input"]}', '--all-skills', '--json'],
     env2,
@@ -189,7 +189,7 @@ test('--input whole replace semantics keep:skills key original pass-through; and
   assert.equal('skills' in (put3.body as Record<string, unknown>), false)
 })
 
-test('--help and --json output: help render --skills/--all-skills,JSON output Hub back visible', { timeout: 60_000 }, async (t) => {
+test('--help and --json output: help shows --skills/--all-skills, --json echoes Hub response', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-profiles-skills-')
   const hub = await startMockHub({ 'POST /api/profiles': (body) => ({ body }) }, { autoRegisterCleanup: t })
   const env = makeCliEnv(hub.url, dir)
@@ -198,14 +198,14 @@ test('--help and --json output: help render --skills/--all-skills,JSON output Hu
   assert.equal(createHelp.code, 0)
   assert.match(createHelp.out, /--skills <json>/)
   assert.match(createHelp.out, /--all-skills <boolean>/)
-  assert.match(createHelp.out, /mutual exclusion/)
+  assert.match(createHelp.out, /mutually exclusive/)
 
   const updateHelp = await runCliCaptured(['profiles', 'update', '--help'], env)
   assert.equal(updateHelp.code, 0)
   assert.match(updateHelp.out, /--skills <json>/)
   assert.match(updateHelp.out, /--all-skills <boolean>/)
 
-  // --json pattern output Hub response original text (contains skills field)
+  // --json outputs raw Hub response (including skills field)
   const r = await runCliCaptured(['profiles', 'create', 'bot', '--skills', '["git-commit","herdr"]', '--json'], env)
   assert.equal(r.code, 0, r.err)
   assert.deepEqual(JSON.parse(r.out), { id: 'bot', skills: ['git-commit', 'herdr'] })

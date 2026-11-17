@@ -1,4 +1,4 @@
-/** output render:--json fidelity JSON; person class pattern is align table / key-value / original text. */
+/** Output rendering: `--json` preserves exact JSON; human mode renders aligned tables, key-value pairs, or raw text. */
 import {
   createLocaleTranslator,
   DEFAULT_HELM_LOCALE,
@@ -75,7 +75,7 @@ function printTable(io: Io, rows: Record<string, unknown>[]): void {
   }
 }
 
-/** unify result output:API direct return entity/array. */
+/** Unified result output for entities/arrays returned directly by the API. */
 export function printValue(io: Io, value: unknown, json: boolean): void {
   if (json) {
     io.out(`${JSON.stringify(value === undefined ? null : value, null, 2)}\n`)
@@ -117,7 +117,7 @@ export function printValue(io: Io, value: unknown, json: boolean): void {
   for (const [key, val] of entries) io.out(`${key.padEnd(width)}  ${toCell(val)}\n`)
 }
 
-/** original text output (skills read / artifacts text content), guarantee tail part newline. */
+/** Raw text output (for skills read / text artifacts), ensuring a trailing newline. */
 export function printText(io: Io, text: string): void {
   io.out(text.endsWith('\n') ? text : `${text}\n`)
 }

@@ -1,4 +1,4 @@
-/** artifact domain:artifacts list / put / get. */
+/** Artifact commands: artifacts list / put / get. */
 import type { ArtifactMetadata } from '@helm/protocol'
 import path from 'node:path'
 import { CliError } from '../errors.js'
@@ -7,11 +7,11 @@ import type { CommandContext, CommandSpec } from './shared.js'
 import { printPlainText, printResult, requirePositional, resolveConversationTarget } from './shared.js'
 import { printValue } from '../output.js'
 
-const convFlags = [{ name: 'current', type: 'boolean', help: 'use env HELM_CONVERSATION_ID' }] as const
+const convFlags = [{ name: 'current', type: 'boolean', help: 'use HELM_CONVERSATION_ID from environment' }] as const
 
 /**
- * by caller (CLI process)cwd local path parse is absolute path: never by HELM_CWD static default switch,
- * also does not all find. directory difference itself is legal cd, only as diagnose attach note return.
+ * Resolve local paths relative to the caller (CLI process) cwd into absolute paths:
+ * never silently substitute HELM_CWD or search upwards; directory differences are valid cd usage and only surfaced as diagnostic notes.
  */
 function resolveCallerPath(ctx: CommandContext, requested: string): { resolvedPath: string; sessionCwd?: string } {
   const resolvedPath = path.resolve(ctx.cwd, requested)
@@ -23,7 +23,7 @@ function resolveCallerPath(ctx: CommandContext, requested: string): { resolvedPa
   return { resolvedPath, sessionCwd }
 }
 
-/** path diagnose structure details(--json message seal supply script consume). */
+/** Structured path diagnostics (attached to --json error details for scripts). */
 function pathDetails(requested: string, resolvedPath: string, ctx: CommandContext, sessionCwd?: string): Record<string, string> {
   return {
     requestedPath: requested,
@@ -33,11 +33,11 @@ function pathDetails(requested: string, resolvedPath: string, ctx: CommandContex
   }
 }
 
-/** person class can read many row diagnose (contains optional conversation cwd attach note). */
+/** Human-readable multiline path diagnostics (includes optional conversation cwd note). */
 function pathDiagLines(requested: string, resolvedPath: string, ctx: CommandContext, sessionCwd?: string): string {
   const hint =
-    sessionCwd !== undefined ? `\n  conversation cwd(HELM_CWD)=${sessionCwd}(directory difference belong legal cd; relative path still by CLI cwd parse)` : ''
-  return `\n  request path=${requested}\n  absolute path=${resolvedPath}\n  CLI cwd=${ctx.cwd}${hint}`
+    sessionCwd !== undefined ? `\n  conversation cwd (HELM_CWD)=${sessionCwd} (directory difference is normal when cd'ing; relative paths still resolve against CLI cwd)` : ''
+  return `\n  requested path=${requested}\n  resolved path=${resolvedPath}\n  CLI cwd=${ctx.cwd}${hint}`
 }
 
 export function artifactsCommands(): CommandSpec[] {
@@ -45,7 +45,7 @@ export function artifactsCommands(): CommandSpec[] {
 
   cmds.push({
     path: ['artifacts', 'list'],
-    description: 'column out conversation artifact (GET /api/conversations/:id/artifacts)',
+    description: 'List conversation artifacts (GET /api/conversations/:id/artifacts)',
     flags: [...convFlags],
     positional: '[id]',
     async run(ctx: CommandContext) {
@@ -58,10 +58,10 @@ export function artifactsCommands(): CommandSpec[] {
 
   cmds.push({
     path: ['artifacts', 'put'],
-    description: 'upload local file is conversation artifact (POST /api/conversations/:id/artifacts)',
+    description: 'Upload a local file as a conversation artifact (POST /api/conversations/:id/artifacts)',
     flags: [
       ...convFlags,
-      { name: 'name', type: 'string', help: 'self define artifact name (default use local filename)' },
+      { name: 'name', type: 'string', help: 'custom artifact name (defaults to local filename)' },
       { name: 'mime-type', type: 'string', help: 'explicit MIME type' },
     ],
     positional: '<filePath> [id]',
@@ -77,7 +77,7 @@ export function artifactsCommands(): CommandSpec[] {
       const filePath = requirePositional(parsed.positionals, 0, 'filePath', 'missing_file_path')
       const id = resolveConversationTarget(parsed.flags, parsed.positionals[1], ctx.env)
       if (parsed.positionals.length > 2) {
-        throw new CliError(`redundant location parameter:${parsed.positionals.slice(2).join(' ')}`, 'unexpected_positional')
+        throw new CliError(`unexpected positional argument: ${parsed.positionals.slice(2).join(' ')}`, 'unexpected_positional')
       }
       const fsp = await import('node:fs/promises')
       const { resolvedPath, sessionCwd } = resolveCallerPath(ctx, filePath)
@@ -86,7 +86,7 @@ export function artifactsCommands(): CommandSpec[] {
         const st = await fsp.stat(resolvedPath)
         if (!st.isFile()) {
           throw new CliError(
-            `upload source is not common rule file (directory/device)${pathDiagLines(filePath, resolvedPath, ctx, sessionCwd)}`,
+            `upload source is not a regular file (directory/device)${pathDiagLines(filePath, resolvedPath, ctx, sessionCwd)}`,
             'read_failed',
             1,
             pathDetails(filePath, resolvedPath, ctx, sessionCwd),
@@ -97,7 +97,7 @@ export function artifactsCommands(): CommandSpec[] {
       } catch (err) {
         if (err instanceof CliError) throw err
         throw new CliError(
-          `read upload file failed (${err instanceof Error ? err.message : String(err)})${pathDiagLines(filePath, resolvedPath, ctx, sessionCwd)}`,
+          `failed to read upload file (${err instanceof Error ? err.message : String(err)})${pathDiagLines(filePath, resolvedPath, ctx, sessionCwd)}`,
           'read_failed',
           1,
           pathDetails(filePath, resolvedPath, ctx, sessionCwd),
@@ -116,8 +116,8 @@ export function artifactsCommands(): CommandSpec[] {
 
   cmds.push({
     path: ['artifacts', 'get'],
-    description: 'read artifact content (GET /api/artifacts/:id/content; text direct out, two enter system must --output)',
-    flags: [{ name: 'output', type: 'string', help: 'two enter system path (by CLI caller cwd parse is absolute path)' }],
+    description: 'Read artifact content (GET /api/artifacts/:id/content; prints text directly, requires --output for binary)',
+    flags: [{ name: 'output', type: 'string', help: 'output file path for binary content (resolved relative to CLI cwd)' }],
     positional: '<id>',
     async run(ctx: CommandContext) {
       const parsed = parseFlags([{ name: 'output', type: 'string' }], ctx.args)
@@ -130,13 +130,13 @@ export function artifactsCommands(): CommandSpec[] {
       if (output !== undefined) {
         const fsp = await import('node:fs/promises')
         const { resolvedPath, sessionCwd } = resolveCallerPath(ctx, output)
-        // complete receive after only then write file, transfer failed cannot by mistakenly report is write failed or override already has deliver file.
+        // Only write the file after receiving the full payload so a failed transfer never masquerades as a write error or overwrites an existing deliverable.
         let buffer: Buffer
         try {
           buffer = Buffer.from(await response.arrayBuffer())
         } catch (err) {
           throw new CliError(
-            `download artifact content failed (${err instanceof Error ? err.message : String(err)})${pathDiagLines(output, resolvedPath, ctx, sessionCwd)}`,
+            `failed to download artifact content (${err instanceof Error ? err.message : String(err)})${pathDiagLines(output, resolvedPath, ctx, sessionCwd)}`,
             'download_failed',
             1,
             pathDetails(output, resolvedPath, ctx, sessionCwd),
@@ -146,18 +146,18 @@ export function artifactsCommands(): CommandSpec[] {
           await fsp.writeFile(resolvedPath, buffer)
         } catch (err) {
           throw new CliError(
-            `write artifact file failed (${err instanceof Error ? err.message : String(err)})${pathDiagLines(output, resolvedPath, ctx, sessionCwd)}`,
+            `failed to write artifact file (${err instanceof Error ? err.message : String(err)})${pathDiagLines(output, resolvedPath, ctx, sessionCwd)}`,
             'write_failed',
             1,
             pathDetails(output, resolvedPath, ctx, sessionCwd),
           )
         }
         if (ctx.json) printValue(ctx.io, { written: resolvedPath, bytes: buffer.byteLength }, true)
-        else ctx.io.out(`already write ${resolvedPath}(${buffer.byteLength} byte)\n`)
+        else ctx.io.out(`wrote ${resolvedPath} (${buffer.byteLength} bytes)\n`)
         return
       }
       if (!isText) {
-        throw new CliError(`artifact is two enter system (${contentType || 'unknown type'}): use --output <path> `, 'binary_content_requires_output')
+        throw new CliError(`artifact is binary (${contentType || 'unknown type'}): use --output <path>`, 'binary_content_requires_output')
       }
       const text = await response.text()
       if (ctx.json) printValue(ctx.io, text, true)

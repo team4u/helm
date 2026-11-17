@@ -1,8 +1,8 @@
 /**
- * CLI new command test:artifacts put / send --attach / conversations reset|compact|fork.
- * real HTTP server simulated Hub contract (cli.test.ts same style pattern): verify path, method,
- * request head (x-artifact-filename URL encode,x-artifact-mime-type), two enter system body
- * byte consistent,--json output and error message seal.
+ * CLI command tests: `artifacts put` / `send --attach` / `conversations reset|compact|fork`.
+ * Uses a real HTTP server mocking Hub contract (same pattern as cli.test.ts): verifies paths, methods,
+ * headers (`x-artifact-filename` URL encoding, `x-artifact-mime-type`), binary body byte fidelity,
+ * --json output, and error envelopes.
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -19,10 +19,10 @@ import {
 // artifacts put
 // ---------------------------------------------------------------------------
 
-test('artifacts put: two enter system stream upload (octet-stream + encode filename + byte consistent)', { timeout: 60_000 }, async (t) => {
+test('artifacts put: binary stream upload (octet-stream + encoded filename + byte fidelity)', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-attach-')
   const file = path.join(dir, 'data report.md')
-  const content = Buffer.from('# title\ncontent row', 'utf8')
+  const content = Buffer.from('# title\ncontent line', 'utf8')
   await fsp.writeFile(file, content)
   const hub = await startMockHub(
     {
@@ -41,12 +41,12 @@ test('artifacts put: two enter system stream upload (octet-stream + encode filen
   assert.equal(hit.path, '/api/conversations/3/artifacts')
   assert.equal(hit.headers['content-type'], 'application/octet-stream')
   assert.equal(hit.headers['x-artifact-filename'], encodeURIComponent('data report.md'))
-  // two enter system body byte consistent.
+  // Binary body bytes match file contents.
   assert.ok(hit.rawBody !== undefined)
   assert.deepEqual([...hit.rawBody!], [...content])
 })
 
-test('artifacts put: person class pattern output append [Artifact] id=<id> name=<name> align frontend timeline detect', { timeout: 60_000 }, async (t) => {
+test('artifacts put: human output includes [Artifact] id=<id> name=<name> matching timeline detection', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-attach-')
   const file = path.join(dir, 'output.png')
   await fsp.writeFile(file, 'image-binary')
@@ -64,7 +64,7 @@ test('artifacts put: person class pattern output append [Artifact] id=<id> name=
   assert.ok(r.out.includes('[Artifact] id=art-img-99 name=output.png\n'))
 })
 
-test('artifacts put:--name and --mime-type override;--current target conversation', { timeout: 60_000 }, async (t) => {
+test('artifacts put: --name and --mime-type overrides; --current target conversation', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-attach-')
   const file = path.join(dir, 'plain.txt')
   await fsp.writeFile(file, 'abc')
@@ -88,25 +88,25 @@ test('artifacts put:--name and --mime-type override;--current target conversatio
   assert.equal(hit.headers['x-artifact-mime-type'], 'application/x-thing')
 })
 
-test('artifacts put: file missing read_failed; directory read_failed; redundant location parameter errors', { timeout: 60_000 }, async (t) => {
+test('artifacts put: missing file read_failed; directory read_failed; extra positional args error', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-attach-')
   const hub = await startMockHub({}, { autoRegisterCleanup: t })
   const env = makeCliEnv(hub.url, dir)
 
   const missing = await runCliCaptured(['artifacts', 'put', path.join(dir, 'nope.bin'), '1'], env)
   assert.equal(missing.code, 1)
-  assert.ok(missing.err.includes('read upload file failed'), `stderr should contains failed to read diagnose:${missing.err}`)
+  assert.ok(missing.err.includes('failed to read upload file'), `stderr should include read diagnostic: ${missing.err}`)
   const dirTarget = await runCliCaptured(['artifacts', 'put', dir, '1'], env)
   assert.equal(dirTarget.code, 1)
-  assert.ok(dirTarget.err.includes('is not common rule file'))
+  assert.ok(dirTarget.err.includes('is not a regular file'))
   const file = path.join(dir, 'ok.txt')
   await fsp.writeFile(file, 'x')
   const extra = await runCliCaptured(['artifacts', 'put', file, '1', 'junk'], env)
   assert.equal(extra.code, 1)
-  assert.ok(extra.err.includes('redundant location parameter'))
+  assert.ok(extra.err.includes('unexpected positional argument'))
 })
 
-test('artifacts put:Hub 413 artifact_too_large error message seal rotate CLI non-zero exit', { timeout: 60_000 }, async (t) => {
+test('artifacts put: Hub 413 artifact_too_large envelope exits non-zero', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-attach-')
   const file = path.join(dir, 'big.bin')
   await fsp.writeFile(file, Buffer.alloc(1024))
@@ -114,21 +114,21 @@ test('artifacts put:Hub 413 artifact_too_large error message seal rotate CLI non
     {
       'POST /api/conversations/1/artifacts': () => ({
         status: 413,
-        body: { error: { code: 'artifact_too_large', message: 'artifact large small exceeds 15 MiB cap' } },
+        body: { error: { code: 'artifact_too_large', message: 'artifact size exceeds 15 MiB limit' } },
       }),
     },
     { autoRegisterCleanup: t },
   )
   const r = await runCliCaptured(['artifacts', 'put', file, '1'], makeCliEnv(hub.url, dir))
   assert.equal(r.code, 1)
-  assert.ok(r.err.includes('artifact large small exceeds 15 MiB cap'), `stderr should contains Hub error message:${r.err}`)
+  assert.ok(r.err.includes('artifact size exceeds 15 MiB limit'), `stderr should include Hub error message: ${r.err}`)
 })
 
 // ---------------------------------------------------------------------------
 // send --attach
 // ---------------------------------------------------------------------------
 
-test('send --attach: comma isolate artifact ID enter body.attachments; null value ignore', { timeout: 60_000 }, async (t) => {
+test('send --attach: comma-separated artifact IDs into body.attachments; empty entries ignored', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-attach-')
   const hub = await startMockHub(
     {
@@ -153,7 +153,7 @@ test('send --attach: comma isolate artifact ID enter body.attachments; null valu
 // send --replace-from / conversations withdraw
 // ---------------------------------------------------------------------------
 
-test('send --replace-from: positive integer enter body.replaceFromEntryId; illegal value errors; default does not carry', { timeout: 60_000 }, async (t) => {
+test('send --replace-from: sends positive integer in body.replaceFromEntryId; rejects invalid values; omitted by default', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-attach-')
   const hub = await startMockHub(
     {
@@ -162,25 +162,25 @@ test('send --replace-from: positive integer enter body.replaceFromEntryId; illeg
     { autoRegisterCleanup: t },
   )
   const env = makeCliEnv(hub.url, dir)
-  const r = await runCliCaptured(['send', '5', 'override heavy', '--replace-from', '12', '--json'], env)
+  const r = await runCliCaptured(['send', '5', 'rewrite message', '--replace-from', '12', '--json'], env)
   assert.equal(r.code, 0, r.err)
   const hit = hub.recorded.hits.at(-1)!
-  assert.deepEqual(hit.body, { text: 'override heavy', replaceFromEntryId: 12 })
+  assert.deepEqual(hit.body, { text: 'rewrite message', replaceFromEntryId: 12 })
 
-  // default: does not carry replaceFromEntryId.
-  const r2 = await runCliCaptured(['send', '5', 'ordinary commit', '--json'], env)
+  // Default: omits replaceFromEntryId.
+  const r2 = await runCliCaptured(['send', '5', 'regular submission', '--json'], env)
   assert.equal(r2.code, 0, r2.err)
-  assert.deepEqual(hub.recorded.hits.at(-1)!.body, { text: 'ordinary commit' })
+  assert.deepEqual(hub.recorded.hits.at(-1)!.body, { text: 'regular submission' })
 
-  // illegal:0 / negative number / decimal.
+  // Invalid values: 0, negative integers, decimals.
   for (const bad of ['0', '-4', '2.5']) {
     const r3 = await runCliCaptured(['send', '5', 'x', '--replace-from', bad], env)
-    assert.equal(r3.code, 1, `--replace-from ${bad} should non-zero exit`)
-    assert.ok(r3.err.includes('--replace-from must be a positive integer'), `stderr should contains diagnose:${r3.err}`)
+    assert.equal(r3.code, 1, `--replace-from ${bad} should exit non-zero`)
+    assert.ok(r3.err.includes('--replace-from must be a positive integer'), `stderr should contain diagnostic: ${r3.err}`)
   }
 })
 
-test('conversations withdraw:--submission-id required enter body;--current; illegal value errors', { timeout: 60_000 }, async (t) => {
+test('conversations withdraw: requires --submission-id in body; supports --current; rejects invalid values', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-attach-')
   const hub = await startMockHub(
     {
@@ -197,7 +197,7 @@ test('conversations withdraw:--submission-id required enter body;--current; ille
   assert.equal(hit.path, '/api/conversations/6/withdraw')
   assert.deepEqual(hit.body, { submissionId: 33 })
 
-  // --current target conversation.
+  // --current targets the conversation.
   const r2 = await runCliCaptured(
     ['conversations', 'withdraw', '--current', '--submission-id', '8', '--json'],
     makeCliEnv(hub.url, dir, { HELM_CONVERSATION_ID: '6' }),
@@ -206,16 +206,16 @@ test('conversations withdraw:--submission-id required enter body;--current; ille
   assert.equal(hub.recorded.hits.at(-1)!.path, '/api/conversations/6/withdraw')
   assert.deepEqual(hub.recorded.hits.at(-1)!.body, { submissionId: 8 })
 
-  // missing --submission-id: required validate.
+  // Missing --submission-id: required option check.
   const r3 = await runCliCaptured(['conversations', 'withdraw', '6'], env)
   assert.equal(r3.code, 1)
   assert.ok(r3.err.includes('missing required option --submission-id'))
 
-  // illegal value:0 / decimal.
+  // Invalid values: 0 / decimal / negative.
   for (const bad of ['0', '1.5', '-2']) {
     const r4 = await runCliCaptured(['conversations', 'withdraw', '6', '--submission-id', bad], env)
-    assert.equal(r4.code, 1, `--submission-id ${bad} should non-zero exit`)
-    assert.ok(r4.err.includes('--submission-id must be a positive integer'), `stderr should contains diagnose:${r4.err}`)
+    assert.equal(r4.code, 1, `--submission-id ${bad} should exit non-zero`)
+    assert.ok(r4.err.includes('--submission-id must be a positive integer'), `stderr should contain diagnostic: ${r4.err}`)
   }
 })
 
@@ -223,7 +223,7 @@ test('conversations withdraw:--submission-id required enter body;--current; ille
 // conversations reset / compact / fork
 // ---------------------------------------------------------------------------
 
-test('conversations reset:handoff enter body;--current; empty body legal', { timeout: 60_000 }, async (t) => {
+test('conversations reset: sends handoff in body; supports --current; empty body allowed', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-attach-')
   const hub = await startMockHub(
     {
@@ -241,11 +241,11 @@ test('conversations reset:handoff enter body;--current; empty body legal', { tim
   )
   assert.equal(r2.code, 0, r2.err)
   assert.equal(hub.recorded.hits.at(-1)!.path, '/api/conversations/9/reset')
-  // without handoff:body is empty object.
+  // Without handoff: body is an empty object.
   assert.deepEqual(hub.recorded.hits.at(-1)!.body, {})
 })
 
-test('conversations compact:instructions enter body;--current', { timeout: 60_000 }, async (t) => {
+test('conversations compact: sends instructions in body; supports --current', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-attach-')
   const hub = await startMockHub(
     {
@@ -254,12 +254,12 @@ test('conversations compact:instructions enter body;--current', { timeout: 60_00
     { autoRegisterCleanup: t },
   )
   const r = await runCliCaptured(
-    ['conversations', 'compact', '12', '--instructions', 'keep decide policy', '--json'],
+    ['conversations', 'compact', '12', '--instructions', 'keep architectural decisions', '--json'],
     makeCliEnv(hub.url, dir),
   )
   assert.equal(r.code, 0, r.err)
   assert.equal(JSON.parse(r.out).taskId, 77)
-  assert.deepEqual(hub.recorded.hits.at(-1)!.body, { instructions: 'keep decide policy' })
+  assert.deepEqual(hub.recorded.hits.at(-1)!.body, { instructions: 'keep architectural decisions' })
 
   const r2 = await runCliCaptured(
     ['conversations', 'compact', '--current', '--json'],
@@ -269,7 +269,7 @@ test('conversations compact:instructions enter body;--current', { timeout: 60_00
   assert.deepEqual(hub.recorded.hits.at(-1)!.body, {})
 })
 
-test('conversations fork:--entry-id required enter body;--title optional;--current', { timeout: 60_000 }, async (t) => {
+test('conversations fork: requires --entry-id in body; --title optional; supports --current', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helm-cli-attach-')
   const hub = await startMockHub(
     {
@@ -289,7 +289,7 @@ test('conversations fork:--entry-id required enter body;--title optional;--curre
   assert.equal(r2.code, 0, r2.err)
   assert.deepEqual(hub.recorded.hits.at(-1)!.body, { entryId: 8 })
 
-  // missing --entry-id: required validate.
+  // Missing --entry-id: required option check.
   const r3 = await runCliCaptured(['conversations', 'fork', '4'], env)
   assert.equal(r3.code, 1)
   assert.ok(r3.err.includes('missing required option --entry-id'))

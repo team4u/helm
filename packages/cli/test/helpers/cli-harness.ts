@@ -1,7 +1,7 @@
 /**
- * CLI test sharing fixture and run auxiliary (`packages/cli/test/helpers/cli-harness.ts`).
- * unify re- use `@helm/test-kit`  Mock Hub, temp directory automatically clean up and DTO work vendor,
- * eliminate each CLI test file in duplicate `startHub / makeEnv / run / tempDir` board code.
+ * Shared CLI test fixtures and execution helpers (`packages/cli/test/helpers/cli-harness.ts`).
+ * Reuses Mock Hub, auto-cleaned temp directories, and DTO factories from `@helm/test-kit`
+ * to avoid duplicating `startHub / makeEnv / run / tempDir` boilerplate across CLI test files.
  */
 
 import { runCli } from '../../src/index.js'
@@ -38,14 +38,14 @@ export type {
   StartMockHubOptions,
 } from '@helm/test-kit/http'
 
-/** `runCliCaptured` return standard output, standard error and exit code snapshot. */
+/** Snapshot of stdout, stderr, and exit code returned by `runCliCaptured`. */
 export interface CliCapturedResult {
   out: string
   err: string
   code: number
 }
 
-/** `runCliCaptured` optional inject items (stdin / cwd / fetch / onStdout). */
+/** Optional injections for `runCliCaptured` (stdin / cwd / fetch / onStdout). */
 export interface RunCliCapturedOptions {
   stdin?: StdinSource
   cwd?: string
@@ -54,8 +54,8 @@ export interface RunCliCapturedOptions {
 }
 
 /**
- * construct isolated CLI test environment variable (by default inject test use `HELM_HUB_URL`,`HELM_DATA_DIR`,`HELM_TOKEN`).
- * if `extra` in explicit a certain key set is `undefined`, then from return object in delete the key.
+ * Build isolated CLI test environment variables (injecting test `HELM_HUB_URL`, `HELM_DATA_DIR`, and `HELM_TOKEN` by default).
+ * Any key explicitly set to `undefined` in `extra` is deleted from the returned env object.
  */
 export function makeCliEnv(
   hubUrl: string,
@@ -75,7 +75,7 @@ export function makeCliEnv(
 }
 
 /**
- * catch style execute `runCli`, return `{ out, err, code }`, avoid test trigger touch global stdio.
+ * Execute `runCli` with captured output, returning `{ out, err, code }` without touching process stdio.
  */
 export async function runCliCaptured(
   argv: readonly string[],
@@ -101,7 +101,7 @@ export async function runCliCaptured(
 }
 
 /**
- * parse CLI `--json` pattern under stderr output error message seal `error` object.
+ * Parse the `error` object emitted on stderr by CLI `--json` mode.
  */
 export function parseCliError<TDetails = Record<string, unknown>>(result: {
   err: string

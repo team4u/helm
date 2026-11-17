@@ -1,6 +1,6 @@
 /**
- * conversation domain:conversations list/get/create/update/delete/reset/compact/fork,
- * send,abort,events watch.create/update support --node <nodeId> bind set compute node.
+ * Conversation commands: conversations list/get/create/update/delete/reset/compact/fork,
+ * send, abort, and events watch. create/update support --node <nodeId> to bind a compute node.
  */
 import type { ConversationSummary } from '@helm/protocol'
 import { CliError } from '../errors.js'
@@ -23,15 +23,15 @@ import {
 const WHEN_BUSY = ['steer', 'followUp', 'reject'] as const
 const ORIGINS = ['human', 'agent', 'trigger'] as const
 
-const convFlags: FlagSpec[] = [{ name: 'current', type: 'boolean', help: 'use env HELM_CONVERSATION_ID' }]
+const convFlags: FlagSpec[] = [{ name: 'current', type: 'boolean', help: 'use HELM_CONVERSATION_ID from environment' }]
 
 export function conversationsCommands(): CommandSpec[] {
   const cmds: CommandSpec[] = []
 
-  // ---- events watch(global SSE, and conversations domain sharing print auxiliary)----
+  // ---- events watch (global SSE, shares print helpers with conversations) ----
   cmds.push({
     path: ['events', 'watch'],
-    description: 'subscribe global SSE event stream (GET /api/events; first frame snapshot + incremental)',
+    description: 'Subscribe to the global SSE event stream (GET /api/events; initial snapshot + incremental updates)',
     async run(ctx: CommandContext) {
       parseNoFlags(ctx)
       const hub = await ctx.hub()
@@ -41,14 +41,14 @@ export function conversationsCommands(): CommandSpec[] {
       process.once('SIGTERM', onSignal)
       const render = (event: string, payload: unknown): void => {
         if (ctx.json) {
-          // NDJSON:snapshot frame and incremental frame all original output (each row a JSON)
+          // NDJSON: emit snapshot and incremental frames verbatim (one JSON value per line)
           ctx.io.out(`${JSON.stringify(payload ?? null)}\n`)
           return
         }
         if (event === 'snapshot') {
           const snap = payload as { seq?: number; conversations?: unknown[]; pendingAsks?: unknown[]; plugins?: unknown[] }
           ctx.io.out(
-            `snapshot seq=${snap.seq ?? '?'} conversation=${snap.conversations?.length ?? 0} await answer=${snap.pendingAsks?.length ?? 0} plugin=${snap.plugins?.length ?? 0}\n`,
+            `snapshot seq=${snap.seq ?? '?'} conversations=${snap.conversations?.length ?? 0} pendingAsks=${snap.pendingAsks?.length ?? 0} plugins=${snap.plugins?.length ?? 0}\n`,
           )
           return
         }
@@ -62,8 +62,8 @@ export function conversationsCommands(): CommandSpec[] {
             try {
               payload = JSON.parse(data)
             } catch {
-              // distortion shape frame: diagnose to stderr after skip, without interruption stream (keepalive etc. noise legal)
-              ctx.io.err(`helm: ignore non- JSON SSE frame (${data.slice(0, 120)})\n`)
+              // Malformed frame: log diagnostic to stderr and skip without breaking the stream (keepalive noise is expected)
+              ctx.io.err(`helm: ignoring non-JSON SSE frame (${data.slice(0, 120)})\n`)
               return
             }
             render(event, payload)
@@ -82,13 +82,13 @@ export function conversationsCommands(): CommandSpec[] {
   // ---- conversations list ----
   cmds.push({
     path: ['conversations', 'list'],
-    description: 'column out conversation (GET /api/conversations; by default only top-level conversation,--all contains sub-conversation,--parent precise directly sub-conversation)',
+    description: 'List conversations (GET /api/conversations; top-level only by default, --all includes child conversations, --parent filters direct children)',
     flags: [
-      { name: 'profile', type: 'string', help: 'by profileId filter' },
-      { name: 'status', type: 'string', help: 'by state filter (working|blocked|done|idle|error)' },
-      { name: 'tag', type: 'string', help: 'by tag filter' },
-      { name: 'all', type: 'boolean', help: 'column out all conversation (contains subagent etc. derive sub-conversation; by default only top-level)' },
-      { name: 'parent', type: 'number', help: 'only column out the conversation directly sub-conversation' },
+      { name: 'profile', type: 'string', help: 'filter by profileId' },
+      { name: 'status', type: 'string', help: 'filter by status (working|blocked|done|idle|error)' },
+      { name: 'tag', type: 'string', help: 'filter by tag' },
+      { name: 'all', type: 'boolean', help: 'list all conversations (including subagent/derived child conversations; top-level only by default)' },
+      { name: 'parent', type: 'number', help: 'list only direct child conversations of this conversation' },
     ],
     async run(ctx: CommandContext) {
       const parsed = parseFlags(
@@ -109,7 +109,7 @@ export function conversationsCommands(): CommandSpec[] {
       const all = parsed.flags.get('all') === true
       const parent = flagValue<number>(parsed.flags, 'parent')
       if (all && parsed.flags.has('parent')) {
-        throw new CliError('--all and --parent mutual exclusion: all amount column out and precise sub-conversation filter cannot also designate', 'invalid_flag_value')
+        throw new CliError('--all and --parent are mutually exclusive: cannot list all conversations and filter direct children at the same time', 'invalid_flag_value')
       }
       if (parent !== undefined) {
         if (!Number.isInteger(parent) || parent < 1) {
@@ -136,11 +136,11 @@ export function conversationsCommands(): CommandSpec[] {
   // ---- conversations get ----
   cmds.push({
     path: ['conversations', 'get'],
-    description: 'view conversation detail situation (GET /api/conversations/:id; contains page timeline)',
+    description: 'Get conversation details (GET /api/conversations/:id; includes paginated timeline)',
     flags: [
       ...convFlags,
-      { name: 'limit', type: 'number', help: 'timeline count cap (default 50)' },
-      { name: 'cursor', type: 'string', help: 'page cursor (on time response nextCursor original back pass)' },
+      { name: 'limit', type: 'number', help: 'maximum timeline entries to return (default 50)' },
+      { name: 'cursor', type: 'string', help: 'pagination cursor (pass back nextCursor from previous response)' },
     ],
     positional: '[id]',
     async run(ctx: CommandContext) {
@@ -170,10 +170,10 @@ export function conversationsCommands(): CommandSpec[] {
     },
   })
 
-  // ---- conversations entry(single timeline item all text)----
+  // ---- conversations entry (full text of a single timeline entry) ----
   cmds.push({
     path: ['conversations', 'entry'],
-    description: 'view single timeline item (GET /api/conversations/:id/entries/:entryId; detail situation throw shadow truncate after not truncate original text)',
+    description: 'Get a single timeline entry (GET /api/conversations/:id/entries/:entryId; returns full untruncated entry)',
     flags: convFlags,
     positional: '[id] <entryId>',
     async run(ctx: CommandContext) {
@@ -182,9 +182,9 @@ export function conversationsCommands(): CommandSpec[] {
       const second = parsed.positionals[1]
       assertNoExtraPositionals(parsed.positionals, 2)
       if (second === undefined && first === undefined) {
-        throw new CliError('missing <entryId> location parameter ([id] <entryId>, conversation target available --current)', 'missing_positional')
+        throw new CliError('missing <entryId> positional argument ([id] <entryId>; use --current for target conversation)', 'missing_positional')
       }
-      // single positional treated as entryId: conversation target must from --current(or env).
+      // Single positional means entryId: conversation target must come from --current (or env).
       const id = resolveConversationTarget(parsed.flags, second === undefined ? undefined : first, ctx.env)
       const entryId = parsePositiveInt((second ?? first) as string, 'entryId')
       const hub = await ctx.hub()
@@ -192,17 +192,17 @@ export function conversationsCommands(): CommandSpec[] {
     },
   })
 
-  // ---- conversations create(support --node bind set compute node)----
+  // ---- conversations create (supports --node to bind a compute node) ----
   cmds.push({
     path: ['conversations', 'create'],
-    description: 'create conversation (POST /api/conversations;--node bind set compute node)',
+    description: 'Create a conversation (POST /api/conversations; --node binds a compute node)',
     flags: [
       { name: 'title', type: 'string' },
       { name: 'profile-id', type: 'string' },
-      { name: 'node', type: 'string', help: 'bind set compute node ID(default inherit Profile or local)' },
+      { name: 'node', type: 'string', help: 'compute node ID to bind (inherits from Profile or local by default)' },
       { name: 'cwd', type: 'string' },
       { name: 'model', type: 'string' },
-      { name: 'tags', type: 'string', help: 'JSON array or comma isolate' },
+      { name: 'tags', type: 'string', help: 'JSON array or comma-separated' },
     ],
     async run(ctx: CommandContext) {
       const parsed = parseFlags(
@@ -235,18 +235,18 @@ export function conversationsCommands(): CommandSpec[] {
     },
   })
 
-  // ---- conversations update(support --node switch compute node)----
+  // ---- conversations update (supports --node to switch compute node) ----
   cmds.push({
     path: ['conversations', 'update'],
-    description: 'update conversation (PATCH /api/conversations/:id;--node switch compute node)',
+    description: 'Update a conversation (PATCH /api/conversations/:id; --node switches compute node)',
     flags: [
       ...convFlags,
       { name: 'title', type: 'string' },
-      { name: 'model', type: 'string', help: 'explicit override model provider/model; empty string (--model= or --model "") clear override and heavy compute inherit chain' },
-      { name: 'thinking', type: 'string', help: 'think Profile off/minimal/low/medium/high/xhigh/max; empty string clear override and inherit Profile / global' },
+      { name: 'model', type: 'string', help: 'explicit model override provider/model; empty string (--model= or --model "") clears override and recomputes inheritance chain' },
+      { name: 'thinking', type: 'string', help: 'thinking level off/minimal/low/medium/high/xhigh/max; empty string clears override and inherits Profile/global' },
       { name: 'profile-id', type: 'string' },
-      { name: 'node', type: 'string', help: 'switch bind set compute node ID' },
-      { name: 'cwd', type: 'string', help: 'switch target node perspective work directory' },
+      { name: 'node', type: 'string', help: 'switch bound compute node ID' },
+      { name: 'cwd', type: 'string', help: 'switch working directory on the target node' },
       { name: 'pinned', type: 'boolean' },
       { name: 'unread', type: 'boolean' },
     ],
@@ -285,7 +285,7 @@ export function conversationsCommands(): CommandSpec[] {
         if (v !== undefined) body[key] = v
       }
       if (Object.keys(body).length === 0) {
-        throw new CliError('not provide any update field (--title/--model/--thinking/--profile-id/--node/--cwd/--pinned/--unread)', 'missing_update_fields')
+        throw new CliError('no update fields provided (--title/--model/--thinking/--profile-id/--node/--cwd/--pinned/--unread)', 'missing_update_fields')
       }
       const hub = await ctx.hub()
       printResult(ctx, await hub.patch<ConversationSummary>(`/api/conversations/${id}`, body))
@@ -295,7 +295,7 @@ export function conversationsCommands(): CommandSpec[] {
   // ---- conversations delete ----
   cmds.push({
     path: ['conversations', 'delete'],
-    description: 'delete conversation (DELETE /api/conversations/:id; plugin manage right conversation subject to protect)',
+    description: 'Delete a conversation (DELETE /api/conversations/:id; plugin-managed conversations are protected)',
     flags: convFlags,
     positional: '[id]',
     async run(ctx: CommandContext) {
@@ -310,8 +310,8 @@ export function conversationsCommands(): CommandSpec[] {
   // ---- conversations reset ----
   cmds.push({
     path: ['conversations', 'reset'],
-    description: 'reset conversation context (POST /api/conversations/:id/reset; new context with handoff start)',
-    flags: [...convFlags, { name: 'handoff', type: 'string', help: 'reset after as first user message handover text' }],
+    description: 'Reset conversation context (POST /api/conversations/:id/reset; starts fresh context with handoff)',
+    flags: [...convFlags, { name: 'handoff', type: 'string', help: 'handoff text used as the first user message after reset' }],
     positional: '[id]',
     async run(ctx: CommandContext) {
       const parsed = parseFlags(
@@ -334,8 +334,8 @@ export function conversationsCommands(): CommandSpec[] {
   // ---- conversations compact ----
   cmds.push({
     path: ['conversations', 'compact'],
-    description: 'manually compress conversation context (POST /api/conversations/:id/compact; background summary task)',
-    flags: [...convFlags, { name: 'instructions', type: 'string', help: 'compress summary self define instruction' }],
+    description: 'Manually compact conversation context (POST /api/conversations/:id/compact; background summarization task)',
+    flags: [...convFlags, { name: 'instructions', type: 'string', help: 'custom instructions for compaction summary' }],
     positional: '[id]',
     async run(ctx: CommandContext) {
       const parsed = parseFlags(
@@ -358,11 +358,11 @@ export function conversationsCommands(): CommandSpec[] {
   // ---- conversations fork ----
   cmds.push({
     path: ['conversations', 'fork'],
-    description: 'from designate item fork conversation (POST /api/conversations/:id/fork)',
+    description: 'Fork a conversation from a specified entry (POST /api/conversations/:id/fork)',
     flags: [
       ...convFlags,
-      { name: 'entry-id', type: 'number', required: true, help: 'fork start point item ID' },
-      { name: 'title', type: 'string', help: 'new conversation title (default<source title> (fork))' },
+      { name: 'entry-id', type: 'number', required: true, help: 'entry ID to fork from' },
+      { name: 'title', type: 'string', help: 'title for the new conversation (defaults to "<source title> (fork)")' },
     ],
     positional: '[id]',
     async run(ctx: CommandContext) {
@@ -391,15 +391,15 @@ export function conversationsCommands(): CommandSpec[] {
   // ---- send ----
   cmds.push({
     path: ['send'],
-    description: 'to conversation commit input (POST /api/conversations/:id/input;--wait wait for this time answer)',
+    description: 'Submit input to a conversation (POST /api/conversations/:id/input; --wait waits for the reply)',
     flags: [
       ...convFlags,
-      enumFlag('when-busy', WHEN_BUSY, 'conversation correct busy when policy, by default steer'),
-      enumFlag('origin', ORIGINS, 'input source, by default human'),
-      { name: 'meta', type: 'json', help: 'self by metadata JSON object (follow input pass to turn_settled)' },
-      { name: 'attach', type: 'string', help: 'mount artifact ID(multiple use comma isolate)' },
-      { name: 'replace-from', type: 'number', help: 'from designate history item ID start override heavy (truncate the and after continue context)' },
-      { name: 'wait', type: 'boolean', help: 'wait for this time input answer (?wait=1; succeeded return ConversationInputResult)' },
+      enumFlag('when-busy', WHEN_BUSY, 'policy when conversation is busy, defaults to steer'),
+      enumFlag('origin', ORIGINS, 'input origin, defaults to human'),
+      { name: 'meta', type: 'json', help: 'free-form metadata JSON object (forwarded to turn_settled)' },
+      { name: 'attach', type: 'string', help: 'artifact ID(s) to attach (comma-separated)' },
+      { name: 'replace-from', type: 'number', help: 'rewrite and resend starting from this history entry ID (truncates it and subsequent context)' },
+      { name: 'wait', type: 'boolean', help: 'wait for the answer to this input (?wait=1; returns ConversationInputResult on success)' },
     ],
     positional: '[id] <text>',
     async run(ctx: CommandContext) {
@@ -422,7 +422,7 @@ export function conversationsCommands(): CommandSpec[] {
       const textIndex = useCurrent ? 0 : 1
       const text = requirePositional(parsed.positionals, textIndex, 'text', 'missing_text')
       if (parsed.positionals.length > textIndex + 1) {
-        throw new CliError(`redundant location parameter:${parsed.positionals.slice(textIndex + 1).join(' ')}(text contains space please add quotes)`, 'unexpected_positional')
+        throw new CliError(`unexpected positional argument: ${parsed.positionals.slice(textIndex + 1).join(' ')} (wrap text containing spaces in quotes)`, 'unexpected_positional')
       }
       const body: Record<string, unknown> = { text }
       const whenBusy = flagValue<string>(parsed.flags, 'when-busy')
@@ -450,7 +450,7 @@ export function conversationsCommands(): CommandSpec[] {
         { body, ...(wait ? { timeoutMs: 0 } : {}) },
       )
       if (wait && !ctx.json) {
-        // person class pattern: wait for succeeded direct out answer text (entry.model inside assistant text chunk)
+        // Human mode: when --wait succeeds, print the answer text directly (assistant text blocks in entry.model)
         const answer = assistantTextOfResult(result)
         printPlainText(ctx, answer !== '' ? answer : JSON.stringify(result))
         return
@@ -462,8 +462,8 @@ export function conversationsCommands(): CommandSpec[] {
   // ---- conversations withdraw ----
   cmds.push({
     path: ['conversations', 'withdraw'],
-    description: 'withdraw back queue up in input (POST /api/conversations/:id/withdraw)',
-    flags: [...convFlags, { name: 'submission-id', type: 'number', required: true, help: 'await withdraw back queue up commit ID' }],
+    description: 'Withdraw a queued input (POST /api/conversations/:id/withdraw)',
+    flags: [...convFlags, { name: 'submission-id', type: 'number', required: true, help: 'queued submission ID to withdraw' }],
     positional: '[id]',
     async run(ctx: CommandContext) {
       const parsed = parseFlags(
@@ -487,7 +487,7 @@ export function conversationsCommands(): CommandSpec[] {
   // ---- abort ----
   cmds.push({
     path: ['abort'],
-    description: 'abort conversation when before turn (POST /api/conversations/:id/abort)',
+    description: 'Abort the current turn of a conversation (POST /api/conversations/:id/abort)',
     flags: convFlags,
     positional: '[id]',
     async run(ctx: CommandContext) {
@@ -502,7 +502,7 @@ export function conversationsCommands(): CommandSpec[] {
   return cmds
 }
 
-/** ConversationInputResult.entry.model -> assistant answer text chunk concatenate. */
+/** Concatenate assistant reply text blocks from ConversationInputResult.entry.model. */
 function assistantTextOfResult(result: unknown): string {
   if (result === null || typeof result !== 'object') return ''
   const entry = (result as { entry?: { model?: unknown } }).entry
@@ -530,7 +530,7 @@ function assistantTextOfResult(result: unknown): string {
   return parts.join('\n')
 }
 
-/** SSE incremental event person class can read single row summary. */
+/** Single-line human-readable summary of an incremental SSE event. */
 function summarizeEvent(payload: unknown): string {
   if (payload === null || typeof payload !== 'object') return JSON.stringify(payload)
   const frame = payload as { seq?: unknown; event?: Record<string, unknown> & { type?: string } }

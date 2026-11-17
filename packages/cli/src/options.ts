@@ -1,17 +1,17 @@
 import process from 'node:process';
 
-/** stdin abstraction:ask etc. command read pipeline content; test inject replace body avoid real process IO. */
+/** stdin abstraction used by commands like `ask` to read piped input; tests inject stubs to avoid real process I/O. */
 export interface StdinSource {
-  /** interaction terminal decide:TTY under never read pipeline (avoid block wait for forever fewer than come EOF). */
+  /** Interactive terminal check: never read stdin under a TTY (prevents blocking indefinitely before EOF). */
   isTTY: boolean;
-  /** read pipeline all content until EOF(only non- TTY when invoke). */
+  /** Read all stdin content until EOF (only called when non-TTY). */
   readAll(): Promise<string>;
 }
 
-/** runCli inject point: test within store writer and fetch replace body replace real process IO. */
+/** Injection hooks for runCli: tests override streams and fetch to avoid touching real process I/O. */
 export interface RunCliOptions {
   env?: NodeJS.ProcessEnv;
-  /** CLI process work directory (local file path parse base allow); default process.cwd(). test inject with avoid process.chdir concurrency pollute. */
+  /** CLI process working directory (root for resolving local file paths); defaults to process.cwd(). Injected in tests to avoid process.chdir concurrency pollution. */
   cwd?: string;
   stdout?: (text: string) => void;
   stderr?: (text: string) => void;
@@ -27,7 +27,7 @@ export interface Io {
   stdin: StdinSource;
 }
 
-/** by default stdin source:TTY decide (lazy, avoid module load phase trigger touch process state) after whole read pipeline. */
+/** Default stdin source: lazy TTY check (avoids touching process state at module load), then reads stdin to completion. */
 function processStdin(): StdinSource {
   return {
     get isTTY(): boolean {
@@ -46,7 +46,7 @@ export function buildIo(options: RunCliOptions = {}): Io {
     env: options.env ?? process.env,
     out: options.stdout ?? ((text) => process.stdout.write(text)),
     err: options.stderr ?? ((text) => process.stderr.write(text)),
-    // do not in module load phase catch global fetch: to each time invoke, test can inject replace body
+    // Defer resolving global fetch until invocation so tests can swap it cleanly
     fetchImpl: options.fetch ?? ((input, init) => fetch(input, init)),
     stdin: options.stdin ?? processStdin(),
   };

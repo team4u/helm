@@ -15,17 +15,17 @@ async function consume(frames: unknown[], options: { raw?: string; mime?: string
   return { code, out, error: err ? JSON.parse(err).error : undefined }
 }
 
-test('core command help do not access Hub or motion state plugin manifest', { timeout: 60_000 }, async () => {
+test('core command help does not access Hub or dynamic plugin manifests', { timeout: 60_000 }, async () => {
   let out = ''
   const code = await runCli(['nodes', 'list', '--help'], {
     env: {}, stdout: (text) => { out += text }, stderr: (text) => assert.fail(text),
-    fetch: async () => { assert.fail('static help must not request Hub') },
+    fetch: async () => { assert.fail('static help must not call Hub') },
   })
   assert.equal(code, 0)
   assert.match(out, /nodes list/)
 })
 
-test('NDJSON first output reach when i.e. can consume, terminal state no need to first reach', { timeout: 60_000 }, async () => {
+test('NDJSON consumes first output chunk immediately without waiting for terminal frame', { timeout: 60_000 }, async () => {
   const encoder = new TextEncoder()
   let streamController: ReadableStreamDefaultController<Uint8Array>
   const stream = new ReadableStream<Uint8Array>({
@@ -50,13 +50,13 @@ test('NDJSON first output reach when i.e. can consume, terminal state no need to
   assert.equal(code, 0)
 })
 
-test('NDJSON mention before end must not unknown result when succeeded', { timeout: 60_000 }, async () => {
+test('NDJSON premature stream end never treats unknown result as success', { timeout: 60_000 }, async () => {
   const result = await consume([{ type: 'output', stream: 'stdout', text: 'started' }])
   assert.equal(result.code, 1)
   assert.equal(result.error.code, 'stream_incomplete')
 })
 
-test('NDJSON error frame keep original error code, message and detail situation', { timeout: 60_000 }, async () => {
+test('NDJSON error frame preserves original error code, message, and details', { timeout: 60_000 }, async () => {
   const result = await consume([{ type: 'error', error: { code: 'node_offline', message: 'node disconnected', details: { nodeId: 'build-box' } } }])
   assert.equal(result.code, 1)
   assert.equal(result.error.code, 'node_offline')
@@ -64,7 +64,7 @@ test('NDJSON error frame keep original error code, message and detail situation'
   assert.deepEqual(result.error.details, { nodeId: 'build-box' })
 })
 
-test('NDJSON reject corrupt frame, old terminal state and terminal state after continue output', { timeout: 60_000 }, async () => {
+test('NDJSON rejects malformed frames, legacy exit frames, and trailing frames after exit', { timeout: 60_000 }, async () => {
   const cases = [
     [{ type: 'output', text: 'missing stream' }],
     [{ type: 'exit', ok: true, exitCode: '0', timedOut: false }],
@@ -82,7 +82,7 @@ test('NDJSON reject corrupt frame, old terminal state and terminal state after c
   assert.equal(wrongMime.error.code, 'invalid_response')
 })
 
-test('NDJSON allows without newline UTF-8 tail frame,JSON output keep terminal state type and failed exit code', { timeout: 60_000 }, async () => {
+test('NDJSON handles UTF-8 trailing frame without newline; JSON output preserves exit type and failure exit code', { timeout: 60_000 }, async () => {
   const success = await consume([], { raw: JSON.stringify({ type: 'exit', ok: true, exitCode: 0, timedOut: false }) })
   assert.equal(success.code, 0)
   assert.equal(JSON.parse(success.out).type, 'exit')
