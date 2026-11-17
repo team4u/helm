@@ -495,9 +495,9 @@ export class UiRegistry {
   }
 
   /**
-   * definePlugin after completion tail unify validate: declaration style docs/sessionDocs track path already whole remove
-   * (JSON Spec migrate out kernel), this method no longer has must validate document reference; keep method supply
-   * PluginHost lifecycle hang point, await badge etc. client track derived validate requirement appear when extend.
+   * Post-`definePlugin` validation hook: declarative `docs`/`sessionDocs` paths have been removed
+   * (JSON Spec migrated out of kernel), so no document references remain to validate here. Retained as a
+   * `PluginHost` lifecycle hook point for future client-track derived validation (such as badges).
    */
   assertUiDocsRegistered(
     _pluginId: string,
@@ -508,16 +508,16 @@ export class UiRegistry {
   }
 
   /**
-   * across plugin uniqueness final inspect: all enabled plugin (contains await commit pending) UI contribution in:
-   * - profile.runtime  kind must not duplicate (many plugin declaration the same kind will let Profile
-   *   runtime table single appear ambiguity, explicit reject while non- by order swallow);
-   * - commandPalette  slash must not duplicate (/completion list trigger term must unique).
+   * Final cross-plugin uniqueness check across all enabled plugins (including `pending`):
+   * - `profile.runtime` `kind` must be unique (duplicate kinds would make the Profile runtime list ambiguous,
+   *   so conflicts reject explicitly instead of being swallowed by registration order);
+   * - `commandPalette` `slash` must be unique (`/completion` triggers must map unambiguously).
    *
-   * by PluginHost in enable commit point (enabled=true the same sync chunk) invoke:define phase
-   * mention before check only than for plugin itself (by default deactivate probe enabled:false does not occupy global name); two
-   * plugin concurrency enable when each define check all may via, but serial commit point final inspect guarantee at most
-   * a expose duplicate items (after to explicit reject and rollback).pending also in activePluginIds in when
-   * skip iterate in it, tail only sweep once, avoid the same plugin self than for mistakenly report.
+   * Called by `PluginHost` at the synchronous enable commit point (`enabled = true`): checks during `define`
+   * only inspect the plugin itself (so default-disabled probes with `enabled: false` do not reserve global
+   * names). Concurrent enables may both pass `define`, but the serialized commit check guarantees at most one
+   * succeeds and subsequent ones reject and roll back. When `pending` is also in `activePluginIds`, skip
+   * iterating it directly so the final sweep checks it once without reporting self-collisions.
    */
   assertCrossPluginUnique(pluginId: string, activePluginIds: Iterable<string>): void {
     const kindOwners = new Map<string, string>();

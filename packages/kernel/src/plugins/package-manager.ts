@@ -318,7 +318,7 @@ export class PluginPackageManager {
           try {
             summary = await this.host.enableManagedPlugin(registered.pluginId);
           } catch (err) {
-            // enable failed do not rollback install (design allows): plugin keep disabled, diagnose pass-through;
+            // Enable failure does not roll back install (by design): plugin stays disabled and diagnostics pass through;
             // register and directory all already in, record persist after restart can load retry.
             enableError = {
               message: err instanceof Error ? err.message : String(err),

@@ -137,7 +137,7 @@ export async function resolvePluginEntry(dirPath: string): Promise<string | unde
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code !== 'ENOENT' && code !== 'ENOTDIR') {
-      // EACCES etc. real IO fault explicit errors, do not mistakenly judge is pure data directory
+      // Re-throw real I/O errors such as EACCES explicitly instead of misclassifying as a plain data directory
       throw new HelmError(
         'plugin_scan_failed',
         `external plugin directory cannot read: ${manifestPath}(${err instanceof Error ? err.message : String(err)})`,
@@ -150,7 +150,7 @@ export async function resolvePluginEntry(dirPath: string): Promise<string | unde
   if (!manifestExists) {
     const probed = probeConventionEntry(dirPath);
     if (probed !== undefined) return probed;
-    // npm standard entry back:package.json helm.main / main(.js suffix heavy write same name TS source)
+    // Fallback to standard npm entrypoint: `package.json#helm.main` / `main` (`.js` rewrites to matching `.ts` source).
     const helm = readHelmField(dirPath);
     const mainSpec = helm?.main;
     if (mainSpec !== undefined) {
@@ -358,7 +358,7 @@ export function assertExternalDefinition(candidate: unknown, dirPath: string): P
 }
 
 /**
- * external plugin define archive one:
+ * External plugin definition normalization:
  * - Strip `locked` (external plugins cannot mark themselves resident/non-unloadable);
  * - Cross-plugin dependencies: merge & deduplicate code and manifest (`plugin.json` `dependencies` /
  *   `package.json#helm.dependencies`); invalid manifest values already fail when read;
@@ -513,8 +513,8 @@ export function normalizeDefinition(definition: PluginDefinition, dirPath: strin
   if (clientDeps.length > 0) {
     normalized.npmDependencies = Object.fromEntries(clientDeps.map((spec) => [spec, dirPath]));
   }
-  // Cross-plugin dependencies: merge & deduplicate code and manifest (`plugin.json` and `package.json#helm`).
-  //(self dependency by host register boundary reject).
+  // Cross-plugin dependencies: merge & deduplicate code and manifest (`plugin.json` and `package.json#helm`);
+  // self-dependencies are rejected at the host registration boundary.
   const codeDeps = normalizeCodeDependencies(dirPath, definition.id, definition.dependencies);
   const manifestDeps = [
     ...(readManifestOptional(dirPath)?.dependencies ?? []),

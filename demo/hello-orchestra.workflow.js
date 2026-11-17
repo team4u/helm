@@ -1,18 +1,18 @@
 export const meta = {
   name: "hello-orchestra",
-  description: "most small orchestration demo: two parallel lanes + aggregate",
-  phases: [{ title: "parallel hit move call" }, { title: "aggregate" }],
+  description: "最小编排演示：并行两路 + 汇总",
+  phases: [{ title: "并行打招呼" }, { title: "汇总" }],
 }
 
-log(`parameter word = ${args.word}`)
-phase("parallel hit move call")
+log(`参数 word = ${args.word}`)
+phase("并行打招呼")
 const replies = await parallel([
-  () => agent(`${args.word}translate into English, only back translate result, do not want redundant content.`, { label: "translate English" }),
-  () => agent(`${args.word}translate into day language, only back translate result, do not want redundant content.`, { label: "translate day language" }),
+  () => agent(`把「${args.word}」翻译成英文，只回翻译结果，不要多余内容。`, { label: "翻译英文" }),
+  () => agent(`把「${args.word}」翻译成日语，只回翻译结果，不要多余内容。`, { label: "翻译日语" }),
 ])
 
-phase("aggregate")
+phase("汇总")
 const joined = replies.filter(r => r !== null).join(" / ")
-const summary = await agent(`${joined}together into one sentence speech introduce, only back this one sentence speech.`, { label: "aggregate" })
+const summary = await agent(`把「${joined}」合成一句话介绍，只回这一句话。`, { label: "汇总" })
 
 return { replies, summary }

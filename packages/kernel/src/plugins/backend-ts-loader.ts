@@ -7,7 +7,7 @@
  *   `@helm/*` singleton identity consistent with the host;
  * - Resolves TS-style relative imports (`.js -> .ts/.tsx`, extensionless -> `.ts/.tsx/index.ts`)
  *   and patches ESM `.json` imports with `type: 'json'`;
- * - Rejects symlink/relative escapes outside registered roots (`reject transpile`);
+ * - Rejects symlink/relative escapes outside registered roots;
  * - Fails explicitly (`501 unsupported_backend_ts_build`) when no transpiler is injected.
  */
 import { registerHooks, type ModuleHooks } from 'node:module';
@@ -16,16 +16,16 @@ import { isAbsolute, join, relative, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { HelmError, type PluginBuildProvider } from '@helm/protocol';
 
-/** transpile function shape (PluginBuildProvider.transformBackendTs). */
+/** Transpilation function signature (`PluginBuildProvider.transformBackendTs`). */
 export type BackendTsTransformFn = PluginBuildProvider['transformBackendTs'];
 
-/** support transpile TypeScript source extension (.cts transpile artifact still by ESM load, keep single one module form). */
+/** Supported TypeScript source extensions (`.cts` output is still loaded as ESM for a uniform module model). */
 const TS_SOURCE_EXTENSIONS = new Set(['.ts', '.tsx', '.mts', '.cts']);
 
-/** Node original generate can parse JS family extension (TS habit mapping source form). */
+/** JS-family extensions natively recognized by Node (TS-style relative import sources). */
 const JS_FAMILY_EXTENSIONS = new Set(['.js', '.mjs', '.cjs']);
 
-/** registered plugin directory (realpath): reference counter and the transpile function (build port inject). */
+/** Registered plugin root directory (`realpath`): reference count and root-specific transpiler injected via the build port. */
 interface TsRootEntry {
   count: number;
   transform?: BackendTsTransformFn;
@@ -34,20 +34,21 @@ interface TsRootEntry {
 const rootRefCounts = new Map<string, TsRootEntry>();
 
 /**
- * module proxy boundary counter (subject to control hot reload use): realpath -> under one proxy proxy count number.
- * reload when for entry URL append `?helmgen=<n>` make Node ESM cache by new URL re- initialize
- * plugin module diagram;resolve hook will the mark record along plugin inside each other for import one by one layer pass broadcast,
- * while bare note symbol (@helm/*,npm package,node: inside placement) do not carries mark record original generate parse, still and host sharing
- * the same instance - - proxy boundary isolated only effect at plugin internal, never pollute outside module.
+ * Module generation counter (for controlled hot reload): root `realpath` -> next generation number.
+ * On reload, appending `?helmgen=<n>` to the entry URL makes Node's ESM cache re-initialize the
+ * plugin module graph under a fresh URL; the `resolve` hook propagates this tag across relative
+ * imports within the plugin root, while bare specifiers (`@helm/*`, npm packages, `node:` builtins)
+ * resolve normally without the tag and stay shared with the host—isolating generation reloads
+ * strictly inside the plugin root.
  */
 const rootGenerations = new Map<string, number>();
 
-/** reserved proxy boundary query parameter prefix (excludes = and value). */
+/** Reserved generation query parameter prefix (excluding `=` and value). */
 const GENERATION_QUERY_PREFIX = 'helmgen=';
 
 /**
- * extract URL  helmgen proxy count number (without mark record return undefined).
- * only in plugin inside each other for import pass broadcast chain on appear; entry by reload/doctor explicit additional.
+ * Extracts the `helmgen` generation number from a URL (or `undefined` when absent).
+ * Only appears along propagated relative-import chains inside a plugin root, seeded by reload/doctor.
  */
 function generationOfUrl(url: string): number | undefined {
   const queryStart = url.lastIndexOf('?');
@@ -61,17 +62,17 @@ function generationOfUrl(url: string): number | undefined {
   return undefined;
 }
 
-/** to file URL additional helmgen proxy count mark record (already has mark record when original return). */
+/** Appends a `helmgen` generation tag to a file URL unless one is already present. */
 function withGenerationQuery(url: string, generation: number): string {
   if (generationOfUrl(url) !== undefined) return url;
   return `${url}?${GENERATION_QUERY_PREFIX}${generation}`;
 }
 
 /**
- * reserved and return plugin under one proxy proxy count number (single tune pass increase).
- * caller (doctor / reload) use it construct carries `?helmgen=<n>` entry URL, implement subject to control hot reload:
- * the same plugin directory new proxy count module diagram independent initialize, old proxy count module in ESM cache in keep available
- * (old plugin instance continue run); bare note symbol dependency do not subject to affect (and host same instance).
+ * Reserves and returns the next monotonically increasing generation number for a plugin root.
+ * Callers (`doctor` / `reload`) attach `?helmgen=<n>` to the entry URL so a new module graph
+ * initializes independently while previous generation modules remain usable in the ESM cache
+ * and bare-specifier dependencies stay shared with the host.
  */
 export function nextPluginGeneration(rootDir: string): number {
   const root = realpathSync(rootDir);
@@ -80,24 +81,24 @@ export function nextPluginGeneration(rootDir: string): number {
   return next;
 }
 
-/** lazy register hook instance; all release when deregister(see file head lifecycle). */
+/** Lazily registered Node module hooks instance; deregistered once all roots are released. */
 let hooks: ModuleHooks | undefined;
 
-/** host side package parse: catch this module itself import.meta.resolve(across any run environment stable points to kernel work zone). */
+/** Host-side package resolver: captures this module's `import.meta.resolve` pointing at the kernel workspace. */
 const hostMetaResolve = import.meta.resolve;
 
-/** target(term method or real path) is otherwise at root inside (across platform:relative + sep, do not hard encode isolate symbol). */
+/** Returns true if `target` (lexical or real path) lies within `root` (cross-platform via `relative` + `sep`). */
 function isInsideRoot(root: string, target: string): boolean {
   const rel = relative(root, target);
   return rel === '' || (!rel.startsWith(`..${sep}`) && rel !== '..' && !isAbsolute(rel));
 }
 
-/** url is otherwise at any one registered directory of under (with realpath register;symlink URL by resolve layer consume solve). */
+/** Returns true if `url` falls under any registered plugin root (registered by `realpath`; symlinks resolved at `resolve`). */
 function isInsideAnyRoot(url: string): boolean {
   return rootOfUrl(url) !== undefined;
 }
 
-/** url which belong registered (without then undefined);transformOfRoot and decide shared use the same iterate. */
+/** Returns the registered root containing `url`, or `undefined` if outside all roots. */
 function rootOfUrl(url: string): string | undefined {
   if (rootRefCounts.size === 0 || !url.startsWith('file:')) return undefined;
   let path: string;
@@ -112,7 +113,7 @@ function rootOfUrl(url: string): string | undefined {
   return undefined;
 }
 
-/** take url which belong registered transpile function (not inject when undefined;load hook explicit reject). */
+/** Returns the transpiler registered for `url`'s root (or `undefined` when unwired; `load` rejects explicitly). */
 function transformOfRoot(url: string): BackendTsTransformFn | undefined {
   const root = rootOfUrl(url);
   return root === undefined ? undefined : rootRefCounts.get(root)?.transform;
@@ -123,7 +124,7 @@ function fileExtension(path: string): string {
   return dot === -1 ? '' : path.slice(dot);
 }
 
-/** note symbol extension (remove query/fragment; bare package name and sub- path unify take tail part segment). */
+/** Returns the extension of a specifier (stripping query/fragment; handles bare package names and subpaths uniformly). */
 function specifierExtension(specifier: string): string {
   const clean = specifier.split('?')[0]!.split('#')[0]!;
   return fileExtension(clean);
@@ -262,7 +263,7 @@ function ensureHooks(): void {
       if (!isInsideAnyRoot(url)) {
         return nextLoad(url, context);
       }
-      // extension by remove query real path compute (proxy boundary URL carry ?helmgen=N mark record).
+      // Compute extension from the path without query parameters (generation URLs carry `?helmgen=N`).
       const ext = fileExtension(fileURLToPath(url));
       // Rewrite relative `.json` imports to include `type: 'json'` since esbuild strips ESM import attributes.
       if (ext === '.json') {

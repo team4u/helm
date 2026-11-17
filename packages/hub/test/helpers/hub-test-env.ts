@@ -1,5 +1,5 @@
 /**
- * Hub integration test shared use environment and fixture auxiliary, re- use `@helm/test-kit` original language.
+ * Shared Hub integration test environment and fixture helpers, reusing `@helm/test-kit` primitives.
  */
 import { createModels } from '@earendil-works/pi-ai/models'
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
@@ -32,12 +32,12 @@ export type FauxProviderOptions = Parameters<typeof fauxProvider>[0]
 export type FauxProviderHandle = ReturnType<typeof fauxProvider>
 export type ModelsRegistry = ReturnType<typeof createModels>
 
-/** create and return official faux provider handle (`KernelRuntimeOptions.providers`). */
+/** Creates and returns an official faux provider handle (`KernelRuntimeOptions.providers`). */
 export function makeFauxProvider(options?: FauxProviderOptions): FauxProviderHandle {
   return fauxProvider(options)
 }
 
-/** create and register official faux provider  Models instance. */
+/** Creates a `Models` registry populated with an official faux provider. */
 export function makeFauxModels(options?: FauxProviderOptions): {
   models: ModelsRegistry
   faux: FauxProviderHandle
@@ -54,7 +54,7 @@ export interface CreateHubTestAppOptions extends HelmOptions {
   fauxOptions?: FauxProviderOptions
 }
 
-/** start mount faux provider real `createHelm` instance (defaults to `providers`; explicit `models` opts into external ownership). */
+/** Launches a real `createHelm` instance mounted with a faux provider (defaults to `providers`; explicit `models` opts into external ownership). */
 export async function createHubTestApp(options: CreateHubTestAppOptions = {}): Promise<{
   app: HubTestApp
   kernel: HubTestApp['kernel']
@@ -90,15 +90,15 @@ export interface HubTestEnv {
 }
 
 export interface OpenHubTestEnvOptions extends CreateHubTestAppOptions {
-  /** temp directory prefix (only in not pass dataDir when takes effect). */
+  /** Temporary directory prefix (only used when `dataDir` is omitted). */
   prefix?: string
-  /** is otherwise ignore app.close() exception (few count test in already has known base seat close defect trace when explicit open start). */
+  /** Whether to ignore errors from `app.close()` (only for tests explicitly exercising teardown defects). */
   swallowCloseError?: boolean
 }
 
 /**
- * create carries temporary `dataDir`(if not explicit provide) real `createHelm` environment.
- * only when directory by this function self create when,`close` only then will recursion clean up the directory.
+ * Creates a real `createHelm` environment with a temporary `dataDir` (when omitted).
+ * `close()` recursively removes `dataDir` only if this helper created it.
  */
 export async function openHubTestEnv(options: OpenHubTestEnvOptions = {}): Promise<HubTestEnv> {
   const {
@@ -140,7 +140,7 @@ export async function openHubTestEnv(options: OpenHubTestEnvOptions = {}): Promi
   }
 }
 
-/** memory plugin document store fixture (supply without SQLite  PluginHost governance single test use). */
+/** In-memory plugin document store fixture (for SQLite-free `PluginHost` governance unit tests). */
 export class MemoryDocStore implements PluginDocStore {
   store = new Map<string, unknown>()
   get<T>(key: string, initial: T): T {
@@ -158,7 +158,7 @@ export class MemoryDocStore implements PluginDocStore {
   async flush(): Promise<void> {}
 }
 
-/** memory plugin config store fixture (support null delete semantics, and `HelmPluginConfigStore` consistent). */
+/** In-memory plugin config store fixture (supports `null` deletion semantics matching `HelmPluginConfigStore`). */
 export class MemoryConfigStore implements PluginConfigStore {
   store = new Map<string, Record<string, unknown>>()
   get(pluginId: string): Record<string, unknown> {

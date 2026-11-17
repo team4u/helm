@@ -173,8 +173,8 @@ async function visitExternalPluginDirs(params: ScanVisitParams): Promise<void> {
       committed = true;
       registered.push(normalized.id);
     } catch (err) {
-      // single directory fault fall back register (scan / load phase;register phase define / enable
-      // fault already by isolateFailure absorb will not to this): do not block assert other directory.
+      // Single-directory fault fallback registration (scan/load phase; define/enable failures during
+      // `register` are already absorbed by `isolateFailure` and never reach here): do not block other directories.
       await registerScanFailure(plugins, dirPath, entry.name, existingIds, 'scan', err);
     } finally {
       if (!committed) releaseTsRoot();
@@ -183,11 +183,11 @@ async function visitExternalPluginDirs(params: ScanVisitParams): Promise<void> {
 }
 
 /**
- * scan `<dataDir>/plugins/` and motion state load all external plugin (by default deactivate register).
- * return this time succeeded register external plugin id list (by directory scan order).
- * single directory fault (scan / load phase) via registerFailed register is failed occupy,
- * do not block assert other directory load;register phase define / enable fault by PluginHost 
- * isolateFailure mechanism fall back is failed item, same without interruption loop.
+ * Scans `<dataDir>/plugins/` and dynamically loads all external plugins (registered disabled by default).
+ * Returns the list of external plugin IDs registered in this pass (in directory scan order).
+ * Single-directory faults in the scan/load phase are recorded as `failed` placeholders via `registerFailed`
+ * without blocking other directories; define/enable faults during `register` are downgraded to `failed` entries
+ * by `PluginHost`'s `isolateFailure` mechanism, likewise without interrupting the loop.
  */
 export async function loadExternalPlugins(dataDir: string, plugins: ExternalPluginHost): Promise<string[]> {
   const registered: string[] = [];
@@ -209,9 +209,10 @@ export async function loadExternalPlugins(dataDir: string, plugins: ExternalPlug
 }
 
 /**
- * Incrementally rescan the plugins directory: only register external plugins not yet registered (disabled by default,
- * enabled restore logic and start scan consistent - - via persist pluginEnabled); registered plugin do not reload,
- * do not dedupe, do not interference. return new register id list and skip directory counter (contains pure data directory/registered directory).
+ * Incrementally rescans the plugins directory: registers only newly discovered external plugins
+ * (disabled by default, with enabled-state restoration matching startup scan via persisted `pluginEnabled`);
+ * already-registered plugins are neither reloaded nor disturbed. Returns newly registered IDs and
+ * the skipped directory count (including pure data directories and already-registered directories).
  */
 export async function rescanExternalPlugins(
   dataDir: string,

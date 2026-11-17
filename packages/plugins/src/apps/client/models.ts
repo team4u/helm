@@ -8,7 +8,9 @@
  * only overlays enhancements — when absent we honestly fall back to the
  * plugin summary itself.
  */
-import type { PluginSummary } from '@helm/protocol'
+import { DEFAULT_HELM_LOCALE, resolveLocalizedText, type HelmLocale, type LocalizedText } from '@helm/plugin-client'
+import type { PluginSummary, ScreenSpec } from '@helm/protocol'
+import { APP_DESCRIPTION_FALLBACK, appDescriptionFromViews } from './copy.ts'
 
 export type AppCategory = 'productivity' | 'devops' | 'data' | 'finance' | 'automation' | 'other'
 
@@ -38,7 +40,7 @@ export interface AppCatalogDoc {
 export interface AppScreenRef {
   pluginId: string
   screenId: string
-  label: string
+  label: LocalizedText
 }
 
 export interface AppItem {
@@ -75,7 +77,7 @@ export function isAppPlugin(
  */
 export function mergeAppItems(
   plugins: PluginSummary[],
-  screens: Array<{ pluginId: string; spec: { id: string; label: string } }>,
+  screens: Array<{ pluginId: string; spec: Pick<ScreenSpec, 'id' | 'label'> }>,
   catalog: AppCatalogDoc | undefined,
 ): AppItem[] {
   return plugins
@@ -87,6 +89,41 @@ export function mergeAppItems(
         .map((s) => ({ pluginId: s.pluginId, screenId: s.spec.id, label: s.spec.label })),
       catalog: catalog?.apps[plugin.id],
     }))
+}
+
+/** Resolve an app's display name for the active locale, falling back to plugin ID. */
+export function resolveAppName(
+  plugin: Pick<PluginSummary, 'id' | 'name'>,
+  locale: HelmLocale = DEFAULT_HELM_LOCALE,
+): string {
+  const resolved = plugin.name !== undefined ? resolveLocalizedText(plugin.name, locale) : ''
+  return resolved.trim() !== '' ? resolved : plugin.id
+}
+
+/** Resolve a contributed screen label for the active locale, falling back to screen ID. */
+export function resolveAppScreenLabel(
+  screen: Pick<AppScreenRef, 'screenId' | 'label'>,
+  locale: HelmLocale = DEFAULT_HELM_LOCALE,
+): string {
+  const resolved = screen.label !== undefined ? resolveLocalizedText(screen.label, locale) : ''
+  return resolved.trim() !== '' ? resolved : screen.screenId
+}
+
+/** Resolve an app's description for the active locale, falling back to its view list or generic copy. */
+export function resolveAppDescription(
+  plugin: Pick<PluginSummary, 'description'>,
+  screens: readonly AppScreenRef[],
+  locale: HelmLocale = DEFAULT_HELM_LOCALE,
+): string {
+  const declared = plugin.description !== undefined ? resolveLocalizedText(plugin.description, locale) : ''
+  if (declared.trim() !== '') return declared
+  if (screens.length > 0) {
+    return appDescriptionFromViews(
+      screens.map((s) => resolveAppScreenLabel(s, locale)),
+      locale,
+    )
+  }
+  return resolveLocalizedText(APP_DESCRIPTION_FALLBACK, locale)
 }
 
 /** Parsed `tab` URL parameter: all / pinned. Only these two tabs are kept. */
@@ -108,14 +145,18 @@ export interface AppFilterState {
 }
 
 /** Filter the app list by pinned tab and keyword (name/ID/description); pure function. */
-export function filterAppItems(items: AppItem[], filter: AppFilterState): AppItem[] {
+export function filterAppItems(
+  items: AppItem[],
+  filter: AppFilterState,
+  locale: HelmLocale = DEFAULT_HELM_LOCALE,
+): AppItem[] {
   const query = filter.query.trim().toLowerCase()
   return items.filter((item) => {
     if (filter.tab === 'pinned' && item.catalog?.pinned !== true) return false
     if (query === '') return true
-    const name = (item.plugin.name ?? '').toLowerCase()
+    const name = (item.plugin.name !== undefined ? resolveLocalizedText(item.plugin.name, locale) : '').toLowerCase()
     const id = (item.plugin.id ?? '').toLowerCase()
-    const desc = (item.plugin.description ?? '').toLowerCase()
+    const desc = (item.plugin.description !== undefined ? resolveLocalizedText(item.plugin.description, locale) : '').toLowerCase()
     return name.includes(query) || id.includes(query) || desc.includes(query)
   })
 }

@@ -46,6 +46,9 @@ import {
   mergeAppItems,
   normalizeAppCategory,
   parseAppTabParam,
+  resolveAppDescription,
+  resolveAppName,
+  resolveAppScreenLabel,
   summarizeAppItems,
   type AppCatalogDoc,
   type AppItem,
@@ -59,7 +62,6 @@ import {
   APP_DELETE_CONFIRM_LABEL,
   APP_DELETING,
   APP_DETAIL_TITLE,
-  APP_DESCRIPTION_FALLBACK,
   APP_EMPTY_HINT_NO_APPS,
   APP_EMPTY_HINT_NO_MATCH,
   APP_EMPTY_NO_APPS,
@@ -104,7 +106,6 @@ import {
   appActionsSectionTitle,
   appCategoryLabel,
   appCenterStats,
-  appDescriptionFromViews,
   appDetailDialogLabel,
   appOriginJumpTitle,
   appVersionTitle,
@@ -134,12 +135,8 @@ function AppCard({
   const versionLabel = plugin.version ? `v${plugin.version.replace(/^v/, '')}` : null
   const iconName = catalog?.icon ?? 'layout-grid'
   const categoryLabel = appCategoryLabel(normalizeAppCategory(catalog?.category), locale)
-  const description =
-    plugin.description && plugin.description.trim() !== ''
-      ? plugin.description
-      : screens.length > 0
-        ? appDescriptionFromViews(screens.map((s) => s.label), locale)
-        : t(APP_DESCRIPTION_FALLBACK)
+  const displayName = resolveAppName(plugin, locale)
+  const description = resolveAppDescription(plugin, screens, locale)
 
   return (
     <div
@@ -147,7 +144,7 @@ function AppCard({
       data-app-id={plugin.id}
       role="button"
       tabIndex={0}
-      aria-label={plugin.name || plugin.id}
+      aria-label={displayName}
       onClick={() => {
         if (isReady && target !== null) onOpen(target)
       }}
@@ -164,8 +161,8 @@ function AppCard({
         </div>
         <div className="app-card-meta">
           <div className="app-card-title-row">
-            <span className="app-card-name" title={plugin.name || plugin.id}>
-              {plugin.name || plugin.id}
+            <span className="app-card-name" title={displayName}>
+              {displayName}
             </span>
             {versionLabel && <span className="app-card-version">{versionLabel}</span>}
             {catalog?.pinned === true && (
@@ -309,12 +306,8 @@ function AppDetailDrawer({
 
   const versionLabel = plugin.version ? `v${plugin.version.replace(/^v/, '')}` : null
   const categoryLabel = appCategoryLabel(normalizeAppCategory(catalog?.category), locale)
-  const description =
-    plugin.description && plugin.description.trim() !== ''
-      ? plugin.description
-      : screens.length > 0
-        ? appDescriptionFromViews(screens.map((s) => s.label), locale)
-        : t(APP_DESCRIPTION_FALLBACK)
+  const displayName = resolveAppName(plugin, locale)
+  const description = resolveAppDescription(plugin, screens, locale)
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
@@ -323,7 +316,7 @@ function AppDetailDrawer({
         <DialogContent
           className="primary-drawer-content app-detail-drawer"
           role="dialog"
-          aria-label={appDetailDialogLabel(plugin.name || plugin.id, locale)}
+          aria-label={appDetailDialogLabel(displayName, locale)}
         >
           {/* Drawer header: reuses the primary-drawer-header conventions */}
           <div className="primary-drawer-header">
@@ -334,7 +327,7 @@ function AppDetailDrawer({
               <div className="primary-drawer-title-col">
                 <div className="primary-drawer-title-row">
                   <DialogTitle className="primary-drawer-title">
-                    {plugin.name || plugin.id}
+                    {displayName}
                   </DialogTitle>
                   {versionLabel && (
                     <span className="badge badge-neutral mono" title={appVersionTitle(versionLabel, locale)}>
@@ -435,7 +428,7 @@ function AppDetailDrawer({
                     <div key={screen.screenId} className="app-detail-screen-row">
                       <span className="app-detail-screen-label" title={`${screen.pluginId}/${screen.screenId}`}>
                         <HelmIcon name="layout" size={13} />
-                        <span>{screen.label || screen.screenId}</span>
+                        <span>{resolveAppScreenLabel(screen, locale)}</span>
                       </span>
                       <div className="app-detail-screen-actions">
                         <button
@@ -572,7 +565,7 @@ export function AppCenterScreen(props: AppCenterScreenProps): ReactNode {
 
   const items = useMemo(() => mergeAppItems(plugins, screens, catalog), [plugins, screens, catalog])
   const stats = useMemo(() => summarizeAppItems(items), [items])
-  const filtered = useMemo(() => filterAppItems(items, { query, tab }), [items, query, tab])
+  const filtered = useMemo(() => filterAppItems(items, { query, tab }, locale), [items, query, tab, locale])
   const selectedItem = selectedAppId !== undefined ? items.find((i) => i.plugin.id === selectedAppId) : undefined
 
   const setTab = (next: AppTabParam) => {

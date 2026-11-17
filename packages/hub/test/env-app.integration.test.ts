@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { createServer, type Socket } from 'node:net'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 
-/** single tool invoke faux message (stopReason: toolUse). */
+/** Single tool-call faux assistant message (`stopReason: 'toolUse'`). */
 function fauxToolCallMessage(name: string, input: Record<string, unknown>): ReturnType<typeof fauxAssistantMessage> {
   return fauxAssistantMessage([fauxToolCall(name, input as Record<string, never>)], { stopReason: 'toolUse' })
 }
@@ -20,9 +20,9 @@ import type { HerdrNodeChannel } from '../../plugins/src/herdr/contracts.js'
 import { createHubTestApp, waitFor } from './helpers/hub-test-env.js'
 
 /**
- * EnvFabric → HerdrNodeChannel adapt (old public export createHerdrNodeChannel already
- * follow zero reference plugin remove; plugin now via ctx.host.nodeIpc host port inject. this test direct use
- * EnvFabric the same IPC port construct channel, and produce same link verify transport re- use node IPC).
+ * Adapts `EnvFabric` to `HerdrNodeChannel` (the old `createHerdrNodeChannel` export was removed with zero
+ * callers; plugins now receive it via `ctx.host.nodeIpc`). This test builds the channel from the same
+ * `EnvFabric` IPC ports and verifies production transport reuse of node IPC.
  */
 function herdrNodeChannelOf(fabric: EnvFabric): HerdrNodeChannel {
   return {
@@ -35,7 +35,7 @@ function herdrNodeChannelOf(fabric: EnvFabric): HerdrNodeChannel {
   }
 }
 
-// real combine layer + real WS node; model by SDK official faux provider drive determinism tool turn.
+// Real composition root + real WS node; model turns driven deterministically via official faux provider.
 async function openEnvironment() {
   const root = await mkdtemp(join(tmpdir(), 'helm-node-app-'))
   const hubDir = join(root, 'hub')
@@ -85,9 +85,8 @@ async function openEnvironment() {
       async close() {
         try { await daemon?.close() } finally {
           try { await hub.close() } finally {
-            // app.close swallow wrong: inside placement workflow stop chain store in known base seat defect
-            //(subject to control stop window inside host.listConversations guard reject), do not mask
-            // test assertion; base seat fix after can restore bare await.
+            // Swallow teardown error: built-in workflow stop chain has a known stop-window guard issue
+            // (`host.listConversations` rejected inside stop window); avoid masking test assertions here.
             try { await app.close().catch(() => {}) } finally { auth.dispose(); await rm(root, { recursive: true, force: true }) }
           }
         }
@@ -107,7 +106,7 @@ async function eventually(check: () => Promise<boolean> | boolean, description: 
   await waitFor(check, { timeoutMs: 5_000, intervalMs: 20, message: description })
 }
 
-test('across node background original generate subagent: real WS node allocate worktree, execute gate,CLI clean up original node worktree', { timeout: 60_000 }, async () => {
+test('cross-node background native subagent: real WS node allocates worktree, runs gate, CLI cleans up remote worktree', { timeout: 60_000 }, async () => {
   const env = await openEnvironment()
   try {
     const setup = await env.cli(['env', 'exec', '--node', 'integration-node', '--cwd', env.remoteCwd, '--json', '--',
@@ -115,18 +114,13 @@ test('across node background original generate subagent: real WS node allocate w
     assert.equal(setup.code, 0, setup.err)
     assert.equal(JSON.parse(setup.out).ok, true, setup.out)
     const parent = await env.app.kernel.createConversation({ nodeId: 'integration-node', cwd: env.remoteCwd })
-    // background subagent via model tool chain (subagent background:true) - - and real produce path
-    // consistent (engine startBackgroundAgent by builtin:workflow plugin internal connect line).
+    // Background subagent via model tool (`subagent background: true`), matching the production path
+    // (wired internally by `builtin:workflow`'s `startBackgroundAgent`).
     //
-    // faux response is all sharing FIFO queue; this time link shared has 4 model consume point, and except first
-    // (parent turn toolCall) outside the rest three (parent tool result turn / background subagent turn /
-    // compute gather report trigger parent turn) reach time order in real concurrency under uncertain - - must not assume
-    // parent first sub- after. is eliminate time order ambiguity,toolCall after one rule supply to the same good text answer proposal:
-    // any consume time order under subagent turn all can obtain to legal answer (run will not because response exhausted false failed,
-    // also will not real error catch into complete).
-    // old write method first set 4 answer proposal again whole override into [toolCall, parentAnswer](2 ),
-    // concurrency under subagent turn may gets empty queue (No more faux responses)→ run real
-    // failed; single file luck via only is when order transport air.
+    // Faux responses share a FIFO queue; this flow consumes 4 model steps, and the final three
+    // (parent tool-result turn, background subagent turn, and completion callback turn) arrive in
+    // non-deterministic order under real concurrency. Provide uniform text responses after `toolCall`
+    // so every ordering receives a valid reply without spurious queue-exhaustion failures.
     env.faux.setResponses([
       fauxToolCallMessage('subagent', {
         prompt: 'execute remote verify',
@@ -138,45 +132,43 @@ test('across node background original generate subagent: real WS node allocate w
     ])
     await env.app.kernel.submitInput(parent.id, 'dispatch background isolated subagent')
     await env.app.kernel.waitForIdle(parent.id)
-    // from tool output extract runId and execution(sub-conversation i.e. execute environment).
+    // Extract `runId` and execution handle from tool output.
     const detail = await env.app.kernel.getConversationDetail(parent.id, { limit: 50 })
     const toolText = JSON.stringify(detail)
     const runIdMatch = /runId\\?":\\?"(wf_[0-9a-f]+)/.exec(toolText)
-    assert.ok(runIdMatch, `subagent tool output should contains runId:${toolText.slice(0, 400)}`)
+    assert.ok(runIdMatch, `subagent tool output should contain runId: ${toolText.slice(0, 400)}`)
     const runId = runIdMatch[1]!
     const child = env.app.kernel.listConversations().find((c) => c.parentConversationId === parent.id)
-    assert.ok(child, 'background sub-conversation should already derive')
+    assert.ok(child, 'background child conversation should be spawned')
     assert.equal(child.nodeId, 'integration-node')
     const inspect = await env.app.kernel.plugins.invokeAction('builtin:workflow', 'inspect', { runId }) as { run: { status: string; error?: string; nodes?: Array<{ id: string; status: string; error?: string }> } }
     for (let i = 0; i < 300 && inspect.run.status === 'running'; i++) {
       await new Promise((resolve) => setTimeout(resolve, 20))
       inspect.run = ((await env.app.kernel.plugins.invokeAction('builtin:workflow', 'inspect', { runId })) as typeof inspect).run
     }
-    // on failure carry complete diagnose (run.error + node error): no longer bare status compare,
-    // concurrency regression when can direct refer real because.
+    // Include full diagnostics (`run.error` + node errors) on failure so concurrency regressions are self-explanatory.
     assert.equal(
       inspect.run.status,
       'completed',
-      `background subagent run should completed(actual ${inspect.run.status}):run.error=${JSON.stringify(inspect.run.error)} nodes=${JSON.stringify(inspect.run.nodes?.map((n) => ({ id: n.id, status: n.status, error: n.error })))}`,
+      `background subagent run should complete (actual ${inspect.run.status}): run.error=${JSON.stringify(inspect.run.error)} nodes=${JSON.stringify(inspect.run.nodes?.map((n) => ({ id: n.id, status: n.status, error: n.error })))}`,
     )
-    // sub-conversation bind set managed isolated tree: new contract under WorktreeAllocator belongs to builtin:workflow
-    //(KernelRuntime without worktrees port); managed id from tool output worktreeId handle
-    // extract, path = execution.effectiveCwd / sub-conversation cwd.
+    // Child conversation is bound to a managed worktree owned by `builtin:workflow`;
+    // extract `worktreeId` from tool output and check it matches child `cwd`.
     const toolEntry = JSON.stringify(
       (await env.app.kernel.getConversationDetail(parent.id, { limit: 50 })).entries
         .filter((e) => e.kind === 'pi.tool-result')
         .map((e) => e.model),
     )
     const wtIdMatch = /worktreeId=\\+"([^"\\\n]+)/.exec(toolEntry)
-    assert.ok(wtIdMatch, `tool output should contains managed worktreeId handle:${toolEntry.slice(0, 400)}`)
+    assert.ok(wtIdMatch, `tool output should contain managed worktreeId handle: ${toolEntry.slice(0, 400)}`)
     const wtId = wtIdMatch[1]!
-    assert.ok(wtId.startsWith('integration-node:'), `managed id should be nodeId:path form (remote node):${wtId}`)
+    assert.ok(wtId.startsWith('integration-node:'), `managed id should use nodeId:path format for remote nodes: ${wtId}`)
     const wtPath = wtId.slice('integration-node:'.length)
-    assert.equal(child.cwd, wtPath, 'sub-conversation cwd should be remote isolated tree')
-    assert.equal(await readFile(join(wtPath, 'remote-proof.txt'), 'utf8'), 'remote-executor', 'gate must read node dedicated belong environment, cannot back Hub execute')
-    // clean up via builtin:workflow action mapping motion state CLI command (helm worktrees cleanup).
+    assert.equal(child.cwd, wtPath, 'child conversation cwd should point to the remote worktree')
+    assert.equal(await readFile(join(wtPath, 'remote-proof.txt'), 'utf8'), 'remote-executor', 'gate must run in the node environment, never falling back to Hub')
+    // Cleanup via CLI command auto-mapped from `builtin:workflow` action (`helm worktrees cleanup`).
     const preserved = await env.cli(['worktrees', 'cleanup', '--worktree-id', wtId, '--json'])
-    assert.notEqual(preserved.code, 0, 'remote uncommitted artifact by default keep')
+    assert.notEqual(preserved.code, 0, 'remote uncommitted artifacts should be preserved by default')
     assert.equal(JSON.parse(preserved.err).error.code, 'worktree_dirty')
     const cleanup = await env.cli(['worktrees', 'cleanup', '--worktree-id', wtId, '--force', '--json'])
     assert.equal(cleanup.code, 0, cleanup.err)
@@ -186,7 +178,7 @@ test('across node background original generate subagent: real WS node allocate w
   } finally { await env.close() }
 })
 
-test('across node execute invalid input in HTTP boundary return explicit 400', { timeout: 60_000 }, async () => {
+test('cross-node execution rejects invalid input with explicit 400 at HTTP boundary', { timeout: 60_000 }, async () => {
   const env = await openEnvironment()
   try {
     for (const body of [
@@ -202,11 +194,11 @@ test('across node execute invalid input in HTTP boundary return explicit 400', {
   } finally { await env.close() }
 })
 
-test('local machine managed Shell  helm wrap entry can access real Hub', { timeout: 60_000 }, async () => {
+test('local managed shell helm wrapper accesses the real Hub', { timeout: 60_000 }, async () => {
   const env = await openEnvironment()
   try {
     const wrapper = await readFile(join(env.hubDir, 'bin', 'helm'), 'utf8')
-    assert.match(wrapper, /packages[\\/]cli[\\/]src[\\/]index\.ts/, 'source code kernel generate managed entry must use source code CLI, even if old dist still store in')
+    assert.match(wrapper, /packages[\\/]cli[\\/]src[\\/]index\.ts/, 'source-mode kernel must point managed wrapper to source CLI even if dist exists')
     const response = await env.request('/api/env/exec', { nodeId: 'local', cwd: env.hubDir, conversationId: 1, command: 'helm status --json' })
     assert.equal(response.status, 200)
     const result = await response.json() as { ok: boolean; output: string }
@@ -215,7 +207,7 @@ test('local machine managed Shell  helm wrap entry can access real Hub', { timeo
   } finally { await env.close() }
 })
 
-test('node throughout through:Herdr deactivate when CLI, real model tool and gate all in conversation bind set node execute', { timeout: 60_000 }, async () => {
+test('node end-to-end with Herdr disabled: CLI, real model tools, and gates execute on conversation-bound node', { timeout: 60_000 }, async () => {
   const env = await openEnvironment()
   try {
     assert.equal(env.app.kernel.plugins.list().find((p) => p.id === 'builtin:herdr')?.enabled, false)
@@ -223,16 +215,16 @@ test('node throughout through:Herdr deactivate when CLI, real model tool and gat
     assert.equal(listed.code, 0, listed.err)
     assert.ok(JSON.parse(listed.out).some((n: { id: string; online: boolean }) => n.id === 'integration-node' && n.online))
     const snapshot = env.app.kernel.events.currentSnapshot()
-    assert.ok(snapshot.nodes?.some((node) => node.id === 'integration-node' && node.online), 'SSE snapshot should and node manage API consistent')
+    assert.ok(snapshot.nodes?.some((node) => node.id === 'integration-node' && node.online), 'SSE snapshot should match node management API')
     assert.equal(JSON.stringify(snapshot).includes(env.token), false)
     const nodeFrames: unknown[] = []
     const releaseEvents = env.app.kernel.events.subscribe((frame) => {
       if (frame.event.type === 'node.changed') nodeFrames.push(frame)
     })
     await env.daemon.close()
-    await eventually(() => nodeFrames.length > 0, 'node disconnection must publish node.changed')
+    await eventually(() => nodeFrames.length > 0, 'node disconnect must emit node.changed')
     await env.connect()
-    await eventually(() => nodeFrames.length >= 2, 're- register must publish node.changed')
+    await eventually(() => nodeFrames.length >= 2, 're-registration must emit node.changed')
     releaseEvents()
     assert.equal(JSON.stringify(nodeFrames).includes(env.token), false)
     const conversation = await env.app.kernel.createConversation({ nodeId: 'integration-node', cwd: env.remoteCwd })
@@ -272,21 +264,21 @@ test('node throughout through:Herdr deactivate when CLI, real model tool and gat
     await env.app.kernel.profiles.save({ id: 'node-expert', nodeId: 'integration-node', cwd: env.remoteCwd })
     const profileConversation = await env.app.kernel.createConversation({ profileId: 'node-expert' })
     assert.equal(profileConversation.nodeId, 'integration-node')
-    assert.equal(profileConversation.cwd, env.remoteCwd, 'ordinary conversation and original generate dedicated household all use Profile node and directory')
-    env.faux.setResponses([fauxAssistantMessage('node dedicated household complete')])
+    assert.equal(profileConversation.cwd, env.remoteCwd, 'both normal conversations and native subagents use Profile node and cwd')
+    env.faux.setResponses([fauxAssistantMessage('node expert complete')])
     let childId: number | undefined
     await env.app.kernel.spawnAgent({
-      parentConversationId: 1, agentType: 'node-expert', prompt: 'execute node dedicated household task',
+      parentConversationId: 1, agentType: 'node-expert', prompt: 'execute node expert task',
       gate: 'test "$HELM_NODE_TEST_ORIGIN" = remote-executor && printf gate >> native-gate',
       onResolved: (info) => { childId = info.conversationId },
     })
     assert.ok(childId)
     assert.equal(env.app.kernel.getConversation(childId).nodeId, 'integration-node')
-    assert.equal(await readFile(join(env.remoteCwd, 'native-gate'), 'utf8'), 'gate', 'original generate subagent gate in target node exactly execute once')
+    assert.equal(await readFile(join(env.remoteCwd, 'native-gate'), 'utf8'), 'gate', 'native subagent gate must execute once on target node')
   } finally { await env.close() }
 })
 
-test('real HTTP stream in command end before deliver output, cancel response close remote execute', { timeout: 60_000 }, async () => {
+test('real HTTP stream delivers output before command exit and cancelling response stops remote execution', { timeout: 60_000 }, async () => {
   const env = await openEnvironment()
   try {
     const response = await env.request('/api/env/exec', {
@@ -302,7 +294,7 @@ test('real HTTP stream in command end before deliver output, cancel response clo
   } finally { await env.close() }
 })
 
-test('node stream output: across chunk secret redaction, conversation isolated and real NDJSON terminal state', { timeout: 60_000 }, async () => {
+test('node stream output: cross-chunk secret redaction, conversation isolation, and real NDJSON exit status', { timeout: 60_000 }, async () => {
   const env = await openEnvironment()
   try {
     const conversation = await env.app.kernel.createConversation({ nodeId: 'integration-node', cwd: env.remoteCwd })
@@ -336,7 +328,7 @@ test('node stream output: across chunk secret redaction, conversation isolated a
   } finally { await env.close() }
 })
 
-test('node disconnection and undo: in-flight command result unknown, reconnect do not replay, offline do not execute local machine', { timeout: 60_000 }, async () => {
+test('node disconnect and removal: in-flight command fails as unknown, reconnect does not replay, offline never runs locally', { timeout: 60_000 }, async () => {
   const env = await openEnvironment()
   try {
     const countPath = join(env.remoteCwd, 'executions.txt')
@@ -345,17 +337,17 @@ test('node disconnection and undo: in-flight command result unknown, reconnect d
       command: [process.execPath, '-e',
         'require("node:fs").appendFileSync("executions.txt", "once\\n"); setInterval(() => {}, 1000)'],
     })
-    await eventually(async () => readFile(countPath, 'utf8').then((text) => text === 'once\n', () => false), 'remote command should real start')
+    await eventually(async () => readFile(countPath, 'utf8').then((text) => text === 'once\n', () => false), 'remote command should actually start')
     await env.daemon.close()
     const result = await pending
     const body = await result.json() as { ok?: boolean; output?: string; error?: { code: string; message: string } }
     assert.equal(body.ok === true, false)
-    assert.match(JSON.stringify(body), /unknown|unknown/)
+    assert.match(JSON.stringify(body), /unknown/)
     await env.connect()
-    assert.equal(await readFile(countPath, 'utf8'), 'once\n', 'new connect cannot replay side effect command')
+    assert.equal(await readFile(countPath, 'utf8'), 'once\n', 'reconnect must not replay side-effecting command')
     const removed = await env.cli(['nodes', 'remove', 'integration-node', '--json'])
     assert.equal(removed.code, 0, removed.err)
-    await eventually(() => !env.daemon.isConnected(), 'delete node must close its existing WS')
+    await eventually(() => !env.daemon.isConnected(), 'removing node must close its active WS')
     const offline = await env.request('/api/env/exec', {
       nodeId: 'integration-node', cwd: env.hubDir,
       command: [process.execPath, '-e', 'require("node:fs").writeFileSync("must-not-run", "bad")'],
@@ -366,7 +358,7 @@ test('node disconnection and undo: in-flight command result unknown, reconnect d
   } finally { await env.close() }
 })
 
-test('across node cancel:HTTP abort pass broadcast to node and stop descendant process write', { timeout: 60_000 }, async () => {
+test('cross-node abort: HTTP abort propagates to node and terminates descendant processes', { timeout: 60_000 }, async () => {
   const env = await openEnvironment()
   try {
     const controller = new AbortController()
@@ -376,21 +368,21 @@ test('across node cancel:HTTP abort pass broadcast to node and stop descendant p
       nodeId: 'integration-node', cwd: env.remoteCwd,
       command: [process.execPath, '-e', program],
     }, controller.signal)
-    // first consume rejection, avoid cancel after test read file during appear not handle reject.
+    // Consume rejection upfront so abort does not trigger an unhandled rejection while polling.
     const completed = pending.then(() => 'completed', (error: unknown) => error)
     const heartbeatPath = join(env.remoteCwd, 'child-heartbeat')
-    await eventually(async () => readFile(heartbeatPath, 'utf8').then((text) => text.length >= 3, () => false), 'descendant process must actual run after again cancel')
+    await eventually(async () => readFile(heartbeatPath, 'utf8').then((text) => text.length >= 3, () => false), 'descendant process must actually run before abort')
     controller.abort()
     const outcome = await completed
     assert.ok(outcome instanceof Error && outcome.name === 'AbortError')
     await new Promise((resolve) => setTimeout(resolve, 200))
     const before = await readFile(heartbeatPath, 'utf8')
     await new Promise((resolve) => setTimeout(resolve, 200))
-    assert.equal(await readFile(heartbeatPath, 'utf8'), before, 'cancel must stop process tree, cannot only reject Hub Promise')
+    assert.equal(await readFile(heartbeatPath, 'utf8'), before, 'abort must kill process tree, not just reject the Hub promise')
   } finally { await env.close() }
 })
 
-test('Herdr transfer re- use real node IPC, subscribe ACK only consume once', { timeout: 60_000 }, async () => {
+test('Herdr transport reuses real node IPC and consumes subscription ACK only once', { timeout: 60_000 }, async () => {
   const env = await openEnvironment()
   const sockets = new Set<Socket>()
   const socketPath = join(env.nodeDir, 'herdr.sock')
@@ -417,23 +409,22 @@ test('Herdr transfer re- use real node IPC, subscribe ACK only consume once', { 
   let release: (() => void) | undefined
   try {
     await new Promise<void>((resolve, reject) => { ipc.once('error', reject); ipc.listen(socketPath, resolve) })
-    // EnvFabric and HerdrNodeChannel structure same construct (ipcCall/ipcSubscribe/envFor/isOnline/
-    // getNodeHubUrl all is signal signature): real node IPC produce path direct connect, without adapt layer.
+    // EnvFabric and HerdrNodeChannel are structurally compatible (same signatures on ipcCall/ipcSubscribe/envFor/isOnline/getNodeHubUrl).
     const transport = createHerdrTransport({ nodeChannel: env.app.kernel.envFabric })
     assert.deepEqual(await transport.call({ nodeId: 'integration-node', socketPath }, 'session.snapshot', {}), { source: 'remote-node-ipc' })
     const events: unknown[] = []
     const errors: unknown[] = []
     release = await transport.subscribe({ nodeId: 'integration-node', socketPath }, (event) => events.push(event), (error) => errors.push(error))
-    await eventually(() => events.length === 1, 'node already consume ACK after,Herdr still should receive first real event')
+    await eventually(() => events.length === 1, 'Herdr should receive first real event after node consumes ACK')
     assert.deepEqual(events, [{ type: 'pane.created', paneId: 'remote-pane' }])
     assert.deepEqual(errors, [])
     assert.deepEqual(calls, ['session.snapshot', 'events.subscribe'])
     for (const socket of sockets) socket.end()
-    await eventually(() => errors.length === 1, 'node IPC actual disconnect must pass reach Herdr subscribe')
-    assert.match(String(errors[0]), /subscription|disconnect|close|disconnect/)
+    await eventually(() => errors.length === 1, 'actual node IPC disconnect must propagate to Herdr subscriber')
+    assert.match(String(errors[0]), /subscription|disconnect|close/)
     release()
     release = undefined
-    await eventually(() => sockets.size === 0, 'cancel subscribe must truly close node IPC socket')
+    await eventually(() => sockets.size === 0, 'unsubscribing must close the node IPC socket')
   } finally {
     release?.()
     for (const socket of sockets) socket.destroy()

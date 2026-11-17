@@ -17,12 +17,15 @@
  *   非法 category 400、宿主端口未接线 501；
  * - 停用 builtin:apps 后动作/UI 立即消失（可停用铁律）。
  */
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { CLIENT_SHARED_GLOBALS, compilePluginClientModule, createPluginBuildProvider } from '@helm/plugin-build'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import {
   HelmError,
   type ConversationSummary,
@@ -33,6 +36,7 @@ import {
   type PluginSummary,
   type PluginUiContribution,
   type PluginUpdateResult,
+  type ScreenSpec,
 } from '@helm/protocol'
 import { PluginHost, type PluginDocStore, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
 import { createPluginHostBackendFixture } from '../../kernel/test/helpers/plugin-host-backend.js'
@@ -43,6 +47,14 @@ import {
   type AppCatalogEntry,
   type AppsCatalogDoc,
 } from '../src/apps.js'
+import { appDescriptionFromViews } from '../src/apps/client/copy.js'
+import {
+  filterAppItems,
+  mergeAppItems,
+  resolveAppDescription,
+  resolveAppName,
+  resolveAppScreenLabel,
+} from '../src/apps/client/models.js'
 import { MemoryDocStore, makeConversationSummary } from './helpers/plugin-test-env.js'
 
 // ---------------------------------------------------------------------------
@@ -749,4 +761,203 @@ test('builtin:apps 插件行为', { timeout: 60_000 }, async (t) => {
     await host.dispose()
     rmSync(dataDir, { recursive: true, force: true })
   })
+})
+
+test('apps client：双语 LocalizedText 插件摘要与 ScreenSpec.label 的模型检索及 React 渲染', { timeout: 60_000 }, async (t) => {
+  const bilingualPlugins: PluginSummary[] = [
+    {
+      id: 'task-board',
+      name: { en: 'Task Board', 'zh-CN': '任务看板' },
+      description: { en: 'Track sprint tasks', 'zh-CN': '追踪迭代任务' },
+      version: '1.0.0',
+      locked: false,
+      enabled: true,
+      hooks: [],
+      actions: [],
+      tools: [],
+    },
+    {
+      id: 'ledger-app',
+      name: { en: 'Expense Ledger', 'zh-CN': '费用账本' },
+      version: '0.5.0',
+      locked: false,
+      enabled: true,
+      hooks: [],
+      actions: [],
+      tools: [],
+    },
+  ]
+  const bilingualScreens: Array<{ pluginId: string; spec: ScreenSpec }> = [
+    {
+      pluginId: 'task-board',
+      spec: { id: 'main', label: { en: 'Board View', 'zh-CN': '看板视图' } },
+    },
+    {
+      pluginId: 'ledger-app',
+      spec: { id: 'ledger', label: { en: 'Ledger View', 'zh-CN': '账本视图' } },
+    },
+  ]
+
+  const items = mergeAppItems(bilingualPlugins, bilingualScreens, undefined)
+  assert.equal(items.length, 2)
+  assert.equal(resolveAppName(items[0]!.plugin, 'en'), 'Task Board')
+  assert.equal(resolveAppName(items[0]!.plugin, 'zh-CN'), '任务看板')
+  assert.equal(resolveAppScreenLabel(items[1]!.screens[0]!, 'en'), 'Ledger View')
+  assert.equal(resolveAppScreenLabel(items[1]!.screens[0]!, 'zh-CN'), '账本视图')
+  assert.equal(resolveAppDescription(items[0]!.plugin, items[0]!.screens, 'en'), 'Track sprint tasks')
+  assert.equal(resolveAppDescription(items[0]!.plugin, items[0]!.screens, 'zh-CN'), '追踪迭代任务')
+  assert.equal(resolveAppDescription(items[1]!.plugin, items[1]!.screens, 'en'), 'Provides views: Ledger View.')
+  assert.equal(resolveAppDescription(items[1]!.plugin, items[1]!.screens, 'zh-CN'), '提供 账本视图 视图。')
+  assert.equal(
+    appDescriptionFromViews([{ en: 'Ledger View', 'zh-CN': '账本视图' }], 'zh-CN'),
+    '提供 账本视图 视图。',
+  )
+
+  // filterAppItems 按当前 locale 对双语 name/description 做关键字匹配，且不报错
+  assert.deepEqual(
+    filterAppItems(items, { query: 'sprint', tab: 'all' }, 'en').map((i) => i.plugin.id),
+    ['task-board'],
+  )
+  assert.deepEqual(
+    filterAppItems(items, { query: '迭代', tab: 'all' }, 'zh-CN').map((i) => i.plugin.id),
+    ['task-board'],
+  )
+  assert.deepEqual(
+    filterAppItems(items, { query: '费用账本', tab: 'all' }, 'zh-CN').map((i) => i.plugin.id),
+    ['ledger-app'],
+  )
+
+  // 真实编译 apps/client/index.tsx 并挂载 React，校验卡片与详情抽屉在 en / zh-CN 下正常渲染
+  if (typeof globalThis.document === 'undefined') GlobalRegistrator.register()
+  const req = createRequire(new URL('../../plugin-client/package.json', import.meta.url))
+  const React = req('react') as typeof import('react')
+  const ReactDOM = req('react-dom') as unknown
+  const ReactDOMClient = req('react-dom/client') as {
+    createRoot: (container: Element) => { render(node: React.ReactNode): void; unmount(): void }
+  }
+  const ReactJsxRuntime = req('react/jsx-runtime') as Record<string, unknown>
+  const LucideReact = req('lucide-react') as Record<string, unknown>
+  const SDK = await import('../../plugin-client/src/index.js')
+
+  const g = globalThis as Record<string, unknown>
+  const sharedKeys = [
+    'React',
+    'IS_REACT_ACT_ENVIRONMENT',
+    CLIENT_SHARED_GLOBALS['react']!,
+    CLIENT_SHARED_GLOBALS['react-dom']!,
+    CLIENT_SHARED_GLOBALS['react-dom/client']!,
+    CLIENT_SHARED_GLOBALS['react/jsx-runtime']!,
+    CLIENT_SHARED_GLOBALS['lucide-react']!,
+    CLIENT_SHARED_GLOBALS['@helm/plugin-client']!,
+  ]
+  const prevGlobals = new Map(sharedKeys.map((k) => [k, g[k]]))
+
+  const buildDir = mkdtempSync(join(tmpdir(), 'helm-apps-client-render-'))
+  t.after(() => {
+    for (const key of sharedKeys) {
+      const prev = prevGlobals.get(key)
+      if (prev === undefined) delete g[key]
+      else g[key] = prev
+    }
+    rmSync(buildDir, { recursive: true, force: true })
+  })
+
+  g.React = React
+  g.IS_REACT_ACT_ENVIRONMENT = true
+  g[CLIENT_SHARED_GLOBALS['react']!] = React
+  g[CLIENT_SHARED_GLOBALS['react-dom']!] = ReactDOM
+  g[CLIENT_SHARED_GLOBALS['react-dom/client']!] = ReactDOMClient
+  g[CLIENT_SHARED_GLOBALS['react/jsx-runtime']!] = ReactJsxRuntime
+  g[CLIENT_SHARED_GLOBALS['lucide-react']!] = LucideReact
+  g[CLIENT_SHARED_GLOBALS['@helm/plugin-client']!] = SDK
+
+  const appsClientDir = resolve(dirname(fileURLToPath(import.meta.url)), '../src/apps/client')
+  const bundle = await compilePluginClientModule(APPS_PLUGIN_ID, appsClientDir, 'index.tsx', buildDir)
+  const mod = (await import(`data:text/javascript;base64,${Buffer.from(bundle.code, 'utf8').toString('base64')}`)) as {
+    AppCenterScreen: React.ComponentType<Record<string, unknown>>
+  }
+
+  for (const locale of ['en', 'zh-CN'] as const) {
+    const port: import('../../plugin-client/src/index.js').PluginClientHostPort = {
+      authenticated: true,
+      theme: 'dark',
+      locale,
+      conversations: [],
+      conversationDetails: {},
+      conversationLives: {},
+      pendingAsks: [],
+      loadErrors: {},
+      plugins: bilingualPlugins,
+      screens: bilingualScreens,
+      pluginDocs: { [`${APPS_PLUGIN_ID}/catalog`]: { apps: {} } },
+      ensurePluginDoc: async () => ({ apps: {} }),
+      getPluginSessionDoc: async () => undefined,
+      subscribeSessionDoc: () => () => {},
+      getSessionDocState: () => ({ hasValue: false, deleted: false, connected: false, value: undefined }),
+      invokePluginAction: async () => ({}),
+      submitConversationInput: async () => undefined,
+      openTarget: () => undefined,
+      openConversationDrawer: () => undefined,
+      openArtifactPreview: () => undefined,
+      setWorkbenchOpen: () => undefined,
+      setWorkbenchTab: () => undefined,
+      notify: () => undefined,
+      loadConversationDetail: () => undefined,
+      slots: { collectItems: () => [], renderItem: () => null },
+      markdown: { view: ({ text }) => React.createElement('div', null, text), codeBlock: ({ code }) => React.createElement('pre', null, code) },
+    }
+    const ctx = SDK.createPluginClientContext(port, APPS_PLUGIN_ID, undefined)
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = ReactDOMClient.createRoot(container)
+    try {
+      await React.act(async () => {
+        root.render(
+          React.createElement(
+            SDK.PluginClientHostContext.Provider,
+            { value: port },
+            React.createElement(
+              SDK.PluginClientContext.Provider,
+              { value: ctx },
+              React.createElement(mod.AppCenterScreen, {
+                pluginId: APPS_PLUGIN_ID,
+                screenId: 'center',
+                isSplit: false,
+                inlineDrawer: true,
+                params: { app: 'ledger-app' },
+                setParams: () => undefined,
+                close: () => undefined,
+              }),
+            ),
+          ),
+        )
+      })
+
+      const text = container.textContent ?? ''
+      assert.ok(!text.includes('[object Object]'), `${locale} 渲染输出不得出现 [object Object]`)
+      const taskCard = container.querySelector('[data-app-id="task-board"]')
+      assert.ok(taskCard !== null)
+      const ledgerCard = container.querySelector('[data-app-id="ledger-app"]')
+      assert.ok(ledgerCard !== null)
+      const drawer = container.querySelector('.app-detail-drawer')
+      assert.ok(drawer !== null)
+
+      if (locale === 'en') {
+        assert.equal(taskCard.getAttribute('aria-label'), 'Task Board')
+        assert.match(taskCard.textContent ?? '', /Track sprint tasks/)
+        assert.match(ledgerCard.textContent ?? '', /Provides views: Ledger View\./)
+        assert.equal(drawer.getAttribute('aria-label'), 'Expense Ledger app details')
+        assert.match(drawer.textContent ?? '', /Ledger View/)
+      } else {
+        assert.equal(taskCard.getAttribute('aria-label'), '任务看板')
+        assert.match(taskCard.textContent ?? '', /追踪迭代任务/)
+        assert.match(ledgerCard.textContent ?? '', /提供 账本视图 视图。/)
+        assert.equal(drawer.getAttribute('aria-label'), '费用账本 应用详情')
+        assert.match(drawer.textContent ?? '', /账本视图/)
+      }
+    } finally {
+      React.act(() => root.unmount())
+      container.remove()
+    }
+  }
 })

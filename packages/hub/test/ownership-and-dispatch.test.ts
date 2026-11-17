@@ -1,23 +1,23 @@
 /**
- * ownership right throw shoot / self raise hosting mark record / dispatch_worker across platform dispatch work verify.
+ * Verification of ownership projection, `managedByPlugin` auto-seeding, and cross-platform `dispatch_worker`.
  *
- * override:
- * 1. ConversationSummary.ownedBy real-time throw shoot: ordinary conversation and root #1 constant human;
- *    superagent enable after router/watchdog common resident conversation and dispatch_worker derive
- *    Worker in getConversation / listConversations in ownedBy === 'helm';
- *    markConversationOwnership change when publish carry most new ownedBy  conversation.upsert.
- * 2. managedByPlugin self raise:superagent/watchdog Profile and watchdog-playbooks
- *    Skill new template carry 'builtin:superagent' mark record and humanSelectable=false;
- *    since has same name user asset (without the field) one by one byte keep - - do not back fill mark record, does not override any
- *    field and file (does not migration), only patch complete missing file (partial-start).
- * 3. dispatch_worker support nodeId and across platform cwd:POSIX absolute path,Windows symbol
- *    (C:\\repo\\app / C:/repo/app) and UNC all can dispatch work; relative path explicit reject;
- *    nodeId pass-through to Worker conversation mirror (nodeId === 'local' explicit pass).
+ * Covers:
+ * 1. Real-time `ConversationSummary.ownedBy` projection: normal conversations and root `#1` stay `'human'`;
+ *    after enabling `builtin:superagent`, resident `router`/`watchdog` conversations and workers spawned
+ *    via `dispatch_worker` report `ownedBy === 'helm'` in both `getConversation` and `listConversations`;
+ *    `markConversationOwnership` changes emit `conversation.upsert` with the updated `ownedBy`.
+ * 2. `managedByPlugin` auto-seeding: newly seeded `superagent`/`watchdog` Profiles and `watchdog-playbooks`
+ *    Skill carry `'builtin:superagent'` and `humanSelectable=false`; existing user assets (lacking those
+ *    fields) are preserved byte-for-byte without backfilling, overwriting, or migrating, while only missing
+ *    files are populated (partial seeding).
+ * 3. `dispatch_worker` supports `nodeId` and cross-platform `cwd`: POSIX absolute paths, Windows drive paths
+ *    (`C:\\repo\\app` / `C:/repo/app`), and UNC paths dispatch cleanly; relative paths reject explicitly;
+ *    `nodeId` passes through to the Worker conversation mirror (`nodeId === 'local'` passed explicitly).
  *
- * combine discipline: real createHelm(true SQLite + true PluginHost)+ faux provider;
- * honest discipline: failed such as throw, do not skip, do not swallow.
+ * Composition discipline: real `createHelm` (real SQLite + real `PluginHost`) + faux provider;
+ * honesty discipline: throw on failure, never skip or swallow errors.
  *
- * runner: tsx --test; each items explicit timeout: 60_000 guard against deadlock; command add total timeout.
+ * Runner: `tsx --test`; every test declares `{ timeout: 60_000 }` against deadlocks.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -35,11 +35,11 @@ import {
   type HubTestApp,
 } from './helpers/hub-test-env.js'
 
-/** initial conversation id(SDK keep #1 bear load; ordinary conversation semantics, without produce product level special right). */
+/** Initial conversation ID (SDK reserves #1; ordinary conversation semantics, no product-level special privileges). */
 const ROOT_CONVERSATION_ID = 1 as const
 
 // ---------------------------------------------------------------------------
-// base create
+// Fixtures
 // ---------------------------------------------------------------------------
 
 interface TestEnv {
@@ -60,12 +60,12 @@ async function makeEnv(): Promise<TestEnv> {
   }
 }
 
-/** wait for say term into establish (polling, by default 5s timeout). */
+/** Polls until predicate holds (5s default timeout). */
 async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 5_000): Promise<void> {
-  await waitForCondition(predicate, { timeoutMs, message: 'waitFor timeout: condition in limit set time inside not into establish' })
+  await waitForCondition(predicate, { timeoutMs, message: 'waitFor timeout: condition did not become true within the time limit' })
 }
 
-/** from disk index doc read common resident conversation ID(doc flush after direct read SQLite). */
+/** Reads resident conversation IDs from the persisted index doc (flushes docs then reads SQLite directly). */
 async function residentIds(env: TestEnv): Promise<{ router?: number; watchdog?: number }> {
   await env.app.kernel.documentStore.flush()
   const { DatabaseSync } = await import('node:sqlite')
@@ -74,7 +74,7 @@ async function residentIds(env: TestEnv): Promise<{ router?: number; watchdog?: 
     const row = db
       .prepare("SELECT value FROM helm_plugin_docs WHERE plugin_id = '__global' AND name = 'builtin:superagent:index'")
       .get() as { value: string } | undefined
-    assert.ok(row, 'doc index should persisted')
+    assert.ok(row, 'index doc should be persisted')
     const doc = JSON.parse(row.value) as { routerConversationId?: number; watchdogConversationId?: number }
     return { router: doc.routerConversationId, watchdog: doc.watchdogConversationId }
   } finally {
@@ -83,16 +83,16 @@ async function residentIds(env: TestEnv): Promise<{ router?: number; watchdog?: 
 }
 
 // ---------------------------------------------------------------------------
-// 1. ownedBy real-time throw shoot
+// 1. Real-time ownedBy projection
 // ---------------------------------------------------------------------------
 
-test('ownership1: ordinary conversation and root ownedBy=human;superagent common resident/Worker ownedBy=helm', { timeout: 60_000 }, async () => {
+test('ownership1: normal and root conversations have ownedBy=human; superagent residents and Workers have ownedBy=helm', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     const kernel = env.app.kernel
-    // root #1 and person class ordinary conversation: default human
+    // Root #1 and human conversations: default `'human'`.
     assert.equal(kernel.getConversation(ROOT_CONVERSATION_ID).ownedBy, 'human')
-    const human = await kernel.createConversation({ title: 'person class conversation', profileId: 'assistant' })
+    const human = await kernel.createConversation({ title: 'human conversation', profileId: 'assistant' })
     assert.equal(human.ownedBy, 'human')
     assert.equal(kernel.getConversation(human.id).ownedBy, 'human')
     const listBefore = kernel.listConversations()
@@ -100,11 +100,11 @@ test('ownership1: ordinary conversation and root ownedBy=human;superagent common
       if (s.id === human.id || s.id === ROOT_CONVERSATION_ID) assert.equal(s.ownedBy, 'human')
     }
 
-    // enable superagent:router/watchdog common resident conversation helm ownership
+    // Enable superagent: router/watchdog resident conversations become `helm`-owned.
     await kernel.plugins.enable('builtin:superagent')
     const ids = await residentIds(env)
-    assert.ok(ids.router, 'router common resident conversation should already allocate')
-    assert.ok(ids.watchdog, 'watchdog common resident conversation should already allocate')
+    assert.ok(ids.router, 'router resident conversation should be allocated')
+    assert.ok(ids.watchdog, 'watchdog resident conversation should be allocated')
     assert.equal(kernel.getConversation(ids.router!).ownedBy, 'helm')
     assert.equal(kernel.getConversation(ids.watchdog!).ownedBy, 'helm')
     const listed = new Map(kernel.listConversations().map((s) => [s.id, s.ownedBy]))
@@ -113,7 +113,7 @@ test('ownership1: ordinary conversation and root ownedBy=human;superagent common
     assert.equal(listed.get(ROOT_CONVERSATION_ID), 'human')
     assert.equal(listed.get(human.id), 'human')
 
-    // dispatch_worker derive Worker:helm ownership (getConversation and list double channel)
+    // Worker spawned via `dispatch_worker`: `helm`-owned in both `getConversation` and `listConversations`.
     const dispatched = (await kernel.plugins.invokeAction('builtin:superagent', 'dispatch_worker', {
       prompt: 'ownership verify task',
     })) as { workerConversationId: number }
@@ -128,7 +128,7 @@ test('ownership1: ordinary conversation and root ownedBy=human;superagent common
   }
 })
 
-test('ownership2: markConversationOwnership change publish carry most new ownedBy  conversation.upsert', { timeout: 60_000 }, async () => {
+test('ownership2: markConversationOwnership emits conversation.upsert with updated ownedBy on change', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     const kernel = env.app.kernel
@@ -136,29 +136,29 @@ test('ownership2: markConversationOwnership change publish carry most new ownedB
     const off = kernel.events.subscribe((frame) => frames.push(frame))
     try {
       const conv = await kernel.createConversation({ title: 'ownership event verify', profileId: 'assistant' })
-      // same value mark record (human -> human): do not publish ownership event (idempotent, without change).
+      // Same-value mark (human -> human): emits no ownership event (idempotent no-op).
       frames.length = 0
       kernel.markConversationOwnership(conv.id, 'human')
       assert.equal(
         frames.filter((f) => f.event.type === 'conversation.upsert').length,
         0,
-        'same value mark record must not publish event',
+        'same-value mark must not emit an event',
       )
-      // change mark record (human -> helm): publish carry ownedBy=helm  upsert.
+      // Changed mark (human -> helm): emits `conversation.upsert` with `ownedBy=helm`.
       kernel.markConversationOwnership(conv.id, 'helm')
       const upsert = frames.find(
         (f) => f.event.type === 'conversation.upsert' && (f.event as { conversation?: { id?: number } }).conversation?.id === conv.id,
       )
-      assert.ok(upsert, 'ownership change should publish conversation.upsert')
+      assert.ok(upsert, 'ownership change should emit conversation.upsert')
       assert.equal((upsert.event as { conversation?: { ownedBy?: string } }).conversation?.ownedBy, 'helm')
       assert.equal(kernel.getConversation(conv.id).ownedBy, 'helm')
-      // fall back human: again publish and ownedBy=human.
+      // Revert back to human: emits again with `ownedBy=human`.
       frames.length = 0
       kernel.markConversationOwnership(conv.id, 'human')
       const revert = frames.find(
         (f) => f.event.type === 'conversation.upsert' && (f.event as { conversation?: { id?: number } }).conversation?.id === conv.id,
       )
-      assert.ok(revert, 'ownership fall back should publish conversation.upsert')
+      assert.ok(revert, 'ownership revert should emit conversation.upsert')
       assert.equal((revert.event as { conversation?: { ownedBy?: string } }).conversation?.ownedBy, 'human')
     } finally {
       off()
@@ -169,14 +169,14 @@ test('ownership2: markConversationOwnership change publish carry most new ownedB
 })
 
 // ---------------------------------------------------------------------------
-// 2. managedByPlugin self raise and old asset back fill
+// 2. managedByPlugin auto-seeding and preservation of existing assets
 // ---------------------------------------------------------------------------
 
-test('ownership3: new self raise asset carry managedByPlugin=builtin:superagent and humanSelectable=false', { timeout: 60_000 }, async () => {
+test('ownership3: newly seeded assets carry managedByPlugin=builtin:superagent and humanSelectable=false', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     await env.app.kernel.plugins.enable('builtin:superagent')
-    // Profile: disk profile.json and ProfileService read double channel
+    // Profile: verified via both disk `profile.json` and `ProfileService`.
     const superagentJson = JSON.parse(
       readFileSync(join(env.dataDir, 'profiles', 'superagent', 'profile.json'), 'utf8'),
     ) as { managedByPlugin?: string; humanSelectable?: boolean }
@@ -192,21 +192,21 @@ test('ownership3: new self raise asset carry managedByPlugin=builtin:superagent 
     assert.equal(profiles.find((p) => p.id === 'superagent')?.humanSelectable, false)
     assert.equal(profiles.find((p) => p.id === 'watchdog')?.managedByPlugin, 'builtin:superagent')
     assert.equal(profiles.find((p) => p.id === 'watchdog')?.humanSelectable, false)
-    // new self raise by default skill policy: router hub skills=[](disable all); watchdog only watchdog-playbooks
+    // Default skill policy on fresh seed: router hub has `skills=[]`; watchdog has only `watchdog-playbooks`.
     assert.deepEqual(
       (JSON.parse(readFileSync(join(env.dataDir, 'profiles', 'superagent', 'profile.json'), 'utf8')) as { skills?: string[] }).skills,
       [],
-      'new self raise router Profile skills should be empty array',
+      'newly seeded router Profile skills should be an empty array',
     )
     assert.deepEqual(
       (JSON.parse(readFileSync(join(env.dataDir, 'profiles', 'watchdog', 'profile.json'), 'utf8')) as { skills?: string[] }).skills,
       ['watchdog-playbooks'],
-      'new self raise watchdog Profile skills should only contains watchdog-playbooks',
+      'newly seeded watchdog Profile skills should contain only watchdog-playbooks',
     )
-    // by default assistant by itself plugin hosting, do not subject to superagent self raise take over.
+    // Default assistant remains managed by its own plugin, unaffected by superagent seeding.
     assert.equal(profiles.find((p) => p.id === 'assistant')?.managedByPlugin, 'builtin:profile')
     assert.equal(profiles.find((p) => p.id === 'assistant')?.humanSelectable, undefined)
-    // Skill:SKILL.md frontmatter and SkillService read double channel
+    // Skill: verified via both `SKILL.md` frontmatter and `SkillService`.
     const skillMd = readFileSync(join(env.dataDir, 'skills', 'watchdog-playbooks', 'SKILL.md'), 'utf8')
     assert.match(skillMd, /^managedByPlugin: builtin:superagent$/m)
     const skills = await env.app.kernel.skills.list()
@@ -216,23 +216,22 @@ test('ownership3: new self raise asset carry managedByPlugin=builtin:superagent 
   }
 })
 
-test('ownership4: since has self define Profile/Skill one by one byte keep; only patch missing file; without migration', { timeout: 60_000 }, async () => {
+test('ownership4: existing custom Profile/Skill assets are preserved byte-for-byte; only missing files are seeded; no migration', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
-    // pre- placement user self define content:superagent profile.json(user change name/model, without
-    // hosting mark record),SYSTEM.md/MEMORY.md user all text,SKILL.md user self define frontmatter
-    // and body text;references directory empty (verify missing patch complete);watchdog Profile fully missing.
+    // Pre-populate custom user files: custom superagent `profile.json` (no managed marker), `SYSTEM.md`/`MEMORY.md`,
+    // custom `SKILL.md` with empty `references/` (to verify partial seeding), and missing watchdog Profile.
     const profileJsonRaw =
-      JSON.stringify({ id: 'superagent', name: 'I router hub', model: 'faux/faux-1' }, null, 2) + '\n'
-    const systemMdRaw = '# I router hub hint\n'
+      JSON.stringify({ id: 'superagent', name: 'My Router Hub', model: 'faux/faux-1' }, null, 2) + '\n'
+    const systemMdRaw = '# My router hub prompt\n'
     const memoryMdRaw = '# Memory\n\nuser memory\n'
     const skillMdRaw = [
       '---',
       'name: watchdog-playbooks',
-      'description: I self define manual',
+      'description: My custom playbook',
       '---',
       '',
-      '# I manual body text',
+      '# My custom playbook body',
       '',
     ].join('\n')
     mkdirSync(join(env.dataDir, 'profiles', 'superagent'), { recursive: true })
@@ -243,44 +242,44 @@ test('ownership4: since has self define Profile/Skill one by one byte keep; only
     writeFileSync(join(env.dataDir, 'skills', 'watchdog-playbooks', 'SKILL.md'), skillMdRaw)
     await env.app.kernel.plugins.enable('builtin:superagent')
 
-    // since has user asset one by one byte keep: do not back fill managedByPlugin / humanSelectable,
-    // do not change write name/model,SYSTEM.md / MEMORY.md / SKILL.md original.
+    // Existing user assets preserved byte-for-byte: no backfilling `managedByPlugin`/`humanSelectable`,
+    // no rewriting `name`/`model`, `SYSTEM.md`, `MEMORY.md`, or `SKILL.md`.
     assert.equal(
       readFileSync(join(env.dataDir, 'profiles', 'superagent', 'profile.json'), 'utf8'),
       profileJsonRaw,
-      'since has profile.json must one by one byte keep (do not back fill hosting mark record)',
+      'existing profile.json must be preserved byte-for-byte without backfilling managed markers',
     )
     assert.equal(readFileSync(join(env.dataDir, 'profiles', 'superagent', 'SYSTEM.md'), 'utf8'), systemMdRaw)
     assert.equal(readFileSync(join(env.dataDir, 'profiles', 'superagent', 'MEMORY.md'), 'utf8'), memoryMdRaw)
     assert.equal(
       readFileSync(join(env.dataDir, 'skills', 'watchdog-playbooks', 'SKILL.md'), 'utf8'),
       skillMdRaw,
-      'since has SKILL.md must one by one byte keep (do not back insert frontmatter mark record row)',
+      'existing SKILL.md must be preserved byte-for-byte without inserting frontmatter markers',
     )
-    // ProfileService read such as reverse reflect user self define shape (without hosting mark record, optional optional in)
+    // ProfileService reflects the user's custom shape (no managed markers, still selectable).
     const userP = (await env.app.kernel.profiles.list()).find((p) => p.id === 'superagent')
     assert.equal(userP?.managedByPlugin, undefined)
     assert.equal(userP?.humanSelectable, undefined)
-    assert.equal(userP?.name, 'I router hub')
+    assert.equal(userP?.name, 'My Router Hub')
     assert.equal(userP?.model, 'faux/faux-1')
     const userSkill = (await env.app.kernel.skills.list()).find((s) => s.id === 'watchdog-playbooks')
     assert.equal(userSkill?.managedByPlugin, undefined)
-    assert.equal(userSkill?.description, 'I self define manual')
+    assert.equal(userSkill?.description, 'My custom playbook')
 
-    // partial-start: since has SKILL.md under missing references patch complete, but do not touch since has file
+    // Partial seeding: missing `references` under existing `SKILL.md` are seeded without touching existing files.
     const herdrRef = readFileSync(
       join(env.dataDir, 'skills', 'watchdog-playbooks', 'references', 'herdr-stalled.md'),
       'utf8',
     )
     assert.match(herdrRef, /Handling Stalled Herdr Terminal Panes/)
-    // all new write watchdog Profile carry new template field (managedByPlugin + humanSelectable=false)
+    // Freshly written watchdog Profile carries new template fields (`managedByPlugin` + `humanSelectable=false`).
     const watchdogJson = JSON.parse(
       readFileSync(join(env.dataDir, 'profiles', 'watchdog', 'profile.json'), 'utf8'),
     ) as { managedByPlugin?: string; humanSelectable?: boolean }
     assert.equal(watchdogJson.managedByPlugin, 'builtin:superagent')
     assert.equal(watchdogJson.humanSelectable, false)
 
-    // idempotent: again deactivate/enable still one by one byte do not motion since has asset
+    // Idempotent: re-enabling after disable leaves existing assets untouched byte-for-byte.
     await env.app.kernel.plugins.disable('builtin:superagent')
     await env.app.kernel.plugins.enable('builtin:superagent')
     assert.equal(
@@ -297,16 +296,16 @@ test('ownership4: since has self define Profile/Skill one by one byte keep; only
 })
 
 // ---------------------------------------------------------------------------
-// 3. dispatch_worker:nodeId and across platform cwd
+// 3. dispatch_worker: nodeId and cross-platform cwd
 // ---------------------------------------------------------------------------
 
-test('ownership5: dispatch_worker support explicit nodeId and across platform cwd(POSIX/symbol/UNC)', { timeout: 60_000 }, async () => {
+test('ownership5: dispatch_worker supports explicit nodeId and cross-platform cwd (POSIX/drive/UNC)', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     await env.app.kernel.plugins.enable('builtin:superagent')
     const kernel = env.app.kernel
 
-    // POSIX absolute path + explicit local node:cwd/nodeId pass-through to Worker conversation mirror
+    // POSIX absolute path + explicit local node: `cwd`/`nodeId` pass through to Worker conversation mirror.
     const posixWorker = (await kernel.plugins.invokeAction('builtin:superagent', 'dispatch_worker', {
       prompt: 'POSIX dispatch work',
       nodeId: 'local',
@@ -317,7 +316,7 @@ test('ownership5: dispatch_worker support explicit nodeId and across platform cw
     assert.equal(posixSummary.cwd, '/tmp/posix-worker')
     await kernel.waitForIdle(posixWorker.workerConversationId)
 
-    // Windows symbol backslash:C:\repo\app
+    // Windows drive backslash: `C:\repo\app`
     const winWorker = (await kernel.plugins.invokeAction('builtin:superagent', 'dispatch_worker', {
       prompt: 'Windows dispatch work',
       cwd: 'C:\\repo\\app',
@@ -325,15 +324,15 @@ test('ownership5: dispatch_worker support explicit nodeId and across platform cw
     assert.equal(kernel.getConversation(winWorker.workerConversationId).cwd, 'C:\\repo\\app')
     await kernel.waitForIdle(winWorker.workerConversationId)
 
-    // Windows symbol correct slash:C:/repo/app
+    // Windows drive forward slash: `C:/repo/app`
     const winFwdWorker = (await kernel.plugins.invokeAction('builtin:superagent', 'dispatch_worker', {
-      prompt: 'Windows correct slash dispatch work',
+      prompt: 'Windows forward slash dispatch work',
       cwd: 'C:/repo/app',
     })) as { workerConversationId: number }
     assert.equal(kernel.getConversation(winFwdWorker.workerConversationId).cwd, 'C:/repo/app')
     await kernel.waitForIdle(winFwdWorker.workerConversationId)
 
-    // UNC path:\\server\share\repo
+    // UNC path: `\\server\share\repo`
     const uncWorker = (await kernel.plugins.invokeAction('builtin:superagent', 'dispatch_worker', {
       prompt: 'UNC dispatch work',
       cwd: '\\\\server\\share\\repo',
@@ -341,7 +340,7 @@ test('ownership5: dispatch_worker support explicit nodeId and across platform cw
     assert.equal(kernel.getConversation(uncWorker.workerConversationId).cwd, '\\\\server\\share\\repo')
     await kernel.waitForIdle(uncWorker.workerConversationId)
 
-    // remote node ID:nodeId pass-through (node store in by target parse chain handle, this where verify pass-through)
+    // Remote node ID: `nodeId` passes through (existence handled at target resolution; pass-through tested here).
     const remoteWorker = (await kernel.plugins.invokeAction('builtin:superagent', 'dispatch_worker', {
       prompt: 'remote node dispatch work',
       nodeId: 'remote-node-1',
@@ -356,24 +355,23 @@ test('ownership5: dispatch_worker support explicit nodeId and across platform cw
   }
 })
 
-test('ownership6: dispatch_worker illegal nodeId / each other for cwd explicit reject', { timeout: 60_000 }, async () => {
+test('ownership6: dispatch_worker rejects invalid nodeId and relative cwd explicitly', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     await env.app.kernel.plugins.enable('builtin:superagent')
     const kernel = env.app.kernel
 
-    // relative path cwd:schema layer let through (minLength 1) but assertWorkerCwd explicit reject
+    // Relative cwd passes schema minLength 1 but is rejected explicitly by `assertWorkerCwd`.
     await assert.rejects(
       () => kernel.plugins.invokeAction('builtin:superagent', 'dispatch_worker', { prompt: 'x', cwd: 'repo/app' }),
       (err: unknown) => err instanceof HelmError && err.code === 'validation_error' && /跨平台绝对路径/.test(err.message),
     )
-    // symbol relative path (C:repo): dependency process cwd semantics, same reject
+    // Drive-relative path (`C:repo`) depends on process cwd and is likewise rejected.
     await assert.rejects(
       () => kernel.plugins.invokeAction('builtin:superagent', 'dispatch_worker', { prompt: 'x', cwd: 'C:repo' }),
       (err: unknown) => err instanceof HelmError && err.code === 'validation_error' && /跨平台绝对路径/.test(err.message),
     )
-    // whitespace/over long/contains path isolate symbol nodeId:schema layer i.e. reject (validatePluginInput
-    // first at handler execute;assertWorkerNodeId is direct tune path second path guard against line)
+    // Whitespace, oversized, or separator-containing `nodeId` is rejected at schema layer (`assertWorkerNodeId` guards direct calls).
     await assert.rejects(
       () => kernel.plugins.invokeAction('builtin:superagent', 'dispatch_worker', { prompt: 'x', nodeId: 'a b' }),
       (err: unknown) => err instanceof HelmError && err.code === 'validation_error' && /nodeId/.test(err.message),

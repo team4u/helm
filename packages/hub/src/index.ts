@@ -1,8 +1,9 @@
 /**
- * @helm/hub: produce product composition root public exit.
+ * @helm/hub: Public entrypoint of the product composition root.
  *
- * composition root only do two piece matter: choose built-in plugin set and default start stop (from @helm/plugins),
- * install match KernelRuntime(from @helm/kernel). kernel mechanism package can independent open
- * (KernelRuntime.open zero built-in plugin), this package do not implement any mechanism.
+ * The composition root does only two things: select built-in plugins and their default
+ * enabled states (from `@helm/plugins`), and assemble `KernelRuntime` (from `@helm/kernel`).
+ * The kernel mechanism package can be opened standalone (`KernelRuntime.open` with zero
+ * built-in plugins); this package implements no core mechanisms itself.
  */
 export { createHelm, type HelmOptions } from './app.js';

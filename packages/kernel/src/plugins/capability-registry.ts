@@ -490,8 +490,8 @@ export class CapabilityRegistry {
   }
 
   /**
-   * only read action bind set query (UI declaration reference action store in and idempotent mark record validate use).
-   * not declaration return undefined; does not trigger any register side effect.
+   * Read-only action binding lookup (used to validate action existence and `idempotent` flags referenced by UI specs).
+   * Returns `undefined` when undeclared without triggering any registration side effects.
    */
   getActionBinding(pluginId: string, actionId: string): { idempotent: boolean } | undefined {
     const entry = this.actions.get(pluginId)?.get(actionId);

@@ -1,10 +1,10 @@
 /**
- * external plugin DX closed ring HTTP contract test:POST /api/plugins/doctor,
- * POST /api/plugins/rescan,POST /api/plugins/:id/reload.
- * real routing layer (createHubHandler + real routes.ts)+ real AuthService +
- * most small PluginHost shape fake(routing layer consume KernelRuntimeLike structure shape).
- * validate: authentication gate, path dispatch,body boundary validate (dir shape/unknown field),
- * error message seal (404/422/501 pass-through HelmError structure semantics) and succeeded response shape.
+ * External plugin DX loop HTTP contract tests: `POST /api/plugins/doctor`,
+ * `POST /api/plugins/rescan`, `POST /api/plugins/:id/reload`.
+ * Uses real router (`createHubHandler` + real `routes.ts`) + real `AuthService` +
+ * minimal `PluginHost` stub matching `KernelRuntimeLike`.
+ * Validates: auth gate, route dispatch, body boundary validation (`dir` shape / unknown fields),
+ * error mapping (404/422/501 pass-through `HelmError` semantics), and success response shapes.
  */
 import test, { beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
@@ -25,7 +25,7 @@ let dataDir: string
 let token: string
 let handler: (request: Request) => Promise<Response>
 
-/** routing layer consume most small plugins port (by case override behavior). */
+/** Minimal `plugins` port consumed by the routing layer (overridden per test case). */
 let doctorImpl:
   | ((target: { dir?: string; id?: string }) => Promise<PluginDoctorReport>)
   | undefined
@@ -127,7 +127,7 @@ async function post(path: string, body?: unknown, withToken = true): Promise<Res
   )
 }
 
-test('POST /api/plugins/doctor: succeeded return report; missing dir / illegal dir / unknown field 400', { timeout: 60_000 }, async () => {
+test('POST /api/plugins/doctor: returns report on success; 400 on missing dir / non-absolute dir / unknown field', { timeout: 60_000 }, async () => {
   const report: PluginDoctorReport = {
     dir: '/abs/plugin',
     pluginId: 'p1',
@@ -142,27 +142,27 @@ test('POST /api/plugins/doctor: succeeded return report; missing dir / illegal d
   assert.equal(res.status, 200)
   assert.deepEqual(await res.json(), report)
 
-  // missing dir
+  // Missing dir
   const missing = await post('/api/plugins/doctor', {})
   assert.equal(missing.status, 400)
   assert.equal(((await missing.json()) as { error: { code: string } }).error.code, 'validation_error')
 
-  // dir non- absolute path
+  // Non-absolute dir
   const relative = await post('/api/plugins/doctor', { dir: 'relative/path' })
   assert.equal(relative.status, 400)
   assert.equal(((await relative.json()) as { error: { code: string } }).error.code, 'validation_error')
 
-  // unknown field
+  // Unknown field
   const extra = await post('/api/plugins/doctor', { dir: '/abs/plugin', force: true })
   assert.equal(extra.status, 400)
   assert.equal(((await extra.json()) as { error: { code: string } }).error.code, 'validation_error')
 
-  // authentication gate
+  // Auth gate
   const unauth = await post('/api/plugins/doctor', { dir: '/abs/plugin' }, false)
   assert.equal(unauth.status, 401)
 })
 
-test('POST /api/plugins/doctor: non- JSON body 400', { timeout: 60_000 }, async () => {
+test('POST /api/plugins/doctor: rejects non-JSON body with 400', { timeout: 60_000 }, async () => {
   const res = await handler(
     new Request('http://hub/api/plugins/doctor', {
       method: 'POST',
@@ -173,7 +173,7 @@ test('POST /api/plugins/doctor: non- JSON body 400', { timeout: 60_000 }, async 
   assert.equal(res.status, 400)
 })
 
-test('POST /api/plugins/rescan: succeeded return structure; port not provide 501', { timeout: 60_000 }, async () => {
+test('POST /api/plugins/rescan: returns result shape on success; 501 when port unavailable', { timeout: 60_000 }, async () => {
   rescanImpl = async () => ({
     registered: ['new-one'],
     skipped: 2,
@@ -187,7 +187,7 @@ test('POST /api/plugins/rescan: succeeded return structure; port not provide 501
   assert.equal(body.plugins.length, 1)
 })
 
-test('POST /api/plugins/:id/reload: succeeded return structure; preflight failed 422; not registered 404', { timeout: 60_000 }, async () => {
+test('POST /api/plugins/:id/reload: returns result shape on success; 422 on preflight failure; 404 when unregistered', { timeout: 60_000 }, async () => {
   reloadImpl = async (pluginId) => {
     if (pluginId === 'missing') throw new HelmError('unknown_plugin', 'not registered', 404, { pluginId })
     return {
@@ -209,7 +209,7 @@ test('POST /api/plugins/:id/reload: succeeded return structure; preflight failed
   assert.equal(notFound.status, 404)
   assert.equal(((await notFound.json()) as { error: { code: string } }).error.code, 'unknown_plugin')
 
-  // preflight failed (422 + doctor report pass-through)
+  // Preflight failure (422 + doctor report pass-through)
   reloadImpl = async () => {
     throw new HelmError('plugin_reload_preflight_failed', 'preflight failed', 422, {
       report: { ok: false, checks: [] },

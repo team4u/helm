@@ -16,11 +16,11 @@ import {
 
 export type HelmOptions = Omit<NonNullable<Parameters<typeof KernelRuntime.open>[0]>, 'autoResume'>;
 
-/** composition root only choose plugin and default enable state, do not provide built-in plugin dedicated belong runtime dependency. */
+/** Composition root only selects plugins and their default enabled states, providing no plugin-specific runtime dependencies. */
 export async function createHelm(options: HelmOptions = {}) {
-  // by default produce product combine inject plugin build implement (client.tsx compile + external TS transpile); caller explicit
-  //pass options.buildProvider can whole replace. kernel itself does not carry esbuild(mechanism and tool separate),
-  // not inject when kernel for client UI and TS plugin explicit reject (unsupported_client_build etc.).
+  // Default product composition injects the plugin build provider (`client.tsx` compilation + external TS transpilation);
+  // callers may override via `options.buildProvider`. The kernel itself does not bundle esbuild (separating mechanism from
+  // tooling) and explicitly rejects client UI / TS plugins when unwired (`unsupported_client_build`, etc.).
   const kernel = await KernelRuntime.open({
     ...options,
     buildProvider: options.buildProvider ?? createPluginBuildProvider(),
@@ -41,7 +41,7 @@ export async function createHelm(options: HelmOptions = {}) {
     await kernel.plugins.register(createHerdrPlugin(), { enabled: false });
     await kernel.plugins.register(createSuperAgentPlugin(), { enabled: false });
     await loadExternalPlugins(kernel.dataDir, kernel.plugins);
-    // all tool register after unify prepare -> start, finally restore SDK scheduler.
+    // Run `prepare -> start` across all registered plugins before resuming the SDK scheduler.
     await kernel.start();
     return { kernel, close: () => kernel.close() };
   } catch (error) {

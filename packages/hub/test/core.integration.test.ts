@@ -1,18 +1,18 @@
 /**
- * helm core end-to-end collection into verify (only this file and app-workflow.integration.test.ts, do not modify implement).
+ * Helm core end-to-end integration verification (never modify implementation just for tests).
  *
- * combine discipline: one rule via real combine entry createHelm(src/app.ts) group install - - true pi-durable
- * SQLite durable layer + true PluginHost + true builtin:profile / builtin:memory + true WorkflowService +
- * faux provider(pi-ai official test provider, process inside script response). do not new
- * KernelRuntime, do not self create MemoryDocStore, do not manually piece together HTTP kernel adapter.
+ * Composition discipline: wired exclusively via real createHelm (src/app.ts) — real pi-durable
+ * SQLite persistence + real PluginHost + real builtin:profile / builtin:memory + real WorkflowService +
+ * faux provider (pi-ai official test provider, in-process scripted responses). Never instantiate
+ * KernelRuntime manually, never create MemoryDocStore manually, and never hand-assemble HTTP kernel adapters.
  *
- * honest discipline:
- * - all model output all from faux.setResponses script, does not mean real outside network model capability;
- * - if runtime collection into fix (createHelm combine) not yet together this worktree while leads to
- *   import crash, the whole set test such as failed (attach diagnose), do not skip, do not mock app;
- * - each items assertion for across module contract (see each test note release), do not mirror implement detail.
+ * Honesty discipline:
+ * - All model outputs come from faux.setResponses scripts and do not imply real external network model capability;
+ * - If a runtime integration fix (createHelm wiring) is incomplete in this worktree and causes import failure,
+ *   let the whole suite fail with diagnostics rather than skipping or mocking the app;
+ * - Every assertion targets cross-module contracts (documented per test), not mirrored implementation details.
  *
- * runner: tsx --test; each items explicit timeout: 60_000 guard against deadlock.
+ * Runner: tsx --test; each test specifies timeout: 60_000 to guard against deadlocks.
  */
 import { test } from 'node:test'
 import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, existsSync, rmSync } from 'node:fs'
@@ -209,22 +209,22 @@ async function makeCoreEnv(): Promise<CoreEnv> {
 }
 
 // ---------------------------------------------------------------------------
-// base create: real createHelm combine environment
+// Fixture setup: real createHelm composition environment
 // ---------------------------------------------------------------------------
 
 interface TestEnv {
   dataDir: string
   dbPath: string
   faux: FauxProviderHandle
-  /** createHelm return complete app(real combine entry artifact). */
+  /** Complete app returned by createHelm (artifact of the real composition entrypoint). */
   app: HubTestApp
-  /** each time model request complete message (faux official TranscriptContext catch). */
+  /** Complete messages per model request (captured via official faux TranscriptContext). */
   requests: Array<{ roles: string[]; systemSections: string[]; userTexts: string[]; assistantTexts: string[] }>
-  /** first time start broadcast initial assistant entry conversation ID(by SDK root #1 bear load, ordinary conversation semantics). */
+  /** Initial assistant conversation ID seeded on first boot (backed by SDK root #1, with normal conversation semantics). */
   initialConvId: number
-  /** real commit + wait for idle (contains turn_settled hook). */
+  /** Submit real input + wait for idle (including turn_settled hook). */
   submitAndWait(text: string, opts?: { origin?: 'human' | 'agent' | 'trigger' }): Promise<void>
-  /** append a capture response to faux queue. */
+  /** Append a capture response to the faux queue. */
   capture(): FauxResponseStep
   close(): Promise<void>
 }
@@ -233,7 +233,7 @@ async function makeEnv(): Promise<TestEnv> {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-core-e2e-'))
   const dbPath = join(dataDir, 'state.sqlite')
 
-  // real combine entry: true SQLite + true PluginHost + profile/memory + WorkflowService.
+  // Real composition entrypoint: real SQLite + real PluginHost + profile/memory + WorkflowService.
   const { app, faux } = await createHubTestApp({
     dataDir,
     cwd: dataDir,
@@ -245,7 +245,7 @@ async function makeEnv(): Promise<TestEnv> {
   const initialConv = app.kernel
     .listConversations()
     .find((c) => c.profileId === 'assistant' && c.parentConversationId === undefined)
-  if (initialConv === undefined) throw new Error('first time start should broadcast assistant entry conversation')
+  if (initialConv === undefined) throw new Error('first boot should seed initial assistant conversation')
   const env: TestEnv = {
     dataDir,
     dbPath,
@@ -271,7 +271,7 @@ async function makeEnv(): Promise<TestEnv> {
             .filter((m) => m.role === 'assistant')
             .flatMap((m) => m.content.filter((c): c is { type: 'text'; text: string } => c.type === 'text').map((c) => c.text)),
         })
-        return fauxAssistantMessage('(not script response: test should explicit setResponses)')
+        return fauxAssistantMessage('(unscripted response: test should setResponses explicitly)')
       }
     },
     async close() {
@@ -282,7 +282,7 @@ async function makeEnv(): Promise<TestEnv> {
   return env
 }
 
-/** declaration skill package (real file:SKILL.md + references/*.md). */
+/** Declare a skill package (real files: SKILL.md + references/*.md). */
 function writeSkill(dataDir: string, id: string, skillMd: string, refs: Record<string, string>): void {
   const dir = join(dataDir, 'skills', id)
   mkdirSync(dir, { recursive: true })
@@ -292,7 +292,7 @@ function writeSkill(dataDir: string, id: string, skillMd: string, refs: Record<s
   for (const [name, content] of Object.entries(refs)) writeFileSync(join(refDir, name), content)
 }
 
-/** sqlite all table byte level scan: return contains needle table name set (secret do not written to the database assertion). */
+/** Byte-level scan across all SQLite tables: returns names of tables containing needle (secret non-persistence assertion). */
 function sqliteTablesContaining(dbPath: string, needle: string): string[] {
   const db = new DatabaseSync(dbPath, { readOnly: true })
   try {
@@ -311,7 +311,7 @@ function sqliteTablesContaining(dbPath: string, needle: string): string[] {
   }
 }
 
-/** assertion reject: takes precedence match HelmError(code), also accept service layer original generate Error + message. */
+/** Assert explicit rejection: prefers matching HelmError(code), also accepts native service Error + message. */
 async function rejectsExplicitly(
   fn: () => Promise<unknown>,
   expected: { code?: string; message: RegExp },
@@ -320,58 +320,58 @@ async function rejectsExplicitly(
     fn,
     (err: unknown) => {
       if (expected.code !== undefined) {
-        assert.ok(err instanceof HelmError, `should be HelmError, actual ${String(err)}`)
+        assert.ok(err instanceof HelmError, `expected HelmError, got ${String(err)}`)
         assert.equal(err.code, expected.code)
       }
       assert.match(err instanceof Error ? err.message : String(err), expected.message)
       return true
     },
-    `should explicit reject:${expected.message}`,
+    `should reject explicitly: ${expected.message}`,
   )
 }
 
 // ---------------------------------------------------------------------------
-// 1. profile/memory self raise + real turn + before_turn sections real enter model request
+// 1. profile/memory bootstrapping + real turn + before_turn sections entering model requests
 // ---------------------------------------------------------------------------
 
-test('collection into1: createHelm combine - -profile/memory by default coordinate same,locked protect,SYSTEM/MEMORY sections real enter model request,update_memory across turn durable', { timeout: 60_000 }, async () => {
+test('integration 1: createHelm wiring — profile/memory enabled together, locked protection, SYSTEM/MEMORY sections reach model request, update_memory persists across turns', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     const kernel = env.app.kernel
-    // fix after plugins getter non- undefined(runtime collection into fix target); test by contract directly consume
+    // plugins getter is non-undefined after fix (target of runtime integration fix); test consumes contract directly
     const host = kernel.plugins!
 
-    // --- self raise:locked builtin:profile + by default enable can deactivate builtin:memory
+    // --- Bootstrapping: locked builtin:profile + default-enabled disableable builtin:memory
     const profileSummary = host.list().find((p) => p.id === 'builtin:profile')
-    assert.ok(profileSummary, 'builtin:profile should via createHelm register')
+    assert.ok(profileSummary, 'builtin:profile should be registered via createHelm')
     assert.equal(profileSummary.locked, true)
     assert.equal(profileSummary.enabled, true)
     assert.ok(profileSummary.tools.includes('load_skill'))
     await rejectsExplicitly(() => host.disable('builtin:profile'), { code: 'plugin_locked', message: /lock/ })
     await rejectsExplicitly(() => host.unregister('builtin:profile'), { code: 'plugin_locked', message: /lock/ })
     const memorySummary = host.list().find((p) => p.id === 'builtin:memory')
-    assert.ok(memorySummary, 'builtin:memory should via createHelm register')
+    assert.ok(memorySummary, 'builtin:memory should be registered via createHelm')
     assert.equal(memorySummary.locked, false)
     assert.equal(memorySummary.enabled, true)
     assert.ok(memorySummary.tools.includes('update_memory'))
     assert.ok(memorySummary.actions.includes('get') && memorySummary.actions.includes('set') && memorySummary.actions.includes('configure'))
 
-    // --- conversation #1 by createHelm create (real SQLite durable)
+    // --- Conversation #1 created by createHelm (real SQLite persistence)
     const conv = kernel.getConversation(env.initialConvId)
     assert.equal(conv.id, env.initialConvId)
     assert.equal(conv.profileId, 'assistant')
 
-    // --- first round request:before_turn sections via real system message enter model (faux catch)
+    // --- Round 1 request: before_turn sections enter model via real system message (captured by faux)
     env.faux.setResponses([env.capture()])
     await env.submitAndWait('你好')
-    assert.equal(env.requests.length, 1, 'first round exactly once model request')
+    assert.equal(env.requests.length, 1, 'round 1 should issue exactly one model request')
     const first = env.requests[0]!
-    assert.ok(first.roles.includes('system'), 'request should contains role=system message (sections real inject)')
+    assert.ok(first.roles.includes('system'), 'request should include role=system message (sections really injected)')
     const allText = first.systemSections.join('\n') + first.userTexts.join('\n')
-    assert.ok(first.systemSections.some((s) => s.includes('# System Prompt')), 'SYSTEM.md should via sections inject')
-    assert.ok(allText.includes('<memory>'), 'MEMORY.md should via sections inject (<memory> package wrap)')
+    assert.ok(first.systemSections.some((s) => s.includes('# System Prompt')), 'SYSTEM.md should be injected via sections')
+    assert.ok(allText.includes('<memory>'), 'MEMORY.md should be injected via sections (<memory> wrapper)')
 
-    // --- real tool link:faux start update_memory → file append → under one round request visible
+    // --- Real tool pipeline: faux triggers update_memory -> writes file -> visible in next round request
     const MEMORY_FACT = 'FAVORITE_COLOR=cyan porcelain green'
     env.requests.length = 0
     env.faux.setResponses([
@@ -384,28 +384,28 @@ test('collection into1: createHelm combine - -profile/memory by default coordina
     await env.submitAndWait('please record I most like color is cyan porcelain green')
 
     const memoryFile = await new MemoryStore(createProfileFileHost(kernel.dataDir)).getMemory('assistant')
-    assert.ok(memoryFile.includes(MEMORY_FACT), 'MEMORY.md should contains new memory (real file write)')
+    assert.ok(memoryFile.includes(MEMORY_FACT), 'MEMORY.md should contain new memory (real file write)')
 
-    // wrap-up round request carries new memory (across module: tool write → before_turn heavy read → model request)
+    // Wrap-up round request carries updated memory (cross-module: tool write -> before_turn re-read -> model request)
     const afterTurn = env.requests[0]!
     assert.ok(
       afterTurn.systemSections.join('\n').includes(MEMORY_FACT),
-      'after write request system sections should contains new memory',
+      'system sections after write should contain new memory',
     )
 
-    // --- third round: across turn durable (memory is not only in tool when round visible)
+    // --- Round 3: persists across turns (memory is not only visible within the tool round)
     env.requests.length = 0
     env.faux.setResponses([env.capture()])
-    await env.submitAndWait('I before say like what color?')
+    await env.submitAndWait('what color did I say I liked before?')
     assert.ok(
       env.requests[0]!.systemSections.join('\n').includes(MEMORY_FACT),
       'new turn request still contains memory',
     )
 
-    // persist core verify:entry real written to the database (the same state.sqlite)
+    // Persistence core verification: entries really written to DB (same state.sqlite)
     assert.ok(
       sqliteTablesContaining(env.dbPath, MEMORY_FACT).length > 0,
-      'memory content should real persist (pi_entries)',
+      'memory content should be persisted in sqlite',
     )
   } finally {
     await env.close()
@@ -413,10 +413,10 @@ test('collection into1: createHelm combine - -profile/memory by default coordina
 })
 
 // ---------------------------------------------------------------------------
-// 2. load_skill:references can read + out of bounds reject (real SkillService guard against defend)
+// 2. load_skill: readable references + out-of-bounds rejection (real SkillService defense)
 // ---------------------------------------------------------------------------
 
-test('collection into2: load_skill read SKILL.md and references/ sub- file, path through exceeds/absolute path/unknown skill by explicit reject', { timeout: 60_000 }, async () => {
+test('integration 2: load_skill reads SKILL.md and references/ subfiles; path traversal / absolute path / unknown skill explicitly rejected', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     writeSkill(
@@ -432,14 +432,14 @@ test('collection into2: load_skill read SKILL.md and references/ sub- file, path
       { skillId: 'deploy-playbook' },
       { conversationId: env.initialConvId },
     )) as { text: string }
-    assert.ok(readMain.text.includes('deploy'), 'default read SKILL.md')
+    assert.ok(readMain.text.includes('deploy'), 'defaults to reading SKILL.md')
 
     const readRef = (await host.executeTool(
       'load_skill',
       { skillId: 'deploy-playbook', path: 'references/rollback.md' },
       { conversationId: env.initialConvId },
     )) as { text: string }
-    assert.ok(readRef.text.includes('helm rollback'), 'should can on demand read references sub- file')
+    assert.ok(readRef.text.includes('helm rollback'), 'should read references subfiles on demand')
 
     await rejectsExplicitly(
       () => host.executeTool('load_skill', { skillId: 'deploy-playbook', path: '../profiles/assistant/MEMORY.md' }, { conversationId: env.initialConvId }),
@@ -454,53 +454,53 @@ test('collection into2: load_skill read SKILL.md and references/ sub- file, path
       { message: /missing|no-such-skill/ },
     )
 
-    // model directory inject:before_turn  <available_skills> segment contains skill and references path
+    // Model catalog injection: before_turn <available_skills> section contains skill and references paths
     env.faux.setResponses([env.capture()])
     await env.submitAndWait('read db-migrate manual')
     const catalog = env.requests[0]!.systemSections.find((s) => s.includes('<available_skills>'))
-    assert.ok(catalog, '<available_skills> segment should inject model request')
-    assert.ok(catalog!.includes('deploy-playbook'), 'directory should contains skill id')
-    assert.ok(catalog!.includes('references/db-migrate.md'), 'directory should contains references path')
+    assert.ok(catalog, '<available_skills> section should be injected into model request')
+    assert.ok(catalog!.includes('deploy-playbook'), 'catalog should contain skill id')
+    assert.ok(catalog!.includes('references/db-migrate.md'), 'catalog should contain references path')
   } finally {
     await env.close()
   }
 })
 
 // ---------------------------------------------------------------------------
-// 2.5 helm-cli system level inside placement skill self raise (builtin:profile service.start idempotent patch complete)
+// 2.5 helm-cli built-in system skill bootstrapping (builtin:profile service.start idempotent completion)
 // ---------------------------------------------------------------------------
 
-test('collection into2.5: createHelm start i.e. sync helm-cli skill (managed override),load_skill can read SKILL.md and three references, restart override back source code version', { timeout: 60_000 }, async () => {
+test('integration 2.5: createHelm startup syncs helm-cli skill (managed overwrite), load_skill reads SKILL.md and three references, restart restores source version', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     const kernel = env.app.kernel
-    // start i.e. contains helm-cli(managedByPlugin = builtin:profile, contains three references)
+    // At startup, helm-cli exists (managedByPlugin = builtin:profile, with three references)
     const skills = await kernel.skills.list()
     const summary = skills.find((s) => s.id === 'helm-cli')
-    assert.ok(summary, 'helm-cli skill should via builtin:profile start self raise')
+    assert.ok(summary, 'helm-cli skill should be bootstrapped by builtin:profile startup')
     assert.equal(summary.managedByPlugin, 'builtin:profile')
     for (const ref of [
       'references/workflows-and-agents.md',
       'references/skill-and-plugin-dev.md',
       'references/plugin-client-code-splitting.md',
     ]) {
-      assert.ok(summary.references.includes(ref), `references should contains ${ref}`)
+      assert.ok(summary.references.includes(ref), `references should contain ${ref}`)
     }
-    // generative-ui skill by builtin:json-render plugin self raise (by default enable), follow plugin start stop filter
+    // generative-ui skill is bootstrapped by builtin:json-render plugin (enabled by default), filtered by plugin toggle
     const genUi = skills.find((sk) => sk.id === 'generative-ui')
-    assert.ok(genUi, 'generative-ui skill should via builtin:json-render start self raise')
+    assert.ok(genUi, 'generative-ui skill should be bootstrapped by builtin:json-render startup')
     assert.equal(genUi.managedByPlugin, 'builtin:json-render')
 
-    // ordinary turn only inject skill directory, does not UI/workflow manual all text stuff common resident context.
+    // Normal turns inject only the skill catalog, never stuffing full UI/workflow manuals into ambient context.
     env.faux.setResponses([env.capture()])
     await env.submitAndWait('你好')
     const sections = env.requests[0]!.systemSections.join('\n')
-    assert.ok(sections.includes('helm-cli'), 'ordinary turn should can discover inside create skill')
-    assert.ok(sections.includes('generative-ui'), 'directory should contains json-render plugin skill (rich render entry)')
-    assert.ok(!sections.includes('MetricGrid'), 'UI component dictionary must not common resident')
-    assert.ok(!sections.includes('workflow(ref, args?)'), 'workflow manual must not common resident')
+    assert.ok(sections.includes('helm-cli'), 'normal turns should discover built-in skills')
+    assert.ok(sections.includes('generative-ui'), 'catalog should contain json-render plugin skill (rich render entry)')
+    assert.ok(!sections.includes('MetricGrid'), 'UI component dictionary must not stay permanently resident')
+    assert.ok(!sections.includes('workflow(ref, args?)'), 'workflow manual must not stay permanently resident')
 
-    // load_skill tool link:SKILL.md and three references all can read and content quality
+    // load_skill tool chain: SKILL.md and all three references are readable with expected content
     const host = kernel.plugins!
     const readSkill = (path?: string) =>
       host.executeTool(
@@ -509,59 +509,59 @@ test('collection into2.5: createHelm start i.e. sync helm-cli skill (managed ove
         { conversationId: env.initialConvId },
       ) as Promise<{ text: string }>
     const main = await readSkill()
-    assert.ok(main.text.includes('helm') && main.text.includes('--json'), 'SKILL.md should contains CLI iron rule')
+    assert.ok(main.text.includes('helm') && main.text.includes('--json'), 'SKILL.md should contain CLI iron rules')
     const ui = await host.executeTool(
       'load_skill',
       { skillId: 'generative-ui' },
       { conversationId: env.initialConvId },
     ) as { text: string }
-    assert.ok(ui.text.includes('```ui'), 'generative-ui skill should contains surround column use method')
-    assert.ok(ui.text.includes('primitives.md'), 'should points to original language contract references')
+    assert.ok(ui.text.includes('```ui'), 'generative-ui skill should contain fence block usage')
+    assert.ok(ui.text.includes('primitives.md'), 'should point to primitive contract references')
     const wf = await readSkill('references/workflows-and-agents.md')
-    assert.ok(wf.text.includes('pipeline') && wf.text.includes('resumeFromRunId'), 'workflows should contains orchestration API and checkpoint replay')
+    assert.ok(wf.text.includes('pipeline') && wf.text.includes('resumeFromRunId'), 'workflows should contain orchestration API and checkpoint replay')
     const dev = await readSkill('references/skill-and-plugin-dev.md')
-    assert.ok(dev.text.includes('definePlugin') && dev.text.includes('ctx.action'), 'skill-and-plugin-dev should contains plugin development guide')
+    assert.ok(dev.text.includes('definePlugin') && dev.text.includes('ctx.action'), 'skill-and-plugin-dev should contain plugin development guide')
     const splitting = await readSkill('references/plugin-client-code-splitting.md')
     assert.ok(
       splitting.text.includes('__helm_import_chunk') && splitting.text.includes('import()') && splitting.text.includes('helm plugins doctor'),
-      'plugin-client-code-splitting should contains AI use rule, host bridge disable items and verify command',
+      'plugin-client-code-splitting should contain AI usage rules, forbidden host bridges, and doctor check command',
     )
 
-    // restart (rebuild app) after managed override: disk manually work tamper SKILL.md and reference back to
-    // source code version, by delete reference patch complete; user self create skill do not subject to affect and still can write
+    // Managed overwrite on restart (rebuilding app): manual edits to SKILL.md/references on disk are
+    // overwritten back to source, deleted references are restored; user-created skills remain untouched and writable
     const customMain = '---\nname: helm-cli\ndescription: user change write\n---\nI version\n'
     const customRef = '# I change UI manual\n'
     writeFileSync(join(env.dataDir, 'skills', 'helm-cli', 'SKILL.md'), customMain)
     writeFileSync(join(env.dataDir, 'skills', 'generative-ui', 'SKILL.md'), customRef)
     rmSync(join(env.dataDir, 'skills', 'helm-cli', 'references', 'skill-and-plugin-dev.md'))
     rmSync(join(env.dataDir, 'skills', 'helm-cli', 'references', 'plugin-client-code-splitting.md'))
-    writeSkill(env.dataDir, 'user-skill', '---\nname: user-skill\ndescription: user self create\n---\nbody text\n', { 'notes.md': '# user pen record\n' })
+    writeSkill(env.dataDir, 'user-skill', '---\nname: user-skill\ndescription: user self create\n---\nbody text\n', { 'notes.md': '# user notes\n' })
     await env.app.close()
 
     const { app: app2 } = await createHubTestApp({ dataDir: env.dataDir, cwd: env.dataDir })
     try {
-      // managed skill: tamper file by override back source code version, missing reference by patch complete
+      // Managed skill: tampered files overwritten back to source, missing references restored
       assert.equal(
         readFileSync(join(env.dataDir, 'skills', 'helm-cli', 'SKILL.md'), 'utf8'),
         HELM_CLI_SKILL_ASSET.skillMd,
-        'after restart SKILL.md must back to source code version',
+        'SKILL.md must revert to source version after restart',
       )
       assert.equal(
         readFileSync(join(env.dataDir, 'skills', 'helm-cli', 'references', 'workflows-and-agents.md'), 'utf8'),
         HELM_CLI_SKILL_ASSET.references['workflows-and-agents.md']!,
-        'after restart managed reference must back to source code version',
+        'managed reference must revert to source version after restart',
       )
       const restored = readFileSync(join(env.dataDir, 'skills', 'helm-cli', 'references', 'skill-and-plugin-dev.md'), 'utf8')
-      assert.equal(restored, HELM_CLI_SKILL_ASSET.references['skill-and-plugin-dev.md']!, 'missing reference by patch complete is source code version')
+      assert.equal(restored, HELM_CLI_SKILL_ASSET.references['skill-and-plugin-dev.md']!, 'missing reference should be restored to source version')
       assert.equal(
         readFileSync(join(env.dataDir, 'skills', 'helm-cli', 'references', 'plugin-client-code-splitting.md'), 'utf8'),
         HELM_CLI_SKILL_ASSET.references['plugin-client-code-splitting.md']!,
-        'missing code split reference by patch complete is source code version',
+        'missing code-splitting reference should be restored to source version',
       )
       const again = await app2.kernel.skills.list()
       assert.equal(again.find((s) => s.id === 'helm-cli')?.description, HELM_CLI_SKILL_ASSET.skillMd.match(/description: (.+)/)?.[1])
 
-      // managed skill write opening: service boundary 403 managed_skill_readonly
+      // Managed skill write API: service boundary returns 403 managed_skill_readonly
       await assert.rejects(
         () => app2.kernel.skills.writeFile('helm-cli', 'SKILL.md', 'tamper'),
         (err: unknown) => {
@@ -572,12 +572,12 @@ test('collection into2.5: createHelm start i.e. sync helm-cli skill (managed ove
         },
       )
 
-      // user self create skill: content do not by override, still can write
-      assert.ok(readFileSync(join(env.dataDir, 'skills', 'user-skill', 'SKILL.md'), 'utf8').includes('user self create'), 'user self create skill do not by managed override trigger touch')
+      // User-created skill: content not overwritten and remains writable
+      assert.ok(readFileSync(join(env.dataDir, 'skills', 'user-skill', 'SKILL.md'), 'utf8').includes('user self create'), 'user-created skill must not be touched by managed overwrite')
       await app2.kernel.skills.writeFile('user-skill', 'references/extra.md', '# user new increase\n')
       assert.ok(
         readFileSync(join(env.dataDir, 'skills', 'user-skill', 'references', 'extra.md'), 'utf8').includes('user new increase'),
-        'user self create skill still can write',
+        'user-created skill remains writable',
       )
     } finally {
       await app2.close()
@@ -588,21 +588,21 @@ test('collection into2.5: createHelm start i.e. sync helm-cli skill (managed ove
 })
 
 // ---------------------------------------------------------------------------
-// 2.7 Profile skills blank name single: double Profile isolated,[] disable, plugin start stop sync filter
+// 2.7 Profile skills allowlist: dual-Profile isolation, [] disables all, sync filter with plugin toggle
 // ---------------------------------------------------------------------------
 
-test('collection into2.7: Profile skills blank name single - - double Profile directory isolated,[] without directory and reject, blank name single inside references can read, plugin start stop sync, runtime change write under round takes effect', { timeout: 60_000 }, async () => {
+test('integration 2.7: Profile skills allowlist — dual Profile catalog isolation, [] has no catalog and rejects all, allowlisted references readable, plugin toggle syncs, runtime edits apply next turn', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     const kernel = env.app.kernel
     const host = kernel.plugins!
 
-    // three user skill: ordinary A/B + plugin hosting skill (frontmatter declaration hosting)
+    // Three skills: regular A/B + plugin-managed skill (frontmatter declares managedByPlugin)
     writeSkill(
       env.dataDir,
       'alpha-guide',
       '---\nname: Alpha manual\ndescription: A\n---\n# Alpha\nsee references/.',
-      { 'intro.md': 'Alpha quote say: only blank name single.' },
+      { 'intro.md': 'Alpha note: allowlisted only.' },
     )
     writeSkill(
       env.dataDir,
@@ -617,41 +617,41 @@ test('collection into2.7: Profile skills blank name single - - double Profile di
       {},
     )
 
-    // double Profile: blank name single only contains alpha-guide; all forbid Profile skills=[]
-    await kernel.profiles.save({ id: 'white-profile', name: 'blank name single', tags: [], skills: ['alpha-guide'] })
-    await kernel.profiles.save({ id: 'none-profile', name: 'all forbid', tags: [], skills: [] })
-    const convWhite = await kernel.createConversation({ title: 'blank name single conversation', profileId: 'white-profile' })
-    const convNone = await kernel.createConversation({ title: 'all forbid conversation', profileId: 'none-profile' })
+    // Dual Profiles: allowlist contains only alpha-guide; disable-all Profile has skills=[]
+    await kernel.profiles.save({ id: 'white-profile', name: 'allowlist', tags: [], skills: ['alpha-guide'] })
+    await kernel.profiles.save({ id: 'none-profile', name: 'disabled-all', tags: [], skills: [] })
+    const convWhite = await kernel.createConversation({ title: 'allowlist conversation', profileId: 'white-profile' })
+    const convNone = await kernel.createConversation({ title: 'disabled-all conversation', profileId: 'none-profile' })
 
-    // ① blank name single inside skill can read,references sub- file same rule can read
+    // 1) Allowlisted skill and its references subfiles are readable
     const main = (await host.executeTool(
       'load_skill',
       { skillId: 'alpha-guide' },
       { conversationId: convWhite.id },
     )) as { text: string }
-    assert.ok(main.text.includes('Alpha'), 'blank name single inside SKILL.md can read')
+    assert.ok(main.text.includes('Alpha'), 'allowlisted SKILL.md should be readable')
     const ref = (await host.executeTool(
       'load_skill',
       { skillId: 'alpha-guide', path: 'references/intro.md' },
       { conversationId: convWhite.id },
     )) as { text: string }
-    assert.ok(ref.text.includes('blank name single'), 'blank name single inside references sub- file can read')
+    assert.ok(ref.text.includes('allowlisted'), 'allowlisted references subfile should be readable')
 
-    // ② blank name single outside (in directory in but do not in profile.skills)→ 403 skill_not_available
+    // 2) Outside allowlist (exists in global catalog but not in profile.skills) -> 403 skill_not_available
     await rejectsExplicitly(
       () => host.executeTool('load_skill', { skillId: 'beta-guide' }, { conversationId: convWhite.id }),
       { code: 'skill_not_available', message: /is unavailable for profile/ },
     )
 
-    // ③ [] Profile: directory do not inject + all skill reject (contains helm-cli inside placement skill)
+    // 3) [] Profile: no catalog injected + all skills rejected (including built-in helm-cli)
     {
-      // use kernel.submitInput directly drive all forbid conversation (faux catch the turn sections)
+      // Drive disabled-all conversation directly with kernel.submitInput (faux captures sections for this turn)
       env.requests.length = 0
       env.faux.setResponses([env.capture()])
-      await kernel.submitInput(convNone.id, 'all forbid back stage')
+      await kernel.submitInput(convNone.id, 'disabled-all round')
       await kernel.waitForIdle(convNone.id)
       const catalogNone = env.requests[0]!.systemSections.find((s) => s.includes('<available_skills>'))
-      assert.equal(catalogNone, undefined, 'skills=[]  Profile must not inject skill directory')
+      assert.equal(catalogNone, undefined, 'Profile with skills=[] must not inject skill catalog')
     }
     await rejectsExplicitly(
       () => host.executeTool('load_skill', { skillId: 'alpha-guide' }, { conversationId: convNone.id }),
@@ -662,40 +662,40 @@ test('collection into2.7: Profile skills blank name single - - double Profile di
       { code: 'skill_not_available', message: /is unavailable for profile/ },
     )
 
-    // ④ by default assistant Profile(default): all available skill inject (contains helm-cli and blank name single outside beta)
+    // 4) Default assistant Profile (undefined): injects all available skills (including helm-cli and non-allowlisted beta)
     {
       env.requests.length = 0
       env.faux.setResponses([env.capture()])
-      await env.submitAndWait('default directory')
+      await env.submitAndWait('default catalog')
       const catalog = env.requests[0]!.systemSections.find((s) => s.includes('<available_skills>'))
-      assert.ok(catalog, 'default Profile should inject directory')
+      assert.ok(catalog, 'default Profile should inject catalog')
       for (const id of ['helm-cli', 'alpha-guide', 'beta-guide']) {
-        assert.ok(catalog!.includes(`id="${id}"`), `default directory should contains ${id}`)
+        assert.ok(catalog!.includes(`id="${id}"`), `default catalog should contain ${id}`)
       }
     }
 
-    // ⑤ blank name single Profile directory: only contains blank name single inside skill, excludes other (contains hosting managed-guide not enabled plugin)
+    // 5) Allowlisted Profile catalog: contains only allowlisted skills, excluding others (including disabled-plugin managed-guide)
     {
       env.requests.length = 0
       env.faux.setResponses([env.capture()])
-      await kernel.submitInput(convWhite.id, 'blank name single back stage')
+      await kernel.submitInput(convWhite.id, 'allowlist round')
       await kernel.waitForIdle(convWhite.id)
       const catalogW = env.requests[0]!.systemSections.find((s) => s.includes('<available_skills>'))
-      assert.ok(catalogW, 'blank name single Profile should inject directory')
-      assert.ok(catalogW!.includes('id="alpha-guide"'), 'directory should contains blank name single inside skill')
+      assert.ok(catalogW, 'allowlist Profile should inject catalog')
+      assert.ok(catalogW!.includes('id="alpha-guide"'), 'catalog should contain allowlisted skill')
       for (const absent of ['beta-guide', 'helm-cli', 'managed-guide']) {
-        assert.ok(!catalogW!.includes(`id="${absent}"`), `directory must not contains ${absent}`)
+        assert.ok(!catalogW!.includes(`id="${absent}"`), `catalog must not contain ${absent}`)
       }
-      // blank name single Profile directory also excludes helm-cli:SYSTEM_DEFAULT refer quote contains helm-cli when only then load condition semantics takes effect
+      // Allowlist Profile catalog excludes helm-cli too: conditional load semantics when SYSTEM_DEFAULT mentions helm-cli
     }
 
-    // ⑥ plugin hosting skill: plugin deactivate (superagent by default not enabled)→ blank name single inside also 403
-    await kernel.profiles.save({ id: 'white-profile', name: 'blank name single', tags: [], skills: ['alpha-guide', 'managed-guide'] })
+    // 6) Plugin-managed skill: when plugin disabled (superagent disabled by default) -> still 403 even if allowlisted
+    await kernel.profiles.save({ id: 'white-profile', name: 'allowlist', tags: [], skills: ['alpha-guide', 'managed-guide'] })
     await rejectsExplicitly(
       () => host.executeTool('load_skill', { skillId: 'managed-guide' }, { conversationId: convWhite.id }),
       { code: 'skill_not_available', message: /is unavailable for profile|is disabled/ },
     )
-    // enable plugin after the same skill i.e. when can read (enabledPluginIds same turn heavy read)
+    // After enabling plugin, the same skill becomes immediately readable (enabledPluginIds re-read dynamically)
     await host.enable('builtin:superagent')
     {
       const managed = (await host.executeTool(
@@ -703,16 +703,16 @@ test('collection into2.7: Profile skills blank name single - - double Profile di
         { skillId: 'managed-guide' },
         { conversationId: convWhite.id },
       )) as { text: string }
-      assert.ok(managed.text.includes('hosting'), 'plugin enable after hosting skill can read')
+      assert.ok(managed.text.includes('hosting'), 'managed skill is readable after enabling plugin')
     }
-    // directory sync: enable after blank name single contains hosting skill → directory appear
+    // Catalog sync: appears in catalog after enabling when allowlisted
     {
       env.requests.length = 0
       env.faux.setResponses([env.capture()])
-      await kernel.submitInput(convWhite.id, 'enable hosting after back stage')
+      await kernel.submitInput(convWhite.id, 'round after enabling managed plugin')
       await kernel.waitForIdle(convWhite.id)
       const catalogE = env.requests[0]!.systemSections.find((s) => s.includes('<available_skills>'))
-      assert.ok(catalogE?.includes('id="managed-guide"'), 'plugin enable after directory should contains hosting skill')
+      assert.ok(catalogE?.includes('id="managed-guide"'), 'catalog should include managed skill after enabling plugin')
     }
     await host.disable('builtin:superagent')
     await rejectsExplicitly(
@@ -720,18 +720,18 @@ test('collection into2.7: Profile skills blank name single - - double Profile di
       { code: 'skill_not_available', message: /is unavailable for profile|is disabled/ },
     )
 
-    // ⑦ runtime modify Profile(change blank name single) under one turn takes effect: blank name single clean into [] after directory disappear
-    await kernel.profiles.save({ id: 'white-profile', name: 'blank name single', tags: [], skills: [] })
+    // 7) Runtime Profile edit (changing allowlist) takes effect next turn: clearing allowlist to [] removes catalog
+    await kernel.profiles.save({ id: 'white-profile', name: 'allowlist', tags: [], skills: [] })
     {
       env.requests.length = 0
       env.faux.setResponses([env.capture()])
-      await kernel.submitInput(convWhite.id, 'change is all forbid after back stage')
+      await kernel.submitInput(convWhite.id, 'round after changing to disabled-all')
       await kernel.waitForIdle(convWhite.id)
       const catalogGone = env.requests[0]!.systemSections.find((s) => s.includes('<available_skills>'))
-      assert.equal(catalogGone, undefined, 'Profile change is [] after under turn directory i.e. disappear')
+      assert.equal(catalogGone, undefined, 'catalog disappears on next turn after setting Profile skills to []')
     }
 
-    // ⑧ unknown skill 404(without leaking content); blank name single inside but not installed → 404 same
+    // 8) Unknown skill returns 404 (no content leaked); allowlisted but uninstalled -> also 404
     await rejectsExplicitly(
       () => host.executeTool('load_skill', { skillId: 'no-such-skill' }, { conversationId: convWhite.id }),
       { code: 'not_found', message: /missing|no-such-skill/ },
@@ -742,54 +742,54 @@ test('collection into2.7: Profile skills blank name single - - double Profile di
 })
 
 // ---------------------------------------------------------------------------
-// 3. SecretStash: real secret value does not enter SQLite, does not enter model request,SSE frame
+// 3. SecretStash: real secret values never enter SQLite, model requests, or SSE frames
 // ---------------------------------------------------------------------------
 
-test('collection into3: double quotes+newline secret value do not appear in SQLite any table, model request and SSE frame in; placeholder can security stream rotate', { timeout: 60_000 }, async () => {
+test('integration 3: secret containing quotes+newline never appears in any SQLite table, model request, or SSE frame; placeholders flow safely', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     const kernel = env.app.kernel
-    // double quotes + newline: only for JSON.stringify after text redaction plain implement will leak this kind of value
+    // Quotes + newline: naive redaction that runs only on post-JSON.stringify text will leak this class of values
     const SECRET_TRICKY = ['quote"', 'line'].join('\n')
     const placeholder = kernel.services.stash.put(env.initialConvId, 'TRICKY_TOKEN', SECRET_TRICKY)
     assert.match(placeholder, /^\[REDACTED:stash:[0-9a-f-]{36}\]$/)
 
-    // model turn: placeholder context, secret value forever do not reach provider
+    // Model turn: placeholder enters context, secret value never reaches provider
     env.faux.setResponses([env.capture()])
     await env.submitAndWait(`please use token ${placeholder} deploy`)
     const req = env.requests[0]!
-    assert.ok(req.userTexts.join('\n').includes(placeholder), 'placeholder can normal enter context')
+    assert.ok(req.userTexts.join('\n').includes(placeholder), 'placeholder should enter context normally')
     const reqAll = req.systemSections.join('\n') + req.userTexts.join('\n') + req.assistantTexts.join('\n')
     assert.ok(!reqAll.includes(SECRET_TRICKY), 'secret value must not enter any model message')
 
-    // envFor conversation isolated
+    // envFor isolated per conversation
     assert.equal(kernel.services.stash.envFor(env.initialConvId)['TRICKY_TOKEN'], SECRET_TRICKY)
     assert.equal(kernel.services.stash.envFor(999)['TRICKY_TOKEN'], undefined)
 
-    // SSE frame (EventHub publish unify redaction): subscribe after publish contains secret payload, frame in only placeholder
+    // SSE frames (unified EventHub publish redaction): publishing secret-containing payload after subscribe emits placeholders only
     const frames: string[] = []
     kernel.events.subscribe((frame) => frames.push(JSON.stringify(frame)))
     kernel.events.publish('notification', { level: 'info', title: 'deploy', body: `token ${SECRET_TRICKY} already use` })
     const joined = frames.join('\n')
-    assert.ok(!joined.includes(SECRET_TRICKY), 'SSE frame must not contains secret plaintext')
-    assert.ok(!joined.includes('quote\\"'), 'SSE frame must not contains secret JSON escaping form')
-    assert.ok(joined.includes(placeholder), 'SSE frame should keep placeholder form')
+    assert.ok(!joined.includes(SECRET_TRICKY), 'SSE frames must not contain plaintext secret')
+    assert.ok(!joined.includes('quote\\"'), 'SSE frames must not contain JSON-escaped secret')
+    assert.ok(joined.includes(placeholder), 'SSE frames should preserve placeholder')
 
-    // all table byte scan (turn + SSE already written to the database after)
+    // Full-table byte scan (after turn + SSE persistence)
     assert.deepEqual(
       sqliteTablesContaining(env.dbPath, SECRET_TRICKY),
       [],
-      'secret value must not appear in state.sqlite any table',
+      'secret value must not appear in any state.sqlite table',
     )
 
-    // structure redaction compare:redactJsonValue recursion value level replace do not leak double quotes newline
+    // Structural redaction comparison: redactJsonValue replaces recursively at value level without leaking quotes/newlines
     const obj = { text: `prefix ${SECRET_TRICKY} ${placeholder}` }
     const redacted = redactJsonValue(obj, (t) => kernel.services.stash.redact(t)) as { text: string }
-    assert.ok(!redacted.text.includes('line'), 'value level redaction after must not store newline segment')
-    assert.ok(!redacted.text.includes('quote'), 'value level redaction after must not store quotes segment')
-    assert.ok(redacted.text.includes(placeholder), 'redaction after keep placeholder')
+    assert.ok(!redacted.text.includes('line'), 'value-level redaction must leave no newline fragment')
+    assert.ok(!redacted.text.includes('quote'), 'value-level redaction must leave no quote fragment')
+    assert.ok(redacted.text.includes(placeholder), 'redaction preserves placeholder')
 
-    // clear after stash semantics destroy
+    // Stash destroyed after clear
     kernel.services.stash.clear()
     assert.equal(kernel.services.stash.envFor(env.initialConvId)['TRICKY_TOKEN'], undefined)
   } finally {
@@ -798,10 +798,10 @@ test('collection into3: double quotes+newline secret value do not appear in SQLi
 })
 
 // ---------------------------------------------------------------------------
-// 4. ctx.action five end sharing validator:invokeAction / executeTool / HTTP / persist doc
+// 4. ctx.action five-endpoint shared validator: invokeAction / executeTool / HTTP / persisted doc
 // ---------------------------------------------------------------------------
 
-test('collection into4: plugin ctx.action sharing Schema validate - - legal execute, illegal 400 do not execute handler, legal null do not fabricate,doc real durable', { timeout: 60_000 }, async () => {
+test('integration 4: plugin ctx.action shared schema validation — valid executes, invalid 400 skips handler, valid null not fabricated, doc persists', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     const kernel = env.app.kernel
@@ -810,11 +810,11 @@ test('collection into4: plugin ctx.action sharing Schema validate - - legal exec
 
     const probePlugin: PluginDefinition = {
       id: 'test:probe',
-      name: 'collection into probe needle',
+      name: 'integration probe',
       definePlugin(ctx) {
         ctx.action<{ n: number }, { doubled: number }>({
           id: 'double',
-          description: 'translate multiple',
+          description: 'double number',
           cli: { command: ['probe', 'double'] },
           inputSchema: {
             type: 'object',
@@ -833,7 +833,7 @@ test('collection into4: plugin ctx.action sharing Schema validate - - legal exec
             return { doubled: input.n * 2 }
           },
         })
-        // legal null output: must not by fabricate is {ok:true} of class
+        // Valid null output: must not be fabricated into {ok:true}
         ctx.action<{ ok: boolean }, null>({
           id: 'null_out',
           description: 'return null',
@@ -848,7 +848,7 @@ test('collection into4: plugin ctx.action sharing Schema validate - - legal exec
         })
         ctx.tool<{ text: string }>({
           name: 'probe_echo',
-          description: 'back sound',
+          description: 'echo text',
           inputSchema: {
             type: 'object',
             properties: { text: { type: 'string', minLength: 1 } },
@@ -866,30 +866,30 @@ test('collection into4: plugin ctx.action sharing Schema validate - - legal exec
     }
     await host.register(probePlugin)
 
-    // legal input real execute
+    // Valid input executes normally
     const ok = (await host.invokeAction('test:probe', 'double', { n: 21 })) as { doubled: number }
     assert.equal(ok.doubled, 42)
 
-    // invalid input: the same validate reject (HTTP 400 / CLI non-zero jointly source),handler do not execute
+    // Invalid input: rejected identically (single source for HTTP 400 / CLI non-zero), handler is not executed
     await rejectsExplicitly(() => host.invokeAction('test:probe', 'double', { n: 'x' }), { code: 'validation_error', message: /validation failed/ })
     await rejectsExplicitly(() => host.invokeAction('test:probe', 'double', {}), { code: 'validation_error', message: /validation failed/ })
     await rejectsExplicitly(() => host.invokeAction('test:probe', 'double', { n: 1, extra: true }), { code: 'validation_error', message: /validation failed/ })
 
-    // legal null output original return (do not fabricate ok)
+    // Valid null output is returned verbatim (never fabricates ok)
     const nullOut = await host.invokeAction('test:probe', 'null_out', { ok: true })
     assert.equal(nullOut, null)
 
-    // tool path same right validate
+    // Tool path enforces identical validation
     const echoed = (await host.executeTool('probe_echo', { text: 'hi' }, { conversationId: 1 })) as { echoed: string }
     assert.equal(echoed.echoed, 'hi')
     await rejectsExplicitly(() => host.executeTool('probe_echo', { text: '' }, { conversationId: 1 }), { code: 'validation_error', message: /validation failed/ })
-    assert.deepEqual(calls, ['double:21', 'echo:hi'], 'invalid input do not execute handler')
+    assert.deepEqual(calls, ['double:21', 'echo:hi'], 'invalid input must not invoke handler')
 
-    // unknown action/tool explicit 404
+    // Unknown action/tool explicitly returns 404
     await rejectsExplicitly(() => host.invokeAction('test:probe', 'nope', {}), { code: 'unknown_action', message: /not declaration/ })
     await rejectsExplicitly(() => host.executeTool('nope', {}, { conversationId: 1 }), { code: 'unknown_tool', message: /not registered/ })
 
-    // run in action when plugin disable explicit 409(not silently split register table): true suspended action occupy task tracker
+    // Disabling plugin while action is in-flight explicitly returns 409 (never silently splits registry): live suspended action holds task tracker
     let release2!: () => void
     const gate2 = new Promise<void>((r) => (release2 = r))
     const slowPlugin: PluginDefinition = {
@@ -917,13 +917,13 @@ test('collection into4: plugin ctx.action sharing Schema validate - - legal exec
     const slow = host.invokeAction('test:slow', 'slow', {})
     const dis = host.disable('test:slow')
     await assert.rejects(dis, (err: unknown) => {
-      assert.ok(err instanceof HelmError, `should be HelmError, actual ${String(err)}`)
+      assert.ok(err instanceof HelmError, `expected HelmError, got ${String(err)}`)
       assert.equal(err.code, 'plugin_has_live_tasks')
       return true
     })
     release2()
     assert.deepEqual(await slow, { done: true })
-    // task after end disable succeeded
+    // Disable succeeds after task finishes
     await host.disable('test:slow')
   } finally {
     await env.close()
@@ -931,10 +931,10 @@ test('collection into4: plugin ctx.action sharing Schema validate - - legal exec
 })
 
 // ---------------------------------------------------------------------------
-// 5. durable conversation restart: the same dataDir heavy open createHelm,#1/history/SSE seq keep
+// 5. Durable conversation restart: reopen createHelm on same dataDir, preserving #1/history/SSE seq
 // ---------------------------------------------------------------------------
 
-test('collection into5: after restart broadcast conversation and history via real SQLite keep,faux resume visible complete history,SSE seq durable does not fall back', { timeout: 60_000 }, async () => {
+test('integration 5: seeded conversation and history persist across restarts via real SQLite, faux resume sees full history, SSE seq never regresses', { timeout: 60_000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), 'helm-core-e2e-'))
   const dbPath = join(dir, 'state.sqlite')
 
@@ -946,14 +946,14 @@ test('collection into5: after restart broadcast conversation and history via rea
   const firstConv = first.app.kernel
     .listConversations()
     .find((c) => c.profileId === 'assistant' && c.parentConversationId === undefined)
-  if (firstConv === undefined) throw new Error('first time start should broadcast assistant entry conversation')
+  if (firstConv === undefined) throw new Error('first boot should seed initial assistant conversation')
   try {
     first.faux.setResponses([fauxAssistantMessage(`already record:${MARK}`)])
     await first.app.kernel.submitInput(firstConv.id, `please record:${MARK}`)
     await first.app.kernel.waitForIdle(firstConv.id)
     assert.equal(first.faux.state.callCount, 1)
     seqAfterFirst = first.app.kernel.events.seq
-    assert.ok(seqAfterFirst > 0, 'one turn should push enter SSE seq')
+    assert.ok(seqAfterFirst > 0, 'one turn should advance SSE seq')
   } finally {
     await first.app.close()
   }
@@ -961,25 +961,25 @@ test('collection into5: after restart broadcast conversation and history via rea
   const second = await build()
   try {
     const convs = second.app.kernel.listConversations()
-    assert.ok(convs.some((c) => c.id === firstConv.id), 'after restart broadcast entry conversation still in')
+    assert.ok(convs.some((c) => c.id === firstConv.id), 'seeded initial conversation remains after restart')
     assert.ok(
       second.app.kernel.events.seq >= seqAfterFirst,
-      `after restart SSE seq(${second.app.kernel.events.seq}) should >= first turn after (${seqAfterFirst})`,
+      `SSE seq after restart (${second.app.kernel.events.seq}) should be >= post-first-turn (${seqAfterFirst})`,
     )
     const conv = second.app.kernel.getConversation(firstConv.id)
-    assert.ok(conv.completionSeq >= 1, 'completionSeq across restarts keep')
+    assert.ok(conv.completionSeq >= 1, 'completionSeq persists across restarts')
 
-    // resume turn: model visible complete history
+    // Resume turn: model sees complete history
     const seen: string[] = []
     second.faux.setResponses([
       (ctx) => {
         seen.push(JSON.stringify(ctx.messages))
-        return fauxAssistantMessage('already back consider history')
+        return fauxAssistantMessage('reviewed history')
       },
     ])
-    await second.app.kernel.submitInput(firstConv.id, 'back consider we say what')
+    await second.app.kernel.submitInput(firstConv.id, 'recall what we said earlier')
     await second.app.kernel.waitForIdle(firstConv.id)
-    assert.ok(seen[0]!.includes(MARK), 'after restart model request should contains history message')
+    assert.ok(seen[0]!.includes(MARK), 'model request after restart should contain history messages')
     assert.ok(sqliteTablesContaining(dbPath, MARK).length > 0, 'history entry should persist')
   } finally {
     await second.app.close()
@@ -988,22 +988,22 @@ test('collection into5: after restart broadcast conversation and history via rea
 })
 
 // ---------------------------------------------------------------------------
-// 6. HTTP real to return: true startHub(port 0) + true app.kernel
+// 6. Real HTTP loopback: real startHub(port 0) + real app.kernel
 // ---------------------------------------------------------------------------
 
 async function makeHttpEnv() {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-core-e2e-http-'))
   const { app, faux } = await createHubTestApp({ dataDir, cwd: dataDir })
 
-  // broadcast entry conversation ID(first assistant without parent chain conversation; this environment inside still store in)
+  // Seeded initial conversation ID (first assistant conversation without parent; still exists in this environment)
   const initialConv = app.kernel
     .listConversations()
     .find((c) => c.profileId === 'assistant' && c.parentConversationId === undefined)
-  if (initialConv === undefined) throw new Error('makeHttpEnv: first time start should broadcast assistant entry conversation')
+  if (initialConv === undefined) throw new Error('makeHttpEnv: first boot should seed initial assistant conversation')
 
-  // collection into probe needle plugin:echo action back visible stash real value (verify out station redaction link).
-  // probe needle value via probeState indirectly reference: initial conversation delete i.e. reclaim its stash secret (new contract),
-  // test system delete after will to store conversation re- register again assertion.
+  // Integration probe plugin: echo action returns real stash secret value (verifies outbound redaction pipeline).
+  // Probe reads indirectly via probeState: deleting initial conversation reclaims its stash secret (per contract),
+  // so the test re-registers the secret on a surviving conversation before asserting.
   const stash = app.kernel.services.stash
   const SECRET_TRICKY = ['quote"', 'line'].join('\n')
   const probeState = {
@@ -1013,11 +1013,11 @@ async function makeHttpEnv() {
 
   await app.kernel.plugins!.register({
     id: 'test:probe',
-    name: 'collection into probe needle',
+    name: 'integration probe',
     definePlugin(ctx) {
       ctx.action<{ text: string }, { text: string }>({
         id: 'echo',
-        description: 'back visible (contains secret redaction verify)',
+        description: 'echo back (including secret redaction check)',
         cli: { command: ['probe', 'echo'] },
         inputSchema: {
           type: 'object',
@@ -1035,7 +1035,7 @@ async function makeHttpEnv() {
       })
       ctx.action<{ n: number }, { doubled: number }>({
         id: 'double',
-        description: 'translate multiple',
+        description: 'double number',
         cli: { command: ['probe', 'double'] },
         inputSchema: {
           type: 'object',
@@ -1060,7 +1060,7 @@ async function makeHttpEnv() {
     },
   })
 
-  // true startHub:port 0(kernel allocate),kernel all from createHelm
+  // Real startHub: port 0 (kernel-allocated), kernel entirely from createHelm
   const hub = await startHub({ kernel: app.kernel as never, port: 0 })
   return {
     hub, app, faux, dataDir, SECRET_TRICKY, probeState, stash, initialConvId: initialConv.id,
@@ -1073,7 +1073,7 @@ async function makeHttpEnv() {
   }
 }
 
-test('collection into6: HTTP real to return - - authentication/initial conversation can delete/action validate same right/secret without leaking out station/SSE snapshot first frame/plugin public routing', { timeout: 60_000 }, async () => {
+test('integration 6: real HTTP loopback — auth / initial conversation deletable / identical action validation / no outbound secret leak / SSE initial snapshot / public plugin route', { timeout: 60_000 }, async () => {
   const env = await makeHttpEnv()
   let token: string | undefined
   try {
@@ -1094,7 +1094,7 @@ test('collection into6: HTTP real to return - - authentication/initial conversat
       return { status: response.status, body: await response.text() }
     }
 
-    // --- authentication boundary
+    // --- Authentication boundary
     const anon = await call('GET', '/api/conversations', { auth: false })
     assert.equal(anon.status, 401)
     const statusBefore = await call('GET', '/api/auth/status', { auth: false })
@@ -1105,45 +1105,45 @@ test('collection into6: HTTP real to return - - authentication/initial conversat
     assert.equal(setup.status, 200)
     token = JSON.parse(setup.body).token as string
     assert.ok(typeof token === 'string' && token.length > 0)
-    const badLogin = await call('POST', '/api/auth/login', { body: { password: 'error password but enough long' }, auth: false })
+    const badLogin = await call('POST', '/api/auth/login', { body: { password: 'wrong password but long enough' }, auth: false })
     assert.equal(badLogin.status, 401)
     const relogin = await call('POST', '/api/auth/login', { body: { password: env.rootPassword }, auth: false })
     assert.equal(relogin.status, 200)
 
-    // --- initial entry conversation can delete (id level exemption already remove; through use protect is plugin manage right 409)
+    // --- Initial conversation deletable (id-level exemption removed; generic protection uses plugin management 409)
     const initialId = env.initialConvId
     const delInitial = await call('DELETE', `/api/conversations/${initialId}`)
-    assert.equal(delInitial.status, 200, `delete initial conversation should succeeded:${delInitial.body}`)
+    assert.equal(delInitial.status, 200, `deleting initial conversation should succeed: ${delInitial.body}`)
     const goneInitial = await call('GET', `/api/conversations/${initialId}`)
     assert.equal(goneInitial.status, 404)
-    // rebuild ordinary conversation supply after continue turn use
-    const created = await call('POST', '/api/conversations', { body: { title: 'collection into conversation', profileId: 'assistant' } })
+    // Recreate a regular conversation for subsequent turns
+    const created = await call('POST', '/api/conversations', { body: { title: 'integration conversation', profileId: 'assistant' } })
     assert.equal(created.status, 201)
     const httpConvId = (JSON.parse(created.body) as { id: number }).id
 
-    // --- real model turn (HTTP submit → true kernel → faux)
+    // --- Real model turn (HTTP submit -> real kernel -> faux)
     const conv = await call('GET', `/api/conversations/${httpConvId}`)
     assert.equal(conv.status, 200)
     assert.equal(JSON.parse(conv.body).id, httpConvId)
     env.faux.setResponses([fauxAssistantMessage('HTTP turn complete')])
-    // non- wait for commit: routing by default submission accepted(202 + {submissionId}), do not fabricate sync answer
+    // Non-blocking submit: route defaults to submission accepted (202 + {submissionId}), never fabricates synchronous reply
     const sent = await call('POST', `/api/conversations/${httpConvId}/input`, { body: { text: '你好, integration test' } })
     assert.equal(sent.status, 202)
     const submission = JSON.parse(sent.body) as { submissionId: string }
     assert.ok(typeof submission.submissionId === 'string' && submission.submissionId.length > 0, '202 should carry submissionId')
     await env.app.kernel.waitForIdle(httpConvId)
-    assert.ok(env.faux.state.callCount >= 1, 'HTTP submit should trigger real model turn')
+    assert.ok(env.faux.state.callCount >= 1, 'HTTP submit should trigger a real model turn')
 
-    // explicit wait for chain:?wait=1 precise wait for this time commit answer (200 ConversationInputResult)
+    // Explicit wait path: ?wait=1 waits specifically for this submission's reply (200 ConversationInputResult)
     env.faux.setResponses([fauxAssistantMessage('HTTP wait for answer')])
-    const waited = await call('POST', `/api/conversations/${httpConvId}/input?wait=1`, { body: { text: 'wait for chain verify' } })
-    assert.equal(waited.status, 200, `wait=1 should return this time answer:${waited.body}`)
+    const waited = await call('POST', `/api/conversations/${httpConvId}/input?wait=1`, { body: { text: 'wait path check' } })
+    assert.equal(waited.status, 200, `wait=1 should return this turn's reply: ${waited.body}`)
     const waitResult = JSON.parse(waited.body) as { submissionId: string; text: string; entry: { id: string; kind: string } }
     assert.ok(waitResult.submissionId.length > 0)
     assert.equal(waitResult.text, 'HTTP wait for answer')
-    assert.ok(waitResult.entry.id, 'wait result should contains precise answer entry')
+    assert.ok(waitResult.entry.id, 'wait result should contain the exact reply entry')
 
-    // --- action validate same right:HTTP illegal reference 400 validation_error(and invokeAction the same validate)
+    // --- Identical action validation: HTTP invalid params return 400 validation_error (same validator as invokeAction)
     const actionList = await call('GET', '/api/actions')
     assert.equal(actionList.status, 200)
     assert.ok(JSON.parse(actionList.body).some((a: { pluginId: string; id: string }) => a.pluginId === 'test:probe' && a.id === 'echo'))
@@ -1154,17 +1154,17 @@ test('collection into6: HTTP real to return - - authentication/initial conversat
       body: { input: {}, conversationId: httpConvId },
     })
     assert.equal(memoryWithContext.status, 200, memoryWithContext.body)
-    assert.equal(JSON.parse(memoryWithContext.body).profileId, 'assistant', 'HTTP conversationId context parse when before Profile')
+    assert.equal(JSON.parse(memoryWithContext.body).profileId, 'assistant', 'HTTP conversationId context resolves current Profile')
     const memoryInvalidExplicit = await call('POST', '/api/actions/builtin:memory/get', {
       body: { input: { profileId: 'missing' }, conversationId: httpConvId },
     })
     assert.equal(memoryInvalidExplicit.status, 404)
-    assert.equal(JSON.parse(memoryInvalidExplicit.body).error.code, 'profile_not_found', 'expires explicit Profile must not fall back to HTTP context')
+    assert.equal(JSON.parse(memoryInvalidExplicit.body).error.code, 'profile_not_found', 'invalid explicit Profile must not fall back to HTTP context')
     const memoryInvalidId = await call('POST', '/api/actions/builtin:memory/get', {
       body: { input: { profileId: '../outside' }, conversationId: httpConvId },
     })
     assert.equal(memoryInvalidId.status, 400)
-    assert.equal(JSON.parse(memoryInvalidId.body).error.code, 'validation_error', 'illegal Profile ID in action boundary explicit 400')
+    assert.equal(JSON.parse(memoryInvalidId.body).error.code, 'validation_error', 'invalid Profile ID rejected with 400 at action boundary')
     const workflowWithoutTarget = await call('POST', '/api/actions/builtin:workflow/run', {
       body: { input: { script: 'export const meta = { name: "no-target", description: "t" }\nreturn 1' } },
     })
@@ -1174,34 +1174,34 @@ test('collection into6: HTTP real to return - - authentication/initial conversat
     assert.equal(badAction.status, 400)
     assert.equal(JSON.parse(badAction.body).error.code, 'validation_error')
 
-    // --- HTTP out station redaction:echo action result contains stash real value when, response only carries placeholder.
-    // hub unify JsonRedactor(kernel.services.stash.redact) must in out station before erase plaintext.
-    // initial conversation already delete (its stash secret follow of reclaim): to store conversation re- register same value again verify.
+    // --- HTTP outbound redaction: when echo action result contains stash secret, response emits only placeholder.
+    // Hub unified JsonRedactor (kernel.services.stash.redact) must scrub plaintext before egress.
+    // Initial conversation was deleted (reclaiming its stash secret): re-register same value on surviving conversation first.
     env.probeState.placeholder = env.stash.put(httpConvId, 'TRICKY_TOKEN', env.SECRET_TRICKY)
     const echoAction = await call('POST', '/api/actions/test:probe/echo', { body: { input: { text: 'prefix' } } })
     assert.equal(echoAction.status, 200)
     const echoBody = echoAction.body
-    assert.ok(!echoBody.includes(env.SECRET_TRICKY), 'HTTP response must not contains secret plaintext (contains newline form)')
-    assert.ok(!echoBody.includes('quote\\"'), 'HTTP response must not contains secret JSON escaping form')
-    assert.ok(!echoBody.includes('line'), 'HTTP response must not contains newline after half segment plaintext')
-    assert.ok(echoBody.includes(env.probeState.placeholder), 'HTTP response should keep placeholder')
+    assert.ok(!echoBody.includes(env.SECRET_TRICKY), 'HTTP response must not contain plaintext secret (multiline form)')
+    assert.ok(!echoBody.includes('quote\\"'), 'HTTP response must not contain JSON-escaped secret')
+    assert.ok(!echoBody.includes('line'), 'HTTP response must not contain second line of plaintext secret')
+    assert.ok(echoBody.includes(env.probeState.placeholder), 'HTTP response should preserve placeholder')
 
-    // --- SSE snapshot first frame: authentication after connect i.e. snapshot
+    // --- SSE initial snapshot frame: immediately emits snapshot after authenticated connect
     const sseResponse = await fetch(`${base}/api/events`, { headers: { authorization: `Bearer ${token}` } })
     assert.equal(sseResponse.headers.get('content-type'), 'text/event-stream')
     const reader = sseResponse.body!.getReader()
     const firstChunk = new TextDecoder().decode((await reader.read()).value)
-    assert.ok(firstChunk.includes('event: snapshot'), 'SSE first frame should be snapshot')
-    assert.ok(firstChunk.includes('"conversations"'), 'snapshot should contains conversation manifest')
+    assert.ok(firstChunk.includes('event: snapshot'), 'first SSE frame should be snapshot')
+    assert.ok(firstChunk.includes('"conversations"'), 'snapshot should contain conversations list')
     await reader.cancel().catch(() => {})
 
-    // --- plugin public routing exemption authentication + encoded pluginId decode match
+    // --- Plugin public route bypasses auth + encoded pluginId decodes to match
     const encoded = encodeURIComponent('test:probe')
     const pub = await fetch(`${base}/api/plugins/${encoded}/routes/ping`)
     assert.equal(pub.status, 200)
     assert.equal((JSON.parse(await pub.text()) as { via: string }).via, 'plugin-route')
 
-    // --- workflows: real engine via builtin:workflow plugin action (/api/actions same link)
+    // --- Workflows: real engine via builtin:workflow plugin action (same /api/actions pipeline)
     const wf = await call('POST', '/api/actions/builtin:workflow/run', {
       body: {
         input: {
@@ -1212,9 +1212,9 @@ test('collection into6: HTTP real to return - - authentication/initial conversat
         conversationId: httpConvId,
       },
     })
-    assert.equal(wf.status, 200, `real workflow engine should accept run:${wf.body}`)
+    assert.equal(wf.status, 200, `real workflow engine should accept run: ${wf.body}`)
     const summary = (JSON.parse(wf.body) as { run: { id: string; status: string } }).run
-    assert.ok(summary.id.startsWith('wf_'), 'summary should contains wf_ prefix runId')
+    assert.ok(summary.id.startsWith('wf_'), 'summary should contain wf_-prefixed runId')
     assert.ok(['running', 'completed'].includes(summary.status))
   } finally {
     await env.close()
@@ -1222,10 +1222,10 @@ test('collection into6: HTTP real to return - - authentication/initial conversat
 })
 
 // ---------------------------------------------------------------------------
-// 7. CLI ↔ true Hub: process inside runCli + async child process true CLI entry
+// 7. CLI <-> real Hub: in-process runCli + async child process real CLI entrypoint
 // ---------------------------------------------------------------------------
 
-test('collection into7: CLI↔Hub real link - -setup credentials/status/conversations/send trigger true model turn/motion state action command/illegal reference non-zero exit/child process CLI', { timeout: 60_000 }, async () => {
+test('integration 7: CLI <-> Hub real path — setup credentials / status / conversations / send triggers real model turn / dynamic action commands / invalid args exit non-zero / child CLI process', { timeout: 60_000 }, async () => {
   const env = await makeHttpEnv()
   const { runCli } = await import('../../cli/src/index.js')
   const hubUrl = new URL(env.hub.url)
@@ -1247,9 +1247,9 @@ test('collection into7: CLI↔Hub real link - -setup credentials/status/conversa
   }
 
   /**
-   * async child process true CLI:spawn(non- spawnSync- -spawnSync blocking die parent process event loop,
-   * same process Hub test under sub- CLI  HTTP forever do not response, is test method defect while non- CLI defect).
-   * stdio pipes collect output; hard timeout kill guard against suspended.
+   * Async child-process real CLI: uses spawn (never spawnSync, which blocks the parent event loop
+   * so an in-process Hub under test cannot respond over HTTP — a test flaw, not a CLI flaw).
+   * Collects output via stdio pipes; hard timeout kill guards against hangs.
    */
   const runCliChildInEnv = (args: string[], timeoutMs = 20_000): Promise<CliRunResult> =>
     runCliChild(
@@ -1259,33 +1259,33 @@ test('collection into7: CLI↔Hub real link - -setup credentials/status/conversa
     )
 
   try {
-    // --- not login: subject to protect command explicit errors non-zero
+    // --- Unauthenticated: protected commands fail explicitly with non-zero exit
     const anon = await run(['conversations', 'list', '--json'])
     assert.notEqual(anon.code, 0)
     assert.equal((JSON.parse(anon.err) as { error: { code: string } }).error.code, 'unauthorized')
 
-    // --- setup: true scrypt credentials + independent cli-token file.
+    // --- setup: real scrypt credentials + separate cli-token file
     const setup = await run(['setup', '--password', env.rootPassword, '--json'])
     assert.equal(setup.code, 0, setup.err)
     assert.ok(typeof (JSON.parse(setup.out) as { token: string }).token === 'string')
     const credRaw = JSON.parse(readFileSync(join(env.dataDir, 'cli-token'), 'utf8')) as {
       hubUrl?: string; token?: string
     }
-    assert.ok(credRaw.token, 'login Token should save in cli-token')
+    assert.ok(credRaw.token, 'login token should be saved in cli-token')
     assert.ok(credRaw.hubUrl?.startsWith('http://127.0.0.1:'), 'hubUrl should persist')
 
-    // --- status: public end point
+    // --- status: public endpoint
     const status = await run(['status', '--json'])
     assert.equal(status.code, 0, status.err)
     assert.equal(JSON.parse(status.out).configured, true)
 
-    // --- conversations list: via credentials file token authentication
+    // --- conversations list: authenticated via credentials file token
     const list = await run(['conversations', 'list', '--json'])
     assert.equal(list.code, 0, list.err)
     const convs = JSON.parse(list.out) as Array<{ id: number; profileId: string }>
-    assert.ok(convs.some((c) => c.profileId === 'assistant'), 'should column out assistant conversation')
+    assert.ok(convs.some((c) => c.profileId === 'assistant'), 'should list assistant conversation')
 
-    // --- memory motion state command: real CLI ↔ Hub, via --current parse conversation which belong Profile
+    // --- Dynamic memory command: real CLI <-> Hub, resolves conversation Profile via --current
     await env.app.kernel.services.profiles.save({ id: 'coder', name: 'Coder', tags: [] })
     const memoryConversation = await env.app.kernel.createConversation({ profileId: 'coder' })
     const currentEnv = { HELM_CONVERSATION_ID: String(memoryConversation.id) }
@@ -1302,62 +1302,63 @@ test('collection into7: CLI↔Hub real link - -setup credentials/status/conversa
     assert.equal(JSON.parse(memoryDisabled.out).enabled, false)
     const explicitMemory = await run(['memory', 'get', '--profile-id', 'assistant', '--current', '--json'], currentEnv)
     assert.equal(explicitMemory.code, 0, explicitMemory.err)
-    assert.equal(JSON.parse(explicitMemory.out).profileId, 'assistant', 'explicit --profile-id takes precedence at --current')
+    assert.equal(JSON.parse(explicitMemory.out).profileId, 'assistant', 'explicit --profile-id overrides --current')
     const memoryNoTarget = await run(['memory', 'get', '--json'])
     assert.notEqual(memoryNoTarget.code, 0)
     assert.equal((JSON.parse(memoryNoTarget.err) as { error: { code: string } }).error.code, 'validation_error')
 
-    // --- send:CLI commit → real model turn
+    // --- send: CLI submit -> real model turn
     const callCountBefore = env.faux.state.callCount
     env.faux.setResponses([fauxAssistantMessage('CLI turn complete')])
-    const send = await run(['send', '1', '你好 CLI collection into', '--json'])
+    const send = await run(['send', '1', '你好 CLI integration', '--json'])
     assert.equal(send.code, 0, send.err)
     await env.app.kernel.waitForIdle(env.initialConvId)
-    assert.ok(env.faux.state.callCount > callCountBefore, 'CLI send should trigger real model turn')
+    assert.ok(env.faux.state.callCount > callCountBefore, 'CLI send should trigger a real model turn')
 
-    // --- motion state action command:GET /api/actions generate helm probe double
+    // --- Dynamic action command: GET /api/actions generates helm probe double
     const doubled = await run(['probe', 'double', '--n', '21', '--json'])
     assert.equal(doubled.code, 0, doubled.err)
     assert.equal(JSON.parse(doubled.out).doubled, 42)
 
-    // --- flag layer intercept:number convert failed non-zero
+    // --- Flag layer rejection: number conversion failure exits non-zero
     const badFlag = await run(['probe', 'double', '--n', 'abc', '--json'])
     assert.notEqual(badFlag.code, 0)
 
-    // --- server side Schema reject (--input bypass flag convert):validation_error
-    const badSchema = await run(['probe', 'double', '--input', '{"n":"is not number"}', '--json'])
+    // --- Server-side Schema rejection (--input bypasses flag conversion): validation_error
+    const badSchema = await run(['probe', 'double', '--input', '{"n":"not a number"}', '--json'])
     assert.notEqual(badSchema.code, 0)
     assert.equal((JSON.parse(badSchema.err) as { error: { code: string } }).error.code, 'validation_error')
 
-    // --- create a ordinary conversation supply after continue child process get verify
+    // --- Create a regular conversation for child-process get verification
     const mkConv = await run(['conversations', 'create', '--title', 'CLI conversation', '--profile-id', 'assistant', '--json'])
     assert.equal(mkConv.code, 0, mkConv.err)
     const cliConvId = (JSON.parse(mkConv.out) as { id: number }).id
 
-    // --- child process true CLI entry (async spawn; parent process event loop keep response,Hub can answer):
-    //     setup completed, child process via cli-token credentials access the same true Hub(three only read command concurrency run omit remove serial process start wait for).
+    // --- Child-process real CLI entrypoint (async spawn; parent event loop stays responsive so Hub can answer):
+    //     after setup, child processes read cli-token credentials to access the same real Hub
+    //     (run three read-only commands concurrently to avoid serial process startup wait).
     const [childStatus, childGet, childAuth] = await Promise.all([
       runCliChildInEnv(['status', '--json']),
       runCliChildInEnv(['conversations', 'get', String(cliConvId), '--json']),
       runCliChildInEnv(['conversations', 'list', '--json']),
     ])
-    assert.equal(childStatus.timedOut, false, 'child process CLI must not suspended')
-    assert.equal(childStatus.code, 0, `child process status failed:${childStatus.err}`)
+    assert.equal(childStatus.timedOut, false, 'child-process CLI must not hang')
+    assert.equal(childStatus.code, 0, `child-process status failed: ${childStatus.err}`)
     assert.equal(JSON.parse(childStatus.out).configured, true)
 
-    assert.equal(childGet.timedOut, false, 'child process CLI must not suspended')
-    assert.equal(childGet.code, 0, `child process conversations get failed:${childGet.err}`)
+    assert.equal(childGet.timedOut, false, 'child-process CLI must not hang')
+    assert.equal(childGet.code, 0, `child-process conversations get failed: ${childGet.err}`)
     assert.equal(JSON.parse(childGet.out).id, cliConvId)
 
     assert.equal(childAuth.timedOut, false)
-    assert.equal(childAuth.code, 0, `child process authentication should via cli-token takes effect:${childAuth.err}`)
+    assert.equal(childAuth.code, 0, `child-process auth via cli-token should work: ${childAuth.err}`)
     assert.ok((JSON.parse(childAuth.out) as Array<{ id: number }>).some((c) => c.id === cliConvId))
 
-    // --- delete initial conversation after: workflow without target explicit 400;--current and explicit target normal
+    // --- After deleting initial conversation: workflow without target returns 400; --current and explicit target work normally
     const delInitial = await run(['conversations', 'delete', String(env.initialConvId), '--json'])
-    assert.equal(delInitial.code, 0, `delete initial conversation should succeeded:${delInitial.err}`)
+    assert.equal(delInitial.code, 0, `deleting initial conversation should succeed: ${delInitial.err}`)
     const goneCheck = await run(['conversations', 'get', String(env.initialConvId), '--json'])
-    assert.notEqual(goneCheck.code, 0, 'after deletion GET should non-zero (404)')
+    assert.notEqual(goneCheck.code, 0, 'GET after deletion should return non-zero (404)')
 
     const workflowScript = (name: string) => `export const meta = { name: "${name}", description: "t" }\nreturn 42`
     const workflowNoTarget = await run(['workflows', 'run', '--script', workflowScript('no-target-after-delete'), '--wait', '--json'])
@@ -1382,17 +1383,17 @@ test('collection into7: CLI↔Hub real link - -setup credentials/status/conversa
       { conversationId: cliConvId, callId: 'workflow-tool-target' },
     ) as { isError?: boolean; structuredOutput?: { summary?: { conversationId?: number } } }
     assert.equal(toolRun.isError, undefined)
-    assert.equal(toolRun.structuredOutput?.summary?.conversationId, cliConvId, 'Workflow tool use real when before conversation, independent of id 1')
+    assert.equal(toolRun.structuredOutput?.summary?.conversationId, cliConvId, 'Workflow tool uses actual current conversation, independent of id 1')
   } finally {
     await env.close()
   }
 })
 
 // ---------------------------------------------------------------------------
-// subagent run phase real-time related:parentToolCallId write mirror and broadcast conversation.upsert
+// Subagent runtime live correlation: parentToolCallId written to mirror & broadcast in conversation.upsert
 // ---------------------------------------------------------------------------
 
-test('subagent derive: sub-conversation summary carry parentToolCallId and via conversation.upsert broadcast', { timeout: 60_000 }, async () => {
+test('subagent spawn: child conversation summary carries parentToolCallId and broadcasts via conversation.upsert', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     const kernel = env.app.kernel
@@ -1404,37 +1405,37 @@ test('subagent derive: sub-conversation summary carry parentToolCallId and via c
         if (conv !== undefined) upserts.push({ id: conv.id, parentConversationId: conv.parentConversationId, parentToolCallId: conv.parentToolCallId })
       }
     })
-    // parent conversation model invoke subagent tool; subagent faux independent answer.
+    // Parent conversation model invokes subagent tool; subagent responds independently via faux.
     env.faux.setResponses([
       fauxAssistantMessage(
-        [fauxToolCall('subagent', { prompt: 'sub- task: check build', background: false })],
+        [fauxToolCall('subagent', { prompt: 'sub-task: check build', background: false })],
         { stopReason: 'toolUse' },
       ),
-      fauxAssistantMessage('subagent already return, task complete'),
+      fauxAssistantMessage('subagent returned, task complete'),
     ])
-    // sub-conversation use the same faux provider(faux queue by request order consume: parent tool round -> subagent turn -> parent wrap-up round).
-    await env.submitAndWait('please dispatch a subagent check build')
+    // Child conversation uses the same faux provider (faux queue consumed in request order: parent tool turn -> subagent turn -> parent wrap-up turn).
+    await env.submitAndWait('please dispatch a subagent to check build')
 
-    // summary layer: derive out sub-conversation mirror carries parentToolCallId(parent conversation tool invoke ID).
+    // Summary layer: spawned child conversation mirror carries parentToolCallId (parent's tool call ID).
     const child = kernel
       .listConversations()
       .find((c) => c.parentConversationId === env.initialConvId && c.parentToolCallId !== undefined)
-    assert.ok(child !== undefined, 'sub-conversation summary must carry parentToolCallId(run phase real-time related contract)')
+    assert.ok(child !== undefined, 'child conversation summary must carry parentToolCallId (live runtime correlation contract)')
     assert.ok(child!.parentToolCallId !== undefined && child!.parentToolCallId !== '')
 
-    // event layer:conversation.upsert broadcast in contains the sub-conversation and parentToolCallId(frontend SSE i.e. moment can related).
+    // Event layer: conversation.upsert broadcast includes the child conversation and parentToolCallId (frontend correlates immediately over SSE).
     const broadcast = upserts.find((u) => u.id === child!.id && u.parentToolCallId === child!.parentToolCallId)
-    assert.ok(broadcast !== undefined, 'conversation.upsert must broadcast contains parentToolCallId sub-conversation summary')
+    assert.ok(broadcast !== undefined, 'conversation.upsert must broadcast child conversation summary with parentToolCallId')
   } finally {
     await env.close()
   }
 })
 
 // ---------------------------------------------------------------------------
-// closed ring 1: managed Token - - managed bash in CLI fully independent of disk login
+// Loop 1: managed token — CLI inside managed bash works independently of disk login
 // ---------------------------------------------------------------------------
 
-test('align1: managed bash inside CLI conversations get --current independent of disk login,HELM_TOKEN only with redaction form stream rotate', { timeout: 60_000 }, async () => {
+test('loop 1: CLI conversations get --current inside managed bash works independently of disk login; HELM_TOKEN flows only in redacted form', { timeout: 60_000 }, async () => {
   const env = await makeCoreEnv()
   let hub: Awaited<ReturnType<typeof startHub>> | undefined
   try {
@@ -1444,16 +1445,16 @@ test('align1: managed bash inside CLI conversations get --current independent of
     const userToken = (JSON.parse(setupRes.body) as { token: string }).token
 
     const runtime = env.app.kernel as unknown as { setHubUrl?: (url: string) => void }
-    assert.equal(typeof runtime.setHubUrl, 'function', 'KernelRuntime.setHubUrl should store in')
+    assert.equal(typeof runtime.setHubUrl, 'function', 'KernelRuntime.setHubUrl should exist')
     runtime.setHubUrl!(base)
 
     const tokenGetter = (env.app.kernel as unknown as {
       toolDeps?: { processToken?: () => string }
     }).toolDeps?.processToken
-    assert.equal(typeof tokenGetter, 'function', 'toolDeps.processToken should store in')
+    assert.equal(typeof tokenGetter, 'function', 'toolDeps.processToken should exist')
     const managedToken = tokenGetter!()
 
-    // CLI in new temporary dataDir(without cli-token disk file) under with HELM_TOKEN env direct connect.
+    // Connect directly via HELM_TOKEN env under a fresh temporary dataDir (no cli-token disk file).
     const cliDataDir = mkdtempSync(join(tmpdir(), 'helm-align-cli-'))
     const cliEnvBase = {
       ...process.env,
@@ -1462,26 +1463,25 @@ test('align1: managed bash inside CLI conversations get --current independent of
       HELM_TOKEN: managedToken,
     }
     try {
-      assert.equal(existsSync(join(cliDataDir, 'cli-token')), false, 'initial without disk login')
+      assert.equal(existsSync(join(cliDataDir, 'cli-token')), false, 'initially has no disk login')
 
       const got = await runCliChild(
         ['conversations', 'get', '--current', '--json'],
         { ...cliEnvBase, HELM_CONVERSATION_ID: String(ROOT_CONVERSATION_ID) },
       )
-      assert.equal(got.timedOut, false, 'CLI child process must not suspended')
-      assert.equal(got.code, 0, `managed token CLI should succeeded:${got.err}`)
+      assert.equal(got.timedOut, false, 'CLI child process must not hang')
+      assert.equal(got.code, 0, `managed-token CLI should succeed: ${got.err}`)
       const summary = JSON.parse(got.out) as { id: number; model?: unknown; entries?: unknown[] }
       assert.equal(summary.id, ROOT_CONVERSATION_ID)
-      assert.ok(Array.isArray(summary.entries), 'CLI get should return detail situation (entries timeline)')
-      assert.ok(!got.out.includes(managedToken) && !got.err.includes(managedToken), 'CLI output must not back visible original Token')
+      assert.ok(Array.isArray(summary.entries), 'CLI get should return detail payload (entries timeline)')
+      assert.ok(!got.out.includes(managedToken) && !got.err.includes(managedToken), 'CLI output must not echo raw token')
 
-      // marker form: global redaction register after, any exit appear is [REDACTED] placeholder.
+      // Placeholder form: after global redactor registration, any egress shows [REDACTED] placeholder.
       const marker = env.app.kernel.services.stash.redact(managedToken)
-      assert.notEqual(marker, managedToken, 'managed token must already by global redaction register')
+      assert.notEqual(marker, managedToken, 'managed token must be registered in global redactor')
 
-      // first subscribe and etc. snapshot first frame (verify subscribe ready), again commit contains token input;
-      // collect condition also want seek entry and upsert(upsert in turn compute when only then publish, only in
-      // first entry then exit will leak compute frame).
+      // Subscribe first and wait for initial snapshot frame (ensuring subscription is ready), then submit token-bearing input;
+      // wait condition requires both entry and upsert (upsert is emitted on turn settle, so exiting on entry alone would miss the settled frame).
       const sub = openSseSubscription(
         base,
         userToken,
@@ -1495,25 +1495,25 @@ test('align1: managed bash inside CLI conversations get --current independent of
       env.faux.setResponses([
         (ctx) => {
           requests.push(JSON.stringify(ctx.messages))
-          return fauxAssistantMessage('receives')
+          return fauxAssistantMessage('received')
         },
       ])
       await env.app.kernel.submitInput(ROOT_CONVERSATION_ID, `credentials is ${managedToken} please keep`)
       await env.app.kernel.waitForIdle(ROOT_CONVERSATION_ID)
-      assert.ok(requests.length > 0, 'should catch model request')
-      assert.ok(!requests[0]!.includes(managedToken), 'model request must not contains original managed Token')
+      assert.ok(requests.length > 0, 'should capture model request')
+      assert.ok(!requests[0]!.includes(managedToken), 'model request must not contain raw managed token')
 
-      // SSE incremental (conversation.entry / upsert) excludes original token.
+      // SSE incremental events (conversation.entry / upsert) exclude raw token.
       const frames = await sub.frames
       const joined = frames.join('\n')
-      assert.ok(joined.includes('event: conversation.entry'), 'should receives conversation.entry incremental event')
-      assert.ok(joined.includes('event: conversation.upsert'), 'should receives conversation.upsert incremental event')
-      assert.ok(!joined.includes(managedToken), 'SSE frame must not contains original managed Token')
+      assert.ok(joined.includes('event: conversation.entry'), 'should receive conversation.entry incremental event')
+      assert.ok(joined.includes('event: conversation.upsert'), 'should receive conversation.upsert incremental event')
+      assert.ok(!joined.includes(managedToken), 'SSE frames must not contain raw managed token')
 
       assert.deepEqual(
         sqliteTablesContaining(env.dbPath, managedToken),
         [],
-        'state.sqlite any table must not contains original managed Token',
+        'no state.sqlite table may contain raw managed token',
       )
     } finally {
       rmSync(cliDataDir, { recursive: true, force: true })
@@ -1525,10 +1525,10 @@ test('align1: managed bash inside CLI conversations get --current independent of
 })
 
 // ---------------------------------------------------------------------------
-// closed ring 2: managed bash in real execute CLI(bash tool child process env carry managed token)
+// Loop 2: executing real CLI inside managed bash (bash tool child process env carries managed token)
 // ---------------------------------------------------------------------------
 
-test('align2: managed bash tool inside execute helm conversations get - - env inject,exit 0 mark record, detail situation special sign back pass and Token do not back visible', { timeout: 60_000 }, async () => {
+test('loop 2: executing helm conversations get inside managed bash tool — env injection, exit 0 marker, detail markers returned, token never echoed', { timeout: 60_000 }, async () => {
   const env = await makeCoreEnv()
   let hub: Awaited<ReturnType<typeof startHub>> | undefined
   try {
@@ -1541,7 +1541,7 @@ test('align2: managed bash tool inside execute helm conversations get - - env in
     runtime.setHubUrl!(base)
 
     const cliDataDir = join(env.dataDir, 'cli-isolated')
-    // tail part && echo CLI_OK:CLI exit 0 only then will output the mark record (&& chain short route).
+    // Trailing && echo CLI_OK: prints marker only when CLI exits 0 (short-circuit via &&).
     const cmd = [
       `export HELM_DATA_DIR="${cliDataDir}"`,
       `export HELM_CONVERSATION_ID=${ROOT_CONVERSATION_ID}`,
@@ -1549,8 +1549,8 @@ test('align2: managed bash tool inside execute helm conversations get - - env in
       'echo CLI_OK',
     ].join(' && ')
 
-    // faux  1 response start bash tool invoke;capture put in tool after 2 response - -
-    // fixed final answer will not carry tool result context, forever cannot catch.
+    // Response #1 triggers bash tool call; capture goes in response #2 after tool result —
+    // a fixed final answer won't carry tool result context and can never be captured.
     const toolResults: string[] = []
     env.faux.setResponses([
       fauxAssistantMessage([fauxToolCall('bash', { command: cmd })], { stopReason: 'toolUse' }),
@@ -1560,22 +1560,22 @@ test('align2: managed bash tool inside execute helm conversations get - - env in
       },
     ])
 
-    await env.app.kernel.submitInput(ROOT_CONVERSATION_ID, 'please in managed shell in execute helm conversations get --current --json')
+    await env.app.kernel.submitInput(ROOT_CONVERSATION_ID, 'execute helm conversations get --current --json inside managed shell')
     await env.app.kernel.waitForIdle(ROOT_CONVERSATION_ID)
 
-    assert.ok(toolResults.length > 0, 'should catch tool after model request')
+    assert.ok(toolResults.length > 0, 'should capture post-tool model request')
     const toolCtx = toolResults[0]!
     const managedToken = (env.app.kernel as unknown as { toolDeps?: { processToken?: () => string } }).toolDeps?.processToken?.()
-    assert.ok(managedToken, 'toolDeps.processToken should store in')
-    assert.ok(!toolCtx.includes(managedToken!), 'tool result back pass model must not contains original managed Token')
-    // CLI real succeeded verify based on chain:exit 0 mark record + detail  entries timeline + helm.input
-    // entry + conversation title - - cannot only see number 1 then compute via.
-    assert.ok(toolCtx.includes('CLI_OK'), 'tool output should contains CLI exit 0 mark record CLI_OK')
-    assert.ok(toolCtx.includes('helm.input'), 'CLI detail situation should contains helm.input entry(this turn input already timeline)')
-    assert.ok(toolCtx.includes('person assist'), 'CLI detail situation should contains conversation title')
-    assert.ok(toolCtx.includes('entries'), 'CLI detail situation should contains entries timeline field')
-    // toolCtx is message array JSON.stringify,CLI output inside embed when quotes by escaping (\"id\": 1)
-    assert.ok(/id\\?"?\s*:\s*1\b/.test(toolCtx), 'CLI detail situation should contains conversation id')
+    assert.ok(managedToken, 'toolDeps.processToken should exist')
+    assert.ok(!toolCtx.includes(managedToken!), 'tool result passed to model must not contain raw managed token')
+    // Evidence chain for real CLI success: exit 0 marker + detail entries timeline + helm.input
+    // entry + conversation title — never pass just because the digit 1 appears.
+    assert.ok(toolCtx.includes('CLI_OK'), 'tool output should contain CLI exit 0 marker CLI_OK')
+    assert.ok(toolCtx.includes('helm.input'), 'CLI detail should contain helm.input entry (current input persisted)')
+    assert.ok(toolCtx.includes('person assist'), 'CLI detail should contain conversation title')
+    assert.ok(toolCtx.includes('entries'), 'CLI detail should contain entries timeline field')
+    // toolCtx is JSON.stringify of message array, so quotes in CLI output are escaped (\"id\": 1)
+    assert.ok(/id\\?"?\s*:\s*1\b/.test(toolCtx), 'CLI detail should contain conversation id')
   } finally {
     await hub?.close()
     await env.close()
@@ -1583,10 +1583,10 @@ test('align2: managed bash tool inside execute helm conversations get - - env in
 })
 
 // ---------------------------------------------------------------------------
-// closed ring 3: input meta all chain + detail situation page + event + snapshot extend + workflow incremental
+// Loop 3: full input.meta pipeline + detail pagination + events + snapshot extensions + workflow deltas
 // ---------------------------------------------------------------------------
 
-test('align3: CLI send --meta → helm.input entry → turn_settled all chain; page first tail without lose;entry/live/plugin.changed/workflow.updated real incremental', { timeout: 60_000 }, async () => {
+test('loop 3: CLI send --meta -> helm.input entry -> turn_settled end-to-end; complete pagination; real entry/live/plugin.changed/workflow.updated deltas', { timeout: 60_000 }, async () => {
   const env = await makeCoreEnv()
   let hub: Awaited<ReturnType<typeof startHub>> | undefined
   try {
@@ -1595,11 +1595,11 @@ test('align3: CLI send --meta → helm.input entry → turn_settled all chain; p
     const setupRes = await httpCall(base, 'POST', '/api/auth/setup', { body: { password: 'align test password at least eight' } })
     const userToken = (JSON.parse(setupRes.body) as { token: string }).token
 
-    // plugin: collect turn_settled inputs(meta should original reach)
+    // Plugin: collects turn_settled inputs (meta must arrive intact)
     const settledInputs: Array<{ origins: string[]; metas: Array<Record<string, unknown> | undefined> }> = []
     await env.app.kernel.plugins.register({
       id: 'test:meta-probe',
-      name: 'meta probe needle',
+      name: 'meta probe',
       definePlugin(ctx) {
         ctx.hook.onTurnSettled((payload) => {
           settledInputs.push({
@@ -1610,10 +1610,10 @@ test('align3: CLI send --meta → helm.input entry → turn_settled all chain; p
       },
     } satisfies PluginDefinition)
 
-    // three subscribe all etc. snapshot first frame ready after again trigger by test behavior:
-    // A: CLI send turn conversation.entry / conversation.live incremental;
-    // B: plugin.changed start/stop two frame;
-    // C: pure script workflow run  workflow.updated complete incremental.
+    // All three subscriptions wait for initial snapshot ready before triggering actions:
+    // A: CLI send turn conversation.entry / conversation.live deltas;
+    // B: two plugin.changed frames for enable/disable;
+    // C: workflow.updated completion delta for pure-script workflow run.
     const subA = openSseSubscription(
       base,
       userToken,
@@ -1640,104 +1640,104 @@ test('align3: CLI send --meta → helm.input entry → turn_settled all chain; p
     try {
       env.faux.setResponses([fauxAssistantMessage('meta turn complete')])
       const sent = await runCliChild(
-        ['send', String(ROOT_CONVERSATION_ID), 'carries metadata input', '--meta', JSON.stringify(meta), '--wait', '--json'],
+        ['send', String(ROOT_CONVERSATION_ID), 'input carrying metadata', '--meta', JSON.stringify(meta), '--wait', '--json'],
         { ...process.env, HELM_HUB_URL: base, HELM_DATA_DIR: cliDataDir, HELM_TOKEN: userToken },
       )
       assert.equal(sent.timedOut, false)
       if (sent.code !== 0) {
-        assert.fail(`send --meta --wait failed:${sent.err}`)
+        assert.fail(`send --meta --wait failed: ${sent.err}`)
       }
-      // send --wait return ConversationInputResult:text i.e. this time answer,entry is answer item
+      // send --wait returns ConversationInputResult: text is this turn's reply, entry is the reply item
       const waitResult = JSON.parse(sent.out) as { text: string; entry?: { id: string } }
-      assert.equal(waitResult.text, 'meta turn complete', 'send --wait should return this time answer text')
-      assert.ok(waitResult.entry?.id, 'send --wait should return this time answer entry id')
+      assert.equal(waitResult.text, 'meta turn complete', 'send --wait should return this turn reply text')
+      assert.ok(waitResult.entry?.id, 'send --wait should return this turn reply entry id')
     } finally {
       rmSync(cliDataDir, { recursive: true, force: true })
     }
 
-    // turn_settled:meta all chain reach
+    // turn_settled: meta arrives intact across the pipeline
     await waitFor(() => settledInputs.length > 0)
     assert.equal(settledInputs[0]!.metas.length, 1)
-    assert.deepEqual(settledInputs[0]!.metas[0], meta, 'meta should from CLI original reach turn_settled')
+    assert.deepEqual(settledInputs[0]!.metas[0], meta, 'meta should flow from CLI intact to turn_settled')
 
-    // detail situation:GET /api/conversations/1 contains helm.input entry  data.meta
+    // Detail view: GET /api/conversations/1 includes data.meta on helm.input entry
     const detailRes = await httpCall(base, 'GET', '/api/conversations/1', { token: userToken })
     assert.equal(detailRes.status, 200)
     const detail = JSON.parse(detailRes.body) as {
       entries: Array<{ kind: string; data?: { meta?: Record<string, unknown>; text?: string }; model?: unknown[] }>
     }
     const inputEntry = detail.entries.find((e) => e.kind === 'helm.input')
-    assert.ok(inputEntry, 'detail should contains helm.input entry')
+    assert.ok(inputEntry, 'detail should contain helm.input entry')
     assert.deepEqual(inputEntry!.data?.meta, meta, 'helm.input entry should carry meta')
 
-    // assistant text in entry.model(do not in data) - -detail do not lose model message
+    // Assistant text lives in entry.model (not data) — detail preserves model messages
     const assistantEntry = detail.entries.find((e) => e.kind === 'pi.assistant')
     if (assistantEntry) {
       assert.ok(
         JSON.stringify(assistantEntry.model ?? '').includes('meta turn complete'),
-        'assistant text should in entry.model(model context message)',
+        'assistant text should be in entry.model (model context message)',
       )
     }
 
-    // SSE:conversation.entry and conversation.live real incremental reach (subscribe first at turn establish)
+    // SSE: conversation.entry and conversation.live arrive incrementally (subscription established before turn)
     const frames = await subA.frames
     const joined = frames.join('\n')
-    assert.ok(joined.includes('event: conversation.entry'), 'should receives conversation.entry event')
-    assert.ok(joined.includes('event: conversation.live'), 'should receives conversation.live event')
+    assert.ok(joined.includes('event: conversation.entry'), 'should receive conversation.entry event')
+    assert.ok(joined.includes('event: conversation.live'), 'should receive conversation.live event')
     const inputFrame = frames.find((f) => f.includes('event: conversation.entry') && f.includes('test.render'))
-    assert.ok(inputFrame, 'conversation.entry incremental should carry helm.input  meta')
+    assert.ok(inputFrame, 'conversation.entry delta should carry helm.input meta')
 
-    // first frame snapshot extend:ui and pluginDocs(builtin:workflow public runs document)
+    // Initial snapshot extensions: ui and pluginDocs (builtin:workflow public runs doc)
     const snapFrame = frames.find((f) => f.startsWith('event: snapshot'))
-    assert.ok(snapFrame, 'subscribe should receives first frame snapshot')
-    assert.ok(snapFrame!.includes('"ui"'), 'snapshot should contains ui(plugin UI contribution)')
-    assert.ok(snapFrame!.includes('"pluginDocs"'), 'snapshot should contains pluginDocs')
+    assert.ok(snapFrame, 'subscription should receive initial snapshot frame')
+    assert.ok(snapFrame!.includes('"ui"'), 'snapshot should contain ui (plugin UI contributions)')
+    assert.ok(snapFrame!.includes('"pluginDocs"'), 'snapshot should contain pluginDocs')
 
-    // page:limit=1 first page + cursor translate page to tail, aggregate without lose without duplicate
+    // Pagination: limit=1 first page + cursor paging to the end, aggregated with no drops or duplicates
     const firstPageRes = await httpCall(base, 'GET', '/api/conversations/1?limit=1', { token: userToken })
     assert.equal(firstPageRes.status, 200)
     const firstPage = JSON.parse(firstPageRes.body) as { entries: Array<{ id: string }>; nextCursor?: string }
     assert.equal(firstPage.entries.length, 1)
-    assert.ok(firstPage.nextCursor, 'should has under one page cursor')
+    assert.ok(firstPage.nextCursor, 'should have next page cursor')
     const collected = [...firstPage.entries.map((e) => e.id)]
     let cursor: string | undefined = firstPage.nextCursor
     let guard = 0
     while (cursor !== undefined && guard++ < 50) {
       const pageRes = await httpCall(base, 'GET', `/api/conversations/1?limit=2&cursor=${encodeURIComponent(cursor)}`, { token: userToken })
-      assert.equal(pageRes.status, 200, `cursor translate page failed:${pageRes.body}`)
+      assert.equal(pageRes.status, 200, `cursor pagination failed: ${pageRes.body}`)
       const page = JSON.parse(pageRes.body) as { entries: Array<{ id: string }>; nextCursor?: string }
       collected.push(...page.entries.map((e) => e.id))
       cursor = page.nextCursor
     }
-    assert.equal(new Set(collected).size, collected.length, 'page must not duplicate entry')
+    assert.equal(new Set(collected).size, collected.length, 'pagination must not duplicate entries')
     const fullRes = await httpCall(base, 'GET', '/api/conversations/1', { token: userToken })
     const full = JSON.parse(fullRes.body) as { entries: Array<{ id: string }> }
     assert.deepEqual(
       [...collected].sort(),
       full.entries.map((e) => e.id).sort(),
-      'page aggregate must and all amount consistent (first tail without lose)',
+      'paginated aggregation must match full set (no missing head/tail)',
     )
 
-    // plugin.changed carry ui: subscribe ready after start/stop carries UI contribution probe needle plugin,
-    // same connect in order receives ui non-empty and ui empty array two frame, do not rely reconnect re- pull snapshot.
+    // plugin.changed carries ui: enable/disable a probe plugin with UI contributions after subscription is ready,
+    // receiving non-empty ui and empty-array ui frames in order on the same connection without reconnecting for snapshot.
     await env.app.kernel.plugins.register({
       id: 'test:ui-probe',
-      name: 'UI probe needle',
+      name: 'UI probe',
       definePlugin(ctx) {
-        ctx.ui.sidebarItem({ id: 'ui-probe', label: 'align probe needle', target: 'conversation:1' })
+        ctx.ui.sidebarItem({ id: 'ui-probe', label: 'align probe', target: 'conversation:1' })
       },
     } satisfies PluginDefinition)
     await env.app.kernel.plugins.disable('test:ui-probe')
     const changeFrames = await subB.frames
     const changed = changeFrames.filter((f) => f.includes('event: plugin.changed'))
-    assert.ok(changed.length >= 2, `same connect should receives start/stop two time plugin.changed(actual ${changed.length})`)
+    assert.ok(changed.length >= 2, `same connection should receive two plugin.changed frames for enable/disable (got ${changed.length})`)
     const withUi = changed.find((f) => f.includes('"ui"') && f.includes('sidebar.item'))
-    assert.ok(withUi, 'enable event should carry ui contribution (contains surface)')
+    assert.ok(withUi, 'enable event should carry ui contributions (including surface)')
     const disabledEmptyUi = changed.find((f) => f.includes('"enabled":false') && /"ui":\s*\[\]/.test(f))
-    assert.ok(disabledEmptyUi, 'deactivate event ui should be empty array (client based on this replace contribution)')
+    assert.ok(disabledEmptyUi, 'disable event ui should be an empty array (client replaces contributions accordingly)')
 
-    // pure script workflow: subscribe ready after via CLI run --wait real execute,
-    // validate CLI terminal state output and workflow.updated complete incremental two route verify based on.
+    // Pure-script workflow: run via CLI run --wait after subscription ready,
+    // double-verifying both CLI terminal output and workflow.updated completion delta.
     const cliDataDir2 = mkdtempSync(join(tmpdir(), 'helm-align-cli-'))
     const wfScriptPath = join(cliDataDir2, 'align-wait.workflow.js')
     writeFileSync(
@@ -1757,7 +1757,7 @@ test('align3: CLI send --meta → helm.input entry → turn_settled all chain; p
       )
       assert.equal(wf.timedOut, false)
       if (wf.code !== 0) {
-        assert.fail(`workflows run --wait failed:${wf.err}`)
+        assert.fail(`workflows run --wait failed: ${wf.err}`)
       }
       const runSummary = (JSON.parse(wf.out) as { run: { id: string; status: string; result?: unknown } }).run
       assert.equal(runSummary.status, 'completed')
@@ -1766,7 +1766,7 @@ test('align3: CLI send --meta → helm.input entry → turn_settled all chain; p
       const completedFrame = wfFrames.find(
         (f) => f.includes('event: workflow.updated') && f.includes(runSummary.id) && f.includes('"status":"completed"'),
       )
-      assert.ok(completedFrame, 'same connect should receives the run  workflow.updated complete incremental')
+      assert.ok(completedFrame, 'same connection should receive workflow.updated completion delta for the run')
     } finally {
       rmSync(cliDataDir2, { recursive: true, force: true })
     }
@@ -1777,42 +1777,42 @@ test('align3: CLI send --meta → helm.input entry → turn_settled all chain; p
 })
 
 // ---------------------------------------------------------------------------
-// closed ring 4: plugin doc public private / manageConversation / scope
+// Loop 4: public/private plugin docs / manageConversation / scope
 // ---------------------------------------------------------------------------
 
-test('align4: ctx.doc public private boundary,plugin.doc.updated redaction incremental,manageConversation hosting protect,scope tool visible and run_action force conversation', { timeout: 60_000 }, async () => {
+test('loop 4: ctx.doc public/private boundary, plugin.doc.updated redaction delta, manageConversation protection, scoped tool visibility and run_action conversation enforcement', { timeout: 60_000 }, async () => {
   const env = await makeCoreEnv()
   let hub: Awaited<ReturnType<typeof startHub>> | undefined
-  // busy gate release function:try outside declaration (finally si bottom can tune),resolve idempotent, duplicate invoke without harm
+  // Busy gate releaser: declared outside try so finally can always settle it; resolve is idempotent
   let releaseBusy: () => void = () => {}
   try {
     const kernel = env.app.kernel
     const host = kernel.plugins
 
-    // public doc value contains secret form: public event must redaction (placeholder), private 404.
+    // Public doc contains a secret value: public events must redact (placeholder), private doc returns 404.
     const SECRET = 'align-doc-secret-blue'
     const placeholder = kernel.services.stash.put(ROOT_CONVERSATION_ID, 'DOC_SECRET', SECRET)
 
     const busyGate = new Promise<void>((r) => (releaseBusy = r))
     const eventsSeen: string[] = []
 
-    // public doc update closed package: subscribe ready after by test explicit trigger, event only then is real incremental
-    // (register phase update occur in subscribe before, forever etc. fewer than frame - - do not guess, do not blurry).
+    // Public doc updater closure: triggered explicitly after subscription ready so the event is a real delta
+    // (updates during register happen before subscription and would never be captured).
     type PubDoc = { note: string; secret: string }
     let updatePubDoc!: (fn: (v: PubDoc) => PubDoc) => void
 
-    const conv = await kernel.createConversation({ title: 'hosting conversation', profileId: 'assistant' })
+    const conv = await kernel.createConversation({ title: 'managed conversation', profileId: 'assistant' })
 
     await host.register({
       id: 'test:guard',
-      name: 'guard probe needle',
+      name: 'guard probe',
       definePlugin(ctx) {
         const pub = ctx.doc('status', { note: 'init', secret: SECRET }, { public: true })
         const priv = ctx.doc('inner', { count: 0 })
         updatePubDoc = (fn) => pub.update(fn)
         ctx.action<Record<string, never>, { ok: boolean }>({
           id: 'blocked_out',
-          description: 'scope outside cannot via conversation path invoke',
+          description: 'out-of-scope cannot invoke via conversation path',
           inputSchema: { type: 'object', properties: {}, additionalProperties: false },
           outputSchema: {
             type: 'object',
@@ -1825,7 +1825,7 @@ test('align4: ctx.doc public private boundary,plugin.doc.updated redaction incre
         })
         ctx.tool<{ text: string }>({
           name: 'guard_scoped',
-          description: 'scope limit set tool',
+          description: 'scoped tool',
           inputSchema: {
             type: 'object',
             properties: { text: { type: 'string' } },
@@ -1837,7 +1837,7 @@ test('align4: ctx.doc public private boundary,plugin.doc.updated redaction incre
         })
         ctx.action<Record<string, never>, { done: boolean }>({
           id: 'busy',
-          description: 'occupy in-flight task',
+          description: 'holds in-flight task',
           inputSchema: { type: 'object', properties: {}, additionalProperties: false },
           outputSchema: {
             type: 'object',
@@ -1853,9 +1853,9 @@ test('align4: ctx.doc public private boundary,plugin.doc.updated redaction incre
         ctx.hook.onTurnSettled(() => {
           eventsSeen.push('settled')
         })
-        // hosting: this plugin manage conv
+        // Manage conv from this plugin
         ctx.host.manageConversation(conv.id)
-        // private doc update do not event (only public doc is event exit)
+        // Private doc updates emit no events (only public docs emit events)
         priv.update((v) => ({ count: v.count + 1 }))
       },
     } satisfies PluginDefinition)
@@ -1865,18 +1865,18 @@ test('align4: ctx.doc public private boundary,plugin.doc.updated redaction incre
     const setupRes = await httpCall(base, 'POST', '/api/auth/setup', { body: { password: 'align test password at least eight' } })
     const userToken = (JSON.parse(setupRes.body) as { token: string }).token
 
-    // --- private doc:HTTP 404; public doc can read and secret with stash marker present
+    // --- Private doc: HTTP 404; public doc is readable and secret appears as stash placeholder
     const privateDoc = await httpCall(base, 'GET', `/api/plugins/test:guard/docs/inner`, { token: userToken })
-    assert.equal(privateDoc.status, 404, `private doc must 404:${privateDoc.status}`)
+    assert.equal(privateDoc.status, 404, `private doc must return 404: ${privateDoc.status}`)
     const publicDoc = await httpCall(base, 'GET', `/api/plugins/test:guard/docs/status`, { token: userToken })
     if (publicDoc.status !== 200) {
-      assert.fail(`public doc should can read (plugin doc HTTP):${publicDoc.status}`)
+      assert.fail(`public doc should be readable (plugin doc HTTP): ${publicDoc.status}`)
     }
-    assert.ok(!publicDoc.body.includes(SECRET), 'public doc out station must not contains secret plaintext')
-    assert.ok(publicDoc.body.includes(placeholder), 'public doc secret field should with stash marker present')
+    assert.ok(!publicDoc.body.includes(SECRET), 'public doc egress must not contain plaintext secret')
+    assert.ok(publicDoc.body.includes(placeholder), 'public doc secret field should appear as stash placeholder')
 
-    // --- plugin.doc.updated real incremental: subscribe ready after actual update and validate event redaction
-    // (original write method subscribe occur in update after, timeout after catch([]), fundamentally not verify event).
+    // --- plugin.doc.updated real delta: update after subscription ready and verify event redaction
+    // (updating before subscribing would time out with [] and never verify the event).
     const docSub = openSseSubscription(
       base,
       userToken,
@@ -1886,29 +1886,29 @@ test('align4: ctx.doc public private boundary,plugin.doc.updated redaction incre
     updatePubDoc((v) => ({ ...v, note: 'after-subscribe' }))
     const docFrames = await docSub.frames
     const docFrame = docFrames.find((f) => f.includes('event: plugin.doc.updated'))
-    assert.ok(docFrame, 'should receives plugin.doc.updated incremental event')
-    assert.ok(!docFrame!.includes(SECRET), 'plugin.doc.updated must not contains secret plaintext')
-    assert.ok(docFrame!.includes(placeholder), 'plugin.doc.updated secret should with stash marker present')
-    assert.ok(docFrame!.includes('after-subscribe'), 'event should carry update after marker value')
-    // public doc read value sync is update after content (marker still redaction)
+    assert.ok(docFrame, 'should receive plugin.doc.updated incremental event')
+    assert.ok(!docFrame!.includes(SECRET), 'plugin.doc.updated must not contain plaintext secret')
+    assert.ok(docFrame!.includes(placeholder), 'plugin.doc.updated secret should appear as stash placeholder')
+    assert.ok(docFrame!.includes('after-subscribe'), 'event should carry updated marker value')
+    // Public doc read reflects updated value (with secret still redacted)
     const publicDoc2 = await httpCall(base, 'GET', `/api/plugins/test:guard/docs/status`, { token: userToken })
     assert.equal(publicDoc2.status, 200)
-    assert.ok(publicDoc2.body.includes('after-subscribe'), 'public doc should reverse reflect update after value')
-    assert.ok(!publicDoc2.body.includes(SECRET), 'update after public doc still must not contains secret plaintext')
+    assert.ok(publicDoc2.body.includes('after-subscribe'), 'public doc should reflect updated value')
+    assert.ok(!publicDoc2.body.includes(SECRET), 'updated public doc must still not contain plaintext secret')
 
-    // --- hosting protect:DELETE managed conversation 409 conversation_managed_by_plugin
+    // --- Management protection: DELETE managed conversation returns 409 conversation_managed_by_plugin
     const delManaged = await httpCall(base, 'DELETE', `/api/conversations/${conv.id}`, { token: userToken })
     assert.equal(delManaged.status, 409)
     assert.equal(JSON.parse(delManaged.body).error.code, 'conversation_managed_by_plugin')
-    // protect takes effect during produces no abort side effect: conversation still store in
+    // Protection has no side effects: conversation still exists
     assert.equal(kernel.getConversation(conv.id).id, conv.id)
 
-    // --- scope:listTools(conversation) by conversation filter choose
+    // --- scope: listTools(conversation) filters per conversation
     const listToolsFn = host as unknown as {
       listTools?: (conversation?: { id: number; profileId: string; tags: string[] }) => Array<{ name: string }>
     }
     if (typeof listToolsFn.listTools !== 'function') {
-      assert.fail('PluginHost.listTools(conversation) scope filter choose should store in')
+      assert.fail('PluginHost.listTools(conversation) scope filter should exist')
     }
     const assistantTools = listToolsFn.listTools!({
       id: ROOT_CONVERSATION_ID,
@@ -1919,19 +1919,19 @@ test('align4: ctx.doc public private boundary,plugin.doc.updated redaction incre
     assert.ok(assistantTools.includes('guard_scoped'), 'assistant conversation should see guard_scoped')
     assert.ok(!otherTools.includes('guard_scoped'), 'other profile conversation must not see guard_scoped')
 
-    // invokeAction carries conversationId must hit scope; missed explicit reject
+    // invokeAction with conversationId must match scope; out-of-scope rejects explicitly
     const okCall = await host.invokeAction('test:guard', 'blocked_out', {}, { conversationId: conv.id })
     assert.deepEqual(okCall, { ok: true })
     await assert.rejects(
       () => host.invokeAction('test:guard', 'blocked_out', {}, { conversationId: ROOT_CONVERSATION_ID }),
       (err: unknown) => err instanceof HelmError && /scope|effect domain/.test(err.message),
-      'scope outside conversationId invoke should explicit reject',
+      'out-of-scope conversationId invocation should reject explicitly',
     )
-    // without conversationId human HTTP invoke do not subject to limit (conversation policy while non- user authentication)
+    // Human HTTP invocation without conversationId is unrestricted (conversation policy, not user auth)
     const httpNoCtx = await httpCall(base, 'POST', '/api/actions/test:guard/blocked_out', { token: userToken, body: { input: {} } })
     assert.equal(httpNoCtx.status, 200)
 
-    // run_action meta tool force carry conversationId: bypass scope invoke by refuse.
+    // run_action meta-tool enforces conversationId: attempting to bypass scope is rejected.
     const runActionOutputs: string[] = []
     env.faux.setResponses([
       fauxAssistantMessage(
@@ -1943,15 +1943,15 @@ test('align4: ctx.doc public private boundary,plugin.doc.updated redaction incre
         return fauxAssistantMessage('end')
       },
     ])
-    // conversation #1 do not in scope(conversationIds only contains conv.id)→ tool result should explicit reject
+    // Conversation #1 is out of scope (conversationIds only includes conv.id) -> tool result must explicitly reject
     await kernel.submitInput(ROOT_CONVERSATION_ID, 'invoke run_action test:guard.blocked_out')
     await kernel.waitForIdle(ROOT_CONVERSATION_ID)
     assert.ok(
       runActionOutputs.some((o) => /scope|effect domain|reject/.test(o)),
-      'run_action in scope outside conversation should by explicit reject (error visible at tool result)',
+      'run_action in out-of-scope conversation should be explicitly rejected (error visible in tool result)',
     )
 
-    // --- in-flight task during disable reject (409 plugin_has_live_tasks); release after disable succeeded and solve except hosting
+    // --- Disable rejects during in-flight task (409 plugin_has_live_tasks); succeeds after release and frees management
     const busy = host.invokeAction('test:guard', 'busy', {})
     await assert.rejects(
       () => host.disable('test:guard'),
@@ -1961,12 +1961,12 @@ test('align4: ctx.doc public private boundary,plugin.doc.updated redaction incre
     assert.deepEqual(await busy, { done: true })
     await host.disable('test:guard')
 
-    // disable after hosting release:DELETE now should succeeded (deactivate automatically release)
+    // Management released after disable: DELETE now succeeds (auto-released on disable)
     const delAfter = await httpCall(base, 'DELETE', `/api/conversations/${conv.id}`, { token: userToken })
-    assert.equal(delAfter.status, 200, `disable after hosting should release:${delAfter.body}`)
+    assert.equal(delAfter.status, 200, `management should release after disable: ${delAfter.body}`)
     void eventsSeen
   } finally {
-    // failed path si bottom: release busy gate, avoid cleanup hang (resolve idempotent)
+    // Failure fallback: release busy gate to avoid cleanup hang (resolve is idempotent)
     releaseBusy?.()
     await hub?.close()
     await env.close()
@@ -1974,17 +1974,17 @@ test('align4: ctx.doc public private boundary,plugin.doc.updated redaction incre
 })
 
 // ---------------------------------------------------------------------------
-// closed ring 5: external backend onAgentSpawn handled - - onResolved/onGateResult true back pass
+// Loop 5: external backend onAgentSpawn handled — real onResolved / onGateResult reporting
 // ---------------------------------------------------------------------------
 
-test('align5: test plugin agent_spawn handled external backend - -onResolved real metadata,onGateResult real kernel.runGate,Gate exactly once, compute order and missing gate explicit failed', { timeout: 60_000 }, async () => {
+test('loop 5: test plugin agent_spawn handled external backend — real onResolved metadata, real kernel.runGate via onGateResult, gate runs once, settle ordering, missing gate fails explicitly', { timeout: 60_000 }, async () => {
   const env = await makeCoreEnv()
-  // settle gate release function:try outside declaration (finally si bottom can tune),resolve idempotent, duplicate invoke without harm
+  // Settle gate releaser: declared outside try so finally can always release; resolve is idempotent
   let releaseSettle: () => void = () => {}
   try {
     const kernel = env.app.kernel
 
-    // external execute environment (real temp directory, do not guess host directory)
+    // External execution environment (real temp directory, never guess host dir)
     const execDir = join(env.dataDir, 'external-exec')
     mkdirSync(execDir, { recursive: true })
     const gateDir = join(env.dataDir, 'gate-files')
@@ -2007,22 +2007,22 @@ test('align5: test plugin agent_spawn handled external backend - -onResolved rea
             schema: request.schema,
           })
           if (request.onResolved === undefined || request.onGateResult === undefined) {
-            throw new HelmError('test_backend_contract', 'external backend must receives onResolved/onGateResult call back', 500)
+            throw new HelmError('test_backend_contract', 'external backend must receive onResolved/onGateResult callbacks', 500)
           }
-          // back pass real execute metadata (real temp directory + executionId + worktree)
+          // Report real execution metadata (real temp directory + executionId + worktree)
           request.onResolved({
             nodeId: 'local',
             executionId: execId,
             effectiveCwd: execDir,
             meta: { 'builtin:workflow': { worktree: { path: execDir, branch: 'align-wt' } } },
           })
-          // gate in external execute environment inside real execute (kernel.runGate real shell at execDir)
+          // Run gate inside external execution environment (kernel.runGate executes real shell at execDir)
           if (request.gate !== undefined) {
             const result = await kernel.runGate(request.gate, { cwd: execDir, conversationId: request.parentConversationId })
             gates.push({ command: request.gate, cwd: execDir })
             request.onGateResult(result)
           }
-          // Schema business data (handled result;source such as declaration enter schema)
+          // Schema business payload (handled result; includes schema-declared field source)
           return { action: 'handled', result: { answer: 42, source: 'external' } }
         })
         ctx.host.onEvent('workflow.settled', async () => {
@@ -2033,11 +2033,11 @@ test('align5: test plugin agent_spawn handled external backend - -onResolved rea
       },
     } satisfies PluginDefinition)
 
-    // gate counter file (real shell side effect, exactly once)
+    // Gate counter file (real shell side effect, must run exactly once)
     const gateCmd = `mkdir -p "${gateDir}" && printf x >> "${join(gateDir, 'count')}" && test -f "${join(execDir, 'marker')}" || (touch "${join(execDir, 'marker')}"; true)`
 
-    // schema such as declaration source:additionalProperties:false under handled return
-    // {answer, source} must all schema, never rely pare weak validate swap via.
+    // Schema declares source: under additionalProperties:false, handled return value {answer, source}
+    // must match schema completely without relying on strip-based lenient validation.
     const script =
       'export const meta = { name: "align-ext", description: "external backend" }\n' +
       'const v = await agent("external extract", { schema: ' +
@@ -2053,68 +2053,66 @@ test('align5: test plugin agent_spawn handled external backend - -onResolved rea
       ', gate: ' + JSON.stringify(gateCmd) + ' })\n' +
       'return v'
 
-    // compute chain verify:run terminal state via builtin:workflow plugin action (wait:true) return.
-    // emitEvent can wait for semantics: engine onRunSettled will await workflow.settled listener
-    //(settleGate), therefore must first etc. listener real enter (settleEntered) again release gate,
-    // finally only then wait for run terminal state - - order reversed will die etc. (run etc. listener, listener etc. release).
+    // Settlement chain check: terminal run state returned via builtin:workflow plugin action (wait:true).
+    // emitEvent awaits workflow.settled listeners (settleGate), so we wait until the listener enters (settleEntered),
+    // release the gate, and then await run completion — reversing the order would deadlock.
     const startedPromise = env.runWorkflow({ script, conversationId: ROOT_CONVERSATION_ID, wait: true })
     await waitFor(() => settleEntered === true)
     releaseSettle()
     const { run: started } = await startedPromise
     const result = started.result as { answer: number; source?: string }
-    assert.deepEqual(result, { answer: 42, source: 'external' }, 'external backend handled result should back pass script')
+    assert.deepEqual(result, { answer: 42, source: 'external' }, 'external backend handled result should flow back to script')
 
-    // node metadata keep:executionId / effectiveCwd / worktree / gate
+    // Node metadata preserved: executionId / effectiveCwd / worktree / gate
     const summary = (await env.inspectRun(started.id)).run
     const node = summary.nodes?.find((n) => n.kind === 'agent')
-    assert.ok(node, 'should contains agent node')
-    assert.equal(node!.executionId, execId, 'node should keep external executionId')
-    assert.equal(node!.effectiveCwd, execDir, 'node should keep external effectiveCwd')
+    assert.ok(node, 'should contain agent node')
+    assert.equal(node!.executionId, execId, 'node should preserve external executionId')
+    assert.equal(node!.effectiveCwd, execDir, 'node should preserve external effectiveCwd')
     assert.equal(node!.nodeId, 'local')
     assert.equal(node!.worktree?.path, execDir)
     assert.equal(node!.worktree?.branch, 'align-wt')
     assert.equal(node!.worktree?.id, `local:${execDir}`)
-    assert.ok(node!.gate?.ok === true, 'node should contains gate execute result')
+    assert.ok(node!.gate?.ok === true, 'node should contain gate execution result')
 
-    // Gate file exactly once (onGateResult back report make engine skip second time execute)
+    // Gate executed exactly once (onGateResult skips redundant execution in engine)
     await waitFor(() => existsSync(join(gateDir, 'count')))
-    assert.equal(readFileSync(join(gateDir, 'count'), 'utf8'), 'x', 'gate exactly execute once')
+    assert.equal(readFileSync(join(gateDir, 'count'), 'utf8'), 'x', 'gate should execute exactly once')
     await waitFor(() => settleCount === 1)
-    assert.equal(settleCount, 1, 'workflow.settled should exactly trigger once')
+    assert.equal(settleCount, 1, 'workflow.settled should trigger exactly once')
 
-    // resume replay no longer gate, no longer execute external backend
+    // Resume replay neither re-runs gate nor re-executes external backend
     const gatesBefore = gates.length
     const { run: resumed } = await env.runWorkflow({ resumeFromRunId: started.id, conversationId: ROOT_CONVERSATION_ID, wait: true })
     const resumedResult = resumed.result as { answer: number; source?: string }
     assert.equal(resumedResult.answer, 42)
-    assert.equal(gates.length, gatesBefore, 'resume replay must not again execute gate')
-    assert.equal(readFileSync(join(gateDir, 'count'), 'utf8'), 'x', 'gate side effect does not repeat')
+    assert.equal(gates.length, gatesBefore, 'resume replay must not re-run gate')
+    assert.equal(readFileSync(join(gateDir, 'count'), 'utf8'), 'x', 'gate side effect must not repeat')
 
-    // deactivate a handled backend, avoid it truncate obtain after continue missing gate scenario spawn
+    // Disable previous handled backend so it does not intercept the missing-gate test spawn
     await kernel.plugins.disable('test:ext-backend')
 
-    // --- missing Gate back report: explicit failed, do not in host guess directory execute
+    // --- Missing gate report: fails explicitly, never guesses a host dir to run gate
     await kernel.plugins.register({
       id: 'test:ext-nogate',
-      name: 'missing gate back report backend',
+      name: 'missing-gate-report backend',
       definePlugin(ctx) {
         ctx.hook.onAgentSpawn((request) => {
           request.onResolved?.({ executionId: `${execId}-nogate`, effectiveCwd: execDir })
-          // deliberately do not back report onGateResult
+          // Intentionally omit onGateResult
           return { action: 'handled', result: { answer: 1 } }
         })
       },
     } satisfies PluginDefinition)
 
-    // agent() failed by engine contract return null(do not throw); script must in null when explicit
-    // throw only then can let the whole run assertion is failed.
+    // agent() returns null on failure by contract (does not throw); script must throw on null
+    // so the overall run fails explicitly.
     const badScript =
       'export const meta = { name: "align-nogate", description: "gate result missing" }\n' +
-      'const v = await agent("missing gate back report", { gate: ' + JSON.stringify(gateCmd) + ' })\n' +
-      'if (v === null || v === undefined) throw new Error("agent not return result")\n' +
+      'const v = await agent("missing gate report", { gate: ' + JSON.stringify(gateCmd) + ' })\n' +
+      'if (v === null || v === undefined) throw new Error("agent did not return result")\n' +
       'return v'
-    // engine contract: script throw make run failed;wait:true action for failed terminal state throw
-    // workflow_failed error message seal, change use non- wait run + inspect polling terminal state.
+    // Engine contract: throwing in script fails the run; wait:true wraps failed runs in workflow_failed with runId details.
     let badId = ''
     await assert.rejects(
       () => env.runWorkflow({ script: badScript, conversationId: ROOT_CONVERSATION_ID, wait: true }),
@@ -2123,43 +2121,42 @@ test('align5: test plugin agent_spawn handled external backend - -onResolved rea
         return err instanceof HelmError && err.code === 'workflow_failed'
       },
     )
-    assert.ok(badId !== '', 'error message seal should carry runId')
+    assert.ok(badId !== '', 'error wrapper should carry runId')
     const badSummary = (await env.inspectRun(badId)).run
-    assert.equal(badSummary.status, 'failed', 'missing gate back report should explicit failed')
+    assert.equal(badSummary.status, 'failed', 'missing gate report should fail explicitly')
     const badNode = badSummary.nodes?.find((n) => n.kind === 'agent')
-    assert.ok(badNode, 'should contains agent node')
+    assert.ok(badNode, 'should contain agent node')
     assert.ok(badNode!.status === 'failed')
-    // only recognize node real diagnose (gate_result_missing by engine write node.error);
-    // ?? summary.error fall back will hit script self row throw character, is false via path, disable.
+    // Only recognize genuine node diagnostic (gate_result_missing written to node.error by engine);
+    // never fall back to summary.error which matches script's own thrown text.
     assert.ok(
       typeof badNode!.error === 'string' && badNode!.error.includes('gate_result_missing'),
-      `agent node error should contains real diagnose gate_result_missing:${String(badNode!.error)}`,
+      `agent node error should contain real diagnostic gate_result_missing: ${String(badNode!.error)}`,
     )
-    // do not in host guess directory execute:gate counter do not because the run add (real side effect while non- edit build message)
-    assert.equal(readFileSync(join(gateDir, 'count'), 'utf8'), 'x', 'missing back report run must not in host directory execute gate')
-    assert.equal(gates.length, gatesBefore, 'missing back report run must not via backend execute gate')
+    // Never guesses a host dir to run gate: counter does not increase
+    assert.equal(readFileSync(join(gateDir, 'count'), 'utf8'), 'x', 'missing-report run must not run gate in host dir')
+    assert.equal(gates.length, gatesBefore, 'missing-report run must not run gate through backend')
   } finally {
-    // failed path si bottom: release settle gate, avoid workflow.settled listen forever long hang
-    //(resolve idempotent).
+    // Failure fallback: release settle gate so workflow.settled listener cannot hang forever (resolve is idempotent).
     releaseSettle()
     await env.close()
   }
 })
 
 // ---------------------------------------------------------------------------
-// closed ring 6: two Profile independent SYSTEM/MEMORY and model + HTTP PATCH switch + restart keep
+// Loop 6: two Profiles with independent SYSTEM/MEMORY/model + HTTP PATCH switch + persistence across restart
 // ---------------------------------------------------------------------------
 
-test('align6: double Profile independent SYSTEM/MEMORY/model,PATCH switch and clean override after request consistent, restart keep', { timeout: 60_000 }, async () => {
+test('loop 6: dual Profile independent SYSTEM/MEMORY/model, consistent requests after PATCH switch and clearing override, preserved across restart', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helm-align-profile-'))
 
   writeProfile(dataDir, 'researcher', {
-    system: '# Researcher System\nyou is research member. unique mark record ALIGN-SYS-RESEARCHER.',
-    memory: 'RESEARCHER-MEM: bias well quote text',
+    system: '# Researcher System\nyou are a researcher. unique marker ALIGN-SYS-RESEARCHER.',
+    memory: 'RESEARCHER-MEM: prefers quoting sources',
   })
   writeProfile(dataDir, 'coder', {
-    system: '# Coder System\nyou is program member. unique mark record ALIGN-SYS-CODER.',
-    memory: 'CODER-MEM: bias well test',
+    system: '# Coder System\nyou are a programmer. unique marker ALIGN-SYS-CODER.',
+    memory: 'CODER-MEM: prefers writing tests',
   })
 
   const build = () => createHubTestApp({ dataDir, cwd: dataDir })
@@ -2167,18 +2164,18 @@ test('align6: double Profile independent SYSTEM/MEMORY/model,PATCH switch and cl
   const requests: string[] = []
   const first = await build()
   try {
-    // two profile each conversation
+    // One conversation per profile
     const r1 = await first.app.kernel.createConversation({ title: 'research member', profileId: 'researcher' })
     const c1 = await first.app.kernel.createConversation({ title: 'program member', profileId: 'coder' })
 
-    // researcher turn:faux catch system sections
+    // researcher turn: faux captures system sections
     first.faux.setResponses([
       (ctx) => {
         requests.push(JSON.stringify(ctx.messages))
         return fauxAssistantMessage('r')
       },
     ])
-    await first.app.kernel.submitInput(r1.id, ' researcher you is who')
+    await first.app.kernel.submitInput(r1.id, 'researcher who are you')
     await first.app.kernel.waitForIdle(r1.id)
 
     // coder turn
@@ -2188,30 +2185,29 @@ test('align6: double Profile independent SYSTEM/MEMORY/model,PATCH switch and cl
         return fauxAssistantMessage('c')
       },
     ])
-    await first.app.kernel.submitInput(c1.id, ' coder you is who')
+    await first.app.kernel.submitInput(c1.id, 'coder who are you')
     await first.app.kernel.waitForIdle(c1.id)
 
     assert.ok(requests.length >= 2)
-    assert.ok(requests[0]!.includes('ALIGN-SYS-RESEARCHER'), 'researcher turn should inject its SYSTEM')
-    // note: across Profile collaboration directory (profile.catalog) will carries coder  SYSTEM first segment single row summary
-    //(contains ALIGN-SYS-CODER mark record), this is design inside recognize know sharing; this where assertion is complete SYSTEM
-    // do not string - - with title row # Coder System is allow.
-    assert.ok(!requests[0]!.includes('# Coder System'), 'researcher turn must not string coder complete SYSTEM')
-    assert.ok(requests[0]!.includes('RESEARCHER-MEM'), 'researcher turn should inject its MEMORY')
-    assert.ok(requests[1]!.includes('ALIGN-SYS-CODER'), 'coder turn should inject its SYSTEM')
-    assert.ok(requests[1]!.includes('CODER-MEM'), 'coder turn should inject its MEMORY')
-    assert.ok(!requests[1]!.includes('# Researcher System'), 'coder turn must not string researcher complete SYSTEM')
+    assert.ok(requests[0]!.includes('ALIGN-SYS-RESEARCHER'), 'researcher turn should inject its own SYSTEM')
+    // Note: cross-Profile catalog (profile.catalog) includes a one-line summary of coder's first SYSTEM line
+    // (which contains ALIGN-SYS-CODER), which is intentional sharing; here we assert full SYSTEM does not leak across profiles.
+    assert.ok(!requests[0]!.includes('# Coder System'), 'researcher turn must not bleed coder full SYSTEM')
+    assert.ok(requests[0]!.includes('RESEARCHER-MEM'), 'researcher turn should inject its own MEMORY')
+    assert.ok(requests[1]!.includes('ALIGN-SYS-CODER'), 'coder turn should inject its own SYSTEM')
+    assert.ok(requests[1]!.includes('CODER-MEM'), 'coder turn should inject its own MEMORY')
+    assert.ok(!requests[1]!.includes('# Researcher System'), 'coder turn must not bleed researcher full SYSTEM')
   } finally {
     await first.app.close()
   }
 
-  // restart:profile bind set and inject keep
+  // Restart: profile binding and injection preserved
   const second = await build()
   try {
     const convs = second.app.kernel.listConversations()
     const r1 = convs.find((c) => c.title === 'research member')
     const c1 = convs.find((c) => c.title === 'program member')
-    assert.ok(r1 && c1, 'after restart conversation keep')
+    assert.ok(r1 && c1, 'conversations preserved across restart')
 
     const requests2: string[] = []
     second.faux.setResponses([
@@ -2220,11 +2216,11 @@ test('align6: double Profile independent SYSTEM/MEMORY/model,PATCH switch and cl
         return fauxAssistantMessage('r2')
       },
     ])
-    await second.app.kernel.submitInput(r1!.id, 'again question once')
+    await second.app.kernel.submitInput(r1!.id, 'ask once more')
     await second.app.kernel.waitForIdle(r1!.id)
-    assert.ok(requests2[0]!.includes('ALIGN-SYS-RESEARCHER'), 'after restart SYSTEM inject keep')
+    assert.ok(requests2[0]!.includes('ALIGN-SYS-RESEARCHER'), 'SYSTEM injection preserved across restart')
 
-    // HTTP PATCH swap Profile: inject follow of switch
+    // HTTP PATCH switches Profile: injection switches accordingly
     let hub: Awaited<ReturnType<typeof startHub>> | undefined
     try {
       hub = await startHub({ kernel: second.app.kernel as never, port: 0 })
@@ -2236,7 +2232,7 @@ test('align6: double Profile independent SYSTEM/MEMORY/model,PATCH switch and cl
         token,
         body: { profileId: 'coder' },
       })
-      assert.equal(patched.status, 200, `PATCH profile failed:${patched.body}`)
+      assert.equal(patched.status, 200, `PATCH profile failed: ${patched.body}`)
 
       const requests3: string[] = []
       second.faux.setResponses([
@@ -2245,12 +2241,12 @@ test('align6: double Profile independent SYSTEM/MEMORY/model,PATCH switch and cl
           return fauxAssistantMessage('c2')
         },
       ])
-      await second.app.kernel.submitInput(r1!.id, 'swap profile after again question')
+      await second.app.kernel.submitInput(r1!.id, 'ask again after switching profile')
       await second.app.kernel.waitForIdle(r1!.id)
-      assert.ok(requests3[0]!.includes('ALIGN-SYS-CODER'), 'PATCH swap Profile after inject should switch')
-      assert.ok(!requests3[0]!.includes('# Researcher System'), 'must not leftover old Profile complete SYSTEM')
+      assert.ok(requests3[0]!.includes('ALIGN-SYS-CODER'), 'injection should switch after PATCH profile')
+      assert.ok(!requests3[0]!.includes('# Researcher System'), 'old Profile full SYSTEM must not remain')
 
-      // explicit model override + clean override:summary and real request consistent
+      // Explicit model override + clearing override: summary matches actual requests
       const override = await httpCall(base, 'PATCH', `/api/conversations/${r1!.id}`, {
         token,
         body: { model: 'faux/faux-1' },
@@ -2260,9 +2256,9 @@ test('align6: double Profile independent SYSTEM/MEMORY/model,PATCH switch and cl
         token,
         body: { model: '' },
       })
-      assert.equal(cleared.status, 200, "PATCH model:'' clean override should by accept")
+      assert.equal(cleared.status, 200, "PATCH model:'' clearing override should be accepted")
       const afterClear = JSON.parse(cleared.body) as { model: string }
-      assert.ok(typeof afterClear.model === 'string' && afterClear.model !== '', 'clean override after takes effect model back Profile/global and non-empty')
+      assert.ok(typeof afterClear.model === 'string' && afterClear.model !== '', 'effective model after clearing override reverts to Profile/global and is non-empty')
     } finally {
       await hub?.close()
     }

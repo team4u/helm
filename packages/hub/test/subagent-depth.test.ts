@@ -1,26 +1,25 @@
 /**
- * subagent embed set deep contract:builtin:workflow managed subagent by default can embed set 2 layer.
+ * Subagent nesting depth contract: `builtin:workflow` managed subagents can nest up to 2 levels by default.
  *
- * fact source (across restarts durable): plugin private doc `subagent-conversations` register via
- * agent_spawn pipeline succeeded derive (onResolved back pass conversationId) sub-conversation,
- * item contains depth / parentConversationId / maxSubagentDepth(sub- tree cap snapshot);
- * fork conversation and SuperAgent worker(via createConversation create, do not via spawn
- * pipeline) does not enter table, do not subject to embed set restrict affect. register fact missing or corrupt when explicit reject.
+ * Source of truth (persisted across restarts): plugin-private doc `subagent-conversations` registers child
+ * conversations spawned through the `agent_spawn` pipeline (`onResolved` returns `conversationId`),
+ * recording `depth` / `parentConversationId` / `maxSubagentDepth` (subtree ceiling snapshot).
+ * Forked conversations and SuperAgent workers (created via `createConversation`, bypassing `spawn`)
+ * stay outside the registry and are not subject to nesting caps. Missing/corrupt entries fail explicitly.
  *
- * three path guard against line:
- * 1. before_turn: reach sub- tree cap leaf turn strip subagent / SubagentWorkflow
- *    (one layer subagent by default keep dispatch work tool, can continue dispatch two layer);
- * 2. tool/action entry:subagent tool,SubagentWorkflow tool,run action in create
- *    any run record before reject (HelmError subagent_depth_exceeded, carry fact);
- * 3. agent_spawn most high priority fall back (priority 300, first at isolation 200 
- *    worktree allocate): directly tune kernel.spawnAgent also by refuse and register new fact.
+ * Three enforcement layers:
+ * 1. `before_turn`: strips `subagent` / `SubagentWorkflow` on leaf turns at the subtree ceiling
+ *    (depth-1 subagents keep dispatch tools so they can dispatch depth-2 children);
+ * 2. Tool/action boundaries: `subagent` tool, `SubagentWorkflow` tool, and `run` action reject before creating
+ *    any run record (`HelmError('subagent_depth_exceeded')`, carrying facts);
+ * 3. `agent_spawn` highest-priority fallback (priority 300, ahead of isolation=200 worktree allocation):
+ *    direct `kernel.spawnAgent` calls also reject without recording new entries.
  *
- * explicit extend:AgentSpawnRequest.maxSubagentDepth(subagent tool reference same name segment)
- * grant sub- tree deep cap (1..5), managed subagent must not mention high inherit cap; host plugin config
- * provide global default value read write opening.
+ * Explicit grants: `AgentSpawnRequest.maxSubagentDepth` (and `subagent` tool param) can grant a subtree ceiling
+ * (1..5), while managed subagents cannot raise their inherited ceiling; plugin config exposes a global default.
  *
- * honest discipline: all real execute (faux model, true sub-conversation, true doc persist, true
- * restart restore), do not mock engine, do not fabricate reject result.
+ * Honesty discipline: all real execution (faux model, real child conversations, real doc persistence, real
+ * restarts), no mocked engine, no fabricated rejection results.
  */
 
 import {
@@ -49,7 +48,7 @@ after(() => {
   rmSync(rootDir, { recursive: true, force: true })
 })
 
-/** read plugin private register table durable value (flush after from state.sqlite direct read, verify across restarts fact). */
+/** Reads the persisted private registry directly from `state.sqlite` after flushing (verifies restart source of truth). */
 function readRegistryRaw(dataDir: string): Record<string, unknown> {
   const db = new DatabaseSync(join(dataDir, 'state.sqlite'), { readOnly: true })
   try {
@@ -63,7 +62,7 @@ function readRegistryRaw(dataDir: string): Record<string, unknown> {
   }
 }
 
-/** direct write plugin private doc(app already on shutdown use; verify corrupt record explicit reject). */
+/** Writes plugin private doc directly (for testing corrupt records after closing app). */
 function writePluginDocRaw(dataDir: string, name: string, value: unknown): void {
   const db = new DatabaseSync(join(dataDir, 'state.sqlite'))
   try {
@@ -76,16 +75,16 @@ function writePluginDocRaw(dataDir: string, name: string, value: unknown): void 
   }
 }
 
-/** register table item assertion auxiliary: archive one read depth / parentConversationId / maxSubagentDepth. */
+/** Helper to read and assert a registry entry (`depth` / `parentConversationId` / `maxSubagentDepth`). */
 function registryEntry(dataDir: string, conversationId: number): Record<string, unknown> {
   const raw = readRegistryRaw(dataDir)[String(conversationId)]
-  assert.ok(raw !== undefined && typeof raw === 'object', `conversation ${conversationId} should register subagent-conversations table`)
+  assert.ok(raw !== undefined && typeof raw === 'object', `conversation ${conversationId} should be registered in subagent-conversations`)
   return raw as Record<string, unknown>
 }
 
 /**
- * derive a real sub-conversation chain (and produce path same construct:onResolved reference and register table record account):
- * parents in order is chain on parent conversation, return all new conversation id.
+ * Spawns a real child conversation chain (matching production `onResolved` + registry behavior):
+ * each entry in `parents` acts as parent for the next spawned child; returns created child IDs.
  */
 async function spawnChain(
   app: Awaited<ReturnType<typeof createHelm>>,
@@ -103,7 +102,7 @@ async function spawnChain(
         if (info.conversationId !== undefined) childId = info.conversationId
       },
     })
-    assert.ok(childId !== undefined, `should from ${parent} derive sub-conversation and back pass conversationId`)
+    assert.ok(childId !== undefined, `should spawn child from ${parent} and return conversationId`)
     created.push(childId)
   }
   return created
@@ -112,16 +111,16 @@ async function spawnChain(
 
 
 // ---------------------------------------------------------------------------
-// 1. top-level derive one layer: fact register + one layer subagent keep dispatch work tool
+// 1. Depth 1 from top-level: fact registration + depth-1 subagent retains dispatch tools
 // ---------------------------------------------------------------------------
 
-describe('workflow subagent deep contract (by default cap 2)', { timeout: 60_000 }, () => {
-  test('top-level conversation derive one layer: register depth=1/parent chain/sub- tree cap=2; one layer subagent turn keep subagent/SubagentWorkflow', { timeout: 60_000 }, async () => {
+describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_000 }, () => {
+  test('top-level spawn depth=1: records depth/parent/ceiling=2; depth-1 subagent keeps subagent/SubagentWorkflow', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'depth1')
     const faux = makeFauxProvider()
     const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
     try {
-      // top-level: derive a subagent (real original generate spawn, true sub-conversation; explicit sync wait for result).
+      // Top-level: spawn a subagent (real native spawn, real child conversation, synchronous wait).
       faux.setResponses([
         fauxAssistantMessage([fauxToolCall('subagent', { prompt: 'sub- task', background: false })], { stopReason: 'toolUse' }),
         fauxAssistantMessage('subagent answer'),
@@ -131,16 +130,16 @@ describe('workflow subagent deep contract (by default cap 2)', { timeout: 60_000
       await app.kernel.waitForIdle(1)
 
       const child = app.kernel.listConversations().find((c) => c.parentConversationId === 1)
-      assert.ok(child, 'top-level derive should create true sub-conversation')
+      assert.ok(child, 'top-level spawn should create a real child conversation')
 
-      // register table: private doc persist deep fact (across restarts can read).
+      // Registry: private doc persists depth fact (survives restart).
       await app.kernel.documentStore.flush()
       const entry = registryEntry(dir, child.id)
-      assert.equal(entry['depth'], 1, 'top-level directly derive one layer subagent depth=1')
+      assert.equal(entry['depth'], 1, 'direct child of top-level conversation has depth=1')
       assert.equal(entry['parentConversationId'], 1)
-      assert.equal(entry['maxSubagentDepth'], 2, 'default sub- tree cap is default value 2')
+      assert.equal(entry['maxSubagentDepth'], 2, 'default subtree ceiling is 2')
 
-      // one layer subagent turn before_turn: dispatch work tool keep (by default can continue dispatch two layer).
+      // Depth-1 subagent `before_turn`: dispatch tools are preserved (can still dispatch depth-2).
       let childTools: string[] | undefined
       await app.kernel.plugins.register({
         id: 'test:depth-observer',
@@ -157,29 +156,28 @@ describe('workflow subagent deep contract (by default cap 2)', { timeout: 60_000
       faux.setResponses([fauxAssistantMessage('one layer subagent directly answer')])
       await app.kernel.submitInput(child.id, 'subagent by mention question')
       await app.kernel.waitForIdle(child.id)
-      assert.ok(childTools, 'should observe to subagent turn tool manifest')
+      assert.ok(childTools, 'should observe tool list on subagent turn')
       assert.ok(
         childTools!.includes('subagent') && childTools!.includes('SubagentWorkflow'),
-        `one layer subagent turn should keep dispatch work tool (actual:${childTools!.join(',')})`,
+        `depth-1 subagent turn should retain dispatch tools (actual: ${childTools!.join(',')})`,
       )
-      assert.ok(childTools!.includes('bash'), 'non- dispatch work tool do not subject to affect (bash still in)')
+      assert.ok(childTools!.includes('bash'), 'non-dispatch tools stay intact (bash present)')
     } finally {
       await app.close()
     }
   })
 
   // -------------------------------------------------------------------------
-  // 2. one layer subagent via real tool chain continue dispatch two layer: register depth=2; two layer turn strip dispatch work tool
+  // 2. Depth-1 subagent spawns depth-2 child: depth=2 recorded; depth-2 turn strips dispatch tools
   // -------------------------------------------------------------------------
 
-  test('one layer subagent via subagent tool continue dispatch two layer: register depth=2/parent chain; two layer subagent turn strip dispatch work tool', { timeout: 60_000 }, async () => {
+  test('depth-1 subagent spawns depth-2 via subagent tool: records depth=2; depth-2 strips dispatch tools', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'depth2')
     const faux = makeFauxProvider()
     const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
     try {
-      // model consume order (sync spawn one by one layer await, order determine):
-      // top-level toolUse(subagent) → one layer subagent toolUse(subagent) → two layer subagent text
-      // → one layer continue answer → top-level continue answer.
+      // Deterministic FIFO consumption order for synchronous nested spawns:
+      // top-level toolUse(subagent) -> depth-1 toolUse(subagent) -> depth-2 text -> depth-1 text -> top-level text.
       faux.setResponses([
         fauxAssistantMessage([fauxToolCall('subagent', { prompt: 'one layer task', background: false })], { stopReason: 'toolUse' }),
         fauxAssistantMessage([fauxToolCall('subagent', { prompt: 'two layer task', background: false })], { stopReason: 'toolUse' }),
@@ -191,21 +189,21 @@ describe('workflow subagent deep contract (by default cap 2)', { timeout: 60_000
       await app.kernel.waitForIdle(1)
 
       const child1 = app.kernel.listConversations().find((c) => c.parentConversationId === 1)
-      assert.ok(child1, 'should derive one layer sub-conversation')
+      assert.ok(child1, 'should spawn depth-1 child conversation')
       await app.kernel.waitForIdle(child1.id)
       const child2 = app.kernel.listConversations().find((c) => c.parentConversationId === child1.id)
-      assert.ok(child2, 'one layer subagent should via tool chain derive two layer sub-conversation')
+      assert.ok(child2, 'depth-1 subagent should spawn depth-2 child conversation via tool')
 
       await app.kernel.documentStore.flush()
       const e1 = registryEntry(dir, child1.id)
       assert.equal(e1['depth'], 1)
       assert.equal(e1['parentConversationId'], 1)
       const e2 = registryEntry(dir, child2.id)
-      assert.equal(e2['depth'], 2, 'two layer subagent depth=2')
+      assert.equal(e2['depth'], 2, 'depth-2 subagent has depth=2')
       assert.equal(e2['parentConversationId'], child1.id)
-      assert.equal(e2['maxSubagentDepth'], 2, 'sub- tree cap inherit parent conversation takes effect cap')
+      assert.equal(e2['maxSubagentDepth'], 2, 'subtree ceiling inherits parent effective ceiling')
 
-      // two layer subagent turn before_turn: dispatch work tool by strip (reach cap i.e. leaf).
+      // Depth-2 `before_turn`: dispatch tools are stripped at the ceiling (leaf).
       let leafTools: string[] | undefined
       await app.kernel.plugins.register({
         id: 'test:depth-observer',
@@ -222,22 +220,22 @@ describe('workflow subagent deep contract (by default cap 2)', { timeout: 60_000
       faux.setResponses([fauxAssistantMessage('two layer leaf only can directly answer')])
       await app.kernel.submitInput(child2.id, 'leaf by mention question')
       await app.kernel.waitForIdle(child2.id)
-      assert.ok(leafTools, 'should observe to two layer subagent turn tool manifest')
+      assert.ok(leafTools, 'should observe tool list on depth-2 turn')
       assert.ok(
         !leafTools!.includes('subagent') && !leafTools!.includes('SubagentWorkflow'),
-        `two layer subagent turn should strip dispatch work tool (actual:${leafTools!.join(',')})`,
+        `depth-2 subagent turn should strip dispatch tools (actual: ${leafTools!.join(',')})`,
       )
-      assert.ok(leafTools!.includes('bash'), 'non- dispatch work tool do not subject to affect (bash still in)')
+      assert.ok(leafTools!.includes('bash'), 'non-dispatch tools stay intact (bash present)')
     } finally {
       await app.close()
     }
   })
 
   // -------------------------------------------------------------------------
-  // 3. two layer reject:spawnAgent fall back + run action entry, all produces no side effect
-  // -------------------------------------------------------------------------
+  // 3. Depth-2 rejection: spawnAgent fallback + run action entry, zero side effects
+  // ---------------------------------------------------------------------------
 
-  test('two layer subagent reject again derive:spawnAgent 403 subagent_depth_exceeded(contains fact);run action set to two layer by refuse and without run record; one layer compare group let through', { timeout: 60_000 }, async () => {
+  test('depth-2 rejects further spawns (403 subagent_depth_exceeded) and run actions with no run records; depth-1 still allowed', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'depth3')
     const faux = makeFauxProvider()
     const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
@@ -245,8 +243,7 @@ describe('workflow subagent deep contract (by default cap 2)', { timeout: 60_000
       const child1 = (await spawnChain(app, faux, [1]))[0]!
       const child2 = (await spawnChain(app, faux, [child1]))[0]!
 
-      // direct tune (contains isolation:worktree - - must in worktree allocate before reject, produces no
-      // any git side effect or lease record).
+      // Direct call (with `isolation: 'worktree'` — must reject prior to worktree allocation with zero git/lease side effects).
       await assert.rejects(
         () =>
           app.kernel.spawnAgent({
@@ -255,17 +252,17 @@ describe('workflow subagent deep contract (by default cap 2)', { timeout: 60_000
             isolation: 'worktree',
           }),
         (err: unknown) => {
-          assert.ok(err instanceof HelmError, `should be HelmError(actual ${String(err)})`)
+          assert.ok(err instanceof HelmError, `expected HelmError (got ${String(err)})`)
           assert.equal(err.code, 'subagent_depth_exceeded')
           assert.equal(err.status, 403)
           const details = err.details as { depth?: number; maxSubagentDepth?: number } | undefined
-          assert.equal(details?.depth, 2, 'error detail situation should carry depth=2 fact')
+          assert.equal(details?.depth, 2, 'error details should report depth=2')
           assert.equal(details?.maxSubagentDepth, 2)
           return true
         },
       )
 
-      // run action (HTTP/CLI same link) set to two layer conversation: reject.
+      // `run` action (HTTP/CLI path) targeting depth-2 conversation rejects.
       await assert.rejects(
         () =>
           app.kernel.plugins.invokeAction('builtin:workflow', 'run', {
@@ -275,13 +272,13 @@ describe('workflow subagent deep contract (by default cap 2)', { timeout: 60_000
         (err: unknown) => err instanceof HelmError && err.code === 'subagent_depth_exceeded',
       )
 
-      // without new run record produce.
+      // Zero run records created.
       const runs = (await app.kernel.plugins.invokeAction('builtin:workflow', 'runs', {})) as {
         runs: Array<{ id: string }>
       }
-      assert.equal(runs.runs.length, 0, 'reject path must not produce any run record')
+      assert.equal(runs.runs.length, 0, 'rejected path must not create run records')
 
-      // one layer compare group: direct tune spawnAgent let through (one layer by default can continue dispatch two layer).
+      // Depth-1 control: direct `spawnAgent` succeeds (depth-1 can spawn depth-2).
       const anotherChild2 = (await spawnChain(app, faux, [child1]))[0]!
       assert.ok(anotherChild2 > 0)
       await app.kernel.documentStore.flush()
@@ -292,10 +289,10 @@ describe('workflow subagent deep contract (by default cap 2)', { timeout: 60_000
   })
 
   // -------------------------------------------------------------------------
-  // 4. one layer subagent can run workflow (run action let through), its engine node derive by depth record account
+  // 4. Depth-1 subagent can run workflows (`run` action allowed); engine nodes register at depth=2
   // -------------------------------------------------------------------------
 
-  test('one layer subagent can run SubagentWorkflow:run action let through, node derive sub-conversation register depth=2', { timeout: 60_000 }, async () => {
+  test('depth-1 subagent can run SubagentWorkflow: run action succeeds and engine node registers at depth=2', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'depth4')
     const faux = makeFauxProvider()
     const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
@@ -310,12 +307,12 @@ describe('workflow subagent deep contract (by default cap 2)', { timeout: 60_000
       })) as { run: { status: string; result: unknown; nodes?: Array<{ conversationId?: number }> } }
       assert.equal(run.run.status, 'completed', JSON.stringify(run.run))
       const nodeConv = run.run.nodes?.find((n) => n.conversationId !== undefined)?.conversationId
-      assert.ok(nodeConv, 'engine node should real derive sub-conversation')
+      assert.ok(nodeConv, 'engine node should spawn a real child conversation')
       await app.kernel.documentStore.flush()
       const entry = registryEntry(dir, nodeConv)
-      assert.equal(entry['depth'], 2, 'one layer conversation run engine node derive register depth=2')
+      assert.equal(entry['depth'], 2, 'engine node spawned from depth-1 registers with depth=2')
       assert.equal(entry['parentConversationId'], child1)
-      // two layer node is leaf: direct tune spawnAgent by refuse.
+      // Depth-2 node is a leaf: direct `spawnAgent` rejects.
       await assert.rejects(
         () => app.kernel.spawnAgent({ parentConversationId: nodeConv, prompt: 'three layer attempt' }),
         (err: unknown) => err instanceof HelmError && err.code === 'subagent_depth_exceeded',
@@ -326,17 +323,17 @@ describe('workflow subagent deep contract (by default cap 2)', { timeout: 60_000
   })
 
   // -------------------------------------------------------------------------
-  // 5. background reject contract: managed subagent (helm-owned) explicit background:true by explicit reject
+  // 5. Background rejection contract: managed subagent (`helm`-owned) rejects explicit `background: true`
   // -------------------------------------------------------------------------
 
-  test('managed subagent explicit background:true: explicit reject (guard against early compute), do not derive, do not create run; sync default still available', { timeout: 60_000 }, async () => {
+  test('managed subagent rejects explicit background: true with no spawn/run; sync default continues working', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'depth5')
     const faux = makeFauxProvider()
     const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
     try {
       const child1 = (await spawnChain(app, faux, [1]))[0]!
-      // one layer subagent is helm-owned automatically conversation: explicit background:true must explicit errors,
-      // must not static default change write is sync, also must not derive sub-conversation/create run(guard against automatically caller early compute).
+      // Depth-1 subagent is a `helm`-owned autonomous conversation: explicit `background: true` must fail
+      // without silently downgrading to sync, spawning a child, or creating a run (prevents premature parent return).
       faux.setResponses([
         fauxAssistantMessage(
           [fauxToolCall('subagent', { prompt: 'by refuse background task', background: true })],
@@ -354,19 +351,19 @@ describe('workflow subagent deep contract (by default cap 2)', { timeout: 60_000
         .find((t) => t.includes('"subagent"')) ?? ''
       assert.ok(
         toolText.includes('subagent_failed') && toolText.includes('background'),
-        `reject information should explicit refer out background do not by allows:${toolText.slice(0, 300)}`,
+        `rejection message should state that background is disallowed: ${toolText.slice(0, 300)}`,
       )
       const { runs } = (await app.kernel.plugins.invokeAction('builtin:workflow', 'runs', {
         conversationId: child1,
       })) as { runs: Array<{ id: string; kind?: string }> }
-      assert.equal(runs.length, 0, 'by refuse invoke must not create any run record')
+      assert.equal(runs.length, 0, 'rejected call must not create any run record')
       assert.equal(
         app.kernel.listConversations().filter((c) => c.parentConversationId === child1).length,
         0,
-        'by refuse invoke must not derive sub-conversation',
+        'rejected call must not spawn a child conversation',
       )
 
-      // the same managed conversation default (omit background) still away sync path: directly wait for result.
+      // Default (omitting `background`) on the same managed conversation stays synchronous and waits for the result.
       faux.setResponses([
         fauxAssistantMessage(
           [fauxToolCall('subagent', { prompt: 'sync two layer task' })],
@@ -378,12 +375,12 @@ describe('workflow subagent deep contract (by default cap 2)', { timeout: 60_000
       await app.kernel.submitInput(child1, 'again dispatch a sync subagent')
       await app.kernel.waitForIdle(child1)
       const child2 = app.kernel.listConversations().find((c) => c.parentConversationId === child1)
-      assert.ok(child2, 'default sync invoke should normal derive two layer sub-conversation')
+      assert.ok(child2, 'default sync invocation should spawn depth-2 child conversation')
       await app.kernel.documentStore.flush()
       const entry = registryEntry(dir, child2.id)
-      assert.equal(entry['depth'], 2, 'sync derive two layer subagent same register depth=2')
+      assert.equal(entry['depth'], 2, 'sync depth-2 subagent also registers with depth=2')
 
-      // two layer subagent is leaf: direct tune spawnAgent by refuse.
+      // Depth-2 subagent is a leaf: direct `spawnAgent` rejects.
       await assert.rejects(
         () => app.kernel.spawnAgent({ parentConversationId: child2.id, prompt: 'three layer attempt' }),
         (err: unknown) => err instanceof HelmError && err.code === 'subagent_depth_exceeded',
@@ -394,27 +391,27 @@ describe('workflow subagent deep contract (by default cap 2)', { timeout: 60_000
   })
 
   // -------------------------------------------------------------------------
-  // 6. fork conversation do not by mistakenly damage
+  // 6. Forked conversations are not misclassified
   // -------------------------------------------------------------------------
 
-  test('fork conversation (has parentConversationId) do not by mistakenly damage: tool complete,spawn and run action available', { timeout: 60_000 }, async () => {
+  test('forked conversations (with parentConversationId) are unaffected: spawn and run actions remain available', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'depth6')
     const faux = makeFauxProvider()
     const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
     try {
-      // top-level complete a turn (provide can fork item).
+      // Complete one top-level turn to obtain a forkable entry.
       faux.setResponses([fauxAssistantMessage('top-level answer')])
       await app.kernel.submitInput(1, '你好')
       await app.kernel.waitForIdle(1)
       const detail = await app.kernel.getConversationDetail(1, { limit: 10 })
       const numericEntry = detail.entries.find((e) => Number.isInteger(Number(e.id)) && Number(e.id) > 0)
-      assert.ok(numericEntry, 'should has can fork item (number entryId)')
+      assert.ok(numericEntry, 'should have a forkable entry (numeric entryId)')
       const entryId = Number(numericEntry!.id)
 
       const forked = await app.kernel.forkConversation(1, { entryId })
-      assert.equal(forked.parentConversationId, 1, 'fork conversation same has parent chain')
+      assert.equal(forked.parentConversationId, 1, 'forked conversation carries parentConversationId')
 
-      // fork do not in register table inside:spawnAgent let through,run action let through (wait terminal state).
+      // Fork is outside the registry: both `spawnAgent` and `run` action succeed.
       faux.setResponses([fauxAssistantMessage('fork subagent answer')])
       const spawned = await app.kernel.spawnAgent({
         parentConversationId: forked.id,
@@ -434,10 +431,10 @@ describe('workflow subagent deep contract (by default cap 2)', { timeout: 60_000
   })
 
   // -------------------------------------------------------------------------
-  // 7. SuperAgent worker do not by mistakenly damage (has parentConversationId, but do not via spawn pipeline)
+  // 7. SuperAgent workers are not misclassified (have parentConversationId, but bypass spawn)
   // -------------------------------------------------------------------------
 
-  test('SuperAgent worker do not by mistakenly damage:dispatch_worker create conversation can normal derive subagent', { timeout: 60_000 }, async () => {
+  test('SuperAgent workers are unaffected: dispatch_worker conversations can spawn subagents normally', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'depth7')
     const faux = makeFauxProvider()
     const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
@@ -448,9 +445,9 @@ describe('workflow subagent deep contract (by default cap 2)', { timeout: 60_000
         profileId: 'assistant',
       })) as { workerConversationId: number }
       const worker = app.kernel.getConversation(dispatched.workerConversationId)
-      assert.equal(worker.parentConversationId !== undefined, true, 'worker has parent chain')
+      assert.equal(worker.parentConversationId !== undefined, true, 'worker has parentConversationId')
 
-      // worker do not in register table:spawnAgent let through.
+      // Worker is outside the registry: `spawnAgent` succeeds.
       faux.setResponses([fauxAssistantMessage('worker derive subagent answer'), fauxAssistantMessage('worker turn complete')])
       const spawned = await app.kernel.spawnAgent({
         parentConversationId: worker.id,
@@ -463,10 +460,10 @@ describe('workflow subagent deep contract (by default cap 2)', { timeout: 60_000
   })
 
   // -------------------------------------------------------------------------
-  // 8. restart restore:depth/parent chain fact across restarts durable, two layer still by refuse, one layer still can dispatch
+  // 8. Restart restoration: depth/parent facts persist across restarts
   // -------------------------------------------------------------------------
 
-  test('restart restore: deep fact across restarts durable, two layer still by refuse, one layer still can dispatch new two layer', { timeout: 60_000 }, async () => {
+  test('restart restoration: depth facts persist across restarts (depth-2 still rejects, depth-1 can still spawn)', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'depth8')
     {
       const faux = makeFauxProvider()
@@ -478,17 +475,17 @@ describe('workflow subagent deep contract (by default cap 2)', { timeout: 60_000
         await app.close()
       }
     }
-    // restart: the same dataDir, register table fact takes effect.
+    // Restart on the same `dataDir`: registry facts remain in effect.
     {
       const faux = makeFauxProvider()
       const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
       try {
         const child1 = app.kernel.listConversations().find((c) => c.parentConversationId === 1)
-        assert.ok(child1, 'after restart one layer sub-conversation mirror should restore')
+        assert.ok(child1, 'depth-1 child conversation should restore after restart')
         const child2 = app.kernel
           .listConversations()
           .find((c) => c.parentConversationId === child1.id)
-        assert.ok(child2, 'after restart two layer sub-conversation mirror should restore')
+        assert.ok(child2, 'depth-2 child conversation should restore after restart')
 
         await assert.rejects(
           () =>
@@ -498,7 +495,7 @@ describe('workflow subagent deep contract (by default cap 2)', { timeout: 60_000
             }),
           (err: unknown) => err instanceof HelmError && err.code === 'subagent_depth_exceeded',
         )
-        // one layer compare group still let through (after restart still can dispatch new two layer).
+        // Depth-1 control still allowed (can spawn a new depth-2 child after restart).
         const newChild2 = (await spawnChain(app, faux, [child1.id]))[0]!
         assert.ok(newChild2 > 0)
         await app.kernel.documentStore.flush()
@@ -510,10 +507,10 @@ describe('workflow subagent deep contract (by default cap 2)', { timeout: 60_000
   })
 
   // -------------------------------------------------------------------------
-  // 9. without compatibility read: missing depth/cap field corrupt item must explicit errors
+  // 9. No legacy fallback: corrupt entries missing depth/ceiling fail explicitly
   // -------------------------------------------------------------------------
 
-  test('register fact missing when explicit failed, do not guess deep and permission', { timeout: 60_000 }, async () => {
+  test('corrupt registry entries missing depth facts fail explicitly without guessing', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'depth9')
     let legacyChildId = 0
     {
@@ -527,11 +524,11 @@ describe('workflow subagent deep contract (by default cap 2)', { timeout: 60_000
         await app.close()
       }
     }
-    // simulated old record: strip new fact field (old contract only agentType/runId/createdAt).
+    // Simulate legacy record by stripping new fields (`agentType`/`createdAt` only).
     {
       const registry = readRegistryRaw(dir)
       const legacy = registry[String(legacyChildId)] as Record<string, unknown>
-      assert.ok(legacy, 'old conversation should has register item')
+      assert.ok(legacy, 'child conversation should have a registry entry')
       writePluginDocRaw(dir, 'builtin:workflow:subagent-conversations', {
         [String(legacyChildId)]: {
           ...(typeof legacy['agentType'] === 'string' ? { agentType: legacy['agentType'] } : {}),
@@ -547,10 +544,10 @@ describe('workflow subagent deep contract (by default cap 2)', { timeout: 60_000
   })
 
   // -------------------------------------------------------------------------
-  // 10. explicit extend request field:maxSubagentDepth=3 allows three layer; invalid value explicit reject
+  // 10. Explicit ceiling grant: `maxSubagentDepth=3` allows depth 3; invalid values reject
   // -------------------------------------------------------------------------
 
-  test('explicit deep grant:maxSubagentDepth=3 when three layer available, three layer is leaf; new register inherit grant cap', { timeout: 60_000 }, async () => {
+  test('explicit depth grant: maxSubagentDepth=3 permits depth 3 as leaf; descendants inherit ceiling', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'depth10')
     const faux = makeFauxProvider()
     const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
@@ -565,17 +562,17 @@ describe('workflow subagent deep contract (by default cap 2)', { timeout: 60_000
           if (info.conversationId !== undefined) grantedChild = info.conversationId
         },
       })
-      assert.ok(grantedChild > 0, 'should derive sub-conversation and back pass conversationId')
+      assert.ok(grantedChild > 0, 'should spawn child conversation and return conversationId')
       const child1 = grantedChild
       await app.kernel.documentStore.flush()
-      assert.equal(registryEntry(dir, child1)['maxSubagentDepth'], 3, 'register table should snapshot explicit grant cap')
+      assert.equal(registryEntry(dir, child1)['maxSubagentDepth'], 3, 'registry should snapshot granted ceiling')
       assert.equal(registryEntry(dir, child1)['depth'], 1)
 
-      // three layer chain all available (1 → 2 → 3), three layer is leaf.
+      // Full 3-level chain succeeds (1 -> 2 -> 3), with depth 3 as the leaf.
       const child2 = (await spawnChain(app, faux, [child1]))[0]!
       const child3 = (await spawnChain(app, faux, [child2]))[0]!
       await app.kernel.documentStore.flush()
-      assert.equal(registryEntry(dir, child2)['maxSubagentDepth'], 3, 'subagent inherit sub- tree grant cap')
+      assert.equal(registryEntry(dir, child2)['maxSubagentDepth'], 3, 'descendant inherits subtree ceiling')
       assert.equal(registryEntry(dir, child3)['depth'], 3)
       await assert.rejects(
         () => app.kernel.spawnAgent({ parentConversationId: child3, prompt: 'four layer attempt' }),
@@ -589,7 +586,7 @@ describe('workflow subagent deep contract (by default cap 2)', { timeout: 60_000
         },
       )
 
-      // invalid value explicit reject (not silently clamp): out of bounds / non- integer.
+      // Out-of-range / non-integer values reject explicitly without silent clamping.
       for (const invalid of [0, 6, 2.5]) {
         await assert.rejects(
           () =>
@@ -599,13 +596,13 @@ describe('workflow subagent deep contract (by default cap 2)', { timeout: 60_000
               meta: withWorkflowSpawnMeta(undefined, { maxSubagentDepth: invalid as number }),
             }),
           (err: unknown) => {
-            assert.ok(err instanceof HelmError, `maxSubagentDepth=${invalid} should be HelmError`)
+            assert.ok(err instanceof HelmError, `maxSubagentDepth=${invalid} should throw HelmError`)
             assert.equal(err.code, 'validation_error')
             return true
           },
         )
       }
-      // subagent cannot self row mention high inherit cap, also cannot settings low at target tier cap.
+      // Subagents cannot raise their inherited ceiling or override below target depth.
       for (const ceiling of [4, 1]) {
         await assert.rejects(
           () =>
@@ -617,20 +614,20 @@ describe('workflow subagent deep contract (by default cap 2)', { timeout: 60_000
           (err: unknown) => err instanceof HelmError && err.code === 'validation_error',
         )
       }
-      // reject path do not register any new fact.
+      // Rejected paths record no new registry entries.
       await app.kernel.documentStore.flush()
       const registry = readRegistryRaw(dir)
-      assert.equal(Object.keys(registry).length, 3, 'only should register three layer chain 3 item')
+      assert.equal(Object.keys(registry).length, 3, 'only the 3 valid chain entries should be registered')
     } finally {
       await app.close()
     }
   })
 
   // -------------------------------------------------------------------------
-  // 11. global config via host unify entry write, and in after restart affect new task tree.
+  // 11. Global config updated via host port persists across restarts for new subtrees
   // -------------------------------------------------------------------------
 
-  test('plugin config maxSubagentDepth can read write, across restarts durable, illegal count value explicit reject derive', { timeout: 60_000 }, async () => {
+  test('plugin config maxSubagentDepth persists across restarts and rejects invalid values', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'depth11')
     {
       const faux = makeFauxProvider()
@@ -641,10 +638,10 @@ describe('workflow subagent deep contract (by default cap 2)', { timeout: 60_000
           await assert.rejects(
             () => app.kernel.plugins.setConfig('builtin:workflow', { maxSubagentDepth: invalid }),
             /maxSubagentDepth|field maxSubagentDepth/,
-            `config value ${String(invalid)} should in persist boundary by reject`,
+            `invalid config value ${String(invalid)} should be rejected at persistence boundary`,
           )
         }
-        assert.equal(app.kernel.plugins.getConfig('builtin:workflow').maxSubagentDepth, 2, 'illegal config must not pollute valid config')
+        assert.equal(app.kernel.plugins.getConfig('builtin:workflow').maxSubagentDepth, 2, 'invalid config must not corrupt valid config')
         await app.kernel.plugins.setConfig('builtin:workflow', { maxSubagentDepth: 1 })
         const child = (await spawnChain(app, faux, [1]))[0]!
         await assert.rejects(

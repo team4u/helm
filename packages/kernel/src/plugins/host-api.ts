@@ -414,14 +414,14 @@ export function wrapHostApi(
                   503,
                 ),
               );
-              // abandon placement body fall back compute: directly end task counter and exhaust force cancel underlying reader.
+              // Fallback cleanup for abandoned bodies: immediately close the task counter and best-effort cancel the underlying reader.
               if (reader !== undefined) reader.cancel(hostClose.signal.reason).catch(() => {});
               end();
             };
-            // a await before register (host dispose arrange empty hostReleases when trigger).
+            // Register before the first await so host dispose triggers it while draining `hostReleases`.
             state.hostReleases.add(release);
-            // standard fetch override semantics:init.signal override Request.signal; explicit null
-            // clear inherit signal (by override old Request signal abort must not cancel this time invoke).
+            // Standard fetch override semantics: `init.signal` overrides `Request.signal`, and explicit `null`
+            // clears the inherited signal (aborting the overridden `Request.signal` must not cancel this call).
             const callerSignal: AbortSignal | null | undefined =
               init?.signal !== undefined
                 ? init.signal
@@ -466,7 +466,7 @@ export function wrapHostApi(
                 });
                 return wrapped;
               } catch (error) {
-                // wrap failed (body already lock etc.): exhaust force cancel underlying stream and end counter, never pending leak leak
+                // Stream wrapping failed (e.g. body already locked): best-effort cancel the underlying stream and close the counter so nothing leaks.
                 response.body.cancel().catch(() => {});
                 end();
                 throw error;
