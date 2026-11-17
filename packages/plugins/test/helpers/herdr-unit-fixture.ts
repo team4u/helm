@@ -68,17 +68,26 @@ export const HERDR_FAST_TEST_TIMINGS: Pick<
   steerWaitBudgetMs: 150,
 }
 
+/** POSIX 可落盘路径：绝对路径且非 `//` 开头（Windows 盘符/UNC 形态在 Linux 测试宿主上无真实落点）。 */
+function isPosixWritablePath(cwd: string): boolean {
+  return cwd.startsWith('/') && !cwd.startsWith('//')
+}
+
 /**
  * Map 形状的交接文件存储（真实落盘）：生产链路 readLocalOutput /
  * removeLocalOutput 经真实 fs 读取同一路径；测试 set/delete 同步真实文件。
+ * Windows 盘符/UNC 形态的键只进内存模型（pane 宿主自己的 fs 不是本 Linux 宿主的
+ * fs），绝不镜像到真实磁盘——否则相对形态会在测试进程 cwd（仓库根）下创建字面
+ * `C:\...` / `\\srv\...` 目录，生产交接读取也因此诚实失败而非读到假文件。
  */
 export class FsOutputFiles {
   private store = new Map<string, string>()
 
   set(key: string, content: string): void {
+    this.store.set(key, content)
+    if (!isPosixWritablePath(dirname(key))) return
     mkdirSync(dirname(key), { recursive: true })
     writeFileSync(key, content, 'utf8')
-    this.store.set(key, content)
   }
 
   get(key: string): string | undefined {
@@ -327,10 +336,6 @@ export const DEFAULT_HERDR_PONG_CAPABILITIES: Record<string, unknown> = {
   detached_server_daemon: false,
   endpoint_protocol_generation: 1,
   [SEND_KEYS_CAS_CAPABILITY]: true,
-}
-
-function isPosixWritablePath(cwd: string): boolean {
-  return cwd.startsWith('/') && !cwd.startsWith('//')
 }
 
 /**

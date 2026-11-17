@@ -79,17 +79,22 @@ test('cwd 回退链与路径/节点校验：request.cwd > runtime.workspace > Pr
     await spawnHerdrDirect(env, { agentType: 'ws-rt', cwd: requestCwd })
     assert.equal(env.transport.calls.findLast((c) => c.method === 'tab.create')!.params['cwd'], requestCwd)
 
-    // Windows 盘符与 UNC 绝对路径放行到 tab.create（本 Linux 宿主无 C:\ 文件系统，交接阶段诚实失败）。
+    // Windows 盘符与 UNC 绝对路径放行到 tab.create；本 Linux 宿主无 C:\ 文件系统，
+    // 交接读取在真实 fs 上显式失败（herdr_invalid_cwd），绝不静默落盘字面 `C:\` / `\\srv` 目录。
     const beforeCreates = env.transport.calls.filter((c) => c.method === 'tab.create').length
     const drive = spawnHerdrDirect(env, { agentType: 'herdr:agy', cwd: 'C:\\build\\helm' }).catch((e: unknown) => e)
     await waitFor(() => env.transport.calls.filter((c) => c.method === 'tab.create').length >= beforeCreates + 1)
     assert.equal(env.transport.calls.findLast((c) => c.method === 'tab.create')!.params['cwd'], 'C:\\build\\helm')
-    await drive
+    const driveOutcome = await drive
+    assert.ok(driveOutcome instanceof HelmError, `Windows 盘符 cwd 在 Linux 宿主上必须显式失败: ${String(driveOutcome)}`)
+    assert.equal(driveOutcome.code, 'herdr_invalid_cwd')
 
     const unc = spawnHerdrDirect(env, { agentType: 'herdr:agy', cwd: '\\\\srv\\share\\work' }).catch((e: unknown) => e)
     await waitFor(() => env.transport.calls.filter((c) => c.method === 'tab.create').length >= beforeCreates + 2)
     assert.equal(env.transport.calls.findLast((c) => c.method === 'tab.create')!.params['cwd'], '\\\\srv\\share\\work')
-    await unc
+    const uncOutcome = await unc
+    assert.ok(uncOutcome instanceof HelmError, `UNC cwd 在 Linux 宿主上必须显式失败: ${String(uncOutcome)}`)
+    assert.equal(uncOutcome.code, 'herdr_invalid_cwd')
 
     for (const badReq of [
       { agentType: 'herdr:agy', cwd: 'C:relative' },
