@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { HelmIcon, Popover, PopoverContent, PopoverTrigger } from '@helm/plugin-client'
+import { useWebLocale } from '../i18n/use-web-locale.js'
 import { formatMessageTime } from '../lib/format.js'
 import {
   countOutlineTurns,
@@ -57,11 +58,11 @@ export function ConversationOutlinePopover({
   nodes,
   activeEntryId,
   activeNodeKey,
-  triggerLabel = 'Outline',
+  triggerLabel,
   triggerTitle,
   badgeCount,
-  searchPlaceholder = 'Search questions, replies and cards…',
-  accessibilityLabel = 'Conversation outline',
+  searchPlaceholder,
+  accessibilityLabel,
   showModeToggle = true,
   portalled = true,
   forceMount,
@@ -70,6 +71,10 @@ export function ConversationOutlinePopover({
   onLoadEarlierHistory,
   onSelectTarget,
 }: ConversationOutlinePopoverProps) {
+  const { t } = useWebLocale()
+  const effectiveTriggerLabel = triggerLabel ?? t('conv.outline.trigger')
+  const effectiveSearchPlaceholder = searchPlaceholder ?? t('conv.outline.searchPlaceholder')
+  const effectiveAccessibilityLabel = accessibilityLabel ?? t('conv.outline.accessibility')
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [mode, setMode] = useState<OutlineFilterMode>('dialogue')
@@ -161,11 +166,11 @@ export function ConversationOutlinePopover({
         <button
           type="button"
           className={`btn btn-sm conversation-outline-trigger${open ? ' is-open' : ''}`}
-          aria-label={`${accessibilityLabel} navigation`}
-          title={triggerTitle ?? `Conversation outline navigation (${turnCount} question turns)`}
+          aria-label={t('conv.outline.nav', { label: effectiveAccessibilityLabel })}
+          title={triggerTitle ?? t('conv.outline.triggerTitle', { count: turnCount })}
         >
           <HelmIcon name="list-tree" size={12} />
-          <span className="pane-action-label">{triggerLabel}</span>
+          <span className="pane-action-label">{effectiveTriggerLabel}</span>
           {displayCount > 0 ? (
             <span className="badge badge-neutral tabular-nums">{displayCount}</span>
           ) : null}
@@ -177,7 +182,7 @@ export function ConversationOutlinePopover({
         align="end"
         sideOffset={6}
         className="conversation-outline-popover"
-        aria-label={accessibilityLabel}
+        aria-label={effectiveAccessibilityLabel}
         onOpenAutoFocus={(e) => {
           e.preventDefault()
           searchInputRef.current?.focus()
@@ -190,8 +195,8 @@ export function ConversationOutlinePopover({
               <input
                 ref={searchInputRef}
                 type="text"
-                aria-label={`Filter ${accessibilityLabel}`}
-                placeholder={searchPlaceholder}
+                aria-label={t('conv.outline.filter', { label: effectiveAccessibilityLabel })}
+                placeholder={effectiveSearchPlaceholder}
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
               />
@@ -199,8 +204,8 @@ export function ConversationOutlinePopover({
                 <button
                   type="button"
                   className="btn btn-ghost btn-icon-xs"
-                  aria-label="Clear outline search"
-                  title="Clear search"
+                  aria-label={t('conv.outline.clearSearchAria')}
+                  title={t('conv.outline.clearSearch')}
                   onClick={() => {
                     setQuery('')
                     searchInputRef.current?.focus()
@@ -211,12 +216,12 @@ export function ConversationOutlinePopover({
               ) : null}
             </div>
             {hasFilterableNodes && showModeToggle ? (
-              <div className="segmented-control conversation-outline-mode" role="group" aria-label="Outline level switch">
+              <div className="segmented-control conversation-outline-mode" role="group" aria-label={t('conv.outline.modeSwitch')}>
                 {(
                   [
-                    ['dialogue', 'Conversation'],
-                    ['questions', 'Questions only'],
-                    ['all', 'All'],
+                    ['dialogue', t('conv.outline.modeDialogue')],
+                    ['questions', t('conv.outline.modeQuestions')],
+                    ['all', t('common.all')],
                   ] as const
                 ).map(([value, label]) => (
                   <button
@@ -242,15 +247,15 @@ export function ConversationOutlinePopover({
                 onClick={() => onLoadEarlierHistory()}
               >
                 <HelmIcon name={loadingEarlierHistory ? 'loader' : 'arrow-up'} size={11} className={loadingEarlierHistory ? 'spin-slow' : undefined} />
-                {loadingEarlierHistory ? 'Loading earlier history…' : 'Load earlier messages to complete the outline'}
+                {loadingEarlierHistory ? t('conv.outline.loadingEarlier') : t('conv.outline.loadEarlier')}
               </button>
             </div>
           ) : null}
 
-          <div ref={listRef} className="conversation-outline-list" role="listbox" aria-label="Conversation outline entries">
+          <div ref={listRef} className="conversation-outline-list" role="listbox" aria-label={t('conv.outline.entries')}>
             {filtered.length === 0 ? (
               <div className="conversation-outline-empty">
-                No matching outline entries
+                {t('conv.outline.noMatches')}
               </div>
             ) : (
               filtered.map((node, idx) => {
@@ -317,7 +322,7 @@ export function ConversationOutlinePopover({
                       />
                       <span className="conversation-outline-item-label">{node.label}</span>
                       {node.status === 'failed' ? (
-                        <span className="conversation-outline-status-badge">Failed</span>
+                        <span className="conversation-outline-status-badge">{t('conv.tool.statusFailed')}</span>
                       ) : null}
                       {timeText !== '' ? (
                         <span className="conversation-outline-time mono tabular-nums">{timeText}</span>

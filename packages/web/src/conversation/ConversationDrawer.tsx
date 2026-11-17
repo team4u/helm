@@ -1,4 +1,5 @@
 import { Dialog, DialogContent, DialogOverlay, DialogPortal, DialogTitle } from '@helm/plugin-client'
+import { useWebLocale } from '../i18n/use-web-locale.js'
 import { ConversationPane } from './ConversationPane.js'
 
 export interface ConversationDrawerProps {
@@ -15,19 +16,21 @@ export interface ConversationDrawerProps {
  * - 抽屉模式与全屏会话共享底层 store，不产生状态割裂。
  */
 export function ConversationDrawer({ conversationId, onClose }: ConversationDrawerProps) {
+  const { t } = useWebLocale()
+  const title = t('conv.drawer.title', { id: conversationId })
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
       <DialogPortal>
         <DialogOverlay
           className="conversation-drawer-backdrop"
-          aria-label="Close child conversation drawer"
+          aria-label={t('conv.drawer.closeChild')}
         />
         <DialogContent
           className="conversation-drawer"
-          aria-label={`Child conversation #${conversationId} drawer`}
+          aria-label={title}
         >
           <DialogTitle style={{ display: 'none' }}>
-            {`Child conversation #${conversationId} drawer`}
+            {title}
           </DialogTitle>
           <ConversationPane
             conversationId={conversationId}

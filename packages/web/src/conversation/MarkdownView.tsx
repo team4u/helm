@@ -7,6 +7,7 @@ import { CopyButton, HelmIcon, markdownUrlTransform, parseArtifactUrl } from '@h
 import type { MarkdownViewProps } from '@helm/plugin-client'
 import { useHelmStore } from '../lib/store-context.js'
 import { LazyMount } from '../ui/LazyMount.js'
+import { useWebLocale } from '../i18n/use-web-locale.js'
 import { CodeBlockRenderer } from './CodeBlockRenderer.js'
 import { artifactsApi } from '../lib/api.js'
 import {
@@ -65,9 +66,10 @@ interface ArtifactInlineMediaProps {
 
 function ArtifactInlineMedia({ artifactId, conversationId, alt, title }: ArtifactInlineMediaProps): ReactNode {
   const store = useHelmStore()
+  const { t } = useWebLocale()
   const [media, setMedia] = useState<{ url: string; mime: string } | null>(null)
   const [loading, setLoading] = useState(true)
-  const label = alt || title || 'Artifacts'
+  const label = alt || title || t('conv.attachment.fallbackLabel')
 
   const openPreview = () => {
     store.setActiveModal({
@@ -118,7 +120,7 @@ function ArtifactInlineMedia({ artifactId, conversationId, alt, title }: Artifac
         <button
           type="button"
           className="attachment-image-thumb"
-          title={`Click to enlarge: ${label}`}
+          title={t('conv.attachment.clickToEnlarge', { name: label })}
           onClick={openPreview}
         >
           <img src={media.url} alt={label} loading="lazy" />
@@ -143,7 +145,7 @@ function ArtifactInlineMedia({ artifactId, conversationId, alt, title }: Artifac
     <button
       type="button"
       className="attachment-chip"
-      title={`Click to preview: ${label}`}
+      title={t('conv.attachment.clickToPreview', { label })}
       onClick={openPreview}
     >
       <HelmIcon name="file-text" size={11} />
@@ -178,6 +180,7 @@ const StreamingMarkdownBlock = memo(function StreamingMarkdownBlock({
 
 export const MarkdownView = memo(function MarkdownView({ text, conversationId, streaming }: MarkdownViewProps): ReactNode {
   const { setActiveModal } = useHelmStore()
+  const { t } = useWebLocale()
   // 渲染器函数身份必须稳定，否则每次流式文本更新都会重挂载既有代码块。
   const components = useMemo<Components>(() => ({
     pre: ({ children, node }) => {
@@ -218,7 +221,7 @@ export const MarkdownView = memo(function MarkdownView({ text, conversationId, s
           <button
             type="button"
             className="attachment-chip"
-            title="Click to preview artifact"
+            title={t('conv.attachment.clickToPreviewArtifact')}
             onClick={() =>
               setActiveModal({
                 kind: 'artifact-preview',
@@ -241,7 +244,7 @@ export const MarkdownView = memo(function MarkdownView({ text, conversationId, s
     img: ({ src, alt, title }) => {
       const artifactId = parseArtifactUrl(src)
       if (artifactId !== null) {
-        const label = alt || title || 'Artifacts'
+        const label = alt || title || t('conv.attachment.fallbackLabel')
         return (
           <LazyMount
             inline
@@ -263,7 +266,7 @@ export const MarkdownView = memo(function MarkdownView({ text, conversationId, s
       }
       return <img src={src} alt={alt} title={title} loading="lazy" />
     },
-  }), [conversationId, setActiveModal])
+  }), [conversationId, setActiveModal, t])
 
   const lastSplitTextRef = useRef<string | null>(null)
   const headingCacheRef = useRef<Map<string, number> | null>(null)

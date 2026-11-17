@@ -1,4 +1,5 @@
 import { useMemo } from 'react'
+import { useWebLocale } from '../i18n/use-web-locale.js'
 import { ConversationOutlinePopover } from './ConversationOutlinePopover.js'
 import { buildMarkdownOutline } from './outline-model.js'
 
@@ -14,6 +15,7 @@ export function MarkdownOutlinePopover({
   activeHeadingIndex,
   onSelectHeading,
 }: MarkdownOutlinePopoverProps) {
+  const { t } = useWebLocale()
   const nodes = useMemo(() => buildMarkdownOutline(text), [text])
   const activeNodeKey = activeHeadingIndex === undefined
     ? undefined
@@ -23,10 +25,10 @@ export function MarkdownOutlinePopover({
     <ConversationOutlinePopover
       nodes={nodes}
       activeNodeKey={activeNodeKey}
-      triggerTitle={`Markdown outline (${nodes.length} sections)`}
+      triggerTitle={t('conv.outline.markdownTitle', { count: nodes.length })}
       badgeCount={nodes.length}
-      searchPlaceholder="Search section titles…"
-      accessibilityLabel="Markdown outline"
+      searchPlaceholder={t('conv.outline.markdownSearch')}
+      accessibilityLabel={t('conv.outline.markdownAccessibility')}
       showModeToggle={false}
       portalled={false}
       forceMount

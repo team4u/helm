@@ -54,6 +54,7 @@ describe('MarkdownView 产物内联渲染', { timeout: 60_000 }, () => {
     return {
       theme: 'dark',
       themePreference: 'system',
+      locale: 'en',
       activeModal: null,
       setActiveModal: activeModalFn ?? (() => {}),
       groupedUi: groupUiContributions([]),

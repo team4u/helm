@@ -479,15 +479,20 @@ test('ConversationOutlinePopover 三态切换：默认「对话」过滤非人�
   host = document.createElement('div')
   document.body.appendChild(host)
   root = createRoot(host)
+  const store = makeTestStore()
   await act(async () => {
     root!.render(
-      e(ConversationOutlinePopover, {
-        nodes,
-        showModeToggle: true,
-        portalled: false,
-        forceMount: true,
-        onSelectTarget: () => {},
-      }),
+      e(
+        (await import('../src/lib/store-context.js')).HelmStoreContext.Provider,
+        { value: store },
+        e(ConversationOutlinePopover, {
+          nodes,
+          showModeToggle: true,
+          portalled: false,
+          forceMount: true,
+          onSelectTarget: () => {},
+        }),
+      ),
     )
   })
 
@@ -527,13 +532,17 @@ test('ConversationOutlinePopover 三态切换：默认「对话」过滤非人�
   // 4. showModeToggle=false（如文档大纲）：不渲染模式切换栏，始终全量展示（含全部标题与卡片）
   await act(async () => {
     root!.render(
-      e(ConversationOutlinePopover, {
-        nodes,
-        showModeToggle: false,
-        portalled: false,
-        forceMount: true,
-        onSelectTarget: () => {},
-      }),
+      e(
+        (await import('../src/lib/store-context.js')).HelmStoreContext.Provider,
+        { value: store },
+        e(ConversationOutlinePopover, {
+          nodes,
+          showModeToggle: false,
+          portalled: false,
+          forceMount: true,
+          onSelectTarget: () => {},
+        }),
+      ),
     )
   })
   assert.ok(host.querySelector('.conversation-outline-mode') === null)
