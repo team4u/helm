@@ -192,13 +192,12 @@ test('extractDoctorReport：从 ApiClientError.details.report 提取真实 Hub 4
   assert.equal(report.checks[1]?.error?.code, 'entry_missing')
 })
 
-test('extractDoctorReport：兼容 details.doctor 与 err.doctor 旧形状，均需形状合法', { timeout: 60_000 }, () => {
+test('extractDoctorReport：旧挂载位置 details.doctor 与 err.doctor 一概不认，返回 null', { timeout: 60_000 }, () => {
   const valid = { dir: '/p', ok: true, checks: [{ id: 'manifest', label: '清单检查' }] }
-  const viaDetailsDoctor = new ApiClientError('x', 'x', 422, { doctor: valid })
-  assert.ok(extractDoctorReport(viaDetailsDoctor))
-
-  const plain = { doctor: valid } as unknown
-  assert.ok(extractDoctorReport(plain))
+  // 旧测试形状把报告挂在 details.doctor 或 err.doctor——生产路径只认 details.report
+  assert.equal(extractDoctorReport(new ApiClientError('x', 'x', 422, { doctor: valid })), null)
+  assert.equal(extractDoctorReport({ doctor: valid } as unknown), null)
+  assert.equal(extractDoctorReport({ details: { doctor: valid } } as unknown), null)
 })
 
 test('extractDoctorReport：形状不合法时返回 null，绝不伪造', { timeout: 60_000 }, () => {

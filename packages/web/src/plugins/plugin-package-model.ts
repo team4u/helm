@@ -140,25 +140,18 @@ export function pluginPackageErrorText(
 }
 
 /**
- * 从安装失败错误中提取 doctor 报告并做形状校验，无有效报告时返回 null（绝不伤造）。
+ * 从安装失败错误中提取 doctor 报告并做形状校验，无有效报告时返回 null（绝不编造）。
  *
  * 真实 Hub 安装预检失败（422 plugin_package_doctor_failed）把完整报告放在
  * HelmError.details.report，经 HTTP 错误信封到达 ApiClientError.details.report；
- * 同时兼容早期测试挂载的 err.doctor 与 details.doctor 形状。
+ * 除此之外的挂载位置一概不认。
  */
 export function extractDoctorReport(err: unknown): PluginDoctorReport | null {
-  const candidates: unknown[] = []
-  if (err !== null && typeof err === 'object') {
-    const details = (err as { details?: unknown }).details
-    if (details !== null && typeof details === 'object' && !Array.isArray(details)) {
-      candidates.push((details as Record<string, unknown>).report, (details as Record<string, unknown>).doctor)
-    }
-    candidates.push((err as { doctor?: unknown }).doctor)
-  }
-  for (const candidate of candidates) {
-    if (isDoctorReportShape(candidate)) return candidate
-  }
-  return null
+  if (err === null || typeof err !== 'object') return null
+  const details = (err as { details?: unknown }).details
+  if (details === null || typeof details !== 'object' || Array.isArray(details)) return null
+  const candidate = (details as Record<string, unknown>).report
+  return isDoctorReportShape(candidate) ? candidate : null
 }
 
 /** 形状校验：dir 非空字符串、ok 布尔、checks 为逐项形状合法的数组；不满足即拒绝。 */
