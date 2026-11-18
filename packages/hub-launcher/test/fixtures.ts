@@ -12,7 +12,11 @@
  *   in-process with the `tar` library), because the production staging unpacks it for real;
  * - a fake registry `fetch` serving real `npm pack` tarballs with correct sha512 SRI metadata,
  *   for golden-path staging through the full production extractor (real download verification +
- *   real unpack + real npm install + real self-check).
+ *   real unpack + real npm install + real self-check);
+ * - every fixture payload carries one inner `file:./fixture-inner-dep.tgz` dependency (the real
+ *   payload ships `@helm/*` exactly this way): `start.mjs check` imports it, so every staging
+ *   path — fake or golden — proves the unpack-then-install ordering actually completed the
+ *   dependency closure (a direct `npm install <outer.tgz>` fails with ENOENT on real artifacts).
  */
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -46,6 +50,15 @@ if (command === 'check') {
     console.log('[fake-payload] self-check hanging');
     setInterval(() => {}, 1 << 30);
     await new Promise(() => {}); // park forever (top-level await; never falls through)
+  }
+  // The inner file: dependency must resolve — proves the candidate's npm install completed
+  // inside the unpacked payload root (the real payload ships @helm/* the same way).
+  try {
+    const dep = await import('fixture-inner-dep');
+    if (dep.marker !== 'inner-dep') throw new Error('bad marker');
+  } catch (error) {
+    console.error('[fake-payload] inner file: dependency did not resolve:', error);
+    process.exit(3);
   }
   console.log('[fake-payload] check ok');
   process.exit(0);
@@ -91,11 +104,28 @@ export interface FakePayloadOptions {
   dependencies?: Record<string, string>;
 }
 
-/** Materialize a fake payload package directory (package.json + manifest.json + start.mjs + mode). */
+/**
+ * Materialize a fake payload package directory (package.json + manifest.json + start.mjs + mode).
+ * A real inner `file:./fixture-inner-dep.tgz` archive is always bundled (mirroring the real
+ * payload's `@helm/*: file:./<pkg>.tgz` layout) so every staging path exercises the
+ * unpack-then-install ordering; `dependencies` adds extra entries (golden nested-dep fixtures).
+ */
 export async function writeFakePayload(options: FakePayloadOptions): Promise<string> {
   const { dir, pkgName, version } = options;
   const mode = options.mode ?? 'ok';
   await fsp.mkdir(dir, { recursive: true });
+  const innerSrc = path.join(dir, '.fixture-inner-src');
+  await fsp.mkdir(innerSrc, { recursive: true });
+  await fsp.writeFile(
+    path.join(innerSrc, 'package.json'),
+    `${JSON.stringify({ name: 'fixture-inner-dep', version: '1.0.0', type: 'module', main: 'index.js' }, null, 2)}\n`,
+  );
+  await fsp.writeFile(path.join(innerSrc, 'index.js'), 'export const marker = "inner-dep";\n');
+  await tar.create(
+    { cwd: innerSrc, file: path.join(dir, 'fixture-inner-dep.tgz'), gzip: true, portable: true, prefix: 'package' },
+    ['package.json', 'index.js'],
+  );
+  await fsp.rm(innerSrc, { recursive: true, force: true });
   await fsp.writeFile(
     path.join(dir, 'package.json'),
     `${JSON.stringify(
@@ -103,7 +133,10 @@ export async function writeFakePayload(options: FakePayloadOptions): Promise<str
         name: pkgName,
         version,
         private: true,
-        ...(options.dependencies !== undefined ? { dependencies: options.dependencies } : {}),
+        dependencies: {
+          'fixture-inner-dep': 'file:./fixture-inner-dep.tgz',
+          ...(options.dependencies ?? {}),
+        },
       },
       null,
       2,
@@ -311,10 +344,24 @@ export function createFakeCore(options: FakeCoreOptions): FakeUpdateCore {
       await fsp.mkdir(path.dirname(destPath), { recursive: true });
       await fsp.copyFile(await pack(source), destPath);
     },
-    async runNpm(args, _cwd) {
+    async runNpm(args, cwd) {
       core.npmCalls.push([...args]);
       if (options.failNpm !== undefined) throw options.failNpm;
       if (args[0] !== 'install') throw new Error(`fake npm: unsupported command ${args[0]}`);
+      if (args[1] !== undefined && !args[1]!.startsWith('--')) {
+        throw new Error(`fake npm: unexpected positional argument ${args[1]}`);
+      }
+      // Ref-less install (the production extractor already unpacked the payload at cwd):
+      // complete the inner file: dependencies by unpacking every payload-root *.tgz into
+      // node_modules/<basename> — what `npm install` does for `file:./<name>.tgz` deps.
+      const target = path.join(cwd, 'node_modules');
+      await fsp.mkdir(target, { recursive: true });
+      for (const entry of await fsp.readdir(cwd)) {
+        if (!entry.endsWith('.tgz')) continue;
+        const depDir = path.join(target, entry.slice(0, -'.tgz'.length));
+        await fsp.mkdir(depDir, { recursive: true });
+        await tar.extract({ f: path.join(cwd, entry), cwd: depDir, strip: 1 });
+      }
     },
     stageRelease(root, version, extractor, stageOptions) {
       return real.stageRelease(root, version, extractor, stageOptions);
