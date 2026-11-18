@@ -1,26 +1,32 @@
 /**
- * Test fixtures for the Hub launcher: fake npm payloads (a self-contained `start.mjs` that mirrors
- * the real payload contract — `check` self-verification, `start` serving `/api/auth/status` — with
- * injectable failure modes) and a fake `UpdateCore` that stands in for the generic `@helm/update`
- * engine (registry download → npm layout materialization → immutable staging → update lock).
+ * Test fixtures for the Hub launcher:
  *
- * These are test doubles, not product code: the production generic mechanism ships in
- * `@helm/update` and is bound via `src/update-core.ts`.
+ * - fake npm payloads: a self-contained `start.mjs` mirroring the real payload contract
+ *   (`check` self-verification, `start` verifying then serving `/api/auth/status`) with injectable
+ *   failure modes. On a successful listen it prints the real Hub startup banner —
+ *   `Helm Hub: http://<host>:<port>` — which the launcher's readiness gate scans for;
+ * - a port-shaped fake `UpdateCore`: the registry (`fetchLatestVersion`) and npm (`runNpm`)
+ *   seams are stubbed (no network, no npm), while immutable staging delegates to the REAL
+ *   `@helm/update` engine so launcher tests cannot drift from the generic semantics;
+ * - a fake registry `fetch` serving real `npm pack` tarballs with correct sha512 SRI metadata,
+ *   for golden-path staging through the full production extractor (real download verification +
+ *   real npm install + real self-check).
  */
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fsp from 'node:fs/promises';
 import net from 'node:net';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
 import { killProcessTree } from '@helm/env-io';
+import { defaultUpdateCore, type UpdateCore } from '../src/update-core.js';
 import type { LauncherIo } from '../src/io.js';
-import type { UpdateCore, StageHubReleaseSpec } from '../src/update-core.js';
 
 export type FakePayloadMode =
-  | 'ok'
+  | 'ok' // normal startup: log lines, listen, banner
   | 'crash' // start exits immediately with code 3
-  | 'never-ready' // start stays alive but never listens (health gate fails)
+  | 'never-ready' // start stays alive but never prints the banner
   | 'ignore-signal' // healthy server that ignores SIGTERM (escalation path)
+  | 'wrong-port-banner' // prints a banner naming a different port (port-filter path)
   | 'check-fail' // `start.mjs check` exits 1
   | 'check-hang'; // `start.mjs check` never exits (staging timeout path)
 
@@ -47,6 +53,11 @@ else {
   if (mode === 'ignore-signal') { process.on('SIGTERM', () => console.log('[fake-payload] ignoring SIGTERM')); process.on('SIGINT', () => {}); }
   const port = Number(process.env.HELM_PORT ?? '3202');
   const host = process.env.HELM_HOST ?? '127.0.0.1';
+  const displayHost = host === '0.0.0.0' || host === '::' ? '127.0.0.1' : host;
+  const bannerPort = mode === 'wrong-port-banner' ? (port === 1 ? 2 : 1) : port;
+  // Preceding log lines on purpose: the readiness scan must find the banner mid-chunk (#72).
+  console.log('[fake-payload] layout validated');
+  console.log('[fake-payload] dependencies resolved');
   const server = createServer((req, res) => {
     if (req.url === '/api/auth/status') {
       res.writeHead(200, { 'content-type': 'application/json' });
@@ -61,7 +72,7 @@ else {
     res.writeHead(404);
     res.end();
   });
-  server.listen(port, host, () => console.log('[fake-payload] listening'));
+  server.listen(port, host, () => console.log(\`Helm Hub: http://\${displayHost}:\${bannerPort}\`));
 }
 `;
 
@@ -70,6 +81,8 @@ export interface FakePayloadOptions {
   pkgName: string;
   version: string;
   mode?: FakePayloadMode;
+  /** Written into manifest.json; the staging nodeEngines gate compares it against the launcher's Node. */
+  nodeEngines?: string;
 }
 
 /** Materialize a fake payload package directory (package.json + manifest.json + start.mjs + mode). */
@@ -84,7 +97,15 @@ export async function writeFakePayload(options: FakePayloadOptions): Promise<str
   await fsp.writeFile(
     path.join(dir, 'manifest.json'),
     `${JSON.stringify(
-      { formatVersion: 1, name: pkgName, version, entries: { hub: 'hub/dist/main.js' }, entryChecksums: { hub: '0'.repeat(64) } },
+      {
+        formatVersion: 1,
+        name: pkgName,
+        version,
+        builtAt: new Date().toISOString(),
+        nodeEngines: options.nodeEngines ?? '>=18.0.0',
+        entries: { launcher: 'start.mjs' },
+        entryChecksums: { launcher: '0'.repeat(64) },
+      },
       null,
       2,
     )}\n`,
@@ -92,6 +113,50 @@ export async function writeFakePayload(options: FakePayloadOptions): Promise<str
   await fsp.writeFile(path.join(dir, 'payload-mode.txt'), mode, 'utf8');
   await fsp.writeFile(path.join(dir, 'start.mjs'), START_MJS, 'utf8');
   return dir;
+}
+
+/** Pack a fixture payload directory into a real npm tarball (`npm pack`); returns its path. */
+export async function packPayloadTarball(payloadDir: string): Promise<string> {
+  const result = await new Promise<{ code: number | null; error?: Error; stdout: string; stderr: string }>(
+    (resolve) => {
+      let stdout = '';
+      let stderr = '';
+      let settled = false;
+      const child = spawn('npm', ['pack', '--json', '--silent'], { cwd: payloadDir, shell: false });
+      child.stdout?.on('data', (chunk: Buffer) => {
+        stdout += chunk.toString('utf8');
+      });
+      child.stderr?.on('data', (chunk: Buffer) => {
+        stderr += chunk.toString('utf8');
+      });
+      const finish = (code: number | null, error?: Error): void => {
+        if (settled) return;
+        settled = true;
+        resolve({ code, error, stdout, stderr });
+      };
+      child.on('error', (error) => finish(null, error));
+      child.on('close', (code) => finish(code));
+    },
+  );
+  if (result.error !== undefined || result.code !== 0) {
+    throw new Error(
+      `npm pack failed (${payloadDir}): ${result.error?.message ?? `exit ${result.code}`}\n${result.stderr}`,
+    );
+  }
+  const parsed = JSON.parse(result.stdout) as Array<{ filename: string }>;
+  const filename = parsed[0]?.filename;
+  if (filename === undefined) throw new Error(`npm pack returned no filename: ${result.stdout}`);
+  return path.join(payloadDir, filename);
+}
+
+/** sha512 SRI string of a file (`sha512-<base64>`, matching npm dist.integrity). */
+export function sriOf(file: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    fsp
+      .readFile(file)
+      .then((bytes) => resolve(`sha512-${createHash('sha512').update(bytes).digest('base64')}`))
+      .catch(reject);
+  });
 }
 
 /** Grab a free TCP port (bind :0, read the port, release). */
@@ -180,26 +245,21 @@ export interface FakeCoreOptions {
 
 export interface FakeUpdateCore extends UpdateCore {
   npmCalls: string[][];
-  installCalls: number;
-  revalidateCalls: number;
   /** Register a local tarball ref (path) as installing the given fixture payload directory. */
   registerLocalTarball(ref: string, payloadDir: string): void;
 }
 
 /**
- * Fake `UpdateCore`: `downloadVerifiedTarball` materializes a marker tgz and remembers its source;
- * `runNpm install <ref>` copies the source payload into `<cwd>/node_modules/<pkg>` (the npm
- * layout); `stageImmutableRelease` and `withUpdateLock` are real-filesystem implementations of the
- * intended generic semantics (staging dir → uuid rename → `.complete` marker + cached revalidation;
- * `O_EXCL` lock).
+ * Port-shaped fake: `fetchLatestVersion`/`downloadVerifiedTarball`/`runNpm` are stubbed against
+ * fixture payloads; `stageRelease` delegates to the REAL engine adapter so staging semantics
+ * (`.complete` markers, cache reuse, staging cleanup) are the production ones.
  */
 export function createFakeCore(options: FakeCoreOptions): FakeUpdateCore {
   const downloadedByDest = new Map<string, string>();
   const localTarballs = options.localTarballs ?? new Map<string, string>();
+  const real = defaultUpdateCore();
   const core: FakeUpdateCore = {
     npmCalls: [],
-    installCalls: 0,
-    revalidateCalls: 0,
     registerLocalTarball(ref, payloadDir) {
       localTarballs.set(ref, payloadDir);
     },
@@ -207,7 +267,7 @@ export function createFakeCore(options: FakeCoreOptions): FakeUpdateCore {
       if (options.failLatest !== undefined) throw options.failLatest;
       return options.latest;
     },
-    async downloadVerifiedTarball(_pkgName, version, destPath) {
+    async downloadVerifiedTarball(_registryUrl, _pkgName, version, destPath) {
       if (options.failDownload !== undefined) throw options.failDownload;
       const source = options.payloads.get(version);
       if (source === undefined) throw new Error(`fake registry: no payload fixture for ${version}`);
@@ -226,105 +286,64 @@ export function createFakeCore(options: FakeCoreOptions): FakeUpdateCore {
       await fsp.mkdir(path.dirname(target), { recursive: true });
       await fsp.cp(source, target, { recursive: true });
     },
-    async stageImmutableRelease(releasesDir, spec: StageHubReleaseSpec) {
-      const versionRoot = path.join(releasesDir, spec.version);
-      const completePath = path.join(versionRoot, '.complete');
-      if (spec.force !== true) {
-        const cached = await readMarker(completePath);
-        if (cached !== null && cached.version === spec.version) {
-          core.revalidateCalls += 1;
-          try {
-            await spec.revalidate(cached.candidateDir, cached.entryRelative);
-            const entryPath = path.resolve(cached.candidateDir, cached.entryRelative);
-            if (entryPath !== cached.candidateDir && !entryPath.startsWith(cached.candidateDir + path.sep)) {
-              throw new Error('cached entry escapes candidate dir');
-            }
-            return { version: spec.version, releaseDir: cached.candidateDir, entryPath, reusedCached: true };
-          } catch {
-            // Cached candidate failed revalidation: fall through and stage a fresh one.
-          }
-        }
-      }
-      await fsp.mkdir(versionRoot, { recursive: true });
-      const stagingDir = path.join(versionRoot, `.staging-${process.pid}-${Date.now()}-${randomUUID().slice(0, 8)}`);
-      try {
-        await fsp.mkdir(stagingDir, { recursive: true });
-        core.installCalls += 1;
-        const entryRelative = await spec.install(stagingDir);
-        if (path.isAbsolute(entryRelative)) throw new Error(`install returned absolute entry path: ${entryRelative}`);
-        const entryPath = path.resolve(stagingDir, entryRelative);
-        if (entryPath !== stagingDir && !entryPath.startsWith(stagingDir + path.sep)) {
-          throw new Error(`install entry escapes stagingDir: ${entryRelative}`);
-        }
-        await fsp.access(entryPath);
-        const candidateDir = path.join(versionRoot, randomUUID());
-        await fsp.rename(stagingDir, candidateDir);
-        const finalEntry = path.join(candidateDir, entryRelative);
-        await fsp.writeFile(
-          completePath,
-          `${JSON.stringify(
-            { version: spec.version, candidateDir, entryRelative, completedAt: new Date().toISOString() },
-            null,
-            2,
-          )}\n`,
-          { mode: 0o600 },
-        );
-        return { version: spec.version, releaseDir: candidateDir, entryPath: finalEntry, reusedCached: false };
-      } catch (error) {
-        await fsp.rm(stagingDir, { recursive: true, force: true }).catch(() => undefined);
-        throw error;
-      }
-    },
-    async withUpdateLock(rootDir, fn) {
-      await fsp.mkdir(rootDir, { recursive: true });
-      const lockPath = path.join(rootDir, 'update.lock');
-      let handle: fsp.FileHandle;
-      try {
-        handle = await fsp.open(lockPath, 'wx');
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
-          throw new Error(`update already in progress: ${lockPath} exists (another update is running)`);
-        }
-        throw error;
-      }
-      try {
-        return await fn();
-      } finally {
-        await handle.close().catch(() => undefined);
-        await fsp.unlink(lockPath).catch(() => undefined);
-      }
+    stageRelease(root, version, extractor, stageOptions) {
+      return real.stageRelease(root, version, extractor, stageOptions);
     },
   };
   return core;
 }
 
-interface CompleteMarker {
-  version: string;
-  candidateDir: string;
-  entryRelative: string;
-  completedAt: string;
+export interface FakeRegistry {
+  registryUrl: string;
+  /** Map an explicit version to a packed tarball (call before staging that version). */
+  serve(version: string, tarballPath: string, options?: { integrity?: string }): Promise<void>;
+  fetchImpl: typeof fetch;
 }
 
-async function readMarker(file: string): Promise<CompleteMarker | null> {
-  try {
-    const raw = JSON.parse(await fsp.readFile(file, 'utf8')) as Record<string, unknown>;
-    if (
-      typeof raw['version'] === 'string' &&
-      typeof raw['candidateDir'] === 'string' &&
-      typeof raw['entryRelative'] === 'string' &&
-      typeof raw['completedAt'] === 'string'
-    ) {
-      return {
-        version: raw['version'],
-        candidateDir: raw['candidateDir'],
-        entryRelative: raw['entryRelative'],
-        completedAt: raw['completedAt'],
-      };
+/**
+ * Fake npm registry over the `fetchFn` seam: serves `<registry>/<pkg>/latest`,
+ * `<registry>/<pkg>/<version>` (with a sha512 `dist.integrity`), and the tarball bytes. The
+ * optional `integrity` override feeds tampering tests through the real verification chain.
+ * Used with the REAL update core for golden-path staging through the production extractor.
+ */
+export async function createFakeRegistry(pkgName: string, latest: string): Promise<FakeRegistry> {
+  const registryUrl = 'https://registry.fake.local';
+  const tarballs = new Map<string, { file: string; integrity?: string }>();
+  const fetchImpl: typeof fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    const tarballMatch = /\/tarball\/([^/]+)$/.exec(url);
+    if (tarballMatch !== null) {
+      const served = tarballs.get(decodeURIComponent(tarballMatch[1]!));
+      if (served === undefined) return new Response('no such tarball', { status: 404 });
+      const bytes = await fsp.readFile(served.file);
+      return new Response(new Uint8Array(bytes), { status: 200 });
     }
-    return null;
-  } catch {
-    return null;
-  }
+    if (/\/latest$/.test(url)) {
+      return Response.json({ name: pkgName, version: latest });
+    }
+    const exactMatch = new RegExp(`/([^/]+)/([0-9][^/]*)$`).exec(url.replace(registryUrl, ''));
+    if (exactMatch !== null) {
+      const version = exactMatch[2]!;
+      const served = tarballs.get(version);
+      if (served === undefined) return new Response('version not found', { status: 404 });
+      return Response.json({
+        name: pkgName,
+        version,
+        dist: {
+          integrity: served.integrity ?? (await sriOf(served.file)),
+          tarball: `${registryUrl}/tarball/${encodeURIComponent(version)}`,
+        },
+      });
+    }
+    return new Response('not found', { status: 404 });
+  }) as typeof fetch;
+  return {
+    registryUrl,
+    async serve(version, tarballPath, options) {
+      tarballs.set(version, { file: tarballPath, ...(options?.integrity !== undefined ? { integrity: options.integrity } : {}) });
+    },
+    fetchImpl,
+  };
 }
 
 /** Best-effort cleanup helper for test-scoped hub processes (never throws). */
