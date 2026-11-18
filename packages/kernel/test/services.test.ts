@@ -560,6 +560,71 @@ test('skills: ensureSkill rejects symlinked dirs and file/dir collisions without
   )
 })
 
+test('skills: ensureSkill reconciles to the declared asset — prunes retired references and retired same-owner skill dirs', { timeout: 60_000 }, async () => {
+  const dataDir = await freshDataDir()
+  const skills = new SkillService(dataDir)
+  const owner = 'builtin:demo-owner'
+  const asset = {
+    id: 'demo-live',
+    skillMd: `---\nname: demo-live\ndescription: managed\nmanagedByPlugin: ${owner}\n---\n\n# body\n`,
+    references: { 'guide.md': '# guide\n' },
+  }
+
+  // Retired same-owner dir (rename residue, e.g. swarm-collab -> swarm), foreign-owner dir, ownerless user skill,
+  // and a dir without SKILL.md coexist next to the live asset.
+  await mkdir(join(dataDir, 'skills', 'demo-retired'), { recursive: true })
+  await writeFile(
+    join(dataDir, 'skills', 'demo-retired', 'SKILL.md'),
+    `---\nname: demo-retired\ndescription: stale\nmanagedByPlugin: ${owner}\n---\n\nold body\n`,
+  )
+  await mkdir(join(dataDir, 'skills', 'demo-retired', 'references'), { recursive: true })
+  await writeFile(join(dataDir, 'skills', 'demo-retired', 'references', 'old.md'), '# stale manual\n')
+  await seedSkill(dataDir, 'foreign-skill')
+  const foreignMd = await readFile(join(dataDir, 'skills', 'foreign-skill', 'SKILL.md'), 'utf8')
+  await writeFile(
+    join(dataDir, 'skills', 'foreign-skill', 'SKILL.md'),
+    foreignMd.replace('---\n', `---\nmanagedByPlugin: builtin:other-owner\n`),
+  )
+  await seedSkill(dataDir, 'user-skill', ['references/notes.md'])
+  await mkdir(join(dataDir, 'skills', 'no-frontmatter-dir', 'references'), { recursive: true })
+
+  // Stale undeclared references inside the live asset: a retired file, a retired nested dir, and an empty leftover dir.
+  await skills.ensureSkill(asset)
+  await writeFile(join(dataDir, 'skills', 'demo-live', 'references', 'retired.md'), '# retired manual\n')
+  await mkdir(join(dataDir, 'skills', 'demo-live', 'references', 'retired-tree'), { recursive: true })
+  await writeFile(join(dataDir, 'skills', 'demo-live', 'references', 'retired-tree', 'nested.md'), '# nested\n')
+  await mkdir(join(dataDir, 'skills', 'demo-live', 'references', 'empty-leftover'), { recursive: true })
+  await mkdir(join(dataDir, 'skills', 'demo-live', 'outside-managed'), { recursive: true })
+  await writeFile(join(dataDir, 'skills', 'demo-live', 'outside-managed', 'keep.txt'), 'not a reference\n')
+
+  await skills.ensureSkill(asset)
+
+  // Declared reference kept; retired file/nested dir/empty dir pruned; files outside the references tree untouched.
+  assert.ok((await skills.readFile('demo-live', 'references/guide.md')).includes('guide'))
+  await assert.rejects(() => skills.readFile('demo-live', 'references/retired.md'), /ENOENT|not found/i)
+  assert.ok(!existsSync(join(dataDir, 'skills', 'demo-live', 'references', 'retired-tree')))
+  assert.ok(!existsSync(join(dataDir, 'skills', 'demo-live', 'references', 'empty-leftover')))
+  assert.equal(
+    await readFile(join(dataDir, 'skills', 'demo-live', 'outside-managed', 'keep.txt'), 'utf8'),
+    'not a reference\n',
+  )
+
+  // Retired same-owner dir removed; foreign-owner, ownerless, and frontmatter-less dirs survive.
+  assert.ok(!existsSync(join(dataDir, 'skills', 'demo-retired')), 'retired same-owner dir must be swept')
+  assert.ok(existsSync(join(dataDir, 'skills', 'foreign-skill', 'SKILL.md')))
+  assert.ok(existsSync(join(dataDir, 'skills', 'user-skill', 'SKILL.md')))
+  assert.ok(existsSync(join(dataDir, 'skills', 'no-frontmatter-dir')))
+
+  // A second skill of the same owner stays once the owner declares it in the same session (accumulated set).
+  await skills.ensureSkill({
+    id: 'demo-sibling',
+    skillMd: `---\nname: demo-sibling\ndescription: managed\nmanagedByPlugin: ${owner}\n---\n\n# sibling\n`,
+    references: {},
+  })
+  await skills.ensureSkill(asset)
+  assert.ok(existsSync(join(dataDir, 'skills', 'demo-sibling', 'SKILL.md')), 'sibling must survive re-ensure of the first skill')
+})
+
 test('profiles: skills tri-state (omitted default, empty array persisted, allowlist deduped, invalid rejected)', { timeout: 60_000 }, async () => {
   const dataDir = await freshDataDir()
   const profiles = new ProfileService(dataDir)

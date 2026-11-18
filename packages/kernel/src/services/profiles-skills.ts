@@ -4,7 +4,7 @@
  * An empty or omitted model means unconfigured—runtime reports an explicit error rather than fabricating a default model in the service layer.
  * Long-term MEMORY.md is autonomously managed by the builtin:memory plugin and does not belong here.
  */
-import { lstat, mkdir, readdir, readFile, realpath, rm } from 'node:fs/promises'
+import { lstat, mkdir, readdir, readFile, realpath, rmdir, rm } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join, relative, sep } from 'node:path'
 import {
@@ -456,6 +456,12 @@ export class SkillService {
   /** Managed skill IDs bootstrapped via ensureSkill (in-process; normal write endpoints return 403). */
   private readonly managedSkillIds = new Set<string>()
 
+  /** Owner-indexed skill IDs ensured this process: the in-memory declared set used to sweep retired same-owner skill
+   * dirs (rename/retire residue). Accumulates across ensureSkill calls, so a rename performed only via live plugin
+   * reload keeps the retired id until the next process start reconciles it; plugins with multiple services that
+   * ensure skills sequentially see delete+recreate churn at most (source content is rewritten identically). */
+  private readonly managedIdsByOwner = new Map<string, Set<string>>()
+
   private readonly dataDir: string
 
   /** External sources scanned and loaded read-only by SkillService and load_skill (ordered after dataDir). */
@@ -626,14 +632,22 @@ export class SkillService {
   /**
    * Built-in plugin managed skill bootstrapper: skills/<id>/SKILL.md and references/* are managed system assets;
    * on every startup they are overwritten file-by-file from the source declarations (reverting stale files and manual
-   * disk edits back to source) and missing files are added, while leaving any other files in the skill directory intact.
-   * Files whose byte contents already match are skipped (by byte comparison, not mtime, avoiding atomic rename
-   * churn in AssetWatcher hot reload).
+   * disk edits back to source) and missing files are added. Files whose byte contents already match are skipped
+   * (by byte comparison, not mtime, avoiding atomic rename churn in AssetWatcher hot reload).
+   *
+   * Source-of-authority reconciliation (no phantom residue): reference files no longer declared by the asset are
+   * pruned from the references tree, and skill dirs whose SKILL.md still claims this asset's managedByPlugin owner
+   * but whose id the owner no longer declares this session (rename/retire residue, e.g. swarm-collab -> swarm) are
+   * removed—otherwise retired content keeps serving stale manuals via load_skill forever. Scope stays narrow:
+   * files elsewhere in the kept skill dir (outside SKILL.md/references) and dirs owned by plugins that ensured
+   * nothing this session (disabled plugins) are left intact; the catalog already filters the latter.
    *
    * Security boundary unchanged: validate all reference paths up front (invalid assets write nothing);
    * verify every directory segment along skills/<id>, references, and nested reference dirs is not a symlink, resolving
    * the skills root via realpath just like readFile; existing targets must be regular files (rejecting symlinks/directories);
-   * errors other than ENOENT are rethrown. Once added to managedSkillIds, normal write endpoints reject with 403.
+   * errors other than ENOENT are rethrown. Deletions walk with lstat semantics only (symlinks are unlinked, never
+   * followed) and are confined to the verified skill dir / skills root by construction. Once added to managedSkillIds,
+   * normal write endpoints reject with 403.
    */
   async ensureSkill(asset: BuiltinSkillAsset): Promise<void> {
     assertSkillId(asset.id)
@@ -667,6 +681,15 @@ export class SkillService {
     await writeManagedFile(join(dir, 'SKILL.md'), asset.skillMd)
     for (const { rel, content } of references) {
       await writeManagedFile(join(dir, rel), content)
+    }
+    // Reconcile to the declared asset (see method JSDoc): prune retired references, sweep retired same-owner dirs.
+    await pruneUndeclaredReferenceFiles(join(dir, 'references'), new Set(references.map((r) => r.rel)))
+    const owner = parseSkillFrontmatter(asset.skillMd).managedByPlugin
+    if (owner !== undefined) {
+      const declared = this.managedIdsByOwner.get(owner) ?? new Set<string>()
+      declared.add(asset.id)
+      this.managedIdsByOwner.set(owner, declared)
+      await removeRetiredManagedSkillDirs(rootReal, owner, declared)
     }
     this.managedSkillIds.add(asset.id)
   }
@@ -783,6 +806,69 @@ async function writeManagedFile(path: string, content: string): Promise<void> {
   })
   if (current === content) return
   await atomicWriteFile(path, content)
+}
+
+/** Prune reference files under a managed skill's (already symlink-verified) references tree that the asset no longer
+ * declares: retired references would otherwise linger forever and keep serving stale content through load_skill.
+ * Dirents carry lstat semantics, so symlinks (file or directory) are unlinked directly and never followed; nested
+ * directories left empty are pruned bottom-up, while the references root itself is kept (ensureSkill owns its
+ * creation). Deletion stays inside the verified tree by construction (readdir names cannot be absolute or `..`). */
+async function pruneUndeclaredReferenceFiles(referencesDir: string, declared: ReadonlySet<string>): Promise<void> {
+  const walk = async (current: string, prefix: string): Promise<void> => {
+    const entries = await readdir(current, { withFileTypes: true }).catch((err: unknown) => {
+      if ((err as { code?: string }).code === 'ENOENT') return undefined
+      throw err
+    })
+    if (entries === undefined) return
+    for (const entry of entries) {
+      const rel = `${prefix}/${entry.name}`
+      const target = join(current, entry.name)
+      if (entry.isDirectory()) {
+        await walk(target, rel)
+        await rmdir(target).catch((err: unknown) => {
+          const code = (err as { code?: string }).code
+          if (code !== 'ENOTEMPTY' && code !== 'ENOENT') throw err
+        })
+        continue
+      }
+      if (!declared.has(rel)) await rm(target, { force: true })
+    }
+  }
+  // Paths are skill-dir-relative ('references/<name>'), matching the asset's declared reference keys.
+  await walk(referencesDir, 'references')
+}
+
+/** Remove skill dirs that still claim `managedByPlugin: owner` in their SKILL.md frontmatter but are no longer in the
+ * owner's declared set for this session (rename/retire residue). Symlinked entries and dirs without attributable
+ * frontmatter (missing SKILL.md, other owners, unparseable frontmatter) are skipped—only unambiguous same-owner
+ * residue is deleted. fs.rm with recursive+force unlinks symlinks without following, keeping deletion lstat-safe. */
+async function removeRetiredManagedSkillDirs(
+  skillsRoot: string,
+  owner: string,
+  declared: ReadonlySet<string>,
+): Promise<void> {
+  const entries = await readdir(skillsRoot, { withFileTypes: true }).catch((err: unknown) => {
+    if ((err as { code?: string }).code === 'ENOENT') return undefined
+    throw err
+  })
+  if (entries === undefined) return
+  for (const entry of entries) {
+    // Dirent.isDirectory() is lstat-based: symlinked dirs (and files) fall through here and are never touched.
+    if (!entry.isDirectory() || declared.has(entry.name)) continue
+    const skillMd = await readFile(join(skillsRoot, entry.name, 'SKILL.md'), 'utf8').catch((err: unknown) => {
+      if ((err as { code?: string }).code === 'ENOENT') return undefined
+      throw err
+    })
+    if (skillMd === undefined) continue
+    let claimed: string | undefined
+    try {
+      claimed = parseSkillFrontmatter(skillMd).managedByPlugin
+    } catch {
+      continue // unattributable frontmatter is not ours to delete
+    }
+    if (claimed !== owner) continue
+    await rm(join(skillsRoot, entry.name), { recursive: true, force: true })
+  }
 }
 
 /** Strip symmetric leading/trailing single or double quotes from a YAML single-line scalar (unescaping \" and \\
