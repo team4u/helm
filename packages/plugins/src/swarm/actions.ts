@@ -1353,7 +1353,7 @@ export function registerSwarmActions(
   ctx.tool({
     name: 'swarm_create_group',
     description:
-      'Start an active peer swarm collaboration board on the current top-level conversation, tagging it swarm-coordinator and unlocking squad tools on the next step.',
+      'Start an active peer swarm collaboration board on the current top-level human conversation, tagging it swarm-coordinator and unlocking squad tools next step. Use for complex tasks needing concurrent role division, live peer handoffs, or writer/verifier review loops; skip for single subtasks or fixed deterministic pipelines.',
     inputSchema: createGroupInputSchema,
     replay: 'safe',
     execute: (input: never, context: PluginToolContext) =>

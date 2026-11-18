@@ -1,19 +1,28 @@
 ---
 name: swarm
-description: Dynamic multi-agent peer blackboard collaboration and parallel orchestration (when to activate via /skill:swarm or swarm_create_group, coordinator delegation discipline, dynamic role sizing and worktree isolation, #seq pointer handoffs, wake doorbell, and two-mode close)
+description: Use in top-level human conversations when a complex task needs dynamic multi-agent division, live peer-to-peer handoffs, multi-round writer/verifier review loops, or mid-flight squad adjustments on a shared blackboard — not for single subtasks or fixed deterministic pipelines.
 managedByPlugin: builtin:swarm
 ---
 
 # Swarm Multi-Agent Peer Collaboration
 
-Use `builtin:swarm` when a task benefits from dividing non-overlapping work across multiple concurrent peer agents, running parallel investigation slices, or pairing writers with read-only cross-verifiers on a shared blackboard. For single-thread tasks use normal execution; for deterministic JS pipeline graphs use `builtin:workflow`.
+Use `builtin:swarm` for horizontal, adaptive peer collaboration on a shared `#seq` blackboard when roles need to inspect each other's progress, run multi-round write/review cycles, or evolve the team shape as findings emerge.
 
-## 1. When to Use & How to Activate
+## 1. When to Use, When Not to Use & How to Activate
 
-- **Explicit `/skill:swarm <task>` entry**: When the user sends `/skill:swarm <task>` (or `/skill:swarm`) in a top-level human conversation, `builtin:swarm` automatically activates (or reuses) a collaboration group on that conversation and unlocks the `swarm_*` tools in the same turn.
-- **Model-initiated or natural-language activation**: When in a normal top-level conversation you judge that multi-agent parallel division is warranted (or the user asks for multi-agent collaboration in natural language) and no active group exists yet, call `swarm_create_group` first to open the collaboration board on the current conversation, then recruit and schedule peer workers on the following step.
-- **Top-level only**: Collaboration groups can only be started on top-level human conversations—never from a worker or child sub-conversation.
-- **Tools vs CLI**: Inside Helm conversations, drive `builtin:swarm` with the `swarm_*` tools (`swarm_create_group`, `swarm_dispatch_worker`, `swarm_board_post`, `swarm_board_read`, `swarm_board_status`, `swarm_inspect_worker`, `swarm_abort_worker`, `swarm_switch_worker_model`, `swarm_archive_worker`, `swarm_close_group`); the equivalent host CLI interface is `helm swarm <subcommand>` (e.g., `helm swarm create-group`, `helm swarm dispatch-worker`, `helm swarm board-status`, `helm swarm close-group`).
+- **Use `swarm` when**:
+  - Multiple non-overlapping code slices or deep investigation tracks benefit from running concurrently **and** coordinating findings or cross-module contracts on a shared board.
+  - Implementation slices need iterative **writer <-> read-only verifier** handoff/review/fix loops before coordinator merge.
+  - The squad shape cannot be scripted up front—you may need to recruit extra specialists, steer/abort a stuck peer, or switch a worker's model mid-task while keeping the user conversation responsive.
+- **Do NOT open a swarm group when**:
+  - **Small or tightly sequential work**: handle it directly in the current conversation.
+  - **One isolated subtask** (single lookup, one blind review, one bounded fix): use `subagent` (when enabled) instead of creating a group.
+  - **Fixed, repeatable pipelines** (fan-out batch audits without peer cross-talk, staged pipelines, strict `gate`/schema checkpoints, saved/scheduled runs, or orchestration inside a child/automated session): use `SubagentWorkflow` (`workflow` skill, when enabled).
+- **Activation & eligibility (top-level human conversations only)**:
+  - **Explicit `/skill:swarm <task>` entry**: When the user sends `/skill:swarm <task>` (or `/skill:swarm`) in a top-level human conversation, `builtin:swarm` automatically activates (or reuses) a collaboration group on that conversation and unlocks the `swarm_*` tools in the same turn.
+  - **Model-initiated or natural-language activation**: When in a normal top-level conversation you judge that the task matches the criteria above (or the user asks for multi-agent collaboration in natural language) and no active group exists yet, call `swarm_create_group` first to open the collaboration board on the current conversation, then recruit and schedule peer workers on the following step.
+  - **Top-level only**: Collaboration groups can only be started on top-level human conversations—never from a worker, child, or automated sub-conversation.
+  - **Tools vs CLI**: Inside Helm conversations, drive `builtin:swarm` with the `swarm_*` tools (`swarm_create_group`, `swarm_dispatch_worker`, `swarm_board_post`, `swarm_board_read`, `swarm_board_status`, `swarm_inspect_worker`, `swarm_abort_worker`, `swarm_switch_worker_model`, `swarm_archive_worker`, `swarm_close_group`); the equivalent host CLI interface is `helm swarm <subcommand>` (e.g., `helm swarm create-group`, `helm swarm dispatch-worker`, `helm swarm board-status`, `helm swarm close-group`).
 
 ## 2. Coordinator Rule: Do Not Do the Work
 

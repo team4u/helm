@@ -1,19 +1,21 @@
 ---
 name: workflow
-description: Use when choosing or running subagents and deterministic SubagentWorkflow orchestration, including DSL scripts, parallel pipelines, gates, worktrees, saved definitions, and checkpoint recovery.
+description: Use when delegating one focused subtask (subagent) or running a predefined, deterministic multi-step/parallel graph (SubagentWorkflow) with JS control flow, schemas, shell gates, worktrees, saved definitions, or checkpoint replay — including inside child or automated sessions. Not for open-ended peer back-and-forth negotiation.
 managedByPlugin: builtin:workflow
 ---
 
 # Workflow Orchestration
 
-Use `builtin:workflow` for multi-agent execution and deterministic orchestration. The plugin owns the tools, actions, run ledger, worktree lifecycle, background reports, and recovery semantics described here.
+Use `builtin:workflow` for focused task delegation and deterministic multi-agent pipelines where the execution graph is known up front and branches pass structured results rather than negotiating peer-to-peer. The plugin owns the tools, actions, run ledger, worktree lifecycle, background reports, and recovery semantics described here.
 
 ## Choose the execution surface
 
-- Use `subagent` for one focused task delegated to another Profile or external runtime. It is the smallest useful unit and returns one business result plus independent execution metadata.
-- Use `SubagentWorkflow` for a deterministic JavaScript graph with multiple agents, parallel branches, staged pipelines, actions, gates, or checkpoint replay. Prefer the native tool in a conversation; use the CLI for terminal or scheduled operation.
-- Use `cleanup_worktree` only for a registered managed worktree. Inspect or merge first; never invent a path, branch, or completion result.
-- Use `run_action` for a workflow action when the action catalog exposes it. Call `run_action({ actionId, describe: true })` before using an unfamiliar action so nested schemas are read without side effects.
+- **Work directly in the current turn** when the task is small, sequential, or tightly coupled to 1-2 files and delegation overhead outweighs parallel gain.
+- **Use `subagent`** for **one** self-contained delegated task (focused research, blind review, isolated slice with a `gate`, or an external runtime like `herdr:*`). It returns one business result plus independent execution metadata without script or board overhead.
+- **Use `SubagentWorkflow`** when the topology can be written as a deterministic JavaScript graph up front: fan-out `parallel` checks where branches do not talk to each other, staged `pipeline` passes, strict output `schema` / `gate` verification, reusable saved definitions, or `resumeFromRunId` ledger replay. Prefer the native tool in a conversation (and use this, not peer boards, when orchestrating inside a child or automation-owned session); use the CLI for terminal or scheduled operation.
+- **Prefer peer blackboard collaboration (`swarm`, if available in `<available_skills>`)** instead of `SubagentWorkflow` in a top-level human conversation when peers must hand off work back and forth across multiple review/fix rounds, negotiate cross-slice boundaries live, or reshape the squad mid-flight.
+- **Use `cleanup_worktree`** only for a registered managed worktree. Inspect or merge first; never invent a path, branch, or completion result.
+- **Use `run_action`** for a workflow action when the action catalog exposes it. Call `run_action({ actionId, describe: true })` before using an unfamiliar action so nested schemas are read without side effects.
 
 ## Operating rules
 

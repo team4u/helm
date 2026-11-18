@@ -9,7 +9,7 @@
 
 默认启用，随 Hub 启动加载。启用时幂等自举受管技能 `swarm`（`managedByPlugin: 'builtin:swarm'`，停用插件后即时消失，不留幻影提示词），沉淀四条实战协同准则：
 
-1. **何时使用与如何开启**：顶层人类会话输入 `/skill:swarm <任务>` 时由 `onInput` 自动建组并同回合解锁 `swarm_*` 工具；普通对话中由模型在 `<available_skills>` 主动发现或按用户自然语言请求先调用 `swarm_create_group` 建组再调度；
+1. **何时使用、何时不用与如何开启**：明确区分适用场景（多模块并行协同、writer ↔ 只读 verifier 多轮交接审改、动态调角/换模）与不适用场景（单线程小改、单点外派 `subagent`、拓扑固定的确定性脚本/子会话内编排），且仅限顶层人类会话开启；输入 `/skill:swarm <任务>` 时由 `onInput` 自动建组并同回合解锁 `swarm_*` 工具，普通对话中则由模型在 `<available_skills>` 主动发现或按用户自然语言请求先调用 `swarm_create_group` 建组再调度；
 2. **主控职责边界（Skill 约束、零剥离业务工具）**：主控专注任务切分、具名派工、冲突裁决与最终合入收尾，允许快速只读探查以划分边界，不直接写业务代码或跑长时构建阻塞看板调度；
 3. **动态拆角 + 按需只读交叉验收**：主控按任务本身动态决定成员数量、小写角色名、权限语义（`readwrite` / `readonly`，由 `<active_swarm_group>` 与 `swarm` 技能约束职责，不强制剥离或硬拦截工具）、隔离方式（并发写代码必须 `worktree` 防冲突；只读检索或交叉验收可选 `inherit` 搭配 `readonly`）及 `profileId` / `model` / `channels`；
 4. **`#seq` 指针、`wake` 门铃与两阶段收尾**：跨成员交接统一通过 `refs: [seq]` 与 `#seq` 引用黑板记录（`worktree` 成员发 `handoff / done` 自动内联 `worktreeSnapshot`）；`wake: true` 仅唤醒下一跳责任人（不抄送闲人、不发空确认）；关闭前确认 `activeWorkingMembers` 为空，未合入分支可合并后 `swarm_close_group()` 或传 `keepWorktree: true` 释放锁并保留分支（会话内经 `swarm_*` 工具驱动，对应主机 CLI 为 `helm swarm <subcommand>`）。
