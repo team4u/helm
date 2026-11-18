@@ -4,7 +4,7 @@
 
 ## 1. 环境、隔离与破坏性变更授权（最高优先级）
 
-- **工作目录**：必须在 `/root/code/helm`（或同级 worktree `../helm-worktrees/<name>`）下工作；开发智能体的继承 `cwd` 可能位于旧仓库，每次开工先显式 `cd`。
+- **工作目录**：主仓位于 `/root/code/helm`，改代码开发必须在同级独立 worktree（`../helm-worktrees/<name>`，禁用 `/tmp`）中完成；开发智能体的继承 `cwd` 可能位于旧仓库，每次开工先显式 `cd`。
 - **历史仓库严格只读**：`/root/code/botx`、`/root/code/botd`、`/root/code/herdr` 仅可参考代码与 `node_modules` 验证 SDK / 协议行为，**绝不修改**。
 - **运行数据隔离**：数据目录仅限 `~/.helm`（或 `HELM_DATA_DIR` 覆盖值），与 `~/.botx`、`~/.botd` 完全隔离，不得读写旧系统运行数据。
 - **端口铁律**：Web dev 固定 `3201`（`strictPort: true`，代理 `/api`、`/ws`），内核 Hub 固定 `3202`（`HELM_PORT=3202`）。**永不占用 `3000`（外部）、`3001/3002`（botd）、`3101/3102`（botx）**。
@@ -75,9 +75,8 @@ pnpm build && pnpm typecheck && pnpm lint && pnpm check:hygiene && pnpm test:all
 
 ## 6. 开发流程与多智能体协作
 
-- **主代理职责**：拆分任务、确定接口、协调子代理、审查结果与最终验收；重实现、大范围开发和成套测试交给子代理。
-- **子代理模型**：所有子代理统一使用 GLM（`glm-agent`），覆盖调查、审查、规划、实现与验收；除非用户明确变更此偏好。
-- **子代理隔离**：写代码的子代理必须在仓库同级 `../helm-worktrees/<name>` 工作，禁止使用共享主工作树或 `/tmp`；提示词写明绝对路径和允许修改范围，并核实实际 worktree 与基线。
+- **Worktree 隔离开发**：不强制使用子代理；无论单代理开发还是拆分子代理，所有代码开发必须在主仓同级独立 worktree（`/root/code/helm-worktrees/<name>`，即 `../helm-worktrees/<name>`）中完成，禁止直接在共享主工作树 `/root/code/helm` 改代码或使用 `/tmp`。开工前核实实际 worktree 绝对路径与基线；合回主干（`main`）前须先合入最新主干并在该 worktree 内跑通验证。
+- **多子代理并行与集成合入**：多个子代理并行开发时，每个写代码的子代理必须独占各自的 `../helm-worktrees/<task>`（提示词写明绝对路径与允许修改范围），**严禁将子代理分支逐个直接合入主干**。必须按序执行：① 新建独立的集成 worktree（`../helm-worktrees/<integration>`），将各子代理改动先合并进该集成 worktree；② 再把最新主干（`main`）合入该集成 worktree 并解决冲突；③ 在集成 worktree 内跑通构建、门禁与测试且确认无误后，才允许合回主干。
 - **改动所有权**：已有的修改、暂存和未跟踪文件默认属于用户或其他代理；先记录状态，所有权不明时保留并询问。禁止为清理或同步而重置、清除或覆盖这些改动。
 - **恢复纪律**：禁止从移动中的 `HEAD` 盲目恢复文件，包括 `git show HEAD:<file> > <file>`；恢复前固定基线并核实文件来源，只按确认的文件操作。发现误覆盖时立即停止写入，保留现场并查找快照、reflog 或其他恢复来源。
 - **Git 提交**：中文 Conventional Commits（如 `feat(kernel): ...`），不加 `Co-Authored-By`。
