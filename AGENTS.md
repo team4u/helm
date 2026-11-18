@@ -4,7 +4,7 @@
 
 ## 1. 环境、隔离与破坏性变更授权（最高优先级）
 
-- **工作目录**：主仓位于 `/root/code/helm`，改代码开发必须在同级独立 worktree（`../helm-worktrees/<name>`，禁用 `/tmp`）中完成；开发智能体的继承 `cwd` 可能位于旧仓库，每次开工先显式 `cd`。
+- **工作目录**：主仓位于 `/root/code/helm`，改代码开发必须在同级独立 worktree（`../helm-worktrees/<name>`，禁用 `/tmp`）中完成（纯文档等轻量例外见第 6 节）；开发智能体的继承 `cwd` 可能位于旧仓库，每次开工先显式 `cd`。
 - **历史仓库严格只读**：`/root/code/botx`、`/root/code/botd`、`/root/code/herdr` 仅可参考代码与 `node_modules` 验证 SDK / 协议行为，**绝不修改**。
 - **运行数据隔离**：数据目录仅限 `~/.helm`（或 `HELM_DATA_DIR` 覆盖值），与 `~/.botx`、`~/.botd` 完全隔离，不得读写旧系统运行数据。
 - **端口铁律**：Web dev 固定 `3201`（`strictPort: true`，代理 `/api`、`/ws`），内核 Hub 固定 `3202`（`HELM_PORT=3202`）。**永不占用 `3000`（外部）、`3001/3002`（botd）、`3101/3102`（botx）**。
@@ -69,6 +69,7 @@ pnpm build && pnpm typecheck && pnpm lint && pnpm check:hygiene && pnpm test:all
   - `unit` = `protocol + env-io + test-kit + cli + web + plugin-client`（纯内存 / happy-dom，不起真实服务）——改协议、测试基座、CLI、Web 或浏览器 SDK 必跑；
   - `integration` = `kernel + plugins + hub + plugin-build + node + payload`（真实进程、SQLite、Git、WS、构建、`createHelm`、daemon 与 payload）——改执行、插件、产品或构建包必跑；
   - 跨档变更两档都跑，合并前跑 `test:all`（不变量 `all = unit ∪ integration` 不重不漏）；新测试文件须落在已登记包的 `test/`，新包同步更新 `scripts/test-suites.mjs`（`SUITES`）与 `scripts/lib/workspace-meta.mjs`（`PACKAGE_TIERS`）。
+  - **文档例外**：仅修改独立文档（如 `AGENTS.md`、`docs/`、`README.md` 等，不涉及 `packages/` 代码、脚本、构建配置或受测试校验的内置资产）时，跳过构建与测试跑批，避免无效耗时。
 - **共享基座、防抖与防散沙**：复用 `@helm/test-kit`（仅限 `devDependencies` 与 `test/`，`package-boundaries` 锁死零生产泄漏）及包级 harness（`cli-harness`、`dom-harness`、`plugin-test-env`、`hub-test-env`、`host-backend-stub`）：临时目录用 `useTempDir`，Git 仓库用 `createGitTemplate().cloneTo()`，子进程环境用 `sanitizedHostEnv` / `makeCliEnv`，Web DOM 用 `ensureHappyDom()`。同步等待用 `deferred` / `waitFor` / 可注入计时参数，禁长固定 `sleep` 与无余量的硬编码墙钟上界断言（超时逃逸须拉大阻塞时长与阈值之比以抗高并发抖动）；纯内存单测保持零全局副作用以便 `test-sharding.mjs` 合片。**三禁**：禁已删功能的历史墓碑测试、禁正则扫描 CSS/TSX 源码的脆弱断言（测 DOM 行为、导出模型或结构不变量）、禁按零散问题新建一两行碎片测试文件（并入对应领域测试）。
 - **快速反馈门（补充而非替代）**：`pnpm check:changed` 按变更集（已提交 ∪ 暂存/未暂存 ∪ 未跟踪；`--base <ref>` 优先，默认取 upstream 或 `origin/HEAD` 的 merge-base，均无则报错要求 `--base`，绝不退化 `HEAD~1`；传参如 `pnpm check:changed -- --base main --list`）选反向闭包受影响包（锁文件/根配置/`scripts/**/*.mjs` 触发全档），顺序执行 `pnpm typecheck` → 受影响包测试；配合 `pnpm check:hygiene` 提供增量快速反馈，不替代分档必跑与合并前 `test:all`。
 - **进程 kill 纪律**：只允许终止**自己 spawn 并持有 PID/句柄**的进程（POSIX：独立进程组 `kill(-pid)`，宽限后 SIGKILL；Windows：`taskkill /PID <pid> /T /F` 杀 owned `ChildProcess` 整棵树，参考 `scripts/run-tests.mjs`）；确需按端口清理时，必须先核验监听进程的 cwd 与实际归属再终止。**严禁按模糊名称/路径发信号（如 `pkill -f`、`pgrep | xargs kill`、`taskkill /IM`）**（会误杀他人会话、其他 worktree 的 dev 服务与无关系统进程），严禁猜测 PID。
@@ -77,6 +78,8 @@ pnpm build && pnpm typecheck && pnpm lint && pnpm check:hygiene && pnpm test:all
 
 - **Worktree 隔离开发**：不强制使用子代理；无论单代理开发还是拆分子代理，所有代码开发必须在主仓同级独立 worktree（`/root/code/helm-worktrees/<name>`，即 `../helm-worktrees/<name>`）中完成，禁止直接在共享主工作树 `/root/code/helm` 改代码或使用 `/tmp`。开工前核实实际 worktree 绝对路径与基线；合回主干（`main`）前须先合入最新主干并在该 worktree 内跑通验证。
 - **多子代理并行与集成合入**：多个子代理并行开发时，每个写代码的子代理必须独占各自的 `../helm-worktrees/<task>`（提示词写明绝对路径与允许修改范围），**严禁将子代理分支逐个直接合入主干**。必须按序执行：① 新建独立的集成 worktree（`../helm-worktrees/<integration>`），将各子代理改动先合并进该集成 worktree；② 再把最新主干（`main`）合入该集成 worktree 并解决冲突；③ 在集成 worktree 内跑通构建、门禁与测试且确认无误后，才允许合回主干。
+- **合并后清理收尾**：改动合回主干（`main`）后必须完成清理：① 按第 5 节「进程 kill 纪律」停止本轮自己启动的所有服务与后台进程（如 `dev`、Hub `3202`、Web `3201`、临时 `helm-node` 或测试验收服务，严禁误杀他人或其它 worktree 的进程）；② 确认各工作与集成 worktree 已合入且无保留未提交改动后，移除对应 `../helm-worktrees/<name>`（`git worktree remove`）并删除已合并临时分支（`git branch -d`）；③ 清理自建临时 `HELM_DATA_DIR` 等测试目录，确认主仓 `git status` 干净。
+- **轻量改动例外**：仅修改独立文档（如 `AGENTS.md`、`docs/`、`README.md` 等，不涉及源码、脚本、构建配置或受测试校验的包内资产）时，可直接在主仓修改并跳过独立 worktree 与构建/测试跑批。
 - **改动所有权**：已有的修改、暂存和未跟踪文件默认属于用户或其他代理；先记录状态，所有权不明时保留并询问。禁止为清理或同步而重置、清除或覆盖这些改动。
 - **恢复纪律**：禁止从移动中的 `HEAD` 盲目恢复文件，包括 `git show HEAD:<file> > <file>`；恢复前固定基线并核实文件来源，只按确认的文件操作。发现误覆盖时立即停止写入，保留现场并查找快照、reflog 或其他恢复来源。
 - **Git 提交**：中文 Conventional Commits（如 `feat(kernel): ...`），不加 `Co-Authored-By`。
