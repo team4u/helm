@@ -326,6 +326,9 @@ importers:
       '@helm/protocol':
         specifier: workspace:*
         version: link:../protocol
+      '@helm/update':
+        specifier: workspace:*
+        version: link:../update
       birpc:
         specifier: ^2.9.0
         version: 2.9.0
