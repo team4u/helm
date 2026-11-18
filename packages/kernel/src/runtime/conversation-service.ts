@@ -673,12 +673,6 @@ export class ConversationService {
     await this.artifactsSvc.deleteConversation(id)
     // Reclaim in-memory secrets synchronously (including old values retained for redaction): deleted conversations free everything.
     this.stash.clear(id)
-    this.events.publish('notification', {
-      level: 'info',
-      title: 'Conversation deleted',
-      body: `Cleaned up conversation ${id} and its artifacts, pending AskDocs, and in-memory secrets`,
-      conversationId: id,
-    })
     this.tracker.stopObserving(id)
     this.store.deleteConv(id)
     this.o.evictHandledToolCalls(id)

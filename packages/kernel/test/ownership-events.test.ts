@@ -27,6 +27,11 @@ test('late tracker summary after deletion never publishes upsert or resurrects c
     try {
       await kernel.deleteConversation(conversation.id)
       assert.ok(frames.some((frame) => frame.event.type === 'conversation.deleted'))
+      assert.equal(
+        frames.some((frame) => frame.event.type === 'notification'),
+        false,
+        'deleteConversation must not emit UI notification events; clients react to conversation.deleted',
+      )
       frames.length = 0
       callback(staleSummary)
       assert.equal(frames.length, 0, 'late summary for deleted conversation must produce zero new events')
