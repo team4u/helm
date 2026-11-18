@@ -1,13 +1,16 @@
 /**
- * Pure domain models, lenient boundary parsers, navigation target builders,
- * orthogonal SVG collaboration graph layout, and worktree snapshot parsers for
- * `builtin:swarm` (zero React/DOM dependencies, Fast Refresh compliant).
+ * Pure domain models and lenient boundary parsers for `builtin:swarm` client
+ * surfaces (zero React/DOM dependencies, Fast Refresh compliant).
+ *
+ * Data sources (all existing backend facts; this module adds no new state):
+ * - public doc `index`: group summaries + worker pointers;
+ * - public doc `board-badges`: per-conversation badge entries;
+ * - session doc `board-view` (keyed by coordinatorConversationId): live board
+ *   projection with headline, member live states, edges and recent posts;
+ * - `board_status` / `board_read` action payloads for the explicit fallback.
  */
-import type { ConversationSummary, TimelineRendererProps } from '@helm/protocol'
-import type { SelectOption } from '@helm/plugin-client'
+import type { TimelineRendererProps } from '@helm/protocol'
 import type { SwarmIndexDoc } from './models.ts'
-
-export const BOARD_SCREEN_BASE = 'screen:builtin:swarm/board'
 
 export type WorkerAccess = 'readwrite' | 'readonly'
 export type WorkerIsolation = 'inherit' | 'worktree'
@@ -155,30 +158,9 @@ export interface BoardWakeupReceiptMeta {
   postCount?: number
 }
 
-export interface WorktreeInspectSnapshot {
-  worktreeId: string
-  nodeId: string
-  path: string
-  branch: string
-  baseCommit: string
-  exists: boolean
-  unavailableReason?: string
-  currentBranch?: string
-  currentHead?: string
-  branchChanged?: boolean
-  dirtyFiles: string[]
-  dirtyFileCount: number
-  dirtyFilesTruncated: boolean
-  commitsAhead?: number
-  diffStat?: string
-  diffPreview?: string
-  diffTruncated: boolean
-  diffBase: string
-}
-
 // 本地宽松对象守卫：client bundle 的共享外部依赖白名单（CLIENT_SHARED_EXTERNALS）不含
 // @helm/protocol，浏览器侧不能运行时导入 protocol 的 isJsonObject，故保留等价私有实现。
-function isPlainObject(v: unknown): v is Record<string, unknown> {
+export function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v)
 }
 
@@ -498,81 +480,9 @@ export function parseBoardWakeupMeta(props: TimelineRendererProps): BoardWakeupR
   return data?.meta ?? {}
 }
 
-/** Strict boundary parser for builtin:workflow inspect_worktree action result. */
-export function parseWorktreeInspectSnapshot(raw: unknown): WorktreeInspectSnapshot | undefined {
-  if (!isPlainObject(raw) || !isPlainObject(raw.record)) return undefined
-  const rec = raw.record
-  if (
-    typeof rec.id !== 'string' ||
-    rec.id === '' ||
-    typeof rec.path !== 'string' ||
-    rec.path === '' ||
-    typeof rec.branch !== 'string' ||
-    rec.branch === '' ||
-    typeof rec.nodeId !== 'string' ||
-    rec.nodeId === ''
-  ) {
-    return undefined
-  }
-  if (typeof raw.exists !== 'boolean') return undefined
-  if (!Array.isArray(raw.dirtyFiles) || raw.dirtyFiles.some((f) => typeof f !== 'string')) return undefined
-  if (!isNonNegInt(raw.dirtyFileCount)) return undefined
-  if (typeof raw.dirtyFilesTruncated !== 'boolean' || typeof raw.diffTruncated !== 'boolean') return undefined
-  if (raw.diffBase !== 'baseCommit' && raw.diffBase !== 'HEAD') return undefined
-
-  return {
-    worktreeId: rec.id,
-    nodeId: rec.nodeId,
-    path: rec.path,
-    branch: rec.branch,
-    baseCommit: typeof rec.baseCommit === 'string' ? rec.baseCommit : '',
-    exists: raw.exists,
-    ...(typeof raw.unavailableReason === 'string' ? { unavailableReason: raw.unavailableReason } : {}),
-    ...(typeof raw.currentBranch === 'string' ? { currentBranch: raw.currentBranch } : {}),
-    ...(typeof raw.currentHead === 'string' ? { currentHead: raw.currentHead } : {}),
-    ...(raw.branchChanged === true ? { branchChanged: true } : {}),
-    dirtyFiles: raw.dirtyFiles as string[],
-    dirtyFileCount: raw.dirtyFileCount,
-    dirtyFilesTruncated: raw.dirtyFilesTruncated,
-    ...(isNonNegInt(raw.commitsAhead) ? { commitsAhead: raw.commitsAhead } : {}),
-    ...(typeof raw.diffStat === 'string' ? { diffStat: raw.diffStat } : {}),
-    ...(typeof raw.diffPreview === 'string' ? { diffPreview: raw.diffPreview } : {}),
-    diffTruncated: raw.diffTruncated,
-    diffBase: raw.diffBase,
-  }
-}
-
 // ---------------------------------------------------------------------------
-// Navigation targets & conversation eligibility
+// Conversation → group resolution (public index + badges only)
 // ---------------------------------------------------------------------------
-
-export function buildBoardScreenTarget(params: {
-  groupId?: string
-  worker?: string
-  seq?: number
-  channel?: string
-}): string {
-  const entries: Array<[string, string]> = []
-  if (params.groupId !== undefined && params.groupId.trim() !== '') {
-    entries.push(['groupId', params.groupId.trim()])
-  }
-  if (params.channel !== undefined && params.channel.trim() !== '' && params.channel !== 'all') {
-    entries.push(['channel', params.channel.trim()])
-  }
-  if (params.worker !== undefined && params.worker.trim() !== '') {
-    entries.push(['worker', params.worker.trim()])
-  }
-  if (params.seq !== undefined && Number.isSafeInteger(params.seq) && params.seq > 0) {
-    entries.push(['seq', String(params.seq)])
-  }
-  if (entries.length === 0) return BOARD_SCREEN_BASE
-  const qs = entries.map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&')
-  return `${BOARD_SCREEN_BASE}?${qs}`
-}
-
-export function isNarrowViewport(width: number | undefined): boolean {
-  return typeof width === 'number' && width > 0 && width <= 680
-}
 
 export interface ConversationBoardLink {
   groupId: string
@@ -602,7 +512,7 @@ export function resolveConversationBoardLink(
       ...(workerName !== undefined ? { workerName } : {}),
       count: badge.count,
       tone: badge.tone,
-      ...(badge.footerText !== undefined ? { footerText: badge.footerText } : {}),
+      ...(badge.footerText !== undefined && badge.footerText !== '' ? { footerText: badge.footerText } : {}),
     }
   }
 
@@ -636,33 +546,82 @@ export function resolveConversationBoardLink(
 }
 
 // ---------------------------------------------------------------------------
-// Stream filters, badges, model options & post helpers
+// Member / post derivations for the tray & workbench panel
 // ---------------------------------------------------------------------------
 
-export interface StreamFilter {
-  channel?: string
-  member?: string
-  edge?: { from: string; to: string }
+/** Member live states that keep the composer tray mounted (in-flight only). */
+export function isMemberInFlight(member: BoardMemberView): boolean {
+  return member.lifecycle === 'active' && (member.liveState === 'working' || member.liveState === 'blocked')
 }
 
-export function filterBoardPosts(posts: ReadonlyArray<BoardPost>, filter: StreamFilter): BoardPost[] {
-  return posts.filter((post) => {
-    if (filter.channel !== undefined && filter.channel !== 'all' && post.channel !== filter.channel) {
-      return false
+/**
+ * Display order for member rows: active before archived, in-flight (blocked
+ * first) before the rest, then done, then alphabetical by name.
+ */
+export function sortBoardMembersForDisplay<T extends BoardMemberView>(members: readonly T[]): T[] {
+  const rank = (m: T): number => {
+    if (m.lifecycle !== 'active') return 4
+    if (m.liveState === 'blocked') return 0
+    if (m.liveState === 'working') return 1
+    if (m.liveState === 'error') return 2
+    return 3
+  }
+  return [...members].sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name))
+}
+
+/** Delivered vs total progress over active members (done members only count as delivered). */
+export function boardProgressOf(members: ReadonlyArray<BoardMemberView>): { done: number; total: number } {
+  const active = members.filter((m) => m.lifecycle === 'active')
+  return {
+    done: active.filter((m) => m.liveState === 'done').length,
+    total: active.length,
+  }
+}
+
+export interface MemberActivity {
+  post: BoardPost
+  direction: 'authored' | 'received'
+}
+
+/**
+ * One honest sentence of latest progress per member: their newest authored
+ * post, else the newest post addressed to them (their latest assignment).
+ */
+export function resolveMemberActivity(
+  posts: ReadonlyArray<BoardPost>,
+  memberName: string,
+): MemberActivity | undefined {
+  let authored: BoardPost | undefined
+  let received: BoardPost | undefined
+  for (const post of posts) {
+    if (post.from === memberName) {
+      if (authored === undefined || post.seq > authored.seq) authored = post
     }
-    if (filter.edge !== undefined) {
-      const { from, to } = filter.edge
-      if (post.from !== from) return false
-      if (!post.resolvedTargets.includes(to) && !post.to.includes(to)) return false
-      return true
+    if (post.resolvedTargets.includes(memberName) || post.to.includes(memberName)) {
+      if (received === undefined || post.seq > received.seq) received = post
     }
-    if (filter.member !== undefined && filter.member !== '') {
-      const m = filter.member
-      if (post.from === m || post.resolvedTargets.includes(m) || post.to.includes(m)) return true
-      return false
+  }
+  if (authored !== undefined) return { post: authored, direction: 'authored' }
+  if (received !== undefined) return { post: received, direction: 'received' }
+  return undefined
+}
+
+/** Newest worktree snapshot attached to a member's handoff/done posts (branch state facts). */
+export function resolveMemberWorktree(
+  posts: ReadonlyArray<BoardPost>,
+  member: Pick<BoardMemberView, 'name'>,
+): WorktreeHandoffSnapshot | undefined {
+  let best: WorktreeHandoffSnapshot | undefined
+  let bestSeq = -1
+  for (const post of posts) {
+    if (post.from !== member.name) continue
+    if (post.worktreeSnapshot === undefined) continue
+    if (post.seq > bestSeq) {
+      bestSeq = post.seq
+      best = post.worktreeSnapshot
     }
-    return true
-  })
+  }
+  return best
 }
 
 export function extractPostRefs(post: BoardPost): number[] {
@@ -694,6 +653,17 @@ export function previewPostBody(body: string): string {
   return `${capped}…`
 }
 
+/** First non-empty line of a post body, whitespace-collapsed and capped for single-row digests. */
+export function postDigestLine(body: string, maxChars = 120): string {
+  const firstLine =
+    body
+      .split(/\r?\n/)
+      .map((line) => line.replaceAll(/\s+/g, ' ').trim())
+      .find((line) => line !== '') ?? ''
+  if (firstLine.length <= maxChars) return firstLine
+  return `${firstLine.slice(0, maxChars - 1)}…`
+}
+
 export function liveStateBadgeClass(state: MemberLiveState): string {
   if (state === 'working') return 'badge-accent'
   if (state === 'blocked' || state === 'missing') return 'badge-warn'
@@ -708,197 +678,4 @@ export function postKindBadgeClass(kind: BoardPostKind): string {
   if (kind === 'stall' || kind === 'review') return 'badge-warn'
   if (kind === 'brief' || kind === 'handoff') return 'badge-accent'
   return 'badge-neutral'
-}
-
-export function buildPostTargetOptions(board: BoardViewDoc): SelectOption<string>[] {
-  const opts: SelectOption<string>[] = [
-    { value: 'all', label: 'all', meta: 'broadcast', icon: 'network' },
-    { value: 'coordinator', label: '@coordinator', meta: 'hub', icon: 'shield' },
-  ]
-  for (const member of board.members) {
-    if (member.lifecycle !== 'active') continue
-    opts.push({
-      value: member.name,
-      label: `@${member.name}`,
-      meta: member.access === 'readonly' ? 'readonly' : member.profileId,
-      icon: 'bot',
-    })
-  }
-  for (const ch of board.group.channels) {
-    if (ch.archived === true || ch.name === 'main') continue
-    opts.push({
-      value: `#${ch.name}`,
-      label: `#${ch.name}`,
-      meta: ch.topic ?? 'channel',
-      icon: 'layers',
-    })
-  }
-  return opts
-}
-
-export function collectSelectableModels(
-  currentModel: string | undefined,
-  board: BoardViewDoc,
-  conversations: ReadonlyArray<ConversationSummary>,
-): string[] {
-  const seen = new Set<string>()
-  const add = (m: string | undefined): void => {
-    if (typeof m === 'string') {
-      const trimmed = m.trim()
-      if (trimmed !== '') seen.add(trimmed)
-    }
-  }
-  add(currentModel)
-  for (const member of board.members) add(member.model)
-  for (const conv of conversations) add(conv.model)
-  return [...seen]
-}
-
-// ---------------------------------------------------------------------------
-// Deterministic Orthogonal SVG Collaboration Graph Layout
-// ---------------------------------------------------------------------------
-
-export interface TopologyNodeLayout {
-  id: string
-  label: string
-  isCoordinator: boolean
-  member?: BoardMemberView
-  x: number
-  y: number
-  width: number
-  height: number
-  unreadCount: number
-}
-
-export interface TopologyEdgeLayout {
-  key: string
-  from: string
-  to: string
-  count: number
-  lastSeq: number
-  lastKind: BoardPostKind
-  path: string
-  labelX: number
-  labelY: number
-}
-
-export interface OrthogonalTopologyLayout {
-  width: number
-  height: number
-  nodes: TopologyNodeLayout[]
-  edges: TopologyEdgeLayout[]
-}
-
-const NODE_W = 168
-const NODE_H = 54
-const LEFT_PAD = 24
-const RIGHT_COL_X = 296
-const COL_GAP_X = 224
-const TOP_PAD = 22
-const ROW_GAP_Y = 74
-
-export function computeOrthogonalTopology(
-  board: BoardViewDoc,
-  coordinatorLabel: string,
-): OrthogonalTopologyLayout {
-  const visibleMembers = board.members.filter(
-    (m) => m.lifecycle === 'active' || board.edges.some((e) => e.from === m.name || e.to === m.name),
-  )
-  const perCol = visibleMembers.length > 4 ? 2 : 1
-  const rows = Math.max(1, Math.ceil(visibleMembers.length / perCol))
-  const totalHeight = Math.max(116, TOP_PAD * 2 + rows * NODE_H + Math.max(0, rows - 1) * (ROW_GAP_Y - NODE_H))
-  const coordY = Math.round((totalHeight - NODE_H) / 2)
-
-  const nodes: TopologyNodeLayout[] = [
-    {
-      id: 'coordinator',
-      label: coordinatorLabel,
-      isCoordinator: true,
-      x: LEFT_PAD,
-      y: coordY,
-      width: NODE_W,
-      height: NODE_H,
-      unreadCount: 0,
-    },
-  ]
-
-  visibleMembers.forEach((member, index) => {
-    const col = perCol === 2 ? index % 2 : 0
-    const row = perCol === 2 ? Math.floor(index / 2) : index
-    const x = RIGHT_COL_X + col * COL_GAP_X
-    const y = TOP_PAD + row * ROW_GAP_Y
-    const unreadCount = Math.max(0, member.pendingWakeupSeq - member.readCursorSeq)
-    nodes.push({
-      id: member.name,
-      label: `@${member.name}`,
-      isCoordinator: false,
-      member,
-      x,
-      y,
-      width: NODE_W,
-      height: NODE_H,
-      unreadCount,
-    })
-  })
-
-  const maxRight = nodes.reduce((acc, n) => Math.max(acc, n.x + n.width), LEFT_PAD + NODE_W)
-  const totalWidth = Math.max(520, maxRight + LEFT_PAD + 28)
-
-  const nodeMap = new Map<string, TopologyNodeLayout>()
-  for (const n of nodes) nodeMap.set(n.id, n)
-
-  const edges: TopologyEdgeLayout[] = []
-  board.edges.forEach((edge, idx) => {
-    const src = nodeMap.get(edge.from)
-    const dst = nodeMap.get(edge.to)
-    if (src === undefined || dst === undefined || src.id === dst.id) return
-
-    const laneOffset = ((idx % 3) - 1) * 7
-    let path: string
-    let labelX: number
-    let labelY: number
-
-    if (src.x < dst.x) {
-      const x1 = src.x + src.width
-      const y1 = src.y + Math.round(src.height / 2) + laneOffset
-      const x2 = dst.x
-      const y2 = dst.y + Math.round(dst.height / 2) + laneOffset
-      const midX = Math.round((x1 + x2) / 2) + laneOffset
-      path = `M ${x1} ${y1} L ${midX} ${y1} L ${midX} ${y2} L ${x2} ${y2}`
-      labelX = midX
-      labelY = Math.round((y1 + y2) / 2) - 6
-    } else if (src.x > dst.x) {
-      const x1 = src.x
-      const y1 = src.y + Math.round(src.height / 2) + 8
-      const x2 = dst.x + dst.width
-      const y2 = dst.y + Math.round(dst.height / 2) + 8
-      const midX = Math.round((x1 + x2) / 2) - 12
-      path = `M ${x1} ${y1} L ${midX} ${y1} L ${midX} ${y2} L ${x2} ${y2}`
-      labelX = midX
-      labelY = Math.round((y1 + y2) / 2) + 12
-    } else {
-      const x1 = src.x + src.width
-      const y1 = src.y + Math.round(src.height / 2)
-      const x2 = dst.x + dst.width
-      const y2 = dst.y + Math.round(dst.height / 2)
-      const railX = Math.max(x1, x2) + 18 + (idx % 2) * 8
-      path = `M ${x1} ${y1} L ${railX} ${y1} L ${railX} ${y2} L ${x2} ${y2}`
-      labelX = railX - 18
-      labelY = Math.round((y1 + y2) / 2)
-    }
-
-    edges.push({
-      key: `${edge.from}->${edge.to}`,
-      from: edge.from,
-      to: edge.to,
-      count: edge.count,
-      lastSeq: edge.lastSeq,
-      lastKind: edge.lastKind,
-      path,
-      labelX,
-      labelY,
-    })
-  })
-
-  return { width: totalWidth, height: totalHeight, nodes, edges }
 }

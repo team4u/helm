@@ -1,31 +1,37 @@
 /**
  * builtin:swarm plugin client.tsx entry (component & type exports only, Fast
  * Refresh compliant):
- * - SwarmBoardScreen: adaptive collaboration board & 540px member drawer;
- * - SwarmOpenBoardAction: conversation:header ('toolbar') bidirectional board
- *   button with live badge count & tone;
- * - SwarmBoardReportPill / SwarmBoardWakeupPill: compact 1-line board batch
- *   receipt pills.
+ * - SwarmToolView: 26px natural-language tool trace rows for all swarm_*
+ *   tools (member rows open the conversation drawer, orchestration rows open
+ *   the workbench panel, unknown targets expand raw details);
+ * - SwarmActiveTray: composer dock in-flight HUD (working/blocked members of
+ *   the current conversation's active group; null when idle);
+ * - SwarmWorkbenchPanel: conversation-scoped orchestration card in the right
+ *   workbench drawer;
+ * - SwarmBoardReportPill / SwarmBoardWakeupPill: compact 1-line receipt pills
+ *   for the durable board report / wakeup inputs.
  */
 import './styles.css'
 import type { ReactNode } from 'react'
-import type { ScreenProps, TimelineRendererProps } from '@helm/protocol'
-import { BoardScreen } from './BoardScreen.tsx'
+import type { ComposerScopeProps, TimelineRendererProps, ToolViewProps, WorkbenchPanelProps } from '@helm/protocol'
+import { SwarmToolView as SwarmToolViewImpl } from './SwarmToolView.tsx'
+import { SwarmActiveTray as SwarmActiveTrayImpl } from './SwarmActiveTray.tsx'
+import { SwarmWorkbenchPanel as SwarmWorkbenchPanelImpl } from './SwarmWorkbenchPanel.tsx'
 import {
   SwarmBoardReportPill as BoardReportPillImpl,
   SwarmBoardWakeupPill as BoardWakeupPillImpl,
-  SwarmOpenBoardAction as OpenBoardActionImpl,
-  type SwarmOpenBoardActionProps,
-} from './HeaderBoardAction.tsx'
+} from './BoardReceipts.tsx'
 
-export type { SwarmOpenBoardActionProps }
-
-export function SwarmBoardScreen(props: ScreenProps): ReactNode {
-  return <BoardScreen {...props} />
+export function SwarmToolView(props: ToolViewProps): ReactNode {
+  return <SwarmToolViewImpl {...props} />
 }
 
-export function SwarmOpenBoardAction(props: SwarmOpenBoardActionProps): ReactNode {
-  return <OpenBoardActionImpl {...props} />
+export function SwarmActiveTray(props: Partial<ComposerScopeProps>): ReactNode {
+  return <SwarmActiveTrayImpl {...props} />
+}
+
+export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): ReactNode {
+  return <SwarmWorkbenchPanelImpl {...props} />
 }
 
 export function SwarmBoardReportPill(props: TimelineRendererProps): ReactNode {

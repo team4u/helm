@@ -1,4 +1,4 @@
-# Swarm 对等协同看板插件
+# Swarm 对等协同插件
 
 `builtin:swarm` 面向「按任务动态拆解角色的多智能体横向对等交接与序号黑板协同」场景（支持根据任务规模动态招募读写成员、并按需搭配只读 Verifier 交叉审改验收），与纵向确定性脚本编排（`builtin:workflow`）和常驻值守中枢（`builtin:superagent`）保持单一职责正交解耦：
 
@@ -57,10 +57,15 @@
 | `close_group` | `swarm_close_group` | `helm swarm close-group` | 主控独享：两态结单（默认要求工作树干净并全清，未合入返 `409 swarm_worktree_unmerged`；`keepWorktree: true` 释放锁、保留待合入分支写入 `retainedWorktrees`，并摘除 `swarm-coordinator` 标签解锁主控合入） |
 | `complete_board_members` / `complete_board_channels` | 仅 `ctx.action` | 隐藏内部动作 | 幂等补全源：为组内会话输入框提供 `@` 活跃成员与 `#` 活跃子频道候选 |
 
-### Web 协同流转看板（`#/views/builtin:swarm/board`）
+### Web 会话内协同界面（对齐 `builtin:workflow` 心智模型）
 
-- **单一 `/skill:swarm` 入口与双向顶栏**：不注册重复的 `ctx.ui.command` 或侧边栏入口；启用插件后自动注册受管技能 `swarm`（`managedByPlugin: 'builtin:swarm'`），待命新对话与顶层人类会话输入 `/` 均可经内置技能补全选择 `/skill:swarm ` 回填草稿，模型亦可在 `<available_skills>` 主动发现并在普通顶层会话先调用 `swarm_create_group` 建组。发送 `/skill:swarm <任务>`（或 `/skill:swarm`）后由 `onInput` 钩子自动在当前顶层会话建组或复用活跃组（`coordinatorGuard: true`）、挂载 `swarm-coordinator` 标签并原样放行用户输入文本（保持聊天消息气泡、自动标题与重编辑草稿干净），再由 `onBeforeTurn` 注入系统引导段落与主控工具；子成员或后台会话发送 `/skill:swarm` 则由 `onInput` 显式拦截拒绝。活跃协同会话（主控与组内成员）在顶栏工具栏（`conversation:header` 动作 `open-swarm-board`）渲染双向定位「协同看板」角标按钮（不占用 `COMPOSER_DOCK_SLOT`，与 `WorkflowActiveTray` 零冲突）；看板空态仅展示 `/skill:swarm <任务>` 只读提示，移除侧边栏入口与弹窗表单；时间线将 `swarm:board-report` 与 `swarm:board-wakeup` 收敛为单行回执胶囊（点击 `#seq` 分屏定位流转卡）。
-- **自适应主舞台与 `540px` 成员抽屉**：宽屏全屏渲染正交 SVG 角色协同拓扑图，分屏或窄屏（`<= 680px`）自动收敛为紧凑横排角色胶囊条；异常态挂载 `<Callout>` 一键唤醒/切模/解锁合入急救按钮；底部提供 `<MultiSelect>` 目标选择、正交 `wake` 开关与 `15px` 输入栏；点击成员滑出右侧 `540px` 详情抽屉（支持 `abort_worker`、空闲模型 `<Select>`、跨插件调用 `builtin:workflow` `inspect_worktree` 快照与一键向主控提交合入请求、打开子会话抽屉与归档）。历史 `closed` 或 `coordinatorDetached` 组自动退避 `board_status + board_read` 无白屏展示。
+Swarm 不再拥有独立的全屏 Board 控制台或顶栏入口：所有 UI 都是会话内编排事实的薄渲染，状态全部来自既有公开文档与动作（`index`、`board-badges`、按主控会话键控的 `sessionDoc('board-view')`，以及 `board_status` / `board_read` 回退），React 层零私有状态模型：
+
+- **26px 工具轨迹行（`ctx.ui.toolView({ replaceRow: true })`）**：`swarm_create_group / swarm_update_group / swarm_dispatch_worker / swarm_board_post / swarm_board_read / swarm_board_status / swarm_abort_worker / swarm_switch_worker_model / swarm_inspect_worker / swarm_archive_worker / swarm_close_group` 的每次调用在 timeline 中渲染为一行自然语言摘要（派工 / 交接 / 审阅 / 已交付 / 受阻等动词 + 目标 + 一句正文）+ 状态灯 + 耗时；成员类调用点击打开 `openConversationDrawer`，编组类调用打开协同工作台面板，无法确定目标的行展开原始工具数据（宽对象守卫解析输入与结果 JSON，绝不伪造目标或状态）。
+- **Composer「进行中」活动托盘（`COMPOSER_DOCK_SLOT`）**：仅当当前会话关联的活跃编组存在执行中 / 受阻成员时渲染 32px HUD（人数、已交付进度、最新一条自然语言动态、编组时长）；整条横栏为真实 toggle 按钮可展开成员行（点击打开子会话抽屉），主控视角对运行中成员提供真实 `abort_worker` 中止动作；无在途事项返回 null 占 0px，与 `WorkflowActiveTray` 同构并列。
+- **右侧 Workbench 编排面板（`ctx.ui.workbenchPanel` id `groups`，仅 `swarm-coordinator` / `swarm-worker` 会话可见）**：当前会话只展示自己所在的编组（主控会话显示自己的组，成员会话显示所属组的同一事实视图，不跨会话列全局索引）。一张编排卡：协同目标、自然状态（进行中 / 需要关注 / 已完成）、成员列表（每成员一句最新真实进展 + 实时 doing + worktree 分支事实，点击整行打开子会话抽屉）、最近交接动态（自然 kind 标签 + `#seq` 辅助信息）与结单后保留待合入分支清单；活跃组经 session doc 实时更新，closed / coordinatorDetached 或无投影时显式退避一次性 `board_status`（失败展示错误并可重试，绝不白屏或伪造「运行中」），「查看完整记录」按需 `board_read`。
+- **单行回执胶囊（`timelineRenderer`）**：后端仍真实写入的 `swarm:board-report` / `swarm:board-wakeup` durable 输入收敛为单行回执（计数 + 动态 + `#seq`），点击打开协同工作台面板；不注册 `screen`、`conversation:header` action、sidebar 或 `ui.command`，人类干预统一走当前 coordinator 对话 Composer（`@` 成员 / `#` 频道补全保留）。
+- **文案与协议分层**：用户可见文案统一 `LocalizedText` 双语；协议词汇（`#seq`、`wake`、原始频道名）仅作辅助信息呈现，不作为用户必须学习的主控件。
 
 ## 配置与数据边界
 
@@ -81,7 +86,7 @@
 | :--- | :--- |
 | 插件入口与 UI 注册 | `packages/plugins/src/swarm.ts`、`packages/plugins/src/swarm/ui.ts` |
 | 单真源黑板存储 / 寻址 / 静默归因 / 动作 / 钩子 | `packages/plugins/src/swarm/`（`contracts.ts`、`action-schemas.ts`、`worktree-bridge.ts`、`group-store.ts`、`board-router.ts`、`board-stall.ts`、`settlement.ts`、`actions.ts`、`hooks.ts`、`assets.ts`、`assets/`） |
-| Web 客户端组件与纯模型 | `packages/plugins/src/swarm/client/`（`index.tsx`、`BoardScreen.tsx`、`BoardTopology.tsx`、`MemberDrawer.tsx`、`HeaderBoardAction.tsx`、`board-model.ts`、`models.ts`、`copy.ts`、`styles.css`） |
+| Web 客户端组件与纯模型 | `packages/plugins/src/swarm/client/`（`index.tsx`、`SwarmToolView.tsx`、`SwarmActiveTray.tsx`、`SwarmWorkbenchPanel.tsx`、`BoardReceipts.tsx`、`board-model.ts`、`model-tool-view.ts`、`model-tray.ts`、`model-panel.ts`、`hooks.ts`、`models.ts`、`copy.ts`、`styles.css`） |
 | 测试 | `packages/plugins/test/swarm.test.ts`、`packages/plugins/test/swarm.integration.test.ts`、`packages/web/test/swarm-client-interactions.test.tsx` |
 
 ## 相关文档

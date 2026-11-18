@@ -8,6 +8,12 @@
 import type { ConversationSummary } from '@helm/protocol'
 import type { CollabGroupSummary } from './board-model.ts'
 
+/**
+ * Fully-qualified workbench panel target for swarm client components.
+ * Locked by tests to the panel id registered in `swarm/ui.ts` ('groups').
+ */
+export const SWARM_WORKBENCH_PANEL_TARGET = 'plugin:builtin:swarm/groups' as const
+
 /** Lightweight active worker pointer in public doc 'index'. */
 export interface SwarmIndexWorkerItem {
   conversationId: number

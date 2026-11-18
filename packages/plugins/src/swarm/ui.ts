@@ -1,6 +1,6 @@
-import type { ConversationScope, HelmPluginContext } from '@helm/protocol'
+import { COMPOSER_DOCK_SLOT, type ConversationScope, type HelmPluginContext } from '@helm/protocol'
 
-export const SWARM_BOARD_SCREEN_ID = 'board' as const
+export const SWARM_WORKBENCH_PANEL_ID = 'groups' as const
 export const SWARM_COORDINATOR_TAG = 'swarm-coordinator' as const
 export const SWARM_WORKER_TAG = 'swarm-worker' as const
 export const SWARM_BOARD_REPORT_RENDERER = 'swarm:board-report' as const
@@ -10,27 +10,53 @@ const SWARM_PARTICIPANT_SCOPE: ConversationScope = {
   tags: [SWARM_COORDINATOR_TAG, SWARM_WORKER_TAG],
 }
 
+/** Model-facing swarm tool names (single source for the toolView trace registration). */
+const SWARM_TOOL_NAMES = [
+  'swarm_create_group',
+  'swarm_update_group',
+  'swarm_dispatch_worker',
+  'swarm_board_post',
+  'swarm_board_read',
+  'swarm_board_status',
+  'swarm_abort_worker',
+  'swarm_switch_worker_model',
+  'swarm_inspect_worker',
+  'swarm_archive_worker',
+  'swarm_close_group',
+] as const
+
 /**
- * Registration-time UI contributions for `builtin:swarm` (LocalizedText display
- * metadata only; intentionally leaves COMPOSER_DOCK_SLOT untouched so
- * WorkflowActiveTray keeps sole ownership).
+ * Registration-time UI contributions for `builtin:swarm` (conversation-scoped
+ * orchestration surfaces; display metadata only, data flows through the public
+ * `index` / `board-badges` docs and the per-coordinator `board-view` session
+ * doc).
+ *
+ * Same mental model as builtin:workflow: the timeline owns 26px tool trace
+ * rows, the composer dock owns the in-flight tray, and the right workbench
+ * owns the orchestration panel. No standalone board screen or header entry
+ * fights the host for the primary stage.
  */
 export function registerSwarmUi(ctx: HelmPluginContext): void {
-  ctx.ui.screen({
-    id: SWARM_BOARD_SCREEN_ID,
-    label: { en: 'Swarm Board', 'zh-CN': '协同流转看板' },
-    icon: 'workflow',
-    client: { module: 'index.tsx', export: 'SwarmBoardScreen' },
+  ctx.ui.toolView({
+    id: 'swarm-tool-trace',
+    toolNames: [...SWARM_TOOL_NAMES],
+    replaceRow: true,
+    client: { module: 'index.tsx', export: 'SwarmToolView' },
   })
-  ctx.ui.action({
-    id: 'open-swarm-board',
-    target: 'conversation:header',
-    placement: 'toolbar',
-    order: 15,
+  ctx.ui.slot({
+    id: 'swarm-active-tray',
+    target: COMPOSER_DOCK_SLOT,
     scope: SWARM_PARTICIPANT_SCOPE,
-    label: { en: 'Swarm Board', 'zh-CN': '协同看板' },
-    icon: 'workflow',
-    client: { module: 'index.tsx', export: 'SwarmOpenBoardAction' },
+    client: { module: 'index.tsx', export: 'SwarmActiveTray' },
+  })
+  ctx.ui.workbenchPanel({
+    id: SWARM_WORKBENCH_PANEL_ID,
+    label: { en: 'Swarm Groups', 'zh-CN': 'Swarm 协同编组' },
+    icon: 'network',
+    order: 12,
+    scope: SWARM_PARTICIPANT_SCOPE,
+    badge: { doc: 'board-badges', byConversationField: 'byConversation' },
+    client: { module: 'index.tsx', export: 'SwarmWorkbenchPanel' },
   })
   ctx.ui.timelineRenderer({
     id: 'swarm-board-report',

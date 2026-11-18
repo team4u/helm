@@ -70,10 +70,10 @@ import { registerSwarmUi } from './swarm/ui.js'
 export function createSwarmPlugin(): PluginDefinition {
   return {
     id: SWARM_PLUGIN_ID,
-    name: { en: 'Swarm Collaboration Board', 'zh-CN': 'Swarm 协同看板' },
+    name: { en: 'Swarm Peer Collaboration', 'zh-CN': 'Swarm 对等协同' },
     description: {
-      en: 'On-demand multi-role peer blackboard collaboration: named Author & Verifier squads, worktree-isolated handoffs, orthogonal wakeups, and event-driven stall recovery.',
-      'zh-CN': '按需多角色对等黑板协同：具名 Author 与 Verifier 小队、工作树隔离交接、正交唤醒与事件驱动防掉棒自愈。',
+      en: 'On-demand multi-agent peer collaboration inside a conversation: dynamic author/verifier squads, worktree-isolated handoffs, event-driven stall recovery, and a per-conversation orchestration panel.',
+      'zh-CN': '会话内按需多智能体对等协同：动态拆分执行与审阅小队、工作树隔离交接、事件驱动防掉棒自愈与按会话的编排面板。',
     },
     icon: 'network',
     version: '0.1.0',
