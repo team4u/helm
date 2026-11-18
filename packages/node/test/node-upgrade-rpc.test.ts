@@ -275,8 +275,10 @@ async function seedStagedRelease(dataDir: string, version: string): Promise<void
     JSON.stringify({
       version,
       candidateDir: candidate,
-      entryPath,
-      cliBinDir: path.join(candidate, 'node_modules', '.bin'),
+      entries: {
+        entryPath,
+        cliBinDir: path.join(candidate, 'node_modules', '.bin'),
+      },
       completedAt: new Date().toISOString(),
       origin: 'extractor',
     }),

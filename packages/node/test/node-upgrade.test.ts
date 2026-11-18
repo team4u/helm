@@ -251,7 +251,7 @@ test('stageReleaseFromNpm: stageExtractor builds immutable candidate dir and wri
   assert.ok(await fs.access(staged.entryPath).then(() => true, () => false));
   assert.ok(staged.cliBinDir.endsWith('node_modules/.bin'));
   const marker = JSON.parse(await fs.readFile(path.join(dir, 'releases', '1.2.3', '.complete'), 'utf8'));
-  assert.equal(marker.entryPath, staged.entryPath);
+  assert.equal(marker.entries.entryPath, staged.entryPath);
 
   const staged2 = await stageReleaseFromNpm(dir, '1.2.3', { stageExtractor: fakeExtractor });
   assert.equal(staged2.releaseDir, staged.releaseDir); // reuses cached candidate without creating a new one
@@ -853,7 +853,7 @@ test('stageReleaseFromNpm: rejects .complete paths escaping version or candidate
   const completePath = path.join(dir, 'releases', '3.0.0', '.complete');
   // a) entryPath points outside the version directory
   const outside = JSON.parse(await fs.readFile(completePath, 'utf8'));
-  await fs.writeFile(completePath, JSON.stringify({ ...outside, entryPath: '/etc/passwd' }), 'utf8');
+  await fs.writeFile(completePath, JSON.stringify({ ...outside, entries: { ...outside.entries, entryPath: '/etc/passwd' } }), 'utf8');
   await assert.rejects(() => stageReleaseFromNpm(dir, '3.0.0', { stageExtractor: fakeExtractor }), /entryPath lies outside immutable release dir/);
   // b) candidateDir points outside the version directory
   await fs.writeFile(completePath, JSON.stringify({ ...outside, candidateDir: path.join(dir, 'elsewhere') }), 'utf8');
@@ -861,7 +861,7 @@ test('stageReleaseFromNpm: rejects .complete paths escaping version or candidate
   // c) entryPath is inside the version directory but outside candidateDir
   await fs.writeFile(
     completePath,
-    JSON.stringify({ ...outside, entryPath: path.join(dir, 'releases', '3.0.0', 'other', 'cli.js') }),
+    JSON.stringify({ ...outside, entries: { ...outside.entries, entryPath: path.join(dir, 'releases', '3.0.0', 'other', 'cli.js') } }),
     'utf8',
   );
   await assert.rejects(() => stageReleaseFromNpm(dir, '3.0.0', { stageExtractor: fakeExtractor }), /entryPath lies outside immutable release dir/);
@@ -962,8 +962,10 @@ test('stageReleaseFromNpm: npm cache revalidation checks package.json versions o
     JSON.stringify({
       version: '4.0.0',
       candidateDir,
-      entryPath: path.join(nodePkgDir, 'dist', 'cli.js'),
-      cliBinDir: path.join(candidateDir, 'node_modules', '.bin'),
+      entries: {
+        entryPath: path.join(nodePkgDir, 'dist', 'cli.js'),
+        cliBinDir: path.join(candidateDir, 'node_modules', '.bin'),
+      },
       completedAt: new Date().toISOString(),
       origin: 'npm',
     }),
