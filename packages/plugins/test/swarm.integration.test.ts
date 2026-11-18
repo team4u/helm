@@ -1084,3 +1084,84 @@ test('swarm-int5: /skill:swarm activation loop (task auto-create + same-turn too
     await env.close()
   }
 })
+
+// ---------------------------------------------------------------------------
+// int6: 多工具轮成员回合的精确结算（回归：handOver 曾被误判为 run 结束）
+// ---------------------------------------------------------------------------
+
+test('swarm-int6: multi-tool-round worker turn settles once — no mid-turn silent-exit nudge, no false system blocker, single post-done coordinator report', { timeout: 60_000 }, async (t) => {
+  const root = useTempDir(t, 'helm-swarm-handover-')
+  const dataDir = join(root, 'data')
+  const repoDir = join(root, 'repo')
+  gitTemplate.cloneTo(repoDir)
+
+  const faux = makeFauxProvider({ models: [{ id: 'faux-1' }] })
+  const app = await createHelm({
+    buildProvider: createPluginBuildProvider(),
+    dataDir,
+    cwd: repoDir,
+    model: 'faux/faux-1',
+    providers: [faux.provider],
+  })
+  try {
+    const coord = await app.kernel.createConversation({ title: 'Handover Coord', profileId: 'assistant', cwd: repoDir })
+    const { groupId } = (await app.kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
+      title: 'Handover Squad',
+      conversationId: coord.id,
+    })) as { groupId: string }
+
+    // Worker turn: two plain bash rounds (each ends in a pi-durable run handOver to a new generation task),
+    // then the done post, then the final answer text. Pre-fix every handOver emitted a spurious turn_settled:
+    // the first fired a silent-exit nudge mid-turn and the second auto-posted a false system [blocker].
+    setSwarmRoleResponses(faux, {
+      coder: [
+        fauxAssistantMessage([fauxToolCall('bash', { command: 'echo step one' })], { stopReason: 'toolUse' }),
+        fauxAssistantMessage([fauxToolCall('bash', { command: 'echo step two' })], { stopReason: 'toolUse' }),
+        fauxAssistantMessage(
+          [fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'done', body: 'Shipped after two tool rounds.' })],
+          { stopReason: 'toolUse' },
+        ),
+        fauxAssistantMessage('Final summary after the done post.'),
+      ],
+      coordinator: [fauxAssistantMessage('Coordinator received the final done report.')],
+    })
+
+    const worker = (await app.kernel.plugins.invokeAction(
+      SWARM_PLUGIN_ID,
+      'dispatch_worker',
+      { prompt: 'Run two tool steps, then post done.', name: 'coder' },
+      { conversationId: coord.id },
+    )) as { workerConversationId: number }
+
+    await app.kernel.waitForIdle(worker.workerConversationId)
+    await waitFor(() => app.kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+    await app.kernel.waitForIdle(coord.id)
+
+    // 1) Board carries only the coordinator brief and the worker done — no system blocker, no stall, no echo posts.
+    const read = (await app.kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'board_read', { groupId })) as { posts: BoardPost[] }
+    assert.equal(
+      read.posts.filter((p) => p.from === 'system').length,
+      0,
+      `system posts must stay empty, got ${JSON.stringify(read.posts.filter((p) => p.from === 'system'))}`,
+    )
+    assert.equal(read.posts.filter((p) => p.kind === 'done' && p.from === 'coder').length, 1)
+
+    // 2) The worker conversation never received a silent-exit nudge (mid-turn settlement misfire).
+    const workerDetail = await app.kernel.getConversationDetail(worker.workerConversationId, { limit: 50 })
+    assert.equal(
+      workerDetail.entries.some((e) => JSON.stringify(e.data ?? '').includes('swarm_silent_exit_nudge')),
+      false,
+      'no silent-exit nudge may be queued while the worker is mid-turn',
+    )
+
+    // 3) The coordinator received exactly one board report, covering the done post.
+    const coordDetail = await app.kernel.getConversationDetail(coord.id, { limit: 50 })
+    const reportInputs = coordDetail.entries.filter(
+      (e) => e.kind === 'helm.input' && JSON.stringify(e.data ?? '').includes('swarm_board_report'),
+    )
+    assert.equal(reportInputs.length, 1, `expected exactly one coordinator report, got ${reportInputs.length}`)
+    assert.match(JSON.stringify(reportInputs[0]!.data ?? ''), /\[done\] @coder/)
+  } finally {
+    await app.close()
+  }
+})

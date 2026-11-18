@@ -5,6 +5,7 @@ import type {
   TurnSettledPayload,
 } from '@helm/protocol'
 import { redactJsonValue } from '@helm/protocol'
+import { lastAssistantText } from '../entry-text.js'
 
 /** 从真实会话详情与产物列表收集结算摘要（不调用模型）。 */
 export async function collectWorkerSettlement(
@@ -55,23 +56,6 @@ function entryDigestText(entry: { kind: string; data?: unknown; model?: unknown 
   if (entry.data !== undefined) {
     const json = JSON.stringify(entry.data)
     return json.length > 400 ? `${json.slice(0, 399)}…` : json
-  }
-  return ''
-}
-
-/** entry.model 首条 assistant 文本（协议形状：model[].content[].text）。 */
-export function lastAssistantText(entries: Array<{ kind?: string; model?: unknown }>): string {
-  for (let i = entries.length - 1; i >= 0; i -= 1) {
-    const model = entries[i]!.model
-    if (!Array.isArray(model)) continue
-    for (let j = model.length - 1; j >= 0; j -= 1) {
-      const blocks = (model[j] as { content?: unknown } | undefined)?.content
-      if (!Array.isArray(blocks)) continue
-      const texts = blocks
-        .filter((b): b is { type: string; text: string } => typeof b === 'object' && b !== null && (b as { type?: string }).type === 'text' && typeof (b as { text?: unknown }).text === 'string')
-        .map((b) => b.text)
-      if (texts.length > 0) return texts.join('\n')
-    }
   }
   return ''
 }

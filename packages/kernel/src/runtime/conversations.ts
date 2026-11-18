@@ -17,7 +17,10 @@
  *   entry reconstruction only counts the active run window (>= run.first) and current inbox so settled historical helm.input
  *   never resurrects; on restart recovery of active runs, live.run.inputs authoritative manifest + submission queries backfill
  *   metadata and indexes;
- * - Multiple tool rounds within the same run (taskId) accumulate consumed inputs (reset only on a new taskId);
+ * - Runs are identified by LOGICAL identity, not by pi.live.run.taskId: pi-durable hands run control to a new generation
+ *   task after every tool round and on onYield continuations (handOver), so taskId changes while the run continues (first
+ *   entry kept, inputs carried over). Same-run handOver accumulates consumed inputs across rounds; only a true run end or
+ *   replacement (run disappears, or a snapshot carries a different logical run) settles;
  * - Run disappearance (complete/fail) settles exactly once (settledRuns prevents duplicate reports; failures use the
  *   exact runFailure.inputs manifest);
  * - Explicit abort via runtime.abortConversation settles immediately (observe path does not double-report);
@@ -80,6 +83,30 @@ const LIVE_THROTTLE_MS = 75
 
 /** Max settled runs retained per conversation (prevents unbounded growth in 24/7 operation; runIds are monotonic so oldest are evicted). */
 const SETTLED_RUNS_PER_CONVERSATION = 64
+
+/** Run shape used by logical-run identity comparison (subset of LiveStateShape.run). */
+export interface RunIdentityShape {
+  taskId: number
+  inputs: number[]
+  first?: number
+}
+
+/**
+ * Whether `next` is the SAME logical run as `prev` after a pi-durable handOver.
+ *
+ * pi-durable 1.5.x hands run control from one generation task to the next after every tool round and on onYield
+ * continuations: `pi.live.run.taskId` changes while the run continues — `first` (the run's first entry) is kept and
+ * the previous inputs are carried over (possibly grown by steers admitted at the boundary). A genuinely new run gets
+ * a fresh `first` (boundary-placed entry, strictly newer) and disjoint inputs. When `first` was never recorded on
+ * either side, fall back to inputs carry-over; ambiguity resolves to "new run" (settle) which matches the
+ * run-disappearance semantics.
+ */
+export function isContinuedRun(prev: RunIdentityShape, next: RunIdentityShape | undefined): boolean {
+  if (next === undefined) return false
+  if (next.taskId === prev.taskId) return true
+  if (prev.first !== undefined && next.first !== undefined) return next.first === prev.first
+  return prev.inputs.length > 0 && prev.inputs.every((id) => next.inputs.includes(id))
+}
 
 export class ConversationTracker {
   private readonly harness: Harness
@@ -697,10 +724,13 @@ export class ConversationTracker {
     }
 
     // Settle the ended previous run first (including collapsed snapshots where run1 ends and run2 starts together).
+    // A changed taskId alone is NOT a run end: the SDK hands the run to a new generation task after every tool round
+    // (isContinuedRun keeps same-run handOver going); only run disappearance or a replacement logical run settles.
     let settledInAdopt = false
-    if (prev?.run && (!live?.run || live.run.taskId !== prev.run.taskId)) {
+    const prevRun = prev?.run
+    const runContinued = prevRun !== undefined && isContinuedRun(prevRun, live?.run)
+    if (prevRun !== undefined && (!live?.run || live.run.taskId !== prevRun.taskId) && !runContinued) {
       settledInAdopt = true
-      const prevRun = prev.run
       const runKey = `${id}:${prevRun.taskId}`
       if (!this.settledRuns.has(runKey)) {
         this.noteSettledRun(id, runKey)
@@ -739,9 +769,11 @@ export class ConversationTracker {
     if (live?.run) {
       const runKey = `${id}:${live.run.taskId}`
       if (mirror.runTaskId !== live.run.taskId) {
-        // New run started: reset consumed inputs for this turn (multi-round tool calls in the same run do not reset).
         mirror.runTaskId = live.run.taskId
-        mirror.consumedInputs = new Set<string>()
+        if (!runContinued) {
+          // New logical run: reset the turn's consumed set (same-run generation handOver keeps accumulating).
+          mirror.consumedInputs = new Set<string>()
+        }
         this.settledRuns.delete(runKey)
         this.dropSettledRunFromOrder(id, runKey)
         const first = live.run.first !== undefined ? Number(live.run.first) : undefined
