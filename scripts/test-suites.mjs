@@ -11,8 +11,9 @@
  *   unit        = protocol + env-io + cli + web + plugin-client (env-io is in-process pure
  *                 scan orchestrator injection tests; web covers happy-dom/React interaction
  *                 and SDK self-tests — none start real services);
- *   integration = plugin-build + kernel + plugins + hub + node + payload (real
- *                 esbuild builds/subprocesses, SQLite/Git/daemon, and payload assembly);
+ *   integration = plugin-build + kernel + plugins + hub + hub-launcher + node + update + payload
+ *                 (real esbuild builds/subprocesses, SQLite/Git/daemon, launcher process
+ *                 lifecycle, the shared update engine, and payload assembly);
  *   all         = unit ∪ integration = every test file, equivalent to the old `pnpm test`.
  *
  * Implementation: Node fs enumerates *.test.ts(x) under <root>/packages/<pkg>/test/, and the
@@ -50,7 +51,7 @@ const packagesDir = path.join(repoRoot, 'packages');
 // mirrored in AGENTS.md's test tiering conventions.
 const SUITES = {
   unit: ['protocol', 'env-io', 'test-kit', 'cli', 'web', 'plugin-client'],
-  integration: ['plugin-build', 'kernel', 'plugins', 'hub', 'node', 'update', 'payload'],
+  integration: ['plugin-build', 'kernel', 'plugins', 'hub', 'hub-launcher', 'node', 'update', 'payload'],
 };
 const ALL_PACKAGES = [...SUITES.unit, ...SUITES.integration];
 

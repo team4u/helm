@@ -1,0 +1,21 @@
+{
+  "name": "@helm/hub-launcher",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "helm-hub-launcher": "./dist/main.js"
+  },
+  "scripts": {
+    "build": "node scripts/clean-dist.mjs && tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "tsx --test"
+  },
+  "dependencies": {
+    "@helm/env-io": "workspace:*",
+    "@helm/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "@helm/test-kit": "workspace:*"
+  }
+}
