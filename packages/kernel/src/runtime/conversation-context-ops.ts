@@ -9,7 +9,7 @@
  */
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { Harness } from '@earendil-works/pi-durable'
-import type { ConversationSummary } from '@helm/protocol'
+import type { ConversationSummary, GuardedMutationExpectation } from '@helm/protocol'
 import { HelmError } from '@helm/protocol'
 import type { SecretStash } from '../services/index.js'
 import type { ConversationTracker } from './conversations.js'
@@ -27,6 +27,11 @@ interface ConversationContextOpsHost {
   readonly isClosed: () => boolean
   readonly alignConversationModel: (id: number) => Promise<void>
   readonly withOwnership: (summary: ConversationSummary) => ConversationSummary
+  /**
+   * Guarded-mutation synchronous re-check (ownership human-red-line + optional CAS watermark),
+   * injected by ConversationService; invoked with zero await gap before the irreversible SDK call.
+   */
+  readonly assertMutationGuard: (id: number, guard: GuardedMutationExpectation) => void
 }
 
 export class ConversationContextOps {
@@ -47,10 +52,20 @@ export class ConversationContextOps {
     return { meta, conversation }
   }
 
-  /** Reset conversation context: call SDK reset(handoff), increment stateChangeSeq, and broadcast summary. */
-  async resetConversation(id: number, opts?: { handoff?: string }): Promise<ConversationSummary> {
+  /**
+   * Reset conversation context: call SDK reset(handoff), increment stateChangeSeq, and broadcast summary.
+   * Guarded callers (plugin automation) pass `guard`: ownership + optional CAS watermark are re-checked
+   * synchronously right before the irreversible SDK reset call (zero await gap, same invariant as
+   * abortConversationGuarded); unguarded callers (HTTP/CLI human paths) omit it.
+   */
+  async resetConversation(
+    id: number,
+    opts?: { handoff?: string },
+    guard?: GuardedMutationExpectation,
+  ): Promise<ConversationSummary> {
     this.assertOpen()
     const { meta, conversation } = await this.conversationForContextOp(id)
+    if (guard !== undefined) this.host.assertMutationGuard(id, guard)
     const safeHandoff =
       opts?.handoff !== undefined && opts.handoff !== '' ? this.host.stash.redact(opts.handoff) : undefined
     await conversation.reset(safeHandoff, BACKGROUND_CONTEXT)
@@ -62,13 +77,18 @@ export class ConversationContextOps {
     return summary
   }
 
-  /** Manual compaction: call SDK compact(instructions) returning background task ID and updated conversation summary. */
+  /**
+   * Manual compaction: call SDK compact(instructions) returning background task ID and updated conversation summary.
+   * Guarded callers pass `guard`: re-check runs synchronously right before the irreversible SDK compact enqueue.
+   */
   async compactConversation(
     id: number,
     opts?: { instructions?: string },
+    guard?: GuardedMutationExpectation,
   ): Promise<{ taskId: number; conversation: ConversationSummary }> {
     this.assertOpen()
     const { meta, conversation } = await this.conversationForContextOp(id)
+    if (guard !== undefined) this.host.assertMutationGuard(id, guard)
     const safeInstructions =
       opts?.instructions !== undefined && opts.instructions !== ''
         ? this.host.stash.redact(opts.instructions)

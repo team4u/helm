@@ -606,6 +606,36 @@ export function wrapHostApi(
         Promise.resolve(port(id, mutationGuard)),
       );
     },
+    resetConversationGuarded: (id, opts, mutationGuard) => {
+      guard('host.resetConversationGuarded');
+      const port = backend.resetConversationGuarded;
+      if (port === undefined) {
+        throw new HelmError(
+          'not_supported',
+          'Current host has not wired guarded context reset (host.resetConversationGuarded)',
+          501,
+          { conversationId: id },
+        );
+      }
+      return deps.tracker.withTask(pluginId, 'host.resetConversationGuarded', () =>
+        Promise.resolve(port(id, opts, mutationGuard)),
+      );
+    },
+    compactConversationGuarded: (id, opts, mutationGuard) => {
+      guard('host.compactConversationGuarded');
+      const port = backend.compactConversationGuarded;
+      if (port === undefined) {
+        throw new HelmError(
+          'not_supported',
+          'Current host has not wired guarded manual compaction (host.compactConversationGuarded)',
+          501,
+          { conversationId: id },
+        );
+      }
+      return deps.tracker.withTask(pluginId, 'host.compactConversationGuarded', () =>
+        Promise.resolve(port(id, opts, mutationGuard)),
+      );
+    },
     getConversationOwnership: (id) => {
       guard('host.getConversationOwnership');
       return backend.getConversationOwnership(id);

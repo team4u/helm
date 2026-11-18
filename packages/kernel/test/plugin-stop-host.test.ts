@@ -458,7 +458,7 @@ test('dispose stop window permits cleanup subset (including final doc writes and
   ])
 })
 
-test('stop window blocks new work (spawn/submitInput/createConversation/dispatchTrigger/createAsk/execEnv/completeText/withFileLock) with zero backend calls', { timeout: 60_000 }, async () => {
+test('stop window blocks new work (spawn/submitInput/createConversation/dispatchTrigger/createAsk/execEnv/completeText/withFileLock/reset+compact guarded) with zero backend calls', { timeout: 60_000 }, async () => {
   const expected: string[] = []
   const def: PluginDefinition = {
     id: 'test:stop-reject',
@@ -476,6 +476,8 @@ test('stop window blocks new work (spawn/submitInput/createConversation/dispatch
             { label: 'dispatchTrigger', run: () => ctx.host.dispatchTrigger({ kind: 'webhook' } as never) },
             { label: 'createAsk', run: () => ctx.host.createAsk({ conversationId: 1, ownerPluginId: 'x', title: 't' } as never) },
             { label: 'execEnv', run: () => ctx.host.execEnv({ command: ['ls'] }) },
+            { label: 'resetConversationGuarded', run: () => ctx.host.resetConversationGuarded(1) },
+            { label: 'compactConversationGuarded', run: () => ctx.host.compactConversationGuarded(1) },
             { label: 'completeText', run: () => ctx.host.completeText({ conversationId: 1, systemPrompt: '', text: '' } as never) },
             { label: 'withFileLock', run: () => ctx.host.withFileLock('/tmp/late', async () => 1) },
             { label: 'nodeIpc.subscribe', run: () => ctx.host.nodeIpc.subscribe('remote-1', { line: '{}' }, () => {}, () => {}) },
@@ -506,6 +508,8 @@ test('stop window blocks new work (spawn/submitInput/createConversation/dispatch
     'dispatchTrigger',
     'createAsk',
     'execEnv',
+    'resetConversationGuarded',
+    'compactConversationGuarded',
     'completeText',
     'withFileLock',
     'nodeIpc.subscribe',

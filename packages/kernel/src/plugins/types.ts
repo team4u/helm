@@ -3,6 +3,7 @@
  */
 import type {
   BackendPluginsLifecyclePort,
+  ConversationSummary,
   GuardedMutationExpectation,
   HelmHostApi,
   HelmHostNodeIpcPort,
@@ -57,7 +58,8 @@ export interface PluginProviderPort {
  *    (returned release callback is wrapped by `PluginHost` for idempotency);
  * 2. Normalized shape: `isClosing` is a zero-arg function (exposed as a getter on `ctx.host`);
  * 3. Optional connections (when unwired, `ctx.host` rejects explicitly with 501, never silently falling back):
- *    `nodeIpc` / `nodeFetch` / `openTunnel` / `plugins` / `abortConversationGuarded` / `submitInputGuarded`;
+ *    `nodeIpc` / `nodeFetch` / `openTunnel` / `plugins` / `abortConversationGuarded` / `submitInputGuarded`
+ *    / `resetConversationGuarded` / `compactConversationGuarded`;
  * 4. Served directly by `PluginHost` (not forwarded to backend): `listPlugins` / `listUi` /
  *    `listActions` / `invokeAction` / `prepareAction` / `setConfig`.
  */
@@ -131,6 +133,18 @@ export interface PluginHostBackend
   ): Promise<void>
   /** Guarded abort port (includes scheduler-paused durability path; 501 when unwired). */
   abortConversationGuarded?(id: number, guard: GuardedMutationExpectation): Promise<void>
+  /** Guarded context reset port (kernel atomic ownership/seq check; 501 when unwired). */
+  resetConversationGuarded?(
+    id: number,
+    opts?: { handoff?: string },
+    guard?: GuardedMutationExpectation,
+  ): Promise<ConversationSummary>
+  /** Guarded manual compaction port (kernel atomic ownership/seq check; 501 when unwired). */
+  compactConversationGuarded?(
+    id: number,
+    opts?: { instructions?: string },
+    guard?: GuardedMutationExpectation,
+  ): Promise<{ taskId: number; conversation: ConversationSummary }>
   /** Claims exclusive management over conversation `id` for `pluginId`; returns release function. */
   manageConversation(id: number, pluginId: string): () => void
 }

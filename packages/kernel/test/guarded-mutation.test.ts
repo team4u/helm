@@ -13,7 +13,11 @@
  * - Guarded APIs (abortConversationGuarded / submitInputGuarded) must reject under the exact same ordering
  *   (409 ownership_conflict) without starting underlying SDK actions;
  * - Also covers success paths, stale stateSeq 409, mismatched ownership 409, missing target 404,
- *   invalid guards 400, and unchanged human behavior on plain APIs (submitInput / abortConversation).
+ *   invalid guards 400, and unchanged human behavior on plain APIs (submitInput / abortConversation);
+ * - Guarded context maintenance surface for plugin automation (resetConversationGuarded /
+ *   compactConversationGuarded): same serial-domain re-check invariants — human flip inside the await
+ *   window rejects before the SDK reset fires, rejected calls leave stateChangeSeq untouched, and
+ *   success paths advance the watermark by exactly one (handoff / background compaction taskId).
  */
 
 import test from 'node:test'
@@ -367,6 +371,148 @@ test('guarded mutation serial gate: serialized within conversation; early failur
     const detail = await kernel.getConversationDetail(conv.id, { limit: 50 })
     const inputs = detail.entries.filter((e) => e.kind === 'helm.input')
     assert.equal(inputs.length, 2, 'both guarded inputs should be queued')
+  } finally {
+    await kernel.close().catch(() => {})
+  }
+})
+
+// ---------------------------------------------------------------------------
+// 4. Guarded context reset / compaction (plugin automation surface)
+// ---------------------------------------------------------------------------
+
+test('guarded reset: flipping ownership to human inside await window -> 409 ownership_conflict, SDK reset untouched', { timeout: 60_000 }, async () => {
+  const dir = join(root, 't-guarded-reset-race')
+  const kernel = await openRuntime(dir)
+  let barrier: { release: () => void } | undefined
+  try {
+    const conv = await kernel.createConversation({})
+    kernel.markConversationOwnership(conv.id, 'bot')
+    kernel.__faux.setResponses([fauxAssistantMessage('first answer')])
+    await kernel.submitInput(conv.id, 'seed history')
+    await kernel.waitForIdle(conv.id)
+    const seqBefore = kernel.getConversation(conv.id).stateChangeSeq
+
+    barrier = barrierConversationHandle(kernel)
+    const attempt = kernel.resetConversationGuarded(conv.id, { handoff: 'next phase' }, { expectedOwnership: 'bot' })
+    await flushToBarrier()
+    // Simulated takeover inside the legacy await window: human takes over.
+    kernel.markConversationOwnership(conv.id, 'human')
+    barrier.release()
+    await assert.rejects(attempt, isHelmError('ownership_conflict', 409))
+
+    // SDK reset never fired: stateChangeSeq unchanged and history is still readable.
+    const after = kernel.getConversation(conv.id)
+    assert.equal(after.stateChangeSeq, seqBefore, 'rejected guarded reset must not touch stateChangeSeq')
+    const detail = await kernel.getConversationDetail(conv.id, { limit: 10 })
+    assert.ok(detail.entries.some((e) => e.kind === 'helm.input'), 'history must survive a rejected guarded reset')
+
+    // Plain human API still works under human ownership.
+    const resetSummary = await kernel.resetConversation(conv.id)
+    assert.equal(resetSummary.stateChangeSeq, seqBefore + 1, 'human reset advances the watermark by exactly one')
+  } finally {
+    barrier?.release()
+    await kernel.close().catch(() => {})
+  }
+})
+
+test('guarded reset success path: bot conversation resets with handoff and advances stateChangeSeq', { timeout: 60_000 }, async () => {
+  const dir = join(root, 't-guarded-reset-success')
+  const kernel = await openRuntime(dir)
+  try {
+    const conv = await kernel.createConversation({})
+    kernel.markConversationOwnership(conv.id, 'bot')
+    kernel.__faux.setResponses([fauxAssistantMessage('answer before reset')])
+    await kernel.submitInput(conv.id, 'history to be cleared')
+    await kernel.waitForIdle(conv.id)
+    const seqBefore = kernel.getConversation(conv.id).stateChangeSeq
+    const statusBefore = kernel.getConversation(conv.id).status
+
+    const summary = await kernel.resetConversationGuarded(conv.id, { handoff: 'carry-on note' }, { expectedOwnership: 'bot' })
+    assert.equal(summary.id, conv.id)
+    assert.equal(summary.stateChangeSeq, seqBefore + 1, 'guarded reset advances the watermark by exactly one')
+    assert.equal(summary.status, statusBefore, 'reset clears context, not the review/read state')
+
+    // Missing explicit target must not fall back to default routing.
+    await assert.rejects(
+      kernel.resetConversationGuarded(999_999, {}, {}),
+      isHelmError('not_found', 404),
+    )
+  } finally {
+    await kernel.close().catch(() => {})
+  }
+})
+
+test('guarded compact: human rejected before enqueue; bot success returns taskId and advances watermark', { timeout: 60_000 }, async () => {
+  const dir = join(root, 't-guarded-compact')
+  const kernel = await openRuntime(dir)
+  try {
+    const conv = await kernel.createConversation({})
+    kernel.markConversationOwnership(conv.id, 'human')
+    const seqBefore = kernel.getConversation(conv.id).stateChangeSeq
+    await assert.rejects(
+      kernel.compactConversationGuarded(conv.id, {}, {}),
+      isHelmError('ownership_conflict', 409),
+      'human ownership hard rule (compact)',
+    )
+    assert.equal(
+      kernel.getConversation(conv.id).stateChangeSeq,
+      seqBefore,
+      'rejected guarded compact must not touch stateChangeSeq',
+    )
+
+    kernel.markConversationOwnership(conv.id, 'helm')
+    const seqHuman = kernel.getConversation(conv.id).stateChangeSeq
+    const result = await kernel.compactConversationGuarded(conv.id, { instructions: 'keep decisions' }, { expectedOwnership: 'helm' })
+    assert.ok(Number.isInteger(result.taskId) && result.taskId >= 0, 'compaction returns a background task id')
+    assert.equal(result.conversation.id, conv.id)
+    assert.equal(result.conversation.stateChangeSeq, seqHuman + 1, 'guarded compact advances the watermark by exactly one')
+
+    // Stale watermark CAS and missing target.
+    await assert.rejects(
+      kernel.compactConversationGuarded(conv.id, {}, { expectedStateSeq: result.conversation.stateChangeSeq + 100 }),
+      isHelmError('state_seq_conflict', 409),
+    )
+    await assert.rejects(
+      kernel.compactConversationGuarded(999_999, {}, {}),
+      isHelmError('not_found', 404),
+    )
+  } finally {
+    await kernel.close().catch(() => {})
+  }
+})
+
+test('guarded reset/compact rejection matrix: ownership mismatch / invalid guards', { timeout: 60_000 }, async () => {
+  const dir = join(root, 't-guarded-context-reject')
+  const kernel = await openRuntime(dir)
+  try {
+    const conv = await kernel.createConversation({})
+    kernel.markConversationOwnership(conv.id, 'helm')
+    await assert.rejects(
+      kernel.resetConversationGuarded(conv.id, {}, { expectedOwnership: 'bot' }),
+      isHelmError('ownership_conflict', 409),
+      'exact ownership mismatch (reset)',
+    )
+    await assert.rejects(
+      kernel.compactConversationGuarded(conv.id, {}, { expectedOwnership: 'bot' }),
+      isHelmError('ownership_conflict', 409),
+      'exact ownership mismatch (compact)',
+    )
+    const seq = kernel.getConversation(conv.id).stateChangeSeq
+    await assert.rejects(
+      kernel.resetConversationGuarded(conv.id, {}, { expectedStateSeq: seq + 100 }),
+      isHelmError('state_seq_conflict', 409),
+      'stale watermark CAS (reset)',
+    )
+    await assert.rejects(
+      kernel.resetConversationGuarded(conv.id, {}, { expectedOwnership: 'human' as never }),
+      isHelmError('validation_error', 400),
+      'expectedOwnership forbids human (reset)',
+    )
+    await assert.rejects(
+      kernel.compactConversationGuarded(conv.id, {}, { expectedStateSeq: -1 }),
+      isHelmError('validation_error', 400),
+      'expectedStateSeq must be non-negative (compact)',
+    )
   } finally {
     await kernel.close().catch(() => {})
   }

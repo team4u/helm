@@ -183,6 +183,7 @@ export class ConversationService {
       isClosed: this.o.isClosed,
       alignConversationModel: (id) => this.alignConversationModel(id),
       withOwnership: (summary) => this.withOwnership(summary),
+      assertMutationGuard: (id, guard) => this.assertMutationGuard(id, guard),
     })
 
     this.detailOps = new ConversationDetailService({
@@ -996,12 +997,41 @@ export class ConversationService {
     return this.contextOps.resetConversation(id, opts)
   }
 
+  /**
+   * Automated guarded reset: guard shape validated up front (fail-fast), then the whole fetch + re-check +
+   * irreversible SDK reset runs inside the per-conversation mutation gate (serialized with guarded abort/submit);
+   * the synchronous ownership/CAS re-check fires right before the SDK reset call via contextOps.
+   */
+  async resetConversationGuarded(
+    id: number,
+    opts?: { handoff?: string },
+    guard: GuardedMutationExpectation = {},
+  ): Promise<ConversationSummary> {
+    this.assertWritable()
+    this.assertGuardShape(guard)
+    return this.withMutationGate(id, () => this.contextOps.resetConversation(id, opts, guard))
+  }
+
   async compactConversation(
     id: number,
     opts?: { instructions?: string },
   ): Promise<{ taskId: number; conversation: ConversationSummary }> {
     this.assertWritable()
     return this.contextOps.compactConversation(id, opts)
+  }
+
+  /**
+   * Automated guarded compaction: same serial-domain + pre-enqueue re-check invariants as resetConversationGuarded;
+   * a failed re-check never enqueues the background compaction task.
+   */
+  async compactConversationGuarded(
+    id: number,
+    opts?: { instructions?: string },
+    guard: GuardedMutationExpectation = {},
+  ): Promise<{ taskId: number; conversation: ConversationSummary }> {
+    this.assertWritable()
+    this.assertGuardShape(guard)
+    return this.withMutationGate(id, () => this.contextOps.compactConversation(id, opts, guard))
   }
 
   async forkConversation(

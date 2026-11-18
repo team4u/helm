@@ -138,6 +138,20 @@ export class PluginHostBackendFixtureBase implements PluginHostBackend {
     unsupported('host.abortConversationGuarded')
   }
 
+  resetConversationGuarded(
+    ...args: Parameters<NonNullable<Port<'resetConversationGuarded'>>>
+  ): ReturnType<NonNullable<Port<'resetConversationGuarded'>>> {
+    void args
+    unsupported('host.resetConversationGuarded')
+  }
+
+  compactConversationGuarded(
+    ...args: Parameters<NonNullable<Port<'compactConversationGuarded'>>>
+  ): ReturnType<NonNullable<Port<'compactConversationGuarded'>>> {
+    void args
+    unsupported('host.compactConversationGuarded')
+  }
+
   submitInputGuarded(
     ...args: Parameters<NonNullable<Port<'submitInputGuarded'>>>
   ): ReturnType<NonNullable<Port<'submitInputGuarded'>>> {
@@ -337,6 +351,8 @@ export function createPluginHostBackendFixture(): PluginHostBackend {
     updateConversation: f(d.updateConversation),
     abortConversation: f(d.abortConversation),
     abortConversationGuarded: f(d.abortConversationGuarded),
+    resetConversationGuarded: f(d.resetConversationGuarded),
+    compactConversationGuarded: f(d.compactConversationGuarded),
     getConversationOwnership: f(d.getConversationOwnership),
     listArtifacts: f(d.listArtifacts),
     createArtifact: f(d.createArtifact),

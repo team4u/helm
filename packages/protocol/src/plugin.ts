@@ -683,6 +683,33 @@ export interface HelmHostApi {
    *   由调用方逐个显式给出。
    */
   abortConversationGuarded(id: number, guard: GuardedMutationExpectation): Promise<void>
+  /**
+   * 自动化 guarded 上下文重置（Watchdog 红线内核执行层）：在会话串行域内、
+   * 于第一个不可逆动作（SDK reset 调用）前同步复核会话存在性、归属（严禁
+   * human）与可选 CAS 水位；复核失败抛 404 not_found / 409 ownership_conflict
+   * / 409 state_seq_conflict 且绝不发起重置。handoff 经内核统一脱敏后成为
+   * 重置后首条用户消息；成功后推进 stateChangeSeq、触发上下文用量重算并
+   * 广播 conversation.upsert（与 POST /api/conversations/:id/reset 同源）。
+   * guard 缺省时仅强制 human 红线（与 submitInputGuarded 同口径）。
+   */
+  resetConversationGuarded(
+    id: number,
+    opts?: { handoff?: string },
+    guard?: GuardedMutationExpectation,
+  ): Promise<ConversationSummary>
+  /**
+   * 自动化 guarded 手动压缩（Watchdog 红线内核执行层）：入队后台压缩任务前
+   * 在会话串行域内同步复核会话存在性、归属（严禁 human）与可选 CAS 水位，
+   * 复核失败绝不入队；instructions 经内核统一脱敏。返回后台任务 ID 与更新
+   * 后的会话摘要——压缩是异步后台任务，完成时序经 conversation.upsert /
+   * 上下文用量事件对账（与 POST /api/conversations/:id/compact 同源）。
+   * guard 缺省时仅强制 human 红线（与 submitInputGuarded 同口径）。
+   */
+  compactConversationGuarded(
+    id: number,
+    opts?: { instructions?: string },
+    guard?: GuardedMutationExpectation,
+  ): Promise<{ taskId: number; conversation: ConversationSummary }>
   /** 会话归属权现读（Watchdog 红线判定唯一可信来源；未标记一律 human）。 */
   getConversationOwnership(id: number): 'helm' | 'bot' | 'human'
   /** 列出会话产物元数据（本会话全部；明文内容不进返回值）。 */

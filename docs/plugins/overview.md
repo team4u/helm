@@ -69,7 +69,7 @@
 | 分组 | 端口 |
 | :--- | :--- |
 | 外部事件 | `dispatchTrigger(envelope)`（统一 defang 防逃逸投递） |
-| 输入与会话 | `submitInput` / `submitInputGuarded`（均支持 `attachments` 产物 ID 列表，按会话或祖先链授权挂载）、`createConversation / forkConversation / listConversations / getConversation / getConversationDetail / updateConversation / abortConversation / abortConversationGuarded`、`manageConversation`（删除保护）、`markConversationOwnership` |
+| 输入与会话 | `submitInput` / `submitInputGuarded`（均支持 `attachments` 产物 ID 列表，按会话或祖先链授权挂载）、`createConversation / forkConversation / listConversations / getConversation / getConversationDetail / updateConversation / abortConversation / abortConversationGuarded`、`resetConversationGuarded / compactConversationGuarded`（插件自动化专用上下文维护：内核串行域内于 SDK reset/compact 前同步复核归属（human 一律拒绝）与可选 CAS 水位；handoff/instructions 过统一脱敏）、`manageConversation`（删除保护）、`markConversationOwnership` |
 | 人机审批 | `createAsk / cancelAsk / registerAskSeqResolver`（CAS 水位解析器） |
 | 子代理与执行 | `spawnAgent / runGate / execEnv / resolveSpawnTarget / listActiveSpawnExecutions / withFileMutationQueue` |
 | 动作互调与治理 | `prepareAction / invokeAction / listActions / plugins`（受管包生命周期端口） |
@@ -77,7 +77,9 @@
 | 节点与文件 | `nodeIpc / nodeFetch / openTunnel / executionEnv / withFileLock / atomicWriteFile / buildSpawnEnv / inspectNodePathUsage` |
 | 通用机制 | `redact / completeText / refreshModels / listPlugins / listUi / setConfig / isClosing / onEvent / emitEvent` |
 
-两条使用纪律：受管 Git Worktree 清理不在 `ctx.host`——需要清理时调用 `builtin:workflow` 的 `cleanup_worktree` 动作；`execEnv` 目标节点或目录缺省继承请求会话坐标，节点离线显式报 `409 node_offline`，绝不静默回退本机。
+三条使用纪律：受管 Git Worktree 清理不在 `ctx.host`——需要清理时调用 `builtin:workflow` 的 `cleanup_worktree` 动作；`execEnv` 目标节点或目录缺省继承请求会话坐标，节点离线显式报 `409 node_offline`，绝不静默回退本机。
+
+第三条纪律：插件做「清理/重置会话上下文」必须走 `resetConversationGuarded` / `compactConversationGuarded`（或复用既有 HTTP/CLI 面向人类开放的语义），**不得**用 `createConversation` 另起会话冒充上下文清理，也不得经 `execEnv`/`executionEnv` 反向调用宿主 `helm` CLI 绕过类型契约与归属红线（`execEnv` 是节点命令执行端口，不是宿主 API 通道）。
 
 ## 配置与数据边界
 

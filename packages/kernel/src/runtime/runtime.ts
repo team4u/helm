@@ -29,6 +29,7 @@ import {
   type EnvExecRequest,
   type EnvExecResponse,
   type ExternalTriggerEnvelope,
+  type GuardedMutationExpectation,
   type MaybePromise,
   type ModelCatalog,
   type ModelProvidersRefreshResult,
@@ -734,12 +735,30 @@ export class KernelRuntime {
     return this.conversations.resetConversation(id, opts)
   }
 
+  async resetConversationGuarded(
+    id: number,
+    opts?: { handoff?: string },
+    guard?: GuardedMutationExpectation,
+  ): Promise<ConversationSummary> {
+    this.assertWritable()
+    return this.conversations.resetConversationGuarded(id, opts, guard)
+  }
+
   async compactConversation(
     id: number,
     opts?: { instructions?: string },
   ): Promise<{ taskId: number; conversation: ConversationSummary }> {
     this.assertWritable()
     return this.conversations.compactConversation(id, opts)
+  }
+
+  async compactConversationGuarded(
+    id: number,
+    opts?: { instructions?: string },
+    guard?: GuardedMutationExpectation,
+  ): Promise<{ taskId: number; conversation: ConversationSummary }> {
+    this.assertWritable()
+    return this.conversations.compactConversationGuarded(id, opts, guard)
   }
 
   async forkConversation(

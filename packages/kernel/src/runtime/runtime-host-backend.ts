@@ -121,6 +121,8 @@ export function createPluginHostBackend(runtime: KernelRuntime): PluginHostBacke
     updateConversation: (id, patch) => runtime.updateConversation(id, patch),
     abortConversation: (id) => runtime.abortConversation(id),
     abortConversationGuarded: (id, guard) => runtime.abortConversationGuarded(id, guard),
+    resetConversationGuarded: (id, opts, guard) => runtime.resetConversationGuarded(id, opts, guard),
+    compactConversationGuarded: (id, opts, guard) => runtime.compactConversationGuarded(id, opts, guard),
     submitInputGuarded: async (id, text, opts, guard) => {
       await runtime.submitInputGuarded(id, text, opts, guard)
     },

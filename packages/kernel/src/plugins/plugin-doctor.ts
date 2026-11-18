@@ -85,6 +85,13 @@ function doctorBackend(): PluginHostBackend {
     updateConversation: () => unavailable('host.updateConversation'),
     abortConversation: () => unavailable('host.abortConversation'),
     abortConversationGuarded: () => unavailable('host.abortConversationGuarded') as never as Promise<void>,
+    resetConversationGuarded: () =>
+      unavailable('host.resetConversationGuarded') as never as Promise<import('@helm/protocol').ConversationSummary>,
+    compactConversationGuarded: () =>
+      unavailable('host.compactConversationGuarded') as never as Promise<{
+        taskId: number
+        conversation: import('@helm/protocol').ConversationSummary
+      }>,
     getConversationOwnership: () => unavailable('host.getConversationOwnership'),
     markConversationOwnership: () => unavailable('host.markConversationOwnership'),
     listArtifacts: () => unavailable('host.listArtifacts'),
