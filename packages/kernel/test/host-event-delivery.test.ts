@@ -20,6 +20,7 @@
  * Runner: tsx --test; every test specifies explicit timeout against deadlocks.
  */
 import { strict as assert } from 'node:assert'
+import { withTimeout } from '@helm/test-kit'
 import { after, before, describe, it } from 'node:test'
 import { join } from 'node:path'
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
@@ -300,11 +301,7 @@ describe('host event single-delivery contract', { timeout: 60_000 }, () => {
         await new Promise((r) => setTimeout(r, 10))
       }
       assert.ok(slowEntered >= 1, 'slow listener was invoked and suspended')
-      const idle = kernel.waitForIdle(1)
-      await Promise.race([
-        idle.then(() => 'idle'),
-        new Promise((r) => setTimeout(() => r('timeout'), 5_000)),
-      ]).then((v) => assert.notEqual(v, 'timeout', 'slow listener must not block turn progression'))
+      await withTimeout(kernel.waitForIdle(1), 5_000, 'slow listener must not block turn progression')
       await submitted
 
       gate.resolve()

@@ -17,6 +17,7 @@
  */
 
 import { HelmError } from '@helm/protocol'
+import { withTimeout } from '@helm/test-kit'
 import { after, before, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -88,22 +89,7 @@ async function openService(
 
 /** Asserts that promise settles within ms (guards against hang regressions with diagnostic failures). */
 async function assertSettlesWithin<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
-  const sentinel = Symbol('pending')
-  const raced = await Promise.race([
-    promise.then(
-      (value) => ({ value }),
-      (error) => ({ error }),
-    ),
-    new Promise((resolve) => setTimeout(() => resolve({ value: sentinel }), ms)),
-  ])
-  const outcome = raced as { value: unknown; error?: unknown }
-  if (outcome.value === sentinel && outcome.error === undefined) {
-    assert.fail(`${label}: promise did not settle within ${ms}ms (hang regression)`)
-  }
-  if ('error' in outcome && outcome.error !== undefined) {
-    throw outcome.error
-  }
-  return outcome.value as T
+  return withTimeout(promise, ms, `${label}: promise did not settle within ${ms}ms (hang regression)`)
 }
 
 const baseSpec = {

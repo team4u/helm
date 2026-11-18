@@ -22,6 +22,7 @@ import {
   makeProfile,
   sleep,
   waitFor,
+  withTimeout,
 } from '../src/index.js'
 import {
   HOST_MANAGED_HELM_ENV_NAMES,
@@ -125,6 +126,11 @@ test('deferred / sleep / waitFor / jsonResponse isomorphic async and response ut
   const failGate = deferred<void>()
   failGate.reject(new Error('boom'))
   await assert.rejects(failGate.promise, /boom/)
+
+  const originalError = new Error('original rejection')
+  assert.equal(await withTimeout(Promise.resolve('done'), 2_000, 'deadline'), 'done')
+  await assert.rejects(withTimeout(Promise.reject(originalError), 2_000, 'deadline'), (error) => error === originalError)
+  await assert.rejects(withTimeout(deferred().promise, 1, 'deadline'), /deadline/)
 
   const t0 = Date.now()
   await sleep(15)

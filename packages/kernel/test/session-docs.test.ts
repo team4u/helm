@@ -12,6 +12,7 @@
  */
 import test, { beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
+import { withTimeout } from '@helm/test-kit'
 import {
   HelmError,
   type PluginDefinition,
@@ -849,10 +850,7 @@ test('SessionDocEventHub.response idle keepalive sends comment lines, disables v
   try {
     const first = await reader.read()
     assert.match(decoder.decode(first.value!), /event: snapshot/)
-    const beat = await Promise.race([
-      reader.read(),
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('keepalive timeout')), 2_000)),
-    ])
+    const beat = await withTimeout(reader.read(), 2_000, 'keepalive timeout')
     const beatText = decoder.decode(beat.value!)
     assert.equal(beatText, ': keepalive\n\n')
     assert.equal(hub.seq, 0, 'keepalive must not increment SessionDocEventHub.seq')
@@ -1018,10 +1016,7 @@ test('SessionDocEventHub.multiplexResponse handles snapshot failure cleanup, kee
       while (!seenKeepalive) {
         const remaining = deadline - Date.now()
         assert.ok(remaining > 0, 'multiplex keepalive timeout')
-        const chunk = await Promise.race([
-          reader.read(),
-          new Promise<never>((_, reject) => setTimeout(() => reject(new Error('multiplex keepalive timeout')), remaining)),
-        ])
+        const chunk = await withTimeout(reader.read(), remaining, 'multiplex keepalive timeout')
         assert.equal(chunk.done, false)
         const text = decoder.decode(chunk.value!)
         if (text === ': keepalive\n\n') {

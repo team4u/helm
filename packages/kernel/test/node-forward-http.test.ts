@@ -6,6 +6,7 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { withTimeout } from '@helm/test-kit'
 import { handleApi } from '../src/http/routes.js'
 import type { KernelRuntimeLike } from '../src/http/contracts.js'
 import type { NodeForwardEvent, NodeForwardSession } from '../src/env/forward.js'
@@ -173,16 +174,14 @@ test('GET events ends stream cleanly after terminal stopped frame without hangin
   // Simulate stop: emit terminal stopped frame on event channel, then fire stop waiters — stream must close cleanly (done=true).
   for (const listener of [...over.events]) listener({ type: 'stopped' })
   for (const waiter of [...stopWaiters]) waiter()
-  const drained = await new Promise<boolean>((resolve) => {
-    void (async () => {
-      for (;;) {
-        const { done } = await reader.read()
-        if (done) { resolve(true); return }
-      }
-    })().catch(() => resolve(false))
-    setTimeout(() => resolve(false), 5_000)
-  })
-  assert.equal(drained, true, 'event stream must terminate cleanly (done=true) after stop notification')
+  const drain = async () => {
+    while (!(await reader.read()).done) { /* consume through EOF */ }
+  }
+  try {
+    await withTimeout(drain(), 5_000, 'event stream must terminate cleanly after stop notification')
+  } finally {
+    await reader.cancel()
+  }
 })
 
 test('GET events acts as lease holder: acquires on attach and releases on abort/cancel without leaks', { timeout: 60_000 }, async () => {

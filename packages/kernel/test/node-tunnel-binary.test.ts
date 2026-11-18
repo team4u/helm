@@ -14,7 +14,7 @@ import { execFile, spawn } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
-import { setTimeout as delay } from 'node:timers/promises'
+import { withTimeout } from '@helm/test-kit'
 import { mkdtempSync, rmSync } from 'node:fs'
 import {
   attachNodeWsGateway,
@@ -146,7 +146,7 @@ test('arbitrary TCP: request-response-shutdown flushes completely without trunca
       duplex.on('close', () => resolve(Buffer.concat(chunks)))
     })
     duplex.write('req') // keep write side open initially: close only after full response arrives
-    const echoed = await Promise.race([got, delay(15_000).then(() => Buffer.alloc(0))])
+    const echoed = await withTimeout(got, 15_000, 'tunnel response did not finish')
     assert.equal(echoed.length, response.length, 'full response flushed back without trailing byte loss')
     assert.ok(echoed.equals(response), 'response contents match')
     duplex.destroy()
@@ -195,7 +195,7 @@ test('arbitrary TCP: duplex destroys when daemon disconnects so consumers observ
     const closed = new Promise<void>((resolve) => duplex.once('close', resolve))
     // Disconnecting daemon triggers eviction and destroys active duplexes immediately instead of hanging.
     await hub.disconnectDaemon()
-    await Promise.race([closed, delay(10_000)])
+    await withTimeout(closed, 10_000, 'tunnel did not close after the daemon disconnected')
     assert.equal(duplex.destroyed, true, 'duplex is destroyed after daemon disconnects')
   } finally {
     await hub.close()

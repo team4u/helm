@@ -258,18 +258,18 @@ if (!shardingDisabled) {
     repoRoot,
     files,
     cpus: workerBudget,
-    // Keep short pure tests in one zero-copy process and reserve the remaining worktree budget
-    // for isolated tests. Shard count and total permits are separate decisions.
+    // Share module initialization by running the pure files in one process.
     filesPerShard: Math.max(8, files.length),
     weightFn: lptWeight,
   });
   const usePureShards = pureFiles.length >= 4 && shards.length > 0;
   if (usePureShards) {
     const pureShardCount = shards.length;
-    const isoConc = Math.max(1, workerBudget - pureShardCount);
+    // Node fixes file concurrency when its runner starts. Run the pure shard first so
+    // the isolated pool can use every permit throughout the much longer phase.
     console.error(
-      `[test-suites] schedule: pure=${pureFiles.length} (${pureShardCount} shards, --test-isolation=none) || ` +
-        `isolated=${isolatedFiles.length} (--test-concurrency=${isoConc}, worktree cap ${workerBudget})`,
+      `[test-suites] schedule: pure=${pureFiles.length} (${pureShardCount} shard, --test-isolation=none), then ` +
+        `isolated=${isolatedFiles.length} (--test-concurrency=${workerBudget}, worktree cap ${workerBudget})`,
     );
     shards.forEach((shard, idx) => {
       plans.push({
@@ -281,8 +281,8 @@ if (!shardingDisabled) {
     if (isolatedFiles.length > 0) {
       plans.push({
         label: 'isolated',
-        args: withDefaultTestConcurrency(extraArgs, isoConc).concat(isolatedFiles),
-        permits: isoConc,
+        args: withDefaultTestConcurrency(extraArgs, workerBudget).concat(isolatedFiles),
+        permits: workerBudget,
       });
     }
   } else {
@@ -301,9 +301,7 @@ if (!shardingDisabled) {
 }
 
 // Reuse run-tests.mjs: cross-platform tsx spawn, per-test/total timeouts, and process-tree
-// cleanup all live there — never re-implemented. A single permit-capped worker pool
-// schedules pure-shards, heavy single files, and concurrent batches together, avoiding
-// dual-pool oversubscription, phase barriers, and tail serialization.
+// cleanup all live there. The permit pool starts the isolated phase once the pure shard releases its permit.
 const runTestsPath = path.join(repoRoot, 'scripts', 'run-tests.mjs');
 const suiteStartMs = Date.now();
 /** @type {Set<import('node:child_process').ChildProcess>} */

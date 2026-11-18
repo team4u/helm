@@ -12,6 +12,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
+import { withTimeout } from '@helm/test-kit'
 import { attachNodeWsGateway, attachNodeTunnelGateway, createEnvFabric, NodeForwardService } from '../src/env/index.js'
 import { createNodeDaemon } from '@helm/node'
 
@@ -221,7 +222,7 @@ test('port forwarding: stop emits terminal stopped frame and resolves event list
     const offStopped = stack.forward.onStopped(session.forwardId, () => notifyStopped?.())
     // Subscribe first, then stop: terminal stopped frame arrives before stream closes.
     await stack.forward.stop(session.forwardId)
-    await Promise.race([stoppedPromise, delay(5_000).then(() => { throw new Error('onStopped was not invoked') })])
+    await withTimeout(stoppedPromise, 5_000, 'onStopped was not invoked')
     assert.deepEqual(events.filter((t) => t === 'stopped'), ['stopped'], 'stop should emit exactly one stopped frame')
     off()
     offStopped()
@@ -229,7 +230,7 @@ test('port forwarding: stop emits terminal stopped frame and resolves event list
     const immediate = new Promise<void>((resolve) => {
       stack.forward.onStopped(session.forwardId, resolve)
     })
-    await Promise.race([immediate, delay(1_000).then(() => { throw new Error('onStopped after stop should resolve immediately') })])
+    await withTimeout(immediate, 1_000, 'onStopped after stop should resolve immediately')
     // Subscribing onEvent after stop throws 404 (session evicted).
     await assert.rejects(
       new Promise(() => stack.forward.onEvent(session.forwardId, () => undefined)),

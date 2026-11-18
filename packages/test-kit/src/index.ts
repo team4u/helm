@@ -85,6 +85,21 @@ export function sleep(ms: number): Promise<void> {
   })
 }
 
+/** Set a deadline without keeping the worker alive after the operation settles. */
+export async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof globalThis.setTimeout> | undefined
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = globalThis.setTimeout(() => reject(new Error(message)), timeoutMs)
+      }),
+    ])
+  } finally {
+    globalThis.clearTimeout(timer)
+  }
+}
+
 /** `waitFor` polling options. */
 export interface WaitForOptions {
   timeoutMs?: number
