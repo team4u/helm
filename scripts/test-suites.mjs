@@ -50,7 +50,7 @@ const packagesDir = path.join(repoRoot, 'packages');
 // mirrored in AGENTS.md's test tiering conventions.
 const SUITES = {
   unit: ['protocol', 'env-io', 'test-kit', 'cli', 'web', 'plugin-client'],
-  integration: ['plugin-build', 'kernel', 'plugins', 'hub', 'node', 'payload'],
+  integration: ['plugin-build', 'kernel', 'plugins', 'hub', 'node', 'update', 'payload'],
 };
 const ALL_PACKAGES = [...SUITES.unit, ...SUITES.integration];
 
