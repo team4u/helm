@@ -10,6 +10,7 @@ import fs from 'node:fs/promises';
 import rawFs from 'node:fs';
 import { createHash } from 'node:crypto';
 import process from 'node:process';
+import { isStrictSemver } from '@helm/protocol';
 import { UpgradeRejectedError } from './errors.js';
 
 export const DEFAULT_REGISTRY = 'https://registry.npmjs.org';
@@ -95,9 +96,29 @@ export async function fetchExactManifest(
   return { integrity, tarball };
 }
 
-/** Query the `latest` dist-tag version of `pkgName`. */
-export async function fetchLatestVersion(registryUrl: string, pkgName: string, fetchImpl: typeof fetch): Promise<string> {
-  const url = `${registryUrl}/${pkgName}/latest`;
+/** Legal npm dist-tag segment: one path-safe segment; version-shaped tags are rejected (they resolve the exact-version document instead of a dist-tag). */
+const DIST_TAG_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+function requireDistTag(tag: string): void {
+  if (!DIST_TAG_PATTERN.test(tag)) {
+    throw new UpgradeRejectedError(
+      `invalid dist-tag: "${tag}" (expected a single path segment of letters, digits, ".", "_" or "-", not starting with a symbol)`,
+    );
+  }
+  if (isStrictSemver(tag)) {
+    throw new UpgradeRejectedError(`invalid dist-tag: "${tag}" is a version, not a dist-tag (request the exact version instead)`);
+  }
+}
+
+/** Query the version a dist-tag points at (`latest` by default; e.g. `beta` for pre-release channels). */
+export async function fetchLatestVersion(
+  registryUrl: string,
+  pkgName: string,
+  fetchImpl: typeof fetch,
+  tag: string = 'latest',
+): Promise<string> {
+  requireDistTag(tag);
+  const url = `${registryUrl}/${pkgName}/${tag}`;
   let latestVersion: string;
   try {
     const data = (await fetchJsonWithTimeout(url, fetchImpl, METADATA_TIMEOUT_MS)) as { version?: unknown };
@@ -106,7 +127,9 @@ export async function fetchLatestVersion(registryUrl: string, pkgName: string, f
     }
     latestVersion = data.version;
   } catch (error) {
-    throw new Error(`failed to query latest version at ${url}: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(
+      `failed to query latest version for dist-tag ${tag} at ${url}: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
   return latestVersion;
 }
@@ -144,4 +167,34 @@ export function computeSri(filePath: string): Promise<string> {
     stream.on('data', (chunk: string | Buffer) => hash.update(chunk));
     stream.on('end', () => resolve(`sha512-${hash.digest('base64')}`));
   });
+}
+
+/**
+ * Fetch the exact-version manifest, download its tarball to `destPath`, and verify the
+ * SHA-512 SRI against the registry-declared integrity — the single verified-download
+ * seam shared by release staging and consumer installers (Hub payload extraction).
+ * Diagnostics preserve the original helm-node wording so consumers' error contracts
+ * stay byte-stable.
+ */
+export async function downloadVerifiedTarball(
+  registryUrl: string,
+  pkgName: string,
+  version: string,
+  destPath: string,
+  fetchFn?: typeof fetch,
+): Promise<void> {
+  const manifest = await fetchExactManifest(registryUrl, pkgName, version, fetchFn ?? fetch);
+  try {
+    await downloadTarball(manifest.tarball, destPath, { fetchFn });
+  } catch (error) {
+    throw new Error(
+      `failed to download ${pkgName}@${version} tarball (${manifest.tarball}): ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  const actual = await computeSri(destPath);
+  if (actual !== manifest.integrity) {
+    throw new Error(
+      `${pkgName}@${version} tarball sha512 integrity check failed: expected ${manifest.integrity}, got ${actual}`,
+    );
+  }
 }
