@@ -48,8 +48,8 @@ test('@helm/node runtime dependencies stay minimal and explicit', { timeout: 60_
   const pkg = JSON.parse(await fs.readFile(packageJsonPath, 'utf8')) as { dependencies?: Record<string, string> };
   assert.deepEqual(
     Object.keys(pkg.dependencies ?? {}).sort(),
-    ['@earendil-works/chord', '@earendil-works/pi-durable', '@helm/env-io', '@helm/protocol', 'birpc', 'ws'],
-    '@helm/node dependencies must stay limited to @earendil-works/chord, @earendil-works/pi-durable, @helm/env-io, @helm/protocol, birpc, and ws',
+    ['@earendil-works/chord', '@earendil-works/pi-durable', '@helm/env-io', '@helm/protocol', '@helm/update', 'birpc', 'ws'],
+    '@helm/node dependencies must stay limited to @earendil-works/chord, @earendil-works/pi-durable, @helm/env-io, @helm/protocol, @helm/update, birpc, and ws',
   );
 });
 
