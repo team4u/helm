@@ -187,6 +187,95 @@ test('a flipped registry latest restarts the hub onto the new version across tic
   assert.equal(await readPidRecord(h.root), null);
 });
 
+test('a beta dist-tag switches versions while `latest` stays unchanged (and vice versa)', { timeout: 60_000 }, async (t) => {
+  const root = useTempDir(t, 'helm-launcher-runbeta-');
+  const spec = {
+    pkgName: PKG,
+    latest: '1.0.0',
+    payloads: new Map<string, string>(),
+    latestByTag: {} as Record<string, string>,
+  };
+  const core = createFakeCore(spec);
+  const captured = captureIo(sanitizedHostEnv({ HELM_PAYLOAD_PACKAGE: PKG }));
+  const port = await freePort();
+  const dataDir = path.join(path.dirname(root), `${path.basename(root)}-user-data`);
+  await writeFakePayload({ dir: path.join(root, 'payload-1.0.0'), pkgName: PKG, version: '1.0.0' });
+  spec.payloads.set('1.0.0', path.join(root, 'payload-1.0.0'));
+  await writeFakePayload({ dir: path.join(root, 'payload-2.0.0-beta.1'), pkgName: PKG, version: '2.0.0-beta.1' });
+  spec.payloads.set('2.0.0-beta.1', path.join(root, 'payload-2.0.0-beta.1'));
+
+  // Default tag: the loop must stay idle while only the beta channel moves.
+  const idleShutdown = newShutdown();
+  const idle = runSupervised({
+    io: captured.io,
+    root,
+    pkgName: PKG,
+    registryUrl: 'https://registry.example.com',
+    intervalMs: 250,
+    pollMs: 50,
+    launchFlags: { port, dataDir },
+    core,
+    shutdownSignal: idleShutdown.promise,
+  });
+  t.after(() => idleShutdown.request());
+  await waitForVersion(port, '1.0.0');
+  const firstRecord = await waitForPidRecord(root);
+  t.after(() => cleanupPid(firstRecord.pid));
+  spec.latestByTag['beta'] = '2.0.0-beta.1';
+  await new Promise((resolve) => setTimeout(resolve, 900)); // several ticks, channel ignored
+  assert.deepEqual(await getJson(port, '/__version'), { version: '1.0.0' });
+  assert.doesNotMatch(captured.outText(), /updated/);
+  idleShutdown.request();
+  assert.equal(await idle, 0);
+  await waitUntilDead(firstRecord.pid);
+
+  // Same state, --tag beta: the periodic CHECK queries beta and the loop switches to it even
+  // though `latest` is unchanged (the #116/#130 tag-propagation regression).
+  const second = newShutdown();
+  const beta = runSupervised({
+    io: captured.io,
+    root,
+    pkgName: PKG,
+    registryUrl: 'https://registry.example.com',
+    intervalMs: 250,
+    pollMs: 50,
+    tag: 'beta',
+    launchFlags: { port, dataDir },
+    core,
+    shutdownSignal: second.promise,
+  });
+  await waitForVersion(port, '2.0.0-beta.1', 30_000);
+  await waitForCondition(
+    async () => /updated 1\.0\.0 -> 2\.0\.0-beta\.1; hub restarted/.test(captured.outText()),
+    'beta update line printed',
+  );
+  const betaRecord = await waitForPidRecord(root);
+  t.after(() => cleanupPid(betaRecord.pid));
+  assert.equal((await readCurrentRelease(root))?.version, '2.0.0-beta.1');
+  assert.ok(core.tagsSeen.includes('beta'));
+  second.request();
+  assert.equal(await beta, 0);
+  await waitUntilDead(betaRecord.pid);
+  assert.equal(await readPidRecord(root), null);
+});
+
+test('an external verified stop of the supervised hub ends the run with exit 1 (no fight)', { timeout: 60_000 }, async (t) => {
+  const h = await setupRun(t, useTempDir(t, 'helm-launcher-runext-'));
+  await h.addPayload('1.0.0');
+
+  const done = runSupervised(h.options());
+  await waitForVersion(h.port, '1.0.0');
+  const record = await waitForPidRecord(h.root);
+
+  // Cross-process `stop` with a valid start-time identity (Linux record) legitimately stops the
+  // supervised hub; the launcher must not fight over the instance and exits with diagnostics.
+  await stopHub(h.root, h.io);
+  await waitUntilDead(record.pid);
+  assert.equal(await done, 1);
+  assert.match(h.errText(), /the supervised hub process exited unexpectedly/);
+  assert.equal(await readPidRecord(h.root), null);
+});
+
 test('failing update checks keep the previous hub serving and the loop alive', { timeout: 60_000 }, async (t) => {
   const h = await setupRun(t, useTempDir(t, 'helm-launcher-runfail-'));
   await h.addPayload('1.0.0');

@@ -74,8 +74,12 @@ HELM_MODEL, HELM_WEB_DIST_DIR, HELM_NPM_REGISTRY, HELM_PAYLOAD_PACKAGE (default 
 HELM_UPGRADE_BLOCK_COOLDOWN_MS (default 1800000), HELM_HUB_UPDATE_TAG (default latest),
 HELM_HUB_UPDATE_INTERVAL_MS (default 21600000).
 
-Cross-platform: graceful stop is POSIX-first; on Windows SIGTERM terminates without handlers, so
-stop degrades to a short grace period before process-tree escalation (taskkill /F /T).
+Cross-platform: graceful stop is POSIX-first. Cross-process "stop" signals a recorded pid only
+with an immutable start-time identity proof (Linux /proc); without that proof (non-Linux
+platforms, or records without a start time) it fails closed with hub_identity_unverifiable and
+steers to the supervised "run" (which holds its own ChildProcess and stops its hub on
+SIGINT/SIGTERM; on Windows it closes the whole process tree). The supervised run is the
+recommended lifecycle on platforms without /proc.
 `;
 
 const VALUE_FLAGS = new Set([
