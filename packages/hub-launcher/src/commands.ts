@@ -1,15 +1,16 @@
 /**
- * Command implementations: check / update / start / stop / restart / status. Each command prints
- * either human-readable text or a JSON object (`--json`) and returns a process exit code. Errors
- * carry a stable `code` (UsageError) surfaced in the JSON error envelope by the CLI layer.
+ * Command implementations: check / update / run / start / stop / restart / status. Each command
+ * prints either human-readable text or a JSON object (`--json`) and returns a process exit code.
+ * Errors carry a stable `code` (UsageError) surfaced in the JSON error envelope by the CLI layer.
  */
 import { readCurrentRelease, readBlockedRelease } from '@helm/update';
-import { pathsOf, resolvePayloadPackageName } from './layout.js';
+import { assertDistTag, pathsOf, resolvePayloadPackageName, resolveRegistryUrl, resolveUpdateIntervalMs, resolveUpdateTag } from './layout.js';
 import { readLaunchConfig, resolveEffectiveLaunchConfig } from './records.js';
 import { readRunningHub, startHub, stopHub } from './process.js';
 import { checkHubUpgrade, performHubUpdate } from './update.js';
+import { runSupervised } from './run.js';
 import type { UpdateCore } from './update-core.js';
-import type { LauncherIo } from './io.js';
+import { UsageError, type LauncherIo } from './io.js';
 
 export interface CommandContext {
   io: LauncherIo;
@@ -22,6 +23,8 @@ export interface CommandContext {
 export interface CommandFlags {
   version?: string;
   registry?: string;
+  tag?: string;
+  intervalMs?: number;
   tarball?: string;
   force?: boolean;
   start?: boolean;
@@ -37,6 +40,19 @@ export interface CommandFlags {
 
 function payloadPackageNameOf(ctx: CommandContext): string {
   return resolvePayloadPackageName(ctx.io.env);
+}
+
+/** Registry URL honoring the `--registry` flag and the `HELM_NPM_REGISTRY` environment alike. */
+function registryUrlOf(ctx: CommandContext, flags: CommandFlags): string {
+  return resolveRegistryUrl(ctx.io.env, flags.registry);
+}
+
+function tagOf(flags: CommandFlags, env: NodeJS.ProcessEnv): string | undefined {
+  if (flags.tag !== undefined) return assertDistTag(flags.tag);
+  if (env.HELM_HUB_UPDATE_TAG !== undefined && env.HELM_HUB_UPDATE_TAG !== '') {
+    return assertDistTag(env.HELM_HUB_UPDATE_TAG);
+  }
+  return undefined;
 }
 
 function launchFlagsOf(flags: CommandFlags) {
@@ -58,12 +74,14 @@ function flagsAsJson(flags: CommandFlags): boolean {
 // ---------------------------------------------------------------------------
 
 export async function cmdCheck(ctx: CommandContext, flags: CommandFlags): Promise<number> {
+  const tag = tagOf(flags, ctx.io.env);
   const result = await checkHubUpgrade({
     io: ctx.io,
     root: ctx.root,
     pkgName: payloadPackageNameOf(ctx),
     ...(ctx.core !== undefined ? { core: ctx.core } : {}),
-    ...(flags.registry !== undefined ? { registryUrl: flags.registry } : {}),
+    registryUrl: registryUrlOf(ctx, flags),
+    ...(tag !== undefined ? { tag } : {}),
     ...(ctx.fetchFn !== undefined ? { fetchFn: ctx.fetchFn } : {}),
   });
   if (flagsAsJson(flags)) {
@@ -87,12 +105,14 @@ export async function cmdCheck(ctx: CommandContext, flags: CommandFlags): Promis
 // ---------------------------------------------------------------------------
 
 export async function cmdUpdate(ctx: CommandContext, flags: CommandFlags): Promise<number> {
+  const tag = tagOf(flags, ctx.io.env);
   const outcome = await performHubUpdate({
     io: ctx.io,
     root: ctx.root,
     pkgName: payloadPackageNameOf(ctx),
-    ...(flags.registry !== undefined ? { registryUrl: flags.registry } : {}),
+    registryUrl: registryUrlOf(ctx, flags),
     ...(flags.version !== undefined ? { targetVersion: flags.version } : {}),
+    ...(tag !== undefined ? { tag } : {}),
     ...(flags.tarball !== undefined ? { tarballPath: flags.tarball } : {}),
     ...(flags.force ? { force: true } : {}),
     ...(flags.start ? { startIfNotRunning: true } : {}),
@@ -115,6 +135,31 @@ export async function cmdUpdate(ctx: CommandContext, flags: CommandFlags): Promi
   else lines.push('hub is not running; run start when ready');
   ctx.io.out(`${lines.join('\n')}\n`);
   return 0;
+}
+
+// ---------------------------------------------------------------------------
+// run
+// ---------------------------------------------------------------------------
+
+export async function cmdRun(ctx: CommandContext, flags: CommandFlags): Promise<number> {
+  if (flags.json === true) {
+    throw new UsageError(
+      'run streams human-readable progress lines and is meant for a service manager or an interactive terminal; --json is not supported for run',
+      'json_not_supported_for_run',
+    );
+  }
+  return await runSupervised({
+    io: ctx.io,
+    root: ctx.root,
+    pkgName: payloadPackageNameOf(ctx),
+    registryUrl: registryUrlOf(ctx, flags),
+    tag: tagOf(flags, ctx.io.env) ?? resolveUpdateTag(ctx.io.env),
+    intervalMs: flags.intervalMs ?? resolveUpdateIntervalMs(ctx.io.env),
+    launchFlags: launchFlagsOf(flags),
+    ...(flags.healthTimeoutMs !== undefined ? { healthTimeoutMs: flags.healthTimeoutMs } : {}),
+    ...(ctx.fetchFn !== undefined ? { fetchFn: ctx.fetchFn } : {}),
+    ...(ctx.core !== undefined ? { core: ctx.core } : {}),
+  });
 }
 
 // ---------------------------------------------------------------------------

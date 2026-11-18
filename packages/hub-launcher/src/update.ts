@@ -7,10 +7,10 @@
  *
  * Flow (engine `upgrade.lock` critical section; the stop→commit→start tail additionally holds
  *   `lifecycle.lock` so start/stop/update never interleave):
- *   resolve target (explicit --version | registry latest) → blocked-cooldown gate
+ *   resolve target (explicit --version | registry dist-tag) → blocked-cooldown gate
  *   → same-version no-op → downgrade guard
- *   → stage candidate through the engine (SRI-verified download + offline npm install +
- *     `start.mjs check` + `manifest.nodeEngines` gate)
+ *   → stage candidate through the engine (SRI-verified download + safe unpack + offline npm
+ *     install + `start.mjs check` + `manifest.nodeEngines` gate)
  *   → [if running] graceful stop (identity-verified; failure aborts before any state change)
  *   → atomically commit `current.json` (engine state ops)
  *   → [if it was running / --start] start the candidate and gate on its own listen line
@@ -18,6 +18,9 @@
  *          release, write `update-blocked.json`, and surface the full diagnostic chain (never a
  *          silent fallback)
  *   → clear any blocked marker on success.
+ *
+ * Process control goes through the injected `HubLifecycleDriver` when present (the supervised
+ * `run` command holds its own `ChildProcess`); the default driver is the pid-record flow above.
  *
  * Two Hubs are never started against the same data directory concurrently: the stop completes
  * before the commit, and the start path itself refuses to double-start. The short stop→start
@@ -48,6 +51,8 @@ export interface PerformUpdateOptions {
   registryUrl?: string;
   /** Explicit target version (strict SemVer). */
   targetVersion?: string;
+  /** npm dist-tag channel used when no explicit version is given (default `latest`). */
+  tag?: string;
   /** Local tarball install source; requires `targetVersion`. */
   tarballPath?: string;
   force?: boolean;
@@ -58,10 +63,29 @@ export interface PerformUpdateOptions {
   fetchFn?: typeof fetch;
   /** Test seam: port-shaped fake standing in for the real adapter (registry/npm seams). */
   core?: UpdateCore;
+  /**
+   * Lifecycle driver overriding the record-based detached start/stop (the supervised `run`
+   * command injects one that holds the spawned `ChildProcess`). Absent = default record flow.
+   */
+  driver?: HubLifecycleDriver;
   healthTimeoutMs?: number;
   pollMs?: number;
   stopTimeoutMs?: number;
   payloadCheckTimeoutMs?: number;
+}
+
+/**
+ * Process-control seam behind the update orchestration. The default implementation talks to the
+ * pid record (detached hubs started by earlier launcher runs); a supervising caller injects its
+ * own so every stop/start/rollback in the sequence targets the process it holds.
+ */
+export interface HubLifecycleDriver {
+  /** Whether a hub controlled by this driver is currently running. */
+  isRunning(): Promise<boolean>;
+  /** Stop that hub (graceful, then escalated). Must throw on failure. */
+  stop(): Promise<void>;
+  /** Start the committed release and gate on its readiness. */
+  start(): Promise<{ pid: number; url: string }>;
 }
 
 export interface UpdateOutcome {
@@ -77,7 +101,7 @@ export interface UpdateOutcome {
   url?: string;
 }
 
-/** Resolve and validate the effective target version (explicit flag, or registry latest). */
+/** Resolve and validate the effective target version (explicit flag, or the registry dist-tag). */
 async function resolveTargetVersion(options: PerformUpdateOptions): Promise<string> {
   if (options.tarballPath !== undefined) {
     if (options.targetVersion === undefined) {
@@ -90,6 +114,7 @@ async function resolveTargetVersion(options: PerformUpdateOptions): Promise<stri
   const latest = await core.fetchLatestVersion(options.pkgName, {
     ...(options.registryUrl !== undefined ? { registryUrl: options.registryUrl } : {}),
     ...(options.fetchFn !== undefined ? { fetchFn: options.fetchFn } : {}),
+    ...(options.tag !== undefined ? { tag: options.tag } : {}),
   });
   if (!isStrictSemver(latest)) {
     throw new Error(`registry latest version is not strict SemVer: "${latest}"`);
@@ -159,14 +184,21 @@ export async function performHubUpdate(options: PerformUpdateOptions): Promise<U
     // pointer commit, the candidate start (and its rollback) never interleave with concurrent
     // start/stop commands on the same machine (#77 lifecycle-lock requirement).
     return await withLifecycleLock(root, async (): Promise<UpdateOutcome> => {
-      const pidRecord = await readPidRecord(root);
-      const wasRunning = pidRecord !== null && isAliveOf(io)(pidRecord.pid);
+      const wasRunning = options.driver !== undefined
+        ? await options.driver.isRunning()
+        : await (async () => {
+            const pidRecord = await readPidRecord(root);
+            return pidRecord !== null && isAliveOf(io)(pidRecord.pid);
+          })();
       if (wasRunning) {
         // Stop before any state changes: a failed stop aborts the update with current.json intact.
-        await stopHubLocked(root, io, {
-          ...(options.stopTimeoutMs !== undefined ? { stopTimeoutMs: options.stopTimeoutMs } : {}),
-          ...(options.fetchFn !== undefined ? { fetchFn: options.fetchFn } : {}),
-        });
+        if (options.driver !== undefined) await options.driver.stop();
+        else {
+          await stopHubLocked(root, io, {
+            ...(options.stopTimeoutMs !== undefined ? { stopTimeoutMs: options.stopTimeoutMs } : {}),
+            ...(options.fetchFn !== undefined ? { fetchFn: options.fetchFn } : {}),
+          });
+        }
       }
 
       const previousRecord: CurrentReleaseRecord | null = current;
@@ -182,12 +214,15 @@ export async function performHubUpdate(options: PerformUpdateOptions): Promise<U
       }
 
       try {
-        const started = await startHubLocked(root, io, {
-          ...(options.launchFlags !== undefined ? { flags: options.launchFlags } : {}),
-          ...(options.healthTimeoutMs !== undefined ? { healthTimeoutMs: options.healthTimeoutMs } : {}),
-          ...(options.pollMs !== undefined ? { pollMs: options.pollMs } : {}),
-          ...(options.fetchFn !== undefined ? { fetchFn: options.fetchFn } : {}),
-        });
+        const started =
+          options.driver !== undefined
+            ? await options.driver.start()
+            : await startHubLocked(root, io, {
+                ...(options.launchFlags !== undefined ? { flags: options.launchFlags } : {}),
+                ...(options.healthTimeoutMs !== undefined ? { healthTimeoutMs: options.healthTimeoutMs } : {}),
+                ...(options.pollMs !== undefined ? { pollMs: options.pollMs } : {}),
+                ...(options.fetchFn !== undefined ? { fetchFn: options.fetchFn } : {}),
+              });
         await clearBlockedRelease(root);
         return {
           previousVersion,
@@ -215,12 +250,15 @@ export async function performHubUpdate(options: PerformUpdateOptions): Promise<U
         else await deleteCurrentRelease(root);
         if (wasRunning) {
           try {
-            const oldStart = await startHubLocked(root, io, {
-              ...(options.launchFlags !== undefined ? { flags: options.launchFlags } : {}),
-              ...(options.healthTimeoutMs !== undefined ? { healthTimeoutMs: options.healthTimeoutMs } : {}),
-              ...(options.pollMs !== undefined ? { pollMs: options.pollMs } : {}),
-              ...(options.fetchFn !== undefined ? { fetchFn: options.fetchFn } : {}),
-            });
+            const oldStart =
+              options.driver !== undefined
+                ? await options.driver.start()
+                : await startHubLocked(root, io, {
+                    ...(options.launchFlags !== undefined ? { flags: options.launchFlags } : {}),
+                    ...(options.healthTimeoutMs !== undefined ? { healthTimeoutMs: options.healthTimeoutMs } : {}),
+                    ...(options.pollMs !== undefined ? { pollMs: options.pollMs } : {}),
+                    ...(options.fetchFn !== undefined ? { fetchFn: options.fetchFn } : {}),
+                  });
             rollbackNotes.push(`rolled back to ${previousRecord?.version ?? '?'} (pid ${oldStart.pid}, ${oldStart.url})`);
           } catch (oldError) {
             rollbackNotes.push(
@@ -254,6 +292,7 @@ export async function checkHubUpgrade(options: {
   root: string;
   pkgName: string;
   registryUrl?: string;
+  tag?: string;
   fetchFn?: typeof fetch;
   core?: UpdateCore;
 }): Promise<HubUpgradeCheckResult> {
@@ -261,6 +300,7 @@ export async function checkHubUpgrade(options: {
   const latestVersion = await core.fetchLatestVersion(options.pkgName, {
     ...(options.registryUrl !== undefined ? { registryUrl: options.registryUrl } : {}),
     ...(options.fetchFn !== undefined ? { fetchFn: options.fetchFn } : {}),
+    ...(options.tag !== undefined ? { tag: options.tag } : {}),
   });
   if (!isStrictSemver(latestVersion)) {
     throw new Error(`registry latest version is not strict SemVer: "${latestVersion}"`);

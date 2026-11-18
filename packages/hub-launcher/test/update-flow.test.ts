@@ -8,7 +8,7 @@
  * artifacts through a fake registry with correct sha512 SRI metadata.
  */
 import assert from 'node:assert/strict';
-import { existsSync, openSync, closeSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, openSync, closeSync, unlinkSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import path from 'node:path';
 import { test } from 'node:test';
@@ -24,6 +24,7 @@ import {
   cleanupPid,
   createFakeCore,
   createFakeRegistry,
+  fixtureTarballPacker,
   freePort,
   getJson,
   packPayloadTarball,
@@ -33,6 +34,12 @@ import {
   type FakePayloadMode,
   type FakeUpdateCore,
 } from './fixtures.js';
+
+/** Shared in-process packer for local-tarball tests (real package/-rooted archives). */
+const packFixture = (() => {
+  const pack = fixtureTarballPacker();
+  return (root: string, version: string): Promise<string> => pack(path.join(root, `payload-${version}`));
+})();
 
 const PKG = '@fake/hub-payload';
 
@@ -97,9 +104,11 @@ test('update installs a release even when nothing is running and clears blocked 
   assert.equal(current.version, '1.1.0');
   assert.ok(current.entries['entryPath'] !== undefined);
   assert.ok(existsSync(current.entries['entryPath']!));
-  assert.match(path.relative(h.root, current.entries['entryPath']!), /^releases[/\\]1\.1\.0[/\\][^/]+[/\\]node_modules/);
+  // The staged candidate is the unpacked payload at the release root (npm-pack layout).
+  assert.match(path.relative(h.root, current.entries['entryPath']!), /^releases[/\\]1\.1\.0[/\\][^/]+[/\\]start\.mjs$/);
   assert.equal(await readBlockedRelease(h.root), null);
-  // The install strategy: synthetic package.json + npm install with the ignore-scripts contract.
+  // The install strategy: unpack-first + plain `npm install` with the ignore-scripts contract
+  // (no tarball spec argument — the payload is already unpacked in the staging root).
   assert.equal(h.core.npmCalls.length, 1);
   assert.equal(h.core.npmCalls[0]![0], 'install');
   assert.ok(h.core.npmCalls[0]!.includes('--ignore-scripts'));
@@ -194,11 +203,9 @@ test('tarball installs require an explicit version and stage from the local file
     },
   );
 
-  const payloadDir = await h.addPayload('2.0.0');
-  const tarballPath = path.join(h.root, 'local-payload.tgz');
-  writeFileSync(tarballPath, 'fake local tarball bytes\n');
-  h.core.registerLocalTarball(tarballPath, payloadDir);
-  h.core.npmCalls.length = 0;
+  await h.addPayload('2.0.0');
+  // A real package/-rooted tarball: the local channel copies it in and unpacks it for real.
+  const tarballPath = await packFixture(h.root, '2.0.0');
   const outcome = await performHubUpdate({
     ...baseOptions(h),
     tarballPath,
@@ -207,7 +214,9 @@ test('tarball installs require an explicit version and stage from the local file
   assert.equal(outcome.changed, true);
   assert.equal((await readCurrentRelease(h.root))?.version, '2.0.0');
   assert.equal(h.core.npmCalls.length, 1);
-  assert.equal(h.core.npmCalls[0]![1], tarballPath);
+  const current = await readCurrentRelease(h.root);
+  assert.ok(current !== null);
+  assert.match(path.relative(h.root, current.entries['entryPath']!), /^releases[/\\]2\.0\.0[/\\][^/]+[/\\]start\.mjs$/);
 });
 
 test('running update: old hub stops, new hub serves, pid/launch records follow', { timeout: 60_000 }, async (t) => {
@@ -404,8 +413,8 @@ test('golden path: real npm pack tarball stages through the production extractor
   });
   assert.equal(staged.version, '2.1.0');
   assert.ok(existsSync(staged.entryPath));
-  // A real npm install completed the node_modules layout for the packed artifact.
-  assert.match(path.relative(root, staged.entryPath), /^releases[/\\]2\.1\.0[/\\][^/]+[/\\]node_modules[/\\]@fake[/\\]hub-payload[/\\]start\.mjs$/);
+  // The packed artifact was unpacked to the candidate root (npm-pack layout, stripped prefix).
+  assert.match(path.relative(root, staged.entryPath), /^releases[/\\]2\.1\.0[/\\][^/]+[/\\]start\.mjs$/);
   assert.equal(staged.reusedCached, false);
 
   // Corrupt-integrity metadata is rejected by the production verification chain.

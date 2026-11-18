@@ -18,6 +18,7 @@ import {
   cleanupPid,
   createFakeCore,
   createFakeRegistry,
+  fixtureTarballPacker,
   freePort,
   getJson,
   packPayloadTarball,
@@ -54,6 +55,18 @@ test('argument parsing accepts valid commands and rejects malformed input', { ti
   assert.throws(() => parseLauncherArgs(['start', '--port', '1', '--port', '2']), /duplicate option/);
   assert.throws(() => parseLauncherArgs(['status', 'extra']), /unexpected extra arguments/);
   assert.throws(() => parseLauncherArgs(['status', '--json=1']), /does not take a value/);
+
+  // run: the supervised lifecycle takes its own option set.
+  const runParsed = parseLauncherArgs(['run', '--interval-ms', '5000', '--tag', 'beta', '--port', '3299']);
+  assert.equal(runParsed.command, 'run');
+  assert.equal(runParsed.flags.intervalMs, 5000);
+  assert.equal(runParsed.flags.tag, 'beta');
+  assert.equal(runParsed.flags.port, 3299);
+  assert.throws(() => parseLauncherArgs(['run', '--force']), /not valid for command/);
+  assert.throws(() => parseLauncherArgs(['run', '--version', '1.2.3']), /not valid for command/);
+  assert.throws(() => parseLauncherArgs(['run', '--interval-ms', 'abc']), /expects a positive integer/);
+  assert.throws(() => parseLauncherArgs(['check', '--interval-ms', '100']), /not valid for command/);
+  assert.equal(parseLauncherArgs(['update', '--tag', 'beta']).flags.tag, 'beta');
 });
 
 test('usage prints for --help and missing commands carry the usage text', { timeout: 60_000 }, async () => {
@@ -106,6 +119,17 @@ test('check with a fake core reports current/latest as JSON and text', { timeout
   assert.match(text.outText(), /update:\s+available/);
 });
 
+test('run rejects --json with an explicit usage error (progress lines are human-readable)', { timeout: 60_000 }, async (t) => {
+  const root = useTempDir(t, 'helm-launcher-runjson-');
+  const payloads = new Map<string, string>();
+  const core = createFakeCore({ pkgName: PKG, latest: '1.0.0', payloads });
+  const captured = ioWith(root);
+  assert.equal(await runLauncherCli(['run', '--json'], captured.io, { core }), 1);
+  const envelope = JSON.parse(captured.errText()) as { ok: boolean; error: { code: string; message: string } };
+  assert.equal(envelope.ok, false);
+  assert.equal(envelope.error.code, 'json_not_supported_for_run');
+});
+
 test('start without an installed release produces a JSON error envelope', { timeout: 60_000 }, async (t) => {
   const root = useTempDir(t, 'helm-launcher-clistart-');
   const captured = ioWith(root);
@@ -121,10 +145,8 @@ test('end-to-end CLI: tarball install, start, status, update, stop', { timeout: 
   const core = createFakeCore({ pkgName: PKG, latest: '1.1.0', payloads });
   const port = await freePort();
 
-  const payloadDir = await writeFakePayload({ dir: path.join(root, 'payload-1.0.0'), pkgName: PKG, version: '1.0.0' });
-  const tarballPath = path.join(root, 'payload.tgz');
-  writeFileSync(tarballPath, 'fake tarball\n');
-  core.registerLocalTarball(tarballPath, payloadDir);
+  await writeFakePayload({ dir: path.join(root, 'payload-1.0.0'), pkgName: PKG, version: '1.0.0' });
+  const tarballPath = await fixtureTarballPacker()(path.join(root, 'payload-1.0.0'));
   await writeFakePayload({ dir: path.join(root, 'payload-1.1.0'), pkgName: PKG, version: '1.1.0' });
   payloads.set('1.1.0', path.join(root, 'payload-1.1.0'));
 

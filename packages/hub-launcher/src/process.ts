@@ -7,13 +7,17 @@
  *   `Helm Hub: <url>` listen-success line appearing in the log after spawn plus the child staying
  *   alive (`@helm/hub` prints that line only after the HTTP server is listening) and the URL
  *   matching the launch configuration, and only then persists `hub.pid` plus the sticky
- *   `launch.json`. The public `GET /api/auth/status` endpoint is an auxiliary confirmation, never
- *   the readiness basis;
- * - `stopHub` verifies the recorded pid is really our Hub (health probe) before signalling,
- *   escalates to `killProcessTree` (process group on POSIX, `taskkill /T` on Windows) when the
- *   graceful SIGTERM budget expires, and removes the pid file only after a confirmed exit;
- * - identity discipline mirrors the node daemon: a live pid without a reachable health endpoint is
- *   never signalled blindly (possible pid reuse) — the user must verify manually;
+ *   `launch.json`. On Linux the pid record also carries the `/proc` start time as a reuse proof.
+ *   `onSpawn` hands the spawned `ChildProcess` to callers that keep supervising it (`run`), so
+ *   the same controlled startup flow can stop its own child without pid guessing;
+ * - `stopHub` verifies the recorded pid is really our Hub before signalling — on Linux by the
+ *   recorded `/proc` start time (a mismatch is pid reuse and is refused even when some other
+ *   process answers on the port), otherwise via the health endpoint — escalates to
+ *   `killProcessTree` (process group on POSIX, `taskkill /T` on Windows) when the graceful
+ *   SIGTERM budget expires, and removes the pid file only after a confirmed exit;
+ * - identity discipline mirrors the node daemon: without a reusable proof (start time match or a
+ *   reachable health endpoint) a live pid is never signalled blindly — the user must verify
+ *   manually;
  * - `lifecycle.lock` serializes every process-state mutation: concurrent starts, stops, and the
  *   update flow's stop→commit→start window (which takes the same lock as one atomic section via
  *   the exported `*Locked` primitives) can never interleave on one machine.
@@ -22,7 +26,7 @@
  * 'SIGTERM')` terminates without delivering a signal handler, so stop degrades to a short
  * pre-escalation wait; the escalation path (`taskkill /F /T`) is uniform.
  */
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import fsp from 'node:fs/promises';
 import process from 'node:process';
 import { killProcessTree } from '@helm/env-io';
@@ -32,6 +36,7 @@ import {
   persistableLaunchConfig,
   readLaunchConfig,
   readPidRecord,
+  readProcessStartTime,
   removePidFileIfMatch,
   resolveEffectiveLaunchConfig,
   writeLaunchConfig,
@@ -55,6 +60,12 @@ export interface StartHubOptions {
   healthTimeoutMs?: number;
   pollMs?: number;
   fetchFn?: typeof fetch;
+  /**
+   * Receives the spawned hub `ChildProcess` right after spawn (before the readiness wait).
+   * Lets a supervising caller hold the handle — stopping its own child never depends on pid
+   * guessing or health probing.
+   */
+  onSpawn?: (child: ChildProcess) => void;
 }
 
 export interface StartHubResult {
@@ -303,6 +314,9 @@ export async function startHubLocked(root: string, io: LauncherIo, options: Star
     exitDetail = `(code=${code ?? 'null'} signal=${signal ?? 'null'})`;
   });
   child.unref();
+  options.onSpawn?.(child);
+  // Linux reuse proof for the pid record (see records.ts); harmless null elsewhere.
+  const startTime = await readProcessStartTime(pid);
   await logHandle.close().catch(() => undefined);
 
   try {
@@ -326,6 +340,7 @@ export async function startHubLocked(root: string, io: LauncherIo, options: Star
       ...(config.host !== undefined ? { host: config.host } : {}),
       ...(config.dataDir !== undefined ? { dataDir: config.dataDir } : {}),
       startedAt: new Date().toISOString(),
+      ...(startTime !== null ? { startTime } : {}),
     });
     await writeLaunchConfig(root, persistableLaunchConfig(config));
     return {
@@ -354,7 +369,7 @@ export function startHub(root: string, io: LauncherIo, options: StartHubOptions)
 }
 
 /**
- * Stop the recorded Hub gracefully; identity is verified before any signal is sent. Unlocked body
+ * Stop the recorded Hub gracefully; identity is proven before any signal is sent. Unlocked body
  * of the public `stopHub` (the update flow calls it while already holding `lifecycle.lock`).
  */
 export async function stopHubLocked(root: string, io: LauncherIo, options?: StopHubOptions): Promise<StopHubResult> {
@@ -366,15 +381,28 @@ export async function stopHubLocked(root: string, io: LauncherIo, options?: Stop
     await removePidFileIfMatch(root, record);
     return { wasRunning: false, escalated: false, cleanedStalePid: true };
   }
-  const health = await probeHubHealth(record.port, record.host, {
-    ...(options?.fetchFn !== undefined ? { fetchFn: options.fetchFn } : {}),
-    timeoutMs: DEFAULTS.identityProbeTimeoutMs,
-  });
-  if (health === null) {
-    throw new UsageError(
-      `pid ${record.pid} is alive, but the hub health endpoint is unreachable (${hubHealthUrl(record.port, record.host)}): refusing to signal an unverified process (possible pid reuse); verify the pid manually, stop it directly, or remove ${paths.pidPath}`,
-      'hub_identity_unverifiable',
-    );
+  if (record.startTime !== undefined) {
+    // Linux reuse proof: the start time is immutable for a pid's lifetime, so a mismatch means
+    // the recorded process exited and the pid was reallocated. This outranks any health answer —
+    // another process serving on the port must not make us signal an unrelated pid.
+    const current = await readProcessStartTime(record.pid);
+    if (current === null || current !== record.startTime) {
+      throw new UsageError(
+        `pid ${record.pid} no longer matches the recorded process start time (recorded ${record.startTime}, current ${current ?? 'unavailable'}): the hub exited and the pid was probably reused; refusing to signal it — remove ${paths.pidPath} after verifying, then start the hub again`,
+        'hub_identity_unverifiable',
+      );
+    }
+  } else {
+    const health = await probeHubHealth(record.port, record.host, {
+      ...(options?.fetchFn !== undefined ? { fetchFn: options.fetchFn } : {}),
+      timeoutMs: DEFAULTS.identityProbeTimeoutMs,
+    });
+    if (health === null) {
+      throw new UsageError(
+        `pid ${record.pid} is alive, but the hub health endpoint is unreachable (${hubHealthUrl(record.port, record.host)}): refusing to signal an unverified process (possible pid reuse); verify the pid manually, stop it directly, or remove ${paths.pidPath}`,
+        'hub_identity_unverifiable',
+      );
+    }
   }
   process.kill(record.pid, 'SIGTERM');
   const stopTimeoutMs = options?.stopTimeoutMs ?? DEFAULTS.stopTimeoutMs;

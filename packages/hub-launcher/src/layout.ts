@@ -34,6 +34,8 @@ export const DEFAULTS = {
   payloadCheckTimeoutMs: 120_000,
   /** Short probe used to verify hub identity before signalling a pid. */
   identityProbeTimeoutMs: 2_000,
+  /** Supervised `run` update-check interval (env `HELM_HUB_UPDATE_INTERVAL_MS`). */
+  updateIntervalMs: 6 * 60 * 60 * 1000,
 } as const;
 
 export interface LauncherPaths {
@@ -103,6 +105,37 @@ export function resolveBlockedCooldownMs(env: NodeJS.ProcessEnv): number {
     throw new Error(`invalid HELM_UPGRADE_BLOCK_COOLDOWN_MS: "${raw}" (expected a positive integer)`);
   }
   return parsed;
+}
+
+/** Supervised-run update-check interval override (env `HELM_HUB_UPDATE_INTERVAL_MS`, positive integer). */
+export function resolveUpdateIntervalMs(env: NodeJS.ProcessEnv): number {
+  const raw = env.HELM_HUB_UPDATE_INTERVAL_MS;
+  if (raw === undefined || raw === '') return DEFAULTS.updateIntervalMs;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`invalid HELM_HUB_UPDATE_INTERVAL_MS: "${raw}" (expected a positive integer)`);
+  }
+  return parsed;
+}
+
+/** npm dist-tag channel for supervised runs (env `HELM_HUB_UPDATE_TAG`, default `latest`). */
+export function resolveUpdateTag(env: NodeJS.ProcessEnv): string {
+  return assertDistTag(env.HELM_HUB_UPDATE_TAG && env.HELM_HUB_UPDATE_TAG !== '' ? env.HELM_HUB_UPDATE_TAG : 'latest');
+}
+
+/**
+ * Validate an npm dist-tag segment. Mirrors the shared engine's rule (a single path-safe segment,
+ * version-shaped values belong to the exact-version channel) so misconfiguration fails at the CLI
+ * boundary with the launcher's own message; the engine re-validates at query time.
+ */
+export function assertDistTag(tag: string): string {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(tag)) {
+    throw new Error(`invalid dist-tag "${tag}" (expected a single npm dist-tag segment such as "latest" or "beta")`);
+  }
+  if (/^\d+\.\d+\.\d+(-[\w.-]+)?(\+[\w.-]+)?$/.test(tag)) {
+    throw new Error(`"${tag}" looks like a version, not a dist-tag; pass --version for exact-version updates`);
+  }
+  return tag;
 }
 
 /** Directory of a package inside an npm `node_modules` layout (`@scope/name` → `@scope/name`). */
