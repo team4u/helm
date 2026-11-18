@@ -22,10 +22,10 @@ helm 当前有两种安装方式：**npm 制品模式**（一次安装，推荐�
 ```bash
 npm install -g @team4u/helm-hub-launcher
 
-helm-hub-launcher update                 # 安装最新 Hub payload 并启动（staging → 自检 → 提交 → 健康门控）
+helm-hub-launcher update                 # 首次安装 latest 通道 Hub payload 并启动（解包 → npm install → 自检 → 健康门控）
+helm-hub-launcher run                    # 日常推荐：前台常驻定时自动更新（间隔与 dist-tag 可配，见下）
 helm-hub-launcher status                 # 安装/运行/blocked 概览（--json 机器可读）
 helm-hub-launcher stop                   # 身份核验后优雅停止 Hub
-helm-hub-launcher update                 # 日常升级：重复执行即可（运行中会平滑重启，失败自动回滚旧版）
 ```
 
 目录与边界：
@@ -40,7 +40,7 @@ helm-hub-launcher update                 # 日常升级：重复执行即可（�
 说明：
 
 - launcher 是**稳定外部安装**，绝不被它管理的 release 覆盖；升级 launcher 本身即重新 `npm install -g @team4u/helm-hub-launcher`；
-- 定时自动更新：launcher 侧交付前台常驻的 `run` 定时入口（周期检查 + 升级，间隔与 npm dist-tag 可配，契约以交付版的 `helm-hub-launcher --help` 为准）；在其落地前，用系统 cron 周期执行 `helm-hub-launcher update` 是等价替代；
+- **定时自动更新**：`helm-hub-launcher run` 前台常驻——首次运行安装所选通道的 payload 并启动，之后每周期检查并自动升级（升级即短停切换：stop → 提交 → 启动 → 健康门控，失败自动回滚旧版并继续服务）；`Ctrl-C` / `SIGTERM` 优雅停止持有的 Hub 后退出。间隔与通道可配：`--interval <秒>`（env `HELM_HUB_UPDATE_INTERVAL`，默认 `3600`，首查立即执行）与 `--tag <dist-tag>`（env `HELM_PAYLOAD_DIST_TAG`，默认 `latest`；预发布通道传 `beta`；非法 tag 入口即拒）。`run` 与手动 `update` / `stop` / `restart` 共用同一生命周期锁，并发操作被串行化，不会交错误杀；registry 故障期间已安装 Hub 持续服务，恢复后下一轮重试。`--json` 输出 JSONL 事件流（`installed` / `updated` / `no-update` / `check-failed` / `update-failed` / `stopped` 等）与结束摘要；
 - `helm`（控制 CLI）与 `helm-node`（节点守护进程）不在该制品内：控制端可继续用源代码模式或 `pnpm link:bins` 挂载；`helm-node` 双包分发属于独立机制。
 
 ## 源代码模式安装
