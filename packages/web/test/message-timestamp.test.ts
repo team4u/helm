@@ -154,6 +154,45 @@ test('timeline-model：AssistantTurn 正确解析 startedAt, settledAt 与 durat
   assert.equal(turn.durationMs, durationMs)
 })
 
+test('timeline-model：toolCall 运行耗时锚点 = 响应结束时刻（timestamp+durationMs），缺 durationMs 不锚定', { timeout: 60_000 }, () => {
+  const startMs = 1731234510000
+  const durationMs = 2800
+  const toolEntry = (message: Record<string, unknown>): ConversationEntry => ({
+    id: '5',
+    kind: 'pi.assistant',
+    model: [
+      {
+        role: 'assistant',
+        content: [{ type: 'toolCall', id: 'call-1', name: 'bash', arguments: { command: 'sleep 30' } }],
+        stopReason: 'toolCall',
+        ...message,
+      },
+    ],
+  })
+  /** 工具段可能被折叠进 step-group，递归下钻取第一个 ToolTrace。 */
+  const firstToolOf = (turn: AssistantTurn): { startedAt?: number } | undefined => {
+    for (const seg of turn.segments as ReadonlyArray<{ kind: string; tool?: { startedAt?: number }; steps?: ReadonlyArray<{ kind: string; tool?: { startedAt?: number } }> }>) {
+      if (seg.kind === 'tool' && seg.tool !== undefined) return seg.tool
+      if (seg.kind === 'step-group') {
+        for (const step of seg.steps ?? []) {
+          if (step.kind === 'tool' && step.tool !== undefined) return step.tool
+        }
+      }
+    }
+    return undefined
+  }
+
+  // 有 timestamp+durationMs：锚点为响应结束（工具回合派发）时刻
+  const anchored = buildTimelineItems([toolEntry({ timestamp: startMs, durationMs })])
+  const anchoredTool = firstToolOf(anchored[0] as AssistantTurn)
+  assert.equal(anchoredTool?.startedAt, startMs + durationMs, '锚点 = 请求起点 + 响应时长')
+
+  // 缺 durationMs（遗留 / deferred 响应）：不锚定，避免从请求起点起算虚高
+  const unanchored = buildTimelineItems([toolEntry({ timestamp: startMs })])
+  const unanchoredTool = firstToolOf(unanchored[0] as AssistantTurn)
+  assert.equal(unanchoredTool?.startedAt, undefined, '无 durationMs 不编造起点')
+})
+
 test('timeline-model：多步骤回合累加 AssistantMessage durationMs 并以最小 startedAt 与最大 settledAt 结算', { timeout: 60_000 }, () => {
   const step1Start = 1731234510000
   const step1Duration = 1200 // 1731234511200 settled
