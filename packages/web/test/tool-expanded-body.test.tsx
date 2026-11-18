@@ -14,19 +14,19 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import * as React from 'react'
-import { GlobalRegistrator } from '@happy-dom/global-registrator'
+import { ensureHappyDom, waitForCondition } from './helpers/dom-harness.js'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { makeTestStore } from './helpers/store.js'
-import { HostStoreProviders } from './helpers/host-store.js'
 import type { FoldableStep, ToolTrace } from '../src/conversation/timeline-model.js'
-import { ToolExpandedBody } from '../src/conversation/ToolExpandedBody.js'
 
 const e = React.createElement
 
-GlobalRegistrator.register()
+ensureHappyDom()
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 ;(globalThis as Record<string, unknown>).React = React
+const { HostStoreProviders } = await import('./helpers/host-store.js')
+const { ToolExpandedBody } = await import('../src/conversation/ToolExpandedBody.js')
 const { TraceRow, StepGroup } = await import('../src/conversation/TimelineRows.js')
 
 // ---------------------------------------------------------------------------
@@ -684,7 +684,9 @@ test('StepGroup：收起且含失败工具时展示失败徽标与总耗时；�
     const errorBadge = summaryBtn.querySelector('.trace-group-badge.trace-group-badge-error')
     assert.equal(errorBadge?.textContent, '1 failed')
     const meta = summaryBtn.querySelector('.trace-group-meta.tabular-nums')
-    assert.equal(meta?.textContent, 'Tools 1.5s')
+    assert.equal(meta?.textContent, '1.5s')
+    assert.equal(summaryBtn.querySelectorAll('.trace-group-meta').length, 1)
+    assert.doesNotMatch(summaryBtn.textContent ?? '', /Model|Tools/)
 
     // 展开后：隐藏组级失败徽标与错误修饰类（组内失败行直接标红），保留总耗时
     await act(async () => {
@@ -693,7 +695,7 @@ test('StepGroup：收起且含失败工具时展示失败徽标与总耗时；�
     assert.equal(summaryBtn.getAttribute('aria-expanded'), 'true')
     assert.equal(summaryBtn.classList.contains('trace-group-summary-error'), false)
     assert.ok(summaryBtn.querySelector('.trace-group-badge-error') === null, '展开后隐藏失败徽标')
-    assert.equal(summaryBtn.querySelector('.trace-group-meta')?.textContent, 'Tools 1.5s', '展开后保留累计工具耗时')
+    assert.equal(summaryBtn.querySelector('.trace-group-meta')?.textContent, '1.5s', 'The cumulative total remains visible when expanded')
     assert.ok(m.host.querySelector('.trace-group-steps .trace-row.trace-row-error') !== null)
 
     // 再次收起：恢复错误徽标与修饰类
@@ -703,6 +705,57 @@ test('StepGroup：收起且含失败工具时展示失败徽标与总耗时；�
     assert.equal(summaryBtn.getAttribute('aria-expanded'), 'false')
     assert.equal(summaryBtn.classList.contains('trace-group-summary-error'), true)
     assert.equal(summaryBtn.querySelector('.trace-group-badge-error')?.textContent, '1 failed')
+  } finally {
+    m.unmount()
+  }
+})
+
+test('StepGroup: one total with localized timing details on hover and keyboard focus', { timeout: 60_000 }, async () => {
+  const m = createMount()
+  const localeStore = makeTestStore({ locale: 'en' })
+  const steps: FoldableStep[] = [
+    { kind: 'thinking', thinking: { key: 'th1', text: 'Check the workspace', responseDurationMs: 3200 } },
+    { kind: 'tool', tool: trace({ key: 't1', durationMs: 5000 }) },
+    { kind: 'tool', tool: trace({ key: 't2', durationMs: 5000, status: 'error', isError: true }) },
+  ]
+  try {
+    await m.render(e(HostStoreProviders, { value: localeStore }, e(StepGroup, {
+      steps, active: false, conversationId: 1, siblingCalls: [],
+    })))
+    const summaryBtn = m.host.querySelector<HTMLButtonElement>('button.trace-group-summary')!
+    assert.equal(summaryBtn.querySelector('.trace-group-meta')?.textContent, '13.2s')
+    assert.equal(summaryBtn.querySelector('.trace-group-badge-error')?.textContent, '1 failed')
+    assert.doesNotMatch(summaryBtn.textContent ?? '', /Model|Tools/)
+    assert.equal(summaryBtn.querySelectorAll('button').length, 0)
+    assert.ok(document.querySelector('[role="tooltip"]') === null)
+
+    await act(async () => {
+      summaryBtn.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerType: 'mouse' }))
+    })
+    await waitForCondition(() => document.querySelector('[role="tooltip"]') !== null)
+    const details = document.querySelector('[role="tooltip"]')!
+    assert.match(details.textContent ?? '', /Model 3\.2s/)
+    assert.match(details.textContent ?? '', /Tools 10\.0s/)
+    assert.match(details.textContent ?? '', /cumulative time, not elapsed time; parallel tools count separately/)
+    assert.equal(summaryBtn.getAttribute('aria-expanded'), 'false', 'Hover must not expand the steps')
+    assert.equal(summaryBtn.getAttribute('aria-describedby'), details.id)
+
+    await act(async () => { localeStore.setLocale('zh-CN') })
+    assert.equal(summaryBtn.querySelector('.trace-group-badge-error')?.textContent, '1 失败')
+    assert.equal(summaryBtn.querySelector('.trace-group-meta')?.textContent, '13.2s')
+    assert.doesNotMatch(summaryBtn.textContent ?? '', /模型|工具|含|项失败/)
+    const localizedDetails = document.querySelector('[role="tooltip"]')!
+    assert.match(localizedDetails.textContent ?? '', /模型 3\.2s/)
+    assert.match(localizedDetails.textContent ?? '', /工具 10\.0s/)
+    assert.match(localizedDetails.textContent ?? '', /累计耗时/)
+
+    await act(async () => { summaryBtn.click() })
+    await waitForCondition(() => document.querySelector('[role="tooltip"]') === null)
+    assert.equal(summaryBtn.getAttribute('aria-expanded'), 'true')
+    await act(async () => { summaryBtn.focus() })
+    await waitForCondition(() => document.querySelector('[role="tooltip"]') !== null)
+    assert.match(document.querySelector('[role="tooltip"]')?.textContent ?? '', /模型 3\.2s/)
+    assert.equal(summaryBtn.getAttribute('aria-expanded'), 'true', 'Keyboard focus must not toggle the steps')
   } finally {
     m.unmount()
   }
@@ -736,7 +789,7 @@ test('StepGroup：进行中（active=true）不显示总耗时，单思考步委
     assert.equal(summaryBtn.querySelector('.trace-group-badge-error')?.textContent, '1 failed')
     assert.ok(summaryBtn.querySelector('.trace-group-meta') === null, 'active=true 时收起仍不显示总耗时')
 
-    // 结束为非活跃态（active=false）：现在展示累计工具耗时（带「Tools」标注，不冒充墙钟流逝）
+    // Settled groups show one bare cumulative duration; the tooltip carries the breakdown.
     await m.render(
       stepGroupUi(
         [
@@ -746,8 +799,9 @@ test('StepGroup：进行中（active=true）不显示总耗时，单思考步委
         false,
       ),
     )
-    assert.equal(summaryBtn.getAttribute('aria-expanded'), 'false')
-    assert.equal(summaryBtn.querySelector('.trace-group-meta')?.textContent, 'Tools 500ms')
+    const settledBtn = m.host.querySelector<HTMLButtonElement>('button.trace-group-summary')!
+    assert.equal(settledBtn.getAttribute('aria-expanded'), 'false')
+    assert.equal(settledBtn.querySelector('.trace-group-meta')?.textContent, '500ms')
 
     // 单步 thinking 保持早退 ThinkingRow，不出现 "(1 步)" 或组徽标
     await m.render(stepGroupUi([{ kind: 'thinking', thinking: { key: 'only', text: '单步思路' } }], false))

@@ -88,20 +88,16 @@ export const conversationMessages = {
   'conv.thinking.exec': { en: 'Thinking and execution ({count} steps)', 'zh-CN': '思考与执行过程 ({count} 步)' },
   'conv.thinking.collapseExec': { en: 'Collapse thinking and execution', 'zh-CN': '收起思考与执行过程' },
   'conv.thinking.expandExec': { en: 'Expand thinking and execution', 'zh-CN': '展开思考与执行过程' },
-  'conv.thinking.errorCount': { en: '{count} failed', 'zh-CN': '含 {count} 项失败' },
+  'conv.thinking.errorCount': { en: '{count} failed', 'zh-CN': '{count} 失败' },
   'conv.thinking.collapseThinking': { en: 'Collapse thinking', 'zh-CN': '收起思考过程' },
   'conv.thinking.expandThinking': { en: 'Expand thinking', 'zh-CN': '展开思考过程' },
   'conv.thinking.activeLabel': { en: 'Thinking…', 'zh-CN': '正在思考…' },
   'conv.thinking.label': { en: 'Thinking', 'zh-CN': '思考过程' },
   'conv.thinking.modelTime': { en: 'Model {duration}', 'zh-CN': '模型 {duration}' },
-  'conv.thinking.modelTimeTitle': {
-    en: 'Cumulative model response time of the responses folded into this group (thinking plus tool calls, no visible reply text); not wall-clock elapsed time',
-    'zh-CN': '本组所折叠模型响应的累计耗时（含思考与工具调用、无可见正文）；非墙钟流逝时间',
-  },
   'conv.thinking.toolsTime': { en: 'Tools {duration}', 'zh-CN': '工具 {duration}' },
-  'conv.thinking.toolsTimeTitle': {
-    en: 'Cumulative tool execution time in this group; parallel tools each count their own execution, so this is not wall-clock elapsed time',
-    'zh-CN': '本组内工具累计执行时间；并行工具各计自身执行时长，并非墙钟流逝时间',
+  'conv.thinking.totalTimeTitle': {
+    en: 'Recorded cumulative time, not elapsed time; parallel tools count separately.',
+    'zh-CN': '已记录的累计耗时；并行工具分别计时，并非实际经过时间。',
   },
 
   // --- Assistant turn footer / model identity ------------------------------------

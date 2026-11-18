@@ -218,8 +218,8 @@ test('会话时间线思考生命周期契约：思考中展开，思考完后�
 // 折叠组过程耗时展示契约（诚实口径：不冒充墙钟、不把整段响应标成思考耗时）
 // ---------------------------------------------------------------------------
 
-test('ThinkingRow 耗时契约：思考单行不显示模型响应耗时，已知耗时由组头单独标注', { timeout: 60_000 }, () => {
-  // 已知模型耗时时，单思考步骤也使用组头显示 Model 标注；耗时不冒充 ThinkingRow 的思考耗时。
+test('StepGroup: a known model duration renders once in the group summary', { timeout: 60_000 }, () => {
+  // The summary shows one bare total, with its accounting details available on hover.
   const html = renderToString(
     e(
       HostStoreProviders,
@@ -233,13 +233,14 @@ test('ThinkingRow 耗时契约：思考单行不显示模型响应耗时，已�
     ),
   )
   assert.match(html, /Thinking \(1 steps\)/)
-  assert.match(html, /Model 3\.2s/)
-  assert.match(html, /trace-group-meta/)
+  assert.match(html, /trace-group-meta[^>]*>3\.2s<\/span>/)
+  assert.doesNotMatch(html, /Model |Tools /)
+  assert.doesNotMatch(html, /role="tooltip"/)
   assert.doesNotMatch(html, /Thinking3\.2s/)
 })
 
-test('折叠组耗时契约：合格模型响应耗时与工具累计耗时以两个分别标注的徽标展示', { timeout: 60_000 }, () => {
-  // 思考（归属 3.2s）+ 两个并行 5s 工具：Model 3.2s 与 Tools 10.0s 分别标注，且带说明性 tooltip
+test('StepGroup: model and parallel tool durations contribute to one cumulative total', { timeout: 60_000 }, () => {
+  // 3.2s of model time plus two 5s tools contribute 13.2s; the tooltip explains parallel accounting.
   const html = renderToString(
     e(
       HostStoreProviders,
@@ -256,13 +257,9 @@ test('折叠组耗时契约：合格模型响应耗时与工具累计耗时以�
       }),
     ),
   )
-  assert.match(html, /Model 3\.2s/)
-  assert.match(html, /Tools 10\.0s/)
-  // 徽标必须带语义说明（累计口径、并行各计自身、非墙钟流逝）
-  assert.match(html, /title="Cumulative model response time[^"]*not wall-clock elapsed time"/)
-  assert.match(html, /title="Cumulative tool execution time[^"]*parallel tools each count their own execution/)
-  // 不允许退回无标注的裸耗时徽标（会把并行累计冒充为流逝时间）
-  assert.doesNotMatch(html, /trace-group-meta[^>]*>\s*[\d.]+m?s\s*</)
+  assert.match(html, /trace-group-meta[^>]*>13\.2s<\/span>/)
+  assert.doesNotMatch(html, /Model |Tools /)
+  assert.doesNotMatch(html, /role="tooltip"/)
 })
 
 test('折叠组耗时契约：进行中（active）不展示耗时徽标；缺耗时不伪造', { timeout: 60_000 }, () => {

@@ -15,6 +15,7 @@ import {
 import { summarizeStepGroup, toolRowStats } from './tool-body-model.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { formatDurationMs } from '../lib/format.js'
+import { Tooltip } from '../ui/Tooltip.js'
 
 // ---------------------------------------------------------------------------
 // 工具单行轨迹 / 思考折叠组（ConversationTimeline 的行级渲染单元）
@@ -224,43 +225,46 @@ function MultiStepGroup({
       ? t('conv.thinking.execActive', { count: steps.length })
       : t('conv.thinking.exec', { count: steps.length })
   const showErrorBadge = !open && summary.errorCount > 0
-  // Two separately labeled cumulative totals (honest accounting): eligible model-response time and
-  // tool execution time. Never merged into one wall-clock figure — the backend timestamps cannot
-  // support exact intervals (result timestamp is settlement time, not execution end), and an
-  // unlabeled sum would overstate parallel execution as elapsed time.
-  const showModelTime = !active && summary.modelDurationMs !== undefined
-  const showToolsTime = !active && summary.toolDurationMs !== undefined
+  // Parallel tools contribute their own durations; the tooltip explains the cumulative total.
+  const durationMs = (summary.modelDurationMs ?? 0) + (summary.toolDurationMs ?? 0)
+  const showTime = !active && durationMs > 0
+  const timeDetails = [
+    summary.modelDurationMs !== undefined
+      ? t('conv.thinking.modelTime', { duration: formatDurationMs(summary.modelDurationMs) })
+      : undefined,
+    summary.toolDurationMs !== undefined
+      ? t('conv.thinking.toolsTime', { duration: formatDurationMs(summary.toolDurationMs) })
+      : undefined,
+    t('conv.thinking.totalTimeTitle'),
+  ].filter(Boolean).join('\n')
 
   return (
     <div className="trace-group">
-      <button
-        type="button"
-        className={`trace-group-summary${showErrorBadge ? ' trace-group-summary-error' : ''}`}
-        aria-expanded={open}
-        data-process-toggle="root"
-        onClick={() => {
-          shortcutExpandSeqRef.current = null
-          setUserOverride(!open)
-        }}
-        title={open ? t('conv.thinking.collapseExec') : t('conv.thinking.expandExec')}
-      >
-        <HelmIcon name={open ? 'chevron-down' : 'chevron-right'} size={12} />
-        {active ? <HelmIcon name="loader" size={11} className="spin-slow" /> : null}
-        {summaryTitle}
-        {showErrorBadge ? (
-          <span className="trace-group-badge trace-group-badge-error">{t('conv.thinking.errorCount', { count: summary.errorCount })}</span>
-        ) : null}
-        {showModelTime ? (
-          <span className="trace-group-meta tabular-nums" title={t('conv.thinking.modelTimeTitle')}>
-            {t('conv.thinking.modelTime', { duration: formatDurationMs(summary.modelDurationMs) })}
+      <Tooltip content={timeDetails} disabled={!showTime} className="trace-group-time-tooltip">
+        <button
+          type="button"
+          className={`trace-group-summary trace-group-summary-multi${showErrorBadge ? ' trace-group-summary-error' : ''}`}
+          aria-expanded={open}
+          data-process-toggle="root"
+          onClick={() => {
+            shortcutExpandSeqRef.current = null
+            setUserOverride(!open)
+          }}
+          title={showTime ? undefined : open ? t('conv.thinking.collapseExec') : t('conv.thinking.expandExec')}
+        >
+          <span className="trace-group-leading" aria-hidden="true">
+            <HelmIcon name={open ? 'chevron-down' : 'chevron-right'} size={12} />
+            {active ? <HelmIcon name="loader" size={11} className="spin-slow" /> : null}
           </span>
-        ) : null}
-        {showToolsTime ? (
-          <span className="trace-group-meta tabular-nums" title={t('conv.thinking.toolsTimeTitle')}>
-            {t('conv.thinking.toolsTime', { duration: formatDurationMs(summary.toolDurationMs) })}
-          </span>
-        ) : null}
-      </button>
+          <span className="trace-group-title">{summaryTitle}</span>
+          {showErrorBadge ? (
+            <span className="trace-group-badge trace-group-badge-error">{t('conv.thinking.errorCount', { count: summary.errorCount })}</span>
+          ) : null}
+          {showTime ? (
+            <span className="trace-group-meta tabular-nums">{formatDurationMs(durationMs)}</span>
+          ) : null}
+        </button>
+      </Tooltip>
       {open ? (
         <div className="trace-group-steps">
           {steps.map((step, idx) =>

@@ -1153,6 +1153,34 @@ pre {
   width: fit-content;
 }
 
+.trace-group-summary-multi {
+  max-width: 100%;
+  min-width: 0;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  white-space: nowrap;
+}
+
+.trace-group-leading {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.trace-group-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trace-group-summary-multi .trace-group-badge,
+.trace-group-meta {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
 .trace-group-summary:hover {
   background: var(--bg-hover);
   color: var(--fg-secondary);
@@ -1189,6 +1217,10 @@ pre {
   font-size: 11px;
   color: color-mix(in srgb, var(--fg-muted) 88%, transparent);
   font-variant-numeric: tabular-nums;
+}
+
+.helm-tooltip-content.trace-group-time-tooltip {
+  white-space: pre-line;
 }
 
 .trace-row {
