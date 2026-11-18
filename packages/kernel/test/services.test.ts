@@ -285,6 +285,8 @@ test('profiles: SYSTEM_DEFAULT Layer 0 contains helm-cli guidance and HELM_CONVE
 
 test('helm-cli skill assets stay synchronized with UI extensions and runtime capabilities (drift guard)', { timeout: 60_000 }, () => {
   assert.ok(!HELM_CLI_SKILL_MD.includes('references/generative-ui.md'), 'must not reference migrated generative-ui.md')
+  assert.ok(!Object.hasOwn(HELM_CLI_SKILL_ASSET.references, 'workflows-and-agents.md'), 'workflow reference belongs to builtin:workflow, not helm-cli')
+  assert.ok(!HELM_CLI_SKILL_MD.includes('helm workflows'), 'workflow CLI guidance belongs to builtin:workflow, not helm-cli')
   assert.ok(HELM_CLI_SKILL_MD.includes("the current turn's available skill descriptions"), 'available skill catalog must drive extension docs')
   for (const optionalSkill of ['generative-ui', 'app-builder']) {
     assert.ok(!HELM_CLI_SKILL_MD.includes(optionalSkill), `core CLI skill must not name optional skill ${optionalSkill}`)

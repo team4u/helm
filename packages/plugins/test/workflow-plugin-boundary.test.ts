@@ -225,10 +225,23 @@ afterEach(() => {
 })
 
 // ---------------------------------------------------------------------------
-// 1. deferServices 启动屏障
+// 1. workflow skill asset and service startup barrier
 // ---------------------------------------------------------------------------
 
-test('deferServices：register 不启动服务；start() 先全部 prepare 再逐插件 start；幂等', { timeout: 60_000 }, async () => {
+test('workflow 插件启动时注册受管 workflow 技能资产', { timeout: 60_000 }, async () => {
+  const host = makeHost()
+  const { createWorkflowPlugin } = await import('../src/workflow.js')
+  await host.register(createWorkflowPlugin())
+  const asset = backend.ensuredSkills.find((item) => item.id === 'workflow')
+  assert.ok(asset, 'workflow 插件启动后应注册 workflow 技能')
+  assert.ok(asset.skillMd.includes('managedByPlugin: builtin:workflow'))
+  assert.deepEqual(Object.keys(asset.references).sort(), ['dsl.md', 'subagents.md'])
+  assert.ok(asset.references['dsl.md']?.includes('agent.withMeta'))
+  assert.ok(asset.references['subagents.md']?.includes('background: false'))
+  await host.dispose()
+})
+
+test('deferServices：register 不启动服务；start() 先全部 prepare 再逐插件 start；幂等',  { timeout: 60_000 }, async () => {
   const host = makeHost({ deferServices: true })
   const log: string[] = []
   await host.register(servicePlugin('test:a', log))

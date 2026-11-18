@@ -57,6 +57,7 @@ import type { PluginDefinition } from '@helm/protocol'
 import { resolvePluginClientAssets } from './asset-paths.js'
 import {
   WORKFLOW_PLUGIN_ID,
+  WORKFLOW_SKILL_ID,
   WORKFLOW_RUNS_DOC,
   WORKFLOW_RUN_BADGES_DOC,
   type WorkflowRunBadgesDocState,
@@ -79,8 +80,9 @@ import { registerWorkflowHooks } from './workflow/hooks.js'
 import { registerWorkflowTools } from './workflow/tools.js'
 import { registerWorkflowActions } from './workflow/actions.js'
 import { registerWorkflowUi } from './workflow/ui.js'
+import { readWorkflowSkillAsset } from './workflow/assets.js'
 
-export { WORKFLOW_PLUGIN_ID }
+export { WORKFLOW_PLUGIN_ID, WORKFLOW_SKILL_ID }
 
 export function createWorkflowPlugin(): PluginDefinition {
   return {
@@ -261,6 +263,7 @@ export function createWorkflowPlugin(): PluginDefinition {
           // Recovery phase two (after all plugins finished prepare): init terminates leftover child tasks,
           // explicitly marks running as failed(interrupted), and re-delivers parent-conversation notifications
           // (tools are registered by now, so re-delivered input consumption is safe), then projects runs & badges in memory.
+          await ctx.host.skills.ensureSkill(readWorkflowSkillAsset())
           await workflows.init()
           projection.sync()
         },

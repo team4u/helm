@@ -210,8 +210,9 @@ export const DEFAULT_MAX_SUBAGENT_DEPTH = 2 as const
  */
 export const HARD_MAX_SUBAGENT_DEPTH = 5 as const
 
-/** 内置编排插件 ID 与公共运行态文档名。 */
+/** 内置编排插件 ID、托管技能 ID 与公共运行态文档名。 */
 export const WORKFLOW_PLUGIN_ID = 'builtin:workflow' as const
+export const WORKFLOW_SKILL_ID = 'workflow' as const
 export const WORKFLOW_RUNS_DOC = 'runs' as const
 
 /** 全局紧凑角标文档名（仅每会话 count/tone/footerText，不含完整 run 摘要）。 */

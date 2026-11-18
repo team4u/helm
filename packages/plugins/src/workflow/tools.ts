@@ -86,6 +86,7 @@ export function registerWorkflowTools(ctx: HelmPluginContext, deps: WorkflowTool
     name: 'SubagentWorkflow',
     replay: 'safe',
     promptGuidelines: [
+      'Load the workflow skill before writing a non-trivial script: load_skill({ skillId: "workflow", path: "references/dsl.md" }).',
       'For inline scripts, set a concise meta.name or pass label (about 4-40 characters) so the run has a readable title in the task list.',
       'After a background workflow starts, keep responding to the user or work on other things; the completion report arrives in this conversation automatically — do not sleep or poll for the result.',
       'A workflow returning a run handle means it has started; wait for the terminal-state report before delivering the final result.',

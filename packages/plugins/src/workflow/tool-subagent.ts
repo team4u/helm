@@ -68,6 +68,7 @@ export function registerSubagentTool(
     name: 'subagent',
     replay: 'safe',
     promptGuidelines: [
+      'Load the workflow skill when you need the full subagent, runtime, worktree, or lifecycle reference: load_skill({ skillId: "workflow", path: "references/subagents.md" }).',
       'Provide a short descriptive label (about 4-40 characters) summarizing the task so users can identify the subagent in the task list and child conversation title.',
       'After a background task starts, keep responding to the user or work on other things; the completion report arrives in this conversation automatically — do not sleep or poll for the result.',
       'Only pass background:false for synchronous waiting when the very next step depends on the subagent result and there is no other work in between.',

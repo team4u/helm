@@ -700,7 +700,7 @@ export class HerdrFakeBackend implements PluginHostBackend {
     list: async () => [],
     readFile: async () => { throw new HelmError('unsupported', '本 fixture 无技能', 501) },
     directory: async (id: string) => `/tmp/herdr-fixture-skills/${id}`,
-    ensureSkill: async () => { throw new HelmError('unsupported', '本 fixture 无技能', 501) },
+    ensureSkill: async () => {},
   }
   secrets = {
     get: async () => undefined,

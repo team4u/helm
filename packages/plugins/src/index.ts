@@ -9,6 +9,7 @@ export { createProfilePlugin } from './profile.js';
 export { createMemoryPlugin, MEMORY_PLUGIN_ID } from './memory.js';
 export { createHerdrPlugin } from './herdr.js';
 export { createWorkflowPlugin, WORKFLOW_PLUGIN_ID } from './workflow.js';
+export { WORKFLOW_SKILL_ID } from './contracts.js';
 export { createSwarmPlugin, SWARM_PLUGIN_ID } from './swarm.js';
 export {
   createSuperAgentPlugin,

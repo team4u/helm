@@ -12,7 +12,7 @@
  * - Method signatures derive from `Parameters`/`ReturnType` of `PluginHostBackend` directly so
  *   subclass overrides (including narrower return types) remain compatible without manual narrowing.
  */
-import { HelmError } from '@helm/protocol'
+import { HelmError, type PluginSkillAsset } from '@helm/protocol'
 import type { PluginHostBackend } from '../../src/plugins/index.js'
 
 function unsupported(what: string): never {
@@ -26,6 +26,8 @@ type Port<K extends keyof PluginHostBackend> = PluginHostBackend[K]
  * Any un-overridden operation invoked in tests fails explicitly with `unsupported` (501).
  */
 export class PluginHostBackendFixtureBase implements PluginHostBackend {
+  readonly ensuredSkills: PluginSkillAsset[] = []
+
   isClosing(): boolean {
     return false
   }
@@ -46,7 +48,9 @@ export class PluginHostBackendFixtureBase implements PluginHostBackend {
     list: () => unsupported('host.skills.list'),
     readFile: () => unsupported('host.skills.readFile'),
     directory: () => unsupported('host.skills.directory'),
-    ensureSkill: () => unsupported('host.skills.ensureSkill'),
+    ensureSkill: async (asset) => {
+      this.ensuredSkills.push(structuredClone(asset))
+    },
   }
 
   secrets: Port<'secrets'> = {

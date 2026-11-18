@@ -420,7 +420,9 @@ test('before_turn：子会话不再一刀切排除；无派工工具不注入（
     }
     // 顶层有工具 → 注入
     const topLevel = await env.host.runHook('before_turn', parentTurn as never)
-    assert.ok(sectionsOf(topLevel, parentTurn).some((s) => s.id === 'profile.catalog'))
+    const topLevelSections = sectionsOf(topLevel, parentTurn)
+    assert.ok(topLevelSections.some((s) => s.id === 'profile.catalog'))
+    assert.ok(topLevelSections.find((s) => s.id === 'profile.skills')?.text.includes('<skill id="workflow">'), '启用 workflow 时目录应暴露插件技能')
 
     // 子会话（parentConversationId 存在，如 fork / SuperAgent worker）有工具同样
     // 注入：不再按父链一刀切（真正子代理由 builtin:workflow 钩子剥离工具后
@@ -448,13 +450,17 @@ test('before_turn：子会话不再一刀切排除；无派工工具不注入（
     await env.host.disable('builtin:workflow')
     const noWorkflowTurn = { ...parentTurn, sections: [], tools: dispatchToolsOf(env.host) }
     const noWorkflow = await env.host.runHook('before_turn', noWorkflowTurn as never)
-    assert.ok(!sectionsOf(noWorkflow, noWorkflowTurn).some((s) => s.id === 'profile.catalog'), 'workflow 停用不注入')
+    const noWorkflowSections = sectionsOf(noWorkflow, noWorkflowTurn)
+    assert.ok(!noWorkflowSections.some((s) => s.id === 'profile.catalog'), 'workflow 停用不注入')
+    assert.ok(!noWorkflowSections.find((s) => s.id === 'profile.skills')?.text.includes('<skill id="workflow">'), 'workflow 停用后目录移除插件技能')
 
     // 重新启用 → 恢复注入（启停下次回合生效）
     await env.host.enable('builtin:workflow')
     const reEnabledTurn = { ...parentTurn, sections: [], tools: dispatchToolsOf(env.host) }
     const reEnabled = await env.host.runHook('before_turn', reEnabledTurn as never)
-    assert.ok(sectionsOf(reEnabled, reEnabledTurn).some((s) => s.id === 'profile.catalog'), '重新启用恢复注入')
+    const reEnabledSections = sectionsOf(reEnabled, reEnabledTurn)
+    assert.ok(reEnabledSections.some((s) => s.id === 'profile.catalog'), '重新启用恢复注入')
+    assert.ok(reEnabledSections.find((s) => s.id === 'profile.skills')?.text.includes('<skill id="workflow">'), 'workflow 重新启用后技能目录恢复')
   } finally {
     await env.close()
   }
