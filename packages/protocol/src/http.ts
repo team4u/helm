@@ -68,6 +68,7 @@ export const CORE_CLI_COMMAND_PATHS = [
   'setup',
   'login',
   'status',
+  'update',
   'events watch',
   'conversations list',
   'conversations get',

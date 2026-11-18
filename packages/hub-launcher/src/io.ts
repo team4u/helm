@@ -33,15 +33,6 @@ export function defaultIsAlive(pid: number): boolean {
   }
 }
 
-export function defaultLauncherIo(): LauncherIo {
-  return {
-    env: process.env,
-    out: (text) => process.stdout.write(text),
-    err: (text) => process.stderr.write(text),
-    isAlive: defaultIsAlive,
-  };
-}
-
 export function isAliveOf(io: LauncherIo): (pid: number) => boolean {
   return io.isAlive ?? defaultIsAlive;
 }

@@ -226,8 +226,7 @@ export async function runCli(argv: readonly string[] = [], options: RunCliOption
     const ctx = makeContext()
     ctx.args = rest.slice(coreMatched.consumed)
     try {
-      await coreMatched.command.run(ctx)
-      return 0
+      return (await coreMatched.command.run(ctx)) ?? 0
     } catch (err) {
       return emitError(describeError(err))
     }
@@ -260,8 +259,7 @@ export async function runCli(argv: readonly string[] = [], options: RunCliOption
   const ctx = makeContext()
   ctx.args = rest.slice(matched.consumed)
   try {
-    await matched.command.run(ctx)
-    return 0
+    return (await matched.command.run(ctx)) ?? 0
   } catch (err) {
     return emitError(describeError(err))
   }

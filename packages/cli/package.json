@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@helm/env-io": "workspace:*",
+    "@helm/hub-launcher": "workspace:*",
     "@helm/protocol": "workspace:*"
   },
   "devDependencies": {

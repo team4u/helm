@@ -35,8 +35,7 @@ RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store \
 
 # 2. Copy sources and build the Hub runtime and the Web frontend static assets in topological order
 #    (@helm/update precedes @helm/node: the node daemon consumes the shared update engine. The
-#    launcher package is installed for lockfile completeness but not built: the container runs the
-#    Hub from source, and release management belongs to the host-side launcher.)
+#    CLI also uses the local lifecycle package.)
 COPY . .
 RUN pnpm --filter @helm/protocol \
          --filter @helm/env-io \
@@ -48,6 +47,7 @@ RUN pnpm --filter @helm/protocol \
          --filter @helm/plugins \
          --filter @helm/hub \
          --filter @helm/web \
+         --filter @helm/hub-launcher \
          --filter @helm/cli \
          run build
 

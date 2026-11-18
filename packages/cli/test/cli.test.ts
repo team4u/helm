@@ -1561,3 +1561,62 @@ test('fails explicitly on permission error reading existing credential lock whil
     stub.mock.restore()
   }
 })
+
+test('helm update --check queries the selected channel without loading Hub credentials', { timeout: 60_000 }, async (t) => {
+  const dataDir = useTempDir(t, 'helm-cli-update-data-')
+  const installRoot = path.join(dataDir, 'installation')
+  await fsp.writeFile(path.join(dataDir, 'cli-token'), 'invalid-json')
+  const env = makeCliEnv('http://127.0.0.1:1', dataDir, {
+    HELM_TOKEN: undefined,
+    HELM_HUB_INSTALL_ROOT: installRoot,
+    HELM_PAYLOAD_PACKAGE: '@test/helm-hub',
+  })
+  const requests: string[] = []
+  const result = await runCliCaptured(['update', '--check', '--channel', 'beta', '--registry', 'https://registry.example', '--json'], env, {
+    fetch: async (input) => {
+      requests.push(String(input))
+      return Response.json({ version: '1.2.0-beta.1' })
+    },
+  })
+  assert.equal(result.code, 0, result.err)
+  assert.deepEqual(requests, ['https://registry.example/@test/helm-hub/beta'])
+  assert.deepEqual(JSON.parse(result.out), {
+    currentVersion: null,
+    latestVersion: '1.2.0-beta.1',
+    updateAvailable: true,
+    blocked: null,
+  })
+  await assert.rejects(fsp.stat(installRoot), { code: 'ENOENT' })
+  const status = await runCliCaptured(['update', '--status', '--json'], env)
+  assert.equal(status.code, 0, status.err)
+  assert.equal(JSON.parse(status.out).current, null)
+})
+
+test('helm update help and mode validation work offline', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helm-cli-update-flags-')
+  const env = makeCliEnv('http://127.0.0.1:1', dir, { HELM_HUB_INSTALL_ROOT: path.join(dir, 'install') })
+  let requests = 0
+  const options = {
+    fetch: async () => {
+      requests++
+      throw new Error('unexpected network request')
+    },
+  }
+  const help = await runCliCaptured(['update', '--help'], env, options)
+  assert.equal(help.code, 0, help.err)
+  assert.match(help.out, /--watch.*15 minutes/)
+  for (const [argv, code] of [
+    [['--check', '--watch'], 'conflicting_flags'],
+    [['--channel', 'beta', '--version', '1.2.0'], 'conflicting_flags'],
+    [['--check', '--force'], 'invalid_option_for_command'],
+    [['--watch', '--interval-ms', '2147483648'], 'invalid_flag_value'],
+    [['--tarball', 'payload.tgz'], 'tarball_requires_version'],
+    [['--version', 'v1.2.0'], 'invalid_version'],
+    [['--watch'], 'json_not_supported_for_watch'],
+  ] as const) {
+    const result = await runCliCaptured(['update', ...argv, '--json'], env, options)
+    assert.equal(result.code, 1, argv.join(' '))
+    assert.equal(JSON.parse(result.err).error.code, code)
+  }
+  assert.equal(requests, 0)
+})

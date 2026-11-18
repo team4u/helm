@@ -25,6 +25,9 @@ managedByPlugin: {{MANAGED_BY}}
 - `helm setup --password <pwd>`: initialize the admin password and log in (first time only).
 - `helm login --password <pwd>`: log in and save credentials to cli-token.
 
+### Local Hub maintenance
+- `helm update --check [--channel <tag>] --json` checks the local Hub release. `helm update` applies it, `--watch` runs the supervised Hub and checks periodically, and `--status` reports the local installation. Use `helm update --stop` to stop a detached Hub where process identity can be verified. Run lifecycle commands from a local terminal or service manager outside any Helm turn. `--watch` streams human-readable progress.
+
 ### Conversations
 - `helm conversations list [--profile <id>] [--status <s>] [--tag <t>]`: top-level conversations only by default (noise reduction); `--all` includes all derived sub-conversations such as subagents; `--parent <id>` lists exactly one conversation's direct children (mutually exclusive with --all).
 - `helm conversations get [id] [--current] [--limit N] [--cursor <c>]` (with a paginated timeline)

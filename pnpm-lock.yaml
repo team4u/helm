@@ -190,6 +190,9 @@ importers:
       '@helm/env-io':
         specifier: workspace:*
         version: link:../env-io
+      '@helm/hub-launcher':
+        specifier: workspace:*
+        version: link:../hub-launcher
       '@helm/protocol':
         specifier: workspace:*
         version: link:../protocol

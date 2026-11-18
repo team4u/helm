@@ -29,7 +29,7 @@ export interface CommandSpec {
   flags?: readonly FlagSpec[]
   /** Positional usage synopsis (help rendering only). */
   positional?: string
-  run(ctx: CommandContext): Promise<void>
+  run(ctx: CommandContext): Promise<void | number>
 }
 
 // ---------------------------------------------------------------------------

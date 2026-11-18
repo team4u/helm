@@ -465,7 +465,7 @@ test('e2e: real CLI run against a local HTTP registry switches versions and stop
   t.after(() => new Promise<void>((resolve) => registry.close(() => resolve())));
 
   const tsxCli = path.join(repoRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs');
-  const entryFile = path.join(repoRoot, 'packages', 'hub-launcher', 'src', 'main.ts');
+  const entryFile = path.join(repoRoot, 'packages', 'cli', 'src', 'index.ts');
   let stdout = '';
   let stderr = '';
   const child: ChildProcess = spawn(
@@ -473,7 +473,8 @@ test('e2e: real CLI run against a local HTTP registry switches versions and stop
     [
       tsxCli,
       entryFile,
-      'run',
+      'update',
+      '--watch',
       '--interval-ms',
       '500',
       '--registry',

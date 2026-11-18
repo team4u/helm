@@ -1,12 +1,12 @@
 /**
- * Command implementations: check / update / run / start / stop / restart / status. Each command
+ * Command implementations: check / update / watch / stop / status. Each command
  * prints either human-readable text or a JSON object (`--json`) and returns a process exit code.
  * Errors carry a stable `code` (UsageError) surfaced in the JSON error envelope by the CLI layer.
  */
 import { readCurrentRelease, readBlockedRelease } from '@helm/update';
 import { assertDistTag, pathsOf, resolvePayloadPackageName, resolveRegistryUrl, resolveUpdateIntervalMs, resolveUpdateTag } from './layout.js';
 import { readLaunchConfig, resolveEffectiveLaunchConfig } from './records.js';
-import { readRunningHub, startHub, stopHub } from './process.js';
+import { readRunningHub, stopHub } from './process.js';
 import { checkHubUpgrade, performHubUpdate } from './update.js';
 import { runSupervised } from './run.js';
 import type { UpdateCore } from './update-core.js';
@@ -27,9 +27,7 @@ export interface CommandFlags {
   intervalMs?: number;
   tarball?: string;
   force?: boolean;
-  start?: boolean;
   json?: boolean;
-  help?: boolean;
   port?: number;
   host?: string;
   dataDir?: string;
@@ -115,7 +113,7 @@ export async function cmdUpdate(ctx: CommandContext, flags: CommandFlags): Promi
     ...(tag !== undefined ? { tag } : {}),
     ...(flags.tarball !== undefined ? { tarballPath: flags.tarball } : {}),
     ...(flags.force ? { force: true } : {}),
-    ...(flags.start ? { startIfNotRunning: true } : {}),
+    startIfNotRunning: true,
     launchFlags: launchFlagsOf(flags),
     ...(flags.healthTimeoutMs !== undefined ? { healthTimeoutMs: flags.healthTimeoutMs } : {}),
     ...(ctx.fetchFn !== undefined ? { fetchFn: ctx.fetchFn } : {}),
@@ -132,7 +130,7 @@ export async function cmdUpdate(ctx: CommandContext, flags: CommandFlags): Promi
   const lines = [`updated: ${outcome.previousVersion ?? '(none)'} -> ${outcome.targetVersion}`];
   if (outcome.restarted) lines.push(`hub restarted (pid ${outcome.pid}, ${outcome.url})`);
   else if (outcome.started) lines.push(`hub started (pid ${outcome.pid}, ${outcome.url})`);
-  else lines.push('hub is not running; run start when ready');
+  else lines.push('hub is not running; use helm update --watch');
   ctx.io.out(`${lines.join('\n')}\n`);
   return 0;
 }
@@ -144,8 +142,8 @@ export async function cmdUpdate(ctx: CommandContext, flags: CommandFlags): Promi
 export async function cmdRun(ctx: CommandContext, flags: CommandFlags): Promise<number> {
   if (flags.json === true) {
     throw new UsageError(
-      'run streams human-readable progress lines and is meant for a service manager or an interactive terminal; --json is not supported for run',
-      'json_not_supported_for_run',
+      'run streams human-readable progress lines and is meant for a service manager or an interactive terminal. --json is not supported with --watch',
+      'json_not_supported_for_watch',
     );
   }
   return await runSupervised({
@@ -160,25 +158,6 @@ export async function cmdRun(ctx: CommandContext, flags: CommandFlags): Promise<
     ...(ctx.fetchFn !== undefined ? { fetchFn: ctx.fetchFn } : {}),
     ...(ctx.core !== undefined ? { core: ctx.core } : {}),
   });
-}
-
-// ---------------------------------------------------------------------------
-// start
-// ---------------------------------------------------------------------------
-
-export async function cmdStart(ctx: CommandContext, flags: CommandFlags): Promise<number> {
-  const result = await startHub(ctx.root, ctx.io, {
-    flags: launchFlagsOf(flags),
-    ...(flags.healthTimeoutMs !== undefined ? { healthTimeoutMs: flags.healthTimeoutMs } : {}),
-    ...(ctx.fetchFn !== undefined ? { fetchFn: ctx.fetchFn } : {}),
-  });
-  if (flagsAsJson(flags)) {
-    ctx.io.out(`${JSON.stringify({ ok: true, ...result }, null, 2)}\n`);
-    return 0;
-  }
-  const healthNote = result.health === null ? ' (auxiliary health probe unanswered)' : '';
-  ctx.io.out(`hub ${result.version} running: pid ${result.pid} at ${result.url}${healthNote} (log: ${result.logPath})\n`);
-  return 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -197,27 +176,6 @@ export async function cmdStop(ctx: CommandContext, flags: CommandFlags): Promise
   }
   ctx.io.out(
     `hub pid ${result.pid} stopped${result.escalated ? ' (escalated after graceful timeout)' : ''}\n`,
-  );
-  return 0;
-}
-
-// ---------------------------------------------------------------------------
-// restart
-// ---------------------------------------------------------------------------
-
-export async function cmdRestart(ctx: CommandContext, flags: CommandFlags): Promise<number> {
-  const stopped = await stopHub(ctx.root, ctx.io);
-  const result = await startHub(ctx.root, ctx.io, {
-    flags: launchFlagsOf(flags),
-    ...(flags.healthTimeoutMs !== undefined ? { healthTimeoutMs: flags.healthTimeoutMs } : {}),
-    ...(ctx.fetchFn !== undefined ? { fetchFn: ctx.fetchFn } : {}),
-  });
-  if (flagsAsJson(flags)) {
-    ctx.io.out(`${JSON.stringify({ ok: true, stopped, ...result }, null, 2)}\n`);
-    return 0;
-  }
-  ctx.io.out(
-    `${stopped.wasRunning ? 'stopped previous hub; ' : ''}hub ${result.version} running: pid ${result.pid} at ${result.url}\n`,
   );
   return 0;
 }

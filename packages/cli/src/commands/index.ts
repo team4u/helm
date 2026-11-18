@@ -7,6 +7,7 @@ import { CORE_CLI_COMMAND_PATHS } from '@helm/protocol'
 import type { CommandSpec } from './shared.js'
 import { CliError } from '../errors.js'
 import { authCommands } from './auth.js'
+import { updateCommand } from './update.js'
 import { conversationsCommands } from './conversations.js'
 import { askCommands } from './ask.js'
 import { asksCommands } from './asks.js'
@@ -101,6 +102,7 @@ function assertCommandTableValid(commands: readonly CommandSpec[]): void {
 export function coreCommands(): CommandSpec[] {
   const commands = [
     ...authCommands(),
+    updateCommand,
     ...conversationsCommands(),
     ...askCommands(),
     ...asksCommands(),

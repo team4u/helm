@@ -17,7 +17,7 @@ export async function readCurrentEntry(root: string): Promise<HubCurrentRelease>
   const record = await readCurrentRelease(root);
   if (record === null) {
     throw new UsageError(
-      `no hub release installed under ${root}; run helm-hub-launcher update first`,
+      `no hub release installed under ${root}; run helm update first`,
       'no_release_installed',
     );
   }
