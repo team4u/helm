@@ -159,10 +159,11 @@ export function createProfilePlugin(): PluginDefinition {
         // The workspace AGENTS.md (project-level conventions) reads in parallel with persona/skills:
         // re-read live every turn; file edits take effect on the next turn; the explicit-explanation
         // policy for read failures or a remote node going offline lives in profile/agents-md.ts
-        const [rawSystem, available, agentsMd] = await Promise.all([
+        const [rawSystem, available, agentsMd, profileRecord] = await Promise.all([
           readSystemOrEmpty(profileId),
           listAvailableSkills(profileId),
           computeAgentsMdSection(ctx.host, turn.conversation.nodeId, turn.conversation.cwd),
+          profiles.get(profileId),
         ]);
         const sections = [...turn.sections];
         if (rawSystem.trim()) sections.push({ id: 'profile.system', text: rawSystem });
@@ -180,6 +181,20 @@ export function createProfilePlugin(): PluginDefinition {
         }
         // The workspace project conventions are injected right after persona assets, before the skill catalog.
         if (agentsMd.kind === 'section') sections.push({ id: agentsMd.id, text: agentsMd.text });
+        // restrictToCwd guardrail honesty: state the boundary so the model does not discover it by
+        // trial and error (file tools reject escapes explicitly; bash keeps running under OS permissions).
+        if (profileRecord?.restrictToCwd === true) {
+          sections.push({
+            id: 'profile.workspace-boundary',
+            text: [
+              '<workspace_boundary>',
+              `This conversation is restricted to its working directory: ${turn.conversation.cwd}`,
+              'File tools (read/write/edit/register_artifact) only accept paths inside that directory; relative paths, ../ traversals, and absolute paths outside it are rejected with path_outside_workspace.',
+              'Stay inside the working directory; when a task genuinely needs outside paths, say so instead of attempting them.',
+              '</workspace_boundary>',
+            ].join('\n'),
+          });
+        }
         if (available.length) {
           const catalog = available.map((skill) =>
             `<skill id="${escapeXml(skill.id)}"><name>${escapeXml(skill.name)}</name><description>${escapeXml(skill.description ?? '')}</description><references>${skill.references.map(escapeXml).join(', ')}</references></skill>`,

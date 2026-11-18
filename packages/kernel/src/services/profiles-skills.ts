@@ -183,6 +183,13 @@ export function validateProfileInput(input: unknown): Profile {
     }
     profile.humanSelectable = humanSelectable
   }
+  const restrictToCwd = input['restrictToCwd']
+  if (restrictToCwd !== undefined) {
+    if (typeof restrictToCwd !== 'boolean') {
+      throw new Error(`profile '${id}' restrictToCwd must be a boolean when present (cwd guardrail for file tools, defaults to false)`)
+    }
+    profile.restrictToCwd = restrictToCwd
+  }
   const runtime = input['runtime']
   if (runtime !== undefined) {
     if (!isJsonObject(runtime)) throw new Error(`profile '${id}' runtime must be an object`)

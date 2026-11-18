@@ -139,6 +139,7 @@ function normalizeProfileConfig(profile: Profile): Profile {
   if (profile.skills !== undefined) config.skills = [...profile.skills]
   if (profile.managedByPlugin !== undefined) config.managedByPlugin = profile.managedByPlugin
   if (profile.humanSelectable !== undefined) config.humanSelectable = profile.humanSelectable
+  if (profile.restrictToCwd !== undefined) config.restrictToCwd = profile.restrictToCwd
   return config
 }
 

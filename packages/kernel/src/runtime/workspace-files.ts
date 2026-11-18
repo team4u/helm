@@ -18,7 +18,7 @@ import { MAX_ARTIFACT_BYTES, detectWorkspaceFileMime } from '../services/index.j
 import { targetPlatformForNode } from './target-platform.js'
 import { artifactOpenFlags, readArtifactBytesFromHandle } from './tools/artifact-tools.js'
 import { basenameForShape } from './tools/file-env.js'
-import { resolveTargetPath } from './tools/target-path.js'
+import { resolveTargetPath, isStrictlyInsideRoot } from './tools/target-path.js'
 
 export interface ConversationFileContent {
   bytes: Uint8Array
@@ -44,18 +44,6 @@ function assertNotAborted(signal?: AbortSignal): void {
 
 function pathsEqualForShape(a: string, b: string, shape: 'posix' | 'win32' | undefined): boolean {
   return shape === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b
-}
-
-function isStrictlyInsideRoot(target: string, root: string, shape: 'posix' | 'win32' | undefined): boolean {
-  const isWin = shape === 'win32'
-  const t = isWin ? target.toLowerCase() : target
-  const r = isWin ? root.toLowerCase() : root
-  if (t === r) return false
-  const sep = isWin ? '\\' : '/'
-  if (r.endsWith(sep)) {
-    return t.startsWith(r) && t.length > r.length
-  }
-  return t.startsWith(r + sep)
 }
 
 function mapLocalFsError(error: unknown, rawPath: string, fromOpenNoFollow = false): HelmError {

@@ -357,3 +357,64 @@ test('resolveSpawnTarget: unmappable POSIX sourceCwd on remote win32 target reje
     (e: unknown) => e instanceof HelmError && e.code === 'unmappable_posix_root',
   )
 })
+
+// ---------------------------------------------------------------------------
+// spawnAgent entry guard: Profile.restrictToCwd confines explicit request cwd to the parent cwd
+// ---------------------------------------------------------------------------
+
+/** Minimal spawnAgent fixture: store/hookBridge stubs; the sentinel proves execution passed the guard. */
+function spawnEntryGuard(options: { restricted: boolean; parentCwd: string }) {
+  const spawn = new RuntimeAgentSpawn({
+    store: { getConv: () => ({ id: 1, cwd: options.parentCwd, profileId: 'worker' }) } as never,
+    toolDeps: { defaultCwd: '/tmp/helm-fallback', restrictToCwdOf: async () => options.restricted } as never,
+    harness: {} as never,
+    registry: {} as never,
+    tracker: {} as never,
+    conversations: {} as never,
+    events: {} as never,
+    envFabric: {} as never,
+    modelsRegistry: {} as never,
+    hookBridge: {
+      runHookAround: async () => {
+        throw new Error('past-guard')
+      },
+    } as never,
+    stashService: {} as never,
+    updateConversation: (() => {
+      throw new Error('unused in this test')
+    }) as never,
+    markConversationOwnership: () => undefined,
+  })
+  return (request: Record<string, unknown>) => spawn.spawnAgent(request as never)
+}
+
+test('spawnAgent guard: restricted parent rejects explicit cwd outside the parent cwd with path_outside_workspace', { timeout: 60_000 }, async () => {
+  const spawn = spawnEntryGuard({ restricted: true, parentCwd: '/tmp/helm/repo' })
+  await assert.rejects(
+    spawn({ parentConversationId: 1, prompt: 'x', cwd: '/etc' }),
+    (error: unknown) => {
+      assert.ok(error instanceof HelmError)
+      assert.equal(error.code, 'path_outside_workspace')
+      assert.equal(error.status, 403)
+      assert.ok(error.message.includes('/etc'))
+      return true
+    },
+  )
+  await assert.rejects(
+    spawn({ parentConversationId: 1, prompt: 'x', cwd: '../outside' }),
+    (error: unknown) => {
+      assert.ok(error instanceof HelmError)
+      assert.equal(error.code, 'path_outside_workspace')
+      return true
+    },
+  )
+})
+
+test('spawnAgent guard: inside cwd / unrestricted parent / absent cwd all pass the guard', { timeout: 60_000 }, async () => {
+  const restricted = spawnEntryGuard({ restricted: true, parentCwd: '/tmp/helm/repo' })
+  // Inside subdir and the cwd itself pass; execution proceeds until the hook sentinel.
+  await assert.rejects(restricted({ parentConversationId: 1, prompt: 'x', cwd: '/tmp/helm/repo/sub' }), /past-guard/)
+  const unrestricted = spawnEntryGuard({ restricted: false, parentCwd: '/tmp/helm/repo' })
+  await assert.rejects(unrestricted({ parentConversationId: 1, prompt: 'x', cwd: '/etc' }), /past-guard/)
+  await assert.rejects(restricted({ parentConversationId: 1, prompt: 'x' }), /past-guard/)
+})

@@ -41,6 +41,14 @@ export interface Profile {
   managedByPlugin?: string
   /** Whether humans can select this Profile in the "new conversation" dropdown; resident singleton roles set false; defaults to true. */
   humanSelectable?: boolean
+  /**
+   * Guardrail: restrict model-driven file tools (`read`/`write`/`edit`/`register_artifact`) and explicit
+   * subagent `cwd` to the conversation's own working directory (defaults to false = unrestricted).
+   * This is a model-facing boundary, not an OS sandbox: `bash` keeps its OS-permission boundary
+   * (symlinks inside cwd remain the user's filesystem reality); hard isolation belongs to node-level
+   * deployment (bind the Profile to a dedicated node).
+   */
+  restrictToCwd?: boolean
   /** At most six items; defaults or an empty array use the host's empty-conversation prompts. */
   starters?: ProfileStarterPrompt[]
   /** Full SYSTEM.md text (read/written by detail endpoints; never written into profile.json). */

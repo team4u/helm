@@ -35,6 +35,7 @@ const PROFILE_FIELD_FLAGS: ReadonlyArray<{ flag: string; key: string }> = [
 const DOC_FLAGS = ['system', 'system-file'] as const
 const SKILLS_FLAGS = ['skills', 'all-skills'] as const
 const STARTERS_FLAGS = ['starters'] as const
+const BOOLEAN_FLAGS = ['restrict-to-cwd'] as const
 
 const semanticFlags: FlagSpec[] = [
   { name: 'input', type: 'json', help: 'Profile JSON (when used alone on update = full replacement; with semantic flags = merge layer)' },
@@ -44,6 +45,7 @@ const semanticFlags: FlagSpec[] = [
   { name: 'skills', type: 'json', help: 'skill allowlist JSON string array (e.g. \'["git-commit"]\'; [] disables all skills; mutually exclusive with --all-skills)' },
   { name: 'all-skills', type: 'boolean', help: 'remove skills key to restore all available skills (mutually exclusive with --skills)' },
   { name: 'starters', type: 'json', help: 'blank conversation starter prompts JSON array (e.g. \'[{"label":"Weekly report","prompt":"..."}]\', max 6 items; [] clears to defaults)' },
+  { name: 'restrict-to-cwd', type: 'boolean', help: 'restrict file tools (read/write/edit/register_artifact) and subagent cwd to the conversation working directory (guardrail, not an OS sandbox; --restrict-to-cwd=false disables)' },
 ]
 
 const PARSE_FLAGS_SPEC = semanticFlags.map((f) => ({ ...f }))
@@ -54,7 +56,8 @@ function hasSemanticFlags(flags: Map<string, unknown>): boolean {
     PROFILE_FIELD_FLAGS.some(({ flag }) => flags.has(flag)) ||
     DOC_FLAGS.some((flag) => flags.has(flag)) ||
     SKILLS_FLAGS.some((flag) => flags.has(flag)) ||
-    STARTERS_FLAGS.some((flag) => flags.has(flag))
+    STARTERS_FLAGS.some((flag) => flags.has(flag)) ||
+    BOOLEAN_FLAGS.some((flag) => flags.has(flag))
   )
 }
 
@@ -136,6 +139,9 @@ async function applySemanticFlags(flags: Map<string, unknown>, body: Record<stri
   }
   applySkillsFlags(flags, body)
   applyStartersFlag(flags, body)
+  // Boolean semantic flags: write only when explicitly passed (full-replacement merge preserves the rest).
+  const restrictToCwd = flags.get('restrict-to-cwd')
+  if (restrictToCwd !== undefined) body['restrictToCwd'] = restrictToCwd
 }
 
 /**
@@ -192,7 +198,7 @@ export function profilesCommands(): CommandSpec[] {
       const hasInput = parsed.flags.has('input')
       if (!hasInput && !hasSemanticFlags(parsed.flags)) {
         throw new CliError(
-          'no fields provided: pass --input <json> or semantic flags (--name/--model/--node/--cwd/--system[-file]/--skills/--all-skills/--starters) (profiles create)',
+          'no fields provided: pass --input <json> or semantic flags (--name/--model/--node/--cwd/--system[-file]/--skills/--all-skills/--starters/--restrict-to-cwd) (profiles create)',
           'missing_update_fields',
         )
       }
@@ -224,7 +230,7 @@ export function profilesCommands(): CommandSpec[] {
       const semantic = hasSemanticFlags(parsed.flags)
       if (!hasInput && !semantic) {
         throw new CliError(
-          'no fields provided: pass --input <json> or semantic flags (--name/--model/--node/--cwd/--system[-file]/--skills/--all-skills/--starters) (profiles update)',
+          'no fields provided: pass --input <json> or semantic flags (--name/--model/--node/--cwd/--system[-file]/--skills/--all-skills/--starters/--restrict-to-cwd) (profiles update)',
           'missing_update_fields',
         )
       }

@@ -26,6 +26,12 @@ export interface HelmToolDeps {
   envFabric?: EnvFabric
   /** `conversationId ->` bound compute node ID (defaults to `'local'`; backed by authoritative store snapshot). */
   nodeIdOf?: (conversationId: number) => string
+  /**
+   * `conversationId ->` whether its Profile sets `restrictToCwd` (guardrail: file tools confined to the
+   * conversation cwd). Resolved live per call so profile edits take effect immediately; read failures
+   * propagate explicitly (a corrupt profile.json already breaks the turn's persona injection).
+   */
+  restrictToCwdOf?: (conversationId: number) => Promise<boolean>
   /** Directory containing `helm` CLI wrapper scripts (prepended to `PATH` so managed children can run `helm`). */
   cliBinDir?: string
 }

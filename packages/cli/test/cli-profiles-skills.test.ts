@@ -210,3 +210,35 @@ test('--help and --json output: help shows --skills/--all-skills, --json echoes 
   assert.equal(r.code, 0, r.err)
   assert.deepEqual(JSON.parse(r.out), { id: 'bot', skills: ['git-commit', 'herdr'] })
 })
+
+test('profiles --restrict-to-cwd: create writes the guardrail; update merges and preserves other bindings', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helm-cli-profiles-restrict-')
+  const hub = await startMockHub(
+    {
+      'GET /api/profiles/worker': () => ({ body: { ...EXISTING_WORKER } }),
+      'POST /api/profiles': (body) => ({ body }),
+      'PUT /api/profiles/worker': (body) => ({ body }),
+    },
+    { autoRegisterCleanup: t },
+  )
+
+  const create = await runCliCaptured(['profiles', 'create', 'reader', '--restrict-to-cwd', '--json'], makeCliEnv(hub.url, dir))
+  assert.equal(create.code, 0, create.err)
+  assert.deepEqual(hub.hits.find((h) => h.method === 'POST')?.body, { id: 'reader', restrictToCwd: true })
+
+  const update = await runCliCaptured(['profiles', 'update', 'worker', '--restrict-to-cwd', '--json'], makeCliEnv(hub.url, dir))
+  assert.equal(update.code, 0, update.err)
+  const put = hub.hits.find((h) => h.method === 'PUT')!.body as Record<string, unknown>
+  assert.equal(put['restrictToCwd'], true)
+  assert.equal(put['nodeId'], 'node-a', 'GET-merge keeps untouched bindings')
+  assert.equal(put['cwd'], '/srv/work')
+
+  // Explicit false disables the guardrail (boolean flag with =false)
+  const off = await runCliCaptured(['profiles', 'update', 'worker', '--restrict-to-cwd=false', '--json'], makeCliEnv(hub.url, dir))
+  assert.equal(off.code, 0, off.err)
+  const putOff = hub.hits.filter((h) => h.method === 'PUT').at(-1)!.body as Record<string, unknown>
+  assert.equal(putOff['restrictToCwd'], false)
+
+  // The flag alone counts as a semantic field (no missing_update_fields error)
+  assert.notEqual(off.code, 1)
+})

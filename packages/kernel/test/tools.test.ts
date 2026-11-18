@@ -27,8 +27,11 @@ import {
 import {
   buildToolEnv,
   createBashTool,
+  createEditTool,
   createReadArtifactTool,
   createReadTool,
+  createRegisterArtifactTool,
+  createWriteTool,
   runGate,
   runShell,
 } from '../src/runtime/tools.js'
@@ -857,3 +860,109 @@ function makeApi(cwd: string, conversationId = 1) {
 function existsSyncSafe(path: string): boolean {
   return existsSync(path)
 }
+
+describe('Profile.restrictToCwd guardrail: file tools confined to the conversation cwd', { timeout: 60_000 }, () => {
+  async function makeRestrictedDeps(dir: string): Promise<HelmToolDeps> {
+    const deps = await makeRealDeps(dir)
+    return { ...deps, restrictToCwdOf: async () => true }
+  }
+
+  it('read rejects ../ traversal and outside absolute paths, allows inside paths', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 'rc1')
+    mkdirSync(join(dir, 'inner'), { recursive: true })
+    const outer = join(rootDir, 'rc1-outer')
+    mkdirSync(outer, { recursive: true })
+    writeFileSync(join(outer, 'secret.txt'), 'outside')
+    writeFileSync(join(dir, 'inner', 'note.md'), 'inside')
+    const deps = await makeRestrictedDeps(join(dir, 'inner'))
+    const tool = createReadTool(deps)
+    for (const p of ['../secret.txt', join(outer, 'secret.txt'), '/etc/hostname']) {
+      const result = await tool.execute({ path: p }, makeApi(join(dir, 'inner')), BACKGROUND_CONTEXT)
+      assert.equal(result.isError, true, `path ${p} should be rejected under restrictToCwd`)
+      const text = (result.output as Array<{ type: string; text: string }>)[0]!.text
+      assert.ok(text.includes('path_outside_workspace'), `error should name path_outside_workspace for ${p}`)
+    }
+    const ok = await tool.execute({ path: 'note.md' }, makeApi(join(dir, 'inner')), BACKGROUND_CONTEXT)
+    assert.equal(!!ok.isError, false, 'inside path should read normally')
+  })
+
+  it('write and edit reject outside targets before any IO (no file or parent dir created)', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 'rc2')
+    mkdirSync(dir, { recursive: true })
+    const deps = await makeRestrictedDeps(dir)
+    const outside = join(rootDir, 'rc2-escape-deep.txt')
+
+    const writeTool = createWriteTool(deps)
+    const writeResult = await writeTool.execute(
+      { path: '../rc2-escape-deep.txt', content: 'x' },
+      makeApi(dir),
+      BACKGROUND_CONTEXT,
+    )
+    assert.equal(writeResult.isError, true)
+    assert.ok(
+      (writeResult.output as Array<{ type: string; text: string }>)[0]!.text.includes('path_outside_workspace'),
+    )
+    assert.equal(existsSync(outside), false, 'guardrail must reject before creating anything outside cwd')
+
+    const editTool = createEditTool(deps)
+    const editResult = await editTool.execute(
+      { path: outside, oldText: 'a', newText: 'b' },
+      makeApi(dir),
+      BACKGROUND_CONTEXT,
+    )
+    assert.equal(editResult.isError, true)
+    assert.ok(
+      (editResult.output as Array<{ type: string; text: string }>)[0]!.text.includes('path_outside_workspace'),
+    )
+  })
+
+  it('write and edit still work inside cwd under restriction', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 'rc3')
+    mkdirSync(dir, { recursive: true })
+    const deps = await makeRestrictedDeps(dir)
+    const writeTool = createWriteTool(deps)
+    const written = await writeTool.execute({ path: 'file.txt', content: 'v1' }, makeApi(dir), BACKGROUND_CONTEXT)
+    assert.equal(!!written.isError, false)
+    const editTool = createEditTool(deps)
+    const edited = await editTool.execute(
+      { path: 'file.txt', oldText: 'v1', newText: 'v2' },
+      makeApi(dir),
+      BACKGROUND_CONTEXT,
+    )
+    assert.equal(!!edited.isError, false)
+    assert.equal(readFileSync(join(dir, 'file.txt'), 'utf8'), 'v2')
+  })
+
+  it('register_artifact rejects outside sources, registers inside ones', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 'rc4')
+    mkdirSync(join(dir, 'sub'), { recursive: true })
+    const outer = join(rootDir, 'rc4-outer')
+    mkdirSync(outer, { recursive: true })
+    writeFileSync(join(outer, 'outside.bin'), 'outside-bytes')
+    writeFileSync(join(dir, 'sub', 'inside.txt'), 'inside-bytes')
+    const deps = await makeRestrictedDeps(join(dir, 'sub'))
+    const tool = createRegisterArtifactTool(deps)
+    const rejected = await tool.execute(
+      { path: '../../rc4-outer/outside.bin' },
+      makeApi(join(dir, 'sub')),
+      BACKGROUND_CONTEXT,
+    )
+    assert.equal(rejected.isError, true)
+    assert.ok(
+      (rejected.output as Array<{ type: string; text: string }>)[0]!.text.includes('path_outside_workspace'),
+    )
+    const registered = await tool.execute({ path: 'inside.txt' }, makeApi(join(dir, 'sub')), BACKGROUND_CONTEXT)
+    assert.equal(!!registered.isError, false)
+  })
+
+  it('guardrail off (false) keeps the unrestricted boundary (../ reads still allowed)', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 'rc5')
+    mkdirSync(join(dir, 'inner'), { recursive: true })
+    writeFileSync(join(dir, 'secret.txt'), 'outside')
+    const deps = await makeRealDeps(join(dir, 'inner'))
+    const scoped = { ...deps, restrictToCwdOf: async () => false }
+    const tool = createReadTool(scoped)
+    const result = await tool.execute({ path: '../secret.txt' }, makeApi(join(dir, 'inner')), BACKGROUND_CONTEXT)
+    assert.equal(!!result.isError, false, 'restrictToCwd=false must keep the unrestricted boundary')
+  })
+})

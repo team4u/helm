@@ -1031,3 +1031,25 @@ test('ProfileDetailDrawer: close button uses .btn-icon-sm; source carries no leg
   assert.match(html, /btn btn-ghost btn-icon-sm/, 'the close button must use the fixed-size .btn-icon-sm')
   assert.match(html, /callout callout-warn/, 'the unsupported thinking level hint must use the unified .callout-warn')
 })
+
+test('ProfileDetailDrawer: restrict-to-cwd switch renders with localized label and hint', { timeout: 60_000 }, () => {
+  const store = makeTestStore({ models: mockModels, skills: mockSkills })
+  const profile: Profile = {
+    id: 'restricted-worker',
+    name: '受限工作角色',
+    cwd: '/srv/work',
+    restrictToCwd: true,
+    tags: [],
+  }
+  const html = renderToStaticMarkup(
+    e(
+      HostStoreProviders,
+      { value: store },
+      e(ProfileDetailDrawer, { profile, isNew: false, open: true, inline: true, onClose: () => {} }),
+    ),
+  )
+  assert.match(html, /Restrict to working directory/)
+  assert.match(html, /profile-form-restrict-cwd/)
+  assert.match(html, /guardrail, not a sandbox/, 'the guardrail-not-sandbox hint keeps the honesty wording')
+  assert.doesNotMatch(html, EMOJI_REGEX)
+})

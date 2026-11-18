@@ -738,3 +738,39 @@ test('watchdog：abort 调用失败撤销去重标记——下一 tick 同水位
     await h.host.dispose().catch(() => {})
   }
 })
+
+test('profile：restrictToCwd 开启时注入 workspace_boundary 边界声明（关闭时不注入）', { timeout: 60_000 }, async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'helm-pm-restrict-'))
+  try {
+    const profiles = new ProfileService(dataDir)
+    await profiles.ensureDefault()
+    const backend = makeControlledBackend(dataDir)
+    const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: backend, docs: new MemoryDocStore() })
+    await host.register(createProfilePlugin(), { enabled: true })
+
+    const turn = {
+      conversation: makeConversation(1, { cwd: '/tmp/helm/repo' }),
+      sections: [],
+      tools: [],
+      inputs: [],
+      messages: [],
+    }
+    // 默认（未开启）：不注入边界节。
+    const off = await host.runHook('before_turn', turn as never)
+    assert.ok(off.action === 'transform')
+    const offSections = (off as { value: { sections: Array<{ id: string }> } }).value.sections
+    assert.ok(!offSections.some((s) => s.id === 'profile.workspace-boundary'), '未开启 restrictToCwd 不注入边界节')
+
+    // 开启：注入边界节，点名会话 cwd 与 path_outside_workspace。
+    await profiles.save({ id: 'assistant', tags: ['assistant'], restrictToCwd: true })
+    const on = await host.runHook('before_turn', turn as never)
+    assert.ok(on.action === 'transform')
+    const onSections = (on as { value: { sections: Array<{ id: string; text: string }> } }).value.sections
+    const boundary = onSections.find((s) => s.id === 'profile.workspace-boundary')
+    assert.ok(boundary !== undefined, '开启 restrictToCwd 必须注入边界节')
+    assert.ok(boundary.text.includes('/tmp/helm/repo'), '点名会话 cwd')
+    assert.ok(boundary.text.includes('path_outside_workspace'), '点名拒绝错误码')
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true })
+  }
+})

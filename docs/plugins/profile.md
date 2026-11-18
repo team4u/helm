@@ -27,6 +27,9 @@
 | `profile.agents-unavailable` | 远端节点离线、宿主能力未接线、AGENTS.md 为特殊文件或超 256 KiB 读取上限等 | `<project_instructions_unavailable>` 显式说明原因，绝不静默降级为「无文件」 |
 | `profile.skills` | 可用技能非空 | `<available_skills>` 目录（id/name/description/references） |
 | `profile.catalog` | 当回合实际有 `subagent` / `SubagentWorkflow` 派工工具 | `<available_profiles>` 协作目录与 `@` 点名委派指引 |
+| `profile.workspace-boundary` | Profile 开启 `restrictToCwd` | `<workspace_boundary>` 边界声明：点名会话 cwd 与 `path_outside_workspace` 拒绝语义，避免模型反复试错 |
+
+`Profile.restrictToCwd`（`helm profiles update <id> --restrict-to-cwd`）是模型护栏而非 OS 沙箱：内核文件工具（read/write/edit/register_artifact）在路径解析咽喉点做词法包含校验（绝对路径与 `../` 越界显式报 `path_outside_workspace`），`agent_spawn` 入口拒绝受限父会话的显式越界 `cwd`（插件经 hook 重写的受管 worktree 属宿主能力不受影响）；bash 保持自身权限边界（cwd 内符号链接仍是用户文件系统现实），硬隔离应绑定专用节点部署。
 
 目录注入钩子以低于默认值的 priority 运行（`-100`），看到的是默认优先级钩子（如路由模式工具剥离）收敛后的最终工具清单——无派工工具的回合（含达到深度上限的叶子子代理）不注入目录，避免教唆调用不存在的工具；不按 `parentConversationId` 一刀切排除（fork / SuperAgent worker 有父链但应保留协作能力）。
 

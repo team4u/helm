@@ -57,3 +57,25 @@ export function resolveTargetPath(
   const rules = nodePathForShape(shape)
   return { ok: true, abs: rules.resolve(base, raw) }
 }
+
+/**
+ * Strict lexical containment: `target` must be a child of `root` (never the root itself; case-insensitive on
+ * win32 shapes). Single source for both the Web workspace file boundary (`workspace-files.ts`) and the
+ * `Profile.restrictToCwd` guardrail — purely lexical by design (symlinks are the user's filesystem reality,
+ * same privilege boundary as bash; canonical containment would need per-node `realpath` probes).
+ */
+export function isStrictlyInsideRoot(
+  target: string,
+  root: string,
+  shape: 'posix' | 'win32' | undefined,
+): boolean {
+  const isWin = shape === 'win32'
+  const t = isWin ? target.toLowerCase() : target
+  const r = isWin ? root.toLowerCase() : root
+  if (t === r) return false
+  const sep = isWin ? '\\' : '/'
+  if (r.endsWith(sep)) {
+    return t.startsWith(r) && t.length > r.length
+  }
+  return t.startsWith(r + sep)
+}

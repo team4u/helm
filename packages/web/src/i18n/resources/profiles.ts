@@ -161,6 +161,11 @@ export const profilesMessages = {
     en: 'Optional, e.g. /root/code/my-project',
     'zh-CN': '可选，例如 /root/code/my-project',
   },
+  'profiles.drawer.field.restrictToCwd': { en: 'Restrict to working directory', 'zh-CN': '限定在工作目录内' },
+  'profiles.drawer.field.restrictToCwdHint': {
+    en: 'File tools (read/write/edit/register_artifact) only accept paths inside the conversation working directory; bash keeps its own permission boundary (guardrail, not a sandbox)',
+    'zh-CN': '文件工具（read/write/edit/register_artifact）仅接受会话工作目录内的路径；bash 保持自身权限边界（护栏，不是沙箱）',
+  },
   'profiles.drawer.system.title': {
     en: 'System prompt (SYSTEM.md)',
     'zh-CN': '系统提示词 (SYSTEM.md)',

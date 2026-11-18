@@ -387,6 +387,7 @@ const PROFILE_COMMON_PROPS = {
   runtime: Type.Optional(PROFILE_RUNTIME_SCHEMA),
   managedByPlugin: Type.Optional(Type.String()),
   humanSelectable: Type.Optional(Type.Boolean()),
+  restrictToCwd: Type.Optional(Type.Boolean()),
   system: Type.Optional(Type.String()),
 }
 
@@ -432,6 +433,7 @@ export function parseProfileBody(body: Record<string, unknown>, opts: { requireI
   if (parsed.skills !== undefined) profile.skills = [...new Set(parsed.skills)]
   if (parsed.managedByPlugin !== undefined) profile.managedByPlugin = parsed.managedByPlugin
   if (parsed.humanSelectable !== undefined) profile.humanSelectable = parsed.humanSelectable
+  if (parsed.restrictToCwd !== undefined) profile.restrictToCwd = parsed.restrictToCwd
   if (starters !== undefined) profile.starters = starters
   if (parsed.system !== undefined) profile.system = parsed.system
   return profile

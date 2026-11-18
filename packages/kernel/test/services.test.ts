@@ -1439,3 +1439,17 @@ test('cleanup temp directory', { timeout: 60_000 }, async () => {
   const res = spawnSync('tsx', ['--version'], { encoding: 'utf8' })
   assert.equal(res.status, 0)
 })
+
+test('profiles: restrictToCwd persists and reloads; non-boolean rejects at the boundary', { timeout: 60_000 }, async () => {
+  const dataDir = await freshDataDir()
+  const profiles = new ProfileService(dataDir)
+  await profiles.save({ id: 'worker', name: 'worker', tags: ['worker'], restrictToCwd: true })
+  assert.equal((await profiles.get('worker'))?.restrictToCwd, true)
+  // Full replacement semantics: omitting the key clears it back to the unrestricted default
+  await profiles.save({ id: 'worker', name: 'worker', tags: ['worker'] })
+  assert.equal((await profiles.get('worker'))?.restrictToCwd, undefined)
+  await assert.rejects(
+    () => profiles.save({ id: 'bad', tags: [], restrictToCwd: 'yes' } as never),
+    /restrictToCwd/,
+  )
+})

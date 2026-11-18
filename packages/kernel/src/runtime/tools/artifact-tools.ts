@@ -23,6 +23,7 @@ import { constants as fsConstants } from 'node:fs'
 import { open, stat } from 'node:fs/promises'
 import { MAX_ARTIFACT_BYTES } from '../../services/artifacts.js'
 import { FileNotFoundError } from '../../services/index.js'
+import { cwdScopeViolationText } from './cwd-scope.js'
 import { resolveTargetPath } from './target-path.js'
 import { resolveToolTarget } from './tool-target.js'
 import { requireRemoteEnv } from './guards.js'
@@ -162,6 +163,16 @@ export function createRegisterArtifactTool(
           return { output: [{ type: 'text', text: `invalid_path: ${resolvedR.reason}` }], isError: true }
         }
         const lexicalAbs = resolvedR.abs
+        // Profile.restrictToCwd guardrail: lexical escapes (absolute paths / ../) reject before any IO.
+        if (
+          deps.restrictToCwdOf !== undefined &&
+          (await deps.restrictToCwdOf(api.conversationId as number)) === true
+        ) {
+          const violation = cwdScopeViolationText(args.path, base, platform)
+          if (violation !== undefined) {
+            return { output: [{ type: 'text', text: violation }], isError: true }
+          }
+        }
         const displayName = args.name ?? basenameForShape(lexicalAbs)
         let bytes: Uint8Array
         let sourcePath: string

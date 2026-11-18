@@ -110,6 +110,7 @@
 | `--skills <json>` | 技能白名单字符串数组；`[]` 禁用全部；与 `--all-skills` 互斥 |
 | `--all-skills` | 删除 `skills` 键恢复加载全部；与 `--skills` 互斥 |
 | `--starters <json>` | 空白会话引导词数组（`[{label, prompt}]`，最多 6 项） |
+| `--restrict-to-cwd` | 目录护栏布尔开关：文件工具（read/write/edit/register_artifact）与子代理显式 `cwd` 限定在会话工作目录内（`--restrict-to-cwd=false` 关闭；是模型护栏而非 OS 沙箱，bash 保持自身权限边界） |
 | `--input <json>` | 整体 Profile JSON；update 单独使用 = 全量替换，与语义化标志组合时作为合并层 |
 
 PUT 为整体替换契约：update 走语义化标志时 CLI 先 GET 完整 Profile 合并后 PUT，未触及字段不丢。MEMORY.md 长期记忆由 `builtin:memory` 管理（见下文 memory 命令）。

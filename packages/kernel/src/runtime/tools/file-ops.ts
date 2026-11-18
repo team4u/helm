@@ -20,6 +20,7 @@ import { EDIT_TOOL_RESULT_SCHEMA, isAbsoluteTargetPath, type EditToolResult } fr
 import { computeEditDiff } from '../tool-edit-diff.js'
 import { targetPlatformForNode } from '../target-platform.js'
 import { throwIfToolAborted, type HelmToolDeps } from '../tool-deps.js'
+import { cwdScopeViolationText } from './cwd-scope.js'
 import { resolveTargetPath } from './target-path.js'
 import { resolveToolTarget } from './tool-target.js'
 import {
@@ -84,6 +85,20 @@ export function createReadTool(deps: HelmToolDeps): ToolRegistration<typeof read
         return { output: [{ type: 'text', text: `invalid_path: ${resolvedR.reason}` }], isError: true }
       }
       const lexicalAbs = resolvedR.abs
+      // Profile.restrictToCwd guardrail: lexical escapes (absolute paths / ../) reject before any IO.
+      if (
+        deps.restrictToCwdOf !== undefined &&
+        (await deps.restrictToCwdOf(api.conversationId as number)) === true
+      ) {
+        const violation = cwdScopeViolationText(
+          raw,
+          sessionId,
+          platformInfo.known ? platformInfo.platform : undefined,
+        )
+        if (violation !== undefined) {
+          return { output: [{ type: 'text', text: violation }], isError: true }
+        }
+      }
       try {
         // Unified execution env: remote (pre-guards fail explicitly on missing EnvFabric/offline, never falling back locally)
         // and local (`node:fs` + fd verification) share the same read template.
@@ -166,6 +181,16 @@ export function createWriteTool(deps: HelmToolDeps): ToolRegistration<typeof wri
         return { output: [{ type: 'text', text: `write_failed: ${target0.error}` }], isError: true }
       }
       const { nodeId, base, platform } = target0
+      // Profile.restrictToCwd guardrail: lexical escapes (absolute paths / ../) reject before any IO or dir creation.
+      if (
+        deps.restrictToCwdOf !== undefined &&
+        (await deps.restrictToCwdOf(api.conversationId as number)) === true
+      ) {
+        const violation = cwdScopeViolationText(args.path, base, platform)
+        if (violation !== undefined) {
+          return { output: [{ type: 'text', text: violation }], isError: true }
+        }
+      }
       try {
         const onWriteSuccess = async (targetAbs: string, bytes: number) => {
           if (args.artifact === true) {
@@ -278,6 +303,16 @@ export function createEditTool(deps: HelmToolDeps): ToolRegistration<typeof edit
         return { output: [{ type: 'text', text: `edit_failed: ${target0.error}` }], isError: true }
       }
       const { nodeId, base, platform } = target0
+      // Profile.restrictToCwd guardrail: lexical escapes (absolute paths / ../) reject before any IO.
+      if (
+        deps.restrictToCwdOf !== undefined &&
+        (await deps.restrictToCwdOf(api.conversationId as number)) === true
+      ) {
+        const violation = cwdScopeViolationText(args.path, base, platform)
+        if (violation !== undefined) {
+          return { output: [{ type: 'text', text: violation }], isError: true }
+        }
+      }
       try {
         // Unified execution env: remote (explicit failure on missing EnvFabric/offline, never falls back locally)
         // and local share the exact same read-modify-write template.

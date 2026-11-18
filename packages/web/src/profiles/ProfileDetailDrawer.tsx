@@ -39,6 +39,8 @@ interface FormState {
   /** 绑定的默认计算节点 ID；空串 = 未绑定（回退本机 local）。 */
   nodeId: string
   cwd: string
+  /** Profile.restrictToCwd 护栏：文件工具与子代理 cwd 限定在会话工作目录内。 */
+  restrictToCwd: boolean
   system: string
   useAllSkills: boolean
   selectedSkillIds: string[]
@@ -57,6 +59,7 @@ function createInitialForm(profile: Profile | null, isNew: boolean): FormState {
       thinkingLevel: '',
       nodeId: '',
       cwd: '',
+      restrictToCwd: false,
       system: '',
       useAllSkills: true,
       selectedSkillIds: [],
@@ -73,6 +76,7 @@ function createInitialForm(profile: Profile | null, isNew: boolean): FormState {
     thinkingLevel: profile.thinkingLevel ?? '',
     nodeId: profile.nodeId ?? '',
     cwd: profile.cwd ?? '',
+    restrictToCwd: profile.restrictToCwd === true,
     system: profile.system ?? '',
     useAllSkills: profile.skills === undefined,
     selectedSkillIds: Array.isArray(profile.skills) ? [...profile.skills] : [],
@@ -177,6 +181,7 @@ export function ProfileDetailDrawer({
         form.thinkingLevel !== '' ||
         form.nodeId.trim() !== '' ||
         form.cwd.trim() !== '' ||
+        form.restrictToCwd ||
         form.system.trim() !== '' ||
         !form.useAllSkills ||
         form.selectedSkillIds.length > 0 ||
@@ -191,6 +196,7 @@ export function ProfileDetailDrawer({
     if (form.thinkingLevel !== baseline.thinkingLevel) return true
     if (form.nodeId !== baseline.nodeId) return true
     if (form.cwd !== baseline.cwd) return true
+    if (form.restrictToCwd !== baseline.restrictToCwd) return true
     if (form.system !== baseline.system) return true
     if (form.useAllSkills !== baseline.useAllSkills) return true
     if (startersDirty(form.starters, baseline.starters)) return true
@@ -294,6 +300,8 @@ export function ProfileDetailDrawer({
         ...(form.thinkingLevel !== '' ? { thinkingLevel: form.thinkingLevel } : {}),
         ...(form.nodeId.trim() !== '' ? { nodeId: form.nodeId.trim() } : {}),
         ...(form.cwd.trim() !== '' ? { cwd: form.cwd.trim() } : {}),
+        // 布尔护栏显式提交（false 也是有效态：整体替换契约下省略与 false 等义，显式写避免歧义）
+        restrictToCwd: form.restrictToCwd,
         ...(form.starters.length > 0
           ? { starters: form.starters.map((s) => ({ label: s.label.trim(), prompt: s.prompt })) }
           : {}),
@@ -564,6 +572,23 @@ export function ProfileDetailDrawer({
                       setForm((prev) => ({ ...prev, cwd: e.target.value }))
                     }
                   />
+                </div>
+
+                <label htmlFor="profile-form-restrict-cwd" className="form-grid-label">
+                  {t('profiles.drawer.field.restrictToCwd')}
+                </label>
+                <div className="form-grid-value flex-col">
+                  <Switch
+                    id="profile-form-restrict-cwd"
+                    checked={form.restrictToCwd}
+                    onChange={(val) =>
+                      setForm((prev) => ({ ...prev, restrictToCwd: val }))
+                    }
+                    label={t('profiles.drawer.field.restrictToCwd')}
+                  />
+                  <div className="profile-editor-hint">
+                    {t('profiles.drawer.field.restrictToCwdHint')}
+                  </div>
                 </div>
               </div>
             </section>

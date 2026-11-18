@@ -894,3 +894,12 @@ test('Profile HTTP saves thinkingLevel; empty string clears it back to global de
     assert.throws(() => parseProfileBody({ id: 'worker', thinkingLevel }, { requireId: true }))
   }
 })
+
+test('Profile HTTP accepts boolean restrictToCwd; non-boolean rejects', { timeout: 60_000 }, () => {
+  assert.equal(parseProfileBody({ id: 'worker', restrictToCwd: true }, { requireId: true }).restrictToCwd, true)
+  assert.equal(parseProfileBody({ id: 'worker', restrictToCwd: false }, { requireId: true }).restrictToCwd, false)
+  assert.equal(parseProfileBody({ id: 'worker' }, { requireId: true }).restrictToCwd, undefined)
+  for (const restrictToCwd of [null, 1, 'true']) {
+    assert.throws(() => parseProfileBody({ id: 'worker', restrictToCwd }, { requireId: true }))
+  }
+})

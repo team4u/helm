@@ -17,6 +17,7 @@ import type {
   PluginBuildProvider,
   TurnSettledPayload,
 } from '@helm/protocol'
+import { HelmError } from '@helm/protocol'
 import type { ConversationOwnership } from './runtime-ownership.js'
 import {
   ArtifactService as SvcArtifactService,
@@ -218,6 +219,20 @@ export function assembleRuntimeServices(
     artifacts: artifactsSvc,
     envFabric,
     nodeIdOf: (id) => options.store.getConv(id)?.nodeId ?? 'local',
+    restrictToCwdOf: async (id) => {
+      const meta = options.store.getConv(id)
+      if (meta?.profileId === undefined) return false
+      try {
+        return (await profilesSvc.get(meta.profileId))?.restrictToCwd === true
+      } catch (error) {
+        throw new HelmError(
+          'profile_read_failed',
+          `cannot determine restrictToCwd for profile '${meta.profileId}' of conversation ${id}: ${error instanceof Error ? error.message : String(error)}`,
+          500,
+          { conversationId: id, profileId: meta.profileId },
+        )
+      }
+    },
     get cliBinDir(): string | undefined { return nodes?.cliBinDir },
   }
 

@@ -44,6 +44,7 @@ import {
   sanitizeAgentNamespacedMeta,
 } from '@helm/protocol'
 import { assertSpawnRequestTitle, isSpawnConversationInTurn, normalizeSpawnTitle, runNativeSpawn } from './spawn.js'
+import { cwdScopeViolationText } from './tools/cwd-scope.js'
 import { validateJsonSchema, type StructuredOutputSession } from './structured-output.js'
 import type { HelmStore } from './store.js'
 import type { HelmToolDeps } from './tool-deps.js'
@@ -168,6 +169,7 @@ export class RuntimeAgentSpawn {
     })
     assertSpawnRequestModes(request)
     assertSpawnRequestTitle(request.title)
+    await this.assertSpawnCwdScope(request)
     const preResolvedForkAnchor = await this.preflightForkRequest(request)
     const token = randomUUID()
     try {
@@ -265,9 +267,29 @@ export class RuntimeAgentSpawn {
     }
   }
 
+  /**
+   * `Profile.restrictToCwd` guardrail at the spawn entry: when the parent conversation's Profile restricts
+   * to its cwd, an explicitly requested `cwd` (a model-directed choice) must stay inside that cwd. Runs
+   * before the `agent_spawn` hook chain: host/plugin-directed rewrites afterwards (workflow worktree
+   * isolation assigning a managed worktree as the child cwd) are trusted capabilities, not model choices.
+   */
+  private async assertSpawnCwdScope(request: AgentSpawnRequest): Promise<void> {
+    if (request.cwd === undefined || this.deps.toolDeps.restrictToCwdOf === undefined) return
+    const parent = this.deps.store.getConv(request.parentConversationId)
+    if (parent === undefined) return // missing parents reject later in the pipeline with their own explicit errors
+    if (!(await this.deps.toolDeps.restrictToCwdOf(request.parentConversationId))) return
+    const violation = cwdScopeViolationText(request.cwd, parent.cwd)
+    if (violation !== undefined) {
+      throw new HelmError('path_outside_workspace', violation, 403, {
+        parentConversationId: request.parentConversationId,
+        requestedCwd: request.cwd,
+        parentCwd: parent.cwd,
+      })
+    }
+  }
+
   /** Fork request pre-validation and anchor locking (shared by entry preflight and final post-hook check). */
-  private async preflightForkRequest(request: AgentSpawnRequest): Promise<number | undefined> {
-    assertSpawnForkFields(request)
+  private async preflightForkRequest(request: AgentSpawnRequest): Promise<number | undefined> {    assertSpawnForkFields(request)
     if (request.fork !== true) return undefined
     if ((request.agentType ?? '').includes(':')) {
       throw new HelmError(
