@@ -23,8 +23,9 @@ import { Tooltip } from '../ui/Tooltip.js'
 // ---------------------------------------------------------------------------
 
 /**
- * 运行中工具的实时已耗时秒表：起点锚定持久化 tool-call entry 时间（服务器时钟），
- * 本地每秒跳字，工具落定随行卸载（无孤儿定时器）。tabular-nums 防止秒位跳动抖宽。
+ * 运行中工具的实时已耗时秒表：起点为派发该调用的响应结束时刻（消息 timestamp+durationMs，
+ * 见 timeline-model appendEntry），本地每秒跳字，工具落定随行卸载（无孤儿定时器）。
+ * tabular-nums 防止秒位跳动抖宽。
  */
 function RunningElapsed({ startedAt }: { startedAt: number }): ReactNode {
   const [now, setNow] = useState(() => Date.now())
@@ -52,7 +53,7 @@ export function TraceRow({
 
   const rowFailed = Boolean(tool.isError)
   // 运行中行右侧只显示实时已耗时秒表（左侧转圈已表意，与落定后的纯耗时形态一致）；
-  // entry 尚未到达的短暂窗口没有诚实的起点锚，右侧留空，不编造起始时间。
+  // 响应缺少 durationMs 等无法诚实锚定起点的场景右侧留空，不编造起始时间。
   const right: ReactNode =
     tool.status === 'running'
       ? tool.startedAt !== undefined

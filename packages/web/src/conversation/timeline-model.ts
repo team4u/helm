@@ -866,10 +866,15 @@ function appendAssistantEntry(
           const callId = typeof b.id === 'string' ? b.id : typeof b.callId === 'string' ? b.callId : undefined
           const name = typeof b.name === 'string' ? b.name : '(unknown tool)'
           const input = 'arguments' in b ? b.arguments : b.input
+          // 运行中耗时的起点锚：本条响应的结束时刻（请求起点 + durationMs）即工具回合派发调用的
+          // 时刻——客户端可达的最诚实逐调用起点（刷新 / 断线重连后依然成立，不依赖推送到达时间）。
+          // durationMs 缺失（遗留 / deferred 响应）时不锚定，避免从请求起点起算虚高。
+          const callStartedAt =
+            msgTimestamp !== undefined && msgDurationMs !== undefined ? msgTimestamp + msgDurationMs : entry.createdAt
           acc.segments.push({
             kind: 'tool',
             key: `tool:${callId ?? key}`,
-            tool: makeToolTrace(`tool:${callId ?? key}`, name, { callId, input, startedAt: entry.createdAt, toolViews: opts.toolViews }),
+            tool: makeToolTrace(`tool:${callId ?? key}`, name, { callId, input, startedAt: callStartedAt, toolViews: opts.toolViews }),
           })
         }
       }
