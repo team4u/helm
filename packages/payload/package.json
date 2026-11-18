@@ -10,9 +10,11 @@
   "devDependencies": {
     "@helm/cli": "workspace:*",
     "@helm/hub": "workspace:*",
+    "@helm/hub-launcher": "workspace:*",
     "@helm/kernel": "workspace:*",
     "@helm/plugins": "workspace:*",
     "@helm/web": "workspace:*",
+    "esbuild": "0.28.2",
     "tar": "7.5.23"
   }
 }
