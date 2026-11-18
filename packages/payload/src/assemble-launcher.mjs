@@ -26,11 +26,6 @@ const SHEBANG = '#!/usr/bin/env node';
 /** Publish launcher package name (overridable via HELM_LAUNCHER_PACKAGE, mirroring HELM_PAYLOAD_PACKAGE). */
 export const launcherPackageName = process.env.HELM_LAUNCHER_PACKAGE ?? '@team4u/helm-hub-launcher';
 
-/** Whether the launcher workspace package exists in this checkout (absence → explicit skip, never a failure). */
-export function launcherSourcesPresent(repoRoot) {
-  return existsSync(path.join(repoRoot, 'packages/hub-launcher/package.json'));
-}
-
 /**
  * Assembles the launcher publish package. Exits the process with a diagnostics list when any
  * launcher-side contract is broken (missing build inputs, multiple bin entries, or a bundle that
