@@ -4,9 +4,8 @@
  * subagent entry. Running foreground-sync runs carry a "Move to background"
  * action (detach).
  */
-import { useId, useState } from 'react'
 import type { ReactNode } from 'react'
-import { StatusLight, formatCompactTimestamp, formatDurationMs, usePluginContext, usePluginLocale, usePluginTranslator } from '@helm/plugin-client'
+import { StatusLight, formatDurationMs, usePluginContext, usePluginLocale, usePluginTranslator } from '@helm/plugin-client'
 import type { WorkflowRunSummary } from '../../contracts.js'
 import { useElapsedNowMs } from './hooks.ts'
 import { Icon } from './WorkflowIcon.tsx'
@@ -22,16 +21,9 @@ import {
   actionDetachFailed,
   EXTERNAL_TITLE,
   externalBackgroundTaskLabel,
-  executionStatusLabel,
   nodeStatusLabel,
   runStatusLabel,
   externalErrorJoiner,
-  META_KV_CREATED,
-  META_KV_LOCATION,
-  META_KV_RUN_ID,
-  META_KV_WORKTREE,
-  META_TOGGLE_ARIA,
-  META_TOGGLE_LABEL,
   externalIdleLine,
   externalNodeFailedLabel,
   externalRunningNodes,
@@ -43,17 +35,13 @@ export function ExternalRunSummary(props: {
   worktree?: { path: string; branch: string }
   toolStatus: 'running' | 'done' | 'error'
   executionId?: string
-  nodeId?: string
-  effectiveCwd?: string
   /** Viewer scope (conversation + ownership): foreground-sync run "Move to background" visibility check. */
   viewer?: DetachViewerScope
 }): ReactNode {
   const ctx = usePluginContext()
   const locale = usePluginLocale()
   const t = usePluginTranslator()
-  const [metaOpen, setMetaOpen] = useState(false)
-  const metaId = useId()
-  const { run, worktree, toolStatus, executionId, nodeId, effectiveCwd } = props
+  const { run, worktree, toolStatus, executionId } = props
   const nodes = run?.nodes ?? []
   const running = nodes.filter((n) => n.status === 'running').length
   const failed = nodes.find((n) => n.status === 'failed')
@@ -123,49 +111,6 @@ export function ExternalRunSummary(props: {
         ) : null}
       </div>
       <div className="subagent-live-stream subagent-external-body">
-        {run !== undefined || nodeId !== undefined || effectiveCwd !== undefined || worktree !== undefined ? (
-          /* 机器元数据（runId / 创建时间 / node:cwd / worktree）收进原地展开：真实按钮 + aria-expanded。 */
-          <div className="subagent-live-meta">
-            <button
-              type="button"
-              className="btn btn-ghost btn-xs subagent-live-meta-toggle"
-              aria-expanded={metaOpen}
-              aria-controls={metaId}
-              aria-label={t(META_TOGGLE_ARIA)}
-              title={t(META_TOGGLE_LABEL)}
-              onClick={() => setMetaOpen((v) => !v)}
-            >
-              <Icon name={metaOpen ? 'chevron-down' : 'chevron-right'} size={11} />
-              <Icon name="info" size={11} />
-            </button>
-            <div id={metaId} hidden={!metaOpen} className="subagent-live-meta-row">
-              {run !== undefined ? (
-                <span className="subagent-live-meta-item mono">
-                  <span className="subagent-live-meta-key">{t(META_KV_RUN_ID)}</span>
-                  {run.id}
-                </span>
-              ) : null}
-              {run !== undefined ? (
-                <span className="subagent-live-meta-item tabular-nums">
-                  <span className="subagent-live-meta-key">{t(META_KV_CREATED)}</span>
-                  {formatCompactTimestamp(run.createdAt)}
-                </span>
-              ) : null}
-              {nodeId !== undefined || effectiveCwd !== undefined ? (
-                <span className="subagent-live-meta-item mono">
-                  <span className="subagent-live-meta-key">{t(META_KV_LOCATION)}</span>
-                  {[nodeId, effectiveCwd].filter((s) => s !== undefined && s !== '').join(':')}
-                </span>
-              ) : null}
-              {worktree !== undefined ? (
-                <span className="subagent-live-meta-item mono">
-                  <span className="subagent-live-meta-key">{t(META_KV_WORKTREE)}</span>
-                  {`${worktree.branch} (${worktree.path})`}
-                </span>
-              ) : null}
-            </div>
-          </div>
-        ) : null}
         {nodes.length > 0 ? (
           <div className="workflow-node-list">
             {nodes.map((n) => (

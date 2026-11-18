@@ -7,9 +7,9 @@
  * decisions — callers inject content via slots:
  * - activate: the header trigger renders as a real navigation <button>
  *   covering the main info area (subagent live card semantics, mounts
- *   subagent-card-clickable); actions, the metadata disclosure and the body
- *   stay sibling structures — no interactive element ever nests inside
- *   another (keyboard Enter/Space come from the native button);
+ *   subagent-card-clickable); actions and the body stay sibling structures —
+ *   no interactive element nests inside another (keyboard Enter/Space come
+ *   from the native button);
  * - toggle: the header trigger renders as a collapse toggle button (report
  *   card semantics, aria-expanded / aria-controls).
  * The two semantics are mutually exclusive: a toggle card never navigates on

@@ -315,43 +315,6 @@ button.workflow-active-tray-row-clickable:focus-visible {
   margin: 0 20px 8px;
 }
 
-/* 机器元数据收进原地展开：小号真实按钮（info）+ aria-expanded 控制的 kv 行 */
-.subagent-live-meta {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding-left: 15px;
-  min-width: 0;
-}
-
-.subagent-live-meta-toggle {
-  align-self: flex-start;
-  gap: 3px;
-  padding: 0 5px;
-  min-height: 22px;
-}
-
-.subagent-live-meta-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px 10px;
-  padding: 2px 0;
-  font-size: 11px;
-  color: var(--fg-muted);
-  min-width: 0;
-}
-
-.subagent-live-meta-item {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-.subagent-live-meta-key {
-  color: var(--fg-subtle);
-  margin-right: 4px;
-}
-
 .workflow-report-expanded {
   gap: 8px;
 }

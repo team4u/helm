@@ -1135,14 +1135,11 @@ test('SubagentLiveCard 点击契约：头部主体为唯一真实导航按钮，
   assert.ok(html.includes('subagent-card-clickable'), '整卡应具有可点击类名')
   assert.ok(html.includes('<button type="button" class="subagent-live-trigger subagent-card-clickable"'), '整卡主体是真实导航 button')
   assert.ok(html.includes('Open subagent #11 drawer'), '整卡应带有打开抽屉的可访问性描述')
-  // 第 1 层（trigger）就是唯一的真实导航按钮；第 2 层（subline）不是交互元素，
-  // 元数据披露的小按钮只出现在 .subagent-live-meta 内（与导航按钮同级结构，无嵌套）。
+  // 第 1 层（trigger）就是唯一的真实导航按钮；第 2 层（subline）不是交互元素。
   const triggerBtnMatch = html.match(/<button type="button" class="subagent-live-trigger subagent-card-clickable"[^>]*>/)
   assert.ok(triggerBtnMatch !== null, '第 1 层 trigger 为真实导航 button')
   assert.ok(!triggerBtnMatch![0].includes('subagent-live-subline'), '导航按钮不包裹 subline 层')
   assert.ok(!html.includes('<button type="button" class="subagent-live-subline'), '第 2 层不得为独立 button')
-  // 元数据披露结构存在（位于导航按钮之外的同级结构中）。
-  assert.ok(html.includes('class="subagent-live-meta"'), '元数据披露结构存在')
 })
 
 const EMOJI_RE = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}\u{2190}-\u{21FF}\u{2700}-\u{27BF}]/u
@@ -1215,7 +1212,7 @@ test('SubagentLiveCard 与 ExternalRunSummary：任务名称主位展示，#id �
 })
 
 // ---------------------------------------------------------------------------
-// 卡片清亮化修正：纯灯主状态 / aborted 语义 / 元数据披露 / 标题可缩
+// 卡片清亮化修正：纯灯主状态 / aborted 语义 / 标题可缩
 // ---------------------------------------------------------------------------
 
 test('清亮化修正：后台 run 中止时主状态灯保留 aborted 菱形（不落成普通红灯/灰点）', { timeout: 60_000 }, () => {
@@ -1232,32 +1229,6 @@ test('清亮化修正：后台 run 中止时主状态灯保留 aborted 菱形（
   const extHtml = h2.renderSsr(e(ExternalRunSummary, { run: bgRun({ status: 'aborted' }), toolStatus: 'done' }))
   assert.ok(extHtml.includes('status-dot-aborted'), 'ExternalRunSummary 中止 run 应渲染 aborted 菱形灯')
   assert.ok(!extHtml.includes('status-dot-error'), 'ExternalRunSummary aborted 不得映射为普通错误红灯')
-})
-
-test('清亮化修正：机器元数据收进原地披露——默认隐藏，真实按钮展开，点击不触发整卡导航', { timeout: 60_000 }, () => {
-  const h = createWorkflowHostHarness({
-    conversationId: 1,
-    conversations: [summary(1, 'idle'), summary(11, 'done')],
-  })
-  const ui = h.mountNode(e(SubagentLiveCard, {
-    childConversationId: 11,
-    toolStatus: 'done',
-    backgroundRun: bgRun({ status: 'completed' }),
-  }))
-  try {
-    const toggle = ui.container.querySelector('button.subagent-live-meta-toggle') as HTMLButtonElement | null
-    assert.ok(toggle !== null, '元数据披露入口为真实按钮')
-    const row = ui.container.querySelector('.subagent-live-meta-row') as HTMLElement | null
-    assert.ok(row !== null && row.hidden === true, '元数据默认隐藏（不占表面宽度）')
-    assert.ok((row.textContent ?? '').includes('wf_bg1'), '元数据行携带 runId（展开后可见，不依赖 title）')
-    act(() => {
-      toggle.click()
-    })
-    assert.equal(row.hidden, false, '点击后原地展开')
-    assert.deepEqual(h.log.drawers, [], '点击元数据披露不触发整卡打开抽屉')
-  } finally {
-    ui.unmount()
-  }
 })
 
 test('清亮化修正：时间线插件行标题带可缩标记（移动端不再与状态簇相互挤压）', { timeout: 60_000 }, () => {
@@ -1290,7 +1261,7 @@ test('executionLightStatus 精度：后代真实失败不被 run 级中止掩盖
   assert.equal(executionLightStatus('done', abortedRun), 'done')
 })
 
-test('清亮化终审：自身状态文字移出主头部——灯可访问名称交代，元数据披露保留事实', { timeout: 60_000 }, () => {
+test('清亮化终审：自身状态文字移出主头部——灯的可访问名称交代自身状态', { timeout: 60_000 }, () => {
   const html = renderCard('done', {
     expanded: undefined,
     conversations: [summary(11, 'idle')],
@@ -1309,6 +1280,4 @@ test('清亮化终审：自身状态文字移出主头部——灯可访问名�
   // 主头部只保留一盏聚合灯；不再有 "Self: ..." 常驻徽章。
   assert.ok(!html.includes('class="badge badge-neutral" title="Run status'), '自身状态不再以常驻徽章摆在头部')
   assert.ok(/aria-label="Self: [^"]+; subtree aggregate:/.test(html), '灯的可访问名称交代自身状态')
-  // 展开的元数据披露保留自身状态事实行。
-  assert.ok(html.includes('Self status'), '元数据披露携带自身状态行')
 })

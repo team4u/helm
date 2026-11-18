@@ -22,8 +22,8 @@
   transition: background-color 0.15s ease, border-color 0.15s ease;
 }
 
-/* 主体导航真实按钮（覆盖头部主信息位）：动作/元数据披露/正文均为同级结构，
-   无嵌套交互，Enter/Space 由原生 button 承担。 */
+/* Actions and body remain siblings of the navigation button to avoid nested
+   controls; the native button handles Enter/Space activation. */
 .subagent-card-clickable {
   cursor: pointer;
   user-select: none;
@@ -255,18 +255,7 @@
   flex-shrink: 0;
 }
 
-.subagent-live-metadata { display: none; }
-
 @container subagent-card (max-width: 680px) {
-  .subagent-live-metadata {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px 8px;
-    padding: 5px 8px 0;
-    font-size: 10.5px;
-    color: var(--fg-muted);
-    overflow-wrap: anywhere;
-  }
   .subagent-action-label,
   .subagent-live-trigger > .subagent-worktree-badge,
   .subagent-live-stats {

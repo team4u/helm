@@ -12,7 +12,7 @@
  *    - 移除重复工作流库列表，保留跳转「工作流库」按钮；
  *    - 响应 workbench-focus 请求直开并高亮目标 run.id；
  *    - WorkflowRunCardBody 去除重复 .phase-bar、提供无损 kv-grid（运行 ID/时间/源/定义）与 Radix Popover `···` 菜单；
- *    - SubagentLiveCard / ExternalRunSummary / WorkflowNodeCards 无损展示任务标题（含 entries 回退）、坐标与时间戳。
+ *    - SubagentLiveCard / ExternalRunSummary / WorkflowNodeCards 展示任务标题（含 entries 回退），机器坐标留在对话详情中查看。
  * 4. 图标与设计Constraints:WorkflowIcon 支持 search/play、零 Emoji、零 callout--warn 拼写错、Fast Refresh 只导出组件与类型。
  */
 import assert from 'node:assert/strict'
@@ -630,8 +630,8 @@ describe('Workflow 三区零重复与无损呈现', () => {
       assert.ok(focusedWrap.textContent?.includes('wf_target'), '工作台无损显示 runId')
       assert.ok(focusedWrap.textContent?.includes('wf_seed'), '工作台无损显示 replayedFrom 源 run')
       assert.ok(focusedWrap.textContent?.includes('pane-42'), '工作台无损显示外部 executionId')
-      assert.ok(focusedWrap.textContent?.includes('remote-a:/srv/repo'), '工作台 SubagentLiveCard 无损显示 nodeId:cwd 物理坐标')
-      assert.ok(wbMount.container.textContent?.includes('remote-b:/srv/standalone'), '工作台独立子会话卡无损显示 nodeId:cwd')
+      assert.ok(!focusedWrap.textContent?.includes('remote-a:/srv/repo'), '工作台子代理卡不重复展示对话详情中的 nodeId:cwd')
+      assert.ok(!wbMount.container.textContent?.includes('remote-b:/srv/standalone'), '工作台独立子会话卡不重复展示对话详情中的 nodeId:cwd')
       assert.ok(wbMount.container.textContent?.includes('从 entries 提取的任务首行标题'), '工作台 SubagentLiveCard 应从 detail.entries 提取任务标题')
 
       // 低频操作（重放 / 保存为工作流）收纳入 Radix Popover `···`
@@ -941,7 +941,7 @@ describe('Workflow 三区零重复与无损呈现', () => {
       assert.ok(extWrap.querySelector('.subagent-external-card') !== null, '有节点的外部 run 必须走 ExternalRunSummary')
       assert.ok(extWrap.querySelector('.workflow-run-card') === null)
       assert.ok(extWrap.textContent?.includes('pane-42'))
-      assert.ok(extWrap.textContent?.includes('remote-x:/srv/ext'))
+      assert.ok(!extWrap.textContent?.includes('remote-x:/srv/ext'), '外部执行卡不重复展示对话详情中的 nodeId:cwd')
       assert.ok(extWrap.querySelector('.worktree-inspect') !== null, '外部 run 也应保留 WorktreeInspectSection')
 
       // 3. 深层后代 wf_grandchild 不得在根工作台平铺出现

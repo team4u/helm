@@ -159,7 +159,7 @@ test('时间线单行与工作台整卡均点击触发 openConversationDrawer（
     await rerender(e(SubagentLiveCard, { childConversationId: 11, toolStatus: 'running' }))
     const card = host.querySelector('.subagent-card-clickable') as HTMLButtonElement | null
     assert.ok(card !== null, '工作台一体化整卡必须渲染 subagent-card-clickable')
-    assert.equal(card.tagName, 'BUTTON', '整卡主体是真实导航 button（元数据披露/动作为同级结构，无嵌套交互）')
+    assert.equal(card.tagName, 'BUTTON', '整卡主体是真实导航 button（动作区为同级结构，无嵌套交互）')
     assert.equal(card.querySelectorAll('button').length, 0, '导航按钮内无嵌套交互')
     act(() => {
       card!.click()
@@ -210,12 +210,7 @@ test('时间线单行与工作台紧凑卡均有实时内容也不内联展开�
     assert.ok(host.querySelector('.subagent-live-stream') === null, '不能显示内联实时流')
     assert.ok(host.querySelector('.subagent-live-card-expanded') === null, '不能使用展开态样式')
     assert.ok(host.querySelector('details') === null, '不能提供原始调用详情的展开入口')
-    // 展开控件仅允许出现在机器元数据披露（.subagent-live-meta）上；实时流不得内联展开。
-    const expandables = [...host.querySelectorAll('[aria-expanded]')] as HTMLElement[]
-    assert.ok(
-      expandables.every((el) => el.closest('.subagent-live-meta') !== null),
-      '不能有元数据披露之外的展开控件',
-    )
+    assert.equal(host.querySelectorAll('[aria-expanded]').length, 0, '紧凑卡直接打开详情，不提供内联展开控件')
   }
   try {
     assertCompact()
@@ -1124,7 +1119,7 @@ test('WorkflowRunCardBody 头部整块可点展开：主体真实按钮切换，
   }
 })
 
-test('执行卡结构：元数据披露与动作区均在导航按钮之外的同级结构（无嵌套交互）', { timeout: 60_000 }, async () => {
+test('执行卡结构：动作区位于导航按钮之外，点击主体打开详情', { timeout: 60_000 }, async () => {
   const child11 = { ...summary(11, 'working'), parentConversationId: 1, parentToolCallId: 'call-nested' }
   setWorkflowClientStub({
     docValue: {
@@ -1151,15 +1146,10 @@ test('执行卡结构：元数据披露与动作区均在导航按钮之外的�
   try {
     const navBtn = host.querySelector('button.subagent-card-clickable') as HTMLButtonElement | null
     assert.ok(navBtn !== null, '导航主体为真实按钮')
-    const metaToggle = host.querySelector('button.subagent-live-meta-toggle') as HTMLButtonElement | null
-    assert.ok(metaToggle !== null, '元数据披露入口存在')
-    assert.ok(metaToggle !== null && navBtn !== null && !navBtn.contains(metaToggle), '元数据披露不在导航按钮内部（同级结构）')
     const abortBtn = host.querySelector('.subagent-live-actions button.btn-danger') as HTMLButtonElement | null
     if (abortBtn !== null) {
       assert.ok(!navBtn!.contains(abortBtn), '动作按钮不在导航按钮内部（同级结构）')
     }
-    // 展开元数据不影响导航；点击导航仍打开抽屉。
-    await act(async () => { metaToggle!.click() })
     await act(async () => { navBtn!.click() })
     assert.deepEqual(spy.drawerCalls, [11], '点击导航主体仍打开子会话抽屉')
   } finally {

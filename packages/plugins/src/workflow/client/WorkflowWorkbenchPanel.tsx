@@ -328,8 +328,6 @@ function ExternalSubagentWorkbenchCard({
         worktree={worktree}
         toolStatus={toolStatus}
         executionId={executionId}
-        nodeId={execNode?.nodeId ?? worktreeNode?.nodeId}
-        effectiveCwd={execNode?.effectiveCwd}
         viewer={viewer}
       />
       <WorkflowRunResultBox

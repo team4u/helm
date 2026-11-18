@@ -239,15 +239,7 @@ export function SubagentLiveCard(props: {
         />
       }
       snippet={
-        <SubagentCardSublines
-          snippet={snippet}
-          frontline={frontline}
-          nodeId={summary?.nodeId}
-          cwd={summary?.cwd}
-          createdAt={backgroundRun?.createdAt ?? summary?.createdAt}
-          runId={backgroundRun?.id}
-          selfStatus={effectiveStatus !== selfBadge.status ? selfBadge.label : undefined}
-        />
+        <SubagentCardSublines snippet={snippet} frontline={frontline} />
       }
     >
       {childNodes.length > 0 ? <ExecutionChildrenRows nodes={childNodes} /> : null}
