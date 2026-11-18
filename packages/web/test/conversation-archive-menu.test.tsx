@@ -198,3 +198,34 @@ test('明细菜单归档资格：bot 托管与子代理派生会话不渲染归�
     .find((el) => el.textContent?.includes('Archive conversation'))
   assert.ok(derivedItem === undefined, '子代理派生会话不得提供归档入口')
 })
+
+test('明细「更多操作」菜单为非模态：打开后点击外部会话按钮一次即关闭菜单并切换，且不抢回焦点', { timeout: 60_000 }, async () => {
+  conversations = [summary(1), summary(2)]
+  await mount('#/c/1')
+
+  const outsideBtn = document.createElement('button')
+  outsideBtn.type = 'button'
+  outsideBtn.textContent = '切换到会话 2'
+  let outsideClickCount = 0
+  outsideBtn.addEventListener('click', () => {
+    outsideClickCount += 1
+    outsideBtn.focus()
+  })
+  document.body.appendChild(outsideBtn)
+
+  await openMenu()
+  assert.ok(document.querySelector('[role="menu"]'), '更多操作菜单已打开')
+  assert.notEqual(document.body.style.pointerEvents, 'none', '不得禁用 body pointer-events 吞掉外部首次点击')
+
+  const menuTrigger = document.querySelector<HTMLButtonElement>('.pane-more-menu button[aria-label="More conversation actions"]')!
+  await act(async () => {
+    outsideBtn.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, cancelable: true }))
+    outsideBtn.click()
+  })
+  await settle()
+
+  assert.equal(outsideClickCount, 1, '外部按钮首次点击立即生效')
+  assert.ok(document.querySelector('[role="menu"]') === null, '菜单已自动关闭')
+  assert.ok(document.activeElement !== menuTrigger, '外部交互关闭菜单后不得把焦点抢回原触发按钮')
+  outsideBtn.remove()
+})

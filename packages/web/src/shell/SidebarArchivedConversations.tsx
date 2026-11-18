@@ -32,6 +32,7 @@ import {
   buildArchivedConversationList,
   getConversationPresence,
   presenceNavClassSuffix,
+  shouldSkipNavRowClick,
 } from './sidebar-model.js'
 import type { ArchivedConversationListItem } from './sidebar-model.js'
 import { archiveBatchNotice, patchConversationsArchived } from './archive-ops.js'
@@ -65,8 +66,14 @@ function ArchivedConversationRow({
   return (
     <div
       className={`nav-item nav-item-sub${presenceNavClassSuffix(presence)}`}
-      onClick={() => {
-        if (batchMode) onToggleSelect?.(conv.id)
+      onClick={(e) => {
+        if (shouldSkipNavRowClick(e.target, e.currentTarget)) return
+        if (batchMode) {
+          onToggleSelect?.(conv.id)
+          return
+        }
+        onOpenConversation(conv.id)
+        onNavigate?.()
       }}
     >
       {batchMode && (

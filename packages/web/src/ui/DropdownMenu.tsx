@@ -19,8 +19,8 @@ export function DropdownMenuPortal({ children, container }: DropdownMenuPortalPr
   )
 }
 
-export function DropdownMenuRoot(props: DropdownMenuPrimitive.DropdownMenuProps) {
-  return <DropdownMenuPrimitive.Root {...props} />
+export function DropdownMenuRoot({ modal = false, ...props }: DropdownMenuPrimitive.DropdownMenuProps) {
+  return <DropdownMenuPrimitive.Root modal={modal} {...props} />
 }
 
 export const DropdownMenuTrigger = DropdownMenuPrimitive.Trigger
@@ -153,8 +153,8 @@ DropdownMenuArrow.displayName = 'DropdownMenuArrow'
 /**
  * Generic Radix DropdownMenu wrapper component.
  */
-export function DropdownMenu(props: DropdownMenuPrimitive.DropdownMenuProps) {
-  return <DropdownMenuPrimitive.Root {...props} />
+export function DropdownMenu({ modal = false, ...props }: DropdownMenuPrimitive.DropdownMenuProps) {
+  return <DropdownMenuPrimitive.Root modal={modal} {...props} />
 }
 
 DropdownMenu.Root = DropdownMenuRoot

@@ -667,3 +667,22 @@ export function openAgentStandby(
   onNavigate?.()
 }
 
+/**
+ * Whether a click inside a `.nav-item` row already landed on its primary
+ * `.nav-item-main` button or an auxiliary interactive control (row action menu,
+ * new-topic "+", split button, batch checkbox). Row-level `onClick` delegates
+ * to the row action only when this returns false so row padding, gaps, and
+ * non-interactive `.nav-item-meta` badges never drop clicks while interactive
+ * controls never double-fire.
+ */
+export function shouldSkipNavRowClick(
+  target: EventTarget | null,
+  rowElement: HTMLElement,
+): boolean {
+  if (typeof Element === 'undefined' || !(target instanceof Element)) return false
+  const interactive = target.closest(
+    'button, a, input, select, textarea, [role="button"], [role="menuitem"], [role="checkbox"]',
+  )
+  return interactive !== null && interactive !== rowElement
+}
+

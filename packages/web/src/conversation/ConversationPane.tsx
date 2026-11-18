@@ -95,6 +95,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
   const prevConversationIdRef = useRef(conversationId)
   const moreMenuRef = useRef<HTMLSpanElement | null>(null)
   const moreButtonRef = useRef<HTMLButtonElement | null>(null)
+  const moreInteractedOutsideRef = useRef(false)
 
   const isWorking = conversation?.status === 'working'
   const isCompacting = conversation?.contextUsage?.compacting === true
@@ -443,7 +444,13 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
             </span>
           )}
           <span className="pane-more-menu" ref={moreMenuRef}>
-            <DropdownMenu open={moreOpen} onOpenChange={setMoreOpen}>
+            <DropdownMenu
+              open={moreOpen}
+              onOpenChange={(next) => {
+                if (next) moreInteractedOutsideRef.current = false
+                setMoreOpen(next)
+              }}
+            >
               <DropdownMenuTrigger asChild>
                 <button
                   type="button"
@@ -461,7 +468,14 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
                   className="pane-more-popover"
                   align="end"
                   sideOffset={6}
+                  onInteractOutside={() => {
+                    moreInteractedOutsideRef.current = true
+                  }}
                   onCloseAutoFocus={(e) => {
+                    if (moreInteractedOutsideRef.current) {
+                      moreInteractedOutsideRef.current = false
+                      return
+                    }
                     e.preventDefault()
                     moreButtonRef.current?.focus()
                   }}

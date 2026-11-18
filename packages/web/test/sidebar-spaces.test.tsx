@@ -686,3 +686,70 @@ test('Sidebar 批量模式 DOM 行为：勾选框仅在会话子项，站位头�
   })
   assert.ok(coderStanding.querySelector('.agent-conversations-list'), '再次点击站位头部重新展开会话子列表')
 })
+
+test('Sidebar 会话行全行命中与非模态菜单：点击行外缘/meta 区域一次直达切换，打开行菜单时点击其他会话一次切换', { timeout: 60_000 }, async () => {
+  const store = makeTestStore({
+    conversations: [
+      conv({ id: 1, title: '个人助理', profileId: 'assistant' }),
+      conv({ id: 2, title: '周末计划', profileId: 'assistant', nodeId: 'remote-a' }),
+      conv({ id: 3, title: '代码评审', profileId: 'assistant' }),
+    ],
+    profiles: [
+      { id: 'assistant', name: '个人助理' },
+      { id: 'coder', name: '编码专员' },
+    ],
+    primaryTarget: { kind: 'conversation', conversationId: 1 },
+  })
+  render(store, e(LiveSidebar))
+  await act(async () => {})
+
+  const subRows = [...document.body.querySelectorAll<HTMLElement>('.nav-item-sub')]
+  const weekendRow = subRows.find((r) => r.textContent?.includes('周末计划'))!
+  const weekendMeta = weekendRow.querySelector<HTMLElement>('.nav-item-meta')!
+  const weekendNodeTag = weekendRow.querySelector<HTMLElement>('.nav-item-meta .mono')!
+  const weekendRowActionsWrap = weekendRow.querySelector<HTMLElement>('.nav-item-row-actions')!
+
+  // 1) 点击行尾 meta 区域 / 节点标记 / row-actions 渐变包装层，均直接切换会话
+  await act(async () => {
+    weekendNodeTag.click()
+  })
+  assert.deepEqual(store.getPrimaryTarget(), { kind: 'conversation', conversationId: 2 }, '点击节点标记直接切换会话')
+
+  const reviewRow = subRows.find((r) => r.textContent?.includes('代码评审'))!
+  await act(async () => {
+    reviewRow.click()
+  })
+  assert.deepEqual(store.getPrimaryTarget(), { kind: 'conversation', conversationId: 3 }, '点击会话行 div 外缘直接切换会话')
+
+  await act(async () => {
+    weekendRowActionsWrap.click()
+  })
+  assert.deepEqual(store.getPrimaryTarget(), { kind: 'conversation', conversationId: 2 }, '点击 row-actions 渐变包装层直接切换会话')
+  void weekendMeta
+
+  // 2) 点击行尾「更多操作」菜单触发按钮打开菜单，不触发会话切换，且不锁定 body pointer-events
+  const firstRowMenuBtn = subRows[0]!.querySelector<HTMLButtonElement>('.nav-item-row-actions button')!
+  await act(async () => {
+    firstRowMenuBtn.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, cancelable: true }))
+  })
+  assert.equal(document.querySelectorAll('[role="menuitem"]').length > 0, true, '行操作菜单已打开')
+  assert.notEqual(document.body.style.pointerEvents, 'none', '非模态菜单不得阻塞页面其他区域的首次点击')
+  assert.deepEqual(store.getPrimaryTarget(), { kind: 'conversation', conversationId: 2 }, '打开行菜单本身不切换会话')
+
+  // 3) 菜单展开状态下直接点击另一个会话行：一次点击同时关闭菜单并切换会话
+  await act(async () => {
+    reviewRow.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, cancelable: true }))
+    reviewRow.click()
+  })
+  assert.deepEqual(store.getPrimaryTarget(), { kind: 'conversation', conversationId: 3 }, '菜单打开时点击另一会话应一次切换')
+  assert.equal(document.querySelectorAll('[role="menuitem"]').length, 0, '切换后原菜单已关闭')
+
+  // 4) 智能体站位行计数徽标（meta 内）同样可点击进入待命，而 "+" 按钮仅新建话题
+  const assistantRow = [...document.body.querySelectorAll<HTMLElement>('.agent-standing-row')]
+    .find((r) => r.textContent?.includes('个人助理'))!
+  const countBadge = assistantRow.querySelector<HTMLElement>('.agent-standing-count')!
+  await act(async () => {
+    countBadge.click()
+  })
+  assert.deepEqual(store.getPrimaryTarget(), { kind: 'agent', profileId: 'assistant' }, '点击站位计数徽标直达待命')
+})

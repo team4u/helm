@@ -226,6 +226,7 @@
 .nav-item-main {
   display: flex;
   align-items: center;
+  align-self: stretch;
   gap: 8px;
   min-width: 0;
   flex: 1;
@@ -396,6 +397,15 @@
   .nav-item:has(:focus-visible) .sidebar-split-action,
   .nav-item:has([aria-expanded="true"]) .sidebar-split-action {
     opacity: 1;
+  }
+
+  /* Only the actual action controls accept pointer events; the 14px gradient fade padding stays click-through for the row. */
+  .nav-item:hover .nav-item-row-actions > *,
+  .nav-item:has(:focus-visible) .nav-item-row-actions > *,
+  .nav-item:has([aria-expanded="true"]) .nav-item-row-actions > *,
+  .nav-item:hover .sidebar-split-action > *,
+  .nav-item:has(:focus-visible) .sidebar-split-action > *,
+  .nav-item:has([aria-expanded="true"]) .sidebar-split-action > * {
     pointer-events: auto;
   }
 

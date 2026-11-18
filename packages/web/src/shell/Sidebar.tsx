@@ -29,6 +29,7 @@ import {
   isConversationArchived,
   presenceNavClassSuffix,
   resolveSidebarTargetPresence,
+  shouldSkipNavRowClick,
   type SidebarStoreView,
   type SidebarTargetPresence,
 } from './sidebar-model.js'
@@ -94,6 +95,10 @@ function ConversationRow({
     <div
       className={`nav-item sidebar-conversation-row${presenceNavClassSuffix(presence)}`}
       style={{ minHeight: 30, opacity: 1 }}
+      onClick={(e) => {
+        if (shouldSkipNavRowClick(e.target, e.currentTarget)) return
+        onOpen()
+      }}
     >
       <button
         type="button"
@@ -212,6 +217,10 @@ function ViewNavGroup({ store }: { store: SidebarStoreView }) {
             key={view.key}
             className={`nav-item${presenceNavClassSuffix(presence)}`}
             style={{ cursor: 'pointer' }}
+            onClick={(e) => {
+              if (shouldSkipNavRowClick(e.target, e.currentTarget)) return
+              store.openTarget(view.target)
+            }}
           >
             <button
               type="button"
@@ -222,7 +231,7 @@ function ViewNavGroup({ store }: { store: SidebarStoreView }) {
               <HelmIcon name={view.icon} size={14} />
               <span className="nav-item-label">{view.label}</span>
             </button>
-            <span className="nav-item-meta" onClick={(e) => e.stopPropagation()}>
+            <span className="nav-item-meta">
               <SidebarPaneTag paneTag={presence.paneTag} />
               <span className="sidebar-split-action">
                 <HoverIconButton
@@ -394,7 +403,15 @@ function SettingsNavGroup({ store, onNavigate }: { store: SidebarStoreView; onNa
       {CENTER_TARGETS.map((key) => {
         const presence = resolveSidebarTargetPresence(store, (target) => target.kind === key)
         return (
-          <div key={key} className={`nav-item settings-nav-item${presenceNavClassSuffix(presence)}`}>
+          <div
+            key={key}
+            className={`nav-item settings-nav-item${presenceNavClassSuffix(presence)}`}
+            onClick={(e) => {
+              if (shouldSkipNavRowClick(e.target, e.currentTarget)) return
+              store.openTarget({ kind: key })
+              onNavigate?.()
+            }}
+          >
             <button
               type="button"
               className="nav-item-main nav-open"

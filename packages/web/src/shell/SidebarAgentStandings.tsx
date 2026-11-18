@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
 import { conversationsApi } from '../lib/api.js'
 import type { ConversationSummary } from '@helm/protocol/browser'
 import { archiveBatchNotice, patchConversationsArchived } from './archive-ops.js'
@@ -19,6 +19,7 @@ import {
   isConversationDeletable,
   openAgentStandby,
   presenceNavClassSuffix,
+  shouldSkipNavRowClick,
   type AgentStanding,
   type SidebarStoreView,
 } from './sidebar-model.js'
@@ -158,33 +159,35 @@ function AgentStandingItem({
   // Collapsed standing rows with a conversation sub-list expand in place on first
   // tap so mobile drawer users can inspect and choose from the revealed topics.
   const keepDrawerOpenOnExpand = !batchMode && !isOpen && hasSubList
+  const canOpenStanding = batchMode || agent.primaryConversation !== null || agent.canCreateConversation
+
+  const handleStandingActivate = (e: MouseEvent): void => {
+    if (batchMode) {
+      e.stopPropagation()
+      if (hasSubList) setExpanded((v) => !v)
+      return
+    }
+    if (!canOpenStanding) return
+    if (keepDrawerOpenOnExpand) {
+      e.stopPropagation()
+    }
+    openPrimary(keepDrawerOpenOnExpand)
+  }
 
   return (
     <div className={`agent-standing${isOpen ? ' agent-standing-open' : ''}`}>
       <div
         className={`nav-item agent-standing-row${presenceNavClassSuffix(standbyPresence)}${isBranchActive ? ' agent-standing-row-branch' : ''}`}
         onClick={(e) => {
-          if (batchMode) {
-            e.stopPropagation()
-            if (hasSubList) setExpanded((v) => !v)
-          }
+          if (shouldSkipNavRowClick(e.target, e.currentTarget)) return
+          handleStandingActivate(e)
         }}
       >
         <button
           type="button"
           className="nav-item-main nav-open"
-          onClick={(e) => {
-            if (batchMode) {
-              e.stopPropagation()
-              if (hasSubList) setExpanded((v) => !v)
-              return
-            }
-            if (keepDrawerOpenOnExpand) {
-              e.stopPropagation()
-            }
-            openPrimary(keepDrawerOpenOnExpand)
-          }}
-          disabled={!batchMode && !agent.primaryConversation && !agent.canCreateConversation}
+          onClick={handleStandingActivate}
+          disabled={!canOpenStanding}
           aria-current={standbyPresence.active ? 'page' : undefined}
         >
           <span className="nav-status-slot">
@@ -200,7 +203,7 @@ function AgentStandingItem({
           </span>
           <span className="nav-item-label">{agent.label}</span>
         </button>
-        <span className="nav-item-meta" onClick={(e) => e.stopPropagation()}>
+        <span className="nav-item-meta">
           {!isOpen && agent.primaryConversation?.nodeId && agent.primaryConversation.nodeId !== 'local' && (
             <RemoteNodeTag nodeId={agent.primaryConversation.nodeId} />
           )}
@@ -329,14 +332,21 @@ function AgentConversationRow({
   const presence = getConversationPresence(store, conv.id)
   const deletable = isConversationDeletable(conv)
 
+  const handleRowActivate = (e: MouseEvent): void => {
+    if (batchMode) {
+      e.stopPropagation()
+      if (deletable) onToggleSelect?.(conv.id)
+      return
+    }
+    store.openTarget({ kind: 'conversation', conversationId: conv.id })
+  }
+
   return (
     <div
       className={`nav-item nav-item-sub${presenceNavClassSuffix(presence)}`}
       onClick={(e) => {
-        if (batchMode) {
-          e.stopPropagation()
-          if (deletable) onToggleSelect?.(conv.id)
-        }
+        if (shouldSkipNavRowClick(e.target, e.currentTarget)) return
+        handleRowActivate(e)
       }}
     >
       {batchMode && (
@@ -355,14 +365,7 @@ function AgentConversationRow({
       <button
         type="button"
         className="nav-item-main nav-open"
-        onClick={(e) => {
-          if (batchMode) {
-            e.stopPropagation()
-            if (deletable) onToggleSelect?.(conv.id)
-            return
-          }
-          store.openTarget({ kind: 'conversation', conversationId: conv.id })
-        }}
+        onClick={handleRowActivate}
         aria-current={presence.active ? 'page' : undefined}
       >
         <span className="nav-status-slot">
