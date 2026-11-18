@@ -191,6 +191,38 @@ test('stop refuses to signal a live pid whose health endpoint is unreachable', {
   assert.ok(pidRecord !== null);
 });
 
+test('stop refuses a live pid whose recorded start time no longer matches (pid reuse)', {
+  timeout: 60_000,
+  // The start-time identity proof is Linux /proc only; other platforms fall back to the health gate.
+  skip: process.platform !== 'linux' ? 'pid start-time identity proof requires Linux /proc' : false,
+}, async (t) => {
+  const h = await setupInstalledRelease(t, useTempDir(t, 'helm-launcher-reuse-'));
+  const { io } = captureIo(sanitizedHostEnv());
+  const started = await startHub(h.root, io, { flags: { port: h.port }, pollMs: 100 });
+  t.after(() => cleanupPid(started.pid));
+  const record = await readPidRecord(h.root);
+  assert.ok(record !== null);
+  assert.ok(typeof record.startTime === 'number', 'a Linux spawn records the start time');
+
+  // Health answers fine, but a tampered/stale start time proves the pid is not the recorded hub:
+  // signalling must be refused even though the port serves hub-shaped responses.
+  await writePidRecord(h.root, { ...record, startTime: record.startTime! + 1 });
+  await assert.rejects(stopHub(h.root, io), (error: unknown) => {
+    assert.ok(error instanceof UsageError);
+    assert.equal(error.code, 'hub_identity_unverifiable');
+    assert.match(error.message, /no longer matches the recorded process start time/);
+    return true;
+  });
+  process.kill(started.pid, 0); // untouched
+  assert.ok((await readPidRecord(h.root)) !== null, 'pid record retained for manual verification');
+
+  // The honest record stops normally (proof by start time outranks the health probe).
+  await writePidRecord(h.root, record);
+  const stopped = await stopHub(h.root, io);
+  assert.equal(stopped.wasRunning, true);
+  await waitUntilDead(started.pid);
+});
+
 test('stop escalates to process-tree termination when SIGTERM is ignored', { timeout: 60_000 }, async (t) => {
   const h = await setupInstalledRelease(t, useTempDir(t, 'helm-launcher-life-'), { mode: 'ignore-signal' });
   const { io } = captureIo(sanitizedHostEnv());

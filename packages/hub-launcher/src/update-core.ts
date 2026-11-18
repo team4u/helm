@@ -7,9 +7,7 @@
  * generic is reimplemented here.
  */
 import {
-  computeSri,
-  downloadTarball,
-  fetchExactManifest,
+  downloadVerifiedTarball,
   fetchLatestVersion,
   resolveRegistryUrl,
   runNpm,
@@ -20,6 +18,8 @@ import {
 export interface UpdateCoreFetchOptions {
   registryUrl?: string;
   fetchFn?: typeof fetch;
+  /** npm dist-tag to resolve (`latest` by default; e.g. `beta` for prerelease channels). */
+  tag?: string;
 }
 
 /**
@@ -50,18 +50,15 @@ export interface UpdateCore {
 export function defaultUpdateCore(): UpdateCore {
   return {
     async fetchLatestVersion(pkgName, options) {
-      return await fetchLatestVersion(resolveRegistryUrl(options?.registryUrl), pkgName, options?.fetchFn ?? fetch);
+      return await fetchLatestVersion(
+        resolveRegistryUrl(options?.registryUrl),
+        pkgName,
+        options?.fetchFn ?? fetch,
+        options?.tag ?? 'latest',
+      );
     },
     async downloadVerifiedTarball(registryUrl, pkgName, version, destPath, fetchImpl) {
-      const fetchFn = fetchImpl ?? fetch;
-      const manifest = await fetchExactManifest(registryUrl, pkgName, version, fetchFn);
-      await downloadTarball(manifest.tarball, destPath, { fetchFn });
-      const actual = await computeSri(destPath);
-      if (actual !== manifest.integrity) {
-        throw new Error(
-          `${pkgName}@${version} tarball sha512 integrity check failed: expected ${manifest.integrity}, got ${actual}`,
-        );
-      }
+      await downloadVerifiedTarball(registryUrl, pkgName, version, destPath, fetchImpl ?? fetch);
     },
     runNpm(args, cwd, timeoutMs) {
       return runNpm([...args], cwd, timeoutMs);

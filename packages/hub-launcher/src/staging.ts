@@ -6,19 +6,18 @@
  * port fake whose staging delegates to the real engine); this module only defines the Hub layout
  * policy inside the staged extractor:
  *
- * 1. obtain the payload tarball — registry (manifest fetch + tarball download + sha512 SRI
- *    verification, all engine primitives behind the port) or a local `--tarball` file (verified
- *    by the payload's own `start.mjs check` checksum contract);
- * 2. unpack the tarball into the candidate's `node_modules/<pkg>` slot, then run
- *    `npm install --omit=dev --ignore-scripts` inside the unpacked payload root (the payload
- *    ships its `@helm/*` dependencies as relative `file:./<pkg>.tgz` archives; npm resolves those
- *    against the outer tarball's cache extraction path when installing the tarball directly —
- *    before the outer package lands on disk, which fails with ENOENT on real artifacts — while
- *    the unpacked root is the layout npm resolves correctly; esbuild platform binaries arrive via
- *    optionalDependencies). Both entry points (registry and `--tarball`) share this exact path;
- * 3. verify the installed package identity (name/version) and the `start.mjs` + `manifest.json`
- *    contract files, including the manifest's `nodeEngines` floor against the launcher's own Node;
- * 4. run `node start.mjs check` — the payload's own zero-dependency self-verification (entry
+ * 1. obtain the payload tarball as a launcher-owned copy inside the candidate — registry
+ *    (manifest fetch + tarball download + sha512 SRI verification, all engine primitives behind
+ *    the port) or an explicit copy of a local `--tarball` file;
+ * 2. safely unpack the archive into the candidate root, stripping the npm-pack `package/`
+ *    prefix (`tarball.ts` rejects links, escapes, and partial parses) — the payload ships its
+ *    `@helm/*` dependency closure as bundled `file:./<pkg>.tgz` members, which only resolve after
+ *    the outer archive is unpacked (`npm install <outer.tgz>` fails with ENOENT);
+ * 3. `npm install --omit=dev --ignore-scripts` in the unpacked root (one install completes the
+ *    whole dependency closure; esbuild platform binaries arrive via optionalDependencies);
+ * 4. verify the payload identity (name/version) and the `start.mjs` + `manifest.json` contract
+ *    files, including the manifest's `nodeEngines` floor against the launcher's own Node;
+ * 5. run `node start.mjs check` — the payload's own zero-dependency self-verification (entry
  *    checksums, dependency resolution, runtime capability probes). Never starts the Hub.
  *
  * Cache reuse is the engine's marker contract: a valid `.complete` marker short-circuits with
@@ -31,10 +30,10 @@ import path from 'node:path';
 import process from 'node:process';
 import { killProcessTree } from '@helm/env-io';
 import { isStrictSemver } from '@helm/protocol';
-import { extract as tarExtract } from 'tar';
-import { DEFAULTS, assertInstallIsolation, packageModulesDir, pathsOf, resolveRegistryUrl } from './layout.js';
+import { DEFAULTS, assertInstallIsolation, pathsOf, resolveRegistryUrl } from './layout.js';
 import { resolveInsideRelease } from './records.js';
 import type { LauncherIo } from './io.js';
+import { unpackPayloadTarball } from './tarball.js';
 import { defaultUpdateCore, type UpdateCore } from './update-core.js';
 
 const CHECK_OUTPUT_LIMIT = 400_000;
@@ -55,7 +54,7 @@ export interface StageHubOptions {
   /** Effective Hub data directory for the program/data separation guard. */
   dataDir: string;
   registryUrl?: string;
-  /** Local tarball install source (skips the registry download; still npm-installed + self-checked). */
+  /** Local tarball install source (skips the registry download; still unpacked + npm-installed + self-checked). */
   tarballPath?: string;
   force?: boolean;
   fetchFn?: typeof fetch;
@@ -155,68 +154,32 @@ function assertNodeEngines(nodeEngines: unknown, manifestPath: string, nodeVersi
 }
 
 /**
- * Unpack a packed payload tarball into `destDir` (the candidate's `node_modules/<pkg>` slot).
- *
- * Why unpack instead of `npm install <tarball>`: the payload manifest carries `@helm/*`
- * dependencies as relative `file:./<pkg>.tgz` archives, and npm resolves those against the outer
- * tarball's cache extraction path before the outer package lands on disk (ENOENT with real
- * artifacts); `npm install` inside the unpacked payload root is the layout npm resolves correctly.
- *
- * Security boundary: only regular files and directories under the `package/` prefix are
- * extracted — links, device nodes, absolute paths, and `..` segments are rejected outright.
+ * Verify the unpacked payload package identity and contract files at the candidate root (the
+ * layout `npm install` runs in; `start.mjs`/`manifest.json` sit at the root, dependencies under
+ * `node_modules/`). Returns the release-relative entry path.
  */
-async function extractPayloadTarball(tarballPath: string, destDir: string): Promise<void> {
-  await fsp.mkdir(destDir, { recursive: true });
-  let accepted = 0;
-  await tarExtract({
-    f: tarballPath,
-    cwd: destDir,
-    strip: 1,
-    filter: (entryPath: string, entry) => {
-      const rel = entryPath.replace(/\\/g, '/');
-      if (rel.split('/').includes('..')) return false;
-      if (rel !== 'package' && !rel.startsWith('package/')) return false;
-      const entryType = (entry as { type?: string }).type;
-      if (entryType !== 'File' && entryType !== 'Directory') return false;
-      accepted += 1;
-      return true;
-    },
-  });
-  if (accepted === 0) {
-    throw new Error(`payload tarball ${tarballPath} contains no extractable package/ entries`);
-  }
-  try {
-    await fsp.access(path.join(destDir, 'package.json'));
-  } catch {
-    throw new Error(
-      `payload tarball ${tarballPath} did not contain a package/ root (package.json missing after unpack)`,
-    );
-  }
-}
-
-/** Verify the npm-installed payload package identity and contract files inside `rootDir`. */
 async function verifyPayloadLayout(
-  rootDir: string,
+  releaseRoot: string,
   pkgName: string,
   version: string,
   nodeVersion: string,
 ): Promise<string> {
-  const payloadDir = packageModulesDir(path.join(rootDir, 'node_modules'), pkgName);
+  const pkgJsonPath = path.join(releaseRoot, 'package.json');
   let pkgJson: Record<string, unknown>;
   try {
-    pkgJson = JSON.parse(await fsp.readFile(path.join(payloadDir, 'package.json'), 'utf8')) as Record<string, unknown>;
+    pkgJson = JSON.parse(await fsp.readFile(pkgJsonPath, 'utf8')) as Record<string, unknown>;
   } catch (error) {
     throw new Error(
-      `installed payload package.json unreadable (${payloadDir}): ${error instanceof Error ? error.message : String(error)}`,
+      `unpacked payload package.json unreadable (${pkgJsonPath}): ${error instanceof Error ? error.message : String(error)}`,
     );
   }
   if (pkgJson.name !== pkgName || pkgJson.version !== version) {
     throw new Error(
-      `installed payload package mismatch: expected ${pkgName}@${version}, got ${String(pkgJson.name)}@${String(pkgJson.version)} (${payloadDir})`,
+      `unpacked payload package mismatch: expected ${pkgName}@${version}, got ${String(pkgJson.name)}@${String(pkgJson.version)} (${pkgJsonPath})`,
     );
   }
-  const entry = path.join(payloadDir, 'start.mjs');
-  const manifest = path.join(payloadDir, 'manifest.json');
+  const entry = path.join(releaseRoot, 'start.mjs');
+  const manifest = path.join(releaseRoot, 'manifest.json');
   for (const [label, file] of [
     ['start.mjs entry', entry],
     ['manifest.json contract', manifest],
@@ -224,7 +187,7 @@ async function verifyPayloadLayout(
     try {
       await fsp.access(file);
     } catch {
-      throw new Error(`installed payload is missing its ${label}: ${file}`);
+      throw new Error(`unpacked payload is missing its ${label}: ${file}`);
     }
   }
   let manifestJson: Record<string, unknown>;
@@ -232,16 +195,48 @@ async function verifyPayloadLayout(
     manifestJson = JSON.parse(await fsp.readFile(manifest, 'utf8')) as Record<string, unknown>;
   } catch (error) {
     throw new Error(
-      `installed payload manifest.json unreadable (${manifest}): ${error instanceof Error ? error.message : String(error)}`,
+      `unpacked payload manifest.json unreadable (${manifest}): ${error instanceof Error ? error.message : String(error)}`,
     );
   }
   if (manifestJson.name !== pkgName || manifestJson.version !== version) {
     throw new Error(
-      `installed payload manifest mismatch: expected ${pkgName}@${version}, got ${String(manifestJson.name)}@${String(manifestJson.version)} (${manifest})`,
+      `unpacked payload manifest mismatch: expected ${pkgName}@${version}, got ${String(manifestJson.name)}@${String(manifestJson.version)} (${manifest})`,
     );
   }
   assertNodeEngines(manifestJson.nodeEngines, manifest, nodeVersion);
-  return path.relative(rootDir, entry);
+  return 'start.mjs';
+}
+
+/**
+ * Materialize the launcher-owned tarball copy inside the candidate: the registry channel
+ * downloads (already verified by the port), the `--tarball` channel copies the local file in so
+ * validation and extraction always observe identical bytes.
+ */
+async function prepareTarballCopy(
+  stagingDir: string,
+  core: UpdateCore,
+  options: StageHubOptions,
+  registryUrl: string,
+  version: string,
+  pkgName: string,
+): Promise<string> {
+  const dest = path.join(stagingDir, '.downloads', 'payload.tgz');
+  await fsp.mkdir(path.dirname(dest), { recursive: true });
+  if (options.tarballPath !== undefined) {
+    const resolved = path.resolve(options.tarballPath);
+    try {
+      const stat = await fsp.stat(resolved);
+      if (!stat.isFile()) throw new Error('not a regular file');
+      await fsp.copyFile(resolved, dest);
+    } catch (error) {
+      throw new Error(
+        `invalid --tarball path ${resolved}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    return dest;
+  }
+  await core.downloadVerifiedTarball(registryUrl, pkgName, version, dest, options.fetchFn);
+  return dest;
 }
 
 /** Stage (or reuse) the Hub payload release for `version` through the update-core port. */
@@ -258,39 +253,14 @@ export async function stageHubRelease(options: StageHubOptions): Promise<StagedH
   const nodeVersion = options.nodeVersion ?? process.versions.node;
 
   const extractor = async (stagingDir: string): Promise<Record<string, string>> => {
-    let tarballRef: string;
-    if (options.tarballPath !== undefined) {
-      const resolved = path.resolve(options.tarballPath);
-      try {
-        const stat = await fsp.stat(resolved);
-        if (!stat.isFile()) throw new Error('not a regular file');
-        tarballRef = resolved;
-      } catch (error) {
-        throw new Error(
-          `invalid --tarball path ${resolved}: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      }
-    } else {
-      const dest = path.join(stagingDir, '.downloads', 'payload.tgz');
-      await fsp.mkdir(path.dirname(dest), { recursive: true });
-      await core.downloadVerifiedTarball(registryUrl, pkgName, version, dest, options.fetchFn);
-      tarballRef = dest;
-    }
-
-    // Unpack into the candidate's node_modules/<pkg> slot, then install inside the unpacked
-    // payload root (see extractPayloadTarball for why the direct `npm install <tarball>` form
-    // fails on real payloads). The registry download must not ride into the immutable candidate.
-    const payloadDir = packageModulesDir(path.join(stagingDir, 'node_modules'), pkgName);
-    try {
-      await extractPayloadTarball(tarballRef, payloadDir);
-    } finally {
-      if (options.tarballPath === undefined) {
-        await fsp.rm(path.join(stagingDir, '.downloads'), { recursive: true, force: true }).catch(() => {});
-      }
-    }
+    const tarballCopy = await prepareTarballCopy(stagingDir, core, options, registryUrl, version, pkgName);
+    // The unpacked payload package becomes the candidate root; its bundled file: dependencies
+    // resolve relative to it and land in `<stagingDir>/node_modules`.
+    await unpackPayloadTarball(tarballCopy, stagingDir);
+    await fsp.rm(path.join(stagingDir, '.downloads'), { recursive: true, force: true });
     await core.runNpm(
       ['install', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund', '--registry', registryUrl],
-      payloadDir,
+      stagingDir,
       npmInstallTimeoutMs,
     );
 

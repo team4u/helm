@@ -7,22 +7,21 @@
  *   `Helm Hub: http://<host>:<port>` — which the launcher's readiness gate scans for;
  * - a port-shaped fake `UpdateCore`: the registry (`fetchLatestVersion`) and npm (`runNpm`)
  *   seams are stubbed (no network, no npm), while immutable staging delegates to the REAL
- *   `@helm/update` engine so launcher tests cannot drift from the generic semantics;
+ *   `@helm/update` engine so launcher tests cannot drift from the generic semantics. The fake
+ *   registry download serves a REAL `package/`-rooted tarball of the fixture payload (packed
+ *   in-process with the `tar` library), because the production staging unpacks it for real;
  * - a fake registry `fetch` serving real `npm pack` tarballs with correct sha512 SRI metadata,
- *   where every fixture payload carries one inner `file:./fixture-inner-dep.tgz` dependency (the
- *   real payload ships @helm/* exactly this way; golden paths must prove the extractor's
- *   unpack-then-install ordering resolves them — a direct `npm install <outer.tgz>` fails with
- *   ENOENT on real artifacts,
  *   for golden-path staging through the full production extractor (real download verification +
- *   real npm install + real self-check).
+ *   real unpack + real npm install + real self-check).
  */
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { readdirSync } from 'node:fs';
 import fsp from 'node:fs/promises';
 import net from 'node:net';
 import path from 'node:path';
 import { killProcessTree } from '@helm/env-io';
-import { create as tarCreate, extract as tarExtract } from 'tar';
+import * as tar from 'tar';
 import { defaultUpdateCore, type UpdateCore } from '../src/update-core.js';
 import type { LauncherIo } from '../src/io.js';
 
@@ -47,15 +46,6 @@ if (command === 'check') {
     console.log('[fake-payload] self-check hanging');
     setInterval(() => {}, 1 << 30);
     await new Promise(() => {}); // park forever (top-level await; never falls through)
-  }
-  // The inner file: dependency must resolve — proves the candidate's npm install completed
-  // inside the unpacked payload root (the real payload ships @helm/* the same way).
-  try {
-    const dep = await import('fixture-inner-dep');
-    if (dep.marker !== 'inner-dep') throw new Error('bad marker');
-  } catch (error) {
-    console.error('[fake-payload] inner file: dependency did not resolve:', error);
-    process.exit(3);
   }
   console.log('[fake-payload] check ok');
   process.exit(0);
@@ -97,6 +87,8 @@ export interface FakePayloadOptions {
   mode?: FakePayloadMode;
   /** Written into manifest.json; the staging nodeEngines gate compares it against the launcher's Node. */
   nodeEngines?: string;
+  /** Merged into package.json (e.g. bundled `file:./dep.tgz` dependencies for goldens). */
+  dependencies?: Record<string, string>;
 }
 
 /** Materialize a fake payload package directory (package.json + manifest.json + start.mjs + mode). */
@@ -104,20 +96,6 @@ export async function writeFakePayload(options: FakePayloadOptions): Promise<str
   const { dir, pkgName, version } = options;
   const mode = options.mode ?? 'ok';
   await fsp.mkdir(dir, { recursive: true });
-  // Inner file: dependency archive (built with the repo-pinned tar): mirrors the real payload's
-  // `@helm/*: file:./<pkg>.tgz` layout so golden paths regress the unpack→install ordering.
-  const innerSrc = path.join(dir, '.fixture-inner-src');
-  await fsp.mkdir(innerSrc, { recursive: true });
-  await fsp.writeFile(
-    path.join(innerSrc, 'package.json'),
-    `${JSON.stringify({ name: 'fixture-inner-dep', version: '1.0.0', type: 'module', main: 'index.js' }, null, 2)}\n`,
-  );
-  await fsp.writeFile(path.join(innerSrc, 'index.js'), 'export const marker = "inner-dep";\n');
-  await tarCreate(
-    { cwd: innerSrc, file: path.join(dir, 'fixture-inner-dep.tgz'), gzip: true, portable: true, prefix: 'package' },
-    ['package.json', 'index.js'],
-  );
-  await fsp.rm(innerSrc, { recursive: true, force: true });
   await fsp.writeFile(
     path.join(dir, 'package.json'),
     `${JSON.stringify(
@@ -125,8 +103,7 @@ export async function writeFakePayload(options: FakePayloadOptions): Promise<str
         name: pkgName,
         version,
         private: true,
-        dependencies: { 'fixture-inner-dep': 'file:./fixture-inner-dep.tgz' },
-        files: ['start.mjs', 'manifest.json', 'payload-mode.txt', 'fixture-inner-dep.tgz'],
+        ...(options.dependencies !== undefined ? { dependencies: options.dependencies } : {}),
       },
       null,
       2,
@@ -185,6 +162,29 @@ export async function packPayloadTarball(payloadDir: string): Promise<string> {
   const filename = parsed[0]?.filename;
   if (filename === undefined) throw new Error(`npm pack returned no filename: ${result.stdout}`);
   return path.join(payloadDir, filename);
+}
+
+/** Pack a fixture payload directory into a real `package/`-rooted tgz in-process (fast, cached per dir). */
+export function fixtureTarballPacker(): (payloadDir: string) => Promise<string> {
+  const cache = new Map<string, Promise<string>>();
+  return (payloadDir: string) => {
+    let packed = cache.get(payloadDir);
+    if (packed === undefined) {
+      const dest = path.join(path.dirname(payloadDir), `packed-${path.basename(payloadDir)}.tgz`);
+      packed = new Promise<string>((resolve, reject) => {
+        tar.c(
+          { gzip: true, file: dest, prefix: 'package', C: payloadDir, portable: true },
+          readdirSync(payloadDir),
+          (error) => {
+            if (error !== undefined && error !== null) reject(new Error(`fixture tar pack failed: ${error.message}`));
+            else resolve(dest);
+          },
+        );
+      });
+      cache.set(payloadDir, packed);
+    }
+    return packed;
+  };
 }
 
 /** sha512 SRI string of a file (`sha512-<base64>`, matching npm dist.integrity). */
@@ -281,20 +281,27 @@ export interface FakeCoreOptions {
 
 export interface FakeUpdateCore extends UpdateCore {
   npmCalls: string[][];
-  /** Register a local tarball ref (path) as installing the given fixture payload directory. */
+  /** dist-tags observed through `fetchLatestVersion` (asserts channel routing). */
+  tagsSeen: string[];
 }
 
 /**
  * Port-shaped fake: `fetchLatestVersion`/`downloadVerifiedTarball`/`runNpm` are stubbed against
  * fixture payloads; `stageRelease` delegates to the REAL engine adapter so staging semantics
- * (`.complete` markers, cache reuse, staging cleanup) are the production ones.
+ * (`.complete` markers, cache reuse, staging cleanup) are the production ones. Downloads serve a
+ * REAL `package/`-rooted tarball of the fixture (the production staging unpacks it for real and
+ * runs the payload self-check from the unpacked root); the fake `runNpm` records the call and
+ * installs nothing — fixture payloads carry no installable dependencies.
  */
 export function createFakeCore(options: FakeCoreOptions): FakeUpdateCore {
+  const pack = fixtureTarballPacker();
   const real = defaultUpdateCore();
   const core: FakeUpdateCore = {
     npmCalls: [],
-    async fetchLatestVersion() {
+    tagsSeen: [],
+    async fetchLatestVersion(_pkgName, fetchOptions) {
       if (options.failLatest !== undefined) throw options.failLatest;
+      core.tagsSeen.push(fetchOptions?.tag ?? 'latest');
       return options.latest;
     },
     async downloadVerifiedTarball(_registryUrl, _pkgName, version, destPath) {
@@ -302,29 +309,12 @@ export function createFakeCore(options: FakeCoreOptions): FakeUpdateCore {
       const source = options.payloads.get(version);
       if (source === undefined) throw new Error(`fake registry: no payload fixture for ${version}`);
       await fsp.mkdir(path.dirname(destPath), { recursive: true });
-      // Pack a real npm-shaped tarball: the production extractor unpacks it with tar, so a marker
-      // file would fail extraction before the orchestration under test ever runs.
-      const entries = (await fsp.readdir(source)).filter((name) => !name.startsWith('.'));
-      await tarCreate({ cwd: source, file: destPath, gzip: true, portable: true, prefix: 'package' }, entries);
+      await fsp.copyFile(await pack(source), destPath);
     },
-    async runNpm(args, cwd) {
+    async runNpm(args, _cwd) {
       core.npmCalls.push([...args]);
       if (options.failNpm !== undefined) throw options.failNpm;
       if (args[0] !== 'install') throw new Error(`fake npm: unsupported command ${args[0]}`);
-      if (args[1] !== undefined && !args[1]!.startsWith('--')) {
-        throw new Error(`fake npm: unexpected positional argument ${args[1]}`);
-      }
-      // Ref-less install (the production extractor already unpacked the payload at cwd):
-      // complete the inner file: dependencies by unpacking every payload-root *.tgz into
-      // node_modules/<basename> — what `npm install` does for `file:./<name>.tgz` deps.
-      const target = path.join(cwd, 'node_modules');
-      await fsp.mkdir(target, { recursive: true });
-      for (const ent of await fsp.readdir(cwd)) {
-        if (!ent.endsWith('.tgz')) continue;
-        const depDir = path.join(target, ent.slice(0, -4));
-        await fsp.mkdir(depDir, { recursive: true });
-        await tarExtract({ f: path.join(cwd, ent), cwd: depDir, strip: 1 });
-      }
     },
     stageRelease(root, version, extractor, stageOptions) {
       return real.stageRelease(root, version, extractor, stageOptions);
@@ -384,6 +374,32 @@ export async function createFakeRegistry(pkgName: string, latest: string): Promi
     },
     fetchImpl,
   };
+}
+
+/**
+ * Nested-dependency golden payload: a real `npm pack` artifact whose package.json depends on a
+ * bundled `file:./<dep>.tgz` — the shape `npm install <outer.tgz>` cannot resolve (#88). Packs a
+ * tiny `@fake/dep` once per call and bundles it into the payload archive.
+ */
+export async function prepareNestedDepPayload(root: string, version: string, pkgName: string): Promise<string> {
+  const depDir = path.join(root, 'dep-pkg');
+  await fsp.mkdir(depDir, { recursive: true });
+  await fsp.writeFile(
+    path.join(depDir, 'package.json'),
+    `${JSON.stringify({ name: '@fake/dep', version: '1.0.0', main: 'index.js' }, null, 2)}\n`,
+  );
+  await fsp.writeFile(path.join(depDir, 'index.js'), `export const marker = 'dep-of-${version}';\n`, 'utf8');
+  const depTarball = await packPayloadTarball(depDir);
+  const depTgzName = path.basename(depTarball);
+  const payloadDir = path.join(root, `nested-payload-${version}`);
+  await writeFakePayload({
+    dir: payloadDir,
+    pkgName,
+    version,
+    dependencies: { '@fake/dep': `file:./${depTgzName}` },
+  });
+  await fsp.copyFile(depTarball, path.join(payloadDir, depTgzName));
+  return await packPayloadTarball(payloadDir);
 }
 
 /** Best-effort cleanup helper for test-scoped hub processes (never throws). */
