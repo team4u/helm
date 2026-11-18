@@ -8,7 +8,7 @@
  * artifacts through a fake registry with correct sha512 SRI metadata.
  */
 import assert from 'node:assert/strict';
-import { existsSync, openSync, closeSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, openSync, closeSync, unlinkSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import path from 'node:path';
 import { test } from 'node:test';
@@ -195,9 +195,7 @@ test('tarball installs require an explicit version and stage from the local file
   );
 
   const payloadDir = await h.addPayload('2.0.0');
-  const tarballPath = path.join(h.root, 'local-payload.tgz');
-  writeFileSync(tarballPath, 'fake local tarball bytes\n');
-  h.core.registerLocalTarball(tarballPath, payloadDir);
+  const tarballPath = await packPayloadTarball(payloadDir);
   h.core.npmCalls.length = 0;
   const outcome = await performHubUpdate({
     ...baseOptions(h),
@@ -207,7 +205,10 @@ test('tarball installs require an explicit version and stage from the local file
   assert.equal(outcome.changed, true);
   assert.equal((await readCurrentRelease(h.root))?.version, '2.0.0');
   assert.equal(h.core.npmCalls.length, 1);
-  assert.equal(h.core.npmCalls[0]![1], tarballPath);
+  // The extractor unpacks the local tarball itself; npm install runs inside the unpacked payload
+  // root with no positional tarball reference.
+  assert.equal(h.core.npmCalls[0]![0], 'install');
+  assert.ok(!h.core.npmCalls[0]!.includes(tarballPath));
 });
 
 test('running update: old hub stops, new hub serves, pid/launch records follow', { timeout: 60_000 }, async (t) => {

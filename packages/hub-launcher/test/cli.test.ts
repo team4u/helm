@@ -122,9 +122,7 @@ test('end-to-end CLI: tarball install, start, status, update, stop', { timeout: 
   const port = await freePort();
 
   const payloadDir = await writeFakePayload({ dir: path.join(root, 'payload-1.0.0'), pkgName: PKG, version: '1.0.0' });
-  const tarballPath = path.join(root, 'payload.tgz');
-  writeFileSync(tarballPath, 'fake tarball\n');
-  core.registerLocalTarball(tarballPath, payloadDir);
+  const tarballPath = await packPayloadTarball(payloadDir);
   await writeFakePayload({ dir: path.join(root, 'payload-1.1.0'), pkgName: PKG, version: '1.1.0' });
   payloads.set('1.1.0', path.join(root, 'payload-1.1.0'));
 
