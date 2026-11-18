@@ -2,12 +2,18 @@ import { COMPOSER_DOCK_SLOT, type ConversationScope, type HelmPluginContext } fr
 
 export const SWARM_WORKBENCH_PANEL_ID = 'groups' as const
 export const SWARM_COORDINATOR_TAG = 'swarm-coordinator' as const
+export const SWARM_COORDINATOR_ARCHIVED_TAG = 'swarm-coordinator-archived' as const
 export const SWARM_WORKER_TAG = 'swarm-worker' as const
 export const SWARM_BOARD_REPORT_RENDERER = 'swarm:board-report' as const
 export const SWARM_BOARD_WAKEUP_RENDERER = 'swarm:board-wakeup' as const
 
 const SWARM_PARTICIPANT_SCOPE: ConversationScope = {
   tags: [SWARM_COORDINATOR_TAG, SWARM_WORKER_TAG],
+}
+
+// 结单历史 tag 仅放行工作台编排面板（查看已完成编组）；活动托盘与 @/# 补全仍限活跃参与者。
+const SWARM_HISTORY_VIEWER_SCOPE: ConversationScope = {
+  tags: [SWARM_COORDINATOR_TAG, SWARM_COORDINATOR_ARCHIVED_TAG, SWARM_WORKER_TAG],
 }
 
 /** Model-facing swarm tool names (single source for the toolView trace registration). */
@@ -54,7 +60,7 @@ export function registerSwarmUi(ctx: HelmPluginContext): void {
     label: { en: 'Swarm Groups', 'zh-CN': 'Swarm 协同编组' },
     icon: 'network',
     order: 12,
-    scope: SWARM_PARTICIPANT_SCOPE,
+    scope: SWARM_HISTORY_VIEWER_SCOPE,
     badge: { doc: 'board-badges', byConversationField: 'byConversation' },
     client: { module: 'index.tsx', export: 'SwarmWorkbenchPanel' },
   })

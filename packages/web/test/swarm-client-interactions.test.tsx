@@ -441,7 +441,11 @@ test('UI 注册契约：toolView/slot/workbenchPanel/回执/补全源，零 scre
   const panels = recorded.filter((r) => r.method === 'workbenchPanel').map((r) => r.spec)
   assert.equal(panels.length, 1, '仅注册一个会话作用域工作台面板')
   assert.equal(panels[0]!['id'], 'groups')
-  assert.deepEqual(panels[0]!['scope'], { tags: ['swarm-coordinator', 'swarm-worker'] }, '普通会话不出现该 Tab')
+  assert.deepEqual(
+    panels[0]!['scope'],
+    { tags: ['swarm-coordinator', 'swarm-coordinator-archived', 'swarm-worker'] },
+    '普通会话不出现该 Tab；结单历史主控仍可访问已完成编组',
+  )
   assert.deepEqual(panels[0]!['badge'], { doc: 'board-badges', byConversationField: 'byConversation' })
   assert.equal(SWARM_WORKBENCH_PANEL_TARGET, 'plugin:builtin:swarm/groups', '客户端面板目标与注册 id 锁定一致')
 
@@ -619,7 +623,7 @@ test('SwarmToolView：错误态如实展示错误首行与状态灯，zh-CN 显�
 // 3. SwarmActiveTray
 // ---------------------------------------------------------------------------
 
-test('SwarmActiveTray：无活跃事项返回 null；working/blocked 成员渲染 HUD 与可展开行，主控视角才显示中止', { timeout: 60_000 }, async () => {
+test('SwarmActiveTray：无活跃事项返回 null；working/blocked 成员渲染 HUD 与可展开行，主控视角对两者均可中止', { timeout: 60_000 }, async () => {
   // 无 board-view 投影：不渲染任何内容（0px 占位）
   setStubState({ docs: { index: coordinatorIndexFixture(), 'board-badges': { byConversation: {} } } })
   const idleSpy = makeSpyCtx({ conversationId: 50 })
@@ -687,6 +691,39 @@ test('SwarmActiveTray：无活跃事项返回 null；working/blocked 成员渲�
     assert.ok(workerMount.host.querySelector('.sw-tray-workbench') !== null, '工作台入口保留')
   } finally {
     workerMount.unmount()
+  }
+
+  // 回归：blocked 成员对主控同样可中止（后端 abortWorker 支持 working 与 blocked）
+  const blockedFixture = boardViewFixture()
+  ;(blockedFixture.members as Array<{ liveState: string }>)[1]!.liveState = 'blocked'
+  setStubState({
+    docs: { index: coordinatorIndexFixture(), 'board-badges': { byConversation: {} } },
+    sessionDocs: { 'builtin:swarm/board-view/50': blockedFixture },
+  })
+  const blockedSpy = makeSpyCtx({ conversationId: 50 })
+  const blockedMount = await mount(
+    blockedSpy,
+    e(components.SwarmActiveTray, { conversation: convSummary(50, '主控', { tags: ['swarm-coordinator'] }) }),
+  )
+  try {
+    const blockedText = blockedMount.host.textContent ?? ''
+    assert.match(blockedText, /1 blocked/, 'blocked 计数')
+    const toggle = blockedMount.host.querySelector<HTMLButtonElement>('.sw-tray-bar-toggle')!
+    await act(async () => {
+      toggle.click()
+    })
+    const abortBtn = blockedMount.host.querySelector<HTMLButtonElement>('.sw-tray-row-actions .btn-danger')
+    assert.ok(abortBtn !== null, '主控视角对 blocked 成员同样提供中止动作')
+    await act(async () => {
+      abortBtn.click()
+    })
+    assert.deepEqual(
+      blockedSpy.actionCalls.map((c) => ({ actionId: c.actionId, input: c.input })),
+      [{ actionId: 'abort_worker', input: { groupId: 'grp-live', name: 'verifier' } }],
+      'blocked 成员中止同样走 abort_worker',
+    )
+  } finally {
+    blockedMount.unmount()
   }
 
   // 全员静默（无 working/blocked）：托盘消失
@@ -767,6 +804,33 @@ test('SwarmWorkbenchPanel：实时 board-view 编排卡（成员行开抽屉、�
     assert.match(workerPanel.host.textContent ?? '', /协同审改组/, 'Worker 看到所属编组同一视图')
   } finally {
     workerPanel.unmount()
+  }
+
+  // 结单历史主控（swarm-coordinator-archived）经 board_status 回退仍能看到已完成编排卡
+  const closedIndex2 = coordinatorIndexFixture()
+  ;((closedIndex2.groups as Array<{ status: string }>)[0]!).status = 'closed'
+  const closedBoard2 = boardViewFixture()
+  ;(closedBoard2.group as { status: string }).status = 'closed'
+  setStubState({ docs: { index: closedIndex2, 'board-badges': { byConversation: {} } }, sessionDocs: {} })
+  const archivedSpy = makeSpyCtx({
+    conversationId: 50,
+    callAction: async (actionId: string) => {
+      if (actionId === 'board_status') return closedBoard2
+      return {}
+    },
+  })
+  const archivedPanel = await mount(
+    archivedSpy,
+    e(components.SwarmWorkbenchPanel, {
+      conversation: convSummary(50, '主控（已结单）', { tags: ['swarm-coordinator-archived'] }),
+    }),
+  )
+  try {
+    const text = archivedPanel.host.textContent ?? ''
+    assert.match(text, /Completed/, '历史主控看到已完成编排卡')
+    assert.match(text, /协同审改组/)
+  } finally {
+    archivedPanel.unmount()
   }
   resetDefaultStubs()
 })

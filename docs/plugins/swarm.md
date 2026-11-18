@@ -25,7 +25,7 @@
 
 ### 互斥工具集、零破 KV Cache 与写门控
 
-- **作用域标签**：`swarm-coordinator`（主控）、`swarm-worker`（活跃组员）、`swarm-worker-archived`（已归档组员）。
+- **作用域标签**：`swarm-coordinator`（主控）、`swarm-worker`（活跃组员）、`swarm-worker-archived`（已归档组员）、`swarm-coordinator-archived`（结单历史主控：仅放行工作台编排面板访问已完成编组，不进入任何工具/动作 scope，不复活主控守卫或 `<active_swarm_group>` 注入；同会话重新建组时原地摘除）。
 - **同回合无缝切换**：未建组普通会话隐藏黑板工具，仅暴露 `swarm_create_group` 与常规 `subagent / SubagentWorkflow`；通过 `/skill:swarm <任务>`（`onInput` 建组并保留用户原文不变）或 `swarm_create_group` / `create_group` 挂载 `swarm-coordinator` 标签后，当前回合 `before_turn` 即刻注入字节恒定的 `<active_swarm_group>` 主控引导（包含动态拆角、调用 `load_skill({ skillId: "swarm" })` 与空参询问提示）、解锁主控工具（`swarm_*`），并在 `coordinatorGuard: true` 时剥离并拦截 `edit / write / bash / subagent / SubagentWorkflow`。
 - **只读成员门控**：`access: 'readonly'` 成员剥离并拦截 `write / edit / cleanup_worktree`，保留 `bash` 供测试验收。
 - **恒定 `turn.sections` 保 Cache**：`before_turn` 注入的 `<active_swarm_group>` 仅含不可变 `groupId` 与静态协作铁律，不含可变成员名册或实时状态，中途扩缩容 0 次重写首条系统消息。
@@ -54,7 +54,7 @@
 | `abort_worker` | `swarm_abort_worker` | `helm swarm abort-worker` | 主控独享：经 `abortConversationGuarded` 原地刹停成员当前回合，保留上下文与 Worktree 锁 |
 | `switch_worker_model` | `swarm_switch_worker_model` | `helm swarm switch-model` | 主控独享：对空闲成员调用 `updateConversation` 原地切换模型续跑 |
 | `inspect_worker` / `archive_worker` | `swarm_inspect_worker` / `swarm_archive_worker` | `helm swarm inspect-worker` / `archive-worker` | 幂等读取成员最近时间线摘要、产物与绑定 `worktreeId` / 校验工作树干净后释放锁并归档成员 |
-| `close_group` | `swarm_close_group` | `helm swarm close-group` | 主控独享：两态结单（默认要求工作树干净并全清，未合入返 `409 swarm_worktree_unmerged`；`keepWorktree: true` 释放锁、保留待合入分支写入 `retainedWorktrees`，并摘除 `swarm-coordinator` 标签解锁主控合入） |
+| `close_group` | `swarm_close_group` | `helm swarm close-group` | 主控独享：两态结单（默认要求工作树干净并全清，未合入返 `409 swarm_worktree_unmerged`；`keepWorktree: true` 释放锁、保留待合入分支写入 `retainedWorktrees`，并将 `swarm-coordinator` 标签原地替换为 `swarm-coordinator-archived` 历史 tag——解锁主控合入与重新建组，工作台面板仍可回看已完成编组） |
 | `complete_board_members` / `complete_board_channels` | 仅 `ctx.action` | 隐藏内部动作 | 幂等补全源：为组内会话输入框提供 `@` 活跃成员与 `#` 活跃子频道候选 |
 
 ### Web 会话内协同界面（对齐 `builtin:workflow` 心智模型）
@@ -62,8 +62,8 @@
 Swarm 不再拥有独立的全屏 Board 控制台或顶栏入口：所有 UI 都是会话内编排事实的薄渲染，状态全部来自既有公开文档与动作（`index`、`board-badges`、按主控会话键控的 `sessionDoc('board-view')`，以及 `board_status` / `board_read` 回退），React 层零私有状态模型：
 
 - **26px 工具轨迹行（`ctx.ui.toolView({ replaceRow: true })`）**：`swarm_create_group / swarm_update_group / swarm_dispatch_worker / swarm_board_post / swarm_board_read / swarm_board_status / swarm_abort_worker / swarm_switch_worker_model / swarm_inspect_worker / swarm_archive_worker / swarm_close_group` 的每次调用在 timeline 中渲染为一行自然语言摘要（派工 / 交接 / 审阅 / 已交付 / 受阻等动词 + 目标 + 一句正文）+ 状态灯 + 耗时；成员类调用点击打开 `openConversationDrawer`，编组类调用打开协同工作台面板，无法确定目标的行展开原始工具数据（宽对象守卫解析输入与结果 JSON，绝不伪造目标或状态）。
-- **Composer「进行中」活动托盘（`COMPOSER_DOCK_SLOT`）**：仅当当前会话关联的活跃编组存在执行中 / 受阻成员时渲染 32px HUD（人数、已交付进度、最新一条自然语言动态、编组时长）；整条横栏为真实 toggle 按钮可展开成员行（点击打开子会话抽屉），主控视角对运行中成员提供真实 `abort_worker` 中止动作；无在途事项返回 null 占 0px，与 `WorkflowActiveTray` 同构并列。
-- **右侧 Workbench 编排面板（`ctx.ui.workbenchPanel` id `groups`，仅 `swarm-coordinator` / `swarm-worker` 会话可见）**：当前会话只展示自己所在的编组（主控会话显示自己的组，成员会话显示所属组的同一事实视图，不跨会话列全局索引）。一张编排卡：协同目标、自然状态（进行中 / 需要关注 / 已完成）、成员列表（每成员一句最新真实进展 + 实时 doing + worktree 分支事实，点击整行打开子会话抽屉）、最近交接动态（自然 kind 标签 + `#seq` 辅助信息）与结单后保留待合入分支清单；活跃组经 session doc 实时更新，closed / coordinatorDetached 或无投影时显式退避一次性 `board_status`（失败展示错误并可重试，绝不白屏或伪造「运行中」），「查看完整记录」按需 `board_read`。
+- **Composer「进行中」活动托盘（`COMPOSER_DOCK_SLOT`）**：仅当当前会话关联的活跃编组存在执行中 / 受阻成员时渲染 32px HUD（人数、已交付进度、最新一条自然语言动态、编组时长）；整条横栏为真实 toggle 按钮可展开成员行（点击打开子会话抽屉），主控视角对执行中与受阻成员均提供真实 `abort_worker` 中止动作；无在途事项返回 null 占 0px，与 `WorkflowActiveTray` 同构并列。
+- **右侧 Workbench 编排面板（`ctx.ui.workbenchPanel` id `groups`，`swarm-coordinator` / `swarm-worker` / `swarm-coordinator-archived` 会话可见）**：当前会话只展示自己所在的编组（主控会话显示自己的组，成员会话显示所属组的同一事实视图，结单历史主控仍可回看已完成编组，不跨会话列全局索引）。一张编排卡：协同目标、自然状态（进行中 / 需要关注 / 已完成）、成员列表（每成员一句最新真实进展 + 实时 doing + worktree 分支事实，点击整行打开子会话抽屉）、最近交接动态（自然 kind 标签 + `#seq` 辅助信息）与结单后保留待合入分支清单；活跃组经 session doc 实时更新，closed / coordinatorDetached 或无投影时显式退避一次性 `board_status`（失败展示错误并可重试，绝不白屏或伪造「运行中」），「查看完整记录」按需 `board_read`。
 - **单行回执胶囊（`timelineRenderer`）**：后端仍真实写入的 `swarm:board-report` / `swarm:board-wakeup` durable 输入收敛为单行回执（计数 + 动态 + `#seq`），点击打开协同工作台面板；不注册 `screen`、`conversation:header` action、sidebar 或 `ui.command`，人类干预统一走当前 coordinator 对话 Composer（`@` 成员 / `#` 频道补全保留）。
 - **文案与协议分层**：用户可见文案统一 `LocalizedText` 双语；协议词汇（`#seq`、`wake`、原始频道名）仅作辅助信息呈现，不作为用户必须学习的主控件。
 

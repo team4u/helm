@@ -5,6 +5,7 @@ import {
   type PluginToolContext,
 } from '@helm/protocol'
 import {
+  ARCHIVED_COORDINATOR_TAG,
   ARCHIVED_WORKER_TAG,
   COORDINATOR_SCOPE,
   COORDINATOR_TAG,
@@ -198,8 +199,9 @@ export async function ensureCoordinatorGroup(
     const syncTagAndProjections = async (groupId: string): Promise<{ groupId: string; group: BoardViewDoc['group'] }> => {
       const latestConv = readConversationOrUndefined(targetConvId)
       if (latestConv !== undefined && !latestConv.tags.includes(COORDINATOR_TAG)) {
+        // 挂回活跃主控 tag 时同步摘除结单历史 tag，避免同一会话双主控标记并存。
         await ctx.host.updateConversation(targetConvId, {
-          tags: [...latestConv.tags, COORDINATOR_TAG],
+          tags: [...latestConv.tags.filter((t) => t !== ARCHIVED_COORDINATOR_TAG), COORDINATOR_TAG],
         })
       }
       groups.syncProjections()
@@ -1212,8 +1214,10 @@ export function registerSwarmActions(
 
       const coordConv = readConversationOrUndefined(freshGroup.coordinatorConversationId)
       if (coordConv !== undefined && coordConv.tags.includes(COORDINATOR_TAG)) {
+        // 结单后将活跃主控 tag 原地替换为历史 tag：workbench 编排面板仍可访问已完成编组，
+        // 但 swarm_create_group 解锁、主控守卫与工具注入按活跃组判定不再复活。
         await ctx.host.updateConversation(freshGroup.coordinatorConversationId, {
-          tags: coordConv.tags.filter((t) => t !== COORDINATOR_TAG),
+          tags: [...coordConv.tags.filter((t) => t !== COORDINATOR_TAG), ARCHIVED_COORDINATOR_TAG],
         })
       }
 

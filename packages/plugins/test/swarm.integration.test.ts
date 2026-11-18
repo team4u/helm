@@ -3,7 +3,8 @@
  * 1) 默认启用、启动零常驻会话、空闲态不阻塞 disable('builtin:workflow')、受管技能 swarm 随启停显隐、
  *    create_group 同回合下一拍解锁团队工具并剥离重工具、扩缩容期间 <active_swarm_group> 100% 字节恒定、inUse 保护；
  * 2) Author(worktree) + Verifier(readonly) 真实 Git Worktree 交接快照、空闲期 ManagedWorktreeHold 防删与阻塞 workflow 停用、
- *    只读成员写工具/非幂等外部动作拦截、两态 close_group(409 swarm_worktree_unmerged vs keepWorktree: true 解锁主控 bash 合入收尾)、
+ *    只读成员写工具/非幂等外部动作拦截、两态 close_group(409 swarm_worktree_unmerged vs keepWorktree: true 解锁主控 bash 合入、
+ *    主控 tag 原地替换为 swarm-coordinator-archived 历史 tag：工作台面板可达、建组解锁、协同工具不复活、重建组摘除历史 tag)、
  *    closed 与 coordinatorDetached 历史组 board_status / board_read 正常读取；
  * 3) forkFrom 干净锚点热分叉、manage_channel + #channel 寻址、被动留言(wake: false)与合并唤醒、
  *    abort_worker 原地刹车、switch_worker_model 原地切模，以及 @/# 幂等补全动作；
@@ -30,6 +31,7 @@ import {
   type FauxProviderHandle,
 } from './helpers/plugin-test-env.js'
 import {
+  ARCHIVED_COORDINATOR_TAG,
   COORDINATOR_TAG,
   SWARM_PLUGIN_ID,
   SWARM_SKILL_ID,
@@ -515,8 +517,14 @@ test('swarm-int2: Author(worktree) + Verifier(readonly) handoff, hold blocks wor
     assert.equal(retained.commitsAhead, 1)
     assert.ok(existsSync(join(retained.path, 'feature.txt')))
     assert.equal(kernel.getConversation(coord.id).tags.includes(COORDINATOR_TAG), false, 'coordinator must drop swarm-coordinator tag')
+    assert.equal(
+      kernel.getConversation(coord.id).tags.includes(ARCHIVED_COORDINATOR_TAG),
+      true,
+      'closed coordinator keeps the history tag so the workbench orchestration panel stays reachable',
+    )
 
     // Coordinator #C now has bash restored and merges the retained branch, then cleans up worktree cleanly!
+    let postCloseToolNames: string[] = []
     env.faux.setResponses([
       fauxAssistantMessage(
         [fauxToolCall('bash', { command: `git merge --no-edit ${retained.branch}` })],
@@ -527,12 +535,44 @@ test('swarm-int2: Author(worktree) + Verifier(readonly) handoff, hold blocks wor
         { stopReason: 'toolUse' },
       ),
       fauxAssistantMessage('Merged and cleaned up worktree.'),
+      (ctx) => {
+        postCloseToolNames = captureRequestMeta(ctx.messages as unknown as Record<string, unknown>[]).toolNames
+        return fauxAssistantMessage('Post-close probe done.')
+      },
     ])
     await kernel.submitInput(coord.id, 'Merge retained branch and clean up')
     await kernel.waitForIdle(coord.id)
 
+    // Trigger the post-close probe turn to capture the coordinator tool list after group close.
+    await kernel.submitInput(coord.id, 'Post-close tool probe')
+    await kernel.waitForIdle(coord.id)
+
     assert.equal(readFileSync(join(env.repoDir, 'feature.txt'), 'utf8').trim(), 'verified-payload')
     assert.equal(existsSync(retained.path), false, 'worktree directory must be removed after merge + cleanup_worktree')
+
+    // History-tag tool semantics: after close the archived tag unlocks swarm_create_group again
+    // while granting zero participant/coordinator tools (no active group, tag is UI-history only).
+    assert.ok(postCloseToolNames.includes('bash'), 'coordinator bash restored after close')
+    assert.ok(postCloseToolNames.includes('swarm_create_group'), 'archived coordinator may start a fresh swarm')
+    assert.equal(postCloseToolNames.includes('swarm_dispatch_worker'), false, 'history tag must not resurrect squad tools')
+    assert.equal(postCloseToolNames.includes('swarm_board_post'), false, 'history tag must not resurrect board tools')
+
+    // Re-creating a group on the same conversation swaps the history tag back to the active coordinator tag.
+    const recreated = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
+      title: 'Second run',
+      conversationId: coord.id,
+    })) as { groupId: string }
+    assert.notEqual(recreated.groupId, groupId)
+    const coordTagsAfterRecreate = kernel.getConversation(coord.id).tags
+    assert.equal(coordTagsAfterRecreate.includes(COORDINATOR_TAG), true, 're-created group restores the active coordinator tag')
+    assert.equal(coordTagsAfterRecreate.includes(ARCHIVED_COORDINATOR_TAG), false, 'history tag is stripped on re-activation')
+    await kernel.plugins.invokeAction(
+      SWARM_PLUGIN_ID,
+      'close_group',
+      { groupId: recreated.groupId },
+      { conversationId: coord.id },
+    )
+    assert.equal(kernel.getConversation(coord.id).tags.includes(ARCHIVED_COORDINATOR_TAG), true, 'closing again re-swaps to the history tag')
 
     // Closed group and coordinatorDetached fallback: delete coordinator #C, board_status & board_read still work!
     await kernel.deleteConversation(coord.id)

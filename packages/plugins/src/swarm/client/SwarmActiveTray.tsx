@@ -6,7 +6,8 @@
  * region is one real toggle <button> (aria-expanded / aria-controls), the
  * workbench action is a sibling button, and every expanded row is one real
  * detail-entry <button> opening the ConversationDrawer, with abort as a
- * trailing sibling action for the coordinator viewer (never nested).
+ * trailing sibling action for the coordinator viewer on both working and
+ * blocked members (the backend abortWorker supports both; never nested).
  *
  * Data: public `index` doc resolves the conversation's group; the live
  * per-coordinator `board-view` session doc provides member states (swarm keeps
@@ -97,7 +98,6 @@ export function SwarmActiveTray(props: Partial<ComposerScopeProps>): ReactNode {
   const isCoordinatorViewer = conversationId === board?.group.coordinatorConversationId
   const hasBlocked = summary.blockedCount > 0
   const countText = trayCount(summary.blockedCount, summary.workingCount, locale)
-
   const runAbort = (key: string, memberName: string): void => {
     if (busyKey !== undefined || board === undefined) return
     setBusyKey(key)
@@ -161,7 +161,9 @@ export function SwarmActiveTray(props: Partial<ComposerScopeProps>): ReactNode {
             const openRow = (): void => {
               ctx.openConversationDrawer(item.conversationId)
             }
-            const canAbort = isCoordinatorViewer && !item.isBlocked
+            // 后端 abortWorker 明确支持 working 与 blocked（经 abortConversationGuarded 原地刹停），
+            // 主控视角对两类在途成员都提供真实中止；Worker 视角无权调用。
+            const canAbort = isCoordinatorViewer
             return (
               <div key={item.key} className="sw-tray-row">
                 <button
@@ -179,7 +181,7 @@ export function SwarmActiveTray(props: Partial<ComposerScopeProps>): ReactNode {
                   {item.doing !== undefined ? <span className="sw-tray-row-doing">{item.doing}</span> : null}
                 </button>
                 <div className="sw-tray-row-actions">
-                  {canAbort ? (
+                  {isCoordinatorViewer ? (
                     <button
                       type="button"
                       className="btn btn-xs btn-danger"

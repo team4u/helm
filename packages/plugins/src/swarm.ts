@@ -16,6 +16,7 @@ import {
 import { resolvePluginClientAssets } from './asset-paths.js'
 import { readSwarmSkillAsset } from './swarm/assets.js'
 import {
+  ARCHIVED_COORDINATOR_TAG,
   ARCHIVED_WORKER_TAG,
   BOARD_BADGES_DOC_NAME,
   BOARD_REPORT_RENDERER,
@@ -265,6 +266,7 @@ export {
   SWARM_SKILL_ID,
   COORDINATOR_TAG,
   WORKER_TAG,
+  ARCHIVED_COORDINATOR_TAG,
   ARCHIVED_WORKER_TAG,
   WORKER_ARCHIVED_TAG,
   COORDINATOR_SCOPE,

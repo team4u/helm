@@ -20,6 +20,12 @@ export const COORDINATOR_TAG = 'swarm-coordinator'
 export const WORKER_TAG = 'swarm-worker'
 export const ARCHIVED_WORKER_TAG = 'swarm-worker-archived'
 export const WORKER_ARCHIVED_TAG = ARCHIVED_WORKER_TAG
+/**
+ * 结单后主控会话的历史 tag：仅供 UI（workbench 编排面板）继续访问已完成编组，
+ * 不进入任何工具/动作 scope，也不触发主控守卫或 <active_swarm_group> 注入
+ * （协作铁律按活跃组判定，与 tag 无关）。重新建组时由 ensureCoordinatorGroup 原地摘除。
+ */
+export const ARCHIVED_COORDINATOR_TAG = 'swarm-coordinator-archived'
 
 export const BOARD_REPORT_RENDERER = 'swarm:board-report'
 export const BOARD_WAKEUP_RENDERER = 'swarm:board-wakeup'

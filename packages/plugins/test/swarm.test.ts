@@ -11,6 +11,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { HelmError } from '@helm/protocol'
 import {
+  ARCHIVED_COORDINATOR_TAG,
   ARCHIVED_WORKER_TAG,
   COORDINATOR_SCOPE,
   COORDINATOR_TAG,
@@ -129,6 +130,7 @@ test('swarm-unit1: plugin definition contract, tags/scopes, config bounds, and s
   assert.equal(COORDINATOR_TAG, 'swarm-coordinator')
   assert.equal(WORKER_TAG, 'swarm-worker')
   assert.equal(ARCHIVED_WORKER_TAG, 'swarm-worker-archived')
+  assert.equal(ARCHIVED_COORDINATOR_TAG, 'swarm-coordinator-archived')
   assert.deepEqual(COORDINATOR_SCOPE, { tags: ['swarm-coordinator'] })
   assert.deepEqual(PARTICIPANT_SCOPE, { tags: ['swarm-coordinator', 'swarm-worker'] })
 
@@ -443,6 +445,11 @@ test('swarm-unit5: checkCoordinatorEligibility rejects child, worker, archived-w
   }
   assert.equal(checkCoordinatorEligibility(baseConv, 'human'), undefined)
   assert.equal(checkCoordinatorEligibility({ ...baseConv, tags: [COORDINATOR_TAG] }, 'human'), undefined)
+  assert.equal(
+    checkCoordinatorEligibility({ ...baseConv, tags: [ARCHIVED_COORDINATOR_TAG] }, 'human'),
+    undefined,
+    'archived coordinator conversation may start a fresh swarm',
+  )
   assert.equal(checkCoordinatorEligibility({ ...baseConv, parentConversationId: 9 }, 'human')?.code, 'validation_error')
   assert.equal(checkCoordinatorEligibility({ ...baseConv, tags: [WORKER_TAG] }, 'human')?.code, 'conversation_scope_violation')
   assert.equal(checkCoordinatorEligibility({ ...baseConv, tags: [ARCHIVED_WORKER_TAG] }, 'human')?.code, 'conversation_scope_violation')
