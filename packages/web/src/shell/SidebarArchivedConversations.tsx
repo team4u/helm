@@ -7,14 +7,19 @@
  * - Collapsed by default; once expanded, rows are identified by owning agent +
  *   title; single-row restore goes through the inline "more actions" menu
  *   (which automatically offers restore for archived conversations), or use
- *   bulk restore;
- * - Restore uses the existing conversation PATCH (archive-ops); failures
- *   produce explicit notices and are never silently swallowed;
+ *   bulk restore; the batch bar also offers bulk delete (confirm-gated, same
+ *   channel as the agent standings group);
+ * - Restore uses the existing conversation PATCH (archive-ops); delete goes
+ *   through conversationsApi.remove per conversation with allSettled
+ *   aggregation (partial failures never mask successes); failures produce
+ *   explicit notices and are never silently swallowed; deletion navigation is
+ *   owned solely by the conversation.deleted SSE fallback pipeline, never here;
  * - An empty group renders nothing at all — zero visual residue.
  */
 import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Checkbox, HelmIcon } from '@helm/plugin-client'
+import { conversationsApi } from '../lib/api.js'
 import {
   useConversations,
   useGroupedUi,
@@ -26,6 +31,7 @@ import {
 } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { Tooltip } from '../ui/Tooltip.js'
+import { ConfirmDialog } from '../ui/AlertDialog.js'
 import { ConversationRowActionsMenu } from '../ui/ConversationRowActionsMenu.js'
 import {
   activeConversationIdsOf,
@@ -153,6 +159,8 @@ export function ArchivedConversationsGroup({
   const [batchMode, setBatchMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [restoring, setRestoring] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [batchDeleteConfirmOpen, setBatchDeleteConfirmOpen] = useState(false)
 
   useEffect(() => {
     if (hasActiveArchived) setOpen(true)
@@ -174,7 +182,7 @@ export function ArchivedConversationsGroup({
    *  "more actions" menu (ConversationRowActionsMenu offers restore for
    *  archived conversations automatically). */
   const executeBatchRestore = async () => {
-    if (selectedIds.size === 0 || restoring) return
+    if (selectedIds.size === 0 || restoring || deleting) return
     setRestoring(true)
     try {
       const convs = items
@@ -186,6 +194,62 @@ export function ArchivedConversationsGroup({
       setBatchMode(false)
     } finally {
       setRestoring(false)
+    }
+  }
+
+  /**
+   * Bulk delete: DELETE per conversation + allSettled aggregation (partial
+   * failures never mask successes; the same channel as the agent standings
+   * group — archived rows are human-owned root conversations by construction,
+   * so no extra deletability gate applies). No navigation here: rely solely on
+   * each successful deletion's conversation.deleted SSE event; the Provider
+   * conditionally falls back by current targets.
+   */
+  const executeBatchDelete = async () => {
+    const count = selectedIds.size
+    if (count === 0 || deleting || restoring) return
+    setBatchDeleteConfirmOpen(false)
+    setDeleting(true)
+    try {
+      const ids = Array.from(selectedIds)
+      const results = await Promise.allSettled(ids.map((id) => conversationsApi.remove(id)))
+      const fulfilled = results.filter((r) => r.status === 'fulfilled').length
+      const rejected = results.filter((r) => r.status === 'rejected').length
+
+      if (rejected === 0) {
+        pushNotice({
+          type: 'notification',
+          level: 'info',
+          title: t('shell.batch.bulkDeleteCompleted'),
+          body: t('shell.batch.bulkDeleteCompletedBody', { count: fulfilled }),
+        })
+      } else if (fulfilled === 0) {
+        pushNotice({
+          type: 'notification',
+          level: 'error',
+          title: t('shell.batch.bulkDeleteFailed'),
+          body: t('shell.batch.bulkDeleteFailedBody', { count: rejected }),
+        })
+      } else {
+        pushNotice({
+          type: 'notification',
+          level: 'warning',
+          title: t('shell.batch.bulkDeletePartial'),
+          body: t('shell.batch.bulkDeletePartialBody', { fulfilled, rejected }),
+        })
+      }
+
+      setSelectedIds(new Set())
+      setBatchMode(false)
+    } catch (err) {
+      pushNotice({
+        type: 'notification',
+        level: 'error',
+        title: t('shell.batch.bulkDeleteError'),
+        body: err instanceof Error ? err.message : String(err),
+      })
+    } finally {
+      setDeleting(false)
     }
   }
 
@@ -211,13 +275,13 @@ export function ArchivedConversationsGroup({
           </span>
         </button>
         {open && (
-          <Tooltip content={batchMode ? t('shell.archived.exitBulkRestore') : t('shell.archived.bulkRestore')} side="top">
+          <Tooltip content={batchMode ? t('shell.archived.exitBulk') : t('shell.archived.manageBulk')} side="top">
             <button
               type="button"
               className="btn btn-ghost btn-icon-xs"
               style={{ color: batchMode ? 'var(--accent)' : undefined }}
-              title={batchMode ? t('shell.archived.exitBulkRestore') : t('shell.archived.bulkRestore')}
-              aria-label={batchMode ? t('shell.archived.exitBulkRestore') : t('shell.archived.bulkRestore')}
+              title={batchMode ? t('shell.archived.exitBulk') : t('shell.archived.manageBulk')}
+              aria-label={batchMode ? t('shell.archived.exitBulk') : t('shell.archived.manageBulk')}
               onClick={() => {
                 setBatchMode((v) => {
                   if (v) setSelectedIds(new Set())
@@ -243,7 +307,7 @@ export function ArchivedConversationsGroup({
                 setBatchMode(false)
                 setSelectedIds(new Set())
               }}
-              title={t('shell.archived.exitBulkRestore')}
+              title={t('shell.archived.exitBulk')}
             >
               {t('shell.batch.exit')}
             </button>
@@ -252,7 +316,7 @@ export function ArchivedConversationsGroup({
             <button
               type="button"
               className="btn btn-ghost btn-sm"
-              disabled={items.length === 0 || restoring}
+              disabled={items.length === 0 || restoring || deleting}
               onClick={() => {
                 setSelectedIds(isAllSelected ? new Set() : new Set(items.map((item) => item.conv.id)))
               }}
@@ -262,10 +326,18 @@ export function ArchivedConversationsGroup({
             <button
               type="button"
               className="btn btn-sm"
-              disabled={selectedIds.size === 0 || restoring}
+              disabled={selectedIds.size === 0 || restoring || deleting}
               onClick={() => void executeBatchRestore()}
             >
               {restoring ? t('shell.archived.restoring') : t('shell.archived.restoreCount', { count: selectedIds.size })}
+            </button>
+            <button
+              type="button"
+              className="btn btn-sm btn-danger-sm"
+              disabled={selectedIds.size === 0 || restoring || deleting}
+              onClick={() => setBatchDeleteConfirmOpen(true)}
+            >
+              {deleting ? t('shell.batch.deleting') : t('shell.batch.deleteCount', { count: selectedIds.size })}
             </button>
           </div>
         </div>
@@ -284,6 +356,18 @@ export function ArchivedConversationsGroup({
             onToggleSelect={toggleSelect}
           />
         ))}
+      <ConfirmDialog
+        open={batchDeleteConfirmOpen}
+        onOpenChange={setBatchDeleteConfirmOpen}
+        title={t('shell.batch.deleteConfirmTitle', { count: selectedIds.size })}
+        description={t('shell.batch.deleteConfirmDesc')}
+        confirmText={t('shell.batch.deleteConfirmButton')}
+        danger
+        onConfirm={() => {
+          void executeBatchDelete()
+        }}
+        onCancel={() => setBatchDeleteConfirmOpen(false)}
+      />
     </div>
   )
 }

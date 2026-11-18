@@ -41,6 +41,7 @@ let patchRequests: Array<{ url: string; method: string; body: { tags?: string[] 
 let holdPatch = false
 let pendingPatches: Array<{ complete(): void }> = []
 let historyLog: Array<{ method: 'push' | 'replace'; hash: string }> = []
+let deleteRequests: string[] = []
 
 function summary(id: number, overrides: Partial<ConversationSummary> = {}): ConversationSummary {
   return {
@@ -116,6 +117,14 @@ function installFetch(): void {
           },
         })
       })
+    }
+    if (/^\/api\/conversations\/\d+$/.test(url) && method === 'DELETE') {
+      const id = Number(/\/api\/conversations\/(\d+)$/.exec(url)![1])
+      deleteRequests.push(url)
+      // 服务端语义：删除成功后广播 conversation.deleted，前端列表随 SSE 移除。
+      conversations = conversations.filter((c) => c.id !== id)
+      sendEvent?.(eventFrame({ type: 'conversation.deleted', conversationId: id }))
+      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })
     }
     const detailMatch = /^\/api\/conversations\/(\d+)/.exec(url)
     if (detailMatch && method === 'GET') {
@@ -221,6 +230,7 @@ afterEach(() => {
   observed = undefined
   navigateTo = undefined
   patchRequests = []
+  deleteRequests = []
   holdPatch = false
   pendingPatches = []
   historyLog = []
@@ -324,6 +334,63 @@ test('恢复已归档会话不导航：主屏目标保持当前会话', { timeou
   ])
   assert.deepEqual(observed?.primary, { kind: 'conversation', conversationId: 1 }, '恢复不触发任何导航')
   assert.ok(observed?.notices.some((n) => n.title === 'Conversations restored'), '恢复成功应有通知')
+})
+
+test('归档分组全选后批量删除：确认后逐会话 DELETE，列表随 conversation.deleted 清空', { timeout: 60_000 }, async () => {
+  conversations = [summary(1), summary(2, { tags: [ARCHIVED_TAG] }), summary(3, { tags: [ARCHIVED_TAG] })]
+  await mount('#/c/1')
+
+  // 展开归档分组 → 进入批量管理
+  const groupToggle = document.querySelector<HTMLButtonElement>('.archived-conversations-group .sidebar-group-header-toggle')
+  assert.ok(groupToggle, '应渲染归档分组头部')
+  await act(async () => { groupToggle!.click() })
+  await settle()
+  const batchToggle = document.querySelector<HTMLButtonElement>(
+    '.archived-conversations-group button[aria-label="Manage archived conversations in bulk"]',
+  )
+  assert.ok(batchToggle, '归档分组应有批量管理入口')
+  await act(async () => { batchToggle!.click() })
+  await settle()
+
+  const barButtons = () => [...document.querySelectorAll<HTMLButtonElement>('.sidebar-batch-bar-actions .btn')]
+  const deleteBtn = barButtons().find((b) => b.textContent?.startsWith('Delete'))
+  assert.ok(deleteBtn, '批量栏应渲染删除按钮')
+  assert.equal(deleteBtn!.disabled, true, '未选择时删除按钮应禁用')
+
+  // 全选仅覆盖归档条目（不含当前主屏未归档会话 1）
+  const selectAll = barButtons().find((b) => b.textContent === 'Select all')
+  assert.ok(selectAll, '批量栏应渲染全选按钮')
+  await act(async () => { selectAll!.click() })
+  await settle()
+  assert.equal(deleteBtn!.disabled, false, '全选后删除按钮应可用')
+  assert.equal(deleteBtn!.textContent, 'Delete (2)')
+
+  // 确认弹窗取消路径：不发起任何 DELETE
+  await act(async () => { deleteBtn!.click() })
+  await settle()
+  const dialog = document.querySelector('[role="alertdialog"]')
+  assert.ok(dialog, '批量删除应先弹确认对话框')
+  assert.ok(dialog!.textContent?.includes('Delete 2 selected conversations?'), '确认文案应带选中数量')
+  const cancel = [...document.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')]
+    .find((b) => b.textContent?.trim() === 'Cancel')
+  await act(async () => { cancel!.click() })
+  await settle()
+  assert.deepEqual(deleteRequests, [], '取消确认不得发起删除请求')
+  assert.ok(document.querySelector('[role="alertdialog"]') === null, '取消后对话框关闭')
+
+  // 确认删除：逐会话 DELETE + SSE 移除，分组清空且不导航
+  await act(async () => { deleteBtn!.click() })
+  await settle()
+  const confirm = [...document.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')]
+    .find((b) => b.textContent?.trim() === 'Delete conversation')
+  assert.ok(confirm, '确认对话框应显示删除会话按钮')
+  await act(async () => { confirm!.click() })
+  await settle()
+
+  assert.deepEqual([...deleteRequests].sort(), ['/api/conversations/2', '/api/conversations/3'], '应对全部选中归档会话发起删除')
+  assert.ok(document.querySelector('.archived-conversations-group') === null, '删除 SSE 后归档分组应清空消失')
+  assert.deepEqual(observed?.primary, { kind: 'conversation', conversationId: 1 }, '删除非当前目标会话不得导航')
+  assert.ok(observed?.notices.some((n) => n.title === 'Bulk delete completed'), '批量删除成功应有通知')
 })
 
 test('SSE 推送归档非当前打开会话：仅列表更新，不导航', { timeout: 60_000 }, async () => {

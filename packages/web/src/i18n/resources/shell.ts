@@ -96,6 +96,31 @@ export const shellMessages = {
   'shell.batch.exit': { en: 'Exit', 'zh-CN': '退出' },
   'shell.batch.clear': { en: 'Clear', 'zh-CN': '清空' },
   'shell.batch.selectAll': { en: 'Select all', 'zh-CN': '全选' },
+  // Shared batch-delete copy (agent standings + archived group batch bars)
+  'shell.batch.deleting': { en: 'Deleting...', 'zh-CN': '删除中...' },
+  'shell.batch.deleteCount': { en: 'Delete ({count})', 'zh-CN': '删除 ({count})' },
+  'shell.batch.deleteConfirmTitle': {
+    en: 'Delete {count} selected conversations?',
+    'zh-CN': '确定删除选中的 {count} 个会话吗？',
+  },
+  'shell.batch.deleteConfirmDesc': { en: 'This action cannot be undone.', 'zh-CN': '此操作无法撤销。' },
+  'shell.batch.deleteConfirmButton': { en: 'Delete conversation', 'zh-CN': '删除会话' },
+  'shell.batch.bulkDeleteCompleted': { en: 'Bulk delete completed', 'zh-CN': '批量删除完成' },
+  'shell.batch.bulkDeleteCompletedBody': {
+    en: 'Deleted {count} conversations',
+    'zh-CN': '成功删除 {count} 个会话',
+  },
+  'shell.batch.bulkDeleteFailed': { en: 'Bulk delete failed', 'zh-CN': '批量删除失败' },
+  'shell.batch.bulkDeleteFailedBody': {
+    en: 'Failed to delete {count} conversations',
+    'zh-CN': '删除失败 {count} 个会话',
+  },
+  'shell.batch.bulkDeletePartial': { en: 'Bulk delete partially failed', 'zh-CN': '批量删除部分失败' },
+  'shell.batch.bulkDeletePartialBody': {
+    en: 'Deleted {fulfilled}, failed {rejected}',
+    'zh-CN': '成功删除 {fulfilled} 个，失败 {rejected} 个',
+  },
+  'shell.batch.bulkDeleteError': { en: 'Bulk delete error', 'zh-CN': '批量删除异常' },
 
   // Agents group in the sidebar
   'shell.agents.groupTitle': { en: 'Agents', 'zh-CN': '智能体' },
@@ -113,41 +138,17 @@ export const shellMessages = {
   'shell.agents.clearFilter': { en: 'Clear filter', 'zh-CN': '清空筛选' },
   'shell.agents.archiving': { en: 'Archiving...', 'zh-CN': '归档中...' },
   'shell.agents.archiveCount': { en: 'Archive ({count})', 'zh-CN': '归档 ({count})' },
-  'shell.agents.deleting': { en: 'Deleting...', 'zh-CN': '删除中...' },
-  'shell.agents.deleteCount': { en: 'Delete ({count})', 'zh-CN': '删除 ({count})' },
   'shell.agents.noMatch': { en: 'No matching agents or topics', 'zh-CN': '没有匹配的智能体或话题' },
-  'shell.agents.deleteConfirmTitle': {
-    en: 'Delete {count} selected conversations?',
-    'zh-CN': '确定删除选中的 {count} 个会话吗？',
-  },
-  'shell.agents.deleteConfirmDesc': { en: 'This action cannot be undone.', 'zh-CN': '此操作无法撤销。' },
-  'shell.agents.deleteConfirmButton': { en: 'Delete conversation', 'zh-CN': '删除会话' },
-  'shell.agents.bulkDeleteCompleted': { en: 'Bulk delete completed', 'zh-CN': '批量删除完成' },
-  'shell.agents.bulkDeleteCompletedBody': {
-    en: 'Deleted {count} conversations',
-    'zh-CN': '成功删除 {count} 个会话',
-  },
-  'shell.agents.bulkDeleteFailed': { en: 'Bulk delete failed', 'zh-CN': '批量删除失败' },
-  'shell.agents.bulkDeleteFailedBody': {
-    en: 'Failed to delete {count} conversations',
-    'zh-CN': '删除失败 {count} 个会话',
-  },
-  'shell.agents.bulkDeletePartial': { en: 'Bulk delete partially failed', 'zh-CN': '批量删除部分失败' },
-  'shell.agents.bulkDeletePartialBody': {
-    en: 'Deleted {fulfilled}, failed {rejected}',
-    'zh-CN': '成功删除 {fulfilled} 个，失败 {rejected} 个',
-  },
-  'shell.agents.bulkDeleteError': { en: 'Bulk delete error', 'zh-CN': '批量删除异常' },
 
   // Archived conversations group in the sidebar
   'shell.archived.groupTitle': { en: 'Archived', 'zh-CN': '已归档' },
   'shell.archived.collapseGroup': { en: 'Collapse archived group', 'zh-CN': '收起已归档分组' },
   'shell.archived.expandGroup': { en: 'Expand archived group', 'zh-CN': '展开已归档分组' },
   'shell.archived.owningAgent': { en: 'Owning agent: {label}', 'zh-CN': '归属智能体：{label}' },
-  'shell.archived.exitBulkRestore': { en: 'Exit bulk restore', 'zh-CN': '退出批量恢复' },
-  'shell.archived.bulkRestore': {
-    en: 'Bulk restore archived conversations',
-    'zh-CN': '批量恢复已归档会话',
+  'shell.archived.exitBulk': { en: 'Exit bulk management', 'zh-CN': '退出批量管理' },
+  'shell.archived.manageBulk': {
+    en: 'Manage archived conversations in bulk',
+    'zh-CN': '批量管理已归档会话',
   },
   'shell.archived.restoring': { en: 'Restoring...', 'zh-CN': '恢复中...' },
   'shell.archived.restoreCount': { en: 'Restore ({count})', 'zh-CN': '恢复 ({count})' },

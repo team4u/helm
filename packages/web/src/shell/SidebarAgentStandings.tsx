@@ -508,22 +508,22 @@ export function AgentStandingsGroup({
         store.pushNotice({
           type: 'notification',
           level: 'info',
-          title: t('shell.agents.bulkDeleteCompleted'),
-          body: t('shell.agents.bulkDeleteCompletedBody', { count: fulfilled }),
+          title: t('shell.batch.bulkDeleteCompleted'),
+          body: t('shell.batch.bulkDeleteCompletedBody', { count: fulfilled }),
         })
       } else if (fulfilled === 0) {
         store.pushNotice({
           type: 'notification',
           level: 'error',
-          title: t('shell.agents.bulkDeleteFailed'),
-          body: t('shell.agents.bulkDeleteFailedBody', { count: rejected }),
+          title: t('shell.batch.bulkDeleteFailed'),
+          body: t('shell.batch.bulkDeleteFailedBody', { count: rejected }),
         })
       } else {
         store.pushNotice({
           type: 'notification',
           level: 'warning',
-          title: t('shell.agents.bulkDeletePartial'),
-          body: t('shell.agents.bulkDeletePartialBody', { fulfilled, rejected }),
+          title: t('shell.batch.bulkDeletePartial'),
+          body: t('shell.batch.bulkDeletePartialBody', { fulfilled, rejected }),
         })
       }
 
@@ -538,7 +538,7 @@ export function AgentStandingsGroup({
       store.pushNotice({
         type: 'notification',
         level: 'error',
-        title: t('shell.agents.bulkDeleteError'),
+        title: t('shell.batch.bulkDeleteError'),
         body: err instanceof Error ? err.message : String(err),
       })
     } finally {
@@ -678,7 +678,7 @@ export function AgentStandingsGroup({
               disabled={selectedIds.size === 0 || deleting || archiving}
               onClick={() => setBatchDeleteConfirmOpen(true)}
             >
-              {deleting ? t('shell.agents.deleting') : t('shell.agents.deleteCount', { count: selectedIds.size })}
+              {deleting ? t('shell.batch.deleting') : t('shell.batch.deleteCount', { count: selectedIds.size })}
             </button>
           </div>
         </div>
@@ -706,9 +706,9 @@ export function AgentStandingsGroup({
       <ConfirmDialog
         open={batchDeleteConfirmOpen}
         onOpenChange={setBatchDeleteConfirmOpen}
-        title={t('shell.agents.deleteConfirmTitle', { count: selectedIds.size })}
-        description={t('shell.agents.deleteConfirmDesc')}
-        confirmText={t('shell.agents.deleteConfirmButton')}
+        title={t('shell.batch.deleteConfirmTitle', { count: selectedIds.size })}
+        description={t('shell.batch.deleteConfirmDesc')}
+        confirmText={t('shell.batch.deleteConfirmButton')}
         danger
         onConfirm={() => {
           void executeBatchDelete()
