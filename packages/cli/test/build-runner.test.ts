@@ -22,6 +22,11 @@ import {
   partitionFilesForSharding,
   shouldDisableSharding,
 } from '../../../scripts/lib/test-sharding.mjs'
+import {
+  explicitTestConcurrency,
+  resolveTestConcurrency,
+  withDefaultTestConcurrency,
+} from '../../../scripts/lib/test-concurrency.mjs'
 
 function touch(root: string, rel: string, content = ''): string {
   const abs = path.join(root, rel)
@@ -215,6 +220,19 @@ test('ok', { timeout: 60_000 }, () => {
     assert.equal(r.pure, false, `${label} must be classified as impure`)
     assert.ok(r.reasons.length > 0, `${label} must report a non-empty reason`)
   }
+})
+
+test('test concurrency: defaults to four workers, honors explicit overrides, and rejects invalid values', { timeout: 60_000 }, () => {
+  assert.equal(resolveTestConcurrency(undefined, 16), 4)
+  assert.equal(resolveTestConcurrency(undefined, 2), 2)
+  assert.equal(resolveTestConcurrency('7', 16), 7)
+  assert.equal(explicitTestConcurrency([]), undefined)
+  assert.equal(explicitTestConcurrency(['--test-concurrency=9']), 9)
+  assert.equal(explicitTestConcurrency(['--test-concurrency', '6']), 6)
+  assert.deepEqual(withDefaultTestConcurrency(['foo.test.ts'], 4), ['--test-concurrency=4', 'foo.test.ts'])
+  assert.deepEqual(withDefaultTestConcurrency(['--test-concurrency=6', 'foo.test.ts'], 4), ['--test-concurrency=6', 'foo.test.ts'])
+  assert.throws(() => resolveTestConcurrency('0', 16), /positive integer/)
+  assert.throws(() => explicitTestConcurrency(['--test-concurrency=bad']), /positive integer/)
 })
 
 test('test-sharding: recursive helper tracing (with cycle guard), flag fallback conditions, and balanced LPT sharding', { timeout: 60_000 }, () => {

@@ -16,9 +16,10 @@
  *   all         = unit ∪ integration = every test file, equivalent to the old `pnpm test`.
  *
  * Implementation: Node fs enumerates *.test.ts(x) under <root>/packages/<pkg>/test/, and the
- * test-sharding.mjs static analysis splits strictly pure in-memory tests into K parallel
- * `--test-isolation=none` shards; the rest keep process isolation and are handed to
- * scripts/run-tests.mjs for concurrent scheduling in LPT (longest-processing-time-first) order.
+ * test-sharding.mjs static analysis splits strictly pure in-memory tests into a bounded
+ * `--test-isolation=none` shard; the rest keep process isolation and are handed to
+ * scripts/run-tests.mjs under a per-worktree worker budget (default 4) in LPT order.
+ * Set TEST_CONCURRENCY to override that budget for a deliberate single-worktree run.
  *
  * Invariants (defensive assertions; any failure exits 2 rather than silently running the
  * wrong set):
@@ -40,6 +41,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { partitionFilesForSharding, shouldDisableSharding } from './lib/test-sharding.mjs';
+import { explicitTestConcurrency, resolveTestConcurrency, withDefaultTestConcurrency } from './lib/test-concurrency.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const packagesDir = path.join(repoRoot, 'packages');
@@ -228,10 +230,24 @@ function lptWeight(relPath) {
 
 const requireFromRoot = createRequire(path.join(repoRoot, 'package.json'));
 const ts = requireFromRoot('typescript');
-const cpus = Math.max(1, os.availableParallelism());
+let workerBudget;
+try {
+  workerBudget = resolveTestConcurrency(process.env.TEST_CONCURRENCY, os.availableParallelism());
+} catch (error) {
+  console.error(`[test-suites] ${error.message}`);
+  process.exit(2);
+}
 
 const sortedAllFiles = [...files].sort((a, b) => lptWeight(b) - lptWeight(a) || a.localeCompare(b));
-const shardingDisabled = shouldDisableSharding(extraArgs);
+let workerBudgetOverride;
+try {
+  workerBudgetOverride = explicitTestConcurrency(extraArgs);
+} catch (error) {
+  console.error(`[test-suites] ${error.message}`);
+  process.exit(2);
+}
+if (workerBudgetOverride !== undefined) workerBudget = workerBudgetOverride;
+const shardingDisabled = shouldDisableSharding(extraArgs) || workerBudgetOverride !== undefined;
 
 /** @type {Array<{ label: string, args: string[], permits: number }>} */
 const plans = [];
@@ -241,53 +257,51 @@ if (!shardingDisabled) {
     ts,
     repoRoot,
     files,
-    cpus,
-    // Merge pure in-memory tests into single-process shards (measured: unit's 43 files in
-    // just 1.3s; integration's 38 files including a 5s timer in 6.9s), and start them
-    // alongside the isolated pool at 1 + (cpus - 1) concurrency: no phase barrier, no
-    // dual-pool oversubscription contention, no cold-start tax from a hundred coordinators.
+    cpus: workerBudget,
+    // Keep short pure tests in one zero-copy process and reserve the remaining worktree budget
+    // for isolated tests. Shard count and total permits are separate decisions.
     filesPerShard: Math.max(8, files.length),
     weightFn: lptWeight,
   });
   const usePureShards = pureFiles.length >= 4 && shards.length > 0;
   if (usePureShards) {
     const pureShardCount = shards.length;
-    const isoConc = Math.max(1, cpus - pureShardCount);
+    const isoConc = Math.max(1, workerBudget - pureShardCount);
     console.error(
       `[test-suites] schedule: pure=${pureFiles.length} (${pureShardCount} shards, --test-isolation=none) || ` +
-        `isolated=${isolatedFiles.length} (--test-concurrency=${isoConc}, total cap ${cpus})`,
+        `isolated=${isolatedFiles.length} (--test-concurrency=${isoConc}, worktree cap ${workerBudget})`,
     );
     shards.forEach((shard, idx) => {
       plans.push({
         label: `pure-shard-${idx + 1}/${pureShardCount}`,
-        args: ['--test-isolation=none', ...extraArgs, ...shard],
+        args: ['--test-isolation=none', '--test-concurrency=1', ...extraArgs, ...shard],
         permits: 1,
       });
     });
     if (isolatedFiles.length > 0) {
       plans.push({
         label: 'isolated',
-        args: [`--test-concurrency=${isoConc}`, ...extraArgs, ...isolatedFiles],
+        args: withDefaultTestConcurrency(extraArgs, isoConc).concat(isolatedFiles),
         permits: isoConc,
       });
     }
   } else {
     plans.push({
       label: 'isolated',
-      args: [...extraArgs, ...sortedAllFiles],
-      permits: cpus,
+      args: withDefaultTestConcurrency(extraArgs, workerBudget).concat(sortedAllFiles),
+      permits: workerBudget,
     });
   }
 } else {
   plans.push({
     label: 'single',
-    args: [...extraArgs, ...sortedAllFiles],
-    permits: cpus,
+    args: withDefaultTestConcurrency(extraArgs, workerBudget).concat(sortedAllFiles),
+    permits: workerBudget,
   });
 }
 
 // Reuse run-tests.mjs: cross-platform tsx spawn, per-test/total timeouts, and process-tree
-// cleanup all live there — never re-implemented. A single permit-capped (cpus) worker pool
+// cleanup all live there — never re-implemented. A single permit-capped worker pool
 // schedules pure-shards, heavy single files, and concurrent batches together, avoiding
 // dual-pool oversubscription, phase barriers, and tail serialization.
 const runTestsPath = path.join(repoRoot, 'scripts', 'run-tests.mjs');
@@ -374,7 +388,7 @@ function runPlanPool(queue, maxPermits) {
   });
 }
 
-const exitCodes = await runPlanPool(plans, cpus);
+const exitCodes = await runPlanPool(plans, workerBudget);
 
 const elapsed = ((Date.now() - suiteStartMs) / 1000).toFixed(1);
 let finalCode = 0;
