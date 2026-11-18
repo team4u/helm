@@ -149,25 +149,19 @@ export function registerSwarmActions(
     structuredOutputSchema: createGroupOutputSchema,
     execute: async (input: never, context: PluginToolContext) => {
       const res = await createGroup(input as Parameters<typeof createGroup>[0], context.conversationId)
-      return envelope(
-        `Created swarm group "${res.group.title}" (${res.groupId}, coordinatorGuard=${res.group.coordinatorGuard}).`,
-        res,
-      )
+      return envelope(`Created swarm group "${res.group.title}" (${res.groupId}).`, res)
     },
   })
 
   ctx.tool({
     name: 'swarm_update_group',
-    description: 'Update the active swarm collaboration group title, objective, or coordinatorGuard setting.',
+    description: 'Update the active swarm collaboration group title or objective.',
     inputSchema: updateGroupInputSchema,
     structuredOutputSchema: updateGroupOutputSchema,
     scope: COORDINATOR_SCOPE,
     execute: async (input: never, context: PluginToolContext) => {
       const res = await updateGroup(input as Parameters<typeof updateGroup>[0], context.conversationId)
-      return envelope(
-        `Updated swarm group "${res.group.title}" (${res.groupId}, coordinatorGuard=${res.group.coordinatorGuard}).`,
-        res,
-      )
+      return envelope(`Updated swarm group "${res.group.title}" (${res.groupId}).`, res)
     },
   })
 
@@ -293,7 +287,7 @@ export function registerSwarmActions(
   ctx.tool({
     name: 'swarm_close_group',
     description:
-      'Close the swarm collaboration group in full-cleanup mode or unlock-merge mode (keepWorktree: true releases holds, preserves modified branches, and restores coordinator bash tools).',
+      'Close the swarm collaboration group in full-cleanup mode or retain-branches mode (keepWorktree: true releases holds and preserves modified branches in retainedWorktrees).',
     inputSchema: closeGroupInputSchema,
     structuredOutputSchema: closeGroupOutputSchema,
     scope: COORDINATOR_SCOPE,
@@ -322,10 +316,10 @@ export function registerSwarmActions(
 
   ctx.action({
     id: 'update_group',
-    description: 'Update swarm collaboration group metadata or coordinatorGuard.',
+    description: 'Update swarm collaboration group metadata.',
     exposeAsTool: false,
     scope: COORDINATOR_SCOPE,
-    cli: { command: ['swarm', 'update-group'], description: 'Update swarm collaboration group metadata or guard' },
+    cli: { command: ['swarm', 'update-group'], description: 'Update swarm collaboration group metadata' },
     inputSchema: updateGroupInputSchema,
     outputSchema: updateGroupOutputSchema,
     handler: (input: Parameters<typeof updateGroup>[0], context) => updateGroup(input, context.conversationId),
@@ -438,7 +432,7 @@ export function registerSwarmActions(
 
   ctx.action({
     id: 'close_group',
-    description: 'Close a swarm collaboration group in full-cleanup mode or unlock-merge mode (keepWorktree: true).',
+    description: 'Close a swarm collaboration group in full-cleanup mode or retain-branches mode (keepWorktree: true).',
     exposeAsTool: false,
     scope: COORDINATOR_SCOPE,
     cli: { command: ['swarm', 'close-group'], description: 'Close a swarm collaboration group' },

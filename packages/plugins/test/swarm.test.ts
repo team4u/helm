@@ -74,7 +74,6 @@ function makeGroup(over: Partial<CollabGroupRecord> = {}): CollabGroupRecord {
     title: 'Auth Refactor Squad',
     objective: 'Ship clean auth refactor with full test coverage',
     coordinatorConversationId: 1,
-    coordinatorGuard: true,
     status: 'active',
     channels: [
       { name: 'main' },
@@ -539,7 +538,7 @@ test('swarm-unit6: main channel noise isolation, XML escape, schema from removal
   // 3) activeSwarmGroupCoordinatorSection omits load_skill when skillAvailable=false
   const noSkillSec = activeSwarmGroupCoordinatorSection('grp-sec', { skillAvailable: false })
   assert.equal(noSkillSec.includes('load_skill('), false)
-  assert.match(noSkillSec, /swarm_close_group\(\)/)
+  assert.match(noSkillSec, /merge worktree branches and call swarm_close_group/)
 
   // 4) XML escape in envelopes prevents tag breakout
   const hostileMember = makeMember({ name: 'evil"worker', conversationId: 13 })

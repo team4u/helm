@@ -5,7 +5,7 @@
  * Every human-visible string of the tool trace rows, the composer activity
  * tray, the workbench orchestration panel, and the timeline receipt pills
  * resolves here against the active host locale. Protocol vocabulary (#seq,
- * wake, coordinatorGuard, raw channel names) stays available as auxiliary
+ * wake, raw channel names) stays available as auxiliary
  * facts, never as the primary control surface.
  */
 import { DEFAULT_HELM_LOCALE, resolveLocalizedText, type HelmLocale, type LocalizedText } from '@helm/plugin-client'

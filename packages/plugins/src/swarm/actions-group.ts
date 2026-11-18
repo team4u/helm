@@ -26,7 +26,6 @@ export interface EnsureCoordinatorGroupInput {
   conversationId: number
   title: string
   objective?: string
-  coordinatorGuard?: boolean
   channels?: Array<{ name: string; topic?: string }>
   reuseExisting?: boolean
 }
@@ -145,10 +144,6 @@ export async function ensureCoordinatorGroup(
   if (eligibilityErr !== undefined) {
     throw new HelmError(eligibilityErr.code, eligibilityErr.message, eligibilityErr.status, eligibilityErr.details)
   }
-  if (input.coordinatorGuard !== undefined && typeof input.coordinatorGuard !== 'boolean') {
-    throw new HelmError('validation_error', 'coordinatorGuard 必须是布尔值', 400, {})
-  }
-  const coordinatorGuard = input.coordinatorGuard ?? true
 
   return enqueueDispatch(async () => {
     const syncTagAndProjections = async (groupId: string): Promise<{ groupId: string; group: BoardViewDoc['group'] }> => {
@@ -175,7 +170,6 @@ export async function ensureCoordinatorGroup(
       coordinatorConversationId: targetConvId,
       title: input.title.trim().slice(0, 120),
       ...(input.objective !== undefined ? { objective: input.objective } : {}),
-      coordinatorGuard,
       ...(input.channels !== undefined ? { channels: input.channels } : {}),
     })
     return syncTagAndProjections(created.id)
@@ -193,7 +187,6 @@ export function createGroupHandlers(ctx: HelmPluginContext, coordinator: SwarmCo
     input: {
       title: string
       objective?: string
-      coordinatorGuard?: boolean
       channels?: Array<{ name: string; topic?: string }>
       conversationId?: number
     },
@@ -222,20 +215,16 @@ export function createGroupHandlers(ctx: HelmPluginContext, coordinator: SwarmCo
       conversationId: targetConvId,
       title: input.title,
       ...(input.objective !== undefined ? { objective: input.objective } : {}),
-      ...(input.coordinatorGuard !== undefined ? { coordinatorGuard: input.coordinatorGuard } : {}),
       ...(input.channels !== undefined ? { channels: input.channels } : {}),
       reuseExisting: false,
     })
   }
 
   const updateGroup = async (
-    input: { groupId?: string; title?: string; objective?: string; coordinatorGuard?: boolean },
+    input: { groupId?: string; title?: string; objective?: string },
     conversationId: number | undefined,
   ): Promise<{ groupId: string; group: BoardViewDoc['group'] }> => {
     const group = resolveCoordinatorGroup(groups, input.groupId, conversationId, true)
-    if (input.coordinatorGuard !== undefined && typeof input.coordinatorGuard !== 'boolean') {
-      throw new HelmError('validation_error', 'coordinatorGuard 必须是布尔值', 400, {})
-    }
     if (input.title !== undefined && (typeof input.title !== 'string' || input.title.trim() === '')) {
       throw new HelmError('validation_error', 'title 必须是非空字符串', 400, {})
     }
@@ -245,7 +234,6 @@ export function createGroupHandlers(ctx: HelmPluginContext, coordinator: SwarmCo
     await groups.updateGroup(group.id, {
       ...(input.title !== undefined ? { title: input.title.trim().slice(0, 120) } : {}),
       ...(input.objective !== undefined ? { objective: input.objective } : {}),
-      ...(input.coordinatorGuard !== undefined ? { coordinatorGuard: input.coordinatorGuard } : {}),
     })
     const view = groups.buildBoardView(group.id)
     return { groupId: group.id, group: view.group }

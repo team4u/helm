@@ -1358,7 +1358,6 @@ export function createCollabGroupRuntime(
         title: input.title.trim(),
         ...(input.objective !== undefined && input.objective.trim() !== '' ? { objective: input.objective.trim() } : {}),
         coordinatorConversationId: input.coordinatorConversationId,
-        coordinatorGuard: input.coordinatorGuard,
         status: 'active',
         channels,
         members: [],
@@ -1395,9 +1394,6 @@ export function createCollabGroupRuntime(
           const obj = patch.objective.trim()
           if (obj === '') delete draft.objective
           else draft.objective = obj
-        }
-        if (patch.coordinatorGuard !== undefined) {
-          draft.coordinatorGuard = patch.coordinatorGuard
         }
         draft.updatedAt = Date.now()
         return { group: draft, result: draft }
