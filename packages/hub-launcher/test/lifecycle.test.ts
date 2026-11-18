@@ -1,22 +1,19 @@
 /**
- * Process lifecycle tests: real detached processes against fake payloads — start readiness gating,
- * pid/launch persistence, duplicate-start refusal, identity-verified stop with escalation, stale
- * pid cleanup, health-failure diagnostics, and restart.
+ * Process lifecycle tests: real detached processes against fake payloads — start readiness gating
+ * on the `Helm Hub: ` listen line (including preceding log lines, stale banners from previous
+ * runs, and wrong-port banners), pid/launch persistence, duplicate-start refusal,
+ * identity-verified stop with escalation, stale pid cleanup, failure diagnostics, restart, the
+ * install/data isolation guard, and the shared lifecycle lock.
  */
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { cp } from 'node:fs/promises';
 import path from 'node:path';
 import { test } from 'node:test';
 import { useTempDir, sanitizedHostEnv } from '@helm/test-kit/node';
-import {
-  readCurrentRelease,
-  readLaunchConfig,
-  readPidRecord,
-  writeCurrentRelease,
-  writePidRecord,
-} from '../src/records.js';
-import { readRunningHub, startHub, stopHub } from '../src/process.js';
+import { writeCurrentRelease } from '@helm/update';
+import { readLaunchConfig, readPidRecord, writePidRecord } from '../src/records.js';
+import { readRunningHub, startHub, stopHub, withLifecycleLock } from '../src/process.js';
 import { UsageError } from '../src/io.js';
 import {
   captureIo,
@@ -26,6 +23,7 @@ import {
   spawnAlienProcess,
   waitUntilDead,
   writeFakePayload,
+  type FakePayloadMode,
 } from './fixtures.js';
 
 const PKG = '@fake/hub-payload';
@@ -38,9 +36,9 @@ interface Harness {
 
 async function setupInstalledRelease(
   t: import('node:test').TestContext,
-  options?: { mode?: 'ok' | 'crash' | 'never-ready' | 'ignore-signal'; version?: string },
+  root: string,
+  options?: { mode?: FakePayloadMode; version?: string },
 ): Promise<Harness> {
-  const root = useTempDir(t, 'helm-launcher-life-');
   const version = options?.version ?? '1.0.0';
   const payloadDir = await writeFakePayload({
     dir: path.join(root, 'fixture-payload'),
@@ -52,7 +50,7 @@ async function setupInstalledRelease(
   const releaseDir = path.join(root, 'releases', version, 'fixture');
   const entryPath = path.join(releaseDir, 'node_modules', ...PKG.split('/'), 'start.mjs');
   await cp(payloadDir, path.dirname(entryPath), { recursive: true });
-  await writeCurrentRelease(root, { version, releaseDir, entryPath, updatedAt: new Date().toISOString() });
+  await writeCurrentRelease(root, { version, updatedAt: new Date().toISOString(), entries: { entryPath } });
   return { root, payloadDir, port: await freePort() };
 }
 
@@ -66,15 +64,19 @@ test('start refuses when no release is installed', { timeout: 60_000 }, async (t
   });
 });
 
-test('start becomes healthy, persists pid + launch config, and refuses double starts', { timeout: 60_000 }, async (t) => {
-  const h = await setupInstalledRelease(t);
+test('start becomes ready via the listen banner, persists pid + launch config, and refuses double starts', { timeout: 60_000 }, async (t) => {
+  const h = await setupInstalledRelease(t, useTempDir(t, 'helm-launcher-life-'));
   const { io } = captureIo(sanitizedHostEnv());
   const started = await startHub(h.root, io, { flags: { port: h.port, dataDir: '/tmp/helm-launcher-data' }, pollMs: 100 });
   t.after(() => cleanupPid(started.pid));
   assert.equal(started.version, '1.0.0');
-  assert.match(started.url, new RegExp(`http://127\\.0\\.0\\.1:${h.port}`));
+  assert.equal(started.url, `http://127.0.0.1:${h.port}`);
+  // The banner follows preceding log lines in the same stream (#72 multiline case): readiness
+  // still resolves and the server is genuinely serving.
   assert.deepEqual(await getJson(h.port, '/__version'), { version: '1.0.0' });
   assert.deepEqual(await getJson(h.port, '/api/auth/status'), { configured: true, authenticated: false });
+  assert.deepEqual(started.health, { configured: true, authenticated: false });
+  assert.match(readFileSync(path.join(h.root, 'logs', 'hub.log'), 'utf8'), new RegExp(`^Helm Hub: http://127\\.0\\.0\\.1:${h.port}`, 'm'));
 
   const pidRecord = await readPidRecord(h.root);
   assert.ok(pidRecord !== null);
@@ -98,6 +100,52 @@ test('start becomes healthy, persists pid + launch config, and refuses double st
   assert.equal(await readPidRecord(h.root), null);
 });
 
+test('a stale banner from a previous run in hub.log never satisfies readiness', { timeout: 60_000 }, async (t) => {
+  const h = await setupInstalledRelease(t, useTempDir(t, 'helm-launcher-life-'));
+  const { io } = captureIo(sanitizedHostEnv());
+  // Pre-existing log content including an old banner line for the SAME port: only bytes appended
+  // after spawn count, so readiness must still wait for the fresh banner.
+  const logPath = path.join(h.root, 'logs', 'hub.log');
+  mkdirSync(path.join(h.root, 'logs'), { recursive: true });
+  appendFileSync(logPath, `[old run] Helm Hub: http://127.0.0.1:${h.port}\n[old run] shutting down\n`);
+  const started = await startHub(h.root, io, { flags: { port: h.port }, pollMs: 100 });
+  t.after(() => cleanupPid(started.pid));
+  // The server is genuinely up (a false-ready off the stale line would leave this unanswered).
+  assert.deepEqual(await getJson(h.port, '/__version'), { version: '1.0.0' });
+  await stopHub(h.root, io);
+  await waitUntilDead(started.pid);
+});
+
+test('a banner naming a different port is not this candidate readiness', { timeout: 60_000 }, async (t) => {
+  const h = await setupInstalledRelease(t, useTempDir(t, 'helm-launcher-life-'), { mode: 'wrong-port-banner' });
+  const { io } = captureIo(sanitizedHostEnv());
+  await assert.rejects(
+    startHub(h.root, io, { flags: { port: h.port }, healthTimeoutMs: 1_500, pollMs: 100 }),
+    /readiness timed out.*no "Helm Hub: " listen line/s,
+  );
+  assert.equal(await readPidRecord(h.root), null);
+  assert.match(readFileSync(path.join(h.root, 'logs', 'hub.log'), 'utf8'), /Helm Hub: http:\/\/127\.0\.0\.1:1\b/);
+});
+
+test('start rejects a data directory nested inside the install root (and vice versa)', { timeout: 60_000 }, async (t) => {
+  const h = await setupInstalledRelease(t, useTempDir(t, 'helm-launcher-life-'));
+  const nested = captureIo(sanitizedHostEnv());
+  await assert.rejects(
+    startHub(h.root, nested.io, { flags: { port: h.port, dataDir: path.join(h.root, 'data') }, pollMs: 100 }),
+    /must not overlap/,
+  );
+  assert.equal(await readPidRecord(h.root), null);
+
+  const enclosing = useTempDir(t, 'helm-launcher-enclose-');
+  const payloadDir = await writeFakePayload({ dir: path.join(enclosing, 'fixture'), pkgName: PKG, version: '1.0.0' });
+  const releaseDir = path.join(enclosing, 'programs', 'releases', '1.0.0', 'fixture');
+  const entryPath = path.join(releaseDir, 'node_modules', ...PKG.split('/'), 'start.mjs');
+  await cp(payloadDir, path.dirname(entryPath), { recursive: true });
+  await writeCurrentRelease(enclosing, { version: '1.0.0', updatedAt: new Date().toISOString(), entries: { entryPath } });
+  const { io } = captureIo(sanitizedHostEnv({ HELM_DATA_DIR: enclosing }));
+  await assert.rejects(startHub(enclosing, io, { flags: { port: h.port }, pollMs: 100 }), /must not overlap/);
+});
+
 test('stop is a clean no-op when nothing runs and cleans dead pid records', { timeout: 60_000 }, async (t) => {
   const root = useTempDir(t, 'helm-launcher-stopnoop-');
   const { io } = captureIo(sanitizedHostEnv());
@@ -105,8 +153,6 @@ test('stop is a clean no-op when nothing runs and cleans dead pid records', { ti
   assert.equal(stopped.wasRunning, false);
   assert.equal(stopped.cleanedStalePid, false);
 
-  const current = await readCurrentRelease(root);
-  assert.equal(current, null);
   await writeFakePayload({ dir: path.join(root, 'fixture'), pkgName: PKG, version: '1.0.0' });
   // A pid record whose process is long dead (huge pid cannot be alive).
   await writePidRecord(root, {
@@ -146,7 +192,7 @@ test('stop refuses to signal a live pid whose health endpoint is unreachable', {
 });
 
 test('stop escalates to process-tree termination when SIGTERM is ignored', { timeout: 60_000 }, async (t) => {
-  const h = await setupInstalledRelease(t, { mode: 'ignore-signal' });
+  const h = await setupInstalledRelease(t, useTempDir(t, 'helm-launcher-life-'), { mode: 'ignore-signal' });
   const { io } = captureIo(sanitizedHostEnv());
   const started = await startHub(h.root, io, { flags: { port: h.port }, pollMs: 100 });
   t.after(() => cleanupPid(started.pid));
@@ -158,27 +204,27 @@ test('stop escalates to process-tree termination when SIGTERM is ignored', { tim
 });
 
 test('start failure paths never leave a pid record and surface hub log tails', { timeout: 60_000 }, async (t) => {
-  const neverReady = await setupInstalledRelease(t, { mode: 'never-ready' });
+  const neverReady = await setupInstalledRelease(t, useTempDir(t, 'helm-launcher-life-'), { mode: 'never-ready' });
   const ioNever = captureIo(sanitizedHostEnv());
   await assert.rejects(
     startHub(neverReady.root, ioNever.io, { flags: { port: neverReady.port }, healthTimeoutMs: 1_500, pollMs: 100 }),
-    /hub failed to become healthy:.*last 40 lines/s,
+    /hub failed to become ready:.*readiness timed out.*last 40 lines/s,
   );
   assert.equal(await readPidRecord(neverReady.root), null);
   assert.ok(existsSync(path.join(neverReady.root, 'logs', 'hub.log')));
   assert.match(readFileSync(path.join(neverReady.root, 'logs', 'hub.log'), 'utf8'), /never becoming ready/);
 
-  const crash = await setupInstalledRelease(t, { mode: 'crash' });
+  const crash = await setupInstalledRelease(t, useTempDir(t, 'helm-launcher-life-'), { mode: 'crash' });
   const ioCrash = captureIo(sanitizedHostEnv());
   await assert.rejects(
     startHub(crash.root, ioCrash.io, { flags: { port: crash.port }, healthTimeoutMs: 3_000, pollMs: 100 }),
-    /exited before becoming healthy.*code=3/s,
+    /exited before reporting readiness.*code=3/s,
   );
   assert.equal(await readPidRecord(crash.root), null);
 });
 
 test('restart cycle: stop then start reports the new pid and version', { timeout: 60_000 }, async (t) => {
-  const h = await setupInstalledRelease(t);
+  const h = await setupInstalledRelease(t, useTempDir(t, 'helm-launcher-life-'));
   const { io } = captureIo(sanitizedHostEnv());
   const first = await startHub(h.root, io, { flags: { port: h.port }, pollMs: 100 });
   t.after(() => cleanupPid(first.pid));
@@ -194,7 +240,7 @@ test('restart cycle: stop then start reports the new pid and version', { timeout
 });
 
 test('status snapshot distinguishes healthy, dead, and absent states', { timeout: 60_000 }, async (t) => {
-  const h = await setupInstalledRelease(t);
+  const h = await setupInstalledRelease(t, useTempDir(t, 'helm-launcher-life-'));
   const { io } = captureIo(sanitizedHostEnv());
   assert.equal(await readRunningHub(h.root, io), null);
 
@@ -211,4 +257,26 @@ test('status snapshot distinguishes healthy, dead, and absent states', { timeout
   assert.ok(dead !== null);
   assert.equal(dead.alive, false);
   assert.equal(dead.health, null);
+});
+
+test('lifecycle lock excludes concurrent lifecycle operations', { timeout: 60_000 }, async (t) => {
+  const h = await setupInstalledRelease(t, useTempDir(t, 'helm-launcher-life-'));
+  const { io } = captureIo(sanitizedHostEnv());
+  await withLifecycleLock(h.root, async () => {
+    await assert.rejects(startHub(h.root, io, { flags: { port: h.port } }), (error: unknown) => {
+      assert.ok(error instanceof UsageError);
+      assert.equal(error.code, 'lifecycle_lock_busy');
+      return true;
+    });
+    await assert.rejects(stopHub(h.root, io), (error: unknown) => {
+      assert.ok(error instanceof UsageError);
+      assert.equal(error.code, 'lifecycle_lock_busy');
+      return true;
+    });
+  });
+  // Lock released afterwards: start works again.
+  const started = await startHub(h.root, io, { flags: { port: h.port }, pollMs: 100 });
+  t.after(() => cleanupPid(started.pid));
+  await stopHub(h.root, io);
+  await waitUntilDead(started.pid);
 });

@@ -1,86 +1,77 @@
 /**
- * Port to the shared generic update engine (`@helm/update`, extraction in flight on the swarm
- * board — see group blackboard briefs #7/#10/#14). The Hub launcher deliberately contains ZERO
- * copies of the generic update mechanism (registry metadata fetch, SHA512-verified download,
- * immutable staging with `.complete`, upgrade locking, the npm runner). Everything generic flows
- * through this interface; everything Hub-specific (pid management, health gate, rollback policy)
- * stays in this package.
- *
- * Binding plan: once `@helm/update` lands, `resolveUpdateCore()` returns an adapter over it and the
- * package gains the `@helm/update` dependency. Until then it returns `null` and update commands
- * fail with an explicit "engine not wired" error — lifecycle commands (start/stop/restart/status)
- * are unaffected. Tests inject a fake core (test/fixtures.ts) that stands in for the generic layer.
+ * Real adapter binding the Hub launcher's narrow update port to the shared `@helm/update`
+ * engine. The port (`UpdateCore`) exists so tests can fake the registry/npm seams without a
+ * network; production always uses `defaultUpdateCore()`, which delegates every generic
+ * mechanism — registry manifest fetch with SHA512 SRI verification, the shell-free npm runner,
+ * immutable staging with `.complete` markers and cache revalidation — to the engine. Nothing
+ * generic is reimplemented here.
  */
-/**
- * Staging specification for one immutable Hub release candidate. The generic engine owns the
- * staging directory lifecycle; the launcher owns what "install" and "revalidate" mean for the Hub
- * payload layout (npm install + `start.mjs check`).
- */
-export interface StageHubReleaseSpec {
-  /** Strict-semver target version (names the `releases/<version>/` root). */
-  version: string;
-  /**
-   * Populate `stagingDir` with the candidate payload and return the `start.mjs` entry path
-   * relative to `stagingDir`. Throwing aborts staging (the engine removes the staging directory).
-   */
-  install(stagingDir: string): Promise<string>;
-  /** Revalidate a `.complete`-cached candidate before reuse; throwing discards the cache. */
-  revalidate(candidateDir: string, entryRelative: string): Promise<void>;
-  /** Bypass the `.complete` cache and build a fresh candidate. */
-  force?: boolean;
-}
+import {
+  computeSri,
+  downloadTarball,
+  fetchExactManifest,
+  fetchLatestVersion,
+  resolveRegistryUrl,
+  runNpm,
+  stageRelease as engineStageRelease,
+  type StageExtractor,
+} from '@helm/update';
 
-export interface FetchLatestOptions {
-  registryUrl?: string;
-  fetchFn?: typeof fetch;
-}
-
-export interface DownloadVerifiedTarballOptions {
+export interface UpdateCoreFetchOptions {
   registryUrl?: string;
   fetchFn?: typeof fetch;
 }
 
 /**
- * Generic update-engine capabilities consumed by the launcher. Function contracts (all shared with
- * the node daemon upgrader semantics):
- * - `fetchLatestVersion`: registry `<registry>/<pkg>/latest` → strict-semver version string;
- * - `downloadVerifiedTarball`: fetch the exact version's tarball URL from registry metadata and
- *   verify its `dist.integrity` sha512 SRI before writing to `destPath` (0600, hard timeout);
- * - `runNpm`: spawn npm without a shell (win32 `npm-cli.js` resolution), hard timeout with
- *   process-tree termination, bounded output with tail diagnostics;
- * - `stageImmutableRelease`: build a candidate under `releases/<version>/` via the spec's
- *   `install` callback inside a `.staging-*` directory, rename to an immutable `<uuid>` candidate,
- *   then atomically write the `.complete` marker; a valid cached marker short-circuits via
- *   `revalidate` (a revalidation failure discards the cache and restages);
- * - `withUpdateLock`: exclusive `update.lock` (`O_EXCL`) around the whole update flow.
+ * Narrow update port consumed by `staging.ts` / `update.ts`; `defaultUpdateCore()` is the only
+ * production implementation. `stageRelease` keeps the extractor channel (download + install run
+ * inside the consumer's extractor) so registry and local-tarball installs share one code path.
  */
 export interface UpdateCore {
-  fetchLatestVersion(pkgName: string, options?: FetchLatestOptions): Promise<string>;
-
+  fetchLatestVersion(pkgName: string, options?: UpdateCoreFetchOptions): Promise<string>;
+  /** Download `<registry>/<pkg>/<version>`'s tarball after verifying its `dist.integrity` sha512 SRI. */
   downloadVerifiedTarball(
+    registryUrl: string,
     pkgName: string,
     version: string,
     destPath: string,
-    options?: DownloadVerifiedTarballOptions,
+    fetchImpl?: typeof fetch,
   ): Promise<void>;
-
   runNpm(args: readonly string[], cwd: string, timeoutMs: number): Promise<void>;
-
-  stageImmutableRelease(releasesDir: string, spec: StageHubReleaseSpec): Promise<{
-    version: string;
-    releaseDir: string;
-    entryPath: string;
-    reusedCached: boolean;
-  }>;
-
-  withUpdateLock<T>(rootDir: string, fn: () => Promise<T>): Promise<T>;
+  /** Immutable staging under `<root>/releases/<version>/` with `.complete` cache semantics. */
+  stageRelease(
+    root: string,
+    version: string,
+    extractor: (stagingDir: string) => Promise<Record<string, string>>,
+    options?: { force?: boolean },
+  ): Promise<{ version: string; releaseDir: string; entries: Record<string, string> }>;
 }
 
-/**
- * Production binding status. Returns `null` until the `@helm/update` adapter is wired in (core
- * package integration); callers must surface an explicit error, never a silent fallback.
- */
-export function resolveUpdateCore(): UpdateCore | null {
-  // Pending: return an adapter over `@helm/update` here once the shared engine lands (board #15).
-  return null;
+export function defaultUpdateCore(): UpdateCore {
+  return {
+    async fetchLatestVersion(pkgName, options) {
+      return await fetchLatestVersion(resolveRegistryUrl(options?.registryUrl), pkgName, options?.fetchFn ?? fetch);
+    },
+    async downloadVerifiedTarball(registryUrl, pkgName, version, destPath, fetchImpl) {
+      const fetchFn = fetchImpl ?? fetch;
+      const manifest = await fetchExactManifest(registryUrl, pkgName, version, fetchFn);
+      await downloadTarball(manifest.tarball, destPath, { fetchFn });
+      const actual = await computeSri(destPath);
+      if (actual !== manifest.integrity) {
+        throw new Error(
+          `${pkgName}@${version} tarball sha512 integrity check failed: expected ${manifest.integrity}, got ${actual}`,
+        );
+      }
+    },
+    runNpm(args, cwd, timeoutMs) {
+      return runNpm([...args], cwd, timeoutMs);
+    },
+    async stageRelease(root, version, extractor, options) {
+      const adapted: StageExtractor = async (stagingDir) => await extractor(stagingDir);
+      return await engineStageRelease(root, version, undefined, {
+        stageExtractor: adapted,
+        ...(options?.force ? { force: true } : {}),
+      });
+    },
+  };
 }

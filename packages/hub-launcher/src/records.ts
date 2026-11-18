@@ -1,13 +1,14 @@
 /**
- * Launcher state records: `current.json`, `update-blocked.json`, `hub.pid`, `launch.json`.
- *
- * Semantics mirror the node daemon upgrader's state discipline: JSON is read strictly (explicit
- * errors on corruption, `null` only on ENOENT) and written atomically with mode `0600`. Shapes are
- * launcher-owned; generic update-engine state (if any) stays inside `@helm/update`.
+ * Launcher-owned state records: `hub.pid` (detached process identity) and `launch.json` (sticky
+ * launch configuration). Release pointers (`current.json`) and cooldown markers
+ * (`update-blocked.json`) are owned by `@helm/update` and used from there — the launcher keeps no
+ * second copy of engine state. JSON reads are strict (explicit errors on corruption, `null` only
+ * on ENOENT via `@helm/update`'s `readStateJson`); writes are atomic (`0600`).
  */
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { atomicWriteJson } from '@helm/env-io';
+import { readStateJson } from '@helm/update';
 import { isStrictSemver } from '@helm/protocol';
 import { pathsOf } from './layout.js';
 
@@ -25,111 +26,6 @@ function requirePort(rec: Record<string, unknown>, key: string): number {
     throw new Error(`expected field "${key}" to be an integer port between 1 and 65535`);
   }
   return value;
-}
-
-/** Read a JSON record file; `null` only when missing, explicit errors on corruption or bad shape. */
-export async function readJsonRecord<T>(file: string, validate: (raw: unknown) => T, label: string): Promise<T | null> {
-  let text: string;
-  try {
-    text = await fsp.readFile(file, 'utf8');
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    throw new Error(`failed to read ${label} (${file}): ${error instanceof Error ? error.message : String(error)}`);
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch (error) {
-    throw new Error(`${label} is corrupt (${file}): ${error instanceof Error ? error.message : String(error)}`);
-  }
-  try {
-    return validate(parsed);
-  } catch (error) {
-    throw new Error(`${label} failed validation (${file}): ${error instanceof Error ? error.message : String(error)}`);
-  }
-}
-
-async function writeJsonRecord(file: string, value: unknown): Promise<void> {
-  await atomicWriteJson(file, value, { mode: 0o600 });
-}
-
-// ---------------------------------------------------------------------------
-// current.json — the committed release pointer
-// ---------------------------------------------------------------------------
-
-export interface CurrentReleaseRecord {
-  version: string;
-  /** Immutable release directory (`releases/<ver>/<uuid>`). */
-  releaseDir: string;
-  /** Absolute path to the payload's `start.mjs` entry. */
-  entryPath: string;
-  updatedAt: string;
-}
-
-function validateCurrent(raw: unknown): CurrentReleaseRecord {
-  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('expected JSON object');
-  const rec = raw as Record<string, unknown>;
-  const record: CurrentReleaseRecord = {
-    version: requireString(rec, 'version'),
-    releaseDir: requireString(rec, 'releaseDir'),
-    entryPath: requireString(rec, 'entryPath'),
-    updatedAt: requireString(rec, 'updatedAt'),
-  };
-  if (!isStrictSemver(record.version)) throw new Error(`invalid SemVer version: "${record.version}"`);
-  return record;
-}
-
-export function readCurrentRelease(root: string): Promise<CurrentReleaseRecord | null> {
-  return readJsonRecord(pathsOf(root).currentPath, validateCurrent, 'current.json');
-}
-
-export async function writeCurrentRelease(root: string, record: CurrentReleaseRecord): Promise<void> {
-  validateCurrent(record);
-  await writeJsonRecord(pathsOf(root).currentPath, record);
-}
-
-export async function deleteCurrentRelease(root: string): Promise<void> {
-  await fsp.rm(pathsOf(root).currentPath, { force: true });
-}
-
-// ---------------------------------------------------------------------------
-// update-blocked.json — cooldown marker for a version that failed its candidate health check
-// ---------------------------------------------------------------------------
-
-export interface BlockedReleaseRecord {
-  version: string;
-  reason: string;
-  at: string;
-}
-
-function validateBlocked(raw: unknown): BlockedReleaseRecord {
-  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('expected JSON object');
-  const rec = raw as Record<string, unknown>;
-  return {
-    version: requireString(rec, 'version'),
-    reason: requireString(rec, 'reason'),
-    at: requireString(rec, 'at'),
-  };
-}
-
-export function readBlockedRelease(root: string): Promise<BlockedReleaseRecord | null> {
-  return readJsonRecord(pathsOf(root).blockedPath, validateBlocked, 'update-blocked.json');
-}
-
-export async function writeBlockedRelease(root: string, record: BlockedReleaseRecord): Promise<void> {
-  validateBlocked(record);
-  await writeJsonRecord(pathsOf(root).blockedPath, record);
-}
-
-export async function clearBlockedRelease(root: string): Promise<void> {
-  await fsp.rm(pathsOf(root).blockedPath, { force: true });
-}
-
-/** True while `blocked` still suppresses attempts at `blocked.version` (cooldown from `at`). */
-export function isBlockedActive(blocked: BlockedReleaseRecord, now: Date, cooldownMs: number): boolean {
-  const at = Date.parse(blocked.at);
-  if (!Number.isFinite(at)) return true; // Unparseable timestamp: keep blocking rather than guessing.
-  return now.getTime() - at < cooldownMs;
 }
 
 // ---------------------------------------------------------------------------
@@ -160,18 +56,19 @@ function validatePidRecord(raw: unknown): HubPidRecord {
     port: requirePort(rec, 'port'),
     startedAt: requireString(rec, 'startedAt'),
   };
+  if (!isStrictSemver(record.version)) throw new Error(`invalid SemVer version: "${record.version}"`);
   if (rec['host'] !== undefined) record.host = requireString(rec, 'host');
   if (rec['dataDir'] !== undefined) record.dataDir = requireString(rec, 'dataDir');
   return record;
 }
 
 export function readPidRecord(root: string): Promise<HubPidRecord | null> {
-  return readJsonRecord(pathsOf(root).pidPath, validatePidRecord, 'hub.pid');
+  return readStateJson(pathsOf(root).pidPath, validatePidRecord, 'hub.pid');
 }
 
 export async function writePidRecord(root: string, record: HubPidRecord): Promise<void> {
   validatePidRecord(record);
-  await writeJsonRecord(pathsOf(root).pidPath, record);
+  await atomicWriteJson(pathsOf(root).pidPath, record, { mode: 0o600 });
 }
 
 /** Canonical JSON with recursively sorted keys (order-insensitive record comparison). */
@@ -190,6 +87,13 @@ export async function removePidFileIfMatch(root: string, record: HubPidRecord): 
   if (current === null || stableStringify(current) !== stableStringify(record)) return false;
   await fsp.rm(pathsOf(root).pidPath, { force: true });
   return true;
+}
+
+/** True while `blocked` still suppresses attempts at `blocked.version` (cooldown from `at`). */
+export function isBlockedActive(blocked: { version: string; reason: string; at: string }, now: Date, cooldownMs: number): boolean {
+  const at = Date.parse(blocked.at);
+  if (!Number.isFinite(at)) return true; // Unparseable timestamp: keep blocking rather than guessing.
+  return now.getTime() - at < cooldownMs;
 }
 
 // ---------------------------------------------------------------------------
@@ -224,12 +128,12 @@ function validateLaunchConfig(raw: unknown): LaunchConfig {
 }
 
 export function readLaunchConfig(root: string): Promise<LaunchConfig | null> {
-  return readJsonRecord(pathsOf(root).launchConfigPath, validateLaunchConfig, 'launch.json');
+  return readStateJson(pathsOf(root).launchConfigPath, validateLaunchConfig, 'launch.json');
 }
 
 export async function writeLaunchConfig(root: string, config: LaunchConfig): Promise<void> {
   validateLaunchConfig(config);
-  await writeJsonRecord(pathsOf(root).launchConfigPath, config);
+  await atomicWriteJson(pathsOf(root).launchConfigPath, config, { mode: 0o600 });
 }
 
 function parsePortEnv(value: string | undefined, label: string): number | undefined {
@@ -282,17 +186,6 @@ export function persistableLaunchConfig(config: EffectiveLaunchConfig): LaunchCo
   return persisted;
 }
 
-/** Entry existence check helper (explicit corruption errors instead of silent fallbacks). */
-export async function assertEntryExists(entryPath: string, context: string): Promise<void> {
-  try {
-    await fsp.access(entryPath);
-  } catch {
-    throw new Error(
-      `${context} points to a missing entry (${entryPath}): staged release may be corrupted; fix current.json or re-run the update instead of guessing another entry`,
-    );
-  }
-}
-
 /** Resolve a release entry path relative to its release directory (traversal-checked). */
 export function resolveInsideRelease(releaseDir: string, relative: string, label: string): string {
   if (typeof relative !== 'string' || relative === '') {
@@ -303,4 +196,15 @@ export function resolveInsideRelease(releaseDir: string, relative: string, label
     throw new Error(`${label} escapes the release directory: ${relative} (resolved to ${resolved})`);
   }
   return resolved;
+}
+
+/** Entry existence check helper (explicit corruption errors instead of silent fallbacks). */
+export async function assertEntryExists(entryPath: string, context: string): Promise<void> {
+  try {
+    await fsp.access(entryPath);
+  } catch {
+    throw new Error(
+      `${context} points to a missing entry (${entryPath}): staged release may be corrupted; fix current.json or re-run the update instead of guessing another entry`,
+    );
+  }
 }

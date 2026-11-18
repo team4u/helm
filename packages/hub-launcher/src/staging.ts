@@ -1,18 +1,26 @@
 /**
  * Hub payload staging strategy: how a published npm payload becomes a verified, immutable release
- * candidate. All generic machinery (verified download, npm runner, immutable staging, markers,
- * locking) is delegated to the injected `UpdateCore`; this module only defines the Hub layout:
+ * candidate. All generic machinery (immutable staging directories, `.complete` markers and cache
+ * reuse, staging cleanup, registry metadata, verified download, npm runner) flows through the
+ * `UpdateCore` port (`update-core.ts` binds it to the shared `@helm/update` engine; tests inject a
+ * port fake whose staging delegates to the real engine); this module only defines the Hub layout
+ * policy inside the staged extractor:
  *
- * 1. obtain the payload tarball — registry (core downloads + sha512-verifies it) or a local
- *    `--tarball` file (verified by the payload's own `start.mjs check` checksum contract);
+ * 1. obtain the payload tarball — registry (manifest fetch + tarball download + sha512 SRI
+ *    verification, all engine primitives behind the port) or a local `--tarball` file (verified
+ *    by the payload's own `start.mjs check` checksum contract);
  * 2. `npm install <tarball> --omit=dev --ignore-scripts` inside the staging directory (the payload
  *    ships its `@helm/*` dependencies as bundled `file:./<pkg>.tgz` archives, so one install
  *    completes the whole dependency closure — esbuild platform binaries arrive via
  *    optionalDependencies);
  * 3. verify the installed package identity (name/version) and the `start.mjs` + `manifest.json`
- *    contract files;
+ *    contract files, including the manifest's `nodeEngines` floor against the launcher's own Node;
  * 4. run `node start.mjs check` — the payload's own zero-dependency self-verification (entry
  *    checksums, dependency resolution, runtime capability probes). Never starts the Hub.
+ *
+ * Cache reuse is the engine's marker contract: a valid `.complete` marker short-circuits with
+ * structural revalidation (entry files exist inside the immutable candidate); the extractor above
+ * is not re-run for cached candidates.
  */
 import { spawn } from 'node:child_process';
 import fsp from 'node:fs/promises';
@@ -20,23 +28,28 @@ import path from 'node:path';
 import process from 'node:process';
 import { killProcessTree } from '@helm/env-io';
 import { isStrictSemver } from '@helm/protocol';
-import { DEFAULTS, packageModulesDir, pathsOf, resolveRegistryUrl } from './layout.js';
+import { DEFAULTS, assertInstallIsolation, packageModulesDir, pathsOf, resolveRegistryUrl } from './layout.js';
 import { resolveInsideRelease } from './records.js';
 import type { LauncherIo } from './io.js';
-import type { UpdateCore } from './update-core.js';
+import { defaultUpdateCore, type UpdateCore } from './update-core.js';
 
 const CHECK_OUTPUT_LIMIT = 400_000;
 const DIAG_LINES = 40;
+/** Supported `nodeEngines` shape: a `>=x.y.z` floor (what the payload builder ships). */
+const NODE_ENGINES_PATTERN = /^>=\s*(\d+)\.(\d+)\.(\d+)$/;
 
 export interface StageHubOptions {
   io: LauncherIo;
-  core: UpdateCore;
+  /** Port fake for tests; production uses the real `@helm/update` adapter. */
+  core?: UpdateCore;
   /** Launcher install root (staging happens under `<root>/releases/<version>/`). */
   root: string;
   /** Strict-semver target version. */
   version: string;
   /** Published payload package name. */
   pkgName: string;
+  /** Effective Hub data directory for the program/data separation guard. */
+  dataDir: string;
   registryUrl?: string;
   /** Local tarball install source (skips the registry download; still npm-installed + self-checked). */
   tarballPath?: string;
@@ -44,6 +57,8 @@ export interface StageHubOptions {
   fetchFn?: typeof fetch;
   npmInstallTimeoutMs?: number;
   payloadCheckTimeoutMs?: number;
+  /** Test seam overriding the Node version checked against the manifest floor. */
+  nodeVersion?: string;
 }
 
 export interface StagedHubRelease {
@@ -101,12 +116,47 @@ async function runPayloadSelfCheck(entry: string, timeoutMs: number): Promise<vo
   }
 }
 
-interface InstalledPayloadLayout {
-  entryRelative: string;
+/** Parse a `x.y.z` release triple, ignoring any prerelease/build suffix. */
+function parseNodeTriple(version: string, label: string): [number, number, number] {
+  const match = /^(\d+)\.(\d+)\.(\d+)/.exec(version);
+  if (match === null) throw new Error(`cannot parse the ${label} version: "${version}"`);
+  return [Number(match[1]), Number(match[2]), Number(match[3])];
+}
+
+/**
+ * Enforce the manifest's `nodeEngines` floor against the launcher's own Node runtime. The payload
+ * ships `>=x.y.z` ranges (from the workspace `engines.node`); anything the launcher cannot
+ * interpret is rejected explicitly rather than guessed at.
+ */
+function assertNodeEngines(nodeEngines: unknown, manifestPath: string, nodeVersion: string): void {
+  if (typeof nodeEngines !== 'string') {
+    throw new Error(`manifest.json nodeEngines must be a string (${manifestPath}): got ${JSON.stringify(nodeEngines)}`);
+  }
+  const match = NODE_ENGINES_PATTERN.exec(nodeEngines.trim());
+  if (match === null) {
+    throw new Error(
+      `manifest.json nodeEngines is not a supported ">=x.y.z" floor (${manifestPath}): "${nodeEngines}"`,
+    );
+  }
+  const floor = [Number(match[1]), Number(match[2]), Number(match[3])] as const;
+  const current = parseNodeTriple(nodeVersion, 'running Node');
+  for (let i = 0; i < 3; i += 1) {
+    if (current[i]! < floor[i]!) {
+      throw new Error(
+        `payload requires Node >= ${floor.join('.')} but this launcher runs Node ${nodeVersion}; update the launcher's Node runtime before installing this release`,
+      );
+    }
+    if (current[i]! > floor[i]!) break;
+  }
 }
 
 /** Verify the npm-installed payload package identity and contract files inside `rootDir`. */
-async function verifyPayloadLayout(rootDir: string, pkgName: string, version: string): Promise<InstalledPayloadLayout> {
+async function verifyPayloadLayout(
+  rootDir: string,
+  pkgName: string,
+  version: string,
+  nodeVersion: string,
+): Promise<string> {
   const payloadDir = packageModulesDir(path.join(rootDir, 'node_modules'), pkgName);
   let pkgJson: Record<string, unknown>;
   try {
@@ -133,20 +183,37 @@ async function verifyPayloadLayout(rootDir: string, pkgName: string, version: st
       throw new Error(`installed payload is missing its ${label}: ${file}`);
     }
   }
-  return { entryRelative: path.relative(rootDir, entry) };
+  let manifestJson: Record<string, unknown>;
+  try {
+    manifestJson = JSON.parse(await fsp.readFile(manifest, 'utf8')) as Record<string, unknown>;
+  } catch (error) {
+    throw new Error(
+      `installed payload manifest.json unreadable (${manifest}): ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  if (manifestJson.name !== pkgName || manifestJson.version !== version) {
+    throw new Error(
+      `installed payload manifest mismatch: expected ${pkgName}@${version}, got ${String(manifestJson.name)}@${String(manifestJson.version)} (${manifest})`,
+    );
+  }
+  assertNodeEngines(manifestJson.nodeEngines, manifest, nodeVersion);
+  return path.relative(rootDir, entry);
 }
 
-/** Stage (or reuse) the Hub payload release for `version`. */
+/** Stage (or reuse) the Hub payload release for `version` through the update-core port. */
 export async function stageHubRelease(options: StageHubOptions): Promise<StagedHubRelease> {
-  const { io, core, version, pkgName } = options;
+  const { io, version, pkgName } = options;
+  const core = options.core ?? defaultUpdateCore();
   if (!isStrictSemver(version)) {
     throw new Error(`invalid target version: "${version}" (expected strict x.y.z[-pre][+build] without v prefix)`);
   }
+  assertInstallIsolation(options.root, options.dataDir, io.env);
   const registryUrl = resolveRegistryUrl(io.env, options.registryUrl);
   const npmInstallTimeoutMs = options.npmInstallTimeoutMs ?? DEFAULTS.npmInstallTimeoutMs;
   const payloadCheckTimeoutMs = options.payloadCheckTimeoutMs ?? DEFAULTS.payloadCheckTimeoutMs;
+  const nodeVersion = options.nodeVersion ?? process.versions.node;
 
-  const install = async (stagingDir: string): Promise<string> => {
+  const extractor = async (stagingDir: string): Promise<Record<string, string>> => {
     let tarballRef: string;
     if (options.tarballPath !== undefined) {
       const resolved = path.resolve(options.tarballPath);
@@ -162,10 +229,7 @@ export async function stageHubRelease(options: StageHubOptions): Promise<StagedH
     } else {
       const dest = path.join(stagingDir, '.downloads', 'payload.tgz');
       await fsp.mkdir(path.dirname(dest), { recursive: true });
-      await core.downloadVerifiedTarball(pkgName, version, dest, {
-        registryUrl,
-        ...(options.fetchFn !== undefined ? { fetchFn: options.fetchFn } : {}),
-      });
+      await core.downloadVerifiedTarball(registryUrl, pkgName, version, dest, options.fetchFn);
       tarballRef = dest;
     }
 
@@ -180,28 +244,29 @@ export async function stageHubRelease(options: StageHubOptions): Promise<StagedH
       npmInstallTimeoutMs,
     );
 
-    const layout = await verifyPayloadLayout(stagingDir, pkgName, version);
-    const entry = resolveInsideRelease(stagingDir, layout.entryRelative, 'payload entry path');
+    const entryRelative = await verifyPayloadLayout(stagingDir, pkgName, version, nodeVersion);
+    const entry = resolveInsideRelease(stagingDir, entryRelative, 'payload entry path');
     await runPayloadSelfCheck(entry, payloadCheckTimeoutMs);
-    return layout.entryRelative;
+    return { entryPath: entryRelative };
   };
 
-  const revalidate = async (candidateDir: string, entryRelative: string): Promise<void> => {
-    await verifyPayloadLayout(candidateDir, pkgName, version);
-    const entry = resolveInsideRelease(candidateDir, entryRelative, 'cached payload entry path');
-    await runPayloadSelfCheck(entry, payloadCheckTimeoutMs);
-  };
+  // Cache-reuse detection: the engine's StagedRelease carries no reuse flag, so snapshot the
+  // immutable candidate names under `releases/<version>/` before staging; an engine cache hit
+  // returns a pre-existing `<uuid>` candidate, a fresh stage mints a new one.
+  const versionRoot = path.join(pathsOf(options.root).releasesDir, version);
+  const candidatesBefore = await fsp.readdir(versionRoot).catch(() => [] as string[]);
 
-  const staged = await core.stageImmutableRelease(pathsOf(options.root).releasesDir, {
-    version,
-    install,
-    revalidate,
+  const staged = await core.stageRelease(options.root, version, extractor, {
     ...(options.force ? { force: true } : {}),
   });
+  const entryPath = staged.entries['entryPath'];
+  if (entryPath === undefined) {
+    throw new Error(`staged release has no "entryPath" entry (got: ${Object.keys(staged.entries).join(', ') || 'none'})`);
+  }
   return {
     version: staged.version,
     releaseDir: staged.releaseDir,
-    entryPath: staged.entryPath,
-    reusedCached: staged.reusedCached,
+    entryPath,
+    reusedCached: candidatesBefore.includes(path.basename(staged.releaseDir)),
   };
 }

@@ -63,6 +63,7 @@ const forbidden: Record<string, readonly string[]> = {
   '@helm/web': ['@helm/kernel', '@helm/hub', '@helm/plugins', '@helm/node', '@helm/plugin-build'],
   '@helm/cli': ['@helm/kernel', '@helm/hub', '@helm/plugins', '@helm/web', '@helm/node', '@helm/plugin-client', '@helm/plugin-build'],
   '@helm/update': ['@helm/kernel', '@helm/hub', '@helm/plugins', '@helm/web', '@helm/node', '@helm/cli', '@helm/plugin-client', '@helm/plugin-build', '@helm/payload'],
+  '@helm/hub-launcher': ['@helm/kernel', '@helm/hub', '@helm/plugins', '@helm/web', '@helm/node', '@helm/cli', '@helm/plugin-client', '@helm/plugin-build', '@helm/payload'],
   '@helm/test-kit': ['@helm/kernel', '@helm/hub', '@helm/plugins', '@helm/web', '@helm/node', '@helm/plugin-client', '@helm/plugin-build', '@helm/cli', '@helm/env-io'],
 }
 
@@ -87,7 +88,7 @@ function hasPublicExport(manifest: PackageManifest, specifier: string): boolean 
 test('production packages maintain one-way dependencies and cross boundaries only via declared public exports', { timeout: 60_000 }, () => {
   const packages = workspacePackages()
   const names = new Set(packages.map(({ manifest }) => manifest.name))
-  for (const name of ['@helm/kernel', '@helm/plugins', '@helm/hub', '@helm/plugin-client', '@helm/plugin-build', '@helm/env-io', '@helm/update']) {
+  for (const name of ['@helm/kernel', '@helm/plugins', '@helm/hub', '@helm/plugin-client', '@helm/plugin-build', '@helm/env-io', '@helm/update', '@helm/hub-launcher']) {
     assert.ok(names.has(name), `missing standalone package ${name}`)
   }
   const violations: string[] = []
