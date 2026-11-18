@@ -71,12 +71,11 @@ helm-hub-launcher status                         # 安装/运行/blocked 概览�
 
 ## 跨平台边界
 
-- 优雅关停是 POSIX 优先：Windows 上 `process.kill(pid, 'SIGTERM')` 无法触发处理器，`stop` 退化为短暂宽限后进程树升级终止（`taskkill /F /T`，与 `@helm/env-io` 的 `killProcessTree` 一致）。
+- 优雅关停是 POSIX 优先：Windows 上 `process.kill(pid, 'SIGTERM')` 无法触发处理器且只杀直接子进程，受监督 `run` 对持有的 wrapper 直接整树终止（`taskkill /F /T`，与 `@helm/env-io` 的 `killProcessTree` 一致）；跨进程 `stop` 在无 startTime 证明的平台显式拒绝（见身份纪律）。
 - npm 调用（win32 `npm-cli.js` 解析、无 shell、超时进程组终止）由 `@helm/update` 的 `runNpm` 提供。
-- 身份纪律（stop 的三道门）：
-  1. **`run` 前台生命周期**持有所启动 Hub 的 `ChildProcess`，信号关停经句柄直达，天然无 pid 复用风险；
-  2. 跨进程 `stop` 在 Linux 上核对 `hub.pid` 记录的 `/proc/<pid>/stat` startTime（pid 生命周期内不可变）：不匹配即 pid 复用，即使端口上仍有 hub 形响应也拒绝发信号；
-  3. 无 startTime 证明（非 Linux 平台）时退回 health 探针：pid 存活但端点不可达即拒绝发信号，要求人工核验。
+- 身份纪律（fail closed，stop 的两道门）：
+  1. **`run` 前台生命周期**持有所启动 Hub 的 `ChildProcess`，信号关停经句柄直达，天然无 pid 复用风险；POSIX 走 SIGTERM 优雅→超时整树升级，Windows 直接整树关闭（SIGTERM 只能杀 entry wrapper、会遗留真实 Hub 孙进程，故在 wrapper 归属可证时一次关整树）；
+  2. 跨进程 `stop` 唯一接受的证据是 `hub.pid` 记录的 `/proc/<pid>/stat` startTime（pid 生命周期内不可变）：不匹配即 pid 复用、记录缺失该证明（非 Linux 平台或 spawn 时不可读）则**一律拒绝发信号**（`hub_identity_unverifiable`）——health 端点只能证明端口上有个 hub 形服务，证明不了记录的 pid 就是它。非 Linux 平台请用 `run` 管理 Hub 生命周期（或人工核验后直接停止进程并删除 `hub.pid`）。
 
 ## 配置优先级
 

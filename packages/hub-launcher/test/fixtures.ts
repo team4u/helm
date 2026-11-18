@@ -307,6 +307,8 @@ export interface FakeCoreOptions {
   latest: string;
   /** version → fixture payload directory served by the fake registry. */
   payloads: Map<string, string>;
+  /** Per-dist-tag latest overrides (e.g. `{ beta: '2.0.0-beta.1' }`); falls back to `latest`. */
+  latestByTag?: Record<string, string>;
   failLatest?: Error;
   failDownload?: Error;
   failNpm?: Error;
@@ -334,8 +336,9 @@ export function createFakeCore(options: FakeCoreOptions): FakeUpdateCore {
     tagsSeen: [],
     async fetchLatestVersion(_pkgName, fetchOptions) {
       if (options.failLatest !== undefined) throw options.failLatest;
-      core.tagsSeen.push(fetchOptions?.tag ?? 'latest');
-      return options.latest;
+      const tag = fetchOptions?.tag ?? 'latest';
+      core.tagsSeen.push(tag);
+      return options.latestByTag?.[tag] ?? options.latest;
     },
     async downloadVerifiedTarball(_registryUrl, _pkgName, version, destPath) {
       if (options.failDownload !== undefined) throw options.failDownload;

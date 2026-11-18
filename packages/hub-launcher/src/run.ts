@@ -149,13 +149,28 @@ export async function runSupervised(options: RunLauncherOptions): Promise<number
     });
   };
 
-  /** Stop the held hub: graceful signal through the held handle, escalate on budget expiry. */
+  /**
+   * Stop the held hub through the held handle (the ownership proof — signalling it can never hit
+   * a reused pid). POSIX: graceful SIGTERM (the payload entry forwards it to the real hub child),
+   * escalating to a process-tree kill when the budget expires. Windows has no deliverable
+   * signals: a SIGTERM-ish kill would only terminate the entry wrapper and orphan the real hub
+   * grandchild, so the whole tree is closed up front while the wrapper is provably ours.
+   */
   const stopHeldHub = async (): Promise<void> => {
     const hub = held;
     if (hub === null) return;
     transitioning = true;
     try {
-      // The held ChildProcess is the ownership proof: signalling it can never hit a reused pid.
+      if (process.platform === 'win32') {
+        killProcessTree(hub.pid);
+        if (!(await waitForChildExit(hub.child, DEFAULTS.stopEscalationWaitMs))) {
+          throw new Error(
+            `supervised hub pid ${hub.pid} did not exit after a process-tree termination on Windows; see ${paths.hubLogPath}`,
+          );
+        }
+        await removeRecordIfOurs(hub.pid);
+        return;
+      }
       hub.child.kill('SIGTERM');
       if (await waitForChildExit(hub.child, stopTimeoutMs)) {
         await removeRecordIfOurs(hub.pid);
@@ -169,6 +184,8 @@ export async function runSupervised(options: RunLauncherOptions): Promise<number
       }
       await removeRecordIfOurs(hub.pid);
     } finally {
+      // The held child is always released, on success and on failure alike: nothing this
+      // launcher spawned may outlive the run loop untracked.
       held = null;
       transitioning = false;
     }
@@ -221,7 +238,9 @@ export async function runSupervised(options: RunLauncherOptions): Promise<number
 
   const runUpdateCycle = async (): Promise<void> => {
     try {
-      const check = await checkHubUpgrade(updateCommon);
+      // The check must query the SAME dist-tag as the update: with --tag beta the loop reacts
+      // to the beta channel even while `latest` is unchanged (and vice versa stays idle).
+      const check = await checkHubUpgrade({ ...updateCommon, tag });
       if (!check.updateAvailable) {
         io.out(`up to date: ${check.currentVersion ?? '(none)'} (tag ${tag}, latest ${check.latestVersion})\n`);
         return;
@@ -325,5 +344,8 @@ export async function runSupervised(options: RunLauncherOptions): Promise<number
       process.off('SIGINT', onSignal);
       process.off('SIGTERM', onSignal);
     }
+    // No last-resort child cleanup here on purpose: stopHeldHub's own finally always releases
+    // `held` (success and failure alike), and the compiler's control-flow analysis proves no
+    // escape path can reach this point with a child still held.
   }
 }

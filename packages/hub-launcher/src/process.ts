@@ -10,14 +10,15 @@
  *   `launch.json`. On Linux the pid record also carries the `/proc` start time as a reuse proof.
  *   `onSpawn` hands the spawned `ChildProcess` to callers that keep supervising it (`run`), so
  *   the same controlled startup flow can stop its own child without pid guessing;
- * - `stopHub` verifies the recorded pid is really our Hub before signalling — on Linux by the
- *   recorded `/proc` start time (a mismatch is pid reuse and is refused even when some other
- *   process answers on the port), otherwise via the health endpoint — escalates to
- *   `killProcessTree` (process group on POSIX, `taskkill /T` on Windows) when the graceful
- *   SIGTERM budget expires, and removes the pid file only after a confirmed exit;
- * - identity discipline mirrors the node daemon: without a reusable proof (start time match or a
- *   reachable health endpoint) a live pid is never signalled blindly — the user must verify
- *   manually;
+ * - `stopHub` verifies the recorded pid is really our Hub before signalling, fail-closed: the
+ *   only accepted proof is the immutable `/proc` start time recorded at spawn (a mismatch is pid
+ *   reuse and is refused even when some other process answers on the port; a record without the
+ *   proof — non-Linux platforms — is refused outright, steering to the supervised `run`), then
+ *   escalates to `killProcessTree` (process group on POSIX, `taskkill /T` on Windows) when the
+ *   graceful SIGTERM budget expires, and removes the pid file only after a confirmed exit;
+ * - identity discipline mirrors the node daemon: without an ownership proof (a held
+ *   `ChildProcess` from the same launcher, or a matching start time) a live pid is never
+ *   signalled blindly — the user must verify manually;
  * - `lifecycle.lock` serializes every process-state mutation: concurrent starts, stops, and the
  *   update flow's stop→commit→start window (which takes the same lock as one atomic section via
  *   the exported `*Locked` primitives) can never interleave on one machine.
@@ -381,28 +382,24 @@ export async function stopHubLocked(root: string, io: LauncherIo, options?: Stop
     await removePidFileIfMatch(root, record);
     return { wasRunning: false, escalated: false, cleanedStalePid: true };
   }
-  if (record.startTime !== undefined) {
-    // Linux reuse proof: the start time is immutable for a pid's lifetime, so a mismatch means
-    // the recorded process exited and the pid was reallocated. This outranks any health answer —
-    // another process serving on the port must not make us signal an unrelated pid.
-    const current = await readProcessStartTime(record.pid);
-    if (current === null || current !== record.startTime) {
-      throw new UsageError(
-        `pid ${record.pid} no longer matches the recorded process start time (recorded ${record.startTime}, current ${current ?? 'unavailable'}): the hub exited and the pid was probably reused; refusing to signal it — remove ${paths.pidPath} after verifying, then start the hub again`,
-        'hub_identity_unverifiable',
-      );
-    }
-  } else {
-    const health = await probeHubHealth(record.port, record.host, {
-      ...(options?.fetchFn !== undefined ? { fetchFn: options.fetchFn } : {}),
-      timeoutMs: DEFAULTS.identityProbeTimeoutMs,
-    });
-    if (health === null) {
-      throw new UsageError(
-        `pid ${record.pid} is alive, but the hub health endpoint is unreachable (${hubHealthUrl(record.port, record.host)}): refusing to signal an unverified process (possible pid reuse); verify the pid manually, stop it directly, or remove ${paths.pidPath}`,
-        'hub_identity_unverifiable',
-      );
-    }
+  // Fail-closed identity proof: the only signal-safe evidence that the recorded pid is still
+  // the hub this launcher spawned is the immutable process start time. A reachable health
+  // endpoint proves only that some hub-shaped server answers on the port — never that the
+  // recorded pid is that server — so without a start-time proof the pid is never signalled.
+  // Platforms without the proof (non-Linux detached records) surface an explicit refusal that
+  // steers to the supervised `run` (which holds its own ChildProcess and needs no pid guessing).
+  if (record.startTime === undefined) {
+    throw new UsageError(
+      `pid ${record.pid} cannot be verified as this launcher's hub: the pid record carries no process start-time proof (no /proc start time on this platform or at spawn time), and a health endpoint alone cannot prove the pid was not reused; refusing to signal it — stop the hub from the launcher 'run' session that owns it (Ctrl+C), or verify the process manually, stop it directly, and remove ${paths.pidPath}`,
+      'hub_identity_unverifiable',
+    );
+  }
+  const current = await readProcessStartTime(record.pid);
+  if (current === null || current !== record.startTime) {
+    throw new UsageError(
+      `pid ${record.pid} no longer matches the recorded process start time (recorded ${record.startTime}, current ${current ?? 'unavailable'}): the hub exited and the pid was probably reused; refusing to signal it — remove ${paths.pidPath} after verifying, then start the hub again`,
+      'hub_identity_unverifiable',
+    );
   }
   process.kill(record.pid, 'SIGTERM');
   const stopTimeoutMs = options?.stopTimeoutMs ?? DEFAULTS.stopTimeoutMs;
