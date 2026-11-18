@@ -10,7 +10,7 @@
  * 4) 顶栏与侧栏角标：ctx.doc('board-badges')（主控与全体活跃成员 O(1) 反查）。
  */
 import { randomUUID } from 'node:crypto'
-import { appendFile, mkdir, readdir, readFile } from 'node:fs/promises'
+import { mkdir, open, readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
   HelmError,
@@ -56,6 +56,14 @@ import {
   evaluateSilentExit,
   type MemberRuntimeSnapshot,
 } from './board-stall.js'
+import {
+  classifyInflightIntent,
+  classifyMemberDetailOutcome,
+  inspectBoardWalLines,
+  reconcileOrphanConversations,
+  reconcileOrphanWorktreeHolds,
+} from './recovery.js'
+import { collectMemberLastReplySummary } from './settlement.js'
 
 function isEnoent(err: unknown): boolean {
   return typeof err === 'object' && err !== null && (err as { code?: unknown }).code === 'ENOENT'
@@ -109,6 +117,11 @@ export function createCollabGroupRuntime(
   const lastCoordReportCompletionSeq = new Map<string, number>()
 
   let stopping = false
+  let orphanWorktreesReconciled = false
+
+  const logDiagnostic = (message: string): void => {
+    console.error(`[swarm] ${ctx.host.redact(message)}`)
+  }
 
   const groupDirOf = (groupId: string): string => join(getGroupsRootDir(), groupId)
   const metaPathOf = (groupId: string): string => join(groupDirOf(groupId), 'meta.json')
@@ -119,6 +132,18 @@ export function createCollabGroupRuntime(
 
   const redactObject = <T>(value: T): T =>
     redactJsonValue(value, (text) => ctx.host.redact(text)) as T
+
+  /** 先追加并 datasync board.jsonl，再由调用方 atomicWriteFile(meta.json) 推进事务提交点。 */
+  const appendBoardLineDurableLocked = async (groupId: string, post: BoardPost): Promise<void> => {
+    await mkdir(groupDirOf(groupId), { recursive: true })
+    const handle = await open(boardPathOf(groupId), 'a')
+    try {
+      await handle.writeFile(`${JSON.stringify(post)}\n`, 'utf8')
+      await handle.datasync()
+    } finally {
+      await handle.close()
+    }
+  }
 
   const runGroupLocked = async <T>(groupId: string, fn: () => Promise<T>): Promise<T> => {
     const prev = groupQueues.get(groupId) ?? Promise.resolve()
@@ -297,6 +322,7 @@ export function createCollabGroupRuntime(
       kind: BoardPostKind
       refs: number[]
       body: string
+      idempotencyKey?: string
       worktreeSnapshot?: WorktreeHandoffSnapshot
       lastStallWatermarkAfterPost?: string
     },
@@ -313,6 +339,31 @@ export function createCollabGroupRuntime(
           groupId: validId,
         })
       }
+      if (draft.idempotencyKey !== undefined) {
+        const existing = (postsByGroup.get(validId) ?? []).find(
+          (p) => p.idempotencyKey === draft.idempotencyKey,
+        )
+        if (existing !== undefined) {
+          if (existing.wake) {
+            for (const target of existing.resolvedTargets) {
+              if (target === 'coordinator') continue
+              const m = current.members.find((item) => item.name === target && item.lifecycle === 'active')
+              if (m !== undefined && m.pendingWakeupSeq > m.readCursorSeq) {
+                membersToWake.push(m.name)
+              }
+            }
+          }
+          if (
+            existing.from !== 'coordinator' &&
+            ((existing.resolvedTargets.includes('coordinator') && existing.wake) ||
+              COORDINATOR_ESCALATION_KINDS.has(existing.kind)) &&
+            current.coordinatorPendingSeq > current.coordinatorNotifiedSeq
+          ) {
+            shouldNotifyCoordinator = true
+          }
+          return existing
+        }
+      }
       const next = structuredClone(current)
       const now = Date.now()
       const seq = next.headSeq + 1
@@ -327,6 +378,7 @@ export function createCollabGroupRuntime(
         kind: draft.kind,
         refs: [...draft.refs],
         body: draft.body,
+        ...(draft.idempotencyKey !== undefined ? { idempotencyKey: draft.idempotencyKey } : {}),
         ...(draft.worktreeSnapshot !== undefined ? { worktreeSnapshot: draft.worktreeSnapshot } : {}),
         createdAt: now,
       }
@@ -371,7 +423,7 @@ export function createCollabGroupRuntime(
       next.headSeq = post.seq
       next.updatedAt = now
 
-      await appendFile(boardPathOf(validId), `${JSON.stringify(post)}\n`, 'utf8')
+      await appendBoardLineDurableLocked(validId, post)
       await persistMetaLocked(next)
       const list = postsByGroup.get(validId) ?? []
       list.push(post)
@@ -447,11 +499,19 @@ export function createCollabGroupRuntime(
       toSeq,
     })
     const requestId = `swarm-wakeup:${groupId}:${memberName}:${fromSeq}-${toSeq}`
+    const baseCompletionSeq = summary.completionSeq
+    const baseLastEntryId = summary.lastEntryId ?? 0
 
     await mutateGroup(groupId, (draft) => {
       const target = draft.members.find((m) => m.name === memberName)
       if (target !== undefined) {
-        target.lastWakeCompletionSeq = summary.completionSeq
+        target.inflightWakeup = {
+          requestId,
+          fromSeq,
+          toSeq,
+          baseCompletionSeq,
+          baseLastEntryId,
+        }
       }
       return { group: draft, result: undefined }
     })
@@ -479,14 +539,21 @@ export function createCollabGroupRuntime(
         const target = draft.members.find((m) => m.name === memberName)
         if (target !== undefined) {
           target.readCursorSeq = Math.max(target.readCursorSeq, toSeq)
+          target.lastWakeCompletionSeq = baseCompletionSeq
+          delete target.inflightWakeup
         }
         return { group: draft, result: undefined }
       })
     } catch (err) {
       await mutateGroup(groupId, (draft) => {
         const target = draft.members.find((m) => m.name === memberName)
-        if (target !== undefined && target.lastWakeCompletionSeq === summary.completionSeq) {
-          delete target.lastWakeCompletionSeq
+        if (target !== undefined) {
+          if (target.inflightWakeup?.requestId === requestId) {
+            delete target.inflightWakeup
+          }
+          if (target.lastWakeCompletionSeq === baseCompletionSeq) {
+            delete target.lastWakeCompletionSeq
+          }
         }
         return { group: draft, result: undefined }
       }).catch(() => {})
@@ -605,6 +672,8 @@ export function createCollabGroupRuntime(
       activeWorkingMembers: view.activeWorkingMembers,
     })
     const requestId = `swarm-report:${groupId}:${fromSeq}-${toSeq}`
+    const baseCompletionSeq = coordSummary.completionSeq
+    const baseLastEntryId = coordSummary.lastEntryId ?? 0
     const meta = {
       renderer: BOARD_REPORT_RENDERER,
       groupId,
@@ -614,7 +683,17 @@ export function createCollabGroupRuntime(
       headline: view.headline.text,
     }
 
-    lastCoordReportCompletionSeq.set(groupId, coordSummary.completionSeq)
+    await mutateGroup(groupId, (draft) => {
+      draft.inflightReport = {
+        requestId,
+        fromSeq,
+        toSeq,
+        baseCompletionSeq,
+        baseLastEntryId,
+      }
+      return { group: draft, result: undefined }
+    })
+    lastCoordReportCompletionSeq.set(groupId, baseCompletionSeq)
     try {
       const ownership = ctx.host.getConversationOwnership(group.coordinatorConversationId)
       if (ownership === 'helm' || ownership === 'bot') {
@@ -634,12 +713,19 @@ export function createCollabGroupRuntime(
       }
       await mutateGroup(groupId, (draft) => {
         draft.coordinatorNotifiedSeq = Math.max(draft.coordinatorNotifiedSeq, toSeq)
+        delete draft.inflightReport
         return { group: draft, result: undefined }
       })
     } catch (err) {
-      if (lastCoordReportCompletionSeq.get(groupId) === coordSummary.completionSeq) {
+      if (lastCoordReportCompletionSeq.get(groupId) === baseCompletionSeq) {
         lastCoordReportCompletionSeq.delete(groupId)
       }
+      await mutateGroup(groupId, (draft) => {
+        if (draft.inflightReport?.requestId === requestId) {
+          delete draft.inflightReport
+        }
+        return { group: draft, result: undefined }
+      }).catch(() => {})
       if (!isLifecycleTeardownError(err)) {
         coord.reportError(`协作组 ${groupId} 主控汇总投递失败`, err)
       }
@@ -830,95 +916,265 @@ export function createCollabGroupRuntime(
     await flushCoordinatorReport(groupId)
   }
 
-  /** 从磁盘加载单个协作组账本与黑板日志（严格校验，不静默兜底）。 */
+  /** 从磁盘加载单个协作组账本与黑板日志（严格校验，仅回滚至多 1 条未提交 WAL 尾）。 */
   const loadGroupFromDisk = async (
     groupId: string,
   ): Promise<{ record: CollabGroupRecord; posts: BoardPost[] }> => {
-    let rawMetaText: string
-    try {
-      rawMetaText = await readFile(metaPathOf(groupId), 'utf8')
-    } catch (err) {
-      throw new HelmError(
-        'swarm_doc_corrupt',
-        `协作组 '${groupId}' 缺少或无法读取 meta.json：${err instanceof Error ? err.message : String(err)}`,
-        500,
-        { pluginId: SWARM_PLUGIN_ID, groupId },
-      )
-    }
-    let parsedMeta: unknown
-    try {
-      parsedMeta = JSON.parse(rawMetaText)
-    } catch (err) {
-      throw new HelmError(
-        'swarm_doc_corrupt',
-        `协作组 '${groupId}' meta.json JSON 解析失败：${err instanceof Error ? err.message : String(err)}`,
-        500,
-        { pluginId: SWARM_PLUGIN_ID, groupId },
-      )
-    }
-    let record = assertCollabGroupRecord(parsedMeta)
-    if (record.id !== groupId) {
-      throw new HelmError(
-        'swarm_doc_corrupt',
-        `协作组目录 '${groupId}' 与 meta.json.id '${record.id}' 不一致`,
-        500,
-        { pluginId: SWARM_PLUGIN_ID, groupId },
-      )
-    }
-
-    const posts: BoardPost[] = []
-    let rawBoard = ''
-    try {
-      rawBoard = await readFile(boardPathOf(groupId), 'utf8')
-    } catch (err) {
-      if (!isEnoent(err)) throw err
-    }
-    const lines = rawBoard.split('\n').filter((line) => line.trim() !== '')
-    for (let i = 0; i < lines.length; i += 1) {
-      let parsedLine: unknown
+    return runGroupLocked(groupId, async () => {
+      let rawMetaText: string
       try {
-        parsedLine = JSON.parse(lines[i]!)
+        rawMetaText = await readFile(metaPathOf(groupId), 'utf8')
       } catch (err) {
         throw new HelmError(
           'swarm_doc_corrupt',
-          `协作组 '${groupId}' board.jsonl 第 ${i + 1} 行 JSON 非法：${err instanceof Error ? err.message : String(err)}`,
+          `协作组 '${groupId}' 缺少或无法读取 meta.json：${err instanceof Error ? err.message : String(err)}`,
           500,
-          { pluginId: SWARM_PLUGIN_ID, groupId, line: i + 1 },
+          { pluginId: SWARM_PLUGIN_ID, groupId },
         )
       }
-      const post = assertBoardPost(parsedLine)
-      if (post.groupId !== groupId || post.seq !== i + 1) {
+      let parsedMeta: unknown
+      try {
+        parsedMeta = JSON.parse(rawMetaText)
+      } catch (err) {
         throw new HelmError(
           'swarm_doc_corrupt',
-          `协作组 '${groupId}' board.jsonl 第 ${i + 1} 行序号或 groupId 不连续（收到 seq=${post.seq}）`,
+          `协作组 '${groupId}' meta.json JSON 解析失败：${err instanceof Error ? err.message : String(err)}`,
           500,
-          { pluginId: SWARM_PLUGIN_ID, groupId, line: i + 1, seq: post.seq },
+          { pluginId: SWARM_PLUGIN_ID, groupId },
         )
       }
-      posts.push(post)
-    }
-    if (posts.length !== record.headSeq) {
-      throw new HelmError(
-        'swarm_doc_corrupt',
-        `协作组 '${groupId}' board.jsonl 条数(${posts.length})与 meta.headSeq(${record.headSeq}) 不一致`,
-        500,
-        { pluginId: SWARM_PLUGIN_ID, groupId, postsCount: posts.length, headSeq: record.headSeq },
-      )
-    }
+      let record = assertCollabGroupRecord(parsedMeta)
+      if (record.id !== groupId) {
+        throw new HelmError(
+          'swarm_doc_corrupt',
+          `协作组目录 '${groupId}' 与 meta.json.id '${record.id}' 不一致`,
+          500,
+          { pluginId: SWARM_PLUGIN_ID, groupId },
+        )
+      }
 
-    if (record.status === 'active' && !record.coordinatorDetached) {
-      if (getCoordinator().readConversationOrUndefined(record.coordinatorConversationId) === undefined) {
-        record = await runGroupLocked(groupId, () =>
-          persistMetaLocked({ ...record, coordinatorDetached: true, updatedAt: Date.now() }),
-        )
+      let rawBoard = ''
+      try {
+        rawBoard = await readFile(boardPathOf(groupId), 'utf8')
+      } catch (err) {
+        if (!isEnoent(err)) throw err
       }
-    }
-    return { record, posts }
+      const wal = inspectBoardWalLines(rawBoard, groupId, record.headSeq)
+      if (wal.trimmed) {
+        logDiagnostic(
+          `协作组 '${groupId}' 检测到未提交的 board.jsonl 尾行（${wal.trimReason}），已按 meta.headSeq=${record.headSeq} 回滚截断`,
+        )
+        const cleanText = wal.posts.length > 0 ? `${wal.posts.map((p) => JSON.stringify(p)).join('\n')}\n` : ''
+        await ctx.host.atomicWriteFile(boardPathOf(groupId), cleanText)
+      }
+
+      if (record.status === 'active' && !record.coordinatorDetached) {
+        if (getCoordinator().readConversationOrUndefined(record.coordinatorConversationId) === undefined) {
+          record = await persistMetaLocked({ ...record, coordinatorDetached: true, updatedAt: Date.now() })
+        }
+      }
+      return { record, posts: wal.posts }
+    })
   }
 
-  return {
+  /** 对账单组成员重启前登记的在途唤醒/续催意图与过期完成水位。 */
+  const reconcileMemberRecoveryState = async (
+    groupId: string,
+    memberSnapshot: GroupMemberState,
+  ): Promise<void> => {
+    const coord = getCoordinator()
+    const summary = coord.readConversationOrUndefined(memberSnapshot.conversationId)
+
+    let clearWakeupAction: 'none' | 'missing' | 'active' | 'settled' | 'uncommitted' = 'none'
+    if (memberSnapshot.inflightWakeup !== undefined) {
+      const status = await classifyInflightIntent(
+        ctx.host,
+        memberSnapshot.conversationId,
+        summary,
+        memberSnapshot.inflightWakeup,
+      )
+      clearWakeupAction = status === 'missing_conv' ? 'missing' : status
+    }
+
+    let clearNudgeAction: 'none' | 'missing' | 'active' | 'settled' | 'uncommitted' = 'none'
+    if (memberSnapshot.inflightNudge !== undefined) {
+      const status = await classifyInflightIntent(
+        ctx.host,
+        memberSnapshot.conversationId,
+        summary,
+        memberSnapshot.inflightNudge,
+      )
+      clearNudgeAction = status === 'missing_conv' ? 'missing' : status
+    }
+
+    let clearStaleCompletionSeq = false
+    if (
+      clearWakeupAction === 'none' &&
+      clearNudgeAction === 'none' &&
+      summary !== undefined &&
+      summary.status !== 'working' &&
+      summary.status !== 'blocked' &&
+      memberSnapshot.pendingWakeupSeq <= memberSnapshot.readCursorSeq &&
+      memberSnapshot.lastWakeCompletionSeq !== undefined &&
+      summary.completionSeq <= memberSnapshot.lastWakeCompletionSeq
+    ) {
+      if (memberSnapshot.lastWakeTaskSeq !== undefined && (memberSnapshot.lastPostSeq ?? 0) >= memberSnapshot.lastWakeTaskSeq) {
+        clearStaleCompletionSeq = true
+      } else if (memberSnapshot.lastWakeTaskSeq === undefined) {
+        clearStaleCompletionSeq = true
+      }
+    }
+
+    if (clearWakeupAction === 'none' && clearNudgeAction === 'none' && !clearStaleCompletionSeq) {
+      return
+    }
+
+    await mutateGroup(groupId, (draft) => {
+      const target = draft.members.find((m) => m.name === memberSnapshot.name)
+      if (target === undefined) return { group: draft, result: undefined }
+
+      if (clearWakeupAction !== 'none' && target.inflightWakeup !== undefined) {
+        const inflight = target.inflightWakeup
+        if (clearWakeupAction === 'active') {
+          target.readCursorSeq = Math.max(target.readCursorSeq, inflight.toSeq)
+          target.lastWakeCompletionSeq = inflight.baseCompletionSeq
+        } else if (clearWakeupAction === 'settled') {
+          target.readCursorSeq = Math.max(target.readCursorSeq, inflight.toSeq)
+          if (target.lastWakeCompletionSeq === inflight.baseCompletionSeq) {
+            delete target.lastWakeCompletionSeq
+          }
+        } else if (clearWakeupAction === 'uncommitted') {
+          if (target.lastWakeCompletionSeq === inflight.baseCompletionSeq) {
+            delete target.lastWakeCompletionSeq
+          }
+        }
+        delete target.inflightWakeup
+      }
+
+      if (clearNudgeAction !== 'none' && target.inflightNudge !== undefined) {
+        const inflight = target.inflightNudge
+        if (clearNudgeAction === 'active') {
+          target.lastWakeCompletionSeq = inflight.baseCompletionSeq
+        } else if (clearNudgeAction === 'settled') {
+          if (target.lastWakeCompletionSeq === inflight.baseCompletionSeq) {
+            delete target.lastWakeCompletionSeq
+          }
+        } else if (clearNudgeAction === 'uncommitted') {
+          if (target.lastWakeCompletionSeq === inflight.baseCompletionSeq) {
+            delete target.lastWakeCompletionSeq
+          }
+          if (target.silentExitNudgeSeq === inflight.taskSeq) {
+            delete target.silentExitNudgeSeq
+          }
+        }
+        delete target.inflightNudge
+      }
+
+      if (clearStaleCompletionSeq) {
+        delete target.lastWakeCompletionSeq
+      }
+
+      return { group: draft, result: undefined }
+    })
+  }
+
+  /** 对账单个活跃协作组重启后的在途意图、未送达投递与已停机成员自愈检查。 */
+  const reconcileSingleRecoveredGroup = async (groupId: string): Promise<void> => {
+    const coord = getCoordinator()
+    if (stopping || !coord.isActive() || coord.isShutdown() || ctx.host.isClosing) return
+    const initialGroup = groupsById.get(groupId)
+    if (initialGroup === undefined || initialGroup.status !== 'active') return
+
+    if (initialGroup.inflightReport !== undefined) {
+      const inflight = initialGroup.inflightReport
+      if (initialGroup.coordinatorDetached) {
+        await mutateGroup(groupId, (draft) => {
+          delete draft.inflightReport
+          return { group: draft, result: undefined }
+        })
+      } else {
+        const coordSummary = coord.readConversationOrUndefined(initialGroup.coordinatorConversationId)
+        const reportStatus = await classifyInflightIntent(
+          ctx.host,
+          initialGroup.coordinatorConversationId,
+          coordSummary,
+          inflight,
+        )
+        await mutateGroup(groupId, (draft) => {
+          if (draft.inflightReport?.requestId === inflight.requestId) {
+            if (reportStatus === 'active' || reportStatus === 'settled') {
+              draft.coordinatorNotifiedSeq = Math.max(draft.coordinatorNotifiedSeq, inflight.toSeq)
+            }
+            delete draft.inflightReport
+          }
+          return { group: draft, result: undefined }
+        })
+        if (reportStatus === 'active') {
+          lastCoordReportCompletionSeq.set(groupId, inflight.baseCompletionSeq)
+        }
+      }
+    }
+
+    const activeMembers = initialGroup.members.filter((m) => m.lifecycle === 'active')
+    for (const member of activeMembers) {
+      if (stopping || !coord.isActive() || coord.isShutdown() || ctx.host.isClosing) return
+      await reconcileMemberRecoveryState(groupId, member)
+    }
+
+    const freshGroup = groupsById.get(groupId)
+    if (freshGroup === undefined || freshGroup.status !== 'active') return
+
+    for (const member of freshGroup.members) {
+      if (member.lifecycle !== 'active') continue
+      if (stopping || !coord.isActive() || coord.isShutdown() || ctx.host.isClosing) return
+      if (member.pendingWakeupSeq > member.readCursorSeq) {
+        void deliverWorkerWakeup(freshGroup.id, member.name)
+        continue
+      }
+      if (member.lastWakeTaskSeq === undefined || (member.lastPostSeq ?? 0) >= member.lastWakeTaskSeq) {
+        continue
+      }
+      const summary = coord.readConversationOrUndefined(member.conversationId)
+      if (summary === undefined || summary.status === 'working' || summary.status === 'blocked') continue
+
+      let entries = [] as Awaited<ReturnType<typeof ctx.host.getConversationDetail>>['entries']
+      if (summary.status !== 'error') {
+        try {
+          entries = (await ctx.host.getConversationDetail(member.conversationId, { limit: 30 })).entries
+        } catch (err) {
+          if (err instanceof HelmError && err.code === 'not_found') continue
+          throw err
+        }
+      }
+      const classified = classifyMemberDetailOutcome(entries, summary, freshGroup.id, member)
+      if (classified.kind === 'pending_queue') continue
+
+      const lastReplySummary =
+        classified.kind === 'aborted' ? '' : await collectMemberLastReplySummary(ctx.host, member.conversationId)
+      await runtimeHandle.onMemberTurnSettled({
+        groupId: freshGroup.id,
+        memberName: member.name,
+        conversationId: member.conversationId,
+        completionSeq: summary.completionSeq,
+        outcome: classified.kind,
+        ...(classified.kind === 'failed' && classified.error !== undefined ? { error: classified.error } : {}),
+        lastReplySummary,
+      })
+    }
+
+    const latestGroup = groupsById.get(groupId)
+    if (latestGroup === undefined || latestGroup.status !== 'active' || latestGroup.coordinatorDetached) return
+    if (latestGroup.coordinatorPendingSeq > latestGroup.coordinatorNotifiedSeq) {
+      void scheduleCoordinatorReport(latestGroup.id, 0)
+    } else if (!hasInflightDeliveriesForGroup(latestGroup.id)) {
+      await checkAndEmitQuiescenceStall(latestGroup.id)
+    }
+  }
+
+  const runtimeHandle: CollabGroupRuntime = {
     async loadAllFromDisk(): Promise<void> {
       stopping = false
+      orphanWorktreesReconciled = false
       groupsById.clear()
       postsByGroup.clear()
       groupQueues.clear()
@@ -945,18 +1201,26 @@ export function createCollabGroupRuntime(
 
       syncIndex()
       syncProjections()
+    },
 
-      for (const group of groupsById.values()) {
-        if (group.status !== 'active') continue
-        for (const member of group.members) {
-          if (member.lifecycle === 'active' && member.pendingWakeupSeq > member.readCursorSeq) {
-            void deliverWorkerWakeup(group.id, member.name)
-          }
-        }
-        if (!group.coordinatorDetached && group.coordinatorPendingSeq > group.coordinatorNotifiedSeq) {
-          void scheduleCoordinatorReport(group.id, 0)
-        }
+    async reconcileOrphansOnBoot(): Promise<void> {
+      if (stopping) return
+      await reconcileOrphanConversations(ctx, groupsById.values())
+      orphanWorktreesReconciled = await reconcileOrphanWorktreeHolds(ctx, groupsById.values(), logDiagnostic)
+    },
+
+    async reconcileRecoveredGroups(): Promise<void> {
+      const coord = getCoordinator()
+      if (stopping || !coord.isActive() || coord.isShutdown() || ctx.host.isClosing) return
+      if (!orphanWorktreesReconciled) {
+        orphanWorktreesReconciled = await reconcileOrphanWorktreeHolds(ctx, groupsById.values(), logDiagnostic)
       }
+      for (const group of [...groupsById.values()]) {
+        if (stopping || !coord.isActive() || coord.isShutdown() || ctx.host.isClosing) return
+        if (group.status !== 'active') continue
+        await reconcileSingleRecoveredGroup(group.id)
+      }
+      syncProjections()
     },
 
     async stopAndClear(): Promise<void> {
@@ -1109,6 +1373,9 @@ export function createCollabGroupRuntime(
     async createGroup(input): Promise<CollabGroupRecord> {
       const existing = this.findActiveGroupByCoordinator(input.coordinatorConversationId)
       if (existing !== undefined) {
+        if (input.createKey !== undefined && existing.createKey === input.createKey) {
+          return existing
+        }
         throw new HelmError(
           'swarm_group_already_active',
           `会话 #${input.coordinatorConversationId} 已存在活跃协作组 '${existing.id}'（同会话限 1 个活跃组）`,
@@ -1139,6 +1406,7 @@ export function createCollabGroupRuntime(
         title: input.title.trim(),
         ...(input.objective !== undefined && input.objective.trim() !== '' ? { objective: input.objective.trim() } : {}),
         coordinatorConversationId: input.coordinatorConversationId,
+        ...(input.createKey !== undefined ? { createKey: input.createKey } : {}),
         status: 'active',
         channels,
         members: [],
@@ -1273,6 +1541,22 @@ export function createCollabGroupRuntime(
             groupId: validId,
           })
         }
+        if (memberInit.dispatchKey !== undefined) {
+          const existingMember = current.members.find(
+            (m) => m.name === memberInit.name && m.dispatchKey === memberInit.dispatchKey,
+          )
+          if (existingMember !== undefined) {
+            const list = postsByGroup.get(validId) ?? []
+            const existingPost =
+              (existingMember.briefPostSeq !== undefined
+                ? list.find((p) => p.seq === existingMember.briefPostSeq)
+                : undefined) ??
+              list.find((p) => p.kind === 'brief' && p.to.includes(existingMember.name))
+            if (existingPost !== undefined) {
+              return { group: current, member: existingMember, post: existingPost, replayed: true }
+            }
+          }
+        }
         if (current.status !== 'active') {
           throw new HelmError('swarm_group_closed', `协作组 '${validId}' 已结单，无法招募新成员`, 409, {
             pluginId: SWARM_PLUGIN_ID,
@@ -1284,6 +1568,7 @@ export function createCollabGroupRuntime(
         const seq = next.headSeq + 1
         const memberState: GroupMemberState = {
           ...memberInit,
+          briefPostSeq: seq,
           readCursorSeq: current.headSeq,
           pendingWakeupSeq: seq,
           lastWakeTaskSeq: seq,
@@ -1306,19 +1591,25 @@ export function createCollabGroupRuntime(
         next.headSeq = seq
         next.updatedAt = now
 
-        await appendFile(boardPathOf(validId), `${JSON.stringify(post)}\n`, 'utf8')
+        await appendBoardLineDurableLocked(validId, post)
         const savedGroup = await persistMetaLocked(next)
         const list = postsByGroup.get(validId) ?? []
         list.push(post)
         postsByGroup.set(validId, list)
         const savedMember = savedGroup.members.find((m) => m.name === memberState.name)!
-        return { group: savedGroup, member: savedMember, post }
+        return { group: savedGroup, member: savedMember, post, replayed: false }
       })
 
       syncIndex()
       syncProjections()
-      await deliverWorkerWakeup(validId, added.member.name)
-      return added
+      if (
+        !added.replayed ||
+        (added.member.pendingWakeupSeq > added.member.readCursorSeq &&
+          added.member.inflightWakeup === undefined)
+      ) {
+        await deliverWorkerWakeup(validId, added.member.name)
+      }
+      return { group: added.group, member: added.member, post: added.post }
     },
 
     appendPost,
@@ -1361,6 +1652,7 @@ export function createCollabGroupRuntime(
             delete target.lastWakeTaskSeq
             delete target.silentExitNudgeSeq
             delete target.lastWakeCompletionSeq
+            delete target.inflightNudge
           }
           return { group: draft, result: undefined }
         })
@@ -1385,6 +1677,7 @@ export function createCollabGroupRuntime(
             delete target.lastWakeTaskSeq
             delete target.silentExitNudgeSeq
             delete target.lastWakeCompletionSeq
+            delete target.inflightNudge
           }
           return { group: draft, result: undefined }
         })
@@ -1404,11 +1697,20 @@ export function createCollabGroupRuntime(
 
       const silentAction = evaluateSilentExit(group, member, input.lastReplySummary)
       if (silentAction.kind === 'nudge') {
+        const nudgeSummary = coord.readConversationOrUndefined(input.conversationId)
+        const baseCompletionSeq = nudgeSummary?.completionSeq ?? input.completionSeq
+        const baseLastEntryId = nudgeSummary?.lastEntryId ?? 0
+        const nudgeRequestId = `swarm-nudge:${input.groupId}:${input.memberName}:${silentAction.taskSeq}`
         await mutateGroup(input.groupId, (draft) => {
           const target = draft.members.find((m) => m.name === input.memberName)
           if (target !== undefined) {
             target.silentExitNudgeSeq = silentAction.taskSeq
-            target.lastWakeCompletionSeq = input.completionSeq
+            target.inflightNudge = {
+              requestId: nudgeRequestId,
+              taskSeq: silentAction.taskSeq,
+              baseCompletionSeq,
+              baseLastEntryId,
+            }
           }
           return { group: draft, result: undefined }
         })
@@ -1419,11 +1721,36 @@ export function createCollabGroupRuntime(
             {
               origin: 'agent',
               whenBusy: 'followUp',
-              requestId: `swarm-nudge:${input.groupId}:${input.memberName}:${silentAction.taskSeq}`,
+              requestId: nudgeRequestId,
             },
             { expectedOwnership: 'helm' },
           )
+          await mutateGroup(input.groupId, (draft) => {
+            const target = draft.members.find((m) => m.name === input.memberName)
+            if (target !== undefined) {
+              if (target.inflightNudge?.requestId === nudgeRequestId) {
+                delete target.inflightNudge
+              }
+              target.lastWakeCompletionSeq = baseCompletionSeq
+            }
+            return { group: draft, result: undefined }
+          })
         } catch (err) {
+          await mutateGroup(input.groupId, (draft) => {
+            const target = draft.members.find((m) => m.name === input.memberName)
+            if (target !== undefined) {
+              if (target.inflightNudge?.requestId === nudgeRequestId) {
+                delete target.inflightNudge
+              }
+              if (target.silentExitNudgeSeq === silentAction.taskSeq) {
+                delete target.silentExitNudgeSeq
+              }
+              if (target.lastWakeCompletionSeq === baseCompletionSeq) {
+                delete target.lastWakeCompletionSeq
+              }
+            }
+            return { group: draft, result: undefined }
+          }).catch(() => {})
           if (!isLifecycleTeardownError(err)) {
             coord.reportError(`协作组 ${input.groupId} 成员 @${input.memberName} 哑巴退场续催失败`, err)
           }
@@ -1438,6 +1765,7 @@ export function createCollabGroupRuntime(
             delete target.lastWakeTaskSeq
             delete target.silentExitNudgeSeq
             delete target.lastWakeCompletionSeq
+            delete target.inflightNudge
           }
           return { group: draft, result: undefined }
         })
@@ -1474,4 +1802,6 @@ export function createCollabGroupRuntime(
       await checkAndEmitQuiescenceStall(group.id)
     },
   }
+
+  return runtimeHandle
 }

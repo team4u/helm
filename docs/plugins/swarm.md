@@ -75,16 +75,20 @@ Swarm 不再拥有独立的全屏 Board 控制台或顶栏入口：所有 UI 都
 
 公开文档：`index`、`board-badges`；公开会话文档：`board-view`。文件存储：`<dataDir>/groups/<groupId>/{meta.json, board.jsonl}`。
 
-## 停用与失败语义
+## 停用、重启与强杀恢复语义
 
-服务启动阶段幂等补发重启前挂起的未送达唤醒/汇总信封。停用遇在途任务或微批投递经 `liveTasks` 硬阻断（`409 plugin_has_live_tasks`）；存在活跃协作组时经 `inUse` 返回 `409 plugin_in_use`。任意时刻可执行 `helm swarm close-group --group-id <id> --abort-running --keep-worktree` 刹停成员、保留代码分支并解锁主控会话。
+- **以 `meta.json` (`headSeq`) 为唯一事务提交点**：`board.jsonl` 先追加并 `datasync`，再经 `atomicWriteFile` 原子替换 `meta.json`。重启加载若遇单条未提交 WAL 尾（`headSeq + 1` 完整待提交行或尾行半截截断）自动原子回滚截断回 `headSeq`；多行越界或已提交前缀损坏仍严格抛 `swarm_doc_corrupt`。
+- **启动屏障孤儿回收（`service.start`）**：加载组状态后、调度器恢复前，按 `meta.json` 单真源收敛孤儿/错配的会话标签与归属权，并释放回收半途强杀遗留的 `builtin:swarm` 孤儿 Worktree 锁（不影响 `keepWorktree: true` 已主动释放锁的分支）。
+- **工具 `replay: 'safe'` 幂等重放**：全部 `swarm_*` 工具声明 `replay: 'safe'`，建组（`createKey`）、派工（`dispatchKey`）、发帖（`idempotencyKey`）凭 `${conversationId}:${callId}` 幂等重放，归档与结单先落盘 `meta.json` 再切标签。
+- **`runtime.started` 恢复对账**：内核恢复在途 `pi-durable` 回合后，对账 `inflightWakeup` / `inflightNudge` / `inflightReport` 提交意图（区分仍在跑 / 已完成未刷盘 / 未提交），幂等补发未送达唤醒与汇总信封，并对已停机未回帖成员补跑一次失败 `[blocker]`、哑巴退场续催或全组 `[stall]` 检查。
+- **停用与人工刹停**：遇在途任务、对账或微批投递经 `liveTasks` 硬阻断（`409 plugin_has_live_tasks`）；存在活跃协作组时经 `inUse` 返回 `409 plugin_in_use`。任意时刻可执行 `helm swarm close-group --group-id <id> --abort-running --keep-worktree` 刹停成员、保留代码分支并解锁主控会话。
 
 ## 源码与测试入口
 
 | 内容 | 位置 |
 | :--- | :--- |
 | 插件入口与 UI 注册 | `packages/plugins/src/swarm.ts`、`packages/plugins/src/swarm/ui.ts` |
-| 单真源黑板存储 / 寻址 / 静默归因 / 动作 / 钩子 | `packages/plugins/src/swarm/`（`contracts.ts`、`action-schemas.ts`、`worktree-bridge.ts`、`group-store.ts`、`board-router.ts`、`board-stall.ts`、`settlement.ts`、`actions.ts`、`hooks.ts`、`assets.ts`、`assets/`） |
+| 单真源黑板存储 / 寻址 / 静默归因 / 恢复对账 / 动作 / 钩子 | `packages/plugins/src/swarm/`（`contracts.ts`、`action-schemas.ts`、`worktree-bridge.ts`、`group-store.ts`、`board-router.ts`、`board-stall.ts`、`recovery.ts`、`settlement.ts`、`actions.ts`、`hooks.ts`、`assets.ts`、`assets/`） |
 | Web 客户端组件与纯模型 | `packages/plugins/src/swarm/client/`（`index.tsx`、`SwarmToolView.tsx`、`SwarmActiveTray.tsx`、`SwarmWorkbenchPanel.tsx`、`BoardReceipts.tsx`、`board-model.ts`、`model-tool-view.ts`、`model-tray.ts`、`model-panel.ts`、`hooks.ts`、`models.ts`、`copy.ts`、`styles.css`） |
 | 测试 | `packages/plugins/test/swarm.test.ts`、`packages/plugins/test/swarm.integration.test.ts`、`packages/web/test/swarm-client-interactions.test.tsx` |
 
