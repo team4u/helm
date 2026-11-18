@@ -139,12 +139,21 @@ export function assertWorkerNodeId(value: string): string {
   return trimmed
 }
 
+function makeToolCallKey(
+  conversationId: number | undefined,
+  callId: string | undefined,
+): string | undefined {
+  if (conversationId === undefined || callId === undefined || callId.trim() === '') return undefined
+  return `${conversationId}:${callId}`
+}
+
 export interface EnsureCoordinatorGroupInput {
   conversationId: number
   title: string
   objective?: string
   channels?: Array<{ name: string; topic?: string }>
   reuseExisting?: boolean
+  createKey?: string
 }
 
 export function checkCoordinatorEligibility(
@@ -204,9 +213,12 @@ export async function ensureCoordinatorGroup(
       return { groupId, group: view.group }
     }
 
-    if (input.reuseExisting === true) {
+    if (input.reuseExisting === true || input.createKey !== undefined) {
       const existing = groups.findActiveGroupByCoordinator(targetConvId)
-      if (existing !== undefined) {
+      if (
+        existing !== undefined &&
+        (input.reuseExisting === true || existing.createKey === input.createKey)
+      ) {
         return syncTagAndProjections(existing.id)
       }
     }
@@ -216,6 +228,7 @@ export async function ensureCoordinatorGroup(
       title: input.title.trim().slice(0, 120),
       ...(input.objective !== undefined ? { objective: input.objective } : {}),
       ...(input.channels !== undefined ? { channels: input.channels } : {}),
+      ...(input.createKey !== undefined ? { createKey: input.createKey } : {}),
     })
     return syncTagAndProjections(created.id)
   })
@@ -343,6 +356,7 @@ export function registerSwarmActions(
       conversationId?: number
     },
     contextConversationId: number | undefined,
+    idempotencyKey?: string,
   ): Promise<{ groupId: string; group: BoardViewDoc['group'] }> => {
     if (typeof input.title !== 'string' || input.title.trim() === '') {
       throw new HelmError('validation_error', 'create_group 需要非空 title', 400, {})
@@ -369,6 +383,7 @@ export function registerSwarmActions(
       ...(input.objective !== undefined ? { objective: input.objective } : {}),
       ...(input.channels !== undefined ? { channels: input.channels } : {}),
       reuseExisting: false,
+      ...(idempotencyKey !== undefined ? { createKey: idempotencyKey } : {}),
     })
   }
 
@@ -419,6 +434,7 @@ export function registerSwarmActions(
     input: DispatchInput,
     conversationId: number | undefined,
     signal?: AbortSignal,
+    idempotencyKey?: string,
   ): Promise<{ workerConversationId: number; groupId: string; name: string; worktreeId?: string; postSeq: number }> => {
     if (typeof input.prompt !== 'string' || input.prompt.trim() === '') {
       throw new HelmError('validation_error', 'dispatch_worker 需要 prompt（非空文本）', 400, {})
@@ -508,7 +524,24 @@ export function registerSwarmActions(
           groupId: group.id,
         })
       }
-      if (freshGroup.members.some((m) => m.name === memberName)) {
+      const existingMember = freshGroup.members.find((m) => m.name === memberName)
+      if (existingMember !== undefined) {
+        if (idempotencyKey !== undefined && existingMember.dispatchKey === idempotencyKey) {
+          const existingPostSeq =
+            existingMember.briefPostSeq ??
+            groups
+              .getPosts(freshGroup.id)
+              .find((p) => p.kind === 'brief' && p.to.includes(existingMember.name))?.seq ??
+            existingMember.lastWakeTaskSeq ??
+            freshGroup.headSeq
+          return {
+            workerConversationId: existingMember.conversationId,
+            groupId: freshGroup.id,
+            name: existingMember.name,
+            ...(existingMember.worktreeId !== undefined ? { worktreeId: existingMember.worktreeId } : {}),
+            postSeq: existingPostSeq,
+          }
+        }
         throw new HelmError(
           'swarm_member_conflict',
           `协作组 '${freshGroup.id}' 中成员名 '${memberName}' 已被占用`,
@@ -612,6 +645,7 @@ export function registerSwarmActions(
             ...(acquiredWorktreeId !== undefined ? { worktreeId: acquiredWorktreeId } : {}),
             channels: subscribedChannels,
             lifecycle: 'active',
+            ...(idempotencyKey !== undefined ? { dispatchKey: idempotencyKey } : {}),
             createdAt: now,
           },
           input.prompt,
@@ -656,6 +690,7 @@ export function registerSwarmActions(
     },
     conversationId: number | undefined,
     signal?: AbortSignal,
+    idempotencyKey?: string,
   ): Promise<{ post: BoardPost }> => {
     if (typeof input.body !== 'string' || input.body.trim() === '') {
       throw new HelmError('validation_error', 'board_post.body 必须是非空文本', 400, {})
@@ -725,6 +760,13 @@ export function registerSwarmActions(
       caller = { role: 'human', from: 'coordinator' }
     }
 
+    if (idempotencyKey !== undefined) {
+      const existing = groups.getPosts(group.id).find((p) => p.idempotencyKey === idempotencyKey)
+      if (existing !== undefined) {
+        return { post: existing }
+      }
+    }
+
     if (group.status !== 'active') {
       throw new HelmError('swarm_group_closed', `协作组 '${group.id}' 已结单，无法追加黑板消息`, 409, {
         pluginId: SWARM_PLUGIN_ID,
@@ -772,6 +814,7 @@ export function registerSwarmActions(
       kind,
       refs,
       body: input.body.trim(),
+      ...(idempotencyKey !== undefined ? { idempotencyKey } : {}),
       ...(worktreeSnapshot !== undefined ? { worktreeSnapshot } : {}),
     })
 
@@ -992,6 +1035,11 @@ export function registerSwarmActions(
     const { group, member, workerConversationId } = resolveTargetWorker(input, conversationId)
     assertCoordinatorAuthority(conversationId, group)
     if (member.lifecycle === 'archived') {
+      const cur = readConversationOrUndefined(workerConversationId)
+      if (cur !== undefined && cur.tags.includes(WORKER_TAG)) {
+        const nextTags = [...cur.tags.filter((t) => t !== WORKER_TAG), ARCHIVED_WORKER_TAG]
+        await ctx.host.updateConversation(workerConversationId, { tags: nextTags })
+      }
       return { archived: true, workerConversationId }
     }
     const summary = readConversationOrUndefined(workerConversationId)
@@ -1044,11 +1092,6 @@ export function registerSwarmActions(
         }
       }
 
-      if (freshSummary !== undefined) {
-        const nextTags = [...freshSummary.tags.filter((t) => t !== WORKER_TAG), ARCHIVED_WORKER_TAG]
-        await ctx.host.updateConversation(workerConversationId, { tags: nextTags })
-      }
-
       await groups.mutateGroup(group.id, (draft) => {
         const target = draft.members.find((m) => m.name === member.name)
         if (target !== undefined) {
@@ -1058,6 +1101,11 @@ export function registerSwarmActions(
         draft.updatedAt = Date.now()
         return { group: draft, result: undefined }
       })
+
+      if (freshSummary !== undefined) {
+        const nextTags = [...freshSummary.tags.filter((t) => t !== WORKER_TAG), ARCHIVED_WORKER_TAG]
+        await ctx.host.updateConversation(workerConversationId, { tags: nextTags })
+      }
 
       return { archived: true, workerConversationId }
     })
@@ -1174,14 +1222,6 @@ export function registerSwarmActions(
         }
       }
 
-      for (const member of activeMembers) {
-        const s = readConversationOrUndefined(member.conversationId)
-        if (s !== undefined) {
-          const nextTags = [...s.tags.filter((t) => t !== WORKER_TAG), ARCHIVED_WORKER_TAG]
-          await ctx.host.updateConversation(member.conversationId, { tags: nextTags })
-        }
-      }
-
       const now = Date.now()
       await groups.mutateGroup(freshGroup.id, (draft) => {
         draft.status = 'closed'
@@ -1199,6 +1239,14 @@ export function registerSwarmActions(
         }
         return { group: draft, result: undefined }
       })
+
+      for (const member of activeMembers) {
+        const s = readConversationOrUndefined(member.conversationId)
+        if (s !== undefined) {
+          const nextTags = [...s.tags.filter((t) => t !== WORKER_TAG), ARCHIVED_WORKER_TAG]
+          await ctx.host.updateConversation(member.conversationId, { tags: nextTags })
+        }
+      }
 
       const coordConv = readConversationOrUndefined(freshGroup.coordinatorConversationId)
       if (coordConv !== undefined && coordConv.tags.includes(COORDINATOR_TAG)) {
@@ -1307,8 +1355,13 @@ export function registerSwarmActions(
     description:
       'Start an active peer swarm collaboration board on the current top-level conversation, tagging it swarm-coordinator and unlocking squad tools on the next step.',
     inputSchema: createGroupInputSchema,
+    replay: 'safe',
     execute: (input: never, context: PluginToolContext) =>
-      createGroup(input as Parameters<typeof createGroup>[0], context.conversationId),
+      createGroup(
+        input as Parameters<typeof createGroup>[0],
+        context.conversationId,
+        makeToolCallKey(context.conversationId, context.callId),
+      ),
   })
 
   ctx.tool({
@@ -1316,6 +1369,7 @@ export function registerSwarmActions(
     description: 'Update the active swarm collaboration group title or objective.',
     inputSchema: updateGroupInputSchema,
     scope: COORDINATOR_SCOPE,
+    replay: 'safe',
     execute: (input: never, context: PluginToolContext) =>
       updateGroup(input as Parameters<typeof updateGroup>[0], context.conversationId),
   })
@@ -1326,8 +1380,14 @@ export function registerSwarmActions(
       'Recruit a named peer role into the active swarm collaboration group with optional worktree isolation and clean-anchor conversation forking.',
     inputSchema: dispatchInputSchema,
     scope: COORDINATOR_SCOPE,
+    replay: 'safe',
     execute: (input: never, context: PluginToolContext) =>
-      dispatchWorker(input as DispatchInput, context.conversationId, context.signal),
+      dispatchWorker(
+        input as DispatchInput,
+        context.conversationId,
+        context.signal,
+        makeToolCallKey(context.conversationId, context.callId),
+      ),
   })
 
   ctx.tool({
@@ -1336,8 +1396,14 @@ export function registerSwarmActions(
       'Publish a structured message on the swarm collaboration board with deterministic target resolution and orthogonal wake control (handoff and done posts from worktree members automatically attach a worktree snapshot).',
     inputSchema: boardPostInputSchema,
     scope: PARTICIPANT_SCOPE,
+    replay: 'safe',
     execute: (input: never, context: PluginToolContext) =>
-      boardPost(input as Parameters<typeof boardPost>[0], context.conversationId, context.signal),
+      boardPost(
+        input as Parameters<typeof boardPost>[0],
+        context.conversationId,
+        context.signal,
+        makeToolCallKey(context.conversationId, context.callId),
+      ),
   })
 
   ctx.tool({
@@ -1367,6 +1433,7 @@ export function registerSwarmActions(
       'Stop an in-flight swarm worker turn in place while preserving its conversation history and managed worktree hold for follow-up correction.',
     inputSchema: workerIdInputSchema,
     scope: COORDINATOR_SCOPE,
+    replay: 'safe',
     execute: (input: never, context: PluginToolContext) =>
       abortWorker(input as Parameters<typeof abortWorker>[0], context.conversationId),
   })
@@ -1376,6 +1443,7 @@ export function registerSwarmActions(
     description: 'Switch an idle swarm worker conversation to another model in place while preserving its conversation history.',
     inputSchema: switchModelInputSchema,
     scope: COORDINATOR_SCOPE,
+    replay: 'safe',
     execute: (input: never, context: PluginToolContext) =>
       switchWorkerModel(input as Parameters<typeof switchWorkerModel>[0], context.conversationId),
   })
@@ -1395,6 +1463,7 @@ export function registerSwarmActions(
     description: 'Archive an idle swarm worker (verifying worktree merge safety and releasing worktree holds when applicable).',
     inputSchema: archiveWorkerInputSchema,
     scope: COORDINATOR_SCOPE,
+    replay: 'safe',
     execute: (input: never, context: PluginToolContext) =>
       archiveWorker(input as Parameters<typeof archiveWorker>[0], context.conversationId, context.signal),
   })
@@ -1405,6 +1474,7 @@ export function registerSwarmActions(
       'Close the swarm collaboration group in full-cleanup mode or retain-branches mode (keepWorktree: true releases holds and preserves modified branches in retainedWorktrees).',
     inputSchema: closeGroupInputSchema,
     scope: COORDINATOR_SCOPE,
+    replay: 'safe',
     execute: (input: never, context: PluginToolContext) =>
       closeGroup(input as Parameters<typeof closeGroup>[0], context.conversationId, context.signal),
   })
