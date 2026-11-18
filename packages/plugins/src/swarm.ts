@@ -133,8 +133,8 @@ export function createSwarmPlugin(): PluginDefinition {
         resolveSwarmConfig(ctx.getConfig() as Record<string, unknown>)
 
       const docs: SwarmDocs = {
-        index: ctx.doc<SwarmIndexDoc>(INDEX_DOC_NAME, { workers: [], groups: [] }, { public: true }),
-        boardBadges: ctx.doc<BoardBadgesDoc>(BOARD_BADGES_DOC_NAME, { byConversation: {} }, { public: true }),
+        index: ctx.doc<SwarmIndexDoc>(INDEX_DOC_NAME, { workers: [], groups: [] }, { public: true, durable: false }),
+        boardBadges: ctx.doc<BoardBadgesDoc>(BOARD_BADGES_DOC_NAME, { byConversation: {} }, { public: true, durable: false }),
         boardView: ctx.sessionDoc<BoardViewDoc | null>(BOARD_VIEW_DOC_NAME, null, { public: true, durable: false }),
       }
 

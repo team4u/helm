@@ -61,7 +61,6 @@ export interface GroupMemberState {
   lastPostSeq?: number
   lastWakeTaskSeq?: number
   silentExitNudgeSeq?: number
-  lastWakeCompletionSeq?: number
   lastOutboundEdge?: { seq: number; to: string[]; kind: BoardPostKind }
   createdAt: number
   archivedAt?: number
@@ -243,217 +242,288 @@ const VALID_LIVE_STATES: ReadonlySet<string> = new Set([
   'missing',
 ])
 
+const VALID_HEADLINE_TONES: ReadonlySet<string> = new Set(['info', 'ok', 'warn', 'err'])
+const VALID_HEADLINE_KINDS: ReadonlySet<string> = new Set(['normal', 'stall', 'blocker', 'unmerged', 'closed'])
+
+function isNonEmptyString(v: unknown): v is string {
+  return typeof v === 'string' && v !== ''
+}
+
+function isFiniteNumber(v: unknown): v is number {
+  return typeof v === 'number' && Number.isFinite(v)
+}
+
+function isNonEmptyStringArray(v: unknown): v is string[] {
+  return Array.isArray(v) && v.every(isNonEmptyString)
+}
+
+function parseWorktreeSnapshot(snap: unknown): WorktreeHandoffSnapshot | undefined | 'invalid' {
+  if (snap === undefined) return undefined
+  if (!isPlainObject(snap) || !isNonEmptyString(snap.worktreeId)) return 'invalid'
+  if (snap.branch !== undefined && typeof snap.branch !== 'string') return 'invalid'
+  if (snap.commitsAhead !== undefined && !isNonNegInt(snap.commitsAhead)) return 'invalid'
+  if (!isNonNegInt(snap.dirtyCount)) return 'invalid'
+  if (!Array.isArray(snap.changedFilesPreview) || !snap.changedFilesPreview.every((f) => typeof f === 'string')) {
+    return 'invalid'
+  }
+  return {
+    worktreeId: snap.worktreeId,
+    ...(snap.branch !== undefined ? { branch: snap.branch } : {}),
+    ...(snap.commitsAhead !== undefined ? { commitsAhead: snap.commitsAhead } : {}),
+    dirtyCount: snap.dirtyCount,
+    changedFilesPreview: snap.changedFilesPreview,
+  }
+}
+
 export function parseBoardPost(raw: unknown): BoardPost | undefined {
   if (!isPlainObject(raw)) return undefined
   if (!isPosInt(raw.seq)) return undefined
-  if (typeof raw.groupId !== 'string' || raw.groupId === '') return undefined
-  if (typeof raw.from !== 'string' || raw.from === '') return undefined
+  if (!isNonEmptyString(raw.groupId)) return undefined
+  if (!isNonEmptyString(raw.channel)) return undefined
+  if (!isNonEmptyString(raw.from)) return undefined
+  if (!isNonEmptyStringArray(raw.to)) return undefined
+  if (!isNonEmptyStringArray(raw.resolvedTargets)) return undefined
+  if (typeof raw.wake !== 'boolean') return undefined
+  if (typeof raw.kind !== 'string' || !VALID_POST_KINDS.has(raw.kind)) return undefined
+  if (!Array.isArray(raw.refs) || !raw.refs.every(isPosInt)) return undefined
   if (typeof raw.body !== 'string') return undefined
-  const kind =
-    typeof raw.kind === 'string' && VALID_POST_KINDS.has(raw.kind)
-      ? (raw.kind as BoardPostKind)
-      : 'handoff'
-  const to = Array.isArray(raw.to) ? raw.to.filter((t): t is string => typeof t === 'string' && t !== '') : []
-  const resolvedTargets = Array.isArray(raw.resolvedTargets)
-    ? raw.resolvedTargets.filter((t): t is string => typeof t === 'string' && t !== '')
-    : to
-  const refs = Array.isArray(raw.refs) ? raw.refs.filter((r): r is number => isPosInt(r)) : []
-  let worktreeSnapshot: WorktreeHandoffSnapshot | undefined
-  const snap = raw.worktreeSnapshot
-  if (isPlainObject(snap) && typeof snap.worktreeId === 'string') {
-    worktreeSnapshot = {
-      worktreeId: snap.worktreeId,
-      ...(typeof snap.branch === 'string' ? { branch: snap.branch } : {}),
-      ...(isNonNegInt(snap.commitsAhead) ? { commitsAhead: snap.commitsAhead } : {}),
-      dirtyCount: isNonNegInt(snap.dirtyCount) ? snap.dirtyCount : 0,
-      changedFilesPreview: Array.isArray(snap.changedFilesPreview)
-        ? snap.changedFilesPreview.filter((f): f is string => typeof f === 'string')
-        : [],
-    }
-  }
+  if (!isFiniteNumber(raw.createdAt)) return undefined
+
+  const worktreeSnapshot = parseWorktreeSnapshot(raw.worktreeSnapshot)
+  if (worktreeSnapshot === 'invalid') return undefined
+
   return {
     seq: raw.seq,
     groupId: raw.groupId,
-    channel: typeof raw.channel === 'string' && raw.channel !== '' ? raw.channel : 'main',
+    channel: raw.channel,
     from: raw.from,
-    to,
-    resolvedTargets,
-    wake: typeof raw.wake === 'boolean' ? raw.wake : kind !== 'comment',
-    kind,
-    refs,
+    to: raw.to,
+    resolvedTargets: raw.resolvedTargets,
+    wake: raw.wake,
+    kind: raw.kind as BoardPostKind,
+    refs: raw.refs,
     body: raw.body,
     ...(worktreeSnapshot !== undefined ? { worktreeSnapshot } : {}),
-    createdAt: typeof raw.createdAt === 'number' ? raw.createdAt : 0,
+    createdAt: raw.createdAt,
+  }
+}
+
+function parseGroupChannelsStrict(rawChannels: unknown): BoardChannelInfo[] | undefined {
+  if (!Array.isArray(rawChannels) || rawChannels.length === 0) return undefined
+  const out: BoardChannelInfo[] = []
+  for (const c of rawChannels) {
+    if (!isPlainObject(c) || !isNonEmptyString(c.name)) return undefined
+    if (c.topic !== undefined && typeof c.topic !== 'string') return undefined
+    if (c.archived !== undefined && typeof c.archived !== 'boolean') return undefined
+    out.push({
+      name: c.name,
+      ...(c.topic !== undefined ? { topic: c.topic } : {}),
+      ...(c.archived === true ? { archived: true } : {}),
+    })
+  }
+  return out
+}
+
+function parseRetainedWorktreesStrict(rawList: unknown): RetainedWorktreeInfo[] | undefined | 'invalid' {
+  if (rawList === undefined) return undefined
+  if (!Array.isArray(rawList)) return 'invalid'
+  const out: RetainedWorktreeInfo[] = []
+  for (const w of rawList) {
+    if (
+      !isPlainObject(w) ||
+      !isNonEmptyString(w.memberName) ||
+      !isNonEmptyString(w.worktreeId) ||
+      !isNonEmptyString(w.branch) ||
+      !isNonEmptyString(w.path) ||
+      !isNonNegInt(w.commitsAhead)
+    ) {
+      return 'invalid'
+    }
+    out.push({
+      memberName: w.memberName,
+      worktreeId: w.worktreeId,
+      branch: w.branch,
+      path: w.path,
+      commitsAhead: w.commitsAhead,
+    })
+  }
+  return out
+}
+
+function parseMemberOutboundEdge(rawEdge: unknown): GroupMemberState['lastOutboundEdge'] | undefined | 'invalid' {
+  if (rawEdge === undefined) return undefined
+  if (
+    !isPlainObject(rawEdge) ||
+    !isPosInt(rawEdge.seq) ||
+    !isNonEmptyStringArray(rawEdge.to) ||
+    typeof rawEdge.kind !== 'string' ||
+    !VALID_POST_KINDS.has(rawEdge.kind)
+  ) {
+    return 'invalid'
+  }
+  return {
+    seq: rawEdge.seq,
+    to: rawEdge.to,
+    kind: rawEdge.kind as BoardPostKind,
+  }
+}
+
+function parseMemberViewStrict(m: unknown): BoardMemberView | undefined {
+  if (!isPlainObject(m)) return undefined
+  if (!isNonEmptyString(m.name) || !isPosInt(m.conversationId) || !isNonEmptyString(m.profileId)) return undefined
+  if (m.access !== 'readwrite' && m.access !== 'readonly') return undefined
+  if (m.isolation !== 'worktree' && m.isolation !== 'inherit') return undefined
+  if (!isNonEmptyString(m.nodeId) || typeof m.cwd !== 'string') return undefined
+  if (m.worktreeId !== undefined && typeof m.worktreeId !== 'string') return undefined
+  if (!isNonEmptyStringArray(m.channels)) return undefined
+  if (m.lifecycle !== 'active' && m.lifecycle !== 'archived') return undefined
+  if (typeof m.liveState !== 'string' || !VALID_LIVE_STATES.has(m.liveState)) return undefined
+  if (!isNonNegInt(m.readCursorSeq) || !isNonNegInt(m.pendingWakeupSeq)) return undefined
+  if (m.lastPostSeq !== undefined && !isPosInt(m.lastPostSeq)) return undefined
+  if (m.lastWakeTaskSeq !== undefined && !isPosInt(m.lastWakeTaskSeq)) return undefined
+  if (m.silentExitNudgeSeq !== undefined && !isPosInt(m.silentExitNudgeSeq)) return undefined
+  if (!isFiniteNumber(m.createdAt)) return undefined
+  if (m.archivedAt !== undefined && !isFiniteNumber(m.archivedAt)) return undefined
+  if (m.model !== undefined && typeof m.model !== 'string') return undefined
+  const lastOutboundEdge = parseMemberOutboundEdge(m.lastOutboundEdge)
+  if (lastOutboundEdge === 'invalid') return undefined
+
+  return {
+    name: m.name,
+    conversationId: m.conversationId,
+    profileId: m.profileId,
+    access: m.access,
+    isolation: m.isolation,
+    nodeId: m.nodeId,
+    cwd: m.cwd,
+    ...(isNonEmptyString(m.worktreeId) ? { worktreeId: m.worktreeId } : {}),
+    channels: m.channels,
+    lifecycle: m.lifecycle,
+    readCursorSeq: m.readCursorSeq,
+    pendingWakeupSeq: m.pendingWakeupSeq,
+    ...(m.lastPostSeq !== undefined ? { lastPostSeq: m.lastPostSeq } : {}),
+    ...(m.lastWakeTaskSeq !== undefined ? { lastWakeTaskSeq: m.lastWakeTaskSeq } : {}),
+    ...(m.silentExitNudgeSeq !== undefined ? { silentExitNudgeSeq: m.silentExitNudgeSeq } : {}),
+    ...(lastOutboundEdge !== undefined ? { lastOutboundEdge } : {}),
+    createdAt: m.createdAt,
+    ...(m.archivedAt !== undefined ? { archivedAt: m.archivedAt } : {}),
+    liveState: m.liveState as MemberLiveState,
+    ...(isNonEmptyString(m.model) ? { model: m.model } : {}),
   }
 }
 
 export function parseBoardView(raw: unknown): BoardViewDoc | undefined {
-  if (!isPlainObject(raw) || !isPlainObject(raw.group)) return undefined
+  if (!isPlainObject(raw) || !isPlainObject(raw.group) || !isPlainObject(raw.headline)) return undefined
   const g = raw.group
-  if (typeof g.id !== 'string' || g.id === '') return undefined
-  if (typeof g.title !== 'string') return undefined
+  if (!isNonEmptyString(g.id) || typeof g.title !== 'string') return undefined
   if (!isPosInt(g.coordinatorConversationId)) return undefined
-  const status: CollabGroupStatus = g.status === 'closed' ? 'closed' : 'active'
+  if (g.status !== 'active' && g.status !== 'closed') return undefined
+  if (!isNonNegInt(g.activeWorkerCount) || !isNonNegInt(g.headSeq)) return undefined
+  if (!isFiniteNumber(g.createdAt) || !isFiniteNumber(g.updatedAt)) return undefined
+  if (g.objective !== undefined && typeof g.objective !== 'string') return undefined
+  if (g.coordinatorDetached !== undefined && typeof g.coordinatorDetached !== 'boolean') return undefined
+  if (g.closeSummary !== undefined && typeof g.closeSummary !== 'string') return undefined
+  if (g.closedAt !== undefined && !isFiniteNumber(g.closedAt)) return undefined
 
-  const channels: BoardChannelInfo[] = Array.isArray(g.channels)
-    ? g.channels
-        .filter((c): c is Record<string, unknown> => isPlainObject(c) && typeof c.name === 'string' && c.name !== '')
-        .map((c) => ({
-          name: c.name as string,
-          ...(typeof c.topic === 'string' ? { topic: c.topic } : {}),
-          ...(c.archived === true ? { archived: true } : {}),
-        }))
-    : [{ name: 'main' }]
-  if (channels.length === 0) channels.push({ name: 'main' })
+  const channels = parseGroupChannelsStrict(g.channels)
+  if (channels === undefined) return undefined
+  const retainedWorktrees = parseRetainedWorktreesStrict(g.retainedWorktrees)
+  if (retainedWorktrees === 'invalid') return undefined
 
-  const retainedWorktrees: RetainedWorktreeInfo[] | undefined = Array.isArray(g.retainedWorktrees)
-    ? g.retainedWorktrees
-        .filter(
-          (w): w is Record<string, unknown> =>
-            isPlainObject(w) &&
-            typeof w.memberName === 'string' &&
-            typeof w.worktreeId === 'string' &&
-            typeof w.branch === 'string' &&
-            typeof w.path === 'string',
-        )
-        .map((w) => ({
-          memberName: w.memberName as string,
-          worktreeId: w.worktreeId as string,
-          branch: w.branch as string,
-          path: w.path as string,
-          commitsAhead: isNonNegInt(w.commitsAhead) ? w.commitsAhead : 0,
-        }))
-    : undefined
-
-  const hRaw = isPlainObject(raw.headline) ? raw.headline : {}
-  const headlineTone =
-    hRaw.tone === 'warn' || hRaw.tone === 'err' || hRaw.tone === 'ok' || hRaw.tone === 'info'
-      ? hRaw.tone
-      : status === 'closed'
-        ? 'ok'
-        : 'info'
-  const headlineKind =
-    hRaw.kind === 'stall' ||
-    hRaw.kind === 'blocker' ||
-    hRaw.kind === 'unmerged' ||
-    hRaw.kind === 'closed' ||
-    hRaw.kind === 'normal'
-      ? hRaw.kind
-      : status === 'closed'
-        ? 'closed'
-        : 'normal'
+  const hRaw = raw.headline
+  if (
+    typeof hRaw.text !== 'string' ||
+    typeof hRaw.tone !== 'string' ||
+    !VALID_HEADLINE_TONES.has(hRaw.tone) ||
+    typeof hRaw.kind !== 'string' ||
+    !VALID_HEADLINE_KINDS.has(hRaw.kind)
+  ) {
+    return undefined
+  }
+  if (hRaw.targetMember !== undefined && typeof hRaw.targetMember !== 'string') return undefined
+  if (hRaw.refSeq !== undefined && !isPosInt(hRaw.refSeq)) return undefined
   const headline: BoardHeadline = {
-    text: typeof hRaw.text === 'string' ? hRaw.text : g.title,
-    tone: headlineTone,
-    kind: headlineKind,
-    ...(typeof hRaw.targetMember === 'string' && hRaw.targetMember !== '' ? { targetMember: hRaw.targetMember } : {}),
-    ...(isPosInt(hRaw.refSeq) ? { refSeq: hRaw.refSeq } : {}),
+    text: hRaw.text,
+    tone: hRaw.tone as BoardHeadline['tone'],
+    kind: hRaw.kind as BoardHeadline['kind'],
+    ...(isNonEmptyString(hRaw.targetMember) ? { targetMember: hRaw.targetMember } : {}),
+    ...(hRaw.refSeq !== undefined ? { refSeq: hRaw.refSeq } : {}),
   }
 
+  if (!Array.isArray(raw.members)) return undefined
   const members: BoardMemberView[] = []
-  if (Array.isArray(raw.members)) {
-    for (const m of raw.members) {
-      if (!isPlainObject(m)) continue
-      if (typeof m.name !== 'string' || m.name === '') continue
-      if (!isPosInt(m.conversationId)) continue
-      const liveState: MemberLiveState =
-        typeof m.liveState === 'string' && VALID_LIVE_STATES.has(m.liveState)
-          ? (m.liveState as MemberLiveState)
-          : 'idle'
-      members.push({
-        name: m.name,
-        conversationId: m.conversationId,
-        profileId: typeof m.profileId === 'string' && m.profileId !== '' ? m.profileId : 'assistant',
-        access: m.access === 'readonly' ? 'readonly' : 'readwrite',
-        isolation: m.isolation === 'worktree' ? 'worktree' : 'inherit',
-        nodeId: typeof m.nodeId === 'string' && m.nodeId !== '' ? m.nodeId : 'local',
-        cwd: typeof m.cwd === 'string' ? m.cwd : '',
-        ...(typeof m.worktreeId === 'string' && m.worktreeId !== '' ? { worktreeId: m.worktreeId } : {}),
-        channels: Array.isArray(m.channels)
-          ? m.channels.filter((c): c is string => typeof c === 'string' && c !== '')
-          : ['main'],
-        lifecycle: m.lifecycle === 'archived' ? 'archived' : 'active',
-        readCursorSeq: isNonNegInt(m.readCursorSeq) ? m.readCursorSeq : 0,
-        pendingWakeupSeq: isNonNegInt(m.pendingWakeupSeq) ? m.pendingWakeupSeq : 0,
-        ...(isPosInt(m.lastPostSeq) ? { lastPostSeq: m.lastPostSeq } : {}),
-        ...(isPosInt(m.lastWakeTaskSeq) ? { lastWakeTaskSeq: m.lastWakeTaskSeq } : {}),
-        ...(isPosInt(m.silentExitNudgeSeq) ? { silentExitNudgeSeq: m.silentExitNudgeSeq } : {}),
-        ...(isNonNegInt(m.lastWakeCompletionSeq) ? { lastWakeCompletionSeq: m.lastWakeCompletionSeq } : {}),
-        createdAt: typeof m.createdAt === 'number' ? m.createdAt : 0,
-        ...(typeof m.archivedAt === 'number' ? { archivedAt: m.archivedAt } : {}),
-        liveState,
-        ...(typeof m.model === 'string' && m.model !== '' ? { model: m.model } : {}),
-      })
-    }
+  for (const m of raw.members) {
+    const parsed = parseMemberViewStrict(m)
+    if (parsed === undefined) return undefined
+    members.push(parsed)
   }
 
+  if (!Array.isArray(raw.edges)) return undefined
   const edges: BoardEdgeSummary[] = []
-  if (Array.isArray(raw.edges)) {
-    for (const e of raw.edges) {
-      if (!isPlainObject(e)) continue
-      if (typeof e.from !== 'string' || e.from === '' || typeof e.to !== 'string' || e.to === '') continue
-      const lastKind =
-        typeof e.lastKind === 'string' && VALID_POST_KINDS.has(e.lastKind)
-          ? (e.lastKind as BoardPostKind)
-          : 'handoff'
-      edges.push({
-        from: e.from,
-        to: e.to,
-        count: isPosInt(e.count) ? e.count : 1,
-        lastSeq: isNonNegInt(e.lastSeq) ? e.lastSeq : 0,
-        lastKind,
-      })
+  for (const e of raw.edges) {
+    if (
+      !isPlainObject(e) ||
+      !isNonEmptyString(e.from) ||
+      !isNonEmptyString(e.to) ||
+      !isPosInt(e.count) ||
+      !isNonNegInt(e.lastSeq) ||
+      typeof e.lastKind !== 'string' ||
+      !VALID_POST_KINDS.has(e.lastKind)
+    ) {
+      return undefined
     }
+    edges.push({
+      from: e.from,
+      to: e.to,
+      count: e.count,
+      lastSeq: e.lastSeq,
+      lastKind: e.lastKind as BoardPostKind,
+    })
   }
 
+  if (!Array.isArray(raw.posts)) return undefined
   const posts: BoardPost[] = []
-  if (Array.isArray(raw.posts)) {
-    for (const p of raw.posts) {
-      const parsed = parseBoardPost(p)
-      if (parsed !== undefined) posts.push(parsed)
-    }
+  for (const p of raw.posts) {
+    const parsed = parseBoardPost(p)
+    if (parsed === undefined) return undefined
+    posts.push(parsed)
   }
   posts.sort((a, b) => a.seq - b.seq)
 
-  const activeWorkingMembers = Array.isArray(raw.activeWorkingMembers)
-    ? raw.activeWorkingMembers.filter((n): n is string => typeof n === 'string' && n !== '')
-    : members
-        .filter((m) => m.lifecycle === 'active' && (m.liveState === 'working' || m.liveState === 'blocked'))
-        .map((m) => m.name)
+  if (!isNonEmptyStringArray(raw.activeWorkingMembers)) return undefined
 
   return {
     group: {
       id: g.id,
       title: g.title,
-      ...(typeof g.objective === 'string' && g.objective !== '' ? { objective: g.objective } : {}),
+      ...(isNonEmptyString(g.objective) ? { objective: g.objective } : {}),
       coordinatorConversationId: g.coordinatorConversationId,
-      status,
+      status: g.status,
       ...(g.coordinatorDetached === true ? { coordinatorDetached: true } : {}),
-      activeWorkerCount: isNonNegInt(g.activeWorkerCount)
-        ? g.activeWorkerCount
-        : members.filter((m) => m.lifecycle === 'active').length,
-      headSeq: isNonNegInt(g.headSeq) ? g.headSeq : (posts[posts.length - 1]?.seq ?? 0),
+      activeWorkerCount: g.activeWorkerCount,
+      headSeq: g.headSeq,
       channels,
       ...(retainedWorktrees !== undefined ? { retainedWorktrees } : {}),
-      ...(typeof g.closeSummary === 'string' && g.closeSummary !== '' ? { closeSummary: g.closeSummary } : {}),
-      createdAt: typeof g.createdAt === 'number' ? g.createdAt : 0,
-      updatedAt: typeof g.updatedAt === 'number' ? g.updatedAt : 0,
-      ...(typeof g.closedAt === 'number' ? { closedAt: g.closedAt } : {}),
+      ...(isNonEmptyString(g.closeSummary) ? { closeSummary: g.closeSummary } : {}),
+      createdAt: g.createdAt,
+      updatedAt: g.updatedAt,
+      ...(g.closedAt !== undefined ? { closedAt: g.closedAt } : {}),
     },
     headline,
     members,
     edges,
     posts,
-    activeWorkingMembers,
+    activeWorkingMembers: raw.activeWorkingMembers,
   }
 }
 
-export function parseBoardReadPosts(raw: unknown): BoardPost[] {
-  if (!isPlainObject(raw) || !Array.isArray(raw.posts)) return []
+export function parseBoardReadPosts(raw: unknown): BoardPost[] | undefined {
+  if (!isPlainObject(raw) || !Array.isArray(raw.posts)) return undefined
   const out: BoardPost[] = []
   for (const item of raw.posts) {
     const parsed = parseBoardPost(item)
-    if (parsed !== undefined) out.push(parsed)
+    if (parsed === undefined) return undefined
+    out.push(parsed)
   }
   out.sort((a, b) => a.seq - b.seq)
   return out
@@ -493,7 +563,6 @@ export interface ConversationBoardLink {
 
 export function resolveConversationBoardLink(
   conversationId: number | undefined,
-  badges: Record<string, BoardBadgeItem>,
   index: SwarmIndexDoc | undefined,
 ): ConversationBoardLink | undefined {
   if (conversationId === undefined) return undefined
@@ -501,18 +570,6 @@ export function resolveConversationBoardLink(
     ? index.workers.find((w) => w.conversationId === conversationId && typeof w.groupId === 'string' && w.groupId !== '')
     : undefined
   const workerName = typeof workerEntry?.name === 'string' && workerEntry.name !== '' ? workerEntry.name : undefined
-
-  const badge = badges[String(conversationId)]
-  if (badge !== undefined) {
-    return {
-      groupId: badge.groupId,
-      coordinatorConversationId: badge.coordinatorConversationId,
-      ...(workerName !== undefined ? { workerName } : {}),
-      count: badge.count,
-      tone: badge.tone,
-      ...(badge.footerText !== undefined && badge.footerText !== '' ? { footerText: badge.footerText } : {}),
-    }
-  }
 
   const groups = parseGroups(index)
   if (workerEntry?.groupId !== undefined) {
@@ -567,11 +624,24 @@ export function sortBoardMembersForDisplay<T extends BoardMemberView>(members: r
   return [...members].sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name))
 }
 
-/** Delivered vs total progress over active members (done members only count as delivered). */
+/**
+ * Whether an active member has settled after delivering its assigned task
+ * (blackboard delivery state is orthogonal to kernel `liveState: 'idle'`).
+ */
+export function isMemberDelivered(member: BoardMemberView): boolean {
+  if (member.lifecycle !== 'active') return false
+  if (member.pendingWakeupSeq > member.readCursorSeq) return false
+  if ((member.lastPostSeq ?? 0) < (member.lastWakeTaskSeq ?? 0)) return false
+  if (member.liveState === 'done') return true
+  if (member.liveState !== 'idle') return false
+  return member.lastOutboundEdge?.kind === 'done' || member.lastOutboundEdge?.kind === 'handoff'
+}
+
+/** Delivered vs total progress over active members. */
 export function boardProgressOf(members: ReadonlyArray<BoardMemberView>): { done: number; total: number } {
   const active = members.filter((m) => m.lifecycle === 'active')
   return {
-    done: active.filter((m) => m.liveState === 'done').length,
+    done: active.filter(isMemberDelivered).length,
     total: active.length,
   }
 }

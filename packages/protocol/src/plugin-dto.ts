@@ -342,6 +342,12 @@ export interface ActionManifest extends PluginPromptFields {
   outputSchema: JsonSchema
   exposeAsTool?: boolean
   /**
+   * Whether this non-tool action is advertised in the `<available_actions>` prompt catalog (default true).
+   * UI-only actions (such as composer completers) set `false` to save system prompt tokens while staying
+   * callable via HTTP / CLI / UI completer sources.
+   */
+  exposeToPrompt?: boolean
+  /**
    * Whether this action is idempotent/read-only (default false):
    * - false: on interruption or failure the journal marks
    *   workflow_action_uncertain and refuses to auto-resume with a side-effect

@@ -10,12 +10,16 @@ import {
   SUPERAGENT_PROFILE_IDS,
   WORKER_ARCHIVED_TAG,
   WORKER_TAG,
-  isAbsoluteTargetPath,
   type SuperAgentCoordinator,
   type SuperAgentWorker,
 } from './contracts.js'
 import { searchRecallNodes } from './recall.js'
-import { recentEntrySummaries } from './settlement.js'
+import {
+  assertWorkerConversationId,
+  assertWorkerCwd,
+  assertWorkerNodeId,
+  recentEntrySummaries,
+} from '../entry-text.js'
 
 interface DispatchInput {
   prompt: string
@@ -46,44 +50,6 @@ export function assertThreadKey(key: string): string {
   const trimmed = key.trim()
   if (trimmed === '' || trimmed.length > 200) {
     throw new HelmError('validation_error', `threadKey 非法（需 1..200 字符，收到：${key}）`, 400, {})
-  }
-  return trimmed
-}
-
-function assertWorkerConversationId(value: unknown): number {
-  if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
-    throw new HelmError('validation_error', `workerConversationId 必须是正整数（收到：${String(value)}）`, 400, {})
-  }
-  return value
-}
-
-/** Worker 工作目录：显式给出则必须是跨平台绝对路径（POSIX `/`、
- * Windows 盘符 `C:\\...` / `C:/...`、UNC `\\\\server\\share`），
- * 目标节点可能与 Hub 异平台，不得用宿主 node:path 规则判定。 */
-function assertWorkerCwd(value: string): string {
-  const trimmed = value.trim()
-  if (trimmed === '' || !isAbsoluteTargetPath(trimmed)) {
-    throw new HelmError(
-      'validation_error',
-      `cwd 必须是跨平台绝对路径（POSIX / 开头、Windows 盘符或 UNC；收到：${value}）`,
-      400,
-      {},
-    )
-  }
-  return trimmed
-}
-
-/** Worker 绑定节点：非空、无空白、无路径分隔符（防目录注入）；
- * 存在性由 createConversation 靶点解析链处理，不在此硬编码节点清单。 */
-function assertWorkerNodeId(value: string): string {
-  const trimmed = value.trim()
-  if (trimmed === '' || trimmed.length > 64 || /\s|[/\\]/.test(trimmed)) {
-    throw new HelmError(
-      'validation_error',
-      `nodeId 非法（非空 1..64 字符，不含空白与路径分隔符，收到：${value}）`,
-      400,
-      {},
-    )
   }
   return trimmed
 }

@@ -5,14 +5,20 @@
  * - `ownerMismatchError`：归属校验拒绝错误构造（`force` 不可越过）。
  */
 import { HelmError } from '@helm/protocol'
+import type { WorktreeInspectResult } from '../contracts.js'
 import {
+  countUnmergedCommits,
   dirExistsOnNode,
   gitExec,
+  resolveMergeReferenceHead,
+  resolveRepoAuthority,
   type GitCapture,
   type GitOkResult,
   type WorktreeNodePorts,
 } from './worktree-git.js'
 import type { ManagedWorktreeRecord, WorktreeStore } from './worktree-store.js'
+
+export type { WorktreeInspectResult }
 
 export interface WorktreeInspectInput {
   worktreeId?: string
@@ -21,23 +27,6 @@ export interface WorktreeInspectInput {
   nodeId?: string
   diff?: boolean
   signal?: AbortSignal
-}
-
-export interface WorktreeInspectResult {
-  record: ManagedWorktreeRecord
-  exists: boolean
-  unavailableReason?: 'removed' | 'directory_missing'
-  currentBranch?: string
-  currentHead?: string
-  branchChanged?: boolean
-  dirtyFiles: string[]
-  dirtyFileCount: number
-  dirtyFilesTruncated: boolean
-  commitsAhead?: number
-  diffStat?: string
-  diffPreview?: string
-  diffTruncated: boolean
-  diffBase: 'baseCommit' | 'HEAD'
 }
 
 const INSPECT_DIRTY_FILES_LIMIT = 200
@@ -132,6 +121,27 @@ export async function inspectWorktree(
     commitsAhead = ahead
   }
 
+  const repoProbeDir = record.repoRoot !== '' ? record.repoRoot : record.path
+  const authority = await resolveRepoAuthority(ports, record.nodeId, repoProbeDir, signal)
+  const referenceHead = await resolveMergeReferenceHead(
+    ports,
+    record.nodeId,
+    authority.mainPath,
+    authority.entries[0]!.head,
+    undefined,
+    record.baseBranch,
+    signal,
+  )
+  const targetRef = branch !== '' && branch !== 'HEAD' ? branch : head
+  const unmergedCommits = await countUnmergedCommits(
+    ports,
+    record.nodeId,
+    authority.mainPath,
+    referenceHead,
+    targetRef,
+    signal,
+  )
+
   const diffRef = record.baseCommit !== '' ? record.baseCommit : 'HEAD'
   const statResult = await run(['diff', '--no-ext-diff', '--no-textconv', '--stat', diffRef], {
     kind: 'chars',
@@ -166,6 +176,7 @@ export async function inspectWorktree(
     dirtyFileCount: statusResult.totalNonEmptyLines,
     dirtyFilesTruncated: statusResult.truncated,
     ...(commitsAhead !== undefined ? { commitsAhead } : {}),
+    unmergedCommits,
     ...(diffStat !== undefined ? { diffStat } : {}),
     ...(diffPreview !== undefined ? { diffPreview } : {}),
     diffTruncated,

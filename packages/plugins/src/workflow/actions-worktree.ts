@@ -116,6 +116,7 @@ export function registerWorktreeActions(
         dirtyFileCount: { type: 'number' },
         dirtyFilesTruncated: { type: 'boolean' },
         commitsAhead: { type: 'number' },
+        unmergedCommits: { type: 'number' },
         diffStat: { type: 'string' },
         diffPreview: { type: 'string' },
         diffTruncated: { type: 'boolean' },

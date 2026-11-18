@@ -38,6 +38,16 @@ export const ACTIVE_SWARM_GROUP_SECTION_ID = 'swarm.active_group'
 /** 协作组成员保留字（禁止作为对等成员短名）。 */
 export const RESERVED_MEMBER_NAMES = new Set(['coordinator', 'all', 'system'])
 
+export const MEMBER_NAME_PATTERN = '^[a-z][a-z0-9_-]{0,31}$'
+export const CHANNEL_NAME_PATTERN = '^[a-z][a-z0-9_-]{0,39}$'
+export const GROUP_ID_PATTERN = '^[A-Za-z0-9_-]{1,64}$'
+export const PROFILE_ID_PATTERN = '^[a-z0-9][a-z0-9-]{0,63}$'
+export const NODE_ID_PATTERN = '^[^\\s/\\\\]{1,64}$'
+
+const MEMBER_NAME_RE = new RegExp(MEMBER_NAME_PATTERN)
+const CHANNEL_NAME_RE = new RegExp(CHANNEL_NAME_PATTERN)
+const GROUP_ID_RE = new RegExp(GROUP_ID_PATTERN)
+
 export const BOARD_POST_KINDS = ['brief', 'handoff', 'review', 'comment', 'blocker', 'done', 'stall'] as const
 export type BoardPostKind = (typeof BOARD_POST_KINDS)[number]
 
@@ -50,11 +60,19 @@ export const COORDINATOR_ESCALATION_KINDS: ReadonlySet<BoardPostKind> = new Set(
 /** 主控汇总微批合并窗口（毫秒）。 */
 export const COORDINATOR_BATCH_WINDOW_MS = 50
 
+/** 全局 index.groups 最多保留的已结单历史组摘要条数（防止 2 MiB 上限膨胀；全量历史按会话走 board_status 懒加载）。 */
+export const MAX_INDEX_CLOSED_GROUPS = 50
+
 /** 协作组主控独享作用域。 */
 export const COORDINATOR_SCOPE: ConversationScope = { tags: [COORDINATOR_TAG] }
 
 /** 协作组全员共享作用域（主控与对等 Worker 共享黑板读写与只读检视）。 */
 export const PARTICIPANT_SCOPE: ConversationScope = { tags: [COORDINATOR_TAG, WORKER_TAG] }
+
+/** 历史面板只读查看作用域（含结单历史主控与已归档成员，仅供工作台 board_read / board_status 回退读取）。 */
+export const HISTORY_PARTICIPANT_SCOPE: ConversationScope = {
+  tags: [COORDINATOR_TAG, ARCHIVED_COORDINATOR_TAG, WORKER_TAG, ARCHIVED_WORKER_TAG],
+}
 
 export const DEFAULT_SWARM_CONFIG: SwarmConfig = {
   maxWorkersPerGroup: 12,
@@ -144,6 +162,7 @@ export interface GroupMemberState {
   lastWakeTaskSeq?: number
   /** 已对该成员发送过单次哑巴退场续催的任务水位（防无限循环）。 */
   silentExitNudgeSeq?: number
+  /** 最近一次唤醒或哑巴续催提交成功后（submitInputGuarded 返回后）记录的 completionSeq 水位，用于重放/静默归因防误判。 */
   lastWakeCompletionSeq?: number
   lastOutboundEdge?: { seq: number; to: string[]; kind: BoardPostKind }
   /** dispatch_worker 工具调用幂等键（`${conversationId}:${callId}`），用于 replay: 'safe' 去重。 */
@@ -295,6 +314,7 @@ export interface CollabGroupRuntime {
     | undefined
   findLatestGroupForConversation(conversationId: number): CollabGroupRecord | undefined
   getPosts(groupId: string): readonly BoardPost[]
+  ensurePostsLoaded(groupId: string): Promise<readonly BoardPost[]>
   buildBoardView(groupId: string): BoardViewDoc
   syncProjections(): void
   onConversationUpsert(conversationId: number): void
@@ -383,10 +403,6 @@ export function isFiniteTime(v: unknown): v is number {
   return typeof v === 'number' && Number.isFinite(v) && v >= 0
 }
 
-export function isAbsoluteTargetPath(value: string): boolean {
-  return value.startsWith('/') || /^[A-Za-z]:[\\/]/.test(value) || value.startsWith('\\\\')
-}
-
 export function isBoardPostKind(v: unknown): v is BoardPostKind {
   return typeof v === 'string' && (BOARD_POST_KINDS as readonly string[]).includes(v)
 }
@@ -438,7 +454,7 @@ export function assertMemberName(value: unknown): string {
     throw new HelmError('validation_error', `成员名必须是字符串（收到：${String(value)}）`, 400, {})
   }
   const trimmed = value.trim()
-  if (!/^[a-z][a-z0-9_-]{0,31}$/.test(trimmed)) {
+  if (!MEMBER_NAME_RE.test(trimmed)) {
     throw new HelmError(
       'validation_error',
       `成员名 '${value}' 非法（需 1..32 位小写字母开头，仅含 [a-z0-9_-]）`,
@@ -463,7 +479,7 @@ export function assertChannelName(value: unknown): string {
     throw new HelmError('validation_error', `频道名必须是字符串（收到：${String(value)}）`, 400, {})
   }
   const trimmed = value.trim()
-  if (!/^[a-z][a-z0-9_-]{0,39}$/.test(trimmed)) {
+  if (!CHANNEL_NAME_RE.test(trimmed)) {
     throw new HelmError(
       'validation_error',
       `频道名 '${value}' 非法（需 1..40 位小写字母开头，仅含 [a-z0-9_-]，不含前导 #）`,
@@ -480,7 +496,7 @@ export function assertGroupId(value: unknown): string {
     throw new HelmError('validation_error', `groupId 必须是字符串（收到：${String(value)}）`, 400, {})
   }
   const trimmed = value.trim()
-  if (!/^[A-Za-z0-9_-]{1,64}$/.test(trimmed)) {
+  if (!GROUP_ID_RE.test(trimmed)) {
     throw new HelmError('validation_error', `groupId '${value}' 非法（需 1..64 位 [A-Za-z0-9_-]）`, 400, { groupId: value })
   }
   return trimmed
@@ -599,7 +615,7 @@ export function assertCollabGroupRecord(value: unknown): CollabGroupRecord {
   const corrupt = (detail: string): HelmError =>
     new HelmError('swarm_doc_corrupt', `协作组 meta.json 损坏：${detail}`, 500, { pluginId: SWARM_PLUGIN_ID })
   if (!isJsonObject(value)) throw corrupt('顶层必须是对象')
-  if (typeof value.id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(value.id)) throw corrupt('id 非法')
+  if (typeof value.id !== 'string' || !GROUP_ID_RE.test(value.id)) throw corrupt('id 非法')
   if (typeof value.title !== 'string' || value.title.trim() === '') throw corrupt('title 非法')
   if (value.objective !== undefined && typeof value.objective !== 'string') throw corrupt('objective 必须是字符串')
   if (!isPosIntId(value.coordinatorConversationId)) throw corrupt('coordinatorConversationId 必须是正整数')

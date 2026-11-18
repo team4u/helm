@@ -210,3 +210,14 @@ test('mutating caller promptGuidelines/spec after registration does not pollute 
   assert.ok(again);
   assert.deepEqual(again.promptGuidelines, ['original guideline']);
 });
+
+test('exposeToPrompt rejects non-booleans at registration and preserves boolean flag on ActionManifest', { timeout: 60_000 }, () => {
+  const cap = new CapabilityRegistry();
+  assert.throws(
+    () => cap.registerAction('p', baseAction({ exposeToPrompt: 'false' as unknown as boolean })),
+    expectHelmError('invalid_action_spec', 'exposeToPrompt'),
+  );
+  cap.registerAction('p', baseAction({ id: 'hidden', exposeToPrompt: false }));
+  const hidden = cap.listActions(['p']).find((m) => m.id === 'hidden');
+  assert.equal(hidden?.exposeToPrompt, false);
+});

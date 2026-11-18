@@ -270,6 +270,7 @@ export class HookBridge {
     const entries: ActionDirectoryEntry[] = []
     for (const manifest of host.listActions()) {
       if (manifest.exposeAsTool === true) continue
+      if (manifest.exposeToPrompt === false) continue
       if (!matchesConversationScope(manifest.scope, summary)) continue
       entries.push({ manifest, cliCommand: actionCliCommand(manifest) })
     }

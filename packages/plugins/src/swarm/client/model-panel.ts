@@ -9,6 +9,7 @@
  */
 import type { ConversationSummary } from '@helm/protocol'
 import {
+  boardProgressOf,
   resolveMemberActivity,
   resolveMemberWorktree,
   sortBoardMembersForDisplay,
@@ -82,7 +83,6 @@ export function buildSwarmPanelModel(
     }
   })
 
-  const activeMembers = view.members.filter((m) => m.lifecycle === 'active')
   const recentPosts = [...view.posts].sort((a, b) => b.seq - a.seq).slice(0, recentLimit).reverse()
 
   return {
@@ -92,10 +92,7 @@ export function buildSwarmPanelModel(
     objective: view.group.objective,
     rows,
     recentPosts,
-    progress: {
-      done: activeMembers.filter((m) => m.liveState === 'done').length,
-      total: activeMembers.length,
-    },
+    progress: boardProgressOf(view.members),
     retainedWorktrees: view.group.retainedWorktrees,
   }
 }

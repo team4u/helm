@@ -87,7 +87,10 @@ export class ConversationContextOps {
    * Fork a new conversation from a specified entry or latest clean anchor: calls SDK fork(entryId),
    * registers helm mirror (inheriting profile/tags/cwd/model/overrides with parent pointing to source), and aligns model.
    */
-  async forkConversation(id: number, opts?: { entryId?: number; title?: string }): Promise<ConversationSummary> {
+  async forkConversation(
+    id: number,
+    opts?: { entryId?: number; title?: string; parentConversationId?: number },
+  ): Promise<ConversationSummary> {
     this.assertOpen()
     const explicitEntryId = opts?.entryId
     if (explicitEntryId !== undefined && (!Number.isSafeInteger(explicitEntryId) || explicitEntryId <= 0)) {
@@ -97,6 +100,22 @@ export class ConversationContextOps {
         400,
         { entryId: explicitEntryId },
       )
+    }
+    const explicitParentId = opts?.parentConversationId
+    if (explicitParentId !== undefined) {
+      if (!Number.isSafeInteger(explicitParentId) || explicitParentId <= 0) {
+        throw new HelmError(
+          'validation_error',
+          `parentConversationId must be a positive safe integer (received ${String(explicitParentId)})`,
+          400,
+          { parentConversationId: explicitParentId },
+        )
+      }
+      if (this.host.store.getConv(explicitParentId) === undefined || this.host.store.isDeleted(explicitParentId)) {
+        throw new HelmError('not_found', `parent conversation not found: ${explicitParentId}`, 404, {
+          parentConversationId: explicitParentId,
+        })
+      }
     }
     const { meta: sourceMeta, conversation: sourceConv } = await this.conversationForContextOp(id)
     let entryId: number
@@ -135,7 +154,7 @@ export class ConversationContextOps {
       title,
       profileId: sourceMeta.profileId,
       tags: [...sourceMeta.tags],
-      parentConversationId: id,
+      parentConversationId: explicitParentId ?? id,
       nodeId: sourceMeta.nodeId ?? 'local',
       cwd: sourceMeta.cwd,
       model: sourceMeta.model,

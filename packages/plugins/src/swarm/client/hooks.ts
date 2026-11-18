@@ -27,11 +27,12 @@ export interface SwarmBoardFallbackState {
  */
 export function useSwarmBoardStatusFallback(
   groupId: string | undefined,
-  options: { conversationId?: number; enabled?: boolean } = {},
+  options: { conversationId?: number; enabled?: boolean; allowConversationLookup?: boolean } = {},
 ): SwarmBoardFallbackState {
   const ctx = usePluginContext()
   const locale = usePluginLocale()
   const enabled = options.enabled !== false
+  const allowConversationLookup = options.allowConversationLookup === true
   const [view, setView] = useState<BoardViewDoc | undefined>(undefined)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | undefined>(undefined)
@@ -43,7 +44,9 @@ export function useSwarmBoardStatusFallback(
   }, [])
 
   useEffect(() => {
-    if (!enabled || groupId === undefined || groupId === '') {
+    const hasGroupId = groupId !== undefined && groupId !== ''
+    const canLookupByConv = allowConversationLookup && options.conversationId !== undefined
+    if (!enabled || (!hasGroupId && !canLookupByConv)) {
       setView(undefined)
       setError(undefined)
       setLoading(false)
@@ -52,8 +55,9 @@ export function useSwarmBoardStatusFallback(
     const current = ++generation.current
     setLoading(true)
     setError(undefined)
+    const input = hasGroupId ? { groupId } : {}
     void ctx
-      .callAction('board_status', { groupId }, { conversationId: options.conversationId })
+      .callAction('board_status', input, { conversationId: options.conversationId })
       .then((raw) => {
         if (generation.current !== current) return
         const parsed = parseBoardView(raw)
@@ -72,7 +76,7 @@ export function useSwarmBoardStatusFallback(
       .finally(() => {
         if (generation.current === current) setLoading(false)
       })
-  }, [enabled, groupId, options.conversationId, ctx, locale, nonce])
+  }, [enabled, groupId, allowConversationLookup, options.conversationId, ctx, locale, nonce])
 
   return { view, loading, error, reload }
 }
@@ -81,29 +85,46 @@ export interface SwarmBoardReadState {
   posts: BoardPost[]
   loading: boolean
   error: string | undefined
+  retry: () => void
 }
 
 /**
  * On-demand `board_read` history loader for the "show full record" affordance
- * in the workbench panel (loads once per group; callers merge into the view).
+ * in the workbench panel (resets on group switch, tracks headSeq updates, and
+ * allows retries on failure; callers merge into the view).
  */
 export function useSwarmBoardReadOnce(
   groupId: string | undefined,
   open: boolean,
-  options: { conversationId?: number } = {},
+  options: { conversationId?: number; headSeq?: number } = {},
 ): SwarmBoardReadState {
   const ctx = usePluginContext()
   const locale = usePluginLocale()
   const [posts, setPosts] = useState<BoardPost[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | undefined>(undefined)
+  const [nonce, setNonce] = useState(0)
   const generation = useRef(0)
+  const lastGroupId = useRef<string | undefined>(undefined)
   const loadedKey = useRef<string | undefined>(undefined)
 
+  const retry = useCallback(() => {
+    loadedKey.current = undefined
+    setNonce((n) => n + 1)
+  }, [])
+
   useEffect(() => {
+    if (lastGroupId.current !== groupId) {
+      lastGroupId.current = groupId
+      loadedKey.current = undefined
+      generation.current += 1
+      setPosts([])
+      setError(undefined)
+      setLoading(false)
+    }
     if (!open || groupId === undefined || groupId === '') return
-    if (loadedKey.current === groupId) return
-    loadedKey.current = groupId
+    const targetKey = `${groupId}:${options.headSeq ?? 0}`
+    if (loadedKey.current === targetKey) return
     const current = ++generation.current
     setLoading(true)
     setError(undefined)
@@ -112,10 +133,11 @@ export function useSwarmBoardReadOnce(
       .then((raw) => {
         if (generation.current !== current) return
         const parsed = parseBoardReadPosts(raw)
-        if (parsed.length === 0 && !Array.isArray((raw as { posts?: unknown })?.posts)) {
+        if (parsed === undefined) {
           setError(panelStatusInvalid(locale))
           return
         }
+        loadedKey.current = targetKey
         setPosts(parsed)
       })
       .catch((err: unknown) => {
@@ -125,7 +147,7 @@ export function useSwarmBoardReadOnce(
       .finally(() => {
         if (generation.current === current) setLoading(false)
       })
-  }, [open, groupId, options.conversationId, ctx, locale])
+  }, [open, groupId, options.headSeq, options.conversationId, ctx, locale, nonce])
 
-  return { posts, loading, error }
+  return { posts, loading, error, retry }
 }

@@ -88,7 +88,7 @@ Swarm 不再拥有独立的全屏 Board 控制台或顶栏入口：所有 UI 都
 | 内容 | 位置 |
 | :--- | :--- |
 | 插件入口与 UI 注册 | `packages/plugins/src/swarm.ts`、`packages/plugins/src/swarm/ui.ts` |
-| 单真源黑板存储 / 寻址 / 静默归因 / 恢复对账 / 动作 / 钩子 | `packages/plugins/src/swarm/`（`contracts.ts`、`action-schemas.ts`、`worktree-bridge.ts`、`group-store.ts`、`board-router.ts`、`board-stall.ts`、`recovery.ts`、`settlement.ts`、`actions.ts`、`hooks.ts`、`assets.ts`、`assets/`） |
+| 单真源黑板存储 / 寻址 / 静默归因 / 恢复对账 / 动作 / 钩子 | `packages/plugins/src/swarm/`（`contracts.ts`、`action-schemas.ts`、`worktree-bridge.ts`、`group-store.ts`、`board-router.ts`、`board-stall.ts`、`recovery.ts`、`settlement.ts`、`actions.ts`、`actions-group.ts`、`actions-worker.ts`、`actions-board.ts`、`hooks.ts`、`assets.ts`、`assets/`） |
 | Web 客户端组件与纯模型 | `packages/plugins/src/swarm/client/`（`index.tsx`、`SwarmToolView.tsx`、`SwarmActiveTray.tsx`、`SwarmWorkbenchPanel.tsx`、`BoardReceipts.tsx`、`board-model.ts`、`model-tool-view.ts`、`model-tray.ts`、`model-panel.ts`、`hooks.ts`、`models.ts`、`copy.ts`、`styles.css`） |
 | 测试 | `packages/plugins/test/swarm.test.ts`、`packages/plugins/test/swarm.integration.test.ts`、`packages/web/test/swarm-client-interactions.test.tsx` |
 

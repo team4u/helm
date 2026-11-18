@@ -131,6 +131,15 @@ export const TRAY_COLLAPSE = L('Collapse', '收起')
 export const TRAY_EXPAND = L('Expand', '展开')
 export const TRAY_WORKBENCH = L('Workbench', '工作台')
 export const ACTION_ABORT = L('Abort', '中止')
+export const TRAY_AWAITING_APPROVAL = L('Awaiting approval', '待审批')
+export const TRAY_AWAITING_HUMAN = L('Waiting for confirmation', '等待确认')
+export const TRAY_OUTPUT_TAG = L('Output', '输出')
+export const TRAY_THINKING_TAG = L('Thinking', '思考')
+export const TRAY_LOAD_FAILED_TAG = L('Load failed', '加载失败')
+
+export function trayParallelToolsTag(count: number, locale: HelmLocale = DEFAULT_HELM_LOCALE): string {
+  return resolveLocalizedText(L(`${count} tools running`, `并行 ${count} 个工具`), locale)
+}
 
 export function trayCount(blocked: number, working: number, locale: HelmLocale = DEFAULT_HELM_LOCALE): string {
   if (blocked > 0) {
