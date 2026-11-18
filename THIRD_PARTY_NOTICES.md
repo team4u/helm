@@ -69,6 +69,22 @@ SOFTWARE.
 
 ---
 
+## tar（launcher npm 制品内联）
+
+- **来源**：<https://github.com/isaacs/node-tar>
+- **版本**：7.5.23（npm 包 `tar@7.5.23`）
+- **许可**：Blue Oak Model License 1.0.0（原文见 npm 包随附 LICENSE）
+- **用途**：`@helm/hub-launcher` 的 payload staging 用 tar 解包 Hub payload
+  tarball（安全边界：仅接受 `package/` 前缀内的常规文件/目录，拒绝链接与
+  路径逃逸）。`packages/payload` 组装的 launcher npm 制品
+  （`dist-launcher/main.js` 单文件 bundle）内联其预打包发布物
+  `dist/esm/index.min.js`；该发布物本身已嵌入 tar 的依赖闭包
+  （`@isaacs/fs-minipass` 4.0.1 · ISC、`chownr` 3.0.0 · BlueOak-1.0.0、
+  `minipass` 7.1.3 · BlueOak-1.0.0、`minizlib` 3.1.0 · MIT、
+  `yallist` 5.0.0 · BlueOak-1.0.0），bundle 中不存在它们的独立副本。
+
+---
+
 ## @earendil-works/pi-durable · pi-ai · chord
 
 - **许可**：见各包随附 LICENSE（helm 以 npm 依赖方式使用，非源码移植）。

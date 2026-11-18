@@ -25,6 +25,11 @@
  *   web/dist/                      Vite output (start.mjs points at it explicitly via HELM_WEB_DIST_DIR)
  *   start.mjs + manifest.json      zero-dependency launch entry and the version/entry/checksum contract
  *
+ * The same build also assembles the stable launcher artifact (see src/assemble-launcher.mjs):
+ * dist-launcher/ is a second publish package — a zero-dependency, single-file bundle of
+ * helm-hub-launcher + @helm/update that installs globally via one `npm install -g`. The Hub payload
+ * contract above is unchanged by that artifact; a missing launcher package aborts the build.
+ *
  * Note: `@helm/plugin-client` is a browser-only SDK already bundled into `web/dist` and virtualized by
  * `@helm/plugin-build` via `globalThis.__helm_shared_plugin_client`, so neither `@helm/plugin-client`
  * nor its browser UI dependency tree (`react`, `lucide-react`, `@radix-ui/*`, markdown) enters the Hub
@@ -40,6 +45,7 @@ import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, write
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { scanPeerOverrides, resolveDepRealDir } from './src/dep-closure.mjs';
+import { assembleLauncherArtifact } from './src/assemble-launcher.mjs';
 
 const payloadPkgRoot = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(payloadPkgRoot, '../..');
@@ -306,3 +312,11 @@ console.log(`[payload] root dependencies: ${Object.keys(rootDependencies).length
 console.log(`[payload] ${stats.files} files, ${(stats.bytes / 1024 / 1024).toFixed(1)} MiB total`);
 console.log(`[payload] runtime asset directories: ${copiedAssets.length}: ${copiedAssets.join(', ')}`);
 console.log('[payload] note: node_modules is not bundled; consumers unpack the tgz files and run npm install --omit=dev --ignore-scripts to complete dependencies (verified by start.mjs check)');
+
+// --- Stable launcher artifact (second publish entry): a hard release input — a missing launcher
+// package or broken bundle contract aborts the build inside assemble-launcher.mjs. ---
+await assembleLauncherArtifact({
+  repoRoot,
+  version: payloadPkg.version,
+  enginesNode: distPackageJson.engines.node,
+});

@@ -19,6 +19,7 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/cli/package.json packages/cli/
 COPY packages/env-io/package.json packages/env-io/
 COPY packages/hub/package.json packages/hub/
+COPY packages/hub-launcher/package.json packages/hub-launcher/
 COPY packages/kernel/package.json packages/kernel/
 COPY packages/node/package.json packages/node/
 COPY packages/payload/package.json packages/payload/
@@ -26,15 +27,20 @@ COPY packages/plugin-build/package.json packages/plugin-build/
 COPY packages/plugin-client/package.json packages/plugin-client/
 COPY packages/plugins/package.json packages/plugins/
 COPY packages/protocol/package.json packages/protocol/
+COPY packages/update/package.json packages/update/
 COPY packages/web/package.json packages/web/
 
 RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store \
     pnpm install --frozen-lockfile
 
 # 2. Copy sources and build the Hub runtime and the Web frontend static assets in topological order
+#    (@helm/update precedes @helm/node: the node daemon consumes the shared update engine. The
+#    launcher package is installed for lockfile completeness but not built: the container runs the
+#    Hub from source, and release management belongs to the host-side launcher.)
 COPY . .
 RUN pnpm --filter @helm/protocol \
          --filter @helm/env-io \
+         --filter @helm/update \
          --filter @helm/node \
          --filter @helm/plugin-build \
          --filter @helm/plugin-client \
