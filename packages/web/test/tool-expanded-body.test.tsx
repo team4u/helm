@@ -9,7 +9,8 @@
  * 4. bash：命令复制头、输出默认尾 8 行、已折叠前 N 行与展开全部、退出码；
  * 5. 通用工具：键值展示 + 原始数据展开保留完整 JSON 入参与原始输出；
  * 6. TraceRow：无插件接管可点击展开内置体；tool.view inline 保留原始数据
- *    入口，插件视图不被内置体替换；单行统计 +N −N / N 行。
+ *    入口，插件视图不被内置体替换；单行统计 +N −N / N 行；运行中行
+ *    右侧仅实时耗时秒表（startedAt 锚点，无锚点留空不编造）。
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
@@ -538,6 +539,31 @@ test('TraceRow：无插件接管时点击展开内置展开体，再点击收起
       row.click()
     })
     assert.ok(m.host.querySelector('.trace-expanded-body') === null, '再次点击收起')
+  } finally {
+    m.unmount()
+  }
+})
+
+test('TraceRow：运行中行右侧仅显示实时耗时秒表，无锚点留空不编造', { timeout: 60_000 }, async () => {
+  const m = createMount()
+  try {
+    // 2 分钟锚点：分钟档取整对渲染毫秒级延迟不敏感（120.0s~120.9s 均为 2m0s）
+    await m.render(rowUi(trace({ status: 'running', startedAt: Date.now() - 120_000 })))
+    const right = m.host.querySelector('.trace-row-right')
+    assert.ok(right, '运行中行右侧状态区存在')
+    // 左侧转圈已表意运行中：右侧不再重复状态文案，只显示秒表
+    assert.match(right!.textContent ?? '', /^\d+m\d+s$/, '仅实时耗时')
+    assert.ok(right!.querySelector('.tabular-nums'), '耗时使用等宽数字防抖宽')
+
+    // entry 未到达的短暂窗口：无 startedAt 时不编造起点，右侧留空
+    await m.render(rowUi(trace({ status: 'running' })))
+    const noAnchor = m.host.querySelector('.trace-row-right')
+    assert.equal(noAnchor?.textContent ?? '', '')
+
+    // 工具落定后回退为累计耗时
+    await m.render(rowUi(trace({ status: 'done', durationMs: 1500 })))
+    const settled = m.host.querySelector('.trace-row-right')
+    assert.match(settled?.textContent ?? '', /1\.5s/)
   } finally {
     m.unmount()
   }

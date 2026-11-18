@@ -57,6 +57,8 @@ export interface MarkdownViewProps {
   conversationId?: number
   /** true = streaming body: completed prefix blocks freeze their parsed form for reuse, only the trailing mutable block is re-parsed. */
   streaming?: boolean
+  /** true = render single newlines as hard line breaks (user-authored bodies keep their typed line structure). */
+  breaks?: boolean
   /** Relative POSIX directory within the workspace (e.g. 'docs') used as base dir when resolving relative links/images in nested Markdown previews. */
   workspaceBaseDir?: string
 }

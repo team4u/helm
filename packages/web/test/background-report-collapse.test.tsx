@@ -222,8 +222,9 @@ test('HumanMessage: 所有来源和模式的待处理卡片在折叠、展开时
           assert.equal(computed.boxShadow, 'none')
           assert.equal(Number(computed.opacity || '1'), 1)
           assert.equal(computed.fontSize, '15px')
-          const body = pill.querySelector('span')
-          assert.ok(body)
+          // 正文元素：折叠态为纯文本预览 span，非折叠/展开态为 Markdown 正文（作用域样式对齐胶囊前景色与字号）。
+          const body = pill.querySelector('.msg-human-collapsed-text') ?? pill.querySelector('.msg-ai-body')
+          assert.ok(body, '胶囊内应存在正文元素（折叠预览或 Markdown 正文）')
           assert.equal(getComputedStyle(body).color, expectedColor)
           assert.equal(getComputedStyle(body).fontSize, '15px')
         }

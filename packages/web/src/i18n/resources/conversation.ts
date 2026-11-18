@@ -76,7 +76,6 @@ export const conversationMessages = {
   'conv.timeline.cardsLabel': { en: 'Timeline cards', 'zh-CN': '时间线卡片' },
 
   // --- Tool trace rows ----------------------------------------------------------
-  'conv.tool.statusRunning': { en: 'Running', 'zh-CN': '运行中' },
   'conv.tool.statusFailed': { en: 'Failed', 'zh-CN': '失败' },
   'conv.tool.statusCompleted': { en: 'Completed', 'zh-CN': '完成' },
   'conv.tool.viewLabel': { en: 'Tool view {name}', 'zh-CN': '工具视图 {name}' },

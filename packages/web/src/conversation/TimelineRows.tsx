@@ -1,4 +1,5 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
 import type { ToolViewSpec } from '@helm/protocol/browser'
 import { HelmIcon } from '@helm/plugin-client'
 import { PluginUiView } from '../ui/PluginUiView.js'
@@ -21,6 +22,19 @@ import { Tooltip } from '../ui/Tooltip.js'
 // 工具单行轨迹 / 思考折叠组（ConversationTimeline 的行级渲染单元）
 // ---------------------------------------------------------------------------
 
+/**
+ * 运行中工具的实时已耗时秒表：起点锚定持久化 tool-call entry 时间（服务器时钟），
+ * 本地每秒跳字，工具落定随行卸载（无孤儿定时器）。tabular-nums 防止秒位跳动抖宽。
+ */
+function RunningElapsed({ startedAt }: { startedAt: number }): ReactNode {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(timer)
+  }, [])
+  return <span className="tabular-nums">{formatDurationMs(Math.max(0, now - startedAt))}</span>
+}
+
 export function TraceRow({
   tool,
   conversationId,
@@ -37,9 +51,13 @@ export function TraceRow({
   const { t } = useWebLocale()
 
   const rowFailed = Boolean(tool.isError)
-  const right =
+  // 运行中行右侧只显示实时已耗时秒表（左侧转圈已表意，与落定后的纯耗时形态一致）；
+  // entry 尚未到达的短暂窗口没有诚实的起点锚，右侧留空，不编造起始时间。
+  const right: ReactNode =
     tool.status === 'running'
-      ? t('conv.tool.statusRunning')
+      ? tool.startedAt !== undefined
+        ? <RunningElapsed startedAt={tool.startedAt} />
+        : ''
       : rowFailed && tool.durationMs === undefined
         ? t('conv.tool.statusFailed')
         : tool.durationMs !== undefined

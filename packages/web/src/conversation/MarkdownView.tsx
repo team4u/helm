@@ -2,6 +2,7 @@ import { createContext, Fragment, memo, useContext, useEffect, useMemo, useRef, 
 import type { ReactNode } from 'react'
 import Markdown, { type Components, type Options } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import remarkBreaks from 'remark-breaks'
 import { SyntaxCode } from './SyntaxCode.js'
 import type { CodeLineRange } from './syntax-code-model.js'
 import { CopyButton, HelmIcon, markdownUrlTransform, parseArtifactUrl } from '@helm/plugin-client'
@@ -22,8 +23,9 @@ import {
   splitStreamingMarkdownBlocks,
 } from './markdown-model.js'
 
-/** 整篇渲染（非流式与 gate 回退路径）复用同一无状态插件组。 */
+/** 整篇渲染（非流式与 gate 回退路径）复用同一无状态插件组；breaks 路径追加 remark-breaks（用户手输正文单换行即换行）。 */
 const wholeDocumentRemarkPlugins = [remarkGfm, remarkHeadingIndices]
+const wholeDocumentBreaksRemarkPlugins = [remarkGfm, remarkBreaks, remarkHeadingIndices]
 
 /**
  * 流式尾部块媒体抑制上下文：流式输出期间，仅尾部仍在增长的块设为 true，
@@ -314,6 +316,8 @@ interface StreamingMarkdownBlockProps {
   headingOffset: number
   components: Components
   deferMediaFetch: boolean
+  /** 单换行渲染为硬换行（用户手输正文）；与整篇路径的 breaks 语义一致。 */
+  breaks: boolean
 }
 
 const StreamingMarkdownBlock = memo(function StreamingMarkdownBlock({
@@ -321,8 +325,11 @@ const StreamingMarkdownBlock = memo(function StreamingMarkdownBlock({
   headingOffset,
   components,
   deferMediaFetch,
+  breaks,
 }: StreamingMarkdownBlockProps): ReactNode {
-  const remarkPlugins: Options['remarkPlugins'] = [remarkGfm, [remarkHeadingIndices, { offset: headingOffset }]]
+  const remarkPlugins: Options['remarkPlugins'] = breaks
+    ? [remarkGfm, remarkBreaks, [remarkHeadingIndices, { offset: headingOffset }]]
+    : [remarkGfm, [remarkHeadingIndices, { offset: headingOffset }]]
   return (
     <DeferWorkspaceMediaContext.Provider value={deferMediaFetch}>
       <Markdown remarkPlugins={remarkPlugins} urlTransform={markdownUrlTransform} components={components}>
@@ -336,6 +343,7 @@ export const MarkdownView = memo(function MarkdownView({
   text,
   conversationId,
   streaming,
+  breaks,
   workspaceBaseDir,
 }: MarkdownViewProps): ReactNode {
   const { setActiveModal } = useStoreActions()
@@ -496,7 +504,7 @@ export const MarkdownView = memo(function MarkdownView({
     return (
       <div className="msg-ai-body">
         <Markdown
-          remarkPlugins={wholeDocumentRemarkPlugins}
+          remarkPlugins={breaks === true ? wholeDocumentBreaksRemarkPlugins : wholeDocumentRemarkPlugins}
           urlTransform={markdownUrlTransform}
           components={components}
         >
@@ -541,6 +549,7 @@ export const MarkdownView = memo(function MarkdownView({
             headingOffset={offsets[index] ?? 0}
             components={components}
             deferMediaFetch={streaming === true && index === blocks.length - 1}
+            breaks={breaks === true}
           />
         </Fragment>
       ))}

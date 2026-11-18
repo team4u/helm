@@ -26,6 +26,7 @@ import { useWebLocale } from '../i18n/use-web-locale.js'
 import type { WebMessageTranslator } from '../i18n/catalog.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
 import { AssistantTurnView, AssistantModelBoundary } from './AssistantTurn.js'
+import { MarkdownView } from './MarkdownView.js'
 import {
   buildActiveEntryIndex,
   buildAssistantModelBoundaries,
@@ -298,6 +299,20 @@ function HumanMessage({
     }
   }
 
+  // 折叠预览是截断的纯文本片段（不可半渲染 Markdown）；正文与展开态走宿主标准 Markdown 渲染，
+  // collapseBodyId 始终落在当前可见正文元素上（aria-controls 在折叠/展开两态都有真实目标）。
+  const markdownBody = <MarkdownView text={item.text} conversationId={conversation.id} breaks />
+  const bodyContent =
+    queuedCollapse?.collapsed === true && !longOpen ? (
+      <span id={collapseBodyId} className="msg-human-collapsed-text">
+        {queuedCollapse.preview}
+      </span>
+    ) : queuedCollapse !== undefined ? (
+      <div id={collapseBodyId}>{markdownBody}</div>
+    ) : (
+      markdownBody
+    )
+
   return (
     <div className={`msg-human-row${item.origin !== 'human' ? ' msg-human-row-external' : ''}`} tabIndex={0}>
       {item.queuedMode !== undefined ? (
@@ -312,12 +327,7 @@ function HumanMessage({
         </span>
       ) : null}
       <div className={`msg-human-pill selectable${item.queuedMode !== undefined ? ' msg-human-pill-queued' : ''}${queuedCollapse?.collapsed === true ? ' msg-human-pill-collapsible' : ''}`}>
-        <span
-          id={collapseBodyId}
-          className={queuedCollapse?.collapsed === true && !longOpen ? 'msg-human-collapsed-text' : undefined}
-        >
-          {queuedCollapse?.collapsed === true && !longOpen ? queuedCollapse.preview : item.text}
-        </span>
+        {bodyContent}
         {queuedCollapse?.collapsed === true ? (
           <button
             type="button"

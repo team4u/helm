@@ -315,8 +315,71 @@
   color: var(--fg);
   font-size: 15px;
   line-height: 1.55;
-  white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* 胶囊内 Markdown 正文：对齐胶囊前景色与字号（queued/external 变体按原胶囊覆盖顺序），
+   压缩块级间距使短消息与纯文本时代的胶囊高度一致 */
+.msg-human-pill .msg-ai-body {
+  color: var(--fg);
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+.msg-human-row-external .msg-human-pill .msg-ai-body {
+  color: var(--fg-secondary);
+  font-size: 13.5px;
+}
+
+.msg-human-pill.msg-human-pill-queued .msg-ai-body {
+  color: var(--fg-muted);
+  font-size: 15px;
+}
+
+.msg-human-pill .msg-ai-body > :first-child {
+  margin-top: 0;
+}
+
+.msg-human-pill .msg-ai-body > :last-child {
+  margin-bottom: 0;
+}
+
+.msg-human-pill .msg-ai-body p {
+  margin: 0 0 6px;
+}
+
+.msg-human-pill .msg-ai-body ul,
+.msg-human-pill .msg-ai-body ol {
+  margin: 0 0 6px;
+}
+
+.msg-human-pill .msg-ai-body li > p {
+  margin: 0 0 2px;
+}
+
+.msg-human-pill .msg-ai-body h1,
+.msg-human-pill .msg-ai-body h2,
+.msg-human-pill .msg-ai-body h3,
+.msg-human-pill .msg-ai-body h4 {
+  margin: 10px 0 4px;
+}
+
+.msg-human-pill .msg-ai-body h1 {
+  font-size: 17px;
+}
+
+.msg-human-pill .msg-ai-body h2 {
+  font-size: 16px;
+  padding-bottom: 2px;
+}
+
+.msg-human-pill .msg-ai-body h3,
+.msg-human-pill .msg-ai-body h4 {
+  font-size: 15px;
+}
+
+.msg-human-pill .msg-ai-body hr {
+  margin: 8px 0;
 }
 
 /* 外部注入输入（智能体汇报 / 触发器）：左对齐中性块，区分人类主动提问胶囊 */
@@ -368,6 +431,7 @@
   -webkit-box-orient: vertical;
   overflow: hidden;
   word-break: break-word;
+  white-space: pre-wrap;
   min-width: 0;
 }
 

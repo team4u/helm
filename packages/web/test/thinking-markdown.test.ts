@@ -1,9 +1,14 @@
+/**
+ * 时间线 Markdown 渲染契约测试：
+ * - 思考折叠组（ThinkingRow / StepGroup）展开正文走宿主 MarkdownView；
+ * - 人类消息胶囊正文同样走 MarkdownView（inline 语法解析、单换行硬换行、胶囊作用域样式继承）。
+ */
 import assert from 'node:assert/strict'
 import { readHostStyles } from './helpers/host-styles.js'
 import { test } from 'node:test'
 import * as React from 'react'
 import { renderToString } from 'react-dom/server'
-import type { ConversationSummary } from '@helm/protocol'
+import type { ConversationEntry, ConversationSummary } from '@helm/protocol'
 import { makeTestStore as makeMockStore } from './helpers/store.js'
 import { HostStoreProviders } from './helpers/host-store.js'
 
@@ -26,6 +31,50 @@ test('消息正文与气泡宽度样式契约：AI 正文段落与列表解除 7
   assert.doesNotMatch(stylesCss, /\.msg-ai-body\s+ul[\s\S]*?max-width:\s*74ch/)
   // 验证 .msg-human-pill 放宽至 min(88%, 840px)
   assert.match(stylesCss, /\.msg-human-pill\s*\{[^}]*max-width:\s*min\(88%,\s*840px\)/)
+})
+
+test('人类胶囊 Markdown 样式契约：正文对齐胶囊前景色与字号，胶囊本体不再 pre-wrap（换行交给硬换行）', { timeout: 60_000 }, () => {
+  assert.match(stylesCss, /\.msg-human-pill\s+\.msg-ai-body\s*\{[^}]*color:\s*var\(--fg\)/)
+  assert.match(stylesCss, /\.msg-human-pill\s+\.msg-ai-body\s*\{[^}]*font-size:\s*15px/)
+  assert.match(stylesCss, /\.msg-human-pill\.msg-human-pill-queued\s+\.msg-ai-body\s*\{[^}]*color:\s*var\(--fg-muted\)/)
+  assert.match(stylesCss, /\.msg-human-row-external\s+\.msg-human-pill\s+\.msg-ai-body\s*\{[^}]*color:\s*var\(--fg-secondary\)/)
+  // Markdown 渲染后胶囊自身不再保留 pre-wrap（避免块间空白二次换行）
+  assert.doesNotMatch(stylesCss, /\.msg-human-pill\s*\{[^}]*white-space:\s*pre-wrap/)
+  // 折叠预览仍是纯文本，需要显式 pre-wrap 保留行结构
+  assert.match(stylesCss, /\.msg-human-collapsed-text\s*\{[^}]*white-space:\s*pre-wrap/)
+})
+
+test('HumanMessage 组件渲染：胶囊正文走 MarkdownView，inline 语法解析且单换行为硬换行', { timeout: 60_000 }, () => {
+  const conv: ConversationSummary = {
+    id: 1, profileId: 'assistant', title: '测试人类胶囊', tags: [], cwd: '/tmp',
+    model: 'faux/faux-1', thinkingLevel: 'off', status: 'idle', stateChangeSeq: 1,
+    completionSeq: 0, unread: false, pinned: false, pendingAskCount: 0,
+    createdAt: 0, updatedAt: 0,
+  }
+  const entries: ConversationEntry[] = [
+    {
+      id: '21',
+      kind: 'helm.input',
+      data: { id: 'h-1', text: '**加粗** 与 `code`，见 [链接](https://example.com)\n第二行续写', origin: 'human', createdAt: 1 },
+    },
+  ]
+  const html = renderToString(
+    e(
+      HostStoreProviders,
+      { value: makeMockStore({ conversations: [conv], conversationDetails: { 1: { ...conv, entries } } }) },
+      e(ConversationTimeline, { conversation: conv, detailEntries: entries, onRequestEdit: () => {} }),
+    ),
+  )
+
+  // 1. 胶囊内挂载 Markdown 正文容器
+  assert.match(html, /msg-human-pill[^>]*>[\s\S]*?<div class="msg-ai-body">/)
+  // 2. inline 语法被解析（非原样星号/反引号）
+  assert.match(html, /<strong>加粗<\/strong>/)
+  assert.match(html, /<code>code<\/code>/)
+  assert.match(html, /href="https:\/\/example\.com"/)
+  // 3. 单换行渲染为 <br>（保持纯文本时代的行结构视觉）
+  assert.match(html, /第二行续写/)
+  assert.match(html, /<br\s*\/?>/)
 })
 
 test('ThinkingRow 组件渲染：展开时使用 MarkdownView 渲染标题与列表并具备 thinking-expanded-body 类', { timeout: 60_000 }, () => {

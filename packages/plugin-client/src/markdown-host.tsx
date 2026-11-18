@@ -23,6 +23,7 @@ export function MarkdownView(props: MarkdownViewProps): ReactNode {
       text={props.text}
       conversationId={props.conversationId}
       streaming={props.streaming}
+      breaks={props.breaks}
       workspaceBaseDir={props.workspaceBaseDir}
     />
   )
