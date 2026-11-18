@@ -120,6 +120,29 @@ export interface SwarmIndexDoc {
   groups: CollabGroupSummary[]
 }
 
+export interface InflightWakeupIntent {
+  requestId: string
+  fromSeq: number
+  toSeq: number
+  baseCompletionSeq: number
+  baseLastEntryId: number
+}
+
+export interface InflightNudgeIntent {
+  requestId: string
+  taskSeq: number
+  baseCompletionSeq: number
+  baseLastEntryId: number
+}
+
+export interface InflightReportIntent {
+  requestId: string
+  fromSeq: number
+  toSeq: number
+  baseCompletionSeq: number
+  baseLastEntryId: number
+}
+
 export interface GroupMemberState {
   name: string
   conversationId: number
@@ -139,7 +162,17 @@ export interface GroupMemberState {
   lastWakeTaskSeq?: number
   /** 已对该成员发送过单次哑巴退场续催的任务水位（防无限循环）。 */
   silentExitNudgeSeq?: number
+  /** 最近一次唤醒或哑巴续催提交成功后（submitInputGuarded 返回后）记录的 completionSeq 水位，用于重放/静默归因防误判。 */
+  lastWakeCompletionSeq?: number
   lastOutboundEdge?: { seq: number; to: string[]; kind: BoardPostKind }
+  /** dispatch_worker 工具调用幂等键（`${conversationId}:${callId}`），用于 replay: 'safe' 去重。 */
+  dispatchKey?: string
+  /** 该成员入组首帖（brief）序号，供 dispatch_worker 重放时 O(1) 还原返回值。 */
+  briefPostSeq?: number
+  /** 尚待提交或尚待与内核状态对账的在途唤醒意图（先于 submitInput 落盘，防强杀死锁）。 */
+  inflightWakeup?: InflightWakeupIntent
+  /** 尚待提交或尚待与内核状态对账的在途哑巴续催意图。 */
+  inflightNudge?: InflightNudgeIntent
   createdAt: number
   archivedAt?: number
 }
@@ -163,12 +196,16 @@ export interface CollabGroupRecord {
   title: string
   objective?: string
   coordinatorConversationId: number
+  /** create_group 工具调用幂等键（`${conversationId}:${callId}`），用于 replay: 'safe' 去重。 */
+  createKey?: string
   status: CollabGroupStatus
   channels: CollabChannelSpec[]
   members: GroupMemberState[]
   headSeq: number
   coordinatorNotifiedSeq: number
   coordinatorPendingSeq: number
+  /** 尚待提交或尚待与内核状态对账的主控在途汇总意图。 */
+  inflightReport?: InflightReportIntent
   lastStallWatermark?: string
   coordinatorDetached?: boolean
   /** keepWorktree: true 结单时固化的待主控合入分支清单。 */
@@ -199,6 +236,8 @@ export interface BoardPost {
   kind: BoardPostKind
   refs: number[]
   body: string
+  /** board_post 工具调用幂等键（`${conversationId}:${callId}`），用于 replay: 'safe' 去重。 */
+  idempotencyKey?: string
   worktreeSnapshot?: WorktreeHandoffSnapshot
   createdAt: number
 }
@@ -261,6 +300,8 @@ export interface SwarmDocs {
 /** 协作组运行时存储与唤醒调度接口（由 group-store.ts 实现）。 */
 export interface CollabGroupRuntime {
   loadAllFromDisk(): Promise<void>
+  reconcileOrphansOnBoot(): Promise<void>
+  reconcileRecoveredGroups(): Promise<void>
   stopAndClear(): Promise<void>
   liveTaskLabels(): string[]
   inUseItems(): Array<{ kind: string; id: string; label: string }>
@@ -283,6 +324,7 @@ export interface CollabGroupRuntime {
     title: string
     objective?: string
     channels?: Array<{ name: string; topic?: string }>
+    createKey?: string
   }): Promise<CollabGroupRecord>
   updateGroup(
     groupId: string,
@@ -308,6 +350,7 @@ export interface CollabGroupRuntime {
       kind: BoardPostKind
       refs: number[]
       body: string
+      idempotencyKey?: string
       worktreeSnapshot?: WorktreeHandoffSnapshot
       lastStallWatermarkAfterPost?: string
     },
@@ -541,6 +584,33 @@ export function assertIndexDoc(value: unknown): SwarmIndexDoc {
   return value as unknown as SwarmIndexDoc
 }
 
+function isNonEmptyString(v: unknown): v is string {
+  return typeof v === 'string' && v.trim() !== ''
+}
+
+function assertInflightBase(
+  raw: unknown,
+  label: string,
+  corrupt: (detail: string) => HelmError,
+): Record<string, unknown> {
+  if (!isJsonObject(raw)) throw corrupt(`${label} 必须是对象`)
+  if (!isNonEmptyString(raw.requestId)) throw corrupt(`${label}.requestId 非法`)
+  if (!isNonNegInt(raw.baseCompletionSeq)) throw corrupt(`${label}.baseCompletionSeq 非法`)
+  if (!isNonNegInt(raw.baseLastEntryId)) throw corrupt(`${label}.baseLastEntryId 非法`)
+  return raw
+}
+
+function assertInflightRangeIntent(
+  raw: unknown,
+  label: string,
+  corrupt: (detail: string) => HelmError,
+): void {
+  const obj = assertInflightBase(raw, label, corrupt)
+  if (!isPosIntId(obj.fromSeq) || !isPosIntId(obj.toSeq) || obj.fromSeq > obj.toSeq) {
+    throw corrupt(`${label} seq 范围非法`)
+  }
+}
+
 export function assertCollabGroupRecord(value: unknown): CollabGroupRecord {
   const corrupt = (detail: string): HelmError =>
     new HelmError('swarm_doc_corrupt', `协作组 meta.json 损坏：${detail}`, 500, { pluginId: SWARM_PLUGIN_ID })
@@ -549,6 +619,7 @@ export function assertCollabGroupRecord(value: unknown): CollabGroupRecord {
   if (typeof value.title !== 'string' || value.title.trim() === '') throw corrupt('title 非法')
   if (value.objective !== undefined && typeof value.objective !== 'string') throw corrupt('objective 必须是字符串')
   if (!isPosIntId(value.coordinatorConversationId)) throw corrupt('coordinatorConversationId 必须是正整数')
+  if (value.createKey !== undefined && !isNonEmptyString(value.createKey)) throw corrupt('createKey 非法')
   if (value.status !== 'active' && value.status !== 'closed') throw corrupt('status 非法')
   if (!Array.isArray(value.channels) || value.channels.length === 0) throw corrupt('channels 必须是非空数组')
   const seenChannels = new Set<string>()
@@ -586,11 +657,20 @@ export function assertCollabGroupRecord(value: unknown): CollabGroupRecord {
       (m.lastPostSeq !== undefined && !isPosIntId(m.lastPostSeq)) ||
       (m.lastWakeTaskSeq !== undefined && !isPosIntId(m.lastWakeTaskSeq)) ||
       (m.silentExitNudgeSeq !== undefined && !isPosIntId(m.silentExitNudgeSeq)) ||
+      (m.lastWakeCompletionSeq !== undefined && !isNonNegInt(m.lastWakeCompletionSeq)) ||
+      (m.dispatchKey !== undefined && !isNonEmptyString(m.dispatchKey)) ||
+      (m.briefPostSeq !== undefined && !isPosIntId(m.briefPostSeq)) ||
       !isFiniteTime(m.createdAt) ||
-      (m.archivedAt !== undefined && !isFiniteTime(m.archivedAt)) ||
-      'lastWakeCompletionSeq' in m
+      (m.archivedAt !== undefined && !isFiniteTime(m.archivedAt))
     ) {
       throw corrupt(`成员记录非法（${String(isJsonObject(m) ? m.name : m)}）`)
+    }
+    if (m.inflightWakeup !== undefined) {
+      assertInflightRangeIntent(m.inflightWakeup, `成员 '${m.name}' inflightWakeup`, corrupt)
+    }
+    if (m.inflightNudge !== undefined) {
+      const nudgeObj = assertInflightBase(m.inflightNudge, `成员 '${m.name}' inflightNudge`, corrupt)
+      if (!isPosIntId(nudgeObj.taskSeq)) throw corrupt(`成员 '${m.name}' inflightNudge.taskSeq 非法`)
     }
     if (m.lastOutboundEdge !== undefined) {
       const edge = m.lastOutboundEdge
@@ -611,6 +691,9 @@ export function assertCollabGroupRecord(value: unknown): CollabGroupRecord {
   if (!isNonNegInt(value.headSeq)) throw corrupt('headSeq 非法')
   if (!isNonNegInt(value.coordinatorNotifiedSeq)) throw corrupt('coordinatorNotifiedSeq 非法')
   if (!isNonNegInt(value.coordinatorPendingSeq)) throw corrupt('coordinatorPendingSeq 非法')
+  if (value.inflightReport !== undefined) {
+    assertInflightRangeIntent(value.inflightReport, 'inflightReport', corrupt)
+  }
   if (value.lastStallWatermark !== undefined && typeof value.lastStallWatermark !== 'string') {
     throw corrupt('lastStallWatermark 非法')
   }
@@ -655,6 +738,9 @@ export function assertBoardPost(value: unknown): BoardPost {
   if (!isBoardPostKind(value.kind)) throw corrupt('kind 非法')
   if (!Array.isArray(value.refs) || !value.refs.every((r) => isPosIntId(r))) throw corrupt('refs 必须是正整数数组')
   if (typeof value.body !== 'string') throw corrupt('body 必须是字符串')
+  if (value.idempotencyKey !== undefined && !isNonEmptyString(value.idempotencyKey)) {
+    throw corrupt('idempotencyKey 非法')
+  }
   if (value.worktreeSnapshot !== undefined) {
     const snap = value.worktreeSnapshot
     if (

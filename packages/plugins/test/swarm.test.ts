@@ -47,6 +47,7 @@ import {
   formatWorkerWakeupEnvelope,
   selectPostsForMemberWakeup,
 } from '../src/swarm/board-router.js'
+import { classifyMemberDetailOutcome, inspectBoardWalLines } from '../src/swarm/recovery.js'
 import { lastAssistantText } from '../src/entry-text.js'
 
 function makeMember(over: Partial<GroupMemberState> = {}): GroupMemberState {
@@ -508,7 +509,7 @@ test('lastAssistantText skips toolResult and user text blocks, walking back to t
   )
 })
 
-test('swarm-unit6: main channel noise isolation, XML escape, schema from removal, skill whitelist gating, and in-memory lastWakeCompletionSeq', { timeout: 60_000 }, () => {
+test('swarm-unit6: main channel noise isolation, XML escape, schema from removal, skill whitelist gating, and quiescence lastWakeCompletionSeq', { timeout: 60_000 }, () => {
   // 1) selectPostsForMemberWakeup excludes other members' main-channel wake=true coordinator reports
   const group = makeGroup({
     headSeq: 4,
@@ -572,7 +573,7 @@ test('swarm-unit6: main channel noise isolation, XML escape, schema from removal
   assert.equal(wakeupXml.match(/<\/swarm_board_wakeup>/g)?.length, 1, 'wakeup must have single real closing tag')
   assert.match(wakeupXml, /&lt;\/swarm_board_wakeup&gt;/)
 
-  // 5) evaluateGroupQuiescence consults runtime lastWakeCompletionSeq rather than persisted meta fields
+  // 5) evaluateGroupQuiescence consults lastWakeCompletionSeq and validates invalid negative watermark
   const stallMember = makeMember({ name: 'alpha', readCursorSeq: 2, pendingWakeupSeq: 2, lastPostSeq: 1 })
   const stallGroup = makeGroup({
     headSeq: 2,
@@ -590,15 +591,176 @@ test('swarm-unit6: main channel noise isolation, XML escape, schema from removal
       { name: 'alpha', completionSeq: 5, lastWakeCompletionSeq: 5, liveState: 'idle', isSettling: false },
     ],
   })
-  assert.equal(suppressed.shouldEmitStall, false, 'matching in-memory lastWakeCompletionSeq suppresses false stall')
+  assert.equal(suppressed.shouldEmitStall, false, 'matching lastWakeCompletionSeq suppresses false stall')
 
   assert.throws(
     () =>
       assertCollabGroupRecord({
         ...stallGroup,
-        members: [{ ...stallMember, lastWakeCompletionSeq: 5 }],
+        members: [{ ...stallMember, lastWakeCompletionSeq: -1 }],
       }),
     (err: unknown) => err instanceof HelmError && err.code === 'swarm_doc_corrupt',
-    'disk meta.json must reject leftover lastWakeCompletionSeq field',
+    'disk meta.json must reject invalid negative lastWakeCompletionSeq',
+  )
+})
+
+// ---------------------------------------------------------------------------
+// unit7 / unit8: WAL 提交点回滚、在途意图契约校验与重启前成员回合终态归因
+// ---------------------------------------------------------------------------
+
+test('swarm-unit7: inspectBoardWalLines trims single uncommitted tail or truncated JSON, while rejecting multi-line or prefix corruption', { timeout: 60_000 }, () => {
+  const p1 = JSON.stringify(makePost(1))
+  const p2 = JSON.stringify(makePost(2, { from: 'author', to: ['coordinator'], resolvedTargets: ['coordinator'], kind: 'done' }))
+  const p3 = JSON.stringify(makePost(3, { body: 'uncommitted seq 3' }))
+
+  // Clean committed prefix
+  const clean = inspectBoardWalLines(`${p1}\n${p2}\n`, 'grp_test_1', 2)
+  assert.equal(clean.trimmed, false)
+  assert.equal(clean.posts.length, 2)
+
+  // Empty board with headSeq=0
+  const empty = inspectBoardWalLines('', 'grp_test_1', 0)
+  assert.equal(empty.trimmed, false)
+  assert.equal(empty.posts.length, 0)
+
+  // Single full uncommitted post seq=3 (crash between datasync(board.jsonl) and atomicWriteFile(meta.json))
+  const uncommittedFull = inspectBoardWalLines(`${p1}\n${p2}\n${p3}\n`, 'grp_test_1', 2)
+  assert.equal(uncommittedFull.trimmed, true)
+  assert.equal(uncommittedFull.posts.length, 2)
+  assert.equal(uncommittedFull.posts[1]!.seq, 2)
+
+  // Single truncated half-written line (crash mid-appendFile)
+  const truncatedTail = inspectBoardWalLines(`${p1}\n{"seq":2,"groupId":"grp_test_1"`, 'grp_test_1', 1)
+  assert.equal(truncatedTail.trimmed, true)
+  assert.equal(truncatedTail.posts.length, 1)
+
+  // >= 2 uncommitted lines must throw swarm_doc_corrupt rather than silently dropping data
+  assert.throws(
+    () => inspectBoardWalLines(`${p1}\n${p2}\n${p3}\n`, 'grp_test_1', 1),
+    (err: unknown) => err instanceof HelmError && err.code === 'swarm_doc_corrupt',
+  )
+
+  // Uncommitted line with mismatched seq must throw swarm_doc_corrupt
+  const wrongSeq = JSON.stringify(makePost(99))
+  assert.throws(
+    () => inspectBoardWalLines(`${p1}\n${wrongSeq}\n`, 'grp_test_1', 1),
+    (err: unknown) => err instanceof HelmError && err.code === 'swarm_doc_corrupt',
+  )
+
+  // Fewer lines than meta.headSeq must throw swarm_doc_corrupt
+  assert.throws(
+    () => inspectBoardWalLines(`${p1}\n`, 'grp_test_1', 2),
+    (err: unknown) => err instanceof HelmError && err.code === 'swarm_doc_corrupt',
+  )
+
+  // Corrupt line inside committed prefix must throw swarm_doc_corrupt
+  assert.throws(
+    () => inspectBoardWalLines(`{broken\n${p2}\n`, 'grp_test_1', 2),
+    (err: unknown) => err instanceof HelmError && err.code === 'swarm_doc_corrupt',
+  )
+})
+
+test('swarm-unit8: recovery metadata validation and classifyMemberDetailOutcome', { timeout: 60_000 }, () => {
+  const validWithInflight = makeGroup({
+    headSeq: 1,
+    createKey: '1:call-create-1',
+    inflightReport: {
+      requestId: 'swarm-report:grp_test_1:1-1',
+      fromSeq: 1,
+      toSeq: 1,
+      baseCompletionSeq: 2,
+      baseLastEntryId: 8,
+    },
+    members: [
+      makeMember({
+        dispatchKey: '1:call-disp-1',
+        briefPostSeq: 1,
+        inflightWakeup: {
+          requestId: 'swarm-wakeup:grp_test_1:author:1-1',
+          fromSeq: 1,
+          toSeq: 1,
+          baseCompletionSeq: 0,
+          baseLastEntryId: 0,
+        },
+        inflightNudge: {
+          requestId: 'swarm-nudge:grp_test_1:author:1',
+          taskSeq: 1,
+          baseCompletionSeq: 1,
+          baseLastEntryId: 5,
+        },
+      }),
+    ],
+  })
+  assert.equal(assertCollabGroupRecord(validWithInflight).createKey, '1:call-create-1')
+  assert.equal(assertBoardPost(makePost(1, { idempotencyKey: '1:call-post-1' })).idempotencyKey, '1:call-post-1')
+
+  // Reject reversed range in inflightWakeup
+  assert.throws(
+    () =>
+      assertCollabGroupRecord(
+        makeGroup({
+          members: [
+            makeMember({
+              inflightWakeup: {
+                requestId: 'swarm-wakeup:grp_test_1:author:3-1',
+                fromSeq: 3,
+                toSeq: 1,
+                baseCompletionSeq: 0,
+                baseLastEntryId: 0,
+              },
+            }),
+          ],
+        }),
+      ),
+    (err: unknown) => err instanceof HelmError && err.code === 'swarm_doc_corrupt',
+  )
+
+  const member = makeMember({ name: 'author', lastWakeTaskSeq: 2, lastWakeCompletionSeq: 1 })
+  // Error summary -> failed
+  assert.deepEqual(
+    classifyMemberDetailOutcome([], { status: 'error', completionSeq: 1, lastError: 'upstream 500' }, 'grp_test_1', member),
+    { kind: 'failed', error: 'upstream 500' },
+  )
+
+  // Matching wake input + completed assistant reply (even if completionSeq hasn't flushed yet) -> completed
+  assert.deepEqual(
+    classifyMemberDetailOutcome(
+      [
+        { id: '10', kind: 'helm.input', data: { id: 'swarm-wakeup:grp_test_1:author:1-2' } },
+        { id: '11', kind: 'pi.assistant', model: [{ role: 'assistant', stopReason: 'stop', content: [{ type: 'text', text: 'forgot post' }] }] },
+      ],
+      { status: 'idle', completionSeq: 1 },
+      'grp_test_1',
+      member,
+    ),
+    { kind: 'completed' },
+  )
+
+  // Matching wake input + aborted assistant reply -> aborted (do not nudge)
+  assert.deepEqual(
+    classifyMemberDetailOutcome(
+      [
+        { id: '10', kind: 'helm.input', data: { id: 'swarm-wakeup:grp_test_1:author:1-2' } },
+        { id: '11', kind: 'pi.assistant', model: [{ role: 'assistant', stopReason: 'aborted', content: [] }] },
+      ],
+      { status: 'idle', completionSeq: 2 },
+      'grp_test_1',
+      member,
+    ),
+    { kind: 'aborted' },
+  )
+
+  // Unrelated older input while completionSeq <= lastWakeCompletionSeq -> pending_queue (still in pi.inbox)
+  assert.deepEqual(
+    classifyMemberDetailOutcome(
+      [
+        { id: '8', kind: 'helm.input', data: { id: 'swarm-wakeup:grp_test_1:author:1-1' } },
+        { id: '9', kind: 'pi.assistant', model: [{ role: 'assistant', stopReason: 'stop', content: [{ type: 'text', text: 'old' }] }] },
+      ],
+      { status: 'idle', completionSeq: 1 },
+      'grp_test_1',
+      member,
+    ),
+    { kind: 'pending_queue' },
   )
 })

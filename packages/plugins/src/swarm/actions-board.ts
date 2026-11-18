@@ -35,6 +35,7 @@ export function createBoardHandlers(ctx: HelmPluginContext, coordinator: SwarmCo
     },
     conversationId: number | undefined,
     signal?: AbortSignal,
+    idempotencyKey?: string,
   ): Promise<{ post: BoardPost }> => {
     if (typeof input.body !== 'string' || input.body.trim() === '') {
       throw new HelmError('validation_error', 'board_post.body 必须是非空文本', 400, {})
@@ -85,6 +86,13 @@ export function createBoardHandlers(ctx: HelmPluginContext, coordinator: SwarmCo
       caller = { role: 'human', from: 'coordinator' }
     }
 
+    if (idempotencyKey !== undefined) {
+      const existing = groups.getPosts(group.id).find((p) => p.idempotencyKey === idempotencyKey)
+      if (existing !== undefined) {
+        return { post: existing }
+      }
+    }
+
     if (group.status !== 'active') {
       throw new HelmError('swarm_group_closed', `协作组 '${group.id}' 已结单，无法追加黑板消息`, 409, {
         pluginId: SWARM_PLUGIN_ID,
@@ -132,6 +140,7 @@ export function createBoardHandlers(ctx: HelmPluginContext, coordinator: SwarmCo
       kind,
       refs,
       body: input.body.trim(),
+      ...(idempotencyKey !== undefined ? { idempotencyKey } : {}),
       ...(worktreeSnapshot !== undefined ? { worktreeSnapshot } : {}),
     })
 

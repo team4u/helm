@@ -124,6 +124,7 @@ export function createWorkerHandlers(ctx: HelmPluginContext, coordinator: SwarmC
     input: DispatchInput,
     conversationId: number | undefined,
     signal?: AbortSignal,
+    idempotencyKey?: string,
   ): Promise<{ workerConversationId: number; groupId: string; name: string; worktreeId?: string; postSeq: number }> => {
     if (typeof input.prompt !== 'string' || input.prompt.trim() === '') {
       throw new HelmError('validation_error', 'dispatch_worker 需要 prompt（非空文本）', 400, {})
@@ -228,7 +229,24 @@ export function createWorkerHandlers(ctx: HelmPluginContext, coordinator: SwarmC
           groupId: group.id,
         })
       }
-      if (freshGroup.members.some((m) => m.name === memberName)) {
+      const existingMember = freshGroup.members.find((m) => m.name === memberName)
+      if (existingMember !== undefined) {
+        if (idempotencyKey !== undefined && existingMember.dispatchKey === idempotencyKey) {
+          const existingPostSeq =
+            existingMember.briefPostSeq ??
+            groups
+              .getPosts(freshGroup.id)
+              .find((p) => p.kind === 'brief' && p.to.includes(existingMember.name))?.seq ??
+            existingMember.lastWakeTaskSeq ??
+            freshGroup.headSeq
+          return {
+            workerConversationId: existingMember.conversationId,
+            groupId: freshGroup.id,
+            name: existingMember.name,
+            ...(existingMember.worktreeId !== undefined ? { worktreeId: existingMember.worktreeId } : {}),
+            postSeq: existingPostSeq,
+          }
+        }
         throw new HelmError(
           'swarm_member_conflict',
           `协作组 '${freshGroup.id}' 中成员名 '${memberName}' 已被占用`,
@@ -350,6 +368,7 @@ export function createWorkerHandlers(ctx: HelmPluginContext, coordinator: SwarmC
             ...(acquiredWorktreeId !== undefined ? { worktreeId: acquiredWorktreeId } : {}),
             channels: subscribedChannels,
             lifecycle: 'active',
+            ...(idempotencyKey !== undefined ? { dispatchKey: idempotencyKey } : {}),
             createdAt: now,
           },
           input.prompt,
@@ -492,6 +511,11 @@ export function createWorkerHandlers(ctx: HelmPluginContext, coordinator: SwarmC
     const { group, member, workerConversationId } = resolveTargetWorker(input, conversationId)
     assertCoordinatorAuthority(conversationId, group)
     if (member.lifecycle === 'archived') {
+      const cur = readConversationOrUndefined(workerConversationId)
+      if (cur !== undefined && cur.tags.includes(WORKER_TAG)) {
+        const nextTags = [...cur.tags.filter((t) => t !== WORKER_TAG), ARCHIVED_WORKER_TAG]
+        await ctx.host.updateConversation(workerConversationId, { tags: nextTags })
+      }
       return { archived: true, workerConversationId }
     }
     const summary = readConversationOrUndefined(workerConversationId)
@@ -544,11 +568,6 @@ export function createWorkerHandlers(ctx: HelmPluginContext, coordinator: SwarmC
         }
       }
 
-      if (freshSummary !== undefined) {
-        const nextTags = [...freshSummary.tags.filter((t) => t !== WORKER_TAG), ARCHIVED_WORKER_TAG]
-        await ctx.host.updateConversation(workerConversationId, { tags: nextTags })
-      }
-
       await groups.mutateGroup(group.id, (draft) => {
         const target = draft.members.find((m) => m.name === member.name)
         if (target !== undefined) {
@@ -558,6 +577,11 @@ export function createWorkerHandlers(ctx: HelmPluginContext, coordinator: SwarmC
         draft.updatedAt = Date.now()
         return { group: draft, result: undefined }
       })
+
+      if (freshSummary !== undefined) {
+        const nextTags = [...freshSummary.tags.filter((t) => t !== WORKER_TAG), ARCHIVED_WORKER_TAG]
+        await ctx.host.updateConversation(workerConversationId, { tags: nextTags })
+      }
 
       return { archived: true, workerConversationId }
     })

@@ -85,10 +85,9 @@ export async function checkMemberWorktree(
   }
 }
 
-export async function releaseWorktreeHold(
+export async function releaseWorktreeHoldById(
   ctx: HelmPluginContext,
-  groupId: string,
-  memberName: string,
+  holdId: string,
   worktreeId: string,
   signal?: AbortSignal,
 ): Promise<void> {
@@ -98,10 +97,20 @@ export async function releaseWorktreeHold(
     {
       worktreeId,
       pluginId: SWARM_PLUGIN_ID,
-      holdId: `${groupId}:${memberName}`,
+      holdId,
     },
     signal !== undefined ? { signal } : undefined,
   )
+}
+
+export async function releaseWorktreeHold(
+  ctx: HelmPluginContext,
+  groupId: string,
+  memberName: string,
+  worktreeId: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  await releaseWorktreeHoldById(ctx, `${groupId}:${memberName}`, worktreeId, signal)
 }
 
 export async function cleanupManagedWorktree(

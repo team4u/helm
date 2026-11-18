@@ -114,6 +114,14 @@ function formatBoardStatusSummary(view: BoardViewDoc): string {
   return lines.join('\n')
 }
 
+function makeToolCallKey(
+  conversationId: number | undefined,
+  callId: string | undefined,
+): string | undefined {
+  if (conversationId === undefined || callId === undefined || callId.trim() === '') return undefined
+  return `${conversationId}:${callId}`
+}
+
 function formatInspectWorkerSummary(res: InspectWorkerResult): string {
   const header = `Member @${res.name} (#${res.conversationId}, group=${res.groupId}, profile=${res.profileId}, status=${res.status}${res.worktreeId !== undefined ? `, worktree=${res.worktreeId}` : ''}${res.doing !== null ? `, doing="${res.doing}"` : ''}, artifacts=${res.artifacts.length})`
   if (res.recentEntries.length === 0) return header
@@ -147,8 +155,13 @@ export function registerSwarmActions(
     ],
     inputSchema: createGroupInputSchema,
     structuredOutputSchema: createGroupOutputSchema,
+    replay: 'safe',
     execute: async (input: never, context: PluginToolContext) => {
-      const res = await createGroup(input as Parameters<typeof createGroup>[0], context.conversationId)
+      const res = await createGroup(
+        input as Parameters<typeof createGroup>[0],
+        context.conversationId,
+        makeToolCallKey(context.conversationId, context.callId),
+      )
       return envelope(`Created swarm group "${res.group.title}" (${res.groupId}).`, res)
     },
   })
@@ -159,6 +172,7 @@ export function registerSwarmActions(
     inputSchema: updateGroupInputSchema,
     structuredOutputSchema: updateGroupOutputSchema,
     scope: COORDINATOR_SCOPE,
+    replay: 'safe',
     execute: async (input: never, context: PluginToolContext) => {
       const res = await updateGroup(input as Parameters<typeof updateGroup>[0], context.conversationId)
       return envelope(`Updated swarm group "${res.group.title}" (${res.groupId}).`, res)
@@ -172,8 +186,14 @@ export function registerSwarmActions(
     inputSchema: dispatchInputSchema,
     structuredOutputSchema: dispatchWorkerOutputSchema,
     scope: COORDINATOR_SCOPE,
+    replay: 'safe',
     execute: async (input: never, context: PluginToolContext) => {
-      const res = await dispatchWorker(input as DispatchInput, context.conversationId, context.signal)
+      const res = await dispatchWorker(
+        input as DispatchInput,
+        context.conversationId,
+        context.signal,
+        makeToolCallKey(context.conversationId, context.callId),
+      )
       return envelope(
         `Dispatched @${res.name} (#${res.workerConversationId}) in group ${res.groupId}${res.worktreeId !== undefined ? `, worktree=${res.worktreeId}` : ''}, brief=#${res.postSeq}.`,
         res,
@@ -188,8 +208,14 @@ export function registerSwarmActions(
     inputSchema: boardPostInputSchema,
     structuredOutputSchema: boardPostOutputSchema,
     scope: PARTICIPANT_SCOPE,
+    replay: 'safe',
     execute: async (input: never, context: PluginToolContext) => {
-      const res = await boardPost(input as Parameters<typeof boardPost>[0], context.conversationId, context.signal)
+      const res = await boardPost(
+        input as Parameters<typeof boardPost>[0],
+        context.conversationId,
+        context.signal,
+        makeToolCallKey(context.conversationId, context.callId),
+      )
       const targets = res.post.resolvedTargets.length > 0 ? res.post.resolvedTargets : res.post.to
       return envelope(
         `Posted #${res.post.seq} [${res.post.kind}] in #${res.post.channel} -> ${targets.join(', ')} (wake=${res.post.wake}).`,
@@ -236,6 +262,7 @@ export function registerSwarmActions(
     inputSchema: workerIdInputSchema,
     structuredOutputSchema: abortWorkerOutputSchema,
     scope: COORDINATOR_SCOPE,
+    replay: 'safe',
     execute: async (input: never, context: PluginToolContext) => {
       const res = await abortWorker(input as Parameters<typeof abortWorker>[0], context.conversationId)
       return envelope(
@@ -253,6 +280,7 @@ export function registerSwarmActions(
     inputSchema: switchModelInputSchema,
     structuredOutputSchema: switchModelOutputSchema,
     scope: COORDINATOR_SCOPE,
+    replay: 'safe',
     execute: async (input: never, context: PluginToolContext) => {
       const res = await switchWorkerModel(input as Parameters<typeof switchWorkerModel>[0], context.conversationId)
       return envelope(`Switched @${res.name} (#${res.workerConversationId}) model to ${res.model}.`, res)
@@ -278,6 +306,7 @@ export function registerSwarmActions(
     inputSchema: archiveWorkerInputSchema,
     structuredOutputSchema: archiveWorkerOutputSchema,
     scope: COORDINATOR_SCOPE,
+    replay: 'safe',
     execute: async (input: never, context: PluginToolContext) => {
       const res = await archiveWorker(input as Parameters<typeof archiveWorker>[0], context.conversationId, context.signal)
       return envelope(`Archived worker #${res.workerConversationId}.`, res)
@@ -291,6 +320,7 @@ export function registerSwarmActions(
     inputSchema: closeGroupInputSchema,
     structuredOutputSchema: closeGroupOutputSchema,
     scope: COORDINATOR_SCOPE,
+    replay: 'safe',
     execute: async (input: never, context: PluginToolContext) => {
       const res = await closeGroup(input as Parameters<typeof closeGroup>[0], context.conversationId, context.signal)
       const text =

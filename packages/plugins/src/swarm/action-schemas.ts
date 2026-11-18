@@ -296,10 +296,36 @@ const boardPostSchema: Record<string, unknown> = {
     kind: { type: 'string', enum: ['brief', 'handoff', 'review', 'comment', 'blocker', 'done', 'stall'] },
     refs: { type: 'array', items: { type: 'number' } },
     body: { type: 'string' },
+    idempotencyKey: { type: 'string' },
     worktreeSnapshot: worktreeSnapshotSchema,
     createdAt: { type: 'number' },
   },
   required: ['seq', 'groupId', 'channel', 'from', 'to', 'resolvedTargets', 'wake', 'kind', 'refs', 'body', 'createdAt'],
+  additionalProperties: false,
+}
+
+const inflightWakeupIntentSchema: Record<string, unknown> = {
+  type: 'object',
+  properties: {
+    requestId: { type: 'string' },
+    fromSeq: { type: 'number' },
+    toSeq: { type: 'number' },
+    baseCompletionSeq: { type: 'number' },
+    baseLastEntryId: { type: 'number' },
+  },
+  required: ['requestId', 'fromSeq', 'toSeq', 'baseCompletionSeq', 'baseLastEntryId'],
+  additionalProperties: false,
+}
+
+const inflightNudgeIntentSchema: Record<string, unknown> = {
+  type: 'object',
+  properties: {
+    requestId: { type: 'string' },
+    taskSeq: { type: 'number' },
+    baseCompletionSeq: { type: 'number' },
+    baseLastEntryId: { type: 'number' },
+  },
+  required: ['requestId', 'taskSeq', 'baseCompletionSeq', 'baseLastEntryId'],
   additionalProperties: false,
 }
 
@@ -321,6 +347,7 @@ const boardMemberViewSchema: Record<string, unknown> = {
     lastPostSeq: { type: 'number' },
     lastWakeTaskSeq: { type: 'number' },
     silentExitNudgeSeq: { type: 'number' },
+    lastWakeCompletionSeq: { type: 'number' },
     lastOutboundEdge: {
       type: 'object',
       properties: {
@@ -331,6 +358,10 @@ const boardMemberViewSchema: Record<string, unknown> = {
       required: ['seq', 'to', 'kind'],
       additionalProperties: false,
     },
+    dispatchKey: { type: 'string' },
+    briefPostSeq: { type: 'number' },
+    inflightWakeup: inflightWakeupIntentSchema,
+    inflightNudge: inflightNudgeIntentSchema,
     createdAt: { type: 'number' },
     archivedAt: { type: 'number' },
     liveState: { type: 'string', enum: ['idle', 'working', 'blocked', 'error', 'missing'] },

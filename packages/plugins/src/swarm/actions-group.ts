@@ -28,6 +28,7 @@ export interface EnsureCoordinatorGroupInput {
   objective?: string
   channels?: Array<{ name: string; topic?: string }>
   reuseExisting?: boolean
+  createKey?: string
 }
 
 export function assertCoordinatorAuthority(
@@ -159,9 +160,12 @@ export async function ensureCoordinatorGroup(
       return { groupId, group: view.group }
     }
 
-    if (input.reuseExisting === true) {
+    if (input.reuseExisting === true || input.createKey !== undefined) {
       const existing = groups.findActiveGroupByCoordinator(targetConvId)
-      if (existing !== undefined) {
+      if (
+        existing !== undefined &&
+        (input.reuseExisting === true || existing.createKey === input.createKey)
+      ) {
         return syncTagAndProjections(existing.id)
       }
     }
@@ -171,6 +175,7 @@ export async function ensureCoordinatorGroup(
       title: input.title.trim().slice(0, 120),
       ...(input.objective !== undefined ? { objective: input.objective } : {}),
       ...(input.channels !== undefined ? { channels: input.channels } : {}),
+      ...(input.createKey !== undefined ? { createKey: input.createKey } : {}),
     })
     return syncTagAndProjections(created.id)
   })
@@ -191,6 +196,7 @@ export function createGroupHandlers(ctx: HelmPluginContext, coordinator: SwarmCo
       conversationId?: number
     },
     contextConversationId: number | undefined,
+    idempotencyKey?: string,
   ): Promise<{ groupId: string; group: BoardViewDoc['group'] }> => {
     if (typeof input.title !== 'string' || input.title.trim() === '') {
       throw new HelmError('validation_error', 'create_group 需要非空 title', 400, {})
@@ -217,6 +223,7 @@ export function createGroupHandlers(ctx: HelmPluginContext, coordinator: SwarmCo
       ...(input.objective !== undefined ? { objective: input.objective } : {}),
       ...(input.channels !== undefined ? { channels: input.channels } : {}),
       reuseExisting: false,
+      ...(idempotencyKey !== undefined ? { createKey: idempotencyKey } : {}),
     })
   }
 
@@ -371,14 +378,6 @@ export function createGroupHandlers(ctx: HelmPluginContext, coordinator: SwarmCo
         }
       }
 
-      for (const member of activeMembers) {
-        const s = readConversationOrUndefined(member.conversationId)
-        if (s !== undefined) {
-          const nextTags = [...s.tags.filter((t) => t !== WORKER_TAG), ARCHIVED_WORKER_TAG]
-          await ctx.host.updateConversation(member.conversationId, { tags: nextTags })
-        }
-      }
-
       const now = Date.now()
       await groups.mutateGroup(freshGroup.id, (draft) => {
         draft.status = 'closed'
@@ -396,6 +395,14 @@ export function createGroupHandlers(ctx: HelmPluginContext, coordinator: SwarmCo
         }
         return { group: draft, result: undefined }
       })
+
+      for (const member of activeMembers) {
+        const s = readConversationOrUndefined(member.conversationId)
+        if (s !== undefined) {
+          const nextTags = [...s.tags.filter((t) => t !== WORKER_TAG), ARCHIVED_WORKER_TAG]
+          await ctx.host.updateConversation(member.conversationId, { tags: nextTags })
+        }
+      }
 
       const coordConv = readConversationOrUndefined(freshGroup.coordinatorConversationId)
       if (coordConv !== undefined && coordConv.tags.includes(COORDINATOR_TAG)) {
