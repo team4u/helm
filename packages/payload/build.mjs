@@ -25,10 +25,10 @@
  *   web/dist/                      Vite output (start.mjs points at it explicitly via HELM_WEB_DIST_DIR)
  *   start.mjs + manifest.json      zero-dependency launch entry and the version/entry/checksum contract
  *
- * The same build additionally assembles the stable launcher artifact when the hub-launcher package
- * exists (see src/assemble-launcher.mjs): dist-launcher/ is a second publish package — a
- * zero-dependency, single-file bundle of helm-hub-launcher + @helm/update that installs globally
- * via one `npm install -g`. The Hub payload contract above is unchanged by that artifact.
+ * The same build also assembles the stable launcher artifact (see src/assemble-launcher.mjs):
+ * dist-launcher/ is a second publish package — a zero-dependency, single-file bundle of
+ * helm-hub-launcher + @helm/update that installs globally via one `npm install -g`. The Hub payload
+ * contract above is unchanged by that artifact; a missing launcher package aborts the build.
  *
  * Note: `@helm/plugin-client` is a browser-only SDK already bundled into `web/dist` and virtualized by
  * `@helm/plugin-build` via `globalThis.__helm_shared_plugin_client`, so neither `@helm/plugin-client`
@@ -45,7 +45,7 @@ import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, write
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { scanPeerOverrides, resolveDepRealDir } from './src/dep-closure.mjs';
-import { assembleLauncherArtifact, launcherSourcesPresent } from './src/assemble-launcher.mjs';
+import { assembleLauncherArtifact } from './src/assemble-launcher.mjs';
 
 const payloadPkgRoot = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(payloadPkgRoot, '../..');
@@ -313,14 +313,10 @@ console.log(`[payload] ${stats.files} files, ${(stats.bytes / 1024 / 1024).toFix
 console.log(`[payload] runtime asset directories: ${copiedAssets.length}: ${copiedAssets.join(', ')}`);
 console.log('[payload] note: node_modules is not bundled; consumers unpack the tgz files and run npm install --omit=dev --ignore-scripts to complete dependencies (verified by start.mjs check)');
 
-// --- Stable launcher artifact (second publish entry): skipped with an explicit notice when the
-// hub-launcher package is absent from the checkout; contract failures inside abort the build. ---
-if (launcherSourcesPresent(repoRoot)) {
-  await assembleLauncherArtifact({
-    repoRoot,
-    version: payloadPkg.version,
-    enginesNode: distPackageJson.engines.node,
-  });
-} else {
-  console.log('[payload] launcher package packages/hub-launcher not present: skipped assembling dist-launcher (no launcher npm publish will run in the release pipeline).');
-}
+// --- Stable launcher artifact (second publish entry): a hard release input — a missing launcher
+// package or broken bundle contract aborts the build inside assemble-launcher.mjs. ---
+await assembleLauncherArtifact({
+  repoRoot,
+  version: payloadPkg.version,
+  enginesNode: distPackageJson.engines.node,
+});

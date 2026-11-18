@@ -7,20 +7,19 @@
 | 工作流 | 触发 | 职责 |
 | :--- | :--- | :--- |
 | `ci.yml` | push / PR | 全仓验证：typecheck → lint → `check:hygiene` → build → POSIX 全量 `test:all`、Windows `test:unit` + 跨平台路径回归 |
-| `release.yml` | 仅 `v*` tag | 发布：verify → build → npm-payload → npm-launcher |
+| `release.yml` | 仅 `v*` tag | 发布：verify → build → npm-publish（payload 与 launcher 两制品） |
 
-`release.yml` 的 `build` 作业承担发布门槛（等价 ci.yml 的 ubuntu 通道 + payload 与 launcher 的网络验收）。
+`release.yml` 的 `build` 作业承担发布门槛（等价 ci.yml 的 ubuntu 通道 + payload 与 launcher 制品的网络验收，均在 `packages/payload/test/payload.test.ts` 单文件内执行——两个制品共享同一次组装）。
 
 ## release.yml 职责链
 
 | 作业 | 职责 | 触达面 |
 | :--- | :--- | :--- |
-| `verify` | 校验 tag 形态（`v<semver>`）、探测 payload 组装器与 launcher 包 | 仅读仓库 |
-| `build` | ubuntu 全量构建与测试 + payload 网络验收（`PAYLOAD_NPM_SMOKE=1`）+ launcher 制品验收（组装契约、真实 tarball 全局安装、黄金序列） | 仅读仓库 |
-| `npm-payload` | npm Hub payload 条件发布（仅 ubuntu 一次，provenance） | npm registry |
-| `npm-launcher` | npm launcher 制品条件发布（仅 ubuntu 一次，provenance；在 `npm-payload` 之后串行） | npm registry |
+| `verify` | 校验 tag 形态（`v<semver>`）与 dist-tag 归属（预发布 → `beta`）；探测 payload 组装器（占位可跳过）；**硬性要求 launcher 包存在** | 仅读仓库 |
+| `build` | ubuntu 全量构建与测试 + 制品网络验收（`PAYLOAD_NPM_SMOKE=1`：payload e2e、launcher 真实 tarball 全局安装、黄金序列） | 仅读仓库 |
+| `npm-publish` | 两制品条件发布（共享一次 checkout/install/build，payload 先、launcher 后，各仅一次，provenance） | npm registry |
 
-依赖关系：`verify → build → npm-payload → npm-launcher`。两类 npm 发布都必须等全量测试通过。
+依赖关系：`verify → build → npm-publish`。npm 发布必须等全量测试通过；launcher 在同作业内晚于 payload 发布（其默认更新路径从 registry 解析 payload）。
 
 ## npm 制品发布（每个制品一个 manifest 权威）
 
@@ -30,9 +29,9 @@
 - **launcher 制品必须零依赖**：它以单文件 bundle 交付（bin `helm-hub-launcher`），消费者一步 `npm install -g` 即用。任何 `workspace:` / `file:` / `@helm/*` 依赖都会让全局安装直接失败（本仓库不发布任何 `@helm/*` 源码包），组装期与发布期双重硬校验；
 - **绝不伪称已发布**：发布记录的 npm 状态由各作业实际输出渲染，成功 / 明确跳过 / 未完成三种结论如实陈述。
 
-发布门槛（两个制品同构，全部满足才 `npm publish`）：制品源包存在（payload → `packages/payload`；launcher → `packages/hub-launcher`）→ 构建后制品 manifest 存在（缺失即组装器契约破裂显式失败）→ `private !== true`（`private: true` 走占位跳过分支，绿色成功不 publish）→ `version` 与 tag 锁步 + `repository` 字段存在（provenance 必需）→ `NPM_TOKEN` secret 已配置（注入为 `NODE_AUTH_TOKEN`；缺失快速失败给指引）。满足后在各自制品目录内 `npm pack` 打 tarball 再 `npm publish <tarball> --provenance --access public`（provenance 依赖 OIDC，作业声明 `id-token: write`）。npm Trusted Publishing（OIDC 免令牌）当前未启用。
+发布门槛（两个制品同构，全部满足才 `npm publish`）：制品源包存在（payload → `packages/payload`，占位期可跳过；launcher → `packages/hub-launcher`，**硬性要求**，verify 阶段缺失即失败）→ 构建后制品 manifest 存在（缺失即组装器契约破裂显式失败）→ `private !== true`（`private: true` 走占位跳过分支，绿色成功不 publish）→ `version` 与 tag 锁步 + `repository` 字段存在（provenance 必需）→ `NPM_TOKEN` secret 已配置（注入为 `NODE_AUTH_TOKEN`；缺失快速失败给指引）。满足后在各自制品目录内 `npm pack` 打 tarball 再 `npm publish <tarball> --provenance --access public`（provenance 依赖 OIDC，作业声明 `id-token: write`）。npm Trusted Publishing（OIDC 免令牌）当前未启用。
 
-dist-tag 策略（两个制品一致）：tag 版本含连字符（预发布，如 `v1.2.3-rc.1`）时 `npm publish --tag beta`，正式版本走 npm 默认 `latest`——预发布绝不隐式进入 `latest`，消费者 `npm install -g` 与 launcher 的 `latest` 解析默认只看到正式版（launcher 侧的 beta 通道由其定时入口的 dist-tag 配置显式选择）。
+dist-tag 策略（两个制品一致，`verify` 作业按 semver 判定一次）：版本核心含连字符（预发布，如 `1.2.3-rc.1`）→ `npm publish --tag beta`；build 元数据（`+` 之后）不算预发布（如 `1.2.3+build-7` 仍走 `latest`）。预发布绝不隐式进入 `latest`，消费者 `npm install -g` 与 launcher 的 `latest` 解析默认只看到正式版（launcher 侧的 beta 通道由其定时入口的 dist-tag 配置显式选择）。
 
 launcher 的两条附加门：
 
@@ -48,7 +47,7 @@ git commit -am "chore(release): v0.1.0"
 # 3. 打 tag 并推送
 git tag v0.1.0
 git push origin v0.1.0
-# 4. 在 Actions 观察 verify → build → npm-payload → npm-launcher
+# 4. 在 Actions 观察 verify → build → npm-publish
 ```
 
 ## 本地校验
@@ -63,9 +62,9 @@ pnpm build && pnpm typecheck && pnpm lint && pnpm check:hygiene && pnpm test:all
 # CI 在 release 的 build 作业以 PAYLOAD_NPM_SMOKE=1 执行）
 pnpm --filter @helm/payload run build
 
-# launcher 制品验收（组装契约 + bundle 真跑 + 真实 tarball npm install -g；
-# 黄金序列需 PAYLOAD_NPM_SMOKE=1 与网络）
-node scripts/run-tests.mjs packages/payload/test/launcher.test.ts
+# 制品验收（payload + launcher 组装契约、真实 tarball npm install -g；
+# 网络验收含黄金序列需 PAYLOAD_NPM_SMOKE=1）
+node scripts/run-tests.mjs packages/payload/test/payload.test.ts
 
 # 工作流 YAML 静态检查（可选）
 python3 -c "import yaml; yaml.safe_load(open('.github/workflows/release.yml'))"
@@ -78,12 +77,13 @@ python3 -c "import yaml; yaml.safe_load(open('.github/workflows/release.yml'))"
 | 现象 | 原因与处理 |
 | :--- | :--- |
 | `verify` 失败：tag 不是 v\<semver\> | 改用合法 tag（如 `v0.1.0`、`v1.2.3-rc.1`） |
-| `npm-payload`：dist/package.json 缺失 | 组装器契约破裂：`pnpm build` 后 `packages/payload/dist` 根必须有可发布 package.json |
-| `npm-launcher`：dist-launcher/package.json 缺失 | launcher 组装契约破裂：确认 `packages/hub-launcher` 存在且 `pnpm build` 产出 bundle |
-| `npm-launcher`：声明了运行时依赖 | bundle 不完整：`build.mjs` 应把 `@helm/update` 闭包全部内联，检查 `dist-launcher/main.js` 是否残留 `@helm/*` import |
-| `npm-launcher`：payload 未发布而跳过 | 如实跳过：先解决 `npm-payload` 的失败/跳过原因，launcher 与 payload 需同轮发布 |
-| `npm-payload` / `npm-launcher`：版本与 tag 不一致 | 版本单一来源锁步 tag 后重新打 tag |
-| `npm-payload` / `npm-launcher`：未配置 NPM_TOKEN | Settings -> Secrets and variables -> Actions 配置后重跑 |
+| `verify` 失败：`packages/hub-launcher` 缺失 | launcher 为发布硬依赖：该 tag 无法产出 launcher 制品，先合入 launcher 包 |
+| `npm-publish`：dist/package.json 缺失 | 组装器契约破裂：`pnpm build` 后 `packages/payload/dist` 根必须有可发布 package.json |
+| `npm-publish`：dist-launcher/package.json 缺失 | launcher 组装契约破裂：确认 `pnpm build` 产出 `dist-launcher/` bundle |
+| `npm-publish`：launcher 声明了运行时依赖 | bundle 不完整：`build.mjs` 应把 `@helm/update` 闭包全部内联，检查 `dist-launcher/main.js` 是否残留 `@helm/*` import |
+| `npm-publish`：launcher 因 payload 未发布而跳过 | 如实跳过：先解决 payload 发布步骤的失败/跳过原因，launcher 与 payload 需同轮发布 |
+| `npm-publish`：版本与 tag 不一致 | 版本单一来源锁步 tag 后重新打 tag |
+| `npm-publish`：未配置 NPM_TOKEN | Settings -> Secrets and variables -> Actions 配置后重跑 |
 | `npm publish` 被 registry 拒绝（provenance） | 确认制品 `repository` 与实际仓库一致、令牌有目标包权限 |
 
 ## 源码与测试入口
@@ -92,7 +92,7 @@ python3 -c "import yaml; yaml.safe_load(open('.github/workflows/release.yml'))"
 | :--- | :--- |
 | 两条工作流 | `.github/workflows/ci.yml`、`release.yml` |
 | payload 组装器 | `packages/payload/build.mjs`（launcher 组装在 `packages/payload/src/assemble-launcher.mjs`） |
-| 测试 | `packages/payload/test/payload.test.ts`（payload 契约与网络验收）、`packages/payload/test/launcher.test.ts`（launcher 制品与黄金序列网络验收） |
+| 测试 | `packages/payload/test/payload.test.ts`（payload 契约、launcher 制品验收与黄金序列网络验收，单文件共享一次组装） |
 
 ## 相关文档
 
