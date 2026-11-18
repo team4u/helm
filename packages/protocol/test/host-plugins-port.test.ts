@@ -22,6 +22,8 @@ import type {
   PluginSummary,
   PluginToolSpec,
   PluginUpdateResult,
+  ArtifactMetadata,
+  GuardedMutationExpectation,
 } from '@helm/protocol'
 
 test('HelmHostApi.plugins mounts HelmHostPluginsPort and keeps the listPlugins/listUi compatibility entries', { timeout: 60_000 }, () => {
@@ -125,4 +127,37 @@ test('AgentSpawnRequest reattach/requestId and PluginToolSpec replay contract fi
   }
   assert.equal(safeTool.replay, 'safe')
   assert.equal(unsafeTool.replay, 'unsafe')
+})
+
+test('HelmHostApi.createArtifact and submitInput attachments (compile-time shape lock)', { timeout: 60_000 }, () => {
+  // Compile-time: createArtifact accepts raw bytes and resolves ArtifactMetadata; both submission
+  // ports declare the optional attachments artifact-ID list (rest of the opts shape unchanged).
+  type CreateArtifact = HelmHostApi['createArtifact']
+  type CreateArtifactOk = CreateArtifact extends
+    (conversationId: number, input: { name: string; bytes: Uint8Array; mimeType?: string }) => Promise<ArtifactMetadata>
+    ? true
+    : false
+  type SubmitAttachments = HelmHostApi['submitInput'] extends
+    (conversationId: number, text: string, opts?: { attachments?: string[] } | undefined) => Promise<void>
+    ? true
+    : false
+  type GuardedAttachments = HelmHostApi['submitInputGuarded'] extends
+    (conversationId: number, text: string, opts?: { attachments?: string[] } | undefined, guard?: GuardedMutationExpectation | undefined) => Promise<void>
+    ? true
+    : false
+  const typeLocks: [CreateArtifactOk, SubmitAttachments, GuardedAttachments] = [true, true, true]
+  assert.deepEqual(typeLocks, [true, true, true])
+
+  // Runtime spot check: the shared protocol artifact metadata model rides the created result.
+  const sample: ReturnType<CreateArtifact> = Promise.resolve({
+    id: 'a1',
+    conversationId: 7,
+    kind: 'upload',
+    name: 'file.txt',
+    path: 'artifacts/7/a1-file.txt',
+    mimeType: 'text/plain',
+    size: 3,
+    createdAt: 1,
+  })
+  void sample
 })

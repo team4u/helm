@@ -126,6 +126,24 @@ export function createPluginHostBackend(runtime: KernelRuntime): PluginHostBacke
     },
     getConversationOwnership: (id) => runtime.getConversationOwnership(id),
     listArtifacts: (conversationId) => Promise.resolve(runtime.artifacts.list(conversationId)),
+    createArtifact: async (conversationId, input) => {
+      // Same existence semantics as submitInput's requireConv: summary lookup is the authoritative
+      // in-memory check wired as writeUploaded's re-check (closes the orphan-artifact race against
+      // concurrent conversation deletion).
+      const exists = (id: number): boolean => {
+        try {
+          runtime.getConversation(id)
+          return true
+        } catch (err) {
+          if (err instanceof HelmError && err.code === 'not_found') return false
+          throw err
+        }
+      }
+      if (!exists(conversationId)) {
+        throw new HelmError('not_found', `conversation not found: ${conversationId}`, 404, { conversationId })
+      }
+      return runtime.artifacts.writeUploaded(conversationId, input, { conversationExists: exists })
+    },
     getArtifact: (artifactId, conversationId) => runtime.resolveAuthorizedAttachment(conversationId, artifactId),
     redact: (text) => runtime.stash.redact(text),
     refreshModels: (options) => runtime.refreshModels(options),

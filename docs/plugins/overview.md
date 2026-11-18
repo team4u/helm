@@ -69,11 +69,11 @@
 | 分组 | 端口 |
 | :--- | :--- |
 | 外部事件 | `dispatchTrigger(envelope)`（统一 defang 防逃逸投递） |
-| 输入与会话 | `submitInput` / `submitInputGuarded`、`createConversation / forkConversation / listConversations / getConversation / getConversationDetail / updateConversation / abortConversation / abortConversationGuarded`、`manageConversation`（删除保护）、`markConversationOwnership` |
+| 输入与会话 | `submitInput` / `submitInputGuarded`（均支持 `attachments` 产物 ID 列表，按会话或祖先链授权挂载）、`createConversation / forkConversation / listConversations / getConversation / getConversationDetail / updateConversation / abortConversation / abortConversationGuarded`、`manageConversation`（删除保护）、`markConversationOwnership` |
 | 人机审批 | `createAsk / cancelAsk / registerAskSeqResolver`（CAS 水位解析器） |
 | 子代理与执行 | `spawnAgent / runGate / execEnv / resolveSpawnTarget / listActiveSpawnExecutions / withFileMutationQueue` |
 | 动作互调与治理 | `prepareAction / invokeAction / listActions / plugins`（受管包生命周期端口） |
-| 资产端口 | `profiles / skills / secrets`（Profile 与 SYSTEM.md、技能受管自举、插件私有机密） |
+| 资产端口 | `profiles / skills / secrets`（Profile 与 SYSTEM.md、技能受管自举、插件私有机密）、`listArtifacts / createArtifact / getArtifact`（会话产物列表、内存字节写入（与 HTTP 上传同链校验，返回 ID 供 `submitInput` 挂载）、授权读取） |
 | 节点与文件 | `nodeIpc / nodeFetch / openTunnel / executionEnv / withFileLock / atomicWriteFile / buildSpawnEnv / inspectNodePathUsage` |
 | 通用机制 | `redact / completeText / refreshModels / listPlugins / listUi / setConfig / isClosing / onEvent / emitEvent` |
 

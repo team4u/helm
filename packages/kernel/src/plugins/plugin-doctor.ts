@@ -88,6 +88,7 @@ function doctorBackend(): PluginHostBackend {
     getConversationOwnership: () => unavailable('host.getConversationOwnership'),
     markConversationOwnership: () => unavailable('host.markConversationOwnership'),
     listArtifacts: () => unavailable('host.listArtifacts'),
+    createArtifact: () => unavailable('host.createArtifact'),
     getArtifact: () => unavailable('host.getArtifact'),
     completeText: () => unavailable('host.completeText'),
     executionEnv: () => unavailable('host.executionEnv'),

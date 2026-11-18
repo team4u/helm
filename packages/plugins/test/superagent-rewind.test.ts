@@ -199,6 +199,7 @@ async function makeHarness(opts: HarnessOptions = {}): Promise<TestHarness> {
       }
     },
     async listArtifacts() { return [] },
+    async createArtifact(): Promise<never> { throw new HelmError('unsupported', 'fixture does not create artifacts', 501) },
     async getArtifact() { throw new HelmError('not_found', '无产物', 404) },
     async completeText() { throw new HelmError('unsupported', '本 fixture 无模型', 501) },
     executionEnv: () => { throw new HelmError('unsupported', '本 fixture 无执行环境', 501) },

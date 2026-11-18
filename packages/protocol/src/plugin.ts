@@ -613,6 +613,8 @@ export interface HelmHostApi {
       origin?: InputOrigin
       whenBusy?: WhenBusy
       meta?: Record<string, unknown>
+      /** 要挂载的产物 ID 列表（去重后按会话或祖先链授权；404 not_found / 403 artifact_forbidden）。 */
+      attachments?: string[]
       /** 跨重启幂等提交标识（重复提交同一 requestId 自动跳过）。 */
       requestId?: string
       /** 从指定历史条目起原地覆盖重发（截断该条及后续上下文后写入新输入）。 */
@@ -636,6 +638,8 @@ export interface HelmHostApi {
       /** 仅向现有运行投递；SDK 在接纳输入时原子拒绝已空闲的会话。 */
       whenIdle?: 'reject'
       meta?: Record<string, unknown>
+      /** 要挂载的产物 ID 列表（与 submitInput 同一授权与提交链）。 */
+      attachments?: string[]
       /** 跨重启幂等提交标识（重复提交同一 requestId 自动跳过）。 */
       requestId?: string
     },
@@ -683,6 +687,16 @@ export interface HelmHostApi {
   getConversationOwnership(id: number): 'helm' | 'bot' | 'human'
   /** 列出会话产物元数据（本会话全部；明文内容不进返回值）。 */
   listArtifacts(conversationId: number): Promise<ArtifactMetadata[]>
+  /**
+   * 以内存字节写入会话产物（kind 'upload'）：与 HTTP 上传同一条服务链
+   * （文件名边界校验、15 MiB 上限、文本 MIME 过 SecretStash 脱敏）；目标会话
+   * 不存在抛 404。返回元数据供 submitInput / submitInputGuarded 的
+   * attachments 挂载（产物须属于目标会话或其祖先链）。
+   */
+  createArtifact(
+    conversationId: number,
+    input: { name: string; bytes: Uint8Array; mimeType?: string },
+  ): Promise<ArtifactMetadata>
   /**
    * 授权读取单个产物（存在 + 属于会话或父链；越权 403、不存在 404）：
    * 返回轻量元数据 + 绝对路径（内容读取由调用方在目标节点执行）。

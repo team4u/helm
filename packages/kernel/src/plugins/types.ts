@@ -91,6 +91,7 @@ export interface PluginHostBackend
     | 'execEnv'
     | 'withFileMutationQueue'
     | 'listArtifacts'
+    | 'createArtifact'
     | 'getArtifact'
     | 'createAsk'
     | 'cancelAsk'

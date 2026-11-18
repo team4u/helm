@@ -207,6 +207,9 @@ class StopWindowBackend implements PluginHostBackend {
   async listArtifacts(): Promise<never[]> {
     return []
   }
+  async createArtifact(): Promise<never> {
+    throw new HelmError('unsupported', 'fixture does not create artifacts', 501)
+  }
   async getArtifact(): Promise<never> {
     throw new HelmError('not_found', 'no artifact', 404)
   }

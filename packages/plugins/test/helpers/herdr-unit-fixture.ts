@@ -728,6 +728,7 @@ export class HerdrFakeBackend implements PluginHostBackend {
   }
   async getConversationDetail(): Promise<never> { throw new HelmError('unsupported', '本 fixture 无详情', 501) }
   async listArtifacts(): Promise<never[]> { return [] }
+  async createArtifact(): Promise<never> { throw new HelmError('unsupported', 'fixture does not create artifacts', 501) }
   async getArtifact(id: string, conversationId: number): Promise<{ id: string; name: string; mimeType: string; size: number; absPath: string }> {
     if (this.getArtifactImpl !== undefined) return this.getArtifactImpl(id, conversationId)
     return undefined as never

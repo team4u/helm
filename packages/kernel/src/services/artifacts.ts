@@ -158,6 +158,28 @@ export class ArtifactService {
     private readonly stash?: { redact(text: string): string },
   ) {}
 
+  /**
+   * Per-conversation write/delete chain: serializes disk writes + metadata mutations for one
+   * conversation so an upload that already passed its existence check can never recreate the
+   * directory of a conversation deleted concurrently (existence checks alone cannot close that
+   * interleaving — the write itself awaits). Chains settle to empty tails so keys never leak.
+   */
+  private readonly conversationChains = new Map<number, Promise<unknown>>()
+
+  private runOnConversationChain<T>(conversationId: number, op: () => Promise<T>): Promise<T> {
+    const prev = this.conversationChains.get(conversationId) ?? Promise.resolve()
+    const run = prev.then(op, op)
+    const tail = run.then(
+      () => {},
+      () => {},
+    )
+    this.conversationChains.set(conversationId, tail)
+    void tail.then(() => {
+      if (this.conversationChains.get(conversationId) === tail) this.conversationChains.delete(conversationId)
+    })
+    return run
+  }
+
   private convDir(conversationId: number): string {
     return join(this.dataDir, 'artifacts', String(conversationId))
   }
@@ -187,32 +209,36 @@ export class ArtifactService {
     const name = opts.name ?? sourcePath.split(/[\\/]/).pop() ?? 'artifact'
     if (/[\\/\0]/.test(name)) throw new Error(`invalid artifact name: ${name}`)
     const mimeType = opts.mimeType ?? detectMime(name)
-    const id = randomUUID()
-    const storedName = `${id}-${name}`
-    const dest = join(this.convDir(conversationId), storedName)
-    let size: number
-    if (isTextMime(mimeType)) {
-      // Read source text and redact first: registration copies must honor stash non-leakage guarantees.
-      const raw = await readTextFile(sourcePath)
-      const safe = this.stash !== undefined ? this.stash.redact(raw) : raw
-      await atomicWriteFile(dest, safe)
-      size = Buffer.byteLength(safe, 'utf8')
-    } else {
-      await copyFilePrivate(sourcePath, dest)
-      size = (await stat(dest)).size
-    }
-    const metadata: ArtifactMetadata = {
-      id,
-      conversationId,
-      kind: 'registered',
-      name,
-      path: artifactRelPath(conversationId, storedName),
-      mimeType,
-      size,
-      createdAt: Date.now(),
-    }
-    this.repository.put(metadata)
-    return metadata
+    // Chained like uploads (ordering vs deleteConversation); no existence check by design —
+    // the tool-spill path runs inside a live turn with a trusted conversation ID.
+    return this.runOnConversationChain(conversationId, async () => {
+      const id = randomUUID()
+      const storedName = `${id}-${name}`
+      const dest = join(this.convDir(conversationId), storedName)
+      let size: number
+      if (isTextMime(mimeType)) {
+        // Read source text and redact first: registration copies must honor stash non-leakage guarantees.
+        const raw = await readTextFile(sourcePath)
+        const safe = this.stash !== undefined ? this.stash.redact(raw) : raw
+        await atomicWriteFile(dest, safe)
+        size = Buffer.byteLength(safe, 'utf8')
+      } else {
+        await copyFilePrivate(sourcePath, dest)
+        size = (await stat(dest)).size
+      }
+      const metadata: ArtifactMetadata = {
+        id,
+        conversationId,
+        kind: 'registered',
+        name,
+        path: artifactRelPath(conversationId, storedName),
+        mimeType,
+        size,
+        createdAt: Date.now(),
+      }
+      this.repository.put(metadata)
+      return metadata
+    })
   }
 
   /**
@@ -237,40 +263,44 @@ export class ArtifactService {
         { maxBytes: MAX_ARTIFACT_BYTES, actualBytes: input.bytes.byteLength },
       )
     }
-    // Final existence check right before writing: no awaits between here and the write (atomic window),
-    // closing the HTTP orphan-artifact race; non-`not_found` errors propagate as-is rather than misreporting missing.
-    if (deps !== undefined && !(await deps.conversationExists(conversationId))) {
-      throw new HelmError('not_found', `conversation not found: ${conversationId}`, 404, { conversationId })
-    }
     const mimeType =
       input.mimeType !== undefined && input.mimeType.trim() !== ''
         ? input.mimeType.trim().toLowerCase()
         : detectMime(safeName)
-    const id = randomUUID()
-    const storedName = `${id}-${safeName}`
-    const dest = join(this.convDir(conversationId), storedName)
-    let size: number
-    if (isTextMime(mimeType)) {
-      const raw = Buffer.from(input.bytes).toString('utf8')
-      const safeText = this.stash !== undefined ? this.stash.redact(raw) : raw
-      await atomicWriteFile(dest, safeText)
-      size = Buffer.byteLength(safeText, 'utf8')
-    } else {
-      await atomicWriteFile(dest, input.bytes)
-      size = input.bytes.byteLength
-    }
-    const metadata: ArtifactMetadata = {
-      id,
-      conversationId,
-      kind: 'upload',
-      name: safeName,
-      path: artifactRelPath(conversationId, storedName),
-      mimeType,
-      size,
-      createdAt: Date.now(),
-    }
-    this.repository.put(metadata)
-    return metadata
+    // Existence check, write, and metadata put run inside the per-conversation chain: relative to a
+    // concurrently running deleteConversation (rm + metadata purge) the upload either completes
+    // wholly before the purge (final state clean) or observes the deletion and rejects 404 — it can
+    // never recreate the directory of a deleted conversation as an orphan.
+    return this.runOnConversationChain(conversationId, async () => {
+      if (deps !== undefined && !(await deps.conversationExists(conversationId))) {
+        throw new HelmError('not_found', `conversation not found: ${conversationId}`, 404, { conversationId })
+      }
+      const id = randomUUID()
+      const storedName = `${id}-${safeName}`
+      const dest = join(this.convDir(conversationId), storedName)
+      let size: number
+      if (isTextMime(mimeType)) {
+        const raw = Buffer.from(input.bytes).toString('utf8')
+        const safeText = this.stash !== undefined ? this.stash.redact(raw) : raw
+        await atomicWriteFile(dest, safeText)
+        size = Buffer.byteLength(safeText, 'utf8')
+      } else {
+        await atomicWriteFile(dest, input.bytes)
+        size = input.bytes.byteLength
+      }
+      const metadata: ArtifactMetadata = {
+        id,
+        conversationId,
+        kind: 'upload',
+        name: safeName,
+        path: artifactRelPath(conversationId, storedName),
+        mimeType,
+        size,
+        createdAt: Date.now(),
+      }
+      this.repository.put(metadata)
+      return metadata
+    })
   }
 
   async get(id: string): Promise<ArtifactMetadata> {
@@ -368,8 +398,13 @@ export class ArtifactService {
    */
   async deleteConversation(conversationId: number): Promise<void> {
     this.assertConversationId(conversationId)
-    await rm(this.convDir(conversationId), { recursive: true, force: true })
-    this.repository.deleteByConversation(conversationId)
+    // Runs on the same per-conversation chain as uploads/registrations: an in-flight write that
+    // queued earlier finishes first and is then purged wholesale; anything queued after observes
+    // its own existence re-check (upload path) or lands before the purge completes.
+    await this.runOnConversationChain(conversationId, async () => {
+      await rm(this.convDir(conversationId), { recursive: true, force: true })
+      this.repository.deleteByConversation(conversationId)
+    })
   }
 
   /** Actual filenames in the conversation artifact directory (used by test assertions). */

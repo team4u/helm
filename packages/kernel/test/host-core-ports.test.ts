@@ -8,6 +8,8 @@
  *   after settle;
  * - prompt projection: only active tools enter prompt.tools.* sections without ghost residues;
  *   promptGuidelines arrays expand line by line.
+ * - createArtifact/submitInput attachments: plugin port wiring over the real runtime (upload
+ *   validation, attachment authorization, [Attached Files] manifest reaching the model, expiry).
  * Runner: tsx --test; every test specifies timeout: 60_000 against deadlocks.
  */
 import test from 'node:test'
@@ -195,6 +197,7 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
       () => captured!.nodeIpc.isOnline('local'),
       () => captured!.completeText({ conversationId: 1, systemPrompt: '', text: '' }),
       () => captured!.forkConversation(1, { entryId: 1 }),
+      () => captured!.createArtifact(1, { name: 'a.txt', bytes: new TextEncoder().encode('x') }),
       () => captured!.refreshModels(),
       () => captured!.redact('x'),
       () => captured!.executionEnv('local', '/tmp').canonicalPath('/tmp/x', BACKGROUND_CONTEXT),
@@ -781,6 +784,138 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
       await runtime.plugins.disable('p:fork-real')
       await assert.rejects(
         async () => realHost!.forkConversation(parent.id, { entryId: lastEntryId }),
+        (err: unknown) => err instanceof HelmError && err.status === 409 && err.code === 'plugin_context_expired',
+      )
+    } finally {
+      await runtime.close()
+    }
+  })
+
+  await t.test('ctx.host.createArtifact + submitInput attachments: real runtime wiring end-to-end', { timeout: 60_000 }, async (sub) => {
+    const rtDir = useTempDir(sub, 'helm-host-attach-rt-')
+    const { models, faux } = makeFauxModels()
+    // Response factory echoes whether the attachment manifest reached the model transcript.
+    faux.setResponses([
+      (context) => {
+        const sawManifest = JSON.stringify(context.messages).includes('[Attached Files]')
+        return fauxAssistantMessage(sawManifest ? 'ATTACHMENT_MANIFEST_SEEN' : 'ATTACHMENT_MANIFEST_MISSING')
+      },
+    ])
+    const runtime = await KernelRuntime.open({
+      buildProvider: createPluginBuildProvider(),
+      dataDir: rtDir,
+      cwd: rtDir,
+      models,
+      model: 'faux/faux-1',
+    })
+    try {
+      let realHost: HelmHostApi | undefined
+      await runtime.plugins.register({
+        id: 'p:attach-real',
+        definePlugin(ctx) {
+          realHost = ctx.host
+        },
+      }, { enabled: true })
+      assert.ok(realHost)
+
+      await runtime.services.profiles.save({
+        id: 'courier',
+        name: 'courier',
+        model: 'faux/faux-1',
+        cwd: rtDir,
+      })
+      const conv = await runtime.createConversation({
+        profileId: 'courier',
+        cwd: rtDir,
+        title: 'attachment relay',
+      })
+      const other = await runtime.createConversation({
+        profileId: 'courier',
+        cwd: rtDir,
+        title: 'sibling conversation',
+      })
+
+      // Boundary rejections before any write: missing conversation, invalid filename.
+      await assert.rejects(
+        () => realHost!.createArtifact(999999, { name: 'a.txt', bytes: new TextEncoder().encode('x') }),
+        (err: unknown) => err instanceof HelmError && err.status === 404 && err.code === 'not_found',
+      )
+      await assert.rejects(
+        () => realHost!.createArtifact(conv.id, { name: '../evil', bytes: new TextEncoder().encode('x') }),
+        (err: unknown) => err instanceof HelmError && err.status === 400 && err.code === 'validation_error',
+      )
+
+      // Happy path: text artifact + image artifact, both visible via listArtifacts.
+      const textMeta = await realHost!.createArtifact(conv.id, {
+        name: 'note.md',
+        mimeType: 'text/markdown',
+        bytes: new TextEncoder().encode('# relay note'),
+      })
+      assert.equal(textMeta.kind, 'upload')
+      assert.equal(textMeta.conversationId, conv.id)
+      const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3])
+      const imageMeta = await realHost!.createArtifact(conv.id, {
+        name: 'photo.png',
+        mimeType: 'image/png',
+        bytes: pngBytes,
+      })
+      const listed = await realHost!.listArtifacts(conv.id)
+      assert.deepEqual(
+        listed.map((m) => m.id).sort(),
+        [textMeta.id, imageMeta.id].sort(),
+      )
+
+      // Attachment authorization: sibling-conversation artifact and unknown IDs are rejected.
+      const siblingMeta = await realHost!.createArtifact(other.id, {
+        name: 'private.txt',
+        bytes: new TextEncoder().encode('sibling only'),
+      })
+      await assert.rejects(
+        () => realHost!.submitInput(conv.id, 'x', { attachments: [siblingMeta.id] }),
+        (err: unknown) => err instanceof HelmError && err.status === 403 && err.code === 'artifact_forbidden',
+      )
+      await assert.rejects(
+        () => realHost!.submitInput(conv.id, 'x', { attachments: ['no-such-artifact'] }),
+        (err: unknown) => err instanceof HelmError && err.status === 404 && err.code === 'not_found',
+      )
+      await assert.rejects(
+        // Shape gate at the shared submission entry: non-string elements never reach resolution.
+        () => realHost!.submitInput(conv.id, 'x', { attachments: [42] as unknown as string[] }),
+        (err: unknown) => err instanceof HelmError && err.status === 400 && err.code === 'validation_error',
+      )
+
+      // Full relay: submitInput with attachments reaches the model with the [Attached Files] manifest.
+      await realHost!.submitInput(conv.id, 'please review the attached files', {
+        origin: 'trigger',
+        attachments: [textMeta.id, imageMeta.id],
+      })
+      await runtime.waitForIdle(conv.id)
+      const detail = await runtime.getConversationDetail(conv.id)
+      const inputEntry = detail.entries.find(
+        (e) => e.kind === 'user' || JSON.stringify(e).includes('please review the attached files'),
+      )
+      assert.ok(inputEntry, 'input entry present in timeline')
+      const serialized = JSON.stringify(inputEntry)
+      assert.ok(serialized.includes('note.md') && serialized.includes('photo.png'), 'attachment refs ride the input entry')
+      // pi entry kinds are provider-native; assistant text lives in the model-context array, so
+      // search the serialized timeline for the faux marker instead of filtering by kind.
+      const timelineText = JSON.stringify(detail.entries)
+      assert.ok(
+        timelineText.includes('ATTACHMENT_MANIFEST_SEEN'),
+        `model transcript carried the attachment manifest (timeline: ${timelineText.slice(0, 2000)})`,
+      )
+
+      // Deletion mid-flight safety: creating into a just-deleted conversation rejects 404, never orphans.
+      await runtime.deleteConversation(other.id)
+      await assert.rejects(
+        () => realHost!.createArtifact(other.id, { name: 'late.txt', bytes: new TextEncoder().encode('x') }),
+        (err: unknown) => err instanceof HelmError && err.status === 404 && err.code === 'not_found',
+      )
+
+      await runtime.plugins.disable('p:attach-real')
+      // Wrap async: the epoch guard throws synchronously before entering the async backend call.
+      await assert.rejects(
+        async () => realHost!.createArtifact(conv.id, { name: 'late.txt', bytes: new TextEncoder().encode('x') }),
         (err: unknown) => err instanceof HelmError && err.status === 409 && err.code === 'plugin_context_expired',
       )
     } finally {

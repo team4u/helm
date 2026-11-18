@@ -637,6 +637,8 @@ export function wrapHostApi(
 
     // 10. artifacts & text completion
     listArtifacts: (conversationId) => tracked('host.listArtifacts', () => backend.listArtifacts(conversationId)),
+    createArtifact: (conversationId, input) =>
+      tracked('host.createArtifact', () => backend.createArtifact(conversationId, input)),
     getArtifact: (artifactId, conversationId) =>
       tracked('host.getArtifact', () => backend.getArtifact(artifactId, conversationId)),
     completeText: (input) => tracked('host.completeText', () => backend.completeText(input)),

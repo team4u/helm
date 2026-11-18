@@ -159,6 +159,7 @@ class FakeBackend implements PluginHostBackend {
   setPluginConfig(): Promise<void> { return Promise.resolve() }
   async getConversationDetail(): Promise<never> { throw new HelmError('unsupported', '本 fixture 无详情', 501) }
   async listArtifacts(): Promise<never[]> { return [] }
+  async createArtifact(): Promise<never> { throw new HelmError('unsupported', 'fixture does not create artifacts', 501) }
   async getArtifact(): Promise<never> { throw new HelmError('not_found', '无产物', 404) }
   redact(text: string): string { return text }
   redactText(text: string): string { return text }

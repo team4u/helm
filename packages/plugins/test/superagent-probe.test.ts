@@ -379,6 +379,7 @@ class ProbeBackend implements PluginHostBackend {
   buildSpawnEnv(): Record<string, string> { return {} }
   async getConversationDetail(): Promise<never> { throw new HelmError('unsupported', '本 fixture 无详情', 501) }
   async listArtifacts(): Promise<never[]> { return [] }
+  async createArtifact(): Promise<never> { throw new HelmError('unsupported', 'fixture does not create artifacts', 501) }
   async getArtifact(): Promise<never> { throw new HelmError('not_found', '无产物', 404) }
   async completeText(): Promise<never> { throw new HelmError('unsupported', '本 fixture 无模型', 501) }
   executionEnv(): never { throw new HelmError('unsupported', '本 fixture 无执行环境', 501) }

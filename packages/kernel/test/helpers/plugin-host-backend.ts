@@ -157,6 +157,11 @@ export class PluginHostBackendFixtureBase implements PluginHostBackend {
     unsupported('host.listArtifacts')
   }
 
+  createArtifact(...args: Parameters<Port<'createArtifact'>>): ReturnType<Port<'createArtifact'>> {
+    void args
+    unsupported('host.createArtifact')
+  }
+
   getArtifact(...args: Parameters<Port<'getArtifact'>>): ReturnType<Port<'getArtifact'>> {
     void args
     unsupported('host.getArtifact')
@@ -334,6 +339,7 @@ export function createPluginHostBackendFixture(): PluginHostBackend {
     abortConversationGuarded: f(d.abortConversationGuarded),
     getConversationOwnership: f(d.getConversationOwnership),
     listArtifacts: f(d.listArtifacts),
+    createArtifact: f(d.createArtifact),
     getArtifact: f(d.getArtifact),
     completeText: f(d.completeText),
     executionEnv: f(d.executionEnv),

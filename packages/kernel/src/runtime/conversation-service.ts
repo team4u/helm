@@ -739,6 +739,22 @@ export class ConversationService {
       )
       if (previous !== undefined) return { submissionId: String(previous.id) }
     }
+    // Shape gate at the shared submission entry (HTTP callers are schema-validated upstream;
+    // in-process/plugin callers land here): rejects non-array or non-string attachment lists before
+    // they can surface as opaque TypeErrors inside attachment resolution.
+    if (opts?.attachments !== undefined) {
+      if (
+        !Array.isArray(opts.attachments) ||
+        opts.attachments.some((a) => typeof a !== 'string' || a.length === 0)
+      ) {
+        throw new HelmError(
+          'validation_error',
+          'attachments must be an array of non-empty artifact ID strings',
+          400,
+          { conversationId: id },
+        )
+      }
+    }
 
     const effectiveModelRef = await this.resolveEffectiveModel(convMeta.modelOverride, convMeta.profileId)
     if (!effectiveModelRef) {

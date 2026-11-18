@@ -12,7 +12,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { join } from 'node:path'
-import { symlink, writeFile } from 'node:fs/promises'
+import fsp, { stat, symlink, writeFile } from 'node:fs/promises'
 import {
   ArtifactService,
   CredentialService,
@@ -31,7 +31,7 @@ import { createHubHandler } from '../src/http/index.js'
 import type { EventHub, KernelRuntimeLike } from '../src/http/index.js'
 import { HelmError, type ConversationSummary } from '@helm/protocol'
 import { createPluginBuildProvider } from '@helm/plugin-build'
-import { MemoryDocStore, cleanupDir, makeConversationSummary, makeTempDir } from './helpers.js'
+import { MemoryDocStore, cleanupDir, deferred, makeConversationSummary, makeTempDir } from './helpers.js'
 
 // ---------------------------------------------------------------------------
 // Test harness
@@ -271,6 +271,50 @@ test('writeUploaded: rejects invalid filenames and invalid conversation IDs', { 
     artifacts.writeUploaded(-1, { name: 'ok.txt', bytes: new Uint8Array(1) }),
     /invalid conversationId/,
   )
+})
+
+test('writeUploaded vs deleteConversation serialization: upload passing its existence check cannot recreate a deleted conversation directory', { timeout: 60_000 }, async () => {
+  const dir = await makeTempDir('helm-artifact-chain-')
+  const service = new ArtifactService(dir, new InMemoryArtifactRepository())
+  const conversationId = 42
+  const conversationDir = join(dir, 'artifacts', String(conversationId))
+  const originalMkdir = fsp.mkdir.bind(fsp) as (...args: unknown[]) => Promise<unknown>
+  const enteredMkdir = deferred<void>()
+  const resumeMkdir = deferred<void>()
+  try {
+    // Barrier inside the write: upload passes the existence re-check, then pauses at mkdir while
+    // the conversation gets deleted underneath — the exact interleaving an existence check alone
+    // cannot close (previously recreated artifacts/42/ as an orphan with live metadata).
+    fsp.mkdir = (async (...args: unknown[]) => {
+      if (args[0] === conversationDir) {
+        enteredMkdir.resolve()
+        await resumeMkdir.promise
+      }
+      return originalMkdir(...args)
+    }) as typeof fsp.mkdir
+    const upload = service.writeUploaded(conversationId, { name: 'probe.bin', bytes: new Uint8Array([1]) }, {
+      conversationExists: () => true,
+    })
+    await Promise.race([
+      enteredMkdir.promise,
+      upload.then(() => {
+        throw new Error('upload completed before reaching the mkdir barrier')
+      }),
+    ])
+    // Enqueue the deletion behind the in-flight write (same per-conversation chain), then release
+    // the barrier: awaiting the deletion here would deadlock the chain it is queued on.
+    const deletion = service.deleteConversation(conversationId)
+    resumeMkdir.resolve()
+    await upload
+    await deletion
+    // Deletion queued behind the in-flight write purges it wholesale: no orphan dir, no metadata.
+    await assert.rejects(() => stat(conversationDir), (err: unknown) => (err as NodeJS.ErrnoException).code === 'ENOENT')
+    assert.deepEqual(await service.list(conversationId), [])
+  } finally {
+    resumeMkdir.resolve()
+    fsp.mkdir = originalMkdir as typeof fsp.mkdir
+    await cleanupDir(dir)
+  }
 })
 
 // ---------------------------------------------------------------------------
