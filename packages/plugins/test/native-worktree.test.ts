@@ -1728,7 +1728,8 @@ function stubChunkedExec(scriptOf: (args: readonly string[]) => { output: string
     args: readonly string[],
   ): Promise<{ ok: boolean; exitCode: number; output: string; timedOut: false }> => {
     seen.push([...args])
-    const spec = scriptOf(args.slice(3))
+    const cmdArgs = args[0] === 'git' ? (args[1] === '-C' ? args.slice(3) : args.slice(1)) : args
+    const spec = scriptOf(cmdArgs)
     const exitCode = spec.exitCode ?? 0
     void chunkSize
     return { ok: exitCode === 0, exitCode, output: spec.output, timedOut: false }
@@ -1751,6 +1752,9 @@ describe('inspect 受限采集上限（受控 exec 分块注入）', { timeout: 
       if (key === 'rev-parse HEAD') return { output: `${head}\n` }
       if (key === 'status --porcelain --untracked-files=all') return { output: `${statusLines.join('\n')}\n` }
       if (key === `rev-list --count ${base}..${head}`) return { output: '3\n' }
+      if (key === 'rev-parse --path-format=absolute --git-common-dir') return { output: '/repo/.git\n' }
+      if (key === 'worktree list --porcelain -z') return { output: `worktree /repo\0HEAD ${base}\0branch refs/heads/main\0\0` }
+      if (key === `rev-list --count ${base}..stub-branch`) return { output: '3\n' }
       if (key === `diff --no-ext-diff --no-textconv --stat ${base}`) return { output: statBody }
       if (key === `diff --no-ext-diff --no-textconv ${base}`) return { output: diffBody }
       return { output: '', exitCode: 1 }
@@ -1810,6 +1814,7 @@ describe('inspect 受限采集上限（受控 exec 分块注入）', { timeout: 
     assert.equal(result.dirtyFilesTruncated, true)
     assert.equal(result.dirtyFiles[0], '?? file-000.txt')
     assert.equal(result.commitsAhead, 3)
+    assert.equal(result.unmergedCommits, 3)
     assert.equal(result.branchChanged, undefined)
     // argv 回归锁定：diff 命令必须携带防护参数。
     const diffInvocations = stub.seen.filter((a) => a.includes('diff'))

@@ -306,6 +306,7 @@ export function createProfilePlugin(): PluginDefinition {
           required: ['items'],
           additionalProperties: false,
         },
+        exposeToPrompt: false,
         idempotent: true,
         async handler(input, context) {
           // Identity adjudication: the calling-context conversation (the outer conversationId

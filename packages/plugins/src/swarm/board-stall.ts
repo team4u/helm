@@ -3,6 +3,7 @@
  * - At-Most-Once Silent-Exit Nudge 判定（单次确定性续催 -> 二次命中代发 [blocker] 结清）；
  * - 6 条件全组静默检测与 3 类根因精确归因（未唤醒悬空产出 / 已读未回帖 / 全员待命未结单）。
  */
+import { escapeXml } from '@helm/protocol'
 import type { BoardPost, CollabGroupRecord, GroupMemberState, MemberLiveState } from './contracts.js'
 
 export type SilentExitAction =
@@ -32,7 +33,7 @@ export function evaluateSilentExit(
       kind: 'nudge',
       taskSeq,
       prompt: [
-        `<swarm_silent_exit_nudge group="${group.id}" worker="${member.name}" taskSeq="${taskSeq}">`,
+        `<swarm_silent_exit_nudge group="${escapeXml(group.id)}" worker="${escapeXml(member.name)}" taskSeq="${taskSeq}">`,
         `You finished your turn for board task #${taskSeq} without calling swarm_board_post.`,
         `Peers and the coordinator only see what is posted to the board. Call swarm_board_post now to publish your outcome ('handoff', 'review', 'done', or 'blocker') with refs: [${taskSeq}].`,
         '</swarm_silent_exit_nudge>',
@@ -134,6 +135,7 @@ export interface MemberRuntimeSnapshot {
   liveState: MemberLiveState
   completionSeq: number
   isSettling: boolean
+  lastWakeCompletionSeq?: number
 }
 
 export interface QuiescenceCheckInput {
@@ -192,7 +194,7 @@ export function evaluateGroupQuiescence(
     if (snap.liveState === 'working' || snap.liveState === 'blocked' || snap.liveState === 'missing') {
       return { shouldEmitStall: false }
     }
-    if (m.lastWakeCompletionSeq !== undefined && snap.completionSeq <= m.lastWakeCompletionSeq) {
+    if (snap.lastWakeCompletionSeq !== undefined && snap.completionSeq <= snap.lastWakeCompletionSeq) {
       return { shouldEmitStall: false }
     }
   }

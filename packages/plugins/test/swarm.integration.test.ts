@@ -868,12 +868,11 @@ test('swarm-int4: failed turn auto [blocker], At-Most-Once Silent-Exit Nudge -> 
     const actualMetaPath = join(dataDir, 'plugins', 'builtin%3Aswarm', 'groups', groupId, 'meta.json')
     const persistedMeta = JSON.parse(readFileSync(actualMetaPath, 'utf8')) as {
       headSeq: number
-      members: Array<{ name: string; readCursorSeq: number; pendingWakeupSeq: number; lastWakeCompletionSeq?: number }>
+      members: Array<{ name: string; readCursorSeq: number; pendingWakeupSeq: number }>
     }
     const muteRec = persistedMeta.members.find((m) => m.name === 'mute')!
     muteRec.readCursorSeq = 0
     muteRec.pendingWakeupSeq = persistedMeta.headSeq
-    delete muteRec.lastWakeCompletionSeq
     writeFileSync(actualMetaPath, `${JSON.stringify(persistedMeta, null, 2)}\n`)
 
     let recoveredWakeupDelivered = false
@@ -1163,5 +1162,390 @@ test('swarm-int6: multi-tool-round worker turn settles once — no mid-turn sile
     assert.match(JSON.stringify(reportInputs[0]!.data ?? ''), /\[done\] @coder/)
   } finally {
     await app.close()
+  }
+})
+
+test('swarm-int7: done non-race catch-up, failed-turn queued wakeup delivery, active worker delete lock + disabled-period reconcile', { timeout: 60_000 }, async (t) => {
+  const env = await openSwarmEnv(useTempDir(t, 'helm-swarm-int7-'))
+  try {
+    const { kernel } = env.app
+    const coord = await kernel.createConversation({ title: 'Catchup Coord', profileId: 'assistant', cwd: env.repoDir })
+    const { groupId } = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
+      title: 'Catchup Squad',
+      conversationId: coord.id,
+    })) as { groupId: string }
+
+    // 1) Eliminating the 50ms done race deadlock + multi-worker blocker idle catch-up:
+    //    beta posts kind:'done' in round 1, then lingers > 80ms (> 50ms batch window) before trailing text settles.
+    //    Coordinator must NOT receive activeWorkingMembers:@beta prematurely, and must receive the post-settlement report once idle.
+    let betaRound = 0
+    let betaSecondRoundEntered = deferred<void>()
+    let betaRelease = deferred<void>()
+    env.faux.setResponses([
+      async (ctx) => {
+        const sec = captureRequestMeta(ctx.messages as unknown as Record<string, unknown>[]).sectionsById['swarm.active_group'] ?? ''
+        if (sec.includes('name="beta"')) {
+          betaRound += 1
+          if (betaRound === 1) {
+            return fauxAssistantMessage(
+              [fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'done', body: 'Beta finished!' })],
+              { stopReason: 'toolUse' },
+            )
+          }
+          betaSecondRoundEntered.resolve()
+          await betaRelease.promise
+          return fauxAssistantMessage('Beta completed trailing summary text.')
+        }
+        return fauxAssistantMessage('Coordinator processed report.')
+      },
+      ...Array.from({ length: 8 }, () => async (ctx: { messages: unknown[] }) => {
+        const sec = captureRequestMeta(ctx.messages as unknown as Record<string, unknown>[]).sectionsById['swarm.active_group'] ?? ''
+        if (sec.includes('name="beta"')) {
+          betaRound += 1
+          if (betaRound === 2) {
+            betaSecondRoundEntered.resolve()
+            await betaRelease.promise
+          }
+          return fauxAssistantMessage('Beta completed trailing summary text.')
+        }
+        return fauxAssistantMessage('Coordinator noted idle completion.')
+      }),
+    ])
+
+    const beta = (await kernel.plugins.invokeAction(
+      SWARM_PLUGIN_ID,
+      'dispatch_worker',
+      { prompt: 'Handle beta task with done + slow trailing text.', name: 'beta' },
+      { conversationId: coord.id },
+    )) as { workerConversationId: number }
+
+    await betaSecondRoundEntered.promise
+    // Hold longer than COORDINATOR_BATCH_WINDOW_MS (50ms) while beta is still mid-turn!
+    await new Promise((r) => setTimeout(r, 90))
+    const midTurnReports = (await kernel.getConversationDetail(coord.id, { limit: 20 })).entries.filter(
+      (e) => e.kind === 'helm.input' && JSON.stringify(e.data ?? '').includes('swarm_board_report'),
+    )
+    assert.equal(midTurnReports.length, 0, 'done post must NOT trigger 50ms race report while worker is still settling trailing text')
+
+    betaRelease.resolve()
+    await kernel.waitForIdle(beta.workerConversationId)
+    await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+    await kernel.waitForIdle(coord.id)
+
+    // Coordinator must have received final report after beta settled with empty activeWorkingMembers!
+    const coordDetail = await kernel.getConversationDetail(coord.id, { limit: 50 })
+    const reports = coordDetail.entries
+      .filter((e) => e.kind === 'helm.input' && JSON.stringify(e.data ?? '').includes('swarm_board_report'))
+      .map((e) => JSON.stringify(e.data ?? ''))
+    assert.equal(reports.length, 1, 'coordinator must receive report once worker settles idle')
+    assert.match(reports[0]!, /\[done\] @beta/)
+    assert.match(reports[0]!, /activeWorkingMembers: \(none\)/)
+
+    // 2) Active worker conversation lock blocks deletion while active, releases after close or archive
+    await assert.rejects(
+      () => kernel.deleteConversation(beta.workerConversationId),
+      (err: unknown) => err instanceof HelmError && err.code === 'conversation_managed_by_plugin' && err.status === 409,
+    )
+    await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'archive_worker', { groupId, name: 'beta' }, { conversationId: coord.id })
+    await kernel.deleteConversation(beta.workerConversationId)
+
+    // 3) failed-turn catchup: if worker settles with outcome=failed after a new wakeup was queued mid-turn, queued wakeup delivers
+    let gammaFailDone = false
+    let gammaRecoveredDelivered = false
+    env.faux.setResponses([fauxAssistantMessage('Gamma ready')])
+    const failingWorker = (await kernel.plugins.invokeAction(
+      SWARM_PLUGIN_ID,
+      'dispatch_worker',
+      { prompt: 'Fail initial turn cleanly.', name: 'gamma' },
+      { conversationId: coord.id },
+    )) as { workerConversationId: number }
+    await kernel.waitForIdle(failingWorker.workerConversationId)
+    await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+    await kernel.waitForIdle(coord.id)
+
+    // Fail gamma's next turn AFTER deterministically awaiting an inbound brief queued mid-turn
+    env.faux.setResponses([
+      async () => {
+        if (!gammaFailDone) {
+          gammaFailDone = true
+          await kernel.plugins.invokeAction(
+            SWARM_PLUGIN_ID,
+            'board_post',
+            { groupId, to: ['gamma'], kind: 'brief', body: 'Retry queued after fail' },
+            { conversationId: coord.id },
+          )
+          throw new Error('simulated worker crash')
+        }
+        gammaRecoveredDelivered = true
+        return fauxAssistantMessage(
+          [fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'done', body: 'Gamma recovered queued wakeup' })],
+          { stopReason: 'toolUse' },
+        )
+      },
+      () => {
+        gammaRecoveredDelivered = true
+        return fauxAssistantMessage(
+          [fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'done', body: 'Gamma recovered queued wakeup' })],
+          { stopReason: 'toolUse' },
+        )
+      },
+      fauxAssistantMessage('Gamma done'),
+      fauxAssistantMessage('Coordinator noted failure & recovery'),
+      fauxAssistantMessage('Coordinator noted done'),
+    ] as never)
+    await kernel.plugins.invokeAction(
+      SWARM_PLUGIN_ID,
+      'board_post',
+      { groupId, to: ['gamma'], kind: 'brief', body: 'Run failing turn' },
+      { conversationId: coord.id },
+    )
+    await waitFor(() => gammaRecoveredDelivered === true)
+    await kernel.waitForIdle(failingWorker.workerConversationId)
+    await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+    await kernel.waitForIdle(coord.id)
+    assert.equal(gammaRecoveredDelivered, true)
+
+    // 4) Worker with worktree deleted while plugin disabled: startup reconciles hold, archives member, and posts [blocker]
+    let deltaStep = 0
+    env.faux.setResponses([
+      () => {
+        deltaStep += 1
+        if (deltaStep === 1) {
+          return fauxAssistantMessage(
+            [fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'done', body: 'Delta done before delete.' })],
+            { stopReason: 'toolUse' },
+          )
+        }
+        return fauxAssistantMessage('Temp ready')
+      },
+      fauxAssistantMessage('Temp ready'),
+      fauxAssistantMessage('Coordinator ack'),
+      fauxAssistantMessage('Coordinator noted deleted delta'),
+    ])
+    const wtWorker = (await kernel.plugins.invokeAction(
+      SWARM_PLUGIN_ID,
+      'dispatch_worker',
+      { prompt: 'Hold worktree then get deleted while disabled.', name: 'delta', isolation: 'worktree' },
+      { conversationId: coord.id },
+    )) as { workerConversationId: number; worktreeId: string }
+    await kernel.waitForIdle(wtWorker.workerConversationId)
+    await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+    await kernel.waitForIdle(coord.id)
+    await waitFor(() => {
+      const s = kernel.getConversation(wtWorker.workerConversationId).status
+      return s !== 'working' && s !== 'blocked' && kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0
+    })
+
+    await kernel.plugins.disable(SWARM_PLUGIN_ID, { force: true })
+    await kernel.deleteConversation(wtWorker.workerConversationId)
+    await kernel.plugins.enable(SWARM_PLUGIN_ID)
+    await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+    await kernel.waitForIdle(coord.id)
+
+    const statusAfterReconcile = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'board_status', { groupId })) as BoardViewDoc
+    const deltaMember = statusAfterReconcile.members.find((m) => m.name === 'delta')!
+    assert.equal(deltaMember.lifecycle, 'archived')
+    assert.ok(
+      statusAfterReconcile.posts.some((p) => p.from === 'system' && p.kind === 'blocker' && p.body.includes('@delta')),
+      'must emit system [blocker] when worker conversation was deleted while plugin disabled',
+    )
+    // Released hold means workflow cleanup succeeds without hold lock error!
+    await kernel.plugins.invokeAction(WORKFLOW_ID, 'cleanup_worktree', { worktreeId: wtWorker.worktreeId, force: true })
+  } finally {
+    await env.close()
+  }
+})
+
+test('swarm-int8: external runtime & nodeId rejection, flat forkFrom, skill whitelist gating, bounded index lazy load & prompt metadata', { timeout: 60_000 }, async (t) => {
+  const env = await openSwarmEnv(useTempDir(t, 'helm-swarm-int8-'))
+  try {
+    const { kernel } = env.app
+    // 1) External runtime profile rejected with 400 unsupported_runtime
+    await kernel.services.profiles.save({
+      id: 'ext-agent',
+      name: 'External Agent',
+      runtime: { kind: 'herdr', agent: 'codex' },
+    })
+    // Restricted profile without swarm skill
+    await kernel.services.profiles.save({
+      id: 'no-swarm-skill',
+      name: 'No Swarm Skill',
+      skills: [],
+    })
+
+    const noSkillCoord = await kernel.createConversation({
+      title: 'Restricted Coord',
+      profileId: 'no-swarm-skill',
+      cwd: env.repoDir,
+    })
+    await assert.rejects(
+      () => kernel.submitInput(noSkillCoord.id, '/skill:swarm try orchestrating'),
+      (err: unknown) => err instanceof HelmError && err.code === 'input_blocked',
+      'Profile with skills=[] must block /skill:swarm trigger',
+    )
+
+    // Even if create_group is called directly, active section omits phantom load_skill instruction
+    const { groupId: noSkillGroupId } = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
+      title: 'Direct Group No Skill',
+      conversationId: noSkillCoord.id,
+    })) as { groupId: string }
+    let noSkillCoordSection = ''
+    let availableActionsInCoordTurn = ''
+    env.faux.setResponses([
+      (ctx) => {
+        const meta = captureRequestMeta(ctx.messages as unknown as Record<string, unknown>[])
+        noSkillCoordSection = meta.sectionsById['swarm.active_group'] ?? ''
+        availableActionsInCoordTurn = meta.sectionsById['prompt.actions'] ?? ''
+        return fauxAssistantMessage('Noted without skill.')
+      },
+    ])
+    await kernel.submitInput(noSkillCoord.id, 'Check sections')
+    await kernel.waitForIdle(noSkillCoord.id)
+    assert.equal(noSkillCoordSection.includes('load_skill('), false)
+    assert.equal(availableActionsInCoordTurn.includes('complete_board_members'), false, 'exposeToPrompt:false hides UI completer from <available_actions>')
+    assert.equal(availableActionsInCoordTurn.includes('list_mentionable'), false, 'exposeToPrompt:false hides profile @ completer')
+    assert.match(availableActionsInCoordTurn, /manage_channel/, 'coordinator manages channels via run_action catalog')
+    await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'close_group', { groupId: noSkillGroupId }, { conversationId: noSkillCoord.id })
+
+    // 2) Dispatch validation & flat forkFrom & structuredOutput tool envelope
+    const coord = await kernel.createConversation({ title: 'Flat Coord', profileId: 'assistant', cwd: env.repoDir })
+    const { groupId } = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
+      title: 'Flat Squad',
+      conversationId: coord.id,
+    })) as { groupId: string }
+
+    await assert.rejects(
+      () =>
+        kernel.plugins.invokeAction(
+          SWARM_PLUGIN_ID,
+          'dispatch_worker',
+          { groupId, name: 'ext', prompt: 'Should fail', profileId: 'ext-agent' },
+          { conversationId: coord.id },
+        ),
+      (err: unknown) => err instanceof HelmError && err.code === 'unsupported_runtime' && err.status === 400,
+    )
+    await assert.rejects(
+      () =>
+        kernel.plugins.invokeAction(
+          SWARM_PLUGIN_ID,
+          'dispatch_worker',
+          { groupId, name: 'badnode', prompt: 'Should fail', nodeId: 'nonexistent-node' },
+          { conversationId: coord.id },
+        ),
+      (err: unknown) => err instanceof HelmError && err.code === 'validation_error' && err.status === 400,
+    )
+
+    env.faux.setResponses([
+      fauxAssistantMessage('Alpha settled reply'),
+      fauxAssistantMessage('Beta forked settled reply'),
+      fauxAssistantMessage('Coordinator noted stalls'),
+      fauxAssistantMessage('Coordinator noted stalls'),
+    ])
+    const alpha = (await kernel.plugins.invokeAction(
+      SWARM_PLUGIN_ID,
+      'dispatch_worker',
+      { groupId, name: 'alpha', prompt: 'Seed alpha conversation' },
+      { conversationId: coord.id },
+    )) as { workerConversationId: number }
+    await kernel.waitForIdle(alpha.workerConversationId)
+
+    const beta = (await kernel.plugins.invokeAction(
+      SWARM_PLUGIN_ID,
+      'dispatch_worker',
+      { groupId, name: 'beta', prompt: 'Fork from peer alpha', forkFrom: 'alpha' },
+      { conversationId: coord.id },
+    )) as { workerConversationId: number }
+    await kernel.waitForIdle(beta.workerConversationId)
+    assert.equal(
+      kernel.getConversation(beta.workerConversationId).parentConversationId,
+      coord.id,
+      'forkFrom peer must keep flat parentConversationId pointing to coordinator',
+    )
+
+    // Tool call envelope verification: swarm_board_status exposes concise text + structuredOutput object
+    const toolRes = (await kernel.plugins.executeTool(
+      'swarm_board_status',
+      { groupId },
+      { conversationId: coord.id },
+    )) as { output: string; structuredOutput: BoardViewDoc }
+    assert.ok(typeof toolRes.output === 'string' && toolRes.output.includes('Flat Squad'))
+    assert.equal(toolRes.structuredOutput.group.id, groupId)
+
+    await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+    await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'close_group', { groupId }, { conversationId: coord.id })
+
+    // 3) Bounded index (MAX_INDEX_CLOSED_GROUPS = 50) + lazy closed group loading for evicted archived coordinator/worker
+    const evictedCoord = await kernel.createConversation({ title: 'Evicted Hist Coord', profileId: 'assistant', cwd: env.repoDir })
+    const evictedGroup = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
+      title: 'Evicted Historic Group',
+      conversationId: evictedCoord.id,
+    })) as { groupId: string }
+    let evictedStep = 0
+    env.faux.setResponses([
+      () => {
+        evictedStep += 1
+        if (evictedStep === 1) {
+          return fauxAssistantMessage(
+            [fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'done', body: 'Evicted worker done' })],
+            { stopReason: 'toolUse' },
+          )
+        }
+        return fauxAssistantMessage('Evicted worker settled')
+      },
+      fauxAssistantMessage('Evicted worker settled'),
+      fauxAssistantMessage('Coord ack'),
+    ])
+    const evictedWorker = (await kernel.plugins.invokeAction(
+      SWARM_PLUGIN_ID,
+      'dispatch_worker',
+      { groupId: evictedGroup.groupId, name: 'evictedw', prompt: 'Worker in evicted group' },
+      { conversationId: evictedCoord.id },
+    )) as { workerConversationId: number }
+    await kernel.waitForIdle(evictedWorker.workerConversationId)
+    await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+    await kernel.waitForIdle(evictedCoord.id)
+    await kernel.plugins.invokeAction(
+      SWARM_PLUGIN_ID,
+      'close_group',
+      { groupId: evictedGroup.groupId },
+      { conversationId: evictedCoord.id },
+    )
+
+    // Create and close 51 more groups so total closed groups = 53 > 50 (with updatedAt strictly newer)
+    for (let i = 0; i < 51; i += 1) {
+      const c = await kernel.createConversation({ title: `Hist ${i}`, profileId: 'assistant', cwd: env.repoDir })
+      const g = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', {
+        title: `Hist Group ${i}`,
+        conversationId: c.id,
+      })) as { groupId: string }
+      await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'close_group', { groupId: g.groupId }, { conversationId: c.id })
+    }
+
+    // Disable + re-enable swarm plugin to exercise startup lazy-load & bounded index sync
+    await kernel.plugins.disable(SWARM_PLUGIN_ID, { force: true })
+    await kernel.plugins.enable(SWARM_PLUGIN_ID)
+    const idxAfterReload = kernel.plugins.getPublicDoc(SWARM_PLUGIN_ID, 'index').value as SwarmIndexDoc
+    assert.ok(idxAfterReload.groups.length <= 50, `closed groups in index must be bounded to <= 50 (got ${idxAfterReload.groups.length})`)
+    assert.equal(idxAfterReload.groups.some((g) => g.id === evictedGroup.groupId), false, 'oldest evicted group is absent from bounded index')
+
+    // Neither evicted coordinator nor evicted worker fails when viewing panel via archived scope!
+    const byArchivedCoord = (await kernel.plugins.invokeAction(
+      SWARM_PLUGIN_ID,
+      'board_status',
+      {},
+      { conversationId: evictedCoord.id },
+    )) as BoardViewDoc
+    assert.equal(byArchivedCoord.group.id, evictedGroup.groupId)
+    assert.ok(byArchivedCoord.posts.length >= 1, 'lazy-loaded board.jsonl restores posts for archived coordinator')
+
+    const byArchivedWorker = (await kernel.plugins.invokeAction(
+      SWARM_PLUGIN_ID,
+      'board_status',
+      {},
+      { conversationId: evictedWorker.workerConversationId },
+    )) as BoardViewDoc
+    assert.equal(byArchivedWorker.group.id, evictedGroup.groupId)
+  } finally {
+    await env.close()
   }
 })

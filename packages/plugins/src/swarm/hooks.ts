@@ -1,4 +1,4 @@
-import { escapeXml, type HelmPluginContext } from '@helm/protocol'
+import { escapeXml, isSkillAvailable, type HelmPluginContext } from '@helm/protocol'
 import {
   ACTIVE_SWARM_GROUP_SECTION_ID,
   ARCHIVED_WORKER_TAG,
@@ -19,14 +19,33 @@ const SWARM_SLASH_RE = /^\/skill:swarm(?:\s+([\s\S]*))?$/
 const INELIGIBLE_SWARM_SLASH_REASON =
   '不能在子成员或后台会话中使用 /skill:swarm 发起协同，请在顶层对话输入 /skill:swarm <任务>'
 
+async function isSwarmSkillAllowed(ctx: HelmPluginContext, profileId: string): Promise<boolean> {
+  const [profile, allSkills] = await Promise.all([
+    ctx.host.profiles.get(profileId),
+    ctx.host.skills.list(),
+  ])
+  if (profile === undefined) return false
+  const skill = allSkills.find((s) => s.id === SWARM_SKILL_ID)
+  if (skill === undefined) return false
+  const enabledPluginIds = new Set(ctx.host.listPlugins().filter((p) => p.enabled).map((p) => p.id))
+  return isSkillAvailable(skill, profile, enabledPluginIds)
+}
+
 /** 100% 字节恒定的协作组主控系统提示词段（仅含创建后永不变更的 groupId 与静态协作铁律，零可变成员列表或状态）。 */
-export function activeSwarmGroupCoordinatorSection(groupId: string): string {
+export function activeSwarmGroupCoordinatorSection(
+  groupId: string,
+  options?: { skillAvailable?: boolean },
+): string {
+  const skillStep =
+    options?.skillAvailable === false
+      ? '1. Coordinate the squad on the blackboard directly with swarm_* tools (profile skills policy disables load_skill). If the user only sent "/skill:swarm" with no task and no prior goal, confirm swarm mode is ready and briefly ask what task to coordinate.'
+      : `1. Before coordinating, call load_skill({ skillId: "${SWARM_SKILL_ID}" }) for the full blackboard collaboration rules. If the user only sent "/skill:swarm" with no task and no prior goal, confirm swarm mode is ready and briefly ask what task to coordinate.`
   return [
     `<active_swarm_group id="${escapeXml(groupId)}" role="coordinator">`,
-    `1. Before coordinating, call load_skill({ skillId: "${SWARM_SKILL_ID}" }) for the full blackboard collaboration rules. If the user only sent "/skill:swarm" with no task and no prior goal, confirm swarm mode is ready and briefly ask what task to coordinate.`,
+    skillStep,
     '2. Dynamically decide the squad for the task itself (never follow fixed role-name templates): choose worker count, lowercase names, directory access ("readwrite" / "readonly"), workspace isolation ("worktree" / "inherit"), and optional profileId / model via swarm_dispatch_worker.',
     '3. Coordinate handoffs via swarm_board_post / swarm_board_read / swarm_board_status using #seq pointers in refs without copy-pasting diffs or long reports; keep wake=true strictly for the next actor who must act, and never close the group while activeWorkingMembers is non-empty.',
-    '4. When all slices pass verification and worktree branches await merging, call swarm_close_group({ keepWorktree: true }) to unlock bash and merge cleanly.',
+    '4. When all tasks finish cleanly without unmerged worktree branches, call swarm_close_group(); if worktree branches await merging, call swarm_close_group({ keepWorktree: true }) to unlock bash and merge cleanly.',
     '</active_swarm_group>',
   ].join('\n')
 }
@@ -90,6 +109,12 @@ export function registerSwarmHooks(
     ) {
       return { action: 'block', reason: INELIGIBLE_SWARM_SLASH_REASON }
     }
+    if (!(await isSwarmSkillAllowed(ctx, conv.profileId))) {
+      return {
+        action: 'block',
+        reason: `当前 Profile '${conv.profileId}' 未开放 '${SWARM_SKILL_ID}' 技能，无法使用 /skill:swarm`,
+      }
+    }
 
     const rawTask = (match[1] ?? '').trim()
     if (groups.findActiveGroupByCoordinator(conv.id) === undefined) {
@@ -116,7 +141,7 @@ export function registerSwarmHooks(
   // ------------------------------------------------------------------
   // before_turn：互斥工具裁剪 + 恒定 sections 注入（零破 Cache）
   // ------------------------------------------------------------------
-  ctx.hook.onBeforeTurn((turn) => {
+  ctx.hook.onBeforeTurn(async (turn) => {
     if (!isActive()) return
     const conv = turn.conversation
     const activeCoordGroup = groups.findActiveGroupByCoordinator(conv.id)
@@ -163,7 +188,11 @@ export function registerSwarmHooks(
     }
 
     if (activeCoordGroup !== undefined) {
-      appendSection(ACTIVE_SWARM_GROUP_SECTION_ID, activeSwarmGroupCoordinatorSection(activeCoordGroup.id))
+      const skillAvailable = await isSwarmSkillAllowed(ctx, conv.profileId)
+      appendSection(
+        ACTIVE_SWARM_GROUP_SECTION_ID,
+        activeSwarmGroupCoordinatorSection(activeCoordGroup.id, { skillAvailable }),
+      )
     } else if (participant?.role === 'worker') {
       appendSection(
         ACTIVE_SWARM_GROUP_SECTION_ID,

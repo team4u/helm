@@ -8,14 +8,25 @@
  * When no member is in flight the summary is empty and the tray must render
  * null (zero height).
  */
-import type { ConversationSummary } from '@helm/protocol'
+import type { AskSpec, ConversationLive, ConversationSummary } from '@helm/protocol'
+import { DEFAULT_HELM_LOCALE, resolveLocalizedText, type HelmLocale } from '@helm/plugin-client'
 import {
+  boardProgressOf,
   isMemberInFlight,
+  isPlainObject,
   postDigestLine,
   sortBoardMembersForDisplay,
   type BoardMemberView,
   type BoardViewDoc,
 } from './board-model.ts'
+import {
+  TRAY_AWAITING_APPROVAL,
+  TRAY_AWAITING_HUMAN,
+  TRAY_LOAD_FAILED_TAG,
+  TRAY_OUTPUT_TAG,
+  TRAY_THINKING_TAG,
+  trayParallelToolsTag,
+} from './copy.ts'
 
 export interface SwarmTrayItem {
   key: string
@@ -80,14 +91,95 @@ export function buildSwarmTraySummary(
     }
   }
 
-  const activeMembers = view.members.filter((m) => m.lifecycle === 'active')
+  const progress = boardProgressOf(view.members)
   return {
     items,
     workingCount: items.filter((i) => !i.isBlocked).length,
     blockedCount: items.filter((i) => i.isBlocked).length,
     frontline,
     ...(view.group.createdAt > 0 ? { groupStartedAt: view.group.createdAt } : {}),
-    doneCount: activeMembers.filter((m) => m.liveState === 'done').length,
-    activeCount: activeMembers.length,
+    doneCount: progress.done,
+    activeCount: progress.total,
   }
+}
+
+function firstLineCompact(text: string, maxChars = 100): string {
+  const first = (text.trim().split(/\r?\n/, 1)[0] ?? '').replaceAll(/\s+/g, ' ').trim()
+  return first.length > maxChars ? `${first.slice(0, maxChars - 1)}…` : first
+}
+
+function lastMeaningfulLine(text: string): string | undefined {
+  const lines = text.split('\n')
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = (lines[i] ?? '').trim()
+    if (line === '') continue
+    return line.replace(/^[#-]+\s+/, '')
+  }
+  return undefined
+}
+
+function formatRunningToolSnippet(toolName: string, input: unknown): string {
+  if (isPlainObject(input)) {
+    const detail =
+      input['command'] ?? input['path'] ?? input['pattern'] ?? input['query'] ?? input['name'] ?? input['kind']
+    if (typeof detail === 'string' && detail.trim() !== '') {
+      return `${toolName}: ${firstLineCompact(detail, 80)}`
+    }
+  }
+  return toolName
+}
+
+/** Derive one live execution / approval snippet from host snapshot facts (never fabricated). */
+export function resolveSwarmTrayLiveSnippet(
+  input: {
+    isBlocked: boolean
+    summary?: ConversationSummary
+    live?: ConversationLive
+    pendingAsk?: Pick<AskSpec, 'title' | 'description'>
+    detailError?: string
+    fallbackDoing?: string
+  },
+  locale: HelmLocale = DEFAULT_HELM_LOCALE,
+): string | undefined {
+  if (input.detailError !== undefined) {
+    return `${resolveLocalizedText(TRAY_LOAD_FAILED_TAG, locale)}: ${firstLineCompact(input.detailError)}`
+  }
+  const hasBlocked =
+    input.isBlocked ||
+    input.pendingAsk !== undefined ||
+    (input.summary?.pendingAskCount ?? 0) > 0 ||
+    input.summary?.status === 'blocked'
+  if (hasBlocked) {
+    const raw =
+      input.pendingAsk?.title ||
+      input.pendingAsk?.description ||
+      input.summary?.doing ||
+      input.fallbackDoing ||
+      resolveLocalizedText(TRAY_AWAITING_HUMAN, locale)
+    return `${resolveLocalizedText(TRAY_AWAITING_APPROVAL, locale)}: ${firstLineCompact(raw)}`
+  }
+
+  const runningTools = (input.live?.tools ?? []).filter((t) => t.status === 'running')
+  if (runningTools.length === 1) {
+    const tool = runningTools[0]!
+    return formatRunningToolSnippet(tool.toolName, tool.input)
+  }
+  if (runningTools.length > 1) {
+    const names = runningTools.slice(0, 2).map((t) => formatRunningToolSnippet(t.toolName, t.input)).join(' · ')
+    return `${trayParallelToolsTag(runningTools.length, locale)}: ${names}`
+  }
+
+  const liveText = input.live?.text !== undefined ? lastMeaningfulLine(input.live.text) : undefined
+  if (liveText !== undefined) {
+    return `${resolveLocalizedText(TRAY_OUTPUT_TAG, locale)}: ${firstLineCompact(liveText)}`
+  }
+  const liveThinking = input.live?.thinking !== undefined ? lastMeaningfulLine(input.live.thinking) : undefined
+  if (liveThinking !== undefined) {
+    return `${resolveLocalizedText(TRAY_THINKING_TAG, locale)}: ${firstLineCompact(liveThinking)}`
+  }
+
+  const doing = input.summary?.doing !== undefined && input.summary.doing.trim() !== ''
+    ? input.summary.doing.trim()
+    : input.fallbackDoing
+  return doing !== undefined && doing.trim() !== '' ? firstLineCompact(doing) : undefined
 }

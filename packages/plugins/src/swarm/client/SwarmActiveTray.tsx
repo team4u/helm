@@ -23,6 +23,7 @@ import {
   StatusLight,
   formatDurationMs,
   resolveLocalizedText,
+  useConversation,
   useConversations,
   usePluginContext,
   usePluginDoc,
@@ -31,7 +32,7 @@ import {
 } from '@helm/plugin-client'
 import type { SwarmIndexDoc } from './models.ts'
 import { SWARM_WORKBENCH_PANEL_TARGET } from './models.ts'
-import { buildSwarmTraySummary } from './model-tray.ts'
+import { buildSwarmTraySummary, resolveSwarmTrayLiveSnippet, type SwarmTrayItem } from './model-tray.ts'
 import { parseBoardView, resolveConversationBoardLink, type BoardViewDoc } from './board-model.ts'
 import { useElapsedNowMs } from './hooks.ts'
 import {
@@ -49,6 +50,86 @@ import {
   trayToggleLabel,
 } from './copy.ts'
 
+function SwarmTrayLiveLine(props: {
+  conversationId: number | undefined
+  isBlocked: boolean
+  fallback?: string
+  emptyFallback?: string
+  inline?: boolean
+}): ReactNode {
+  const locale = usePluginLocale()
+  const conv = useConversation(props.conversationId, { includeDetail: false })
+  const snippet =
+    props.conversationId === undefined
+      ? undefined
+      : resolveSwarmTrayLiveSnippet(
+          {
+            isBlocked: props.isBlocked,
+            ...(conv.summary !== undefined ? { summary: conv.summary } : {}),
+            ...(conv.live !== undefined ? { live: conv.live } : {}),
+            ...(conv.pendingAsks[0] !== undefined ? { pendingAsk: conv.pendingAsks[0] } : {}),
+            ...(conv.loadError !== undefined ? { detailError: conv.loadError } : {}),
+            ...(props.fallback !== undefined ? { fallbackDoing: props.fallback } : {}),
+          },
+          locale,
+        )
+  const text = snippet ?? props.emptyFallback
+  if (text === undefined || text.trim() === '') return null
+  return (
+    <span className={props.inline === true ? 'sw-tray-frontline' : 'sw-tray-row-live'} title={text}>
+      {text}
+    </span>
+  )
+}
+
+function SwarmTrayRow(props: {
+  item: SwarmTrayItem
+  isCoordinatorViewer: boolean
+  busy: boolean
+  onAbort: (key: string, memberName: string) => void
+}): ReactNode {
+  const ctx = usePluginContext()
+  const locale = usePluginLocale()
+  const { item } = props
+  return (
+    <div className="sw-tray-row">
+      <button
+        type="button"
+        className="sw-tray-row-main"
+        aria-label={`@${item.name} — ${trayRowOpenLabel(item.name, locale)}`}
+        onClick={() => ctx.openConversationDrawer(item.conversationId)}
+      >
+        <span className="sw-tray-row-head">
+          <StatusLight
+            status={item.isBlocked ? 'blocked' : 'running'}
+            label={memberLiveStateLabel(item.isBlocked ? 'blocked' : 'working', locale)}
+          />
+          <span className="sw-tray-row-title">@{item.name}</span>
+          <span className="sw-tray-row-id tabular-nums">{`#${item.conversationId}`}</span>
+        </span>
+        <SwarmTrayLiveLine
+          conversationId={item.conversationId}
+          isBlocked={item.isBlocked}
+          fallback={item.doing}
+        />
+      </button>
+      <div className="sw-tray-row-actions">
+        {props.isCoordinatorViewer ? (
+          <button
+            type="button"
+            className="btn btn-xs btn-danger"
+            disabled={props.busy}
+            onClick={() => props.onAbort(`abort:${item.name}`, item.name)}
+          >
+            <HelmIcon name="square" size={11} />
+            <span>{resolveLocalizedText(ACTION_ABORT, locale)}</span>
+          </button>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
 export function SwarmActiveTray(props: Partial<ComposerScopeProps>): ReactNode {
   const ctx = usePluginContext()
   const locale = usePluginLocale()
@@ -64,7 +145,7 @@ export function SwarmActiveTray(props: Partial<ComposerScopeProps>): ReactNode {
   }, [conversationId])
 
   const link = useMemo(
-    () => resolveConversationBoardLink(conversationId, {}, index),
+    () => resolveConversationBoardLink(conversationId, index),
     [conversationId, index],
   )
 
@@ -115,6 +196,7 @@ export function SwarmActiveTray(props: Partial<ComposerScopeProps>): ReactNode {
   }
 
   const frontlineText = summary.frontline !== undefined ? trayFrontline(summary.frontline, locale) : undefined
+  const headlineItem = summary.items[0]
   const hudElapsed =
     nowMs !== undefined && summary.groupStartedAt !== undefined && nowMs >= summary.groupStartedAt
       ? formatDurationMs(nowMs - summary.groupStartedAt)
@@ -140,7 +222,21 @@ export function SwarmActiveTray(props: Partial<ComposerScopeProps>): ReactNode {
           <span className="badge badge-neutral sw-tray-badge tabular-nums">
             {trayProgress(summary.doneCount, summary.activeCount, locale)}
           </span>
-          {frontlineText !== undefined ? <span className="sw-tray-frontline">{frontlineText}</span> : null}
+          {summary.items.length > 1 || expanded ? (
+            <span className="sw-tray-count">{countText}</span>
+          ) : null}
+          {expanded ? null : headlineItem !== undefined ? (
+            <SwarmTrayLiveLine
+              conversationId={headlineItem.conversationId}
+              isBlocked={headlineItem.isBlocked}
+              fallback={headlineItem.doing}
+              emptyFallback={frontlineText}
+              inline
+            />
+          ) : frontlineText !== undefined ? (
+            <span className="sw-tray-frontline">{frontlineText}</span>
+          ) : null}
+          <span className="sw-tray-spacer" />
           {hudElapsed !== undefined ? (
             <span className="sw-tray-elapsed tabular-nums">{hudElapsed}</span>
           ) : null}
@@ -157,45 +253,15 @@ export function SwarmActiveTray(props: Partial<ComposerScopeProps>): ReactNode {
       </div>
       {expanded ? (
         <div id={listId} className="sw-tray-list">
-          {summary.items.map((item) => {
-            const openRow = (): void => {
-              ctx.openConversationDrawer(item.conversationId)
-            }
-            // 后端 abortWorker 明确支持 working 与 blocked（经 abortConversationGuarded 原地刹停），
-            // 主控视角对两类在途成员都提供真实中止；Worker 视角无权调用。
-            const canAbort = isCoordinatorViewer
-            return (
-              <div key={item.key} className="sw-tray-row">
-                <button
-                  type="button"
-                  className="sw-tray-row-main"
-                  aria-label={`@${item.name} — ${trayRowOpenLabel(item.name, locale)}`}
-                  onClick={openRow}
-                >
-                  <StatusLight
-                    status={item.isBlocked ? 'blocked' : 'running'}
-                    label={memberLiveStateLabel(item.isBlocked ? 'blocked' : 'working', locale)}
-                  />
-                  <span className="sw-tray-row-title">@{item.name}</span>
-                  <span className="sw-tray-row-id tabular-nums">{`#${item.conversationId}`}</span>
-                  {item.doing !== undefined ? <span className="sw-tray-row-doing">{item.doing}</span> : null}
-                </button>
-                <div className="sw-tray-row-actions">
-                  {isCoordinatorViewer ? (
-                    <button
-                      type="button"
-                      className="btn btn-xs btn-danger"
-                      disabled={busyKey !== undefined}
-                      onClick={() => runAbort(`abort:${item.name}`, item.name)}
-                    >
-                      <HelmIcon name="square" size={11} />
-                      <span>{resolveLocalizedText(ACTION_ABORT, locale)}</span>
-                    </button>
-                  ) : null}
-                </div>
-              </div>
-            )
-          })}
+          {summary.items.map((item) => (
+            <SwarmTrayRow
+              key={item.key}
+              item={item}
+              isCoordinatorViewer={isCoordinatorViewer}
+              busy={busyKey !== undefined}
+              onAbort={runAbort}
+            />
+          ))}
         </div>
       ) : null}
     </div>

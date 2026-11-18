@@ -178,14 +178,7 @@ export function asConversationEntryEvent(payload: unknown): ConversationEntryEve
   return payload as ConversationEntryEvent
 }
 
-/**
- * 跨平台绝对路径判定（插件纯函数；与内核工具同语义）：POSIX `/` 开头、
- * Windows 盘符 `C:\\...`/`C:/...` 或 UNC `\\\\server\\share`。
- * 目标节点可能与 Hub 异平台，不得用宿主 node:path 规则判定。
- */
-export function isAbsoluteTargetPath(value: string): boolean {
-  return value.startsWith('/') || /^[A-Za-z]:[\\/]/.test(value) || value.startsWith('\\\\')
-}
+export { isAbsoluteTargetPath } from '@helm/protocol'
 
 /** mutedSources 逗号/换行分隔解析为精确 source 集合（空项剔除）。 */
 export function parseMutedSources(raw: string): Set<string> {

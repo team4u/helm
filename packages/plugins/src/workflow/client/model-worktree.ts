@@ -38,6 +38,7 @@ export interface WorktreeInspectView {
   dirtyFileCount: number
   dirtyFilesTruncated: boolean
   commitsAhead?: number
+  unmergedCommits?: number
   diffStat?: string
   diffPreview?: string
   diffTruncated: boolean
@@ -102,6 +103,8 @@ export function parseWorktreeInspectResult(raw: unknown): WorktreeInspectView | 
   if (result['branchChanged'] !== undefined && typeof result['branchChanged'] !== 'boolean') return undefined
   const commitsAhead = result['commitsAhead']
   if (commitsAhead !== undefined && !inspectCount(commitsAhead)) return undefined
+  const unmergedCommits = result['unmergedCommits']
+  if (unmergedCommits !== undefined && !inspectCount(unmergedCommits)) return undefined
   const diffStat = inspectString(result, 'diffStat')
   const diffPreview = inspectString(result, 'diffPreview')
   return {
@@ -121,6 +124,7 @@ export function parseWorktreeInspectResult(raw: unknown): WorktreeInspectView | 
     dirtyFileCount,
     dirtyFilesTruncated,
     ...(commitsAhead !== undefined ? { commitsAhead } : {}),
+    ...(unmergedCommits !== undefined ? { unmergedCommits } : {}),
     ...(diffStat !== undefined ? { diffStat } : {}),
     ...(diffPreview !== undefined ? { diffPreview } : {}),
     diffTruncated: result['diffTruncated'],

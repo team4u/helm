@@ -4,6 +4,7 @@ export const SWARM_WORKBENCH_PANEL_ID = 'groups' as const
 export const SWARM_COORDINATOR_TAG = 'swarm-coordinator' as const
 export const SWARM_COORDINATOR_ARCHIVED_TAG = 'swarm-coordinator-archived' as const
 export const SWARM_WORKER_TAG = 'swarm-worker' as const
+export const SWARM_WORKER_ARCHIVED_TAG = 'swarm-worker-archived' as const
 export const SWARM_BOARD_REPORT_RENDERER = 'swarm:board-report' as const
 export const SWARM_BOARD_WAKEUP_RENDERER = 'swarm:board-wakeup' as const
 
@@ -11,9 +12,9 @@ const SWARM_PARTICIPANT_SCOPE: ConversationScope = {
   tags: [SWARM_COORDINATOR_TAG, SWARM_WORKER_TAG],
 }
 
-// 结单历史 tag 仅放行工作台编排面板（查看已完成编组）；活动托盘与 @/# 补全仍限活跃参与者。
+// 结单历史 tag（含历史主控与已归档 Worker）仅放行工作台编排面板查看历史编组；活动托盘与 @/# 补全仍限活跃参与者。
 const SWARM_HISTORY_VIEWER_SCOPE: ConversationScope = {
-  tags: [SWARM_COORDINATOR_TAG, SWARM_COORDINATOR_ARCHIVED_TAG, SWARM_WORKER_TAG],
+  tags: [SWARM_COORDINATOR_TAG, SWARM_COORDINATOR_ARCHIVED_TAG, SWARM_WORKER_TAG, SWARM_WORKER_ARCHIVED_TAG],
 }
 
 /** Model-facing swarm tool names (single source for the toolView trace registration). */
