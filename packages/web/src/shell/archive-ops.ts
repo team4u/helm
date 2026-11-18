@@ -10,9 +10,14 @@
  *   re-archiving does not re-append, restoring keeps the other tags); batches
  *   PATCH per conversation and aggregate with allSettled — partial failures
  *   never mask successes and are never silently swallowed;
- * - Archive/restore does not delete the conversation — currently open targets
- *   stay valid, so no navigation fallback happens (unlike the delete SSE
- *   fallback pipeline); the sidebar list updates purely via conversation.upsert.
+ * - Archive/restore does not delete the conversation — archived conversations
+ *   stay openable, so restore never navigates. Archiving the conversation
+ *   currently shown in the primary or split pane jumps to the owning agent's
+ *   standby (new-conversation) page; that navigation lives in the SSE
+ *   conversation.upsert handler (single source of truth, mirroring the delete
+ *   fallback pipeline) so every archive surface (pane menu, sidebar rows) and
+ *   even another client's archive follows the same rule; the sidebar list
+ *   updates purely via conversation.upsert.
  */
 import type { ConversationPatch, ConversationSummary } from '@helm/protocol/browser'
 import { conversationsApi } from '../lib/api.js'
