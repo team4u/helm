@@ -3,23 +3,20 @@
  * either human-readable text or a JSON object (`--json`) and returns a process exit code. Errors
  * carry a stable `code` (UsageError) surfaced in the JSON error envelope by the CLI layer.
  */
-import { pathsOf, resolvePayloadPackageName, resolveRegistryUrl } from './layout.js';
-import {
-  readBlockedRelease,
-  readCurrentRelease,
-  readLaunchConfig,
-  resolveEffectiveLaunchConfig,
-} from './records.js';
+import { readCurrentRelease, readBlockedRelease } from '@helm/update';
+import { pathsOf, resolvePayloadPackageName } from './layout.js';
+import { readLaunchConfig, resolveEffectiveLaunchConfig } from './records.js';
 import { readRunningHub, startHub, stopHub } from './process.js';
 import { checkHubUpgrade, performHubUpdate } from './update.js';
-import { UsageError, type LauncherIo } from './io.js';
 import type { UpdateCore } from './update-core.js';
+import type { LauncherIo } from './io.js';
 
 export interface CommandContext {
   io: LauncherIo;
   root: string;
-  /** Null while the `@helm/update` binding is pending; update commands fail explicitly. */
-  core: UpdateCore | null;
+  /** Test seams: fake registry fetch and a port-shaped update-core fake (no registry/npm). */
+  fetchFn?: typeof fetch;
+  core?: UpdateCore;
 }
 
 export interface CommandFlags {
@@ -38,22 +35,8 @@ export interface CommandFlags {
   healthTimeoutMs?: number;
 }
 
-function requireCore(ctx: CommandContext): UpdateCore {
-  if (ctx.core === null) {
-    throw new UsageError(
-      'the generic update engine (@helm/update) is not wired into this build yet; lifecycle commands (start/stop/restart/status) work, but check/update require the core binding (pending swarm integration)',
-      'update_core_unavailable',
-    );
-  }
-  return ctx.core;
-}
-
 function payloadPackageNameOf(ctx: CommandContext): string {
   return resolvePayloadPackageName(ctx.io.env);
-}
-
-function registryUrlOf(ctx: CommandContext, flags: CommandFlags): string {
-  return resolveRegistryUrl(ctx.io.env, flags.registry);
 }
 
 function launchFlagsOf(flags: CommandFlags) {
@@ -66,20 +49,24 @@ function launchFlagsOf(flags: CommandFlags) {
   };
 }
 
+function flagsAsJson(flags: CommandFlags): boolean {
+  return flags.json === true;
+}
+
 // ---------------------------------------------------------------------------
 // check
 // ---------------------------------------------------------------------------
 
 export async function cmdCheck(ctx: CommandContext, flags: CommandFlags): Promise<number> {
-  const core = requireCore(ctx);
   const result = await checkHubUpgrade({
     io: ctx.io,
-    core,
     root: ctx.root,
     pkgName: payloadPackageNameOf(ctx),
-    registryUrl: registryUrlOf(ctx, flags),
+    ...(ctx.core !== undefined ? { core: ctx.core } : {}),
+    ...(flags.registry !== undefined ? { registryUrl: flags.registry } : {}),
+    ...(ctx.fetchFn !== undefined ? { fetchFn: ctx.fetchFn } : {}),
   });
-  if (flags.json === true) {
+  if (flagsAsJson(flags)) {
     ctx.io.out(`${JSON.stringify(result, null, 2)}\n`);
     return 0;
   }
@@ -95,28 +82,24 @@ export async function cmdCheck(ctx: CommandContext, flags: CommandFlags): Promis
   return 0;
 }
 
-function flagsAsJson(flags: CommandFlags): boolean {
-  return flags.json === true;
-}
-
 // ---------------------------------------------------------------------------
 // update
 // ---------------------------------------------------------------------------
 
 export async function cmdUpdate(ctx: CommandContext, flags: CommandFlags): Promise<number> {
-  const core = requireCore(ctx);
   const outcome = await performHubUpdate({
     io: ctx.io,
-    core,
     root: ctx.root,
     pkgName: payloadPackageNameOf(ctx),
-    registryUrl: registryUrlOf(ctx, flags),
+    ...(flags.registry !== undefined ? { registryUrl: flags.registry } : {}),
     ...(flags.version !== undefined ? { targetVersion: flags.version } : {}),
     ...(flags.tarball !== undefined ? { tarballPath: flags.tarball } : {}),
     ...(flags.force ? { force: true } : {}),
     ...(flags.start ? { startIfNotRunning: true } : {}),
     launchFlags: launchFlagsOf(flags),
     ...(flags.healthTimeoutMs !== undefined ? { healthTimeoutMs: flags.healthTimeoutMs } : {}),
+    ...(ctx.fetchFn !== undefined ? { fetchFn: ctx.fetchFn } : {}),
+    ...(ctx.core !== undefined ? { core: ctx.core } : {}),
   });
   if (flagsAsJson(flags)) {
     ctx.io.out(`${JSON.stringify({ ok: true, ...outcome }, null, 2)}\n`);
@@ -130,7 +113,6 @@ export async function cmdUpdate(ctx: CommandContext, flags: CommandFlags): Promi
   if (outcome.restarted) lines.push(`hub restarted (pid ${outcome.pid}, ${outcome.url})`);
   else if (outcome.started) lines.push(`hub started (pid ${outcome.pid}, ${outcome.url})`);
   else lines.push('hub is not running; run start when ready');
-  if (outcome.reusedCachedStage) lines.push('(reused the cached staged release)');
   ctx.io.out(`${lines.join('\n')}\n`);
   return 0;
 }
@@ -143,13 +125,14 @@ export async function cmdStart(ctx: CommandContext, flags: CommandFlags): Promis
   const result = await startHub(ctx.root, ctx.io, {
     flags: launchFlagsOf(flags),
     ...(flags.healthTimeoutMs !== undefined ? { healthTimeoutMs: flags.healthTimeoutMs } : {}),
+    ...(ctx.fetchFn !== undefined ? { fetchFn: ctx.fetchFn } : {}),
   });
   if (flagsAsJson(flags)) {
-    const { health, ...rest } = result;
-    ctx.io.out(`${JSON.stringify({ ok: true, ...rest, health }, null, 2)}\n`);
+    ctx.io.out(`${JSON.stringify({ ok: true, ...result }, null, 2)}\n`);
     return 0;
   }
-  ctx.io.out(`hub ${result.version} running: pid ${result.pid} at ${result.url} (log: ${result.logPath})\n`);
+  const healthNote = result.health === null ? ' (auxiliary health probe unanswered)' : '';
+  ctx.io.out(`hub ${result.version} running: pid ${result.pid} at ${result.url}${healthNote} (log: ${result.logPath})\n`);
   return 0;
 }
 
@@ -182,10 +165,10 @@ export async function cmdRestart(ctx: CommandContext, flags: CommandFlags): Prom
   const result = await startHub(ctx.root, ctx.io, {
     flags: launchFlagsOf(flags),
     ...(flags.healthTimeoutMs !== undefined ? { healthTimeoutMs: flags.healthTimeoutMs } : {}),
+    ...(ctx.fetchFn !== undefined ? { fetchFn: ctx.fetchFn } : {}),
   });
   if (flagsAsJson(flags)) {
-    const { health, ...rest } = result;
-    ctx.io.out(`${JSON.stringify({ ok: true, stopped, ...rest, health }, null, 2)}\n`);
+    ctx.io.out(`${JSON.stringify({ ok: true, stopped, ...result }, null, 2)}\n`);
     return 0;
   }
   ctx.io.out(
@@ -201,9 +184,10 @@ export async function cmdRestart(ctx: CommandContext, flags: CommandFlags): Prom
 export async function cmdStatus(ctx: CommandContext, flags: CommandFlags): Promise<number> {
   const paths = pathsOf(ctx.root);
   const current = await readCurrentRelease(ctx.root);
-  const running = await readRunningHub(ctx.root, ctx.io);
+  const running = await readRunningHub(ctx.root, ctx.io, ctx.fetchFn);
   const saved = await readLaunchConfig(ctx.root);
   const effective = resolveEffectiveLaunchConfig({ env: ctx.io.env, saved });
+  const blocked = await readBlockedRelease(ctx.root);
   const payload = {
     installRoot: ctx.root,
     current:
@@ -211,9 +195,8 @@ export async function cmdStatus(ctx: CommandContext, flags: CommandFlags): Promi
         ? null
         : {
             version: current.version,
-            releaseDir: current.releaseDir,
-            entryPath: current.entryPath,
             updatedAt: current.updatedAt,
+            entryPath: current.entries['entryPath'] ?? null,
           },
     running:
       running === null
@@ -226,7 +209,7 @@ export async function cmdStatus(ctx: CommandContext, flags: CommandFlags): Promi
             healthy: running.health !== null,
             startedAt: running.record.startedAt,
           },
-    blocked: await readBlockedRelease(ctx.root),
+    blocked,
     launch: {
       port: effective.port,
       host: effective.host,
@@ -258,4 +241,3 @@ export async function cmdStatus(ctx: CommandContext, flags: CommandFlags): Promi
   ctx.io.out(`${lines.join('\n')}\n`);
   return running !== null && (!running.alive || running.health === null) ? 1 : 0;
 }
-

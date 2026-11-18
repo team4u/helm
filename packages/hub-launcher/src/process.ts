@@ -1,28 +1,35 @@
 /**
  * Hub process lifecycle owned by the launcher:
  *
- * - `startHub` spawns the committed payload entry (`start.mjs start`) detached with stdio to
- *   `logs/hub.log`, gates readiness on the public health endpoint, and only then persists
- *   `hub.pid` plus the sticky `launch.json`;
+ * - `startHub` spawns the committed payload entry (`start.mjs start`) detached with stdio
+ *   redirected to `logs/hub.log` (file-backed output survives launcher exit; no pipes that could
+ *   break a detached child), gates readiness primarily on the candidate's own stdout
+ *   `Helm Hub: <url>` listen-success line appearing in the log after spawn plus the child staying
+ *   alive (`@helm/hub` prints that line only after the HTTP server is listening) and the URL
+ *   matching the launch configuration, and only then persists `hub.pid` plus the sticky
+ *   `launch.json`. The public `GET /api/auth/status` endpoint is an auxiliary confirmation, never
+ *   the readiness basis;
  * - `stopHub` verifies the recorded pid is really our Hub (health probe) before signalling,
  *   escalates to `killProcessTree` (process group on POSIX, `taskkill /T` on Windows) when the
  *   graceful SIGTERM budget expires, and removes the pid file only after a confirmed exit;
  * - identity discipline mirrors the node daemon: a live pid without a reachable health endpoint is
- *   never signalled blindly (possible pid reuse) — the user must verify manually.
+ *   never signalled blindly (possible pid reuse) — the user must verify manually;
+ * - `lifecycle.lock` serializes every process-state mutation: concurrent starts, stops, and the
+ *   update flow's stop→commit→start window (which takes the same lock as one atomic section via
+ *   the exported `*Locked` primitives) can never interleave on one machine.
  *
  * Cross-platform boundary: graceful shutdown is POSIX-first. On Windows `process.kill(pid,
- * 'SIGTERM')` terminates without delivering a signal handler, so the graceful budget effectively
- * degrades to a short pre-escalation wait; the escalation path (`taskkill /F /T`) is uniform.
+ * 'SIGTERM')` terminates without delivering a signal handler, so stop degrades to a short
+ * pre-escalation wait; the escalation path (`taskkill /F /T`) is uniform.
  */
 import { spawn } from 'node:child_process';
 import fsp from 'node:fs/promises';
 import process from 'node:process';
 import { killProcessTree } from '@helm/env-io';
-import { DEFAULTS, pathsOf } from './layout.js';
+import { DEFAULTS, assertInstallIsolation, pathsOf } from './layout.js';
 import {
   assertEntryExists,
   persistableLaunchConfig,
-  readCurrentRelease,
   readLaunchConfig,
   readPidRecord,
   removePidFileIfMatch,
@@ -33,11 +40,14 @@ import {
   type HubPidRecord,
   type LaunchConfig,
 } from './records.js';
-import { hubHealthUrl, probeHubHealth, waitForHubHealth, type HubHealthStatus } from './health.js';
+import { hubHealthUrl, probeHubHealth, type HubHealthStatus } from './health.js';
 import { isAliveOf, UsageError, type LauncherIo } from './io.js';
+import { readCurrentEntry } from './current.js';
 
 const EXIT_POLL_MS = 100;
 const LOG_TAIL_LINES = 40;
+/** `@helm/hub` prints `Helm Hub: <url>` right after `startHub` resolves (server listening). Multiline + global: the banner may follow earlier log lines in the same read, and `matchAll` requires global matching. */
+const LISTEN_LINE_PATTERN = /^Helm Hub: (\S+)\s*$/gm;
 
 export interface StartHubOptions {
   /** Explicit flags (highest precedence) folded into the effective launch configuration. */
@@ -53,7 +63,8 @@ export interface StartHubResult {
   entryPath: string;
   url: string;
   logPath: string;
-  health: HubHealthStatus;
+  /** Auxiliary health confirmation; `null` means the probe did not answer (readiness already confirmed by the listen line). */
+  health: HubHealthStatus | null;
 }
 
 export interface StopHubOptions {
@@ -71,8 +82,12 @@ export interface StopHubResult {
   cleanedStalePid: boolean;
 }
 
-async function withStartLock<T>(root: string, fn: () => Promise<T>): Promise<T> {
-  const lockPath = pathsOf(root).startLockPath;
+/**
+ * Held across every process-state mutation (start/stop and the update commit window) so the
+ * three can never interleave on one machine.
+ */
+export async function withLifecycleLock<T>(root: string, fn: () => Promise<T>): Promise<T> {
+  const lockPath = pathsOf(root).lifecycleLockPath;
   await fsp.mkdir(root, { recursive: true });
   let handle: fsp.FileHandle;
   try {
@@ -80,8 +95,8 @@ async function withStartLock<T>(root: string, fn: () => Promise<T>): Promise<T> 
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
       throw new UsageError(
-        `concurrent start conflict: ${lockPath} already exists (another start is in progress, or a previous start crashed); confirm no start is running and remove the lock file before retrying`,
-        'start_lock_busy',
+        `concurrent lifecycle operation conflict: ${lockPath} already exists (another start/stop/update is in progress, or a previous one crashed); confirm nothing is running and remove the lock file before retrying`,
+        'lifecycle_lock_busy',
       );
     }
     throw error;
@@ -104,9 +119,24 @@ async function readLogTail(logFile: string, maxLines: number): Promise<string> {
   }
 }
 
-export function hubDisplayUrl(config: EffectiveLaunchConfig): string {
-  const host = config.host === '0.0.0.0' || config.host === '::' ? '127.0.0.1' : config.host;
-  return `http://${host}:${config.port}`;
+/** Read the log from `offset` and return the new text plus the advanced offset. */
+async function readLogFrom(logFile: string, offset: number): Promise<{ text: string; offset: number }> {
+  let handle: fsp.FileHandle;
+  try {
+    handle = await fsp.open(logFile, 'r');
+  } catch {
+    return { text: '', offset };
+  }
+  try {
+    const stat = await handle.stat();
+    if (stat.size <= offset) return { text: '', offset };
+    const length = Math.min(stat.size - offset, 1_000_000);
+    const buffer = Buffer.alloc(length);
+    const { bytesRead } = await handle.read(buffer, 0, length, offset);
+    return { text: buffer.subarray(0, bytesRead).toString('utf8'), offset: offset + bytesRead };
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
 }
 
 /** Poll a pid until it exits or the budget expires (returns whether it exited). */
@@ -151,121 +181,183 @@ async function assertNoLiveHub(
   );
 }
 
-/** Start the committed Hub release detached; persists `hub.pid` + `launch.json` only after readiness. */
-export async function startHub(root: string, io: LauncherIo, options: StartHubOptions): Promise<StartHubResult> {
+/**
+ * The listen line must describe the configured endpoint, not just any `Helm Hub: ` output: a
+ * mismatch means the candidate bound somewhere other than the requested host/port and is surfaced
+ * as an explicit failure instead of a false-ready.
+ */
+function assertListenUrlMatches(listenUrl: string, config: EffectiveLaunchConfig): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(listenUrl);
+  } catch {
+    throw new Error(`startup listen line URL is not parseable: "${listenUrl}"`);
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(`startup listen line URL is not http(s): "${listenUrl}"`);
+  }
+  const expectedHost = config.host === '0.0.0.0' || config.host === '::' ? '127.0.0.1' : config.host;
+  const stripBrackets = (host: string): string => host.replace(/^\[|\]$/g, '');
+  if (parsed.port !== String(config.port) || stripBrackets(parsed.hostname) !== stripBrackets(expectedHost)) {
+    throw new Error(
+      `startup listen line reports ${listenUrl} but the launch configuration expects http://${expectedHost}:${config.port}`,
+    );
+  }
+}
+
+/**
+ * Primary readiness gate: the candidate's own `Helm Hub: <url>` listen line in `hub.log` (only
+ * content appended after spawn counts) while the child stays alive. The URL's port must match the
+ * launch config — a banner naming a different endpoint is not this candidate's listen success and
+ * keeps the wait going; a port-matching line is then host-checked before being accepted. Rejects
+ * with the exit detail and the log tail.
+ */
+async function waitForListenLine(
+  logFile: string,
+  startOffset: number,
+  pid: number,
+  isAlive: (pid: number) => boolean,
+  options: { timeoutMs: number; pollMs: number; expectedPort: number; exitDetail: () => string | null },
+): Promise<string> {
+  const deadline = Date.now() + options.timeoutMs;
+  let offset = startOffset;
+  let scanned = '';
+  for (;;) {
+    if (!isAlive(pid)) {
+      const tail = await readLogTail(logFile, LOG_TAIL_LINES);
+      const detail = options.exitDetail();
+      throw new Error(
+        `hub process exited before reporting readiness${detail !== null ? ` ${detail}` : ''} (no "Helm Hub: " listen line)${tail !== '' ? `\n--- ${logFile} last ${LOG_TAIL_LINES} lines ---\n${tail}` : ''}`,
+      );
+    }
+    const chunk = await readLogFrom(logFile, offset);
+    offset = chunk.offset;
+    if (chunk.text !== '') {
+      scanned += chunk.text;
+      if (scanned.length > 200_000) scanned = scanned.slice(-100_000);
+      // Multiline-anchored match: the payload may (and does) print preceding log lines in the
+      // same chunk.
+      for (const match of scanned.matchAll(LISTEN_LINE_PATTERN)) {
+        const candidateUrl = match[1]!;
+        const parsed = /^https?:\/\/\[?([^\]]+)\]?:([0-9]+)$/.exec(candidateUrl);
+        if (parsed !== null && Number(parsed[2]) === options.expectedPort) return candidateUrl;
+      }
+    }
+    if (Date.now() >= deadline) {
+      const tail = await readLogTail(logFile, LOG_TAIL_LINES);
+      throw new Error(
+        `hub readiness timed out after ${options.timeoutMs}ms: no "Helm Hub: " listen line in ${logFile}${tail !== '' ? `\n--- last ${LOG_TAIL_LINES} lines ---\n${tail}` : ''}`,
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, options.pollMs));
+  }
+}
+
+/**
+ * Start the committed Hub release detached; persists `hub.pid` + `launch.json` only after
+ * readiness. Unlocked body of the public `startHub` (the update flow calls it while already
+ * holding `lifecycle.lock`).
+ */
+export async function startHubLocked(root: string, io: LauncherIo, options: StartHubOptions): Promise<StartHubResult> {
   const paths = pathsOf(root);
   const isAlive = isAliveOf(io);
-  return await withStartLock(root, async () => {
-    await assertNoLiveHub(root, io, options.fetchFn);
-    const current = await readCurrentRelease(root);
-    if (current === null) {
-      throw new UsageError(
-        `no hub release installed under ${root}; run helm-hub-launcher update first`,
-        'no_release_installed',
-      );
-    }
-    await assertEntryExists(current.entryPath, `current.json (version ${current.version})`);
-    const config = resolveEffectiveLaunchConfig({
-      flags: options.flags,
-      env: io.env,
-      saved: await readLaunchConfig(root),
+  await assertNoLiveHub(root, io, options.fetchFn);
+  const current = await readCurrentEntry(root);
+  await assertEntryExists(current.entryPath, `current.json (version ${current.version})`);
+  const config = resolveEffectiveLaunchConfig({
+    flags: options.flags,
+    env: io.env,
+    saved: await readLaunchConfig(root),
+  });
+  assertInstallIsolation(root, config.dataDir, io.env);
+
+  await fsp.mkdir(paths.logDir, { recursive: true });
+  const logHandle = await fsp.open(paths.hubLogPath, 'a');
+  const startOffset = (await logHandle.stat()).size;
+  const childEnv: NodeJS.ProcessEnv = {
+    ...io.env,
+    HELM_PORT: String(config.port),
+    HELM_HOST: config.host,
+  };
+  if (config.dataDir !== undefined) childEnv.HELM_DATA_DIR = config.dataDir;
+  if (config.model !== undefined) childEnv.HELM_MODEL = config.model;
+  if (config.webDistDir !== undefined) childEnv.HELM_WEB_DIST_DIR = config.webDistDir;
+  let child: ReturnType<typeof spawn>;
+  try {
+    child = spawn(process.execPath, [current.entryPath, 'start'], {
+      detached: true,
+      stdio: ['ignore', logHandle.fd, logHandle.fd],
+      env: childEnv,
     });
+  } catch (error) {
+    await logHandle.close().catch(() => undefined);
+    throw new Error(`failed to spawn hub process: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (child.pid === undefined) {
+    await logHandle.close().catch(() => undefined);
+    throw new Error('hub process pid unavailable after spawn (internal error)');
+  }
+  const pid = child.pid;
+  let exitDetail: string | null = null;
+  child.once('exit', (code, signal) => {
+    exitDetail = `(code=${code ?? 'null'} signal=${signal ?? 'null'})`;
+  });
+  child.unref();
+  await logHandle.close().catch(() => undefined);
 
-    await fsp.mkdir(paths.logDir, { recursive: true });
-    const logHandle = await fsp.open(paths.hubLogPath, 'a');
-    let child: ReturnType<typeof spawn>;
-    const childEnv: NodeJS.ProcessEnv = {
-      ...io.env,
-      HELM_PORT: String(config.port),
-      HELM_HOST: config.host,
-    };
-    if (config.dataDir !== undefined) childEnv.HELM_DATA_DIR = config.dataDir;
-    if (config.model !== undefined) childEnv.HELM_MODEL = config.model;
-    if (config.webDistDir !== undefined) childEnv.HELM_WEB_DIST_DIR = config.webDistDir;
-    try {
-      child = spawn(process.execPath, [current.entryPath, 'start'], {
-        detached: true,
-        stdio: ['ignore', logHandle.fd, logHandle.fd],
-        env: childEnv,
-      });
-    } catch (error) {
-      await logHandle.close().catch(() => undefined);
-      throw new Error(`failed to spawn hub process: ${error instanceof Error ? error.message : String(error)}`);
-    }
-
-    // Readiness = health endpoint answers; fail fast when the child dies before answering.
-    const cleanup = async (): Promise<void> => {
-      child.removeAllListeners('exit');
-      await logHandle.close().catch(() => undefined);
-    };
-    const exitPromise = new Promise<never>((_, reject) => {
-      child.once('exit', (code, signal) => {
-        reject(
-          new Error(
-            `hub process exited before becoming healthy (code=${code ?? 'null'} signal=${signal ?? 'null'})`,
-          ),
-        );
-      });
-    });
-
-    const healthPromise = waitForHubHealth(config.port, config.host, {
+  try {
+    const listenUrl = await waitForListenLine(paths.hubLogPath, startOffset, pid, isAlive, {
       timeoutMs: options.healthTimeoutMs ?? DEFAULTS.healthTimeoutMs,
-      ...(options.pollMs !== undefined ? { pollMs: options.pollMs } : {}),
-      ...(options.fetchFn !== undefined ? { fetchFn: options.fetchFn } : {}),
+      pollMs: options.pollMs ?? DEFAULTS.healthPollMs,
+      expectedPort: config.port,
+      exitDetail: () => exitDetail,
     });
-
-    let health: HubHealthStatus;
-    try {
-      health = await Promise.race([healthPromise, exitPromise]);
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
-      if (child.pid !== undefined && isAlive(child.pid)) killProcessTree(child.pid);
-      const tail = await readLogTail(paths.hubLogPath, LOG_TAIL_LINES);
-      await cleanup();
-      throw new Error(
-        `hub failed to become healthy: ${reason}${tail !== '' ? `\n--- ${paths.hubLogPath} last ${LOG_TAIL_LINES} lines ---\n${tail}` : ''}`,
-      );
-    }
-
-    if (child.pid === undefined) {
-      await cleanup();
-      throw new Error('hub process pid unavailable after readiness (internal error)');
-    }
-    try {
-      await writePidRecord(root, {
-        pid: child.pid,
-        version: current.version,
-        entryPath: current.entryPath,
-        port: config.port,
-        ...(config.host !== undefined ? { host: config.host } : {}),
-        ...(config.dataDir !== undefined ? { dataDir: config.dataDir } : {}),
-        startedAt: new Date().toISOString(),
-      });
-      await writeLaunchConfig(root, persistableLaunchConfig(config));
-    } catch (error) {
-      // Never leave an untracked healthy hub behind: best-effort kill, then surface the original error.
-      killProcessTree(child.pid);
-      await cleanup();
-      throw new AggregateError(
-        [error],
-        `failed to persist hub state after startup; attempted to terminate pid ${child.pid} — verify ${paths.pidPath} manually`,
-      );
-    }
-    child.unref();
-    await cleanup();
-    return {
-      pid: child.pid,
+    assertListenUrlMatches(listenUrl, config);
+    // Auxiliary confirmation only: the listen line already proves the candidate is serving.
+    const health = await probeHubHealth(config.port, config.host, {
+      ...(options.fetchFn !== undefined ? { fetchFn: options.fetchFn } : {}),
+      timeoutMs: DEFAULTS.healthRequestTimeoutMs,
+    });
+    await writePidRecord(root, {
+      pid,
       version: current.version,
       entryPath: current.entryPath,
-      url: hubDisplayUrl(config),
+      port: config.port,
+      ...(config.host !== undefined ? { host: config.host } : {}),
+      ...(config.dataDir !== undefined ? { dataDir: config.dataDir } : {}),
+      startedAt: new Date().toISOString(),
+    });
+    await writeLaunchConfig(root, persistableLaunchConfig(config));
+    return {
+      pid,
+      version: current.version,
+      entryPath: current.entryPath,
+      url: listenUrl,
       logPath: paths.hubLogPath,
       health,
     };
-  });
+  } catch (error) {
+    // Never leave an untracked half-started hub behind: kill the tree, then surface the error.
+    killProcessTree(pid);
+    await waitForExitPid(pid, 5_000, isAlive).catch(() => undefined);
+    const reason = error instanceof Error ? error.message : String(error);
+    const tail = await readLogTail(paths.hubLogPath, LOG_TAIL_LINES);
+    throw new Error(
+      `hub failed to become ready: ${reason}${tail !== '' && !reason.includes('---') ? `\n--- ${paths.hubLogPath} last ${LOG_TAIL_LINES} lines ---\n${tail}` : ''}`,
+    );
+  }
 }
 
-/** Stop the recorded Hub gracefully; identity is verified before any signal is sent. */
-export async function stopHub(root: string, io: LauncherIo, options?: StopHubOptions): Promise<StopHubResult> {
+/** Public start: one atomic lifecycle-lock section. */
+export function startHub(root: string, io: LauncherIo, options: StartHubOptions): Promise<StartHubResult> {
+  return withLifecycleLock(root, () => startHubLocked(root, io, options));
+}
+
+/**
+ * Stop the recorded Hub gracefully; identity is verified before any signal is sent. Unlocked body
+ * of the public `stopHub` (the update flow calls it while already holding `lifecycle.lock`).
+ */
+export async function stopHubLocked(root: string, io: LauncherIo, options?: StopHubOptions): Promise<StopHubResult> {
   const paths = pathsOf(root);
   const isAlive = isAliveOf(io);
   const record = await readPidRecord(root);
@@ -301,6 +393,11 @@ export async function stopHub(root: string, io: LauncherIo, options?: StopHubOpt
   return { wasRunning: true, pid: record.pid, escalated: true, cleanedStalePid: false };
 }
 
+/** Public stop: one atomic lifecycle-lock section. */
+export function stopHub(root: string, io: LauncherIo, options?: StopHubOptions): Promise<StopHubResult> {
+  return withLifecycleLock(root, () => stopHubLocked(root, io, options));
+}
+
 export interface RunningHubInfo {
   record: HubPidRecord;
   alive: boolean;
@@ -318,7 +415,7 @@ export async function readRunningHub(
   const alive = isAliveOf(io)(record.pid);
   const health = alive
     ? await probeHubHealth(record.port, record.host, {
-        ...(fetchFn !== undefined ? { fetchFn } : {}),
+        ...(fetchFn !== undefined ? { fetchFn: fetchFn } : {}),
         timeoutMs: DEFAULTS.identityProbeTimeoutMs,
       })
     : null;

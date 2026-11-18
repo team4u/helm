@@ -255,6 +255,9 @@ importers:
       '@helm/protocol':
         specifier: workspace:*
         version: link:../protocol
+      '@helm/update':
+        specifier: workspace:*
+        version: link:../update
     devDependencies:
       '@helm/test-kit':
         specifier: workspace:*

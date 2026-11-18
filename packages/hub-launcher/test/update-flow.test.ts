@@ -1,9 +1,11 @@
 /**
- * Update flow tests: staging strategy (verified download → npm layout → payload self-check),
- * commit sequencing (stop-before-commit), health-gated rollback with restart of the previous
- * release, blocked cooldown bookkeeping, downgrade/no-op guards, tarball installs, `.complete`
- * cache reuse, and update-lock exclusion. Uses the fake `UpdateCore` (test/fixtures.ts) standing
- * in for the generic `@helm/update` engine plus real detached fake-payload processes.
+ * Update flow tests: staging strategy (verified download → npm layout → manifest/nodeEngines
+ * gates → payload self-check), commit sequencing (atomic lifecycle window, stop-before-commit),
+ * readiness-gated rollback with restart of the previous release, blocked cooldown bookkeeping,
+ * downgrade/no-op guards, tarball installs, `.complete` cache reuse via the real engine, and
+ * update-lock exclusion. Policy tests use the port fake (real engine staging, fixture
+ * registry/npm); golden-path tests run the REAL production extractor against `npm pack`
+ * artifacts through a fake registry with correct sha512 SRI metadata.
  */
 import assert from 'node:assert/strict';
 import { existsSync, openSync, closeSync, unlinkSync, writeFileSync } from 'node:fs';
@@ -11,14 +13,8 @@ import { rm } from 'node:fs/promises';
 import path from 'node:path';
 import { test } from 'node:test';
 import { useTempDir, sanitizedHostEnv } from '@helm/test-kit/node';
-import {
-  readBlockedRelease,
-  readCurrentRelease,
-  readPidRecord,
-  readLaunchConfig,
-  writeBlockedRelease,
-  writePidRecord,
-} from '../src/records.js';
+import { readBlockedRelease, readCurrentRelease, writeBlockedRelease, writeCurrentRelease } from '@helm/update';
+import { readPidRecord, readLaunchConfig, writePidRecord } from '../src/records.js';
 import { performHubUpdate, checkHubUpgrade } from '../src/update.js';
 import { stageHubRelease } from '../src/staging.js';
 import { startHub, stopHub } from '../src/process.js';
@@ -27,11 +23,14 @@ import {
   captureIo,
   cleanupPid,
   createFakeCore,
+  createFakeRegistry,
   freePort,
   getJson,
+  packPayloadTarball,
   spawnAlienProcess,
   waitUntilDead,
   writeFakePayload,
+  type FakePayloadMode,
   type FakeUpdateCore,
 } from './fixtures.js';
 
@@ -42,11 +41,10 @@ interface FlowHarness {
   io: ReturnType<typeof captureIo>['io'];
   core: FakeUpdateCore;
   payloads: Map<string, string>;
-  addPayload(version: string, mode?: 'ok' | 'crash' | 'never-ready' | 'ignore-signal' | 'check-fail' | 'check-hang'): Promise<string>;
+  addPayload(version: string, mode?: FakePayloadMode, nodeEngines?: string): Promise<string>;
 }
 
-async function setupFlow(t: import('node:test').TestContext, latest = '1.1.0'): Promise<FlowHarness> {
-  const root = useTempDir(t, 'helm-launcher-flow-');
+async function setupFlow(t: import('node:test').TestContext, root: string, latest = '1.1.0'): Promise<FlowHarness> {
   const payloads = new Map<string, string>();
   const core = createFakeCore({ pkgName: PKG, latest, payloads });
   const { io } = captureIo(sanitizedHostEnv({ HELM_PAYLOAD_PACKAGE: PKG }));
@@ -55,8 +53,14 @@ async function setupFlow(t: import('node:test').TestContext, latest = '1.1.0'): 
     io,
     core,
     payloads,
-    addPayload: async (version, mode) => {
-      const dir = await writeFakePayload({ dir: path.join(root, `payload-${version}`), pkgName: PKG, version, mode });
+    addPayload: async (version, mode, nodeEngines) => {
+      const dir = await writeFakePayload({
+        dir: path.join(root, `payload-${version}`),
+        pkgName: PKG,
+        version,
+        mode,
+        ...(nodeEngines !== undefined ? { nodeEngines } : {}),
+      });
       payloads.set(version, dir);
       return dir;
     },
@@ -71,16 +75,18 @@ function baseOptions(h: FlowHarness) {
     root: h.root,
     pkgName: PKG,
     registryUrl: 'https://registry.example.com',
+    // Outside the install root on purpose: the program/data separation guard rejects nesting.
+    dataDir: path.join(path.dirname(h.root), `${path.basename(h.root)}-user-data`),
     pollMs: 100,
   };
 }
 
 test('update installs a release even when nothing is running and clears blocked state', { timeout: 60_000 }, async (t) => {
-  const h = await setupFlow(t);
+  const h = await setupFlow(t, useTempDir(t, 'helm-launcher-flow-'));
   await h.addPayload('1.1.0');
   await writeBlockedRelease(h.root, { version: '0.9.0', reason: 'old unrelated block', at: new Date().toISOString() });
 
-  const outcome = await performHubUpdate({ ...baseOptions(h) });
+  const outcome = await performHubUpdate(baseOptions(h));
   assert.equal(outcome.changed, true);
   assert.equal(outcome.previousVersion, null);
   assert.equal(outcome.restarted, false);
@@ -89,8 +95,9 @@ test('update installs a release even when nothing is running and clears blocked 
   const current = await readCurrentRelease(h.root);
   assert.ok(current !== null);
   assert.equal(current.version, '1.1.0');
-  assert.ok(existsSync(current.entryPath));
-  assert.match(path.relative(current.releaseDir, current.entryPath), /^node_modules/);
+  assert.ok(current.entries['entryPath'] !== undefined);
+  assert.ok(existsSync(current.entries['entryPath']!));
+  assert.match(path.relative(h.root, current.entries['entryPath']!), /^releases[/\\]1\.1\.0[/\\][^/]+[/\\]node_modules/);
   assert.equal(await readBlockedRelease(h.root), null);
   // The install strategy: synthetic package.json + npm install with the ignore-scripts contract.
   assert.equal(h.core.npmCalls.length, 1);
@@ -100,12 +107,12 @@ test('update installs a release even when nothing is running and clears blocked 
 });
 
 test('same-version update is a no-op and downgrades are rejected without --force', { timeout: 60_000 }, async (t) => {
-  const h = await setupFlow(t, '1.0.0');
+  const h = await setupFlow(t, useTempDir(t, 'helm-launcher-flow-'), '1.0.0');
   await h.addPayload('1.0.0');
   await performHubUpdate(baseOptions(h));
   const noop = await performHubUpdate(baseOptions(h));
   assert.equal(noop.changed, false);
-  assert.equal(h.core.installCalls, 1);
+  assert.equal(h.core.npmCalls.length, 1);
 
   h.payloads.set('1.1.0', await h.addPayload('1.1.0'));
   await performHubUpdate({ ...baseOptions(h), targetVersion: '1.1.0' });
@@ -123,18 +130,18 @@ test('same-version update is a no-op and downgrades are rejected without --force
 });
 
 test('blocked cooldown suppresses the same version until expiry, another version, or --force', { timeout: 60_000 }, async (t) => {
-  const h = await setupFlow(t, '1.2.0');
+  const h = await setupFlow(t, useTempDir(t, 'helm-launcher-flow-'), '1.2.0');
   await h.addPayload('1.0.0');
   await h.addPayload('1.2.0');
   await performHubUpdate({ ...baseOptions(h), targetVersion: '1.0.0' });
   await writeBlockedRelease(h.root, {
     version: '1.2.0',
-    reason: 'candidate health check failed: simulated',
+    reason: 'candidate readiness failed: simulated',
     at: new Date().toISOString(),
   });
 
   await assert.rejects(
-    performHubUpdate({ ...baseOptions(h) }),
+    performHubUpdate(baseOptions(h)),
     (error: unknown) => {
       assert.ok(error instanceof UsageError);
       assert.equal(error.code, 'update_blocked_cooldown');
@@ -144,7 +151,7 @@ test('blocked cooldown suppresses the same version until expiry, another version
   // Expired cooldown no longer blocks.
   await writeBlockedRelease(h.root, {
     version: '1.2.0',
-    reason: 'candidate health check failed: simulated',
+    reason: 'candidate readiness failed: simulated',
     at: new Date(Date.now() - 2 * 60 * 60_000).toISOString(),
   });
   const ok = await performHubUpdate(baseOptions(h));
@@ -158,7 +165,7 @@ test('blocked cooldown suppresses the same version until expiry, another version
 });
 
 test('staging failures change no state and write no blocked marker', { timeout: 60_000 }, async (t) => {
-  const h = await setupFlow(t, '1.1.0');
+  const h = await setupFlow(t, useTempDir(t, 'helm-launcher-flow-'), '1.1.0');
   await h.addPayload('1.1.0', 'check-fail');
   await assert.rejects(
     performHubUpdate(baseOptions(h)),
@@ -177,7 +184,7 @@ test('staging failures change no state and write no blocked marker', { timeout: 
 });
 
 test('tarball installs require an explicit version and stage from the local file', { timeout: 60_000 }, async (t) => {
-  const h = await setupFlow(t);
+  const h = await setupFlow(t, useTempDir(t, 'helm-launcher-flow-'));
   await assert.rejects(
     performHubUpdate({ ...baseOptions(h), tarballPath: '/tmp/whatever.tgz' }),
     (error: unknown) => {
@@ -204,7 +211,7 @@ test('tarball installs require an explicit version and stage from the local file
 });
 
 test('running update: old hub stops, new hub serves, pid/launch records follow', { timeout: 60_000 }, async (t) => {
-  const h = await setupFlow(t, '1.1.0');
+  const h = await setupFlow(t, useTempDir(t, 'helm-launcher-flow-'), '1.1.0');
   await h.addPayload('1.0.0');
   await h.addPayload('1.1.0');
   const port = await freePort();
@@ -228,8 +235,8 @@ test('running update: old hub stops, new hub serves, pid/launch records follow',
   await waitUntilDead(outcome.pid!);
 });
 
-test('failed candidate health check rolls the pointer back, restarts the old hub, and blocks the version', { timeout: 60_000 }, async (t) => {
-  const h = await setupFlow(t, '1.1.0');
+test('failed candidate readiness rolls the pointer back, restarts the old hub, and blocks the version', { timeout: 60_000 }, async (t) => {
+  const h = await setupFlow(t, useTempDir(t, 'helm-launcher-flow-'), '1.1.0');
   await h.addPayload('1.0.0');
   await h.addPayload('1.1.0', 'never-ready');
   const port = await freePort();
@@ -241,7 +248,7 @@ test('failed candidate health check rolls the pointer back, restarts the old hub
     performHubUpdate({ ...baseOptions(h), healthTimeoutMs: 1_500 }),
     /rolled back to 1\.0\.0/,
   );
-  // Pointer restored, old hub restarted on the same port and healthy again.
+  // Pointer restored, old hub restarted on the same port and serving again.
   assert.equal((await readCurrentRelease(h.root))?.version, '1.0.0');
   const restarted = await readPidRecord(h.root);
   assert.ok(restarted !== null);
@@ -252,9 +259,9 @@ test('failed candidate health check rolls the pointer back, restarts the old hub
   // The failed version is blocked with a cooldown.
   const blocked = await readBlockedRelease(h.root);
   assert.equal(blocked?.version, '1.1.0');
-  assert.match(blocked?.reason ?? '', /health/);
+  assert.match(blocked?.reason ?? '', /readiness/);
   await assert.rejects(
-    performHubUpdate({ ...baseOptions(h) }),
+    performHubUpdate(baseOptions(h)),
     (error: unknown) => {
       assert.ok(error instanceof UsageError);
       assert.equal(error.code, 'update_blocked_cooldown');
@@ -266,7 +273,7 @@ test('failed candidate health check rolls the pointer back, restarts the old hub
 });
 
 test('a stop failure (unverifiable identity) aborts before any state change', { timeout: 60_000 }, async (t) => {
-  const h = await setupFlow(t, '1.1.0');
+  const h = await setupFlow(t, useTempDir(t, 'helm-launcher-flow-'), '1.1.0');
   await h.addPayload('1.0.0');
   await h.addPayload('1.1.0');
   await performHubUpdate({ ...baseOptions(h), targetVersion: '1.0.0' });
@@ -280,7 +287,7 @@ test('a stop failure (unverifiable identity) aborts before any state change', { 
     startedAt: new Date().toISOString(),
   });
   await assert.rejects(
-    performHubUpdate({ ...baseOptions(h) }),
+    performHubUpdate(baseOptions(h)),
     (error: unknown) => {
       assert.ok(error instanceof UsageError);
       assert.equal(error.code, 'hub_identity_unverifiable');
@@ -292,13 +299,13 @@ test('a stop failure (unverifiable identity) aborts before any state change', { 
   process.kill(alienPid, 0); // untouched
 });
 
-test('concurrent updates are excluded by the update lock', { timeout: 60_000 }, async (t) => {
-  const h = await setupFlow(t, '1.1.0');
+test('concurrent updates are excluded by the engine upgrade lock', { timeout: 60_000 }, async (t) => {
+  const h = await setupFlow(t, useTempDir(t, 'helm-launcher-flow-'), '1.1.0');
   await h.addPayload('1.1.0');
-  const lockPath = path.join(h.root, 'update.lock');
+  const lockPath = path.join(h.root, 'upgrade.lock');
   const fd = openSync(lockPath, 'wx');
   try {
-    await assert.rejects(performHubUpdate(baseOptions(h)), /update already in progress/);
+    await assert.rejects(performHubUpdate(baseOptions(h)), /upgrade already in progress/);
   } finally {
     closeSync(fd);
     unlinkSync(lockPath); // closing the fd does not remove the lock file
@@ -307,8 +314,8 @@ test('concurrent updates are excluded by the update lock', { timeout: 60_000 }, 
   assert.equal(ok.changed, true);
 });
 
-test('staged releases are reused via .complete revalidation instead of reinstalling', { timeout: 60_000 }, async (t) => {
-  const h = await setupFlow(t, '1.1.0');
+test('staged releases are reused via the engine .complete cache instead of reinstalling', { timeout: 60_000 }, async (t) => {
+  const h = await setupFlow(t, useTempDir(t, 'helm-launcher-flow-'), '1.1.0');
   await h.addPayload('1.0.0');
   await h.addPayload('1.1.0');
   await performHubUpdate({ ...baseOptions(h), targetVersion: '1.0.0' }); // install #1 (1.0.0)
@@ -317,35 +324,135 @@ test('staged releases are reused via .complete revalidation instead of reinstall
   assert.ok(firstCurrent !== null);
   assert.equal(firstCurrent.version, '1.1.0');
   await performHubUpdate({ ...baseOptions(h), targetVersion: '1.0.0', force: true }); // install #3 (forced restage)
-  const reused = await performHubUpdate(baseOptions(h)); // cache hit: revalidate, no new install
-  assert.equal(reused.reusedCachedStage, true);
-  assert.equal(h.core.installCalls, 3);
-  assert.equal(h.core.revalidateCalls, 1);
-  assert.equal(h.core.npmCalls.length, 3);
+  h.core.npmCalls.length = 0;
+  const reused = await performHubUpdate(baseOptions(h)); // cache hit: no new npm install
+  assert.equal(h.core.npmCalls.length, 0);
   const current = await readCurrentRelease(h.root);
   assert.ok(current !== null);
   assert.equal(current.version, '1.1.0');
-  assert.equal(current.releaseDir, firstCurrent.releaseDir); // same immutable candidate
+  assert.equal(current.entries['entryPath'], firstCurrent.entries['entryPath']); // same immutable candidate
 });
 
-test('stageHubRelease validates the npm layout contract files', { timeout: 60_000 }, async (t) => {
-  const h = await setupFlow(t, '1.1.0');
+test('staging enforces the manifest nodeEngines floor against the launcher Node', { timeout: 60_000 }, async (t) => {
+  const h = await setupFlow(t, useTempDir(t, 'helm-launcher-flow-'), '1.1.0');
+  await h.addPayload('1.1.0', 'ok', '>=99.0.0');
+  await assert.rejects(
+    stageHubRelease({ ...baseOptions(h), version: '1.1.0' }),
+    /requires Node >= 99\.0\.0 but this launcher runs Node/,
+  );
+  // A floor below the injected runtime passes; an uninterpretable range is explicit.
+  await h.addPayload('1.2.0', 'ok', '>=18.0.0');
+  const staged = await stageHubRelease({ ...baseOptions(h), version: '1.2.0', nodeVersion: '20.1.0' });
+  assert.equal(staged.version, '1.2.0');
+  await h.addPayload('1.3.0', 'ok', '^24');
+  await assert.rejects(
+    stageHubRelease({ ...baseOptions(h), version: '1.3.0' }),
+    /not a supported ">=x\.y\.z" floor/,
+  );
+});
+
+test('staging refuses install/data nesting via the effective data directory', { timeout: 60_000 }, async (t) => {
+  const h = await setupFlow(t, useTempDir(t, 'helm-launcher-flow-'), '1.1.0');
+  await h.addPayload('1.1.0');
+  await assert.rejects(
+    stageHubRelease({ ...baseOptions(h), version: '1.1.0', dataDir: path.join(h.root, 'data-inside') }),
+    /must not overlap/,
+  );
+  await assert.rejects(
+    performHubUpdate({ ...baseOptions(h), launchFlags: { dataDir: path.join(h.root, 'nested-data') } }),
+    /must not overlap/,
+  );
+});
+
+test('staging validates the npm layout contract files', { timeout: 60_000 }, async (t) => {
+  const h = await setupFlow(t, useTempDir(t, 'helm-launcher-flow-'), '1.1.0');
   const payloadDir = await h.addPayload('1.1.0');
   // Sabotage: remove manifest.json from the fixture payload.
   await rm(path.join(payloadDir, 'manifest.json'));
   await assert.rejects(
-    stageHubRelease({ io: h.io, core: h.core, root: h.root, version: '1.1.0', pkgName: PKG, registryUrl: 'https://registry.example.com' }),
+    stageHubRelease({ ...baseOptions(h), version: '1.1.0' }),
     /missing its manifest\.json contract/,
   );
 });
 
 test('check reports current/latest/blocked without touching state', { timeout: 60_000 }, async (t) => {
-  const h = await setupFlow(t, '1.2.0');
+  const h = await setupFlow(t, useTempDir(t, 'helm-launcher-flow-'), '1.2.0');
   await h.addPayload('1.0.0');
   await performHubUpdate({ ...baseOptions(h), targetVersion: '1.0.0' });
-  const result = await checkHubUpgrade({ io: h.io, core: h.core, root: h.root, pkgName: PKG });
+  const result = await checkHubUpgrade({ io: h.io, root: h.root, pkgName: PKG, core: h.core });
   assert.equal(result.currentVersion, '1.0.0');
   assert.equal(result.latestVersion, '1.2.0');
   assert.equal(result.updateAvailable, true);
   assert.equal(result.blocked, null);
+});
+
+test('golden path: real npm pack tarball stages through the production extractor (registry channel)', { timeout: 60_000 }, async (t) => {
+  const root = useTempDir(t, 'helm-launcher-golden-');
+  const registry = await createFakeRegistry(PKG, '2.1.0');
+  const payloadDir = await writeFakePayload({ dir: path.join(root, 'fixture-payload'), pkgName: PKG, version: '2.1.0' });
+  await registry.serve('2.1.0', await packPayloadTarball(payloadDir));
+  const { io } = captureIo(sanitizedHostEnv({ HELM_PAYLOAD_PACKAGE: PKG }));
+
+  const staged = await stageHubRelease({
+    io,
+    root,
+    version: '2.1.0',
+    pkgName: PKG,
+    dataDir: path.join(path.dirname(root), `${path.basename(root)}-user-data`),
+    registryUrl: registry.registryUrl,
+    fetchFn: registry.fetchImpl,
+  });
+  assert.equal(staged.version, '2.1.0');
+  assert.ok(existsSync(staged.entryPath));
+  // A real npm install completed the node_modules layout for the packed artifact.
+  assert.match(path.relative(root, staged.entryPath), /^releases[/\\]2\.1\.0[/\\][^/]+[/\\]node_modules[/\\]@fake[/\\]hub-payload[/\\]start\.mjs$/);
+  assert.equal(staged.reusedCached, false);
+
+  // Corrupt-integrity metadata is rejected by the production verification chain.
+  const badSri = 'sha512-' + 'A'.repeat(86) + '=';
+  const tamperedPayload = await writeFakePayload({ dir: path.join(root, 'fixture-221'), pkgName: PKG, version: '2.2.0' });
+  await registry.serve('2.2.0', await packPayloadTarball(tamperedPayload), { integrity: badSri });
+  await assert.rejects(
+    stageHubRelease({
+      io,
+      root,
+      version: '2.2.0',
+      pkgName: PKG,
+      dataDir: path.join(path.dirname(root), `${path.basename(root)}-user-data`),
+      registryUrl: registry.registryUrl,
+      fetchFn: registry.fetchImpl,
+    }),
+    /sha512 integrity check failed/,
+  );
+});
+
+test('golden path: local --tarball of a real npm pack artifact installs and self-checks', { timeout: 60_000 }, async (t) => {
+  const root = useTempDir(t, 'helm-launcher-goldentgz-');
+  const payloadDir = await writeFakePayload({ dir: path.join(root, 'fixture-payload'), pkgName: PKG, version: '3.0.0' });
+  const tarballPath = await packPayloadTarball(payloadDir);
+  const { io } = captureIo(sanitizedHostEnv({ HELM_PAYLOAD_PACKAGE: PKG }));
+
+  const staged = await stageHubRelease({
+    io,
+    root,
+    version: '3.0.0',
+    pkgName: PKG,
+    dataDir: path.join(path.dirname(root), `${path.basename(root)}-user-data`),
+    tarballPath,
+  });
+  assert.equal(staged.version, '3.0.0');
+  assert.ok(existsSync(staged.entryPath));
+
+  // The staged candidate runs for real through the production entry: banner-gated start + stop.
+  await writeCurrentRelease(root, {
+    version: '3.0.0',
+    updatedAt: new Date().toISOString(),
+    entries: { entryPath: staged.entryPath },
+  });
+  const port = await freePort();
+  const started = await startHub(root, io, { flags: { port }, pollMs: 100 });
+  t.after(() => cleanupPid(started.pid));
+  assert.deepEqual(await getJson(port, '/__version'), { version: '3.0.0' });
+  await stopHub(root, io);
+  await waitUntilDead(started.pid);
 });

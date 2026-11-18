@@ -2,8 +2,9 @@
 /**
  * `helm-hub-launcher` CLI: argument parsing and command dispatch for the local Hub launcher.
  *
- * - `runLauncherCli(argv, io, updateCore?)` is the sole testable entrypoint; direct execution is
- *   guarded in `main.ts` (supporting pnpm `.bin` symlinks).
+ * - `runLauncherCli(argv, io, deps?)` is the sole testable entrypoint; direct execution is
+ *   guarded in `main.ts` (supporting pnpm `.bin` symlinks). `deps` carries test seams only
+ *   (fake registry fetch / port-shaped update-core fake).
  * - Commands: `check`, `update`, `start`, `stop`, `restart`, `status`, `--help`.
  * - `--json` applies globally: JSON on stdout for success, a JSON error envelope on stderr with
  *   exit code 1.
@@ -11,7 +12,7 @@
  */
 import { resolveInstallRoot } from './layout.js';
 import { defaultLauncherIo, UsageError, type LauncherIo } from './io.js';
-import { resolveUpdateCore, type UpdateCore } from './update-core.js';
+import type { UpdateCore } from './update-core.js';
 import {
   cmdCheck,
   cmdRestart,
@@ -29,11 +30,15 @@ Usage: helm-hub-launcher <command> [options]
 Commands:
   check                          Query the registry for the latest payload version (no state changes)
   update                         Stage, commit, and (when running) restart onto a new release with
-                                 health-gated rollback; --tarball installs a local payload archive
+                                 readiness-gated rollback; --tarball installs a local payload archive
   start [--port N] [--host H]    Start the committed release detached and wait for readiness
   stop                           Stop the running Hub gracefully (identity-verified, then escalate)
   restart                        Stop (if running) then start
   status                         Show installed/running/blocked state summary
+
+Readiness contract: a started candidate is ready when its own stdout prints the exact
+"Helm Hub: <url>" listen line (the Hub prints it after the HTTP server is listening) while the
+process stays alive; the health endpoint is only an auxiliary confirmation.
 
 Options:
   --version <ver>        Target payload version for update (strict SemVer; required with --tarball)
@@ -52,13 +57,15 @@ Options:
 
 Install layout (program state, strictly separate from Hub user data in ~/.helm):
   <installRoot>/releases/<ver>/<uuid>/   immutable staged payload candidates
-  <installRoot>/current.json             committed release pointer
+  <installRoot>/current.json             committed release pointer (@helm/update state)
   <installRoot>/update-blocked.json      cooldown marker for a failed candidate
   <installRoot>/hub.pid + logs/hub.log   detached process identity and output
+  <installRoot>/lifecycle.lock           start/stop/update commit-window mutual exclusion
+  <installRoot>/releases/…/upgrade.lock  cross-process update exclusion (@helm/update)
 
 Environment: HELM_HUB_INSTALL_ROOT (default ~/.helm-hub), HELM_PORT, HELM_HOST, HELM_DATA_DIR,
 HELM_MODEL, HELM_WEB_DIST_DIR, HELM_NPM_REGISTRY, HELM_PAYLOAD_PACKAGE (default @team4u/helm-hub),
-HELM_HUB_BLOCKED_COOLDOWN_MS (default 1800000).
+HELM_UPGRADE_BLOCK_COOLDOWN_MS (default 1800000).
 
 Cross-platform: graceful stop is POSIX-first; on Windows SIGTERM terminates without handlers, so
 stop degrades to a short grace period before process-tree escalation (taskkill /F /T).
@@ -198,10 +205,17 @@ export function parseLauncherArgs(argv: readonly string[]): ParsedArgs {
   return { command, flags };
 }
 
+export interface LauncherCliDeps {
+  /** Test seam: fake registry fetch (routes latest-version lookups away from the network). */
+  fetchFn?: typeof fetch;
+  /** Test seam: port-shaped update-core fake (stages without registry/npm). */
+  core?: UpdateCore;
+}
+
 export async function runLauncherCli(
   argv: readonly string[],
   io: LauncherIo = defaultLauncherIo(),
-  updateCore?: UpdateCore | null,
+  deps: LauncherCliDeps = {},
 ): Promise<number> {
   let parsed: ParsedArgs;
   try {
@@ -216,7 +230,8 @@ export async function runLauncherCli(
   const ctx = {
     io,
     root: resolveInstallRoot(io.env),
-    core: updateCore !== undefined ? updateCore : resolveUpdateCore(),
+    ...(deps.fetchFn !== undefined ? { fetchFn: deps.fetchFn } : {}),
+    ...(deps.core !== undefined ? { core: deps.core } : {}),
   };
   try {
     switch (parsed.command) {
