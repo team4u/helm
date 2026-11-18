@@ -3,8 +3,8 @@
  * (`@helm/node` daemon today, the local Hub launcher next).
  *
  * Mechanisms provided (policy stays with the consumer):
- * - npm registry access: latest/exact metadata fetch with timeouts, SHA-512 SRI verified
- *   tarball download, registry allowlisting for RPC-exposed inputs;
+ * - npm registry access: dist-tag/exact metadata fetch with timeouts, SHA-512 SRI verified
+ *   tarball download (`downloadVerifiedTarball`), registry allowlisting for RPC-exposed inputs;
  * - immutable release staging: `releases/<version>/<uuid>/` directories with a `.complete`
  *   marker, cache revalidation, layout declared per product via `ReleaseLayout`
  *   (Node's dual `@helm/node` + `@helm/cli` packages, a single Hub payload, or an injected
@@ -35,6 +35,7 @@ export {
   fetchExactManifest,
   fetchLatestVersion,
   downloadTarball,
+  downloadVerifiedTarball,
   computeSri,
   type RegistryManifest,
   type DownloadTarballOptions,
