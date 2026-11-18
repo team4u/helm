@@ -14,7 +14,7 @@ import {
 // ---------------------------------------------------------------------------
 
 export const SWARM_PLUGIN_ID = 'builtin:swarm'
-export const SWARM_SKILL_ID = 'swarm-collab'
+export const SWARM_SKILL_ID = 'swarm'
 
 export const COORDINATOR_TAG = 'swarm-coordinator'
 export const WORKER_TAG = 'swarm-worker'

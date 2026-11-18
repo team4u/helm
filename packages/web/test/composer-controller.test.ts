@@ -88,69 +88,48 @@ test('isValidPluginSlash: reserved words and the skill: prefix are rejected; val
   assert.equal(isValidPluginSlash('/x'), false)
 })
 
-test('pluginSlashCommandsFor: commands declaring slash with actionId or insert and matching scope; duplicate slash takes the first', { timeout: 60_000 }, () => {
+test('pluginSlashCommandsFor: only commands declaring slash+actionId and matching scope; duplicate slash takes the first', { timeout: 60_000 }, () => {
   const commands = [
     cmd('p1', { slash: 'archive', actionId: 'archive' }),
-    cmd('p1', { slash: 'noop' }), // neither actionId nor insert: excluded from completion
-    cmd('p1', { slash: 'swarm', insert: '/swarm ' }),
+    cmd('p1', { slash: 'noop' }), // no actionId: nothing to execute, excluded from completion
     cmd('p2', { slash: 'archive', actionId: 'archive2' }), // duplicate slash: first wins
     cmd('p3', { slash: 'worker-only', actionId: 'w', scope: { tags: ['worker'] } }),
     cmd('p4', { slash: 'new', actionId: 'x' }), // reserved word: defensively skipped
   ]
   const hit = pluginSlashCommandsFor(commands, conv(1))
-  assert.deepEqual(hit.map((c) => c.spec.slash), ['archive', 'swarm'])
+  assert.deepEqual(hit.map((c) => c.spec.slash), ['archive'])
   const workerHit = pluginSlashCommandsFor(commands, conv(2, ['worker']))
-  assert.deepEqual(workerHit.map((c) => c.spec.slash), ['archive', 'swarm', 'worker-only'])
+  assert.deepEqual(workerHit.map((c) => c.spec.slash), ['archive', 'worker-only'])
   // No conversation context: only scope-free commands
-  assert.deepEqual(pluginSlashCommandsFor(commands, undefined).map((c) => c.spec.slash), ['archive', 'swarm'])
+  assert.deepEqual(pluginSlashCommandsFor(commands, undefined).map((c) => c.spec.slash), ['archive'])
 })
 
-test('buildSlashMenuItems: three-source merge; action commands run without write-back while insert commands apply back to draft', { timeout: 60_000 }, () => {
+test('buildSlashMenuItems: three-source merge; plugin commands run without write-back', { timeout: 60_000 }, () => {
   const executed: string[] = []
   const items = buildSlashMenuItems(
     [{ id: 'review', name: '代码审查' }],
-    [
-      cmd('p1', { slash: 'archive', actionId: 'archive', title: '归档' }),
-      cmd('builtin:swarm', {
-        id: 'swarm',
-        slash: 'swarm',
-        insert: '/swarm ',
-        title: { en: 'Swarm Multi-Agent Collaboration', 'zh-CN': 'Swarm 多智能体协同' },
-        description: { en: 'Start multi-agent peer collaboration (/swarm <task>)', 'zh-CN': '启动多智能体并行协同与交叉验收（输入 /swarm <任务>）' },
-      }),
-    ],
+    [cmd('p1', { slash: 'archive', actionId: 'archive', title: '归档' })],
     (c) => executed.push(c.pluginId),
     'en',
   )
   assert.deepEqual(
     items.map((i) => i.id),
-    ['/new', '/clear', '/compact', '/skill:review', 'plugin:p1/cmd-p1', 'plugin:builtin:swarm/swarm'],
+    ['/new', '/clear', '/compact', '/skill:review', 'plugin:p1/cmd-p1'],
   )
   const pluginItem = items[4]!
   assert.equal(pluginItem!.label, '/archive')
-  assert.equal(pluginItem!.apply, undefined, 'action plugin commands never write the trigger word back')
+  assert.equal(pluginItem!.apply, undefined, 'plugin commands never write the trigger word back')
   pluginItem!.run!()
   assert.deepEqual(executed, ['p1'])
-
-  const insertItem = items[5]!
-  assert.equal(insertItem.label, '/swarm')
-  assert.equal(insertItem.hint, 'Start multi-agent peer collaboration (/swarm <task>)')
-  assert.equal(insertItem.apply, '/swarm ', 'insert plugin commands behave like /skill: and backfill the draft')
-  assert.equal(insertItem.run, undefined)
 })
 
-test('matchExactPluginSlash: exact first-token hit for actionId only; insert commands pass through to backend onInput', { timeout: 60_000 }, () => {
-  const commands = [
-    cmd('p1', { slash: 'archive', actionId: 'archive' }),
-    cmd('builtin:swarm', { id: 'swarm', slash: 'swarm', insert: '/swarm ' }),
-  ]
+test('matchExactPluginSlash: exact first-token hit; arguments never hit', { timeout: 60_000 }, () => {
+  const commands = [cmd('p1', { slash: 'archive', actionId: 'archive' })]
   assert.equal(matchExactPluginSlash('/archive', commands)?.pluginId, 'p1')
   assert.equal(matchExactPluginSlash('  /archive  ', commands)?.pluginId, 'p1')
   assert.equal(matchExactPluginSlash('/archive extra', commands), undefined, 'with arguments it never hits')
   assert.equal(matchExactPluginSlash('/archivex', commands), undefined)
   assert.equal(matchExactPluginSlash('/new', commands), undefined, 'reserved words never hit plugin commands')
-  assert.equal(matchExactPluginSlash('/swarm', commands), undefined, 'insert commands are never intercepted on frontend')
-  assert.equal(matchExactPluginSlash('/swarm 重构鉴权模块', commands), undefined, 'insert commands with task pass through to backend onInput')
 })
 
 test('insertAtCaret / removeTokenBeforeCaret / replaceSlashToken: caret insertion and trigger-token replacement', { timeout: 60_000 }, () => {
@@ -204,14 +183,6 @@ test('commandActionPluginId / commandHint: cross-plugin routing and hint derivat
   assert.equal(commandHint({ id: 'x', title: 't', actionId: 'a' } as never, 'p1', 'en'), 'p1 / a')
   assert.equal(commandHint({ id: 'x', title: 't', actionId: 'a', actionPluginId: 'p2' } as never, 'p1', 'en'), 'p2 / a')
   assert.equal(commandHint({ id: 'x', title: 't' } as never, 'p1', 'en'), 'p1')
-  assert.equal(
-    commandHint({ id: 'swarm', title: { en: 'Swarm', 'zh-CN': '协同' }, slash: 'swarm', insert: '/swarm ' } as never, 'builtin:swarm', 'zh-CN'),
-    '协同',
-  )
-  assert.equal(
-    commandHint({ id: 'swarm', title: '', slash: 'swarm', insert: '/swarm ' } as never, 'builtin:swarm', 'en'),
-    '/swarm',
-  )
 })
 
 test('LocalizedText 命令元数据：hint 与通知正文按 locale 解析，纯字符串透传', { timeout: 60_000 }, async () => {
@@ -325,7 +296,6 @@ function stubFetch(captured: CapturedRequest[], ok: boolean): () => void {
 }
 
 const { Composer } = await import('../src/conversation/Composer.js')
-const { AgentStandbyPane } = await import('../src/conversation/AgentStandbyPane.js')
 
 /** Mount the real Composer tree (real user-path assertions: textarea typing + keyboard/buttons + fetch capture). */
 function mountComposer(
@@ -674,161 +644,4 @@ test('a failing plugin slash keeps the original draft and diagnoses explicitly',
     assert.equal(textareaOf(app.host).value, '/archive')
     assert.ok(app.store.getNotices().some((notice: { title: string }) => String(notice.title).includes('Command failed')))
   } finally { app.unmount(); restore() }
-})
-
-const swarmInsertUi: PluginUiContribution[] = [
-  {
-    pluginId: 'builtin:swarm',
-    surface: 'commandPalette',
-    spec: {
-      id: 'swarm',
-      title: { en: 'Swarm Multi-Agent Collaboration', 'zh-CN': 'Swarm 多智能体协同' },
-      slash: 'swarm',
-      insert: '/swarm ',
-      description: {
-        en: 'Start multi-agent peer collaboration (/swarm <task>)',
-        'zh-CN': '启动多智能体并行协同与交叉验收（输入 /swarm <任务>）',
-      },
-    },
-  },
-]
-
-test('interaction: insert-type slash command (/swarm) in Composer backfills draft on pick and submits full message via input pipeline', { timeout: 60_000 }, async () => {
-  const captured: CapturedRequest[] = []
-  const restore = stubFetch(captured, true)
-  const { host, store, unmount } = mountComposer(summary(34, 'idle'), swarmInsertUi)
-  try {
-    const ta = textareaOf(host)
-    await act(async () => {
-      typeInto(ta, '/')
-    })
-    await act(async () => {})
-    const popover = host.querySelector('.composer-popover')
-    assert.ok(popover !== null, "'/' opens slash popover")
-    const swarmItem = [...popover.querySelectorAll<HTMLButtonElement>('button.popover-item')].find((btn) =>
-      btn.textContent?.includes('/swarm'),
-    )
-    assert.ok(swarmItem !== undefined, '/swarm appears in slash popover')
-    await act(async () => {
-      swarmItem.click()
-    })
-    await act(async () => {})
-    assert.equal(ta.value, '/swarm ', 'picking /swarm writes "/swarm " back into draft')
-    assert.equal(store.actionCalls.length, 0, 'insert command never invokes plugin action')
-    assert.ok(host.querySelector('.composer-popover') === null, 'popover closes after backfill')
-
-    // User appends task and submits
-    await act(async () => {
-      typeInto(ta, '/swarm 实现鉴权模块')
-    })
-    await act(async () => {
-      ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
-    })
-    await act(async () => {})
-    assert.equal(captured.length, 1)
-    assert.equal(captured[0]!.path, '/api/conversations/34/input')
-    assert.equal(captured[0]!.body.text, '/swarm 实现鉴权模块')
-    assert.equal(store.actionCalls.length, 0)
-  } finally {
-    unmount()
-    restore()
-  }
-})
-
-test('interaction: insert-type slash command (/swarm) in AgentStandbyPane backfills draft and submits via create + input', { timeout: 60_000 }, async () => {
-  const captured: CapturedRequest[] = []
-  const originalFetch = globalThis.fetch
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const path = String(input)
-    if (path.includes('/api/models/default')) {
-      return new Response(JSON.stringify({ defaultModel: 'p/m', defaultThinkingLevel: 'off' }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      })
-    }
-    if (path.endsWith('/api/conversations') && String(init?.method ?? 'GET') === 'POST') {
-      const body = init?.body ? JSON.parse(String(init.body)) : {}
-      captured.push({ method: 'POST', path, body })
-      return new Response(
-        JSON.stringify({
-          ...conv(88),
-          title: '',
-          profileId: String(body.profileId ?? 'assistant'),
-        }),
-        { status: 201, headers: { 'Content-Type': 'application/json' } },
-      )
-    }
-    captured.push({ method: String(init?.method ?? 'GET'), path, body: init?.body ? JSON.parse(String(init.body)) : {} })
-    return new Response(JSON.stringify({ submissionId: 's-standby' }), {
-      status: 202,
-      headers: { 'Content-Type': 'application/json' },
-    })
-  }) as typeof fetch
-
-  const store = makeTestStore({
-    profiles: [
-      {
-        id: 'assistant',
-        name: 'Assistant',
-        systemPrompt: '',
-        model: 'p/m',
-        thinkingLevel: 'off',
-        humanSelectable: true,
-      } as never,
-    ],
-    assetsLoaded: true,
-    models: [{ id: 'p/m', provider: 'p', modelId: 'm', available: true, thinkingLevels: ['off'] }],
-    uiContributions: swarmInsertUi,
-    primaryTarget: { kind: 'agent', profileId: 'assistant' },
-  })
-  const host = document.createElement('div')
-  document.body.appendChild(host)
-  let root: ReturnType<typeof createRoot> | undefined
-  try {
-    await act(async () => {
-      root = createRoot(host)
-      root.render(
-        React.createElement(
-          HostStoreProviders,
-          { value: store },
-          React.createElement(AgentStandbyPane, { profileId: 'assistant' }),
-        ),
-      )
-    })
-    await act(async () => {})
-
-    const ta = textareaOf(host)
-    await act(async () => {
-      typeInto(ta, '/')
-    })
-    await act(async () => {})
-    const popover = host.querySelector('.composer-popover')
-    assert.ok(popover !== null, "'/' opens slash popover on standby pane")
-    const swarmItem = [...popover.querySelectorAll<HTMLButtonElement>('button.popover-item')].find((btn) =>
-      btn.textContent?.includes('/swarm'),
-    )
-    assert.ok(swarmItem !== undefined, '/swarm appears in standby slash popover')
-    await act(async () => {
-      swarmItem.click()
-    })
-    await act(async () => {})
-    assert.equal(ta.value, '/swarm ', 'picking /swarm backfills "/swarm " in standby draft')
-
-    await act(async () => {
-      typeInto(ta, '/swarm 并行重构测试')
-    })
-    await act(async () => {
-      ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
-    })
-    await act(async () => {})
-
-    assert.equal(captured.some((c) => c.path.endsWith('/api/conversations')), true, 'standby submit creates conversation')
-    const inputReq = captured.find((c) => c.path.endsWith('/api/conversations/88/input'))
-    assert.ok(inputReq !== undefined, 'standby submit sends /swarm input to backend onInput')
-    assert.equal(inputReq.body.text, '/swarm 并行重构测试')
-  } finally {
-    act(() => root?.unmount())
-    host.remove()
-    globalThis.fetch = originalFetch
-  }
 })

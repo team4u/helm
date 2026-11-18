@@ -68,8 +68,8 @@ export const SW_BOARD_EMPTY_TITLE: LocalizedText = {
   'zh-CN': '暂无协同工作组',
 }
 export const SW_BOARD_EMPTY_HINT: LocalizedText = {
-  en: 'Send /swarm <task> in any top-level human conversation composer to start a collaboration group and open its live board.',
-  'zh-CN': '在任意顶层人类对话输入框发送 /swarm <任务> 即可启动协同工作组并打开实时看板。',
+  en: 'Send /skill:swarm <task> in any top-level human conversation composer to start a collaboration group and open its live board.',
+  'zh-CN': '在任意顶层人类对话输入框发送 /skill:swarm <任务> 即可启动协同工作组并打开实时看板。',
 }
 export const SW_BOARD_SELECT_GROUP_ARIA: LocalizedText = {
   en: 'Select collaboration group',

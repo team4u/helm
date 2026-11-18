@@ -16,18 +16,6 @@ const SWARM_PARTICIPANT_SCOPE: ConversationScope = {
  * WorkflowActiveTray keeps sole ownership).
  */
 export function registerSwarmUi(ctx: HelmPluginContext): void {
-  ctx.ui.command({
-    id: 'swarm',
-    title: { en: 'Swarm Multi-Agent Collaboration', 'zh-CN': 'Swarm 多智能体协同' },
-    icon: 'network',
-    slash: 'swarm',
-    insert: '/swarm ',
-    description: {
-      en: 'Start multi-agent peer collaboration (/swarm <task>)',
-      'zh-CN': '启动多智能体并行协同与交叉验收（输入 /swarm <任务>）',
-    },
-    keywords: ['swarm', 'multi-agent', 'collab', '协同', '多智能体'],
-  })
   ctx.ui.screen({
     id: SWARM_BOARD_SCREEN_ID,
     label: { en: 'Swarm Board', 'zh-CN': '协同流转看板' },

@@ -7,12 +7,12 @@
 
 ## 当前状态与自举资产
 
-默认启用，随 Hub 启动加载。启用时幂等自举受管技能 `swarm-collab`（`managedByPlugin: 'builtin:swarm'`，停用插件后即时消失，不留幻影提示词），沉淀四条实战协同准则：
+默认启用，随 Hub 启动加载。启用时幂等自举受管技能 `swarm`（`managedByPlugin: 'builtin:swarm'`，停用插件后即时消失，不留幻影提示词），沉淀四条实战协同准则：
 
-1. **主控零编码铁律**：主控只做任务切分、具名派工、冲突裁决与最终合入收尾，不直接改业务代码或跑长时构建阻塞看板调度；
-2. **动态拆角 + 按需只读交叉验收**：主控按任务本身动态决定成员数量、小写角色名、权限（`readwrite` / `readonly`）、隔离方式（`worktree` / `inherit`）及 `profileId` / `model`；并行写代码成员使用无重叠分片与 `isolation: 'worktree'`，需要交叉审改验收时搭配 `access: 'readonly'` 的验收成员跑测并打回 `review`；
-3. **`#seq` 指针零搬运**：跨成员交接统一通过 `refs: [seq]` 与正文 `#seq` 引用黑板记录，禁止复制粘贴其他成员的 Diff 或长篇日志；
-4. **`wake` 门铃与解锁合入纪律**：`wake: true` 是唤醒门铃而非抄送，对等流水线仅唤醒下一跳责任人，仅遇阻塞（`blocker`）或最终交付（`done`）时唤醒 `coordinator`；全员审过且存在待合入分支时调用 `swarm_close_group({ keepWorktree: true })`（动作 ID `close_group`）解锁主控合入收尾。
+1. **何时使用与如何开启**：顶层人类会话输入 `/skill:swarm <任务>` 时由 `onInput` 自动建组并同回合解锁 `swarm_*` 工具；普通对话中由模型在 `<available_skills>` 主动发现或按用户自然语言请求先调用 `swarm_create_group` 建组再调度；
+2. **主控零编码铁律**：主控只做任务切分、具名派工、冲突裁决与最终合入收尾，不直接改业务代码或跑长时构建阻塞看板调度（`coordinatorGuard: true` 剥离 `edit / write / bash / subagent / SubagentWorkflow`）；
+3. **动态拆角 + 按需只读交叉验收**：主控按任务本身动态决定成员数量、小写角色名、权限（`readwrite` / `readonly`）、隔离方式（并发写代码必须 `worktree` 防冲突；只读检索或交叉验收可选 `inherit` 搭配 `readonly`）及 `profileId` / `model` / `channels`；
+4. **`#seq` 指针、`wake` 门铃与两阶段收尾**：跨成员交接统一通过 `refs: [seq]` 与 `#seq` 引用黑板记录（`worktree` 成员发 `handoff / done` 自动内联 `worktreeSnapshot`）；`wake: true` 仅唤醒下一跳责任人（不抄送闲人、不发空确认）；关闭前确认 `activeWorkingMembers` 为空，未合入分支传 `keepWorktree: true` 解锁主控合入与清理（会话内经 `swarm_*` 工具驱动，对应主机 CLI 为 `helm swarm <subcommand>`）。
 
 ## 能力和入口
 
@@ -26,7 +26,7 @@
 ### 互斥工具集、零破 KV Cache 与写门控
 
 - **作用域标签**：`swarm-coordinator`（主控）、`swarm-worker`（活跃组员）、`swarm-worker-archived`（已归档组员）。
-- **同回合无缝切换**：未建组普通会话隐藏黑板工具，仅暴露 `swarm_create_group` 与常规 `subagent / SubagentWorkflow`；通过 `/swarm <任务>`（`onInput` 建组并保留用户原文不变）或 `swarm_create_group` / `create_group` 挂载 `swarm-coordinator` 标签后，当前回合 `before_turn` 即刻注入字节恒定的 `<active_swarm_group>` 主控引导（包含动态拆角、调用 `load_skill` 与空参询问提示）、解锁主控工具（`swarm_*`），并在 `coordinatorGuard: true` 时剥离并拦截 `edit / write / bash / subagent / SubagentWorkflow`。
+- **同回合无缝切换**：未建组普通会话隐藏黑板工具，仅暴露 `swarm_create_group` 与常规 `subagent / SubagentWorkflow`；通过 `/skill:swarm <任务>`（`onInput` 建组并保留用户原文不变）或 `swarm_create_group` / `create_group` 挂载 `swarm-coordinator` 标签后，当前回合 `before_turn` 即刻注入字节恒定的 `<active_swarm_group>` 主控引导（包含动态拆角、调用 `load_skill({ skillId: "swarm" })` 与空参询问提示）、解锁主控工具（`swarm_*`），并在 `coordinatorGuard: true` 时剥离并拦截 `edit / write / bash / subagent / SubagentWorkflow`。
 - **只读成员门控**：`access: 'readonly'` 成员剥离并拦截 `write / edit / cleanup_worktree`，保留 `bash` 供测试验收。
 - **恒定 `turn.sections` 保 Cache**：`before_turn` 注入的 `<active_swarm_group>` 仅含不可变 `groupId` 与静态协作铁律，不含可变成员名册或实时状态，中途扩缩容 0 次重写首条系统消息。
 
@@ -59,7 +59,7 @@
 
 ### Web 协同流转看板（`#/views/builtin:swarm/board`）
 
-- **对话 `/swarm` 入口与双向顶栏**：通过 `ctx.ui.command` 注册 `slash: 'swarm', insert: '/swarm '`（不设 `scope`，待命新对话与顶层人类会话输入 `/` 均可补全回填，体验与 `/skill:` 一致）；发送 `/swarm <任务>` 后由 `onInput` 钩子自动在当前顶层会话建组或复用活跃组（`coordinatorGuard: true`）、挂载 `swarm-coordinator` 标签并原样放行用户输入文本（保持聊天消息气泡、自动标题与重编辑草稿干净），再由 `onBeforeTurn` 注入系统引导段落与主控工具。活跃协同会话（主控与组内成员）在顶栏工具栏渲染双向定位「协同看板」角标按钮（不占用 `COMPOSER_DOCK_SLOT`，与 `WorkflowActiveTray` 零冲突）；看板空态仅展示 `/swarm <任务>` 只读提示，移除侧边栏入口与弹窗表单；时间线将 `swarm:board-report` 与 `swarm:board-wakeup` 收敛为单行回执胶囊（点击 `#seq` 分屏定位流转卡）。
+- **单一 `/skill:swarm` 入口与双向顶栏**：不注册重复的 `ctx.ui.command` 或侧边栏入口；启用插件后自动注册受管技能 `swarm`（`managedByPlugin: 'builtin:swarm'`），待命新对话与顶层人类会话输入 `/` 均可经内置技能补全选择 `/skill:swarm ` 回填草稿，模型亦可在 `<available_skills>` 主动发现并在普通顶层会话先调用 `swarm_create_group` 建组。发送 `/skill:swarm <任务>`（或 `/skill:swarm`）后由 `onInput` 钩子自动在当前顶层会话建组或复用活跃组（`coordinatorGuard: true`）、挂载 `swarm-coordinator` 标签并原样放行用户输入文本（保持聊天消息气泡、自动标题与重编辑草稿干净），再由 `onBeforeTurn` 注入系统引导段落与主控工具；子成员或后台会话发送 `/skill:swarm` 则由 `onInput` 显式拦截拒绝。活跃协同会话（主控与组内成员）在顶栏工具栏（`conversation:header` 动作 `open-swarm-board`）渲染双向定位「协同看板」角标按钮（不占用 `COMPOSER_DOCK_SLOT`，与 `WorkflowActiveTray` 零冲突）；看板空态仅展示 `/skill:swarm <任务>` 只读提示，移除侧边栏入口与弹窗表单；时间线将 `swarm:board-report` 与 `swarm:board-wakeup` 收敛为单行回执胶囊（点击 `#seq` 分屏定位流转卡）。
 - **自适应主舞台与 `540px` 成员抽屉**：宽屏全屏渲染正交 SVG 角色协同拓扑图，分屏或窄屏（`<= 680px`）自动收敛为紧凑横排角色胶囊条；异常态挂载 `<Callout>` 一键唤醒/切模/解锁合入急救按钮；底部提供 `<MultiSelect>` 目标选择、正交 `wake` 开关与 `15px` 输入栏；点击成员滑出右侧 `540px` 详情抽屉（支持 `abort_worker`、空闲模型 `<Select>`、跨插件调用 `builtin:workflow` `inspect_worktree` 快照与一键向主控提交合入请求、打开子会话抽屉与归档）。历史 `closed` 或 `coordinatorDetached` 组自动退避 `board_status + board_read` 无白屏展示。
 
 ## 配置与数据边界

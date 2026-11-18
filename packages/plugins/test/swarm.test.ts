@@ -16,6 +16,7 @@ import {
   COORDINATOR_TAG,
   PARTICIPANT_SCOPE,
   SWARM_PLUGIN_ID,
+  SWARM_SKILL_ID,
   WORKER_TAG,
   activeSwarmGroupCoordinatorSection,
   activeSwarmGroupWorkerSection,
@@ -121,6 +122,7 @@ test('swarm-unit1: plugin definition contract, tags/scopes, config bounds, and s
   const def = createSwarmPlugin()
   assert.equal(def.id, SWARM_PLUGIN_ID)
   assert.equal(def.id, 'builtin:swarm')
+  assert.equal(SWARM_SKILL_ID, 'swarm')
   // Must NOT declare static dependencies: ['builtin:workflow'] so idle builtin:swarm never blocks disabling builtin:workflow
   assert.equal(def.dependencies, undefined)
 
@@ -297,7 +299,8 @@ test('swarm-unit3: synthesizeBoardView, fingerprint deduplication, and byte-cons
   // Byte-constant sections contain <active_swarm_group> and zero mutable roster/headSeq
   const coordSec = activeSwarmGroupCoordinatorSection('grp_test_1')
   assert.match(coordSec, /^<active_swarm_group id="grp_test_1" role="coordinator">/)
-  assert.match(coordSec, /load_skill\(\{ skillId: "swarm-collab" \}\)/)
+  assert.match(coordSec, /load_skill\(\{ skillId: "swarm" \}\)/)
+  assert.match(coordSec, /"\/skill:swarm"/)
   assert.match(coordSec, /never follow fixed role-name templates/)
   assert.match(coordSec, /swarm_dispatch_worker/)
   assert.match(coordSec, /<\/active_swarm_group>$/)

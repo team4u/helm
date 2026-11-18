@@ -2,12 +2,12 @@
  * builtin:swarm 插件 client 组件测试（真实编译产物 + 共享宿主 SDK + DOM 事件）。
  *
  * 覆盖：
- * 1. UI 扩展注册不变量（registerSwarmUi：无 sidebarItem、无 start-swarm-group、ui.command 注册 slash:'swarm' + insert:'/swarm '、board screen、双向顶栏动作、单行回执渲染器、@/# composerCompleter、绝不占用 COMPOSER_DOCK_SLOT、双语 LocalizedText）；
+ * 1. UI 扩展注册不变量（registerSwarmUi：无 sidebarItem、无 start-swarm-group、无 ui.command 重复入口、board screen、双向顶栏动作、单行回执渲染器、@/# composerCompleter、绝不占用 COMPOSER_DOCK_SLOT、双语 LocalizedText）；
  * 2. 主控与组内 Worker 顶栏双向定位角标按钮（Worker 自动附带 worker=<name>）与 swarm:board-report / swarm:board-wakeup 单行回执胶囊 #seq 跳转；
  * 3. SwarmBoardScreen 实时 sessionDoc 宽屏正交 SVG 拓扑、频道 Tabs 切换、分屏与 <=680px 窄屏自动收敛紧凑角色胶囊条、stall/blocker/unmerged Callout 急救按钮、两态 close_group、底部人工发帖栏（MultiSelect + 正交 wake Switch + 15px 输入框）；
  * 4. 右侧 540px 成员详情抽屉（working 态 abort_worker、空闲态 Radix 模型 Select -> switch_worker_model、跨插件 builtin:workflow inspect_worktree 快照与请求主控合入 submitInput、子会话抽屉与归档）；
  * 5. closed 历史组（含 retainedWorktrees）与 coordinatorDetached 组自动退避 board_status + board_read 无白屏加载；
- * 6. 空态页纯只读 /swarm 引导、failure Retry、zh-CN 双语文案、零 Emoji、零原生 <select>/<input type="checkbox"> 与 Fast Refresh 组件导出纯度。
+ * 6. 空态页纯只读 /skill:swarm 引导、failure Retry、zh-CN 双语文案、零 Emoji、零原生 <select>/<input type="checkbox"> 与 Fast Refresh 组件导出纯度。
  */
 import assert from 'node:assert/strict'
 import { readdirSync, readFileSync } from 'node:fs'
@@ -288,16 +288,8 @@ test('UI 注册契约：registerSwarmUi 注册看板 Screen/顶栏动作/单行�
   const sidebarItems = recorded.filter((r) => r.method === 'sidebarItem')
   assert.equal(sidebarItems.length, 0, '移除侧边栏入口，不再注册 sidebarItem')
 
-  const commands = recorded.filter((r) => r.method === 'command').map((r) => ({
-    id: r.spec['id'],
-    slash: r.spec['slash'],
-    insert: r.spec['insert'],
-    icon: r.spec['icon'],
-    scope: r.spec['scope'],
-  }))
-  assert.deepEqual(commands, [
-    { id: 'swarm', slash: 'swarm', insert: '/swarm ', icon: 'network', scope: undefined },
-  ])
+  const commands = recorded.filter((r) => r.method === 'command')
+  assert.equal(commands.length, 0, '不注册与 /skill:swarm 重复的 ui.command')
 
   const screens = recorded.filter((r) => r.method === 'screen').map((r) => ({
     id: r.spec['id'],
@@ -1266,7 +1258,7 @@ test('双通道无白屏回退与 zh-CN 双语空态：closed 历史组及 coord
   try {
     assert.match(zhEmptyMount.host.textContent ?? '', /协同流转看板/)
     assert.match(zhEmptyMount.host.textContent ?? '', /暂无协同工作组/)
-    assert.match(zhEmptyMount.host.textContent ?? '', /\/swarm/)
+    assert.match(zhEmptyMount.host.textContent ?? '', /\/skill:swarm/)
     assert.equal(zhEmptyMount.host.querySelectorAll('select').length, 0)
     assert.equal(zhEmptyMount.host.querySelectorAll('button').length, 0, '空态页不再渲染启动按钮或弹窗触发器')
   } finally {
@@ -1275,7 +1267,7 @@ test('双通道无白屏回退与 zh-CN 双语空态：closed 历史组及 coord
   }
 })
 
-test('空态页纯只读 /swarm 引导与失败重试：board_status 失败展示错误横幅并支持 Retry', { timeout: 60_000 }, async () => {
+test('空态页纯只读 /skill:swarm 引导与失败重试：board_status 失败展示错误横幅并支持 Retry', { timeout: 60_000 }, async () => {
   resetDefaultStubs()
   const spy = makeSpyCtx({ conversationId: undefined })
   const emptyMount = await mount(
@@ -1294,7 +1286,7 @@ test('空态页纯只读 /swarm 引导与失败重试：board_status 失败展�
   )
   try {
     assert.match(emptyMount.host.textContent ?? '', /No collaboration groups yet/)
-    assert.match(emptyMount.host.textContent ?? '', /\/swarm <task>/)
+    assert.match(emptyMount.host.textContent ?? '', /\/skill:swarm <task>/)
     assert.equal(emptyMount.host.querySelectorAll('select').length, 0)
     assert.equal(emptyMount.host.querySelectorAll('button').length, 0)
     assert.equal(spy.actionCalls.length, 0)

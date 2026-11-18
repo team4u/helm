@@ -15,15 +15,15 @@ import {
 import { checkCoordinatorEligibility, ensureCoordinatorGroup } from './actions.js'
 import { collectMemberLastReplySummary } from './settlement.js'
 
-const SWARM_SLASH_RE = /^\/swarm(?:\s+([\s\S]*))?$/
+const SWARM_SLASH_RE = /^\/skill:swarm(?:\s+([\s\S]*))?$/
 const INELIGIBLE_SWARM_SLASH_REASON =
-  '不能在子成员或后台会话中使用 /swarm 发起协同，请在顶层对话输入 /swarm <任务>'
+  '不能在子成员或后台会话中使用 /skill:swarm 发起协同，请在顶层对话输入 /skill:swarm <任务>'
 
 /** 100% 字节恒定的协作组主控系统提示词段（仅含创建后永不变更的 groupId 与静态协作铁律，零可变成员列表或状态）。 */
 export function activeSwarmGroupCoordinatorSection(groupId: string): string {
   return [
     `<active_swarm_group id="${escapeXml(groupId)}" role="coordinator">`,
-    `1. Before coordinating, call load_skill({ skillId: "${SWARM_SKILL_ID}" }) for the full blackboard collaboration rules. If the user only sent "/swarm" with no task and no prior goal, confirm swarm mode is ready and briefly ask what task to coordinate.`,
+    `1. Before coordinating, call load_skill({ skillId: "${SWARM_SKILL_ID}" }) for the full blackboard collaboration rules. If the user only sent "/skill:swarm" with no task and no prior goal, confirm swarm mode is ready and briefly ask what task to coordinate.`,
     '2. Dynamically decide the squad for the task itself (never follow fixed role-name templates): choose worker count, lowercase names, directory access ("readwrite" / "readonly"), workspace isolation ("worktree" / "inherit"), and optional profileId / model via swarm_dispatch_worker.',
     '3. Coordinate handoffs via swarm_board_post / swarm_board_read / swarm_board_status using #seq pointers in refs without copy-pasting diffs or long reports; keep wake=true strictly for the next actor who must act, and never close the group while activeWorkingMembers is non-empty.',
     '4. When all slices pass verification and worktree branches await merging, call swarm_close_group({ keepWorktree: true }) to unlock bash and merge cleanly.',
@@ -73,7 +73,7 @@ export function registerSwarmHooks(
   } = coordinator
 
   // ------------------------------------------------------------------
-  // input：/swarm 斜杠指令激活或复用协作组，保留用户输入原文不变
+  // input：/skill:swarm 技能指令激活或复用协作组，保留用户输入原文不变
   // ------------------------------------------------------------------
   ctx.hook.onInput(async (payload) => {
     if (!isActive()) return
