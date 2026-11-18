@@ -19,6 +19,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test, type TestContext } from 'node:test'
 import { HelmError } from '@helm/protocol'
+import { deferred } from '@helm/test-kit'
+import { setImmediate as nextTurn } from 'node:timers/promises'
 import { assertNoUnhandledRejection } from './helpers/plugin-test-env.js'
 import {
   JournalWriter,
@@ -419,10 +421,8 @@ test('invokeSpawn timeoutMs：超时守卫中止子会话并返回 [agent_timeou
 })
 
 test('invokeSpawn 超时：返回前等完自己触发的守卫中止（后续 resume 不撞在途 abort）', timeout, async (t) => {
-  let releaseAbort: (() => void) | undefined
-  const abortGate = new Promise<void>((resolve) => {
-    releaseAbort = resolve
-  })
+  const abortEntered = deferred()
+  const abortGate = deferred()
   const custom = makeEnv(
     t,
     (proto: unknown) => {
@@ -435,7 +435,8 @@ test('invokeSpawn 超时：返回前等完自己触发的守卫中止（后续 r
     {
       abortConversationGuarded: async (id: number) => {
         custom.guardedAborts.push(id)
-        await abortGate
+        abortEntered.resolve()
+        await abortGate.promise
       },
     },
   )
@@ -451,10 +452,17 @@ test('invokeSpawn 超时：返回前等完自己触发的守卫中止（后续 r
     settled = true
     return result
   })
-  // 超时（1s）后守卫中止挂在 abortGate 上：完成前不得返回超时失败。
-  await new Promise((resolve) => setTimeout(resolve, 1_500))
-  assert.equal(settled, false, '自己触发的守卫中止完成前不得返回（防 resume 撞忙）')
-  releaseAbort!()
+  await Promise.race([
+    abortEntered.promise,
+    pending.then(() => assert.fail('spawn settled before starting the guarded abort')),
+  ])
+  try {
+    // Flush the continuations that would settle spawn if it did not await the guarded abort.
+    await nextTurn()
+    assert.equal(settled, false, '自己触发的守卫中止完成前不得返回（防 resume 撞忙）')
+  } finally {
+    abortGate.resolve()
+  }
   const result = await pending
   assert.equal(result.timedOut, true)
   assert.deepEqual(custom.guardedAborts, [12])
@@ -466,6 +474,7 @@ test('invokeSpawn 成功返回后撤销超时计时器：旧 attempt 迟到超�
     request.onResolved?.({ conversationId: 31 })
     return 'quick'
   })
+  t.mock.timers.enable({ apis: ['setTimeout'] })
   const result = await callInvokeSpawn(custom, {
     agentId: 'e',
     index: 0,
@@ -478,7 +487,8 @@ test('invokeSpawn 成功返回后撤销超时计时器：旧 attempt 迟到超�
   assert.equal(result.timedOut, undefined)
   // 等待越过 timeoutMs：旧 attempt 的计时器必须已被成功出口撤销，绝不
   // 迟到触发守卫中止（同会话可能已被新 attempt 续接）。
-  await new Promise((resolve) => setTimeout(resolve, 1_400))
+  t.mock.timers.tick(1_000)
+  await nextTurn()
   assert.deepEqual(custom.guardedAborts, [], '成功出口后不得有迟到超时中止')
 })
 

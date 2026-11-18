@@ -13,7 +13,9 @@ import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { updateCliCredentials } from '../src/credentials.js'
 import { CliError } from '../src/errors.js'
+import { withTimeout } from '@helm/test-kit'
 import {
+  deferred,
   makeCliEnv,
   makeConversationSummary,
   makePluginSummary,
@@ -1005,16 +1007,24 @@ test('setup persists credentials even when data directory does not exist yet (cr
   assert.deepEqual(leftovers, [])
 })
 
-test('cross-process concurrency: child CLI cli-token writes and Hub credentials.json writes do not interfere across 3 consecutive rounds', { timeout: 60_000 }, async (t) => {
-  const rootDir = useTempDir(t, 'helm-cli-race-')
+test('cross-process concurrency: child CLI cli-token writes and Hub credentials.json writes do not interfere when login responses are released together', { timeout: 60_000 }, async (t) => {
+  const dataDir = useTempDir(t, 'helm-cli-race-')
+  const contenders = 4
+  const arrived = deferred()
+  const release = deferred()
+  let loginsInFlight = 0
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
   const tsxCli = resolveTsxCli()
   const cliEntry = path.join(repoRoot, 'packages', 'cli', 'src', 'index.ts')
 
-  // Child CLI processes: independent Node processes logging in and writing cli-token
+  // Synchronize real CLI processes at the point just before they persist cli-token.
   const hub = await startMockHub(
     {
-      'POST /api/auth/login': (body) => ({ body: { token: `tok-cli-${(body as { password: string }).password}` } }),
+      'POST /api/auth/login': async (body) => {
+        if (++loginsInFlight === contenders) arrived.resolve()
+        await release.promise
+        return { body: { token: `tok-cli-${(body as { password: string }).password}` } }
+      },
     },
     { autoRegisterCleanup: t },
   )
@@ -1029,44 +1039,43 @@ test('cross-process concurrency: child CLI cli-token writes and Hub credentials.
       child.on('error', reject)
       child.on('close', (code) => resolve({ code, err }))
     })
-  // Run consecutive rounds (each with a fresh missing dataDir to exercise directory creation under lock contention)
-  const ROUNDS = 3
   const { CredentialService } = await import('../../kernel/src/services/index.js')
-  for (let round = 0; round < ROUNDS; round++) {
-    const dataDir = path.join(rootDir, `round-${round}`)
-    // Pre-seed server credentials, then race 4 real CLI child processes (writing cli-token) against 4 in-process CredentialService.set calls (writing credentials.json)
-    await fsp.mkdir(dataDir, { recursive: true })
-    await fsp.writeFile(path.join(dataDir, 'credentials.json'), JSON.stringify({ providers: {}, pluginSecrets: {} }), { mode: 0o600 })
-    const svc = new CredentialService(dataDir)
-    await svc.set('base', 'sk-base-0123456789')
+  const svc = new CredentialService(dataDir)
+  await svc.set('base', 'sk-base-0123456789')
 
-    const children: Promise<{ code: number | null; err: string }>[] = Array.from({ length: 4 }, (_, i) => runCliChild(dataDir, `pw-${i}`))
-    const serverSets: Promise<void>[] = Array.from({ length: 4 }, (_, i) => svc.set(`provider-${i}`, `sk-value-${i}`))
-    const childResults = await Promise.all(children)
-    await Promise.all(serverSets)
-    for (const r of childResults) {
-      assert.equal(r.code, 0, `round ${round + 1}/${ROUNDS} CLI child failed: ${r.err}`)
-    }
-
-    // Provider secrets stay intact (credentials.json no longer carries CLI login state); cli-token holds the last child's token
-    const final = JSON.parse(await fsp.readFile(path.join(dataDir, 'credentials.json'), 'utf8')) as Record<string, unknown> & {
-      providers: Record<string, { value: string }>
-    }
-    assert.equal(final['cli'], undefined, 'login state must not be written into credentials.json')
-    const finalToken = JSON.parse(await fsp.readFile(path.join(dataDir, 'cli-token'), 'utf8')) as { hubUrl: string; token: string }
-    assert.equal(finalToken.hubUrl, hub.url)
-    assert.match(finalToken.token, /^tok-cli-pw-[0-3]$/)
-    const ids = await svc.list()
-    assert.deepEqual(ids, ['base', 'provider-0', 'provider-1', 'provider-2', 'provider-3'])
-    for (let i = 0; i < 4; i++) {
-      assert.equal(final.providers[`provider-${i}`]?.value, `sk-value-${i}`)
-    }
-    // 0600 permissions and no leftover lock/temp files (Windows has no POSIX mode, verifies existence only)
-    await assertPrivateCredentialFile(path.join(dataDir, 'credentials.json'))
-    await assertPrivateCredentialFile(path.join(dataDir, 'cli-token'))
-    const leftovers = (await fsp.readdir(dataDir)).filter((f) => f.includes('.lock') || f.includes('.tmp'))
-    assert.deepEqual(leftovers, [])
+  const children = Array.from({ length: contenders }, (_, i) => runCliChild(dataDir, `pw-${i}`))
+  try {
+    await withTimeout(Promise.race([
+      arrived.promise,
+      ...children.map((child) => child.then(({ err }) => assert.fail(`CLI exited before the login barrier: ${err}`))),
+    ]), 15_000, 'all CLI children must reach the login barrier')
+    const serverSets = Array.from({ length: contenders }, (_, i) => svc.set(`provider-${i}`, `sk-value-${i}`))
+    release.resolve()
+    const [childResults] = await Promise.all([Promise.all(children), Promise.all(serverSets)])
+    for (const result of childResults) assert.equal(result.code, 0, result.err)
+  } finally {
+    release.resolve()
+    await Promise.allSettled(children)
   }
+
+  // Provider secrets stay intact (credentials.json no longer carries CLI login state); cli-token holds the last child's token
+  const final = JSON.parse(await fsp.readFile(path.join(dataDir, 'credentials.json'), 'utf8')) as Record<string, unknown> & {
+    providers: Record<string, { value: string }>
+  }
+  assert.equal(final['cli'], undefined, 'login state must not be written into credentials.json')
+  const finalToken = JSON.parse(await fsp.readFile(path.join(dataDir, 'cli-token'), 'utf8')) as { hubUrl: string; token: string }
+  assert.equal(finalToken.hubUrl, hub.url)
+  assert.match(finalToken.token, /^tok-cli-pw-[0-3]$/)
+  const ids = await svc.list()
+  assert.deepEqual(ids, ['base', 'provider-0', 'provider-1', 'provider-2', 'provider-3'])
+  for (let i = 0; i < contenders; i++) {
+    assert.equal(final.providers[`provider-${i}`]?.value, `sk-value-${i}`)
+  }
+  // 0600 permissions and no leftover lock/temp files (Windows has no POSIX mode, verifies existence only)
+  await assertPrivateCredentialFile(path.join(dataDir, 'credentials.json'))
+  await assertPrivateCredentialFile(path.join(dataDir, 'cli-token'))
+  const leftovers = (await fsp.readdir(dataDir)).filter((f) => f.includes('.lock') || f.includes('.tmp'))
+  assert.deepEqual(leftovers, [])
 })
 
 test('origin binding: cli-token only authenticates the matching Hub and omits token when targeting another Hub', { timeout: 60_000 }, async (t) => {

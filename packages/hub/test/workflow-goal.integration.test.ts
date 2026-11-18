@@ -7,12 +7,11 @@
  * - Real `createHelm` + real `KernelRuntime` + faux provider + real `WorkflowService` (via `builtin:workflow`
  *   `run` action, same path as HTTP/CLI) + real `WorktreeAllocator`; gates run via `settleGate -> runGate -> runShell`
  *   with full process-group kill on timeout (never mocking kernel timeouts).
- * - `goal({ label: 'worker-c', isolation: 'worktree', maxAttempts: 3, gateTimeoutMs: 1000 })`:
- *   attempt 1 hangs 6s (killed at 1s by process-group timeout), attempt 2 exits 1, attempt 3 succeeds.
+ * - `goal({ label: 'worker-c', isolation: 'worktree', maxAttempts: 3, gateTimeoutMs: 2000 })`:
+ *   attempt 1 times out, attempt 2 exits 1, attempt 3 succeeds.
  * - Asserts: all 3 attempts reuse the same `conversationId` and worktree (`path`/`branch`/`id` identical,
  *   spawning only one child conversation overall); journal records `gate.timedOut`/`gate.exitCode` and
- *   `execution` per attempt; final `ok: true, attempts: 3`; killed gate process never writes its escape marker
- *   within the escape window (proving process-group kill actually terminated it).
+ *   `execution` per attempt; final `ok: true, attempts: 3`; the first gate process exits without reaching its delayed write.
  *
  * T3 (3-level nested identical labels + `resumeFromRunId` checkpoint resume, real engine):
  * - Master -> module sub-workflows -> module A runs two concurrent `'plan'` nodes (`agent.withMeta` and
@@ -35,7 +34,7 @@ import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/provid
 import type { AssistantMessage, TranscriptContext } from '@earendil-works/pi-ai'
 import { HelmError } from '@helm/protocol'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, before, describe, it } from 'node:test'
@@ -43,7 +42,7 @@ import assert from 'node:assert/strict'
 import {
   createGitTemplate,
   createHubTestApp,
-  sleep,
+  waitFor,
   type FauxProviderHandle,
   type GitTemplate,
   type HubTestApp,
@@ -172,24 +171,18 @@ function readJournal(dataDir: string, conversationId: number, runId: string): Ar
     .map((line) => JSON.parse(line) as Record<string, any>)
 }
 
-/** Recursively searches for files matching `name` (to detect escaped background processes). */
-function findFileRecursive(root: string, name: string): string[] {
-  const found: string[] = []
-  const walk = (dir: string) => {
-    let entries: Array<{ name: string; isDirectory(): boolean }>
-    try {
-      entries = readdirSync(dir, { withFileTypes: true }) as unknown as Array<{ name: string; isDirectory(): boolean }>
-    } catch {
-      return
-    }
-    for (const entry of entries) {
-      const path = join(dir, entry.name)
-      if (entry.isDirectory()) walk(path)
-      else if (entry.name === name) found.push(path)
-    }
+function gateHasExited(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    if (process.platform !== 'linux') return false
+    // A killed descendant can remain a zombie until its parent reaps it.
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8')
+    return stat[stat.lastIndexOf(')') + 2] === 'Z'
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === 'ESRCH' || code === 'ENOENT') return true
+    throw error
   }
-  walk(root)
-  return found
 }
 
 // ---------------------------------------------------------------------------
@@ -204,14 +197,14 @@ describe('T2 goal gate automatic retry (real kernel / faux / WorkflowService / w
     const env = await openRuntime(dataDir, repo)
 
     // Gate script (runs inside the worktree; behavior controlled by marker files):
-    // - attempt 1 only: sleeps 10s (exceeds gateTimeoutMs=1000, killed via process-group timeout;
-    //   if kill fails, writes escape marker `gate-1-escaped.txt` after 10s and exits 0)
+    // The first gate records its identity before blocking so the test can verify its actual exit.
     // - attempt 2 present: exits 1
     // - attempt 3 present: exits 0
     const gateCommand =
       'node -e "const fs=require(\'fs\');' +
       "if(fs.existsSync('attempt-3.txt'))process.exit(0);" +
       "if(fs.existsSync('attempt-2.txt'))process.exit(1);" +
+      "fs.writeFileSync('gate-1.pid',String(process.pid));" +
       "setTimeout(function(){fs.writeFileSync('gate-1-escaped.txt','alive')},10000)" +
       '"'
     const script =
@@ -221,7 +214,7 @@ describe('T2 goal gate automatic retry (real kernel / faux / WorkflowService / w
       '  objective: "T2-GOAL-OBJECTIVE: in isolated worktree inside complete commit and via gate",\n' +
       '  isolation: "worktree",\n' +
       `  gate: ${JSON.stringify(gateCommand)},\n` +
-      '  gateTimeoutMs: 1000,\n' +
+      '  gateTimeoutMs: 2000,\n' +
       '  maxAttempts: 3,\n' +
       '})\n' +
       'return result\n'
@@ -248,7 +241,6 @@ describe('T2 goal gate automatic retry (real kernel / faux / WorkflowService / w
 
     try {
       env.faux.setResponses(routedResponses(t2Route, 10))
-      const startedAt = Date.now()
       const { run } = await env.runWorkflowAction({
         script,
         conversationId: env.conversationId,
@@ -290,7 +282,7 @@ describe('T2 goal gate automatic retry (real kernel / faux / WorkflowService / w
         [[0, 1, false], [1, 2, false], [2, 3, true]],
         `attempt journal should record index/attempt/ok: ${JSON.stringify(entries.map((e) => ({ i: e['index'], a: e['attempt'], ok: e['ok'] })))}`,
       )
-      // Attempt 1: gate killed by 1s process-group timeout (real runShell timeout path).
+      // Attempt 1: the real Gate timeout is recorded on both the gate and the attempt.
       assert.equal(first['timedOut'], true, 'native gate timeout should also mark the attempt timedOut')
       assert.equal(first['gate'].ok, false)
       assert.equal(first['gate'].timedOut, true, '1st gate should report timedOut=true')
@@ -318,8 +310,6 @@ describe('T2 goal gate automatic retry (real kernel / faux / WorkflowService / w
       }
       assert.ok(existsSync(worktree.path), 'worktree is preserved across retries (not reclaimed on failure)')
 
-      // ---- Process-group kill is genuine: an unkilled gate would write escape marker after 6s
-      // and stretch the run past 6s. ----
       const goalNode = (run.nodes ?? []).find((n: Record<string, any>) => n['label'] === 'worker-c')
       assert.ok(goalNode, 'agent node with label worker-c should exist')
       assert.equal(goalNode!['status'], 'done')
@@ -328,21 +318,13 @@ describe('T2 goal gate automatic retry (real kernel / faux / WorkflowService / w
         typeof run['updatedAt'] === 'number' && typeof run['createdAt'] === 'number',
         'run summary should carry createdAt/updatedAt',
       )
-      assert.ok(
-        run['updatedAt'] - run['createdAt'] < 9_500,
-        `total run duration ${run['updatedAt'] - run['createdAt']}ms should be under 9.5s (gate terminated at 1s timeout)`,
-      )
-      const escaped = findFileRecursive(dir, 'gate-1-escaped.txt')
-      if (escaped.length > 0) {
-        // Fail fast if escape marker already appeared before waiting out the window.
-        assert.fail(`gate process escaped process-group kill: ${escaped.join(', ')}`)
-      }
-      while (Date.now() - startedAt < 10_200) await sleep(100)
-      assert.deepEqual(
-        findFileRecursive(dir, 'gate-1-escaped.txt'),
-        [],
-        'killed gate process must not write escape marker even after 6s window',
-      )
+      const gatePid = Number(readFileSync(join(worktree.path, 'gate-1.pid'), 'utf8'))
+      assert.ok(Number.isSafeInteger(gatePid) && gatePid > 0, 'the first gate must have started')
+      await waitFor(() => gateHasExited(gatePid), {
+        timeoutMs: 5_000,
+        message: `gate process ${gatePid} remained live after timeout`,
+      })
+      assert.equal(existsSync(join(worktree.path, 'gate-1-escaped.txt')), false, 'the first gate must be killed before its delayed write')
     } finally {
       await env.close()
     }
