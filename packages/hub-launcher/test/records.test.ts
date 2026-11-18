@@ -11,7 +11,9 @@ import { useTempDir } from '@helm/test-kit/node';
 import { readCurrentRelease, writeCurrentRelease } from '@helm/update';
 import {
   isBlockedActive,
+  parseLinuxStartTime,
   readPidRecord,
+  readProcessStartTime,
   removePidFileIfMatch,
   resolveEffectiveLaunchConfig,
   persistableLaunchConfig,
@@ -19,6 +21,7 @@ import {
 } from '../src/records.js';
 import { readCurrentEntry } from '../src/current.js';
 import {
+  assertDistTag,
   assertInstallIsolation,
   defaultHubDataDir,
   pathsOf,
@@ -26,6 +29,8 @@ import {
   resolvePayloadPackageName,
   resolveRegistryUrl,
   resolveBlockedCooldownMs,
+  resolveUpdateIntervalMs,
+  resolveUpdateTag,
 } from '../src/layout.js';
 import { UsageError } from '../src/io.js';
 
@@ -48,9 +53,33 @@ test('hub.pid round-trips and rejects invalid shapes explicitly', { timeout: 60_
   await assert.rejects(writePidRecord(root, { ...record, pid: 0 }), /pid.*positive integer/);
   await assert.rejects(writePidRecord(root, { ...record, version: 'not-semver' }), /invalid SemVer/);
   await assert.rejects(writePidRecord(root, { ...record, port: 99999 }), /integer port/);
+  await assert.rejects(writePidRecord(root, { ...record, startTime: -1 }), /startTime.*non-negative integer/);
+
+  // The Linux pid-reuse proof round-trips as an optional field.
+  const withStart = { ...record, startTime: 123456 };
+  await writePidRecord(root, withStart);
+  assert.deepEqual(await readPidRecord(root), withStart);
 
   writeFileSync(pathsOf(root).pidPath, '{corrupt', 'utf8');
   await assert.rejects(readPidRecord(root), /hub\.pid is corrupt/);
+});
+
+test('Linux /proc start time parsing counts fields after the comm segment only', { timeout: 60_000 }, async () => {
+  // comm may contain spaces and parentheses; field 22 (start time) sits after the final ')'.
+  // comm may contain spaces and parentheses; field 22 (start time) sits after the final ')'.
+  // Fields #4..#21 are 18 dummies, then #22 is the start time.
+  const tail = `${Array.from({ length: 18 }, (_, i) => i + 1).join(' ')} 424242 18`;
+  assert.equal(parseLinuxStartTime(`1234 (node) R ${tail}\n`), 424242);
+  assert.equal(parseLinuxStartTime(`7 (weird ) name) S ${Array.from({ length: 18 }, () => 0).join(' ')} 99\n`), 99);
+  assert.equal(parseLinuxStartTime('no-stat-line'), null);
+  assert.equal(parseLinuxStartTime('1 (init) S not enough fields'), null);
+  // The live reader proves a real pid's start time on Linux and reports null-shaped absence elsewhere.
+  const live = await readProcessStartTime(process.pid);
+  if (process.platform === 'linux') {
+    assert.ok(typeof live === 'number' && live >= 0);
+  } else {
+    assert.equal(live, null);
+  }
 });
 
 test('removePidFileIfMatch only removes an unchanged record (compare-and-swap)', { timeout: 60_000 }, async (t) => {
@@ -139,6 +168,20 @@ test('current entry access: engine record shape, entryPath extraction, explicit 
   const engineRecord = await readCurrentRelease(root);
   assert.ok(engineRecord !== null);
   assert.equal(engineRecord.entries['hub'], entryPath);
+});
+
+test('layout helpers: update interval, dist-tag channels, and their invalid forms', { timeout: 60_000 }, () => {
+  assert.equal(resolveUpdateIntervalMs({}), 6 * 60 * 60 * 1000);
+  assert.equal(resolveUpdateIntervalMs({ HELM_HUB_UPDATE_INTERVAL_MS: '5000' }), 5000);
+  assert.throws(() => resolveUpdateIntervalMs({ HELM_HUB_UPDATE_INTERVAL_MS: '0' }), /invalid HELM_HUB_UPDATE_INTERVAL_MS/);
+  assert.throws(() => resolveUpdateIntervalMs({ HELM_HUB_UPDATE_INTERVAL_MS: 'abc' }), /invalid HELM_HUB_UPDATE_INTERVAL_MS/);
+
+  assert.equal(resolveUpdateTag({}), 'latest');
+  assert.equal(resolveUpdateTag({ HELM_HUB_UPDATE_TAG: 'beta' }), 'beta');
+  assert.throws(() => resolveUpdateTag({ HELM_HUB_UPDATE_TAG: '../evil' }), /invalid dist-tag/);
+  assert.throws(() => assertDistTag('1.2.3'), /looks like a version, not a dist-tag/);
+  assert.throws(() => assertDistTag('foo bar'), /invalid dist-tag/);
+  assert.equal(assertDistTag('beta-1.0'), 'beta-1.0');
 });
 
 test('layout helpers: install root, registry, package name, cooldown env', { timeout: 60_000 }, () => {

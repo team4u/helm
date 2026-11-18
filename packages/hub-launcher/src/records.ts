@@ -7,6 +7,7 @@
  */
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import process from 'node:process';
 import { atomicWriteJson } from '@helm/env-io';
 import { readStateJson } from '@helm/update';
 import { isStrictSemver } from '@helm/protocol';
@@ -40,6 +41,12 @@ export interface HubPidRecord {
   host?: string;
   dataDir?: string;
   startedAt: string;
+  /**
+   * Linux `/proc/<pid>/stat` start time (field 22, clock ticks since boot), captured at spawn.
+   * Immutable for a pid's lifetime: a mismatch on stop proves pid reuse and blocks signalling.
+   * Absent on platforms without `/proc` (the health-probe identity gate applies instead).
+   */
+  startTime?: number;
 }
 
 function validatePidRecord(raw: unknown): HubPidRecord {
@@ -59,6 +66,13 @@ function validatePidRecord(raw: unknown): HubPidRecord {
   if (!isStrictSemver(record.version)) throw new Error(`invalid SemVer version: "${record.version}"`);
   if (rec['host'] !== undefined) record.host = requireString(rec, 'host');
   if (rec['dataDir'] !== undefined) record.dataDir = requireString(rec, 'dataDir');
+  if (rec['startTime'] !== undefined) {
+    const startTime = rec['startTime'];
+    if (typeof startTime !== 'number' || !Number.isInteger(startTime) || startTime < 0) {
+      throw new Error('expected field "startTime" to be a non-negative integer');
+    }
+    record.startTime = startTime;
+  }
   return record;
 }
 
@@ -184,6 +198,39 @@ export function persistableLaunchConfig(config: EffectiveLaunchConfig): LaunchCo
   if (config.model !== undefined) persisted.model = config.model;
   if (config.webDistDir !== undefined) persisted.webDistDir = config.webDistDir;
   return persisted;
+}
+
+// ---------------------------------------------------------------------------
+// pid identity proof — Linux /proc start time
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse the start-time field (22) out of a `/proc/<pid>/stat` line. The `comm` field may contain
+ * spaces and parentheses, so fields are counted after the final `)`. `null` when the content does
+ * not look like a stat line (explicit, never guessed).
+ */
+export function parseLinuxStartTime(statContent: string): number | null {
+  const close = statContent.lastIndexOf(')');
+  if (close === -1) return null;
+  const fields = statContent.slice(close + 2).trim().split(/\s+/);
+  // fields[0] is `state` (field 3 overall); start time is field 22 → index 19.
+  const raw = fields[19];
+  if (raw === undefined || !/^\d+$/.test(raw)) return null;
+  return Number(raw);
+}
+
+/**
+ * Current start time of `pid` on Linux, or `null` on platforms without `/proc` and when the pid
+ * cannot be read. A recorded start time plus a matching current value proves the pid was not
+ * reused; a mismatch proves it was.
+ */
+export async function readProcessStartTime(pid: number): Promise<number | null> {
+  if (process.platform !== 'linux') return null;
+  try {
+    return parseLinuxStartTime(await fsp.readFile(`/proc/${pid}/stat`, 'utf8'));
+  } catch {
+    return null;
+  }
 }
 
 /** Resolve a release entry path relative to its release directory (traversal-checked). */

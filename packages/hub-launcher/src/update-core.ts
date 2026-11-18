@@ -2,10 +2,9 @@
  * Real adapter binding the Hub launcher's narrow update port to the shared `@helm/update`
  * engine. The port (`UpdateCore`) exists so tests can fake the registry/npm seams without a
  * network; production always uses `defaultUpdateCore()`, which delegates every generic
- * mechanism — registry manifest fetch with SHA-512 SRI verification (`downloadVerifiedTarball`,
- * the engine's single verified-download seam), dist-tag-aware `latest` lookup, the shell-free
- * npm runner, immutable staging with `.complete` markers and cache revalidation — to the
- * engine. Nothing generic is reimplemented here.
+ * mechanism — registry manifest fetch with SHA512 SRI verification, the shell-free npm runner,
+ * immutable staging with `.complete` markers and cache revalidation — to the engine. Nothing
+ * generic is reimplemented here.
  */
 import {
   downloadVerifiedTarball,
@@ -19,15 +18,14 @@ import {
 export interface UpdateCoreFetchOptions {
   registryUrl?: string;
   fetchFn?: typeof fetch;
-  /** npm dist-tag channel (default `latest`; e.g. `beta` for pre-release channels). */
+  /** npm dist-tag to resolve (`latest` by default; e.g. `beta` for prerelease channels). */
   tag?: string;
 }
 
 /**
- * Narrow update port consumed by `staging.ts` / `update.ts` / `run.ts`; `defaultUpdateCore()` is
- * the only production implementation. `stageRelease` keeps the extractor channel (download +
- * unpack + install run inside the consumer's extractor) so registry and local-tarball installs
- * share one code path.
+ * Narrow update port consumed by `staging.ts` / `update.ts`; `defaultUpdateCore()` is the only
+ * production implementation. `stageRelease` keeps the extractor channel (download + install run
+ * inside the consumer's extractor) so registry and local-tarball installs share one code path.
  */
 export interface UpdateCore {
   fetchLatestVersion(pkgName: string, options?: UpdateCoreFetchOptions): Promise<string>;
@@ -59,8 +57,8 @@ export function defaultUpdateCore(): UpdateCore {
         options?.tag ?? 'latest',
       );
     },
-    downloadVerifiedTarball(registryUrl, pkgName, version, destPath, fetchImpl) {
-      return downloadVerifiedTarball(registryUrl, pkgName, version, destPath, fetchImpl ?? fetch);
+    async downloadVerifiedTarball(registryUrl, pkgName, version, destPath, fetchImpl) {
+      await downloadVerifiedTarball(registryUrl, pkgName, version, destPath, fetchImpl ?? fetch);
     },
     runNpm(args, cwd, timeoutMs) {
       return runNpm([...args], cwd, timeoutMs);

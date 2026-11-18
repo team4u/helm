@@ -1,211 +1,329 @@
 /**
- * Foreground scheduled auto-update loop (the `run` command): the stable external supervisor the
- * product mandates — the Hub never re-launches itself through its own internal cron.
+ * `helm-hub-launcher run` — the supervised foreground lifecycle.
  *
- * One process-control model: the loop uses the same start/stop/update machinery as the one-shot
- * commands (detached spawn, banner-gated readiness, `lifecycle.lock` serialization, pid-record
- * identity verification); there is no second supervision path. Semantics:
+ * One long-running launcher process owns the local Hub end to end:
  *
- * - bootstrap: install a release when none exists yet, then ensure exactly one Hub is running
- *   (start when absent/dead, adopt the running one otherwise);
- * - every cycle: query the registry dist-tag, and when a newer version exists, run the full
- *   health-gated update (graceful stop → atomic commit → banner-gated start with rollback).
- *   The stop is a graceful SIGTERM: in-flight turns are interrupted mid-request at worst, and the
- *   kernel's journaling recovers them on the new release — the short stop→start window is honest
- *   downtime, not a zero-downtime canary;
- * - failures (registry unreachable, staging failure, candidate rejected) never exit the loop and
- *   never touch the running Hub: the failed version enters the blocked cooldown and the next
- *   cycle retries;
- * - shutdown (Ctrl-C / SIGTERM): the loop stops the Hub it owns — the same identity-verified
- *   graceful stop the `stop` command performs (with escalation), then the launcher exits.
+ * - startup: installs the dist-tag's latest release when nothing is committed yet, then starts
+ *   the committed release through the normal readiness gate. A hub that is already running (a
+ *   leftover from another launcher run, or started by hand) is refused explicitly — this launcher
+ *   only ever supervises processes it spawned itself;
+ * - periodic checks: every `--interval-ms` the registry dist-tag (`--tag`, default `latest`) is
+ *   compared against the committed version; a newer one flows through the ordinary update
+ *   orchestration (staging → stop → commit → start) with its existing readiness-gated rollback.
+ *   A failed check or a bad candidate keeps the previous hub serving — the loop logs the failure
+ *   and continues with the next tick (never exits, never silently degrades);
+ * - process ownership: every hub this launcher starts is held as a `ChildProcess` (the
+ *   `HubLifecycleDriver` seam feeds it into the update orchestration, so updates and rollbacks
+ *   also restart the held process). SIGINT/SIGTERM shut down the hub this launcher can prove it
+ *   owns — the held handle — via graceful SIGTERM with process-tree escalation; a pid record is
+ *   maintained alongside purely for `status`/`stop` observability;
+ * - honesty boundaries: a signal that arrives during an in-flight update cycle waits for the
+ *   cycle to finish (state mutations are never interleaved with an abort; the second signal
+ *   force-exits without stopping anything — locks and atomic writes make that crash-safe). An
+ *   unexpected exit of the supervised hub (crash, or someone else stopping it) ends the launcher
+ *   with exit code 1 and the hub log tail pointer instead of fighting over the instance.
  */
+import type { ChildProcess } from 'node:child_process';
+import fsp from 'node:fs/promises';
+import process from 'node:process';
+import { killProcessTree } from '@helm/env-io';
 import { readCurrentRelease } from '@helm/update';
-import { readPidRecord, type LaunchConfig } from './records.js';
-import { isAliveOf, type LauncherIo } from './io.js';
-import { startHub, stopHub } from './process.js';
-import { checkHubUpgrade, performHubUpdate } from './update.js';
-import { defaultUpdateCore, type UpdateCore } from './update-core.js';
+import { DEFAULTS, pathsOf } from './layout.js';
+import { readPidRecord, removePidFileIfMatch, type LaunchConfig } from './records.js';
+import { isAliveOf, UsageError, type LauncherIo } from './io.js';
+import { startHubLocked, withLifecycleLock } from './process.js';
+import { checkHubUpgrade, performHubUpdate, type HubLifecycleDriver } from './update.js';
+import type { UpdateCore } from './update-core.js';
 
-/** Default auto-update check interval (1 hour). */
-export const DEFAULT_RUN_INTERVAL_MS = 60 * 60 * 1000;
-
-export type RunLoopEvent =
-  | { type: 'installed'; version: string }
-  | { type: 'already-running'; version: string; pid: number }
-  | { type: 'started'; version: string; pid: number; url: string }
-  | { type: 'start-failed'; error: string }
-  | { type: 'no-update'; current: string; latest: string }
-  | { type: 'updated'; previous: string; next: string; pid: number; url: string }
-  | { type: 'check-failed'; error: string }
-  | { type: 'update-failed'; error: string }
-  | { type: 'stopping' }
-  | { type: 'stopped'; pid?: number }
-  | { type: 'stop-failed'; error: string };
-
-export interface RunLauncherLoopOptions {
+export interface RunLauncherOptions {
   io: LauncherIo;
   root: string;
   pkgName: string;
   registryUrl?: string;
-  /** npm dist-tag channel (default `latest`; e.g. `beta`). */
+  /** npm dist-tag channel (default `latest`). */
   tag?: string;
-  /** Interval between periodic checks (the first check runs immediately after bootstrap). */
-  intervalMs: number;
+  /** Update-check interval (default `DEFAULTS.updateIntervalMs`). */
+  intervalMs?: number;
+  /** Launch flags for every hub start (initial, post-update, rollback). */
   launchFlags?: LaunchConfig;
-  fetchFn?: typeof fetch;
   core?: UpdateCore;
+  fetchFn?: typeof fetch;
   healthTimeoutMs?: number;
   pollMs?: number;
   stopTimeoutMs?: number;
-  payloadCheckTimeoutMs?: number;
-  /** Abort handle (Ctrl-C in the CLI); aborting triggers the graceful shutdown path. */
-  signal?: AbortSignal;
-  /** Event sink: CLI printing and test assertions. */
-  onEvent?: (event: RunLoopEvent) => void;
+  /** Test seam: resolves to emulate SIGINT/SIGTERM (production installs real handlers). */
+  shutdownSignal?: Promise<void>;
 }
 
-export interface RunLoopSummary {
-  /** Completed periodic check cycles. */
-  cycles: number;
-  /** Successful updates applied by the loop. */
-  updates: number;
-  /** True when the owned hub was confirmed stopped on shutdown. */
-  stoppedHub: boolean;
-  /** Last non-fatal failure surfaced by a cycle or by shutdown (the loop itself never throws). */
-  lastError?: string;
+interface HeldHub {
+  child: ChildProcess;
+  pid: number;
 }
 
-const errorMessage = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
 
-/** Sleep that resolves early (`false`) when the abort signal fires. */
-function abortableSleep(ms: number, signal: AbortSignal | undefined): Promise<boolean> {
-  if (signal?.aborted) return Promise.resolve(false);
+/** Cancellable sleep: the timer must never outlive the run loop (it would pin the process). */
+function cancellableSleep(ms: number): { promise: Promise<void>; cancel: () => void } {
+  let timer: NodeJS.Timeout | undefined;
+  const promise = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, ms);
+  });
+  return {
+    promise,
+    cancel: () => {
+      if (timer !== undefined) clearTimeout(timer);
+    },
+  };
+}
+
+/** Wait for a child's exit event with a budget (false = still running when the budget expired). */
+function waitForChildExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
-      cleanup();
-      resolve(true);
-    }, ms);
-    const onAbort = (): void => {
-      cleanup();
+      child.removeListener('exit', onExit);
       resolve(false);
-    };
-    const cleanup = (): void => {
+    }, timeoutMs);
+    const onExit = (): void => {
       clearTimeout(timer);
-      signal?.removeEventListener('abort', onAbort);
+      resolve(true);
     };
-    signal?.addEventListener('abort', onAbort, { once: true });
+    child.once('exit', onExit);
   });
 }
 
-/** Run the scheduled auto-update loop until aborted; returns the shutdown summary. */
-export async function runLauncherLoop(options: RunLauncherLoopOptions): Promise<RunLoopSummary> {
-  const { io, root } = options;
-  const core = options.core ?? defaultUpdateCore();
-  const emit = (event: RunLoopEvent): void => {
-    options.onEvent?.(event);
-  };
-  const isAlive = isAliveOf(io);
-  const summary: RunLoopSummary = { cycles: 0, updates: 0, stoppedHub: false };
+/** Read the last `maxLines` of a log file for shutdown diagnostics. */
+async function readLogTail(logFile: string, maxLines: number): Promise<string> {
+  try {
+    const text = await fsp.readFile(logFile, 'utf8');
+    const lines = text.split('\n').filter((line) => line !== '');
+    return lines.slice(-maxLines).join('\n');
+  } catch {
+    return '';
+  }
+}
 
-  const updateOptions = {
+/**
+ * The supervised run. Resolves only when the launcher shuts down (signal, supervised-hub death,
+ * or a refused startup); the resolved value is the process exit code.
+ */
+export async function runSupervised(options: RunLauncherOptions): Promise<number> {
+  const { io, root } = options;
+  const tag = options.tag ?? 'latest';
+  const intervalMs = options.intervalMs ?? DEFAULTS.updateIntervalMs;
+  const paths = pathsOf(root);
+  const isAlive = isAliveOf(io);
+  const stopTimeoutMs = options.stopTimeoutMs ?? DEFAULTS.stopTimeoutMs;
+
+  let held: HeldHub | null = null;
+  let transitioning = false;
+  let shuttingDown = false;
+  const shutdown = deferred<void>();
+  let shutdownCode = 0;
+  let shutdownMessage = '';
+
+  const requestShutdown = (code: 0 | 1, message: string): void => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    shutdownCode = code;
+    shutdownMessage = message;
+    shutdown.resolve();
+  };
+
+  const captureChild = (child: ChildProcess): void => {
+    if (child.pid === undefined) return;
+    held = { child, pid: child.pid };
+    child.once('exit', (code, signal) => {
+      if (held === null || held.child !== child) return; // superseded by stop/start/rollback
+      if (shuttingDown || transitioning) return; // expected during a mediated transition
+      held = null;
+      requestShutdown(
+        1,
+        `the supervised hub process exited unexpectedly (code=${code ?? 'null'} signal=${signal ?? 'null'}); inspect ${paths.hubLogPath}`,
+      );
+    });
+  };
+
+  /** Stop the held hub: graceful signal through the held handle, escalate on budget expiry. */
+  const stopHeldHub = async (): Promise<void> => {
+    const hub = held;
+    if (hub === null) return;
+    transitioning = true;
+    try {
+      // The held ChildProcess is the ownership proof: signalling it can never hit a reused pid.
+      hub.child.kill('SIGTERM');
+      if (await waitForChildExit(hub.child, stopTimeoutMs)) {
+        await removeRecordIfOurs(hub.pid);
+        return;
+      }
+      killProcessTree(hub.pid);
+      if (!(await waitForChildExit(hub.child, DEFAULTS.stopEscalationWaitMs))) {
+        throw new Error(
+          `supervised hub pid ${hub.pid} did not exit within ${stopTimeoutMs}ms graceful budget plus escalation; see ${paths.hubLogPath}`,
+        );
+      }
+      await removeRecordIfOurs(hub.pid);
+    } finally {
+      held = null;
+      transitioning = false;
+    }
+  };
+
+  /** Remove the pid record only while it still describes the hub we spawned (CAS semantics). */
+  const removeRecordIfOurs = async (pid: number): Promise<void> => {
+    const record = await readPidRecord(root);
+    if (record !== null && record.pid === pid) await removePidFileIfMatch(root, record);
+  };
+
+  const driver: HubLifecycleDriver = {
+    isRunning: async () => held !== null && held.child.exitCode === null && held.child.signalCode === null,
+    stop: stopHeldHub,
+    async start() {
+      // The unlocked body: inside `performHubUpdate` the lifecycle lock is already held (the
+      // update's stop→commit→start window); the standalone startup path wraps this in the lock.
+      transitioning = true;
+      try {
+        const result = await startHubLocked(root, io, {
+          ...(options.launchFlags !== undefined ? { flags: options.launchFlags } : {}),
+          ...(options.healthTimeoutMs !== undefined ? { healthTimeoutMs: options.healthTimeoutMs } : {}),
+          ...(options.pollMs !== undefined ? { pollMs: options.pollMs } : {}),
+          ...(options.fetchFn !== undefined ? { fetchFn: options.fetchFn } : {}),
+          onSpawn: captureChild,
+        });
+        return { pid: result.pid, url: result.url };
+      } catch (error) {
+        held = null; // never became a supervised hub; its own failure path already killed it
+        throw error;
+      } finally {
+        transitioning = false;
+      }
+    },
+  };
+
+  const updateCommon = {
     io,
-    core,
     root,
     pkgName: options.pkgName,
     ...(options.registryUrl !== undefined ? { registryUrl: options.registryUrl } : {}),
-    ...(options.tag !== undefined ? { tag: options.tag } : {}),
     ...(options.fetchFn !== undefined ? { fetchFn: options.fetchFn } : {}),
+    ...(options.core !== undefined ? { core: options.core } : {}),
     ...(options.launchFlags !== undefined ? { launchFlags: options.launchFlags } : {}),
     ...(options.healthTimeoutMs !== undefined ? { healthTimeoutMs: options.healthTimeoutMs } : {}),
     ...(options.pollMs !== undefined ? { pollMs: options.pollMs } : {}),
     ...(options.stopTimeoutMs !== undefined ? { stopTimeoutMs: options.stopTimeoutMs } : {}),
-    ...(options.payloadCheckTimeoutMs !== undefined ? { payloadCheckTimeoutMs: options.payloadCheckTimeoutMs } : {}),
+    driver,
   };
 
-  // Bootstrap 1/2: install a release when none exists yet (loop updates retry on failure).
-  if ((await readCurrentRelease(root)) === null) {
+  const runUpdateCycle = async (): Promise<void> => {
     try {
-      const outcome = await performHubUpdate({ ...updateOptions, startIfNotRunning: false });
-      emit({ type: 'installed', version: outcome.targetVersion });
-    } catch (error) {
-      summary.lastError = errorMessage(error);
-      emit({ type: 'update-failed', error: summary.lastError });
-    }
-  }
-
-  // Bootstrap 2/2: ensure exactly one Hub is running (start when absent or dead, adopt otherwise).
-  const pidRecord = await readPidRecord(root);
-  if (pidRecord !== null && isAlive(pidRecord.pid)) {
-    emit({ type: 'already-running', version: pidRecord.version, pid: pidRecord.pid });
-  } else {
-    try {
-      const started = await startHub(root, io, {
-        ...(options.launchFlags !== undefined ? { flags: options.launchFlags } : {}),
-        ...(options.healthTimeoutMs !== undefined ? { healthTimeoutMs: options.healthTimeoutMs } : {}),
-        ...(options.pollMs !== undefined ? { pollMs: options.pollMs } : {}),
-        ...(options.fetchFn !== undefined ? { fetchFn: options.fetchFn } : {}),
-      });
-      emit({ type: 'started', version: started.version, pid: started.pid, url: started.url });
-    } catch (error) {
-      summary.lastError = errorMessage(error);
-      emit({ type: 'start-failed', error: summary.lastError });
-      // Nothing can run right now: keep looping — a later update/retry may recover it.
-    }
-  }
-
-  // Periodic cycles: the first check runs immediately, then one per interval. Cycle failures
-  // never exit the loop and never disturb the running Hub.
-  for (;;) {
-    if (options.signal?.aborted) break;
-    summary.cycles += 1;
-    try {
-      const check = await checkHubUpgrade({
-        io,
-        root,
-        pkgName: options.pkgName,
-        ...(options.core !== undefined ? { core: options.core } : {}),
-        ...(options.registryUrl !== undefined ? { registryUrl: options.registryUrl } : {}),
-        ...(options.fetchFn !== undefined ? { fetchFn: options.fetchFn } : {}),
-        ...(options.tag !== undefined ? { tag: options.tag } : {}),
-      });
+      const check = await checkHubUpgrade(updateCommon);
       if (!check.updateAvailable) {
-        emit({ type: 'no-update', current: check.currentVersion ?? '(none)', latest: check.latestVersion });
-      } else {
-        try {
-          const outcome = await performHubUpdate({ ...updateOptions, startIfNotRunning: true });
-          summary.updates += 1;
-          emit({
-            type: 'updated',
-            previous: outcome.previousVersion ?? '(none)',
-            next: outcome.targetVersion,
-            pid: outcome.pid ?? 0,
-            url: outcome.url ?? '',
-          });
-        } catch (error) {
-          summary.lastError = errorMessage(error);
-          emit({ type: 'update-failed', error: summary.lastError });
-        }
+        io.out(`up to date: ${check.currentVersion ?? '(none)'} (tag ${tag}, latest ${check.latestVersion})\n`);
+        return;
       }
+      const outcome = await performHubUpdate({ ...updateCommon, tag });
+      if (!outcome.changed) {
+        io.out(`already at ${outcome.targetVersion}; nothing to do\n`);
+        return;
+      }
+      const pidNote = outcome.pid !== undefined ? ` (pid ${outcome.pid}, ${outcome.url})` : '';
+      io.out(
+        outcome.restarted || outcome.started
+          ? `updated ${outcome.previousVersion ?? '(none)'} -> ${outcome.targetVersion}; hub restarted${pidNote}\n`
+          : `updated ${outcome.previousVersion ?? '(none)'} -> ${outcome.targetVersion}\n`,
+      );
     } catch (error) {
-      summary.lastError = errorMessage(error);
-      emit({ type: 'check-failed', error: summary.lastError });
+      const message = error instanceof Error ? error.message : String(error);
+      const current = await readCurrentRelease(root);
+      io.err(`update cycle failed; keeping ${current?.version ?? '(no release)'} running: ${message}\n`);
     }
-    const slept = await abortableSleep(options.intervalMs, options.signal);
-    if (!slept) break;
-  }
+  };
 
-  // Shutdown: gracefully stop the hub owned by this loop (identity-verified, with escalation).
-  emit({ type: 'stopping' });
-  try {
-    const stopped = await stopHub(root, io, {
-      ...(options.stopTimeoutMs !== undefined ? { stopTimeoutMs: options.stopTimeoutMs } : {}),
-      ...(options.fetchFn !== undefined ? { fetchFn: options.fetchFn } : {}),
-    });
-    summary.stoppedHub = stopped.wasRunning;
-    emit(stopped.wasRunning ? { type: 'stopped', pid: stopped.pid } : { type: 'stopped' });
-  } catch (error) {
-    summary.lastError = errorMessage(error);
-    emit({ type: 'stop-failed', error: summary.lastError });
+  // Production signal handling; the injected `shutdownSignal` seam keeps tests handler-free.
+  const onSignal =
+    options.shutdownSignal !== undefined
+      ? undefined
+      : (signal: NodeJS.Signals) => {
+          if (shuttingDown) {
+            // Second signal: stop waiting for the in-flight cycle and force-exit. State is
+            // crash-safe (locks, atomic writes, throwaway staging); the hub may stay up.
+            if (held !== null) {
+              try {
+                killProcessTree(held.pid);
+              } catch {
+                // best-effort on the hard-exit path
+              }
+            }
+            process.exit(130);
+          }
+          requestShutdown(0, `received ${signal}`);
+        };
+  if (onSignal !== undefined) {
+    process.on('SIGINT', onSignal);
+    process.on('SIGTERM', onSignal);
   }
-  return summary;
+  const externalSignal = options.shutdownSignal;
+  const onExternalSignal = externalSignal !== undefined && onSignal === undefined
+    ? () => requestShutdown(0, 'shutdown requested')
+    : undefined;
+  if (externalSignal !== undefined && onExternalSignal !== undefined) externalSignal.then(onExternalSignal);
+
+  try {
+    // Startup: never adopt a hub this launcher did not spawn — ownership is the whole safety
+    // story for signal-mediated shutdown, so an existing live hub is an explicit refusal.
+    const record = await readPidRecord(root);
+    if (record !== null && isAlive(record.pid)) {
+      throw new UsageError(
+        `a hub is already running (pid ${record.pid}, version ${record.version}) that this launcher did not start; stop it first (helm-hub-launcher stop) or keep managing it manually`,
+        'run_refuses_existing_hub',
+      );
+    }
+    const current = await readCurrentRelease(root);
+    if (current === null) {
+      io.out(`no release installed under ${root}; installing ${options.pkgName} (tag ${tag})\n`);
+      const outcome = await performHubUpdate({ ...updateCommon, tag, startIfNotRunning: true });
+      const pidNote = outcome.pid !== undefined ? ` (pid ${outcome.pid}, ${outcome.url})` : '';
+      io.out(`installed ${outcome.previousVersion ?? '(none)'} -> ${outcome.targetVersion}; hub started${pidNote}\n`);
+    } else {
+      // Standalone start: take the lifecycle lock around the unlocked driver body (the update
+      // path already holds it when it drives the same driver).
+      const started = await withLifecycleLock(root, () => driver.start());
+      io.out(`hub ${current.version} running: pid ${started.pid} at ${started.url}\n`);
+    }
+    io.out(`supervising: update checks every ${intervalMs}ms against tag "${tag}" (Ctrl+C to stop)\n`);
+
+    for (;;) {
+      const sleep = cancellableSleep(intervalMs);
+      await Promise.race([sleep.promise, shutdown.promise.then(() => sleep.cancel())]);
+      if (shuttingDown) break;
+      await runUpdateCycle();
+      if (shuttingDown) break;
+    }
+
+    await stopHeldHub().catch((error: unknown) => {
+      // Shutdown must still return an exit code; an unstoppable hub is a failure exit with the
+      // diagnostic instead of a rejected run.
+      shutdownCode = 1;
+      shutdownMessage += `${shutdownMessage !== '' ? '; ' : ''}${error instanceof Error ? error.message : String(error)}`;
+    });
+    if (shutdownMessage !== '') {
+      const prefix = shutdownCode === 0 ? 'launcher stopping' : 'launcher stopping after a failure';
+      io.err(`${prefix}: ${shutdownMessage}\n`);
+      if (shutdownCode !== 0) {
+        const tail = await readLogTail(paths.hubLogPath, 40);
+        if (tail !== '') io.err(`--- ${paths.hubLogPath} last 40 lines ---\n${tail}\n`);
+      }
+    }
+    return shutdownCode;
+  } finally {
+    if (onSignal !== undefined) {
+      process.off('SIGINT', onSignal);
+      process.off('SIGTERM', onSignal);
+    }
+  }
 }
