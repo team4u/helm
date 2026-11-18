@@ -53,8 +53,8 @@ function imports(file: string): Array<{ specifier: string; typeOnly: boolean }> 
 }
 
 const forbidden: Record<string, readonly string[]> = {
-  '@helm/protocol': ['@helm/kernel', '@helm/hub', '@helm/plugins', '@helm/web', '@helm/node', '@helm/plugin-client', '@helm/plugin-build', '@helm/env-io', '@helm/update'],
-  '@helm/env-io': ['@helm/kernel', '@helm/hub', '@helm/plugins', '@helm/web', '@helm/node', '@helm/plugin-client', '@helm/plugin-build', '@helm/update'],
+  '@helm/protocol': ['@helm/kernel', '@helm/hub', '@helm/plugins', '@helm/web', '@helm/node', '@helm/plugin-client', '@helm/plugin-build', '@helm/env-io', '@helm/update', '@helm/hub-launcher'],
+  '@helm/env-io': ['@helm/kernel', '@helm/hub', '@helm/plugins', '@helm/web', '@helm/node', '@helm/plugin-client', '@helm/plugin-build', '@helm/update', '@helm/hub-launcher'],
   '@helm/kernel': ['@helm/plugins', '@helm/hub', '@helm/web', '@helm/plugin-client', '@helm/plugin-build'],
   '@helm/plugins': ['@helm/kernel', '@helm/hub', '@helm/web'],
   '@helm/plugin-build': ['@helm/kernel', '@helm/hub', '@helm/web', '@helm/plugins', '@helm/plugin-client', '@helm/node'],
@@ -62,7 +62,7 @@ const forbidden: Record<string, readonly string[]> = {
   '@helm/node': ['@helm/kernel', '@helm/hub', '@helm/plugins', '@helm/web', '@helm/plugin-client', '@helm/plugin-build'],
   '@helm/web': ['@helm/kernel', '@helm/hub', '@helm/plugins', '@helm/node', '@helm/plugin-build'],
   '@helm/cli': ['@helm/kernel', '@helm/hub', '@helm/plugins', '@helm/web', '@helm/node', '@helm/plugin-client', '@helm/plugin-build'],
-  '@helm/update': ['@helm/kernel', '@helm/hub', '@helm/plugins', '@helm/web', '@helm/node', '@helm/cli', '@helm/plugin-client', '@helm/plugin-build', '@helm/payload'],
+  '@helm/update': ['@helm/kernel', '@helm/hub', '@helm/plugins', '@helm/web', '@helm/node', '@helm/cli', '@helm/plugin-client', '@helm/plugin-build', '@helm/payload', '@helm/hub-launcher'],
   '@helm/hub-launcher': ['@helm/kernel', '@helm/hub', '@helm/plugins', '@helm/web', '@helm/node', '@helm/cli', '@helm/plugin-client', '@helm/plugin-build', '@helm/payload'],
   '@helm/test-kit': ['@helm/kernel', '@helm/hub', '@helm/plugins', '@helm/web', '@helm/node', '@helm/plugin-client', '@helm/plugin-build', '@helm/cli', '@helm/env-io'],
 }
