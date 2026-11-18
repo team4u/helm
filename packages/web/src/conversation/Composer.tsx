@@ -445,6 +445,7 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
             aria-label={t('conv.composer.inputAria')}
             ref={textareaRef}
             className="composer-textarea selectable"
+            data-composer-draft-managed="true"
             value={text}
             rows={1}
             placeholder={getComposerPlaceholder(working, isMobile, t)}

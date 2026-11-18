@@ -722,6 +722,7 @@ function StandbyComposer({
             aria-label={t('composer.standby.firstMessageAria', { name: profile.name || profile.id })}
             ref={textareaRef}
             className="composer-textarea selectable"
+            data-composer-draft-managed="true"
             value={draft.text}
             rows={1}
             readOnly={busy}

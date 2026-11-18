@@ -66,9 +66,13 @@ export function pruneConversationWindows(
 
 /**
  * Mutable per-window sink the mounted Composer writes its latest dirty snapshot into. The
- * frame reads it when hiding; plain ref object, stable identity per window.
+ * frame reads it when hiding; `publish` lets async completion while hidden push updated state
+ * back to the frame without waiting for wake. Plain ref object, stable identity per window.
  */
-export type ConversationDirtySink = { current: ComposerDirtySnapshot | null }
+export type ConversationDirtySink = {
+  current: ComposerDirtySnapshot | null
+  publish?: (snapshot: ComposerDirtySnapshot) => void
+}
 
 /** Null outside a keep-alive window (split panes, drawers keep their standalone behavior). */
 export const ConversationDirtySinkContext = createContext<ConversationDirtySink | null>(null)

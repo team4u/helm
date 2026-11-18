@@ -103,13 +103,35 @@ type DraftListener = () => void
 const drafts = new Map<string, StandbyDraftState>()
 const listeners = new Set<DraftListener>()
 let localFileSeq = 0
+export const EMPTY_STANDBY_DIRTY_KEYS: ReadonlyArray<string> = []
+let dirtyKeysCache: ReadonlyArray<string> = EMPTY_STANDBY_DIRTY_KEYS
 /** Draft lifecycle epoch: bumped on full resets such as logout; in-flight
  * first-send tasks verify the epoch after every await and discard their
  * responses when it changed (no reviving text/attachments, no further
  * upload/send, no notices, no navigation). */
 let draftEpoch = 0
 
+function isStandbyDraftDirtyRecord(draft: StandbyDraftState): boolean {
+  return (
+    draft.text.trim() !== '' ||
+    draft.localFiles.length > 0 ||
+    draft.uploaded.length > 0 ||
+    draft.sending
+  )
+}
+
+function syncDirtyKeysCache(): void {
+  const keys: string[] = []
+  for (const [key, draft] of drafts.entries()) {
+    if (isStandbyDraftDirtyRecord(draft)) keys.push(key)
+  }
+  keys.sort()
+  if (keys.length === dirtyKeysCache.length && keys.every((k, i) => k === dirtyKeysCache[i])) return
+  dirtyKeysCache = keys.length === 0 ? EMPTY_STANDBY_DIRTY_KEYS : keys
+}
+
 function notifyListeners(): void {
+  syncDirtyKeysCache()
   for (const listener of listeners) listener()
 }
 
@@ -123,6 +145,13 @@ export function subscribeStandbyDrafts(listener: DraftListener): () => void {
 }
 
 /**
+ * Referentially stable list of dirty standby draft keys (for useSyncExternalStore).
+ */
+export function standbyDirtyDraftKeys(): ReadonlyArray<string> {
+  return dirtyKeysCache
+}
+
+/**
  * Whether any standby draft at any coordinate carries unsubmitted local state
  * (non-empty text / staged or uploaded attachments / a first send in flight).
  * Consumed when the version auto-refresh treats unsubmitted browser-local
@@ -131,12 +160,7 @@ export function subscribeStandbyDrafts(listener: DraftListener): () => void {
  * counts as local state too.
  */
 export function standbyDraftsDirty(): boolean {
-  for (const draft of drafts.values()) {
-    if (draft.text.trim() !== '') return true
-    if (draft.localFiles.length > 0 || draft.uploaded.length > 0) return true
-    if (draft.sending) return true
-  }
-  return false
+  return dirtyKeysCache.length > 0
 }
 
 /** Draft entry coordinate: panel + Profile + inherited environment. The same

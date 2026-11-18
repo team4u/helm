@@ -513,3 +513,60 @@ test('in-progress history edit mode survives A -> B -> A Activity wake', { timeo
   assert.equal(textareaA.value, 'pending edit', '唤醒后编辑草稿应保留')
   assert.ok(paneA.querySelector('.composer-edit-banner') !== null, '唤醒后历史编辑态横幅应保留')
 })
+
+test('hidden window clears busy dirty state immediately when in-flight send finishes in the background', { timeout: 60_000 }, async () => {
+  let resolveSubmit!: () => void
+  let rejectSubmit!: (err: Error) => void
+  let submitAttempt = 0
+  await mount('#/c/1')
+  const baseFetch = globalThis.fetch
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+    if (url === '/api/conversations/1/input' && init?.method === 'POST') {
+      submitAttempt += 1
+      if (submitAttempt === 1) {
+        await new Promise<void>((resolve) => {
+          resolveSubmit = resolve
+        })
+        return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      await new Promise<void>((_, reject) => {
+        rejectSubmit = reject
+      })
+    }
+    return baseFetch(input, init)
+  }) as typeof fetch
+
+  const paneA = findPane(1)
+  assert.ok(paneA)
+  const textareaA = paneTextarea(paneA)
+  const sendBtnA = paneA.querySelector<HTMLButtonElement>('.btn-send')
+  assert.ok(sendBtnA)
+
+  // 1. Send succeeds while conversation 1 is hidden -> busy guard must clear without revisiting conv 1.
+  await act(async () => { typeIntoControl(textareaA, 'in-flight ok') })
+  await act(async () => { sendBtnA.click() })
+  await openConversation(2)
+  assert.equal(composerDirty(), true, '发送在途切走期间应保持挂起保护')
+
+  await act(async () => {
+    resolveSubmit()
+    await Promise.resolve()
+  })
+  await settle()
+  assert.equal(composerDirty(), false, '后台发送完成后无需切回原会话，脏判定应自动解除')
+
+  // 2. Send fails while conversation 1 is hidden -> restored draft must keep dirty guard active.
+  await openConversation(1)
+  await act(async () => { typeIntoControl(textareaA, 'in-flight fail') })
+  await act(async () => { sendBtnA.click() })
+  await openConversation(2)
+  assert.equal(composerDirty(), true)
+
+  await act(async () => {
+    rejectSubmit(new Error('network timeout'))
+    await Promise.resolve()
+  })
+  await settle()
+  assert.equal(composerDirty(), true, '后台发送失败回滚草稿后，仍应保持脏保护不丢失草稿')
+})

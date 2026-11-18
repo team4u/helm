@@ -25,21 +25,69 @@ export interface ComposerDirtySnapshot {
   busy: boolean
 }
 
-const reports = new Map<string, ComposerDirtySnapshot>()
-const listeners = new Set<() => void>()
+export interface ComposerDirtySummary {
+  readonly anyDirty: boolean
+  readonly conversationIds: ReadonlyArray<number>
+  readonly hasUnscopedDirty: boolean
+}
 
-function notifyIfChanged(before: boolean): void {
-  if (composerDirty() !== before) {
-    for (const listener of listeners) listener()
+export const EMPTY_COMPOSER_DIRTY_SUMMARY: ComposerDirtySummary = {
+  anyDirty: false,
+  conversationIds: [],
+  hasUnscopedDirty: false,
+}
+
+interface ComposerDirtyReport {
+  snapshot: ComposerDirtySnapshot
+  conversationId?: number
+}
+
+const reports = new Map<string, ComposerDirtyReport>()
+const listeners = new Set<() => void>()
+let cachedSummary: ComposerDirtySummary = EMPTY_COMPOSER_DIRTY_SUMMARY
+
+function computeSummary(): ComposerDirtySummary {
+  const idSet = new Set<number>()
+  let anyDirty = false
+  let hasUnscopedDirty = false
+  for (const report of reports.values()) {
+    if (!isComposerDirtySnapshot(report.snapshot)) continue
+    anyDirty = true
+    if (report.conversationId !== undefined) idSet.add(report.conversationId)
+    else hasUnscopedDirty = true
   }
+  if (!anyDirty) return EMPTY_COMPOSER_DIRTY_SUMMARY
+  return {
+    anyDirty,
+    conversationIds: Array.from(idSet).sort((a, b) => a - b),
+    hasUnscopedDirty,
+  }
+}
+
+function sameSummary(a: ComposerDirtySummary, b: ComposerDirtySummary): boolean {
+  if (a.anyDirty !== b.anyDirty || a.hasUnscopedDirty !== b.hasUnscopedDirty) return false
+  if (a.conversationIds.length !== b.conversationIds.length) return false
+  for (let i = 0; i < a.conversationIds.length; i++) {
+    if (a.conversationIds[i] !== b.conversationIds[i]) return false
+  }
+  return true
+}
+
+function syncSummaryAndNotify(): void {
+  const next = computeSummary()
+  if (sameSummary(cachedSummary, next)) return
+  cachedSummary = next
+  for (const listener of listeners) listener()
 }
 
 /** Aggregate verdict: any mounted Composer carries unsubmitted local state. */
 export function composerDirty(): boolean {
-  for (const snapshot of reports.values()) {
-    if (isComposerDirtySnapshot(snapshot)) return true
-  }
-  return false
+  return cachedSummary.anyDirty
+}
+
+/** Referentially stable summary of dirty Composer instances (for useSyncExternalStore). */
+export function getComposerDirtySummary(): ComposerDirtySummary {
+  return cachedSummary
 }
 
 /** Pure function: whether a single snapshot carries unsubmitted local state. */
@@ -48,18 +96,16 @@ export function isComposerDirtySnapshot(snapshot: ComposerDirtySnapshot): boolea
 }
 
 /** Report (or update) one Composer instance's dirty snapshot. */
-export function setComposerDirty(key: string, snapshot: ComposerDirtySnapshot): void {
-  const before = composerDirty()
-  reports.set(key, snapshot)
-  notifyIfChanged(before)
+export function setComposerDirty(key: string, snapshot: ComposerDirtySnapshot, conversationId?: number): void {
+  reports.set(key, conversationId !== undefined ? { snapshot, conversationId } : { snapshot })
+  syncSummaryAndNotify()
 }
 
 /** Clear one Composer instance's report (component unmount). */
 export function clearComposerDirty(key: string): void {
   if (!reports.has(key)) return
-  const before = composerDirty()
   reports.delete(key)
-  notifyIfChanged(before)
+  syncSummaryAndNotify()
 }
 
 /** Subscribe to aggregated dirty-state changes (getSnapshot uses composerDirty). */

@@ -180,15 +180,94 @@ export function probeAllowed(now: number, lastProbeAt: number | null, throttleMs
   return now - lastProbeAt >= throttleMs
 }
 
-/** Conservative form protection: whether the focused element is a text input (input/textarea). */
-export function isTextInputElement(el: Element | null): boolean {
-  return el !== null && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')
+const NON_TEXT_INPUT_TYPES = new Set([
+  'button',
+  'checkbox',
+  'color',
+  'file',
+  'hidden',
+  'image',
+  'radio',
+  'range',
+  'reset',
+  'submit',
+])
+
+/**
+ * Editable text input element check: matches enabled, non-readOnly text-like
+ * `<input>` (excluding buttons/checkboxes/radios/files/etc.) and `<textarea>`.
+ */
+export function isTextInputElement(el: Element | null): el is HTMLInputElement | HTMLTextAreaElement {
+  if (el === null) return false
+  if (el.tagName === 'TEXTAREA') {
+    const textarea = el as HTMLTextAreaElement
+    return !textarea.disabled && !textarea.readOnly
+  }
+  if (el.tagName === 'INPUT') {
+    const input = el as HTMLInputElement
+    if (input.disabled || input.readOnly) return false
+    const type = (input.getAttribute('type') ?? input.type ?? 'text').trim().toLowerCase()
+    return !NON_TEXT_INPUT_TYPES.has(type)
+  }
+  return false
+}
+
+/**
+ * Whether an input element belongs to a Composer / StandbyComposer whose draft
+ * state is already tracked authoritatively by `composer-dirty` / `standby-model`.
+ */
+export function isComposerManagedInput(el: Element | null): boolean {
+  return el !== null && el.getAttribute('data-composer-draft-managed') === 'true'
+}
+
+/**
+ * Whether an element is still connected and not hidden via `hidden` or
+ * `display: none` on itself or any ancestor (covers React `<Activity mode="hidden">`).
+ */
+export function isElementVisibleInDocument(el: Element | null): boolean {
+  if (el === null || !el.isConnected) return false
+  const win = el.ownerDocument?.defaultView
+  let cur: Element | null = el
+  while (cur !== null) {
+    if ((cur as HTMLElement).hidden === true) return false
+    if ((cur as HTMLElement).style?.display === 'none') return false
+    if (win !== null && win !== undefined) {
+      try {
+        if (win.getComputedStyle(cur).display === 'none') return false
+      } catch {
+        /* ignore detached/foreign elements */
+      }
+    }
+    cur = cur.parentElement
+  }
+  return true
 }
 
 /** Auto-refresh defer reason (null = not deferred; drives the version-banner copy). */
-export type VersionDeferReason = 'draft' | 'modal' | 'draft-and-modal' | null
+export type VersionDeferReason =
+  | 'draft'
+  | 'background-draft'
+  | 'modal'
+  | 'draft-and-modal'
+  | 'background-draft-and-modal'
+  | null
 
-/** Defer reason → banner hint copy ("unsubmitted input" covers both draft facts and focus protection). */
+/** Resolve defer reason with foreground draft taking precedence over background drafts. */
+export function resolveVersionDeferReason(input: {
+  foregroundDraft: boolean
+  backgroundDraft: boolean
+  modalOpen: boolean
+}): VersionDeferReason {
+  if (input.foregroundDraft) {
+    return input.modalOpen ? 'draft-and-modal' : 'draft'
+  }
+  if (input.backgroundDraft) {
+    return input.modalOpen ? 'background-draft-and-modal' : 'background-draft'
+  }
+  return input.modalOpen ? 'modal' : null
+}
+
+/** Defer reason → banner hint copy. */
 export function versionDeferHint(
   reason: VersionDeferReason,
   t: WebMessageTranslator = englishWebTranslator,
@@ -196,10 +275,14 @@ export function versionDeferHint(
   switch (reason) {
     case 'draft':
       return t('shell.version.deferDraft')
+    case 'background-draft':
+      return t('shell.version.deferBackgroundDraft')
     case 'modal':
       return t('shell.version.deferModal')
     case 'draft-and-modal':
       return t('shell.version.deferBoth')
+    case 'background-draft-and-modal':
+      return t('shell.version.deferBackgroundBoth')
     default:
       return ''
   }

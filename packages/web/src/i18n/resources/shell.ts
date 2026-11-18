@@ -30,6 +30,10 @@ export const shellMessages = {
     en: 'Unsubmitted input in progress; auto refresh deferred',
     'zh-CN': '当前有未提交的输入内容，已暂缓自动刷新',
   },
+  'shell.version.deferBackgroundDraft': {
+    en: 'Another conversation has an unsent draft; auto refresh deferred',
+    'zh-CN': '其他会话有未发送的草稿，已暂缓自动刷新',
+  },
   'shell.version.deferModal': {
     en: 'A window is open; auto refresh deferred',
     'zh-CN': '当前有打开的窗口，已暂缓自动刷新',
@@ -37,6 +41,10 @@ export const shellMessages = {
   'shell.version.deferBoth': {
     en: 'Unsubmitted input and an open window; auto refresh deferred',
     'zh-CN': '当前有未提交的输入内容和打开的窗口，已暂缓自动刷新',
+  },
+  'shell.version.deferBackgroundBoth': {
+    en: 'Another conversation has an unsent draft and a window is open; auto refresh deferred',
+    'zh-CN': '其他会话有未发送的草稿且当前有打开的窗口，已暂缓自动刷新',
   },
 
   // Auth gate (first-start setup and unlock)

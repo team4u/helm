@@ -13,6 +13,7 @@ import {
   DEFAULT_CONVERSATION_WINDOW_LIMIT,
   pruneConversationWindows,
   touchConversationWindows,
+  type ConversationDirtySink,
   type ConversationWindowEntry,
 } from './conversation-window-model.js'
 
@@ -85,8 +86,26 @@ interface ConversationWindowFrameProps {
 
 function ConversationWindowFrame({ conversationId, visible }: ConversationWindowFrameProps) {
   const { loadConversationDetail } = useStoreActions()
-  const dirtySink = useRef<ComposerDirtySnapshot | null>(null)
   const frameDirtyKey = `conversation-window:${conversationId}`
+  const visibleRef = useRef(visible)
+  visibleRef.current = visible
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
+  const dirtySinkRef = useRef<ConversationDirtySink | null>(null)
+  if (dirtySinkRef.current === null) {
+    dirtySinkRef.current = { current: null }
+  }
+  const dirtySink = dirtySinkRef.current
+  dirtySink.publish = (snapshot) => {
+    if (!mountedRef.current || visibleRef.current) return
+    if (isComposerDirtySnapshot(snapshot)) setComposerDirty(frameDirtyKey, snapshot, conversationId)
+    else clearComposerDirty(frameDirtyKey)
+  }
   const wasVisibleRef = useRef(visible)
 
   // Dirty-draft bridge across Activity hides: hiding destroys the Composer's effect-managed
@@ -100,10 +119,10 @@ function ConversationWindowFrame({ conversationId, visible }: ConversationWindow
       return
     }
     const snapshot = dirtySink.current
-    if (snapshot !== null && isComposerDirtySnapshot(snapshot)) setComposerDirty(frameDirtyKey, snapshot)
+    if (snapshot !== null && isComposerDirtySnapshot(snapshot)) setComposerDirty(frameDirtyKey, snapshot, conversationId)
     else clearComposerDirty(frameDirtyKey)
     return () => clearComposerDirty(frameDirtyKey)
-  }, [visible, frameDirtyKey])
+  }, [visible, frameDirtyKey, conversationId, dirtySink])
 
   // Wake refresh: kept-alive (hidden) conversations sit outside the store's visible set, so a
   // window can wake with a stale detail snapshot; refresh silently — the timeline's SWR anchor

@@ -313,7 +313,7 @@ test('会话 Composer 有本地草稿时不自动 reload：挂起提示 + 立即
   assert.equal(h.reloads(), 1, 'dirty 转清自动补刷')
 })
 
-test('待命草稿（任意坐标非空正文）同样挂起；草稿清空后补刷', { timeout: 60_000 }, async () => {
+test('待命草稿（任意坐标非空正文）挂起，并区分当前可见与后台草稿；草稿清空后补刷', { timeout: 60_000 }, async () => {
   entryCleanup = installProductionEntry(CURRENT_ENTRY)
   harness = mountWatcher()
   const h = harness
@@ -327,7 +327,14 @@ test('待命草稿（任意坐标非空正文）同样挂起；草稿清空后�
   h.respond(() => new Response(builtIndexHtml(NEW_ENTRY), { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } }))
   h.renderStore('boot-2')
   await flush()
-  assert.equal(h.view().deferReason, 'draft', '待命草稿挂起')
+  assert.equal(h.view().deferReason, 'background-draft', '当前在其他页面时标识为后台草稿')
+  assert.equal(h.reloads(), 0)
+
+  act(() => {
+    h.store().openTarget({ kind: 'agent', profileId: 'p1' })
+  })
+  await flush()
+  assert.equal(h.view().deferReason, 'draft', '切到该待命页后标识为当前输入内容')
   assert.equal(h.reloads(), 0)
 
   act(() => {
@@ -478,7 +485,81 @@ test('草稿 + 弹窗同时在场：deferReason 如实组合，两者都解除�
   assert.equal(h.reloads(), 1)
 })
 
-test('焦点在 input/textarea 时保守挂起（文案并入未提交内容）；失焦后补刷', { timeout: 60_000 }, async () => {
+test('空输入框或未改动预填值聚焦不误拦；实际编辑挂起，删回原值或失焦后自动补刷', { timeout: 60_000 }, async () => {
+  entryCleanup = installProductionEntry(CURRENT_ENTRY)
+  harness = mountWatcher()
+  const h = harness
+  const input = document.createElement('input')
+  input.value = 'preset'
+  document.body.appendChild(input)
+  h.renderStore('boot-1')
+  await flush()
+  h.respond(() => htmlOf(NEW_ENTRY))
+
+  // 仅聚焦未改字（含已有默认值的表单字段）：不误判为未提交输入
+  act(() => {
+    input.focus()
+  })
+  await flush()
+  assert.equal(h.view().deferReason, null, '聚焦但未修改值不挂起')
+
+  // 用户实际修改内容：立即进入 draft 挂起，发版不强刷
+  act(() => {
+    input.value = 'preset edited'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  await flush()
+  assert.equal(h.view().deferReason, 'draft', '实际修改输入内容后挂起')
+
+  h.renderStore('boot-2')
+  await flush()
+  assert.equal(h.view().updateAvailable, true)
+  assert.equal(h.reloads(), 0, '编辑过程中不自动刷新')
+
+  // 删回原值后恢复干净，立即补刷
+  act(() => {
+    input.value = 'preset'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  await flush()
+  assert.equal(h.view().deferReason, null)
+  assert.equal(h.reloads(), 1, '改回原值后恢复干净并自动补刷')
+  input.remove()
+})
+
+test('聚焦中的脏输入框被直接卸载或 display:none 隐藏时，无 focusout 也自愈并补刷', { timeout: 60_000 }, async () => {
+  entryCleanup = installProductionEntry(CURRENT_ENTRY)
+  harness = mountWatcher()
+  const h = harness
+  const wrap = document.createElement('div')
+  const input = document.createElement('input')
+  wrap.appendChild(input)
+  document.body.appendChild(wrap)
+  h.renderStore('boot-1')
+  await flush()
+  h.respond(() => htmlOf(NEW_ENTRY))
+
+  act(() => {
+    input.focus()
+    input.value = 'unsaved'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  await flush()
+  h.renderStore('boot-2')
+  await flush()
+  assert.equal(h.view().deferReason, 'draft')
+  assert.equal(h.reloads(), 0)
+
+  // 场景 A：父容器变为 display:none（如 <Activity mode="hidden">），浏览器不触发 focusout
+  act(() => {
+    wrap.style.display = 'none'
+  })
+  await waitForCondition(() => h.view().deferReason === null)
+  assert.equal(h.reloads(), 1, '容器隐藏后自愈解除挂起并补刷')
+  wrap.remove()
+})
+
+test('聚焦中的脏输入框从 DOM 移除（如 AuthGate/重命名卸载）时自动自愈补刷', { timeout: 60_000 }, async () => {
   entryCleanup = installProductionEntry(CURRENT_ENTRY)
   harness = mountWatcher()
   const h = harness
@@ -490,22 +571,89 @@ test('焦点在 input/textarea 时保守挂起（文案并入未提交内容）�
 
   act(() => {
     input.focus()
+    input.value = 'secret'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
   })
   await flush()
-  assert.equal(h.view().deferReason, 'draft', '焦点保护并入未提交内容文案')
+  h.renderStore('boot-2')
+  await flush()
+  assert.equal(h.reloads(), 0)
+
+  act(() => {
+    input.remove()
+  })
+  await waitForCondition(() => h.view().deferReason === null)
+  assert.equal(h.reloads(), 1, 'DOM 移除后自动解除挂起并补刷')
+})
+
+test('受管 Composer 空 textarea 聚焦不误拦，仅 IME 组合输入期间保护', { timeout: 60_000 }, async () => {
+  entryCleanup = installProductionEntry(CURRENT_ENTRY)
+  harness = mountWatcher()
+  const h = harness
+  const textarea = document.createElement('textarea')
+  textarea.setAttribute('data-composer-draft-managed', 'true')
+  document.body.appendChild(textarea)
+  h.renderStore('boot-1')
+  await flush()
+  h.respond(() => htmlOf(NEW_ENTRY))
+
+  act(() => {
+    textarea.focus()
+  })
+  await flush()
+  assert.equal(h.view().deferReason, null, '发完消息光标留在空受管框内不拦截自动刷新')
+
+  act(() => {
+    textarea.dispatchEvent(new Event('compositionstart', { bubbles: true }))
+  })
+  await flush()
+  assert.equal(h.view().deferReason, 'draft', 'IME 组合输入期间受保护')
 
   h.renderStore('boot-2')
   await flush()
-  assert.equal(h.view().updateAvailable, true)
-  assert.equal(h.reloads(), 0, '焦点内不自动刷新')
+  assert.equal(h.reloads(), 0)
 
   act(() => {
-    input.blur()
+    textarea.dispatchEvent(new Event('compositionend', { bubbles: true }))
   })
   await flush()
   assert.equal(h.view().deferReason, null)
-  assert.equal(h.reloads(), 1, '失焦且无其他现场后补刷')
-  input.remove()
+  assert.equal(h.reloads(), 1, 'IME 结束且草稿为空后自动补刷')
+  textarea.remove()
+})
+
+test('分屏与抽屉内的会话草稿计为当前可见，其余隐藏会话计为后台草稿', { timeout: 60_000 }, async () => {
+  entryCleanup = installProductionEntry(CURRENT_ENTRY)
+  harness = mountWatcher()
+  const h = harness
+  act(() => {
+    setComposerDirty('watch-composer-instance', { ...CLEAN_COMPOSER, hasDraftText: true }, 9)
+  })
+  h.renderStore('boot-1')
+  await flush()
+  h.respond(() => htmlOf(NEW_ENTRY))
+  h.renderStore('boot-2', { activeModal: { kind: 'command-palette' } })
+  await flush()
+  assert.equal(h.view().deferReason, 'background-draft-and-modal', '后台草稿 + 打开窗口精确组合')
+
+  // 若在 conversation-drawer 中打开了会话 9，则视为当前可见草稿
+  h.renderStore('boot-2', { activeModal: { kind: 'conversation-drawer', conversationId: 9 } })
+  await flush()
+  assert.equal(h.view().deferReason, 'draft-and-modal', '抽屉内会话草稿属于当前可见现场')
+
+  // 关掉抽屉但分屏打开会话 9，仍属于当前可见草稿
+  act(() => {
+    h.store().openTarget({ kind: 'conversation', conversationId: 9 }, { split: true })
+  })
+  h.renderStore('boot-2', { activeModal: null })
+  await flush()
+  assert.equal(h.view().deferReason, 'draft', '分屏内会话草稿属于当前可见现场')
+
+  act(() => {
+    clearComposerDirty('watch-composer-instance')
+  })
+  await flush()
+  assert.equal(h.reloads(), 1)
 })
 
 // ---------------------------------------------------------------------------
@@ -566,7 +714,13 @@ test('Composer 实例上报与卸载清报：旧实例残留不阻塞刷新', { 
     sendApi!.setDraftState('未发送的草稿')
   })
   await flush()
-  assert.equal(h.view().deferReason, 'draft', '实例上报挂起')
+  assert.equal(h.view().deferReason, 'background-draft', '当前看会话 1 时，会话 7 上报为后台草稿')
+
+  act(() => {
+    h.store().openTarget({ kind: 'conversation', conversationId: HOST_CONVERSATION.id })
+  })
+  await flush()
+  assert.equal(h.view().deferReason, 'draft', '切到会话 7 后识别为当前输入内容')
 
   h.renderStore('boot-1')
   await flush()
@@ -944,11 +1098,13 @@ test('storage 不可用：指纹驱动的自动刷新同样拒绝（fail-closed 
     assert.equal(h.view().updateAvailable, true, '待刷新提示保留')
     assert.equal(h.reloads(), 0, 'storage 不可用拒绝自动刷新（禁 storage 的 WebView + 回吐旧缓存 = 无限循环）')
 
-    // 挂起条件反复变化（失焦/聚焦）也不得绕过 fail-closed 自动刷新
+    // 挂起条件反复变化（实际输入并失焦）也不得绕过 fail-closed 自动刷新
     const input = document.createElement('input')
     document.body.appendChild(input)
     act(() => {
       input.focus()
+      input.value = 'dirty'
+      input.dispatchEvent(new Event('input', { bubbles: true }))
     })
     act(() => {
       input.blur()

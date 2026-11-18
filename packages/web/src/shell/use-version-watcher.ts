@@ -43,19 +43,31 @@
  *   Web 产物）；断线提示仍由 App 连接横幅负责，两套提示互不替代。
  * 本模块只导出 hook 与纯类型（无组件），保持 .ts Fast Refresh 约定。
  */
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
-import { useActiveModal, useAuthConnection, useStoreActions } from '../lib/store-context.js'
-import { composerDirty, subscribeComposerDirty } from '../conversation/composer-dirty.js'
-import { standbyDraftsDirty, subscribeStandbyDrafts } from '../conversation/standby-model.js'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { useActiveModal, useAuthConnection, useLocationTargets, useStoreActions } from '../lib/store-context.js'
+import {
+  EMPTY_COMPOSER_DIRTY_SUMMARY,
+  getComposerDirtySummary,
+  subscribeComposerDirty,
+} from '../conversation/composer-dirty.js'
+import {
+  EMPTY_STANDBY_DIRTY_KEYS,
+  standbyDirtyDraftKeys,
+  standbyDraftKey,
+  subscribeStandbyDrafts,
+} from '../conversation/standby-model.js'
 import {
   applyProbeResult,
   buildVersionReloadUrl,
   claimFingerprintAutoReload,
   detectDocumentProductionEntry,
   initialVersionWatchState,
+  isComposerManagedInput,
+  isElementVisibleInDocument,
   isTextInputElement,
   probeAllowed,
   probeLatestIndexEntry,
+  resolveVersionDeferReason,
   shouldReloadNow,
   versionUpdatePending,
   type VersionDeferReason,
@@ -110,18 +122,74 @@ export interface VersionWatcherView {
 
 export function useVersionWatcher(options: VersionWatcherOptions = {}): VersionWatcherView {
   const { kernelBootId } = useAuthConnection()
+  const { primaryTarget, splitTarget } = useLocationTargets()
   const activeModal = useActiveModal()
   const { pushNotice } = useStoreActions()
-  // 本地未提交草稿现场（外部 store 聚合布尔值；getSnapshot 为原始值天然稳定）。
-  const composerDirtyNow = useSyncExternalStore(subscribeComposerDirty, composerDirty, () => false)
-  const standbyDirtyNow = useSyncExternalStore(subscribeStandbyDrafts, standbyDraftsDirty, () => false)
-  const draftDirty = composerDirtyNow || standbyDirtyNow
+  // 本地未提交草稿现场（外部 store 聚合快照；getSnapshot 引用稳定）。
+  const composerSummary = useSyncExternalStore(
+    subscribeComposerDirty,
+    getComposerDirtySummary,
+    () => EMPTY_COMPOSER_DIRTY_SUMMARY,
+  )
+  const standbyDirtyKeys = useSyncExternalStore(
+    subscribeStandbyDrafts,
+    standbyDirtyDraftKeys,
+    () => EMPTY_STANDBY_DIRTY_KEYS,
+  )
+  const visibleConversationIds = useMemo(() => {
+    const ids = new Set<number>()
+    if (primaryTarget.kind === 'conversation') ids.add(primaryTarget.conversationId)
+    if (splitTarget?.kind === 'conversation') ids.add(splitTarget.conversationId)
+    if (activeModal?.kind === 'conversation-drawer') ids.add(activeModal.conversationId)
+    return ids
+  }, [primaryTarget, splitTarget, activeModal])
+  const visibleStandbyKeys = useMemo(() => {
+    const keys = new Set<string>()
+    if (primaryTarget.kind === 'agent') keys.add(standbyDraftKey({ panel: 'primary', ...primaryTarget }))
+    if (splitTarget?.kind === 'agent') keys.add(standbyDraftKey({ panel: 'split', ...splitTarget }))
+    return keys
+  }, [primaryTarget, splitTarget])
+  const hasForegroundComposerDirty =
+    composerSummary.hasUnscopedDirty ||
+    composerSummary.conversationIds.some((id) => visibleConversationIds.has(id))
+  const hasForegroundStandbyDirty = standbyDirtyKeys.some((key) => visibleStandbyKeys.has(key))
+  const draftDirty = composerSummary.anyDirty || standbyDirtyKeys.length > 0
   // 弹窗现场：任意 activeModal（含只读预览）都挂起自动刷新，理由见文件头。
   const modalOpen = activeModal !== null
-  // 焦点现场：焦点在 input/textarea 即保守视为存在未提交输入（额外 guard）。
-  const [textInputFocused, setTextInputFocused] = useState<boolean>(() =>
-    typeof document !== 'undefined' && isTextInputElement(document.activeElement),
-  )
+  // 焦点输入保护：仅当聚焦在可见、非托管的可编辑文本框内且相对聚焦初值确实发生了修改
+  // （或正处于 IME 组合输入态）时才置脏；卸载/隐藏时自动自愈，空框聚焦不误拦。
+  const focusBaselineRef = useRef<WeakMap<Element, string>>(new WeakMap())
+  const composingRef = useRef(false)
+  const evaluateFocusedInputDirty = useCallback((): boolean => {
+    if (typeof document === 'undefined') return false
+    const active = document.activeElement
+    if (!isTextInputElement(active) || !isElementVisibleInDocument(active)) {
+      composingRef.current = false
+      return false
+    }
+    if (isComposerManagedInput(active)) {
+      return composingRef.current
+    }
+    if (composingRef.current) return true
+    const baselines = focusBaselineRef.current
+    if (!baselines.has(active)) {
+      baselines.set(active, active.value)
+      return false
+    }
+    const baseline = baselines.get(active)!
+    return active.value !== baseline && (active.value.trim() !== '' || baseline.trim() !== '')
+  }, [])
+  const [focusedInputDirty, setFocusedInputDirty] = useState<boolean>(false)
+  const focusedInputDirtyRef = useRef(focusedInputDirty)
+  focusedInputDirtyRef.current = focusedInputDirty
+  const syncFocusedInputDirty = useCallback((): boolean => {
+    const next = evaluateFocusedInputDirty()
+    if (next !== focusedInputDirtyRef.current) {
+      focusedInputDirtyRef.current = next
+      setFocusedInputDirty(next)
+    }
+    return next
+  }, [evaluateFocusedInputDirty])
 
   // 启用门控：当前页面生产入口指纹（惰性一次性读取；null = 探测器休眠）。
   const [currentEntry] = useState<string | null>(() =>
@@ -138,8 +206,6 @@ export function useVersionWatcher(options: VersionWatcherOptions = {}): VersionW
   draftDirtyRef.current = draftDirty
   const modalOpenRef = useRef(modalOpen)
   modalOpenRef.current = modalOpen
-  const textFocusRef = useRef(textInputFocused)
-  textFocusRef.current = textInputFocused
   const pendingRef = useRef(false)
   const preloadProbePendingRef = useRef(false)
   const pushNoticeRef = useRef(pushNotice)
@@ -206,10 +272,10 @@ export function useVersionWatcher(options: VersionWatcherOptions = {}): VersionW
       // 导航确实没有发生（页面还活着）：仍待刷新、且挂起条件未在窗口内出现
       // 才升级重试；用户刚开始输入则放弃自动升级，横幅与手动动作保留。
       if (!activeRef.current || !pendingRef.current) return
-      if (draftDirtyRef.current || modalOpenRef.current || textFocusRef.current) return
+      if (draftDirtyRef.current || modalOpenRef.current || syncFocusedInputDirty()) return
       navigate()
     }, versionWatchTimings.reloadEscalateMs)
-  }, [clearReloadEscalation])
+  }, [clearReloadEscalation, syncFocusedInputDirty])
 
   /** 自动刷新一次性闸门：本页生命周期内自动路径只发起一次（防重复探测/通知循环）。 */
   const autoReloadOnce = useCallback((): void => {
@@ -225,10 +291,11 @@ export function useVersionWatcher(options: VersionWatcherOptions = {}): VersionW
       pendingRef.current = fingerprintPending
       setUpdateAvailable(fingerprintPending)
     }
+    const focusDirty = syncFocusedInputDirty()
     if (
       !shouldReloadNow({
         pending: fingerprintPending,
-        dirty: draftDirtyRef.current || modalOpenRef.current || textFocusRef.current,
+        dirty: draftDirtyRef.current || modalOpenRef.current || focusDirty,
         reloadTriggered: reloadTriggeredRef.current,
       })
     ) {
@@ -295,12 +362,31 @@ export function useVersionWatcher(options: VersionWatcherOptions = {}): VersionW
     void runProbe()
   }, [kernelBootId, currentEntry, runProbe])
 
-  // 挂起条件（草稿/弹窗/文本焦点）全部解除：仍有待刷新版本（含 preloadError
-  // 强制挂起）即自动补刷（自动路径一次性闸门防循环）。
+  // 挂起条件（草稿/弹窗/聚焦编辑）全部解除：仍有待刷新版本即自动补刷。
   useEffect(() => {
     if (currentEntry === null) return
-    if (!draftDirty && !modalOpen && !textInputFocused) settle()
-  }, [draftDirty, modalOpen, textInputFocused, currentEntry, settle])
+    if (!draftDirty && !modalOpen && !focusedInputDirty) settle()
+  }, [draftDirty, modalOpen, focusedInputDirty, currentEntry, settle])
+
+  // 聚焦输入脏态期间挂载轻量 MutationObserver：监听 DOM 卸载或 display:none/hidden 隐藏，
+  // 弥补浏览器在移除/隐藏聚焦元素时不派发 focusout 的盲区；干净时自动断开零开销。
+  useEffect(() => {
+    if (currentEntry === null || !focusedInputDirty || typeof MutationObserver === 'undefined' || typeof document === 'undefined') {
+      return
+    }
+    const root = document.body ?? document.documentElement
+    if (root === null) return
+    const observer = new MutationObserver(() => {
+      syncFocusedInputDirty()
+    })
+    observer.observe(root, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['style', 'hidden', 'disabled', 'readonly'],
+    })
+    return () => observer.disconnect()
+  }, [currentEntry, focusedInputDirty, syncFocusedInputDirty])
 
   // 事件与轮询装配：visibility/focus 节流探测、visible 期间 60s 轮询
   //（hidden 跳过）、vite:preloadError 兜底；卸载全部清理。
@@ -324,19 +410,44 @@ export function useVersionWatcher(options: VersionWatcherOptions = {}): VersionW
       preloadProbePendingRef.current = true
       void runProbe()
     }
-    // 焦点保护：focusin/focusout 后按 document.activeElement 重算（焦点在
-    // input/textarea 之间直接转移时两次事件同任务批处理，不产生中间态提交）。
-    const syncTextInputFocus = (): void => {
-      const focused = isTextInputElement(document.activeElement)
-      if (focused === textFocusRef.current) return
-      textFocusRef.current = focused
-      setTextInputFocused(focused)
+    const onFocusIn = (event: FocusEvent): void => {
+      const target = event.target
+      if (target instanceof Element && isTextInputElement(target) && !focusBaselineRef.current.has(target)) {
+        focusBaselineRef.current.set(target, target.value)
+      }
+      composingRef.current = false
+      syncFocusedInputDirty()
     }
+    const onFocusOut = (event: FocusEvent): void => {
+      if (event.target instanceof Element) {
+        focusBaselineRef.current.delete(event.target)
+      }
+      composingRef.current = false
+      syncFocusedInputDirty()
+    }
+    const onInput = (): void => {
+      syncFocusedInputDirty()
+    }
+    const onCompositionStart = (event: CompositionEvent): void => {
+      if (isTextInputElement(document.activeElement) || (event.target instanceof Element && isTextInputElement(event.target))) {
+        composingRef.current = true
+        syncFocusedInputDirty()
+      }
+    }
+    const onCompositionEnd = (): void => {
+      composingRef.current = false
+      syncFocusedInputDirty()
+    }
+    // 挂载若已存在初始焦点，记录基线并同步一次。
+    syncFocusedInputDirty()
     document.addEventListener('visibilitychange', onVisibilityChange)
     window.addEventListener('focus', onFocus)
     window.addEventListener('vite:preloadError', onPreloadError)
-    document.addEventListener('focusin', syncTextInputFocus)
-    document.addEventListener('focusout', syncTextInputFocus)
+    document.addEventListener('focusin', onFocusIn)
+    document.addEventListener('focusout', onFocusOut)
+    document.addEventListener('input', onInput)
+    document.addEventListener('compositionstart', onCompositionStart)
+    document.addEventListener('compositionend', onCompositionEnd)
     const timer = setInterval(() => {
       if (document.hidden) return
       void runProbe()
@@ -345,24 +456,25 @@ export function useVersionWatcher(options: VersionWatcherOptions = {}): VersionW
       document.removeEventListener('visibilitychange', onVisibilityChange)
       window.removeEventListener('focus', onFocus)
       window.removeEventListener('vite:preloadError', onPreloadError)
-      document.removeEventListener('focusin', syncTextInputFocus)
-      document.removeEventListener('focusout', syncTextInputFocus)
+      document.removeEventListener('focusin', onFocusIn)
+      document.removeEventListener('focusout', onFocusOut)
+      document.removeEventListener('input', onInput)
+      document.removeEventListener('compositionstart', onCompositionStart)
+      document.removeEventListener('compositionend', onCompositionEnd)
       clearInterval(timer)
     }
-  }, [currentEntry, runProbe, issueReloadNavigation, settle])
+  }, [currentEntry, runProbe, issueReloadNavigation, settle, syncFocusedInputDirty])
 
   // 会话 Composer 脏状态由各组件实例自行上报与清除（composer-dirty 桥接），
   // 本 hook 只订阅聚合结果，无需额外清理。
 
-  // 「未提交内容」语义 = 权威草稿事实 ∪ 焦点保护（焦点内可能存在其他未提交输入）。
-  const draftLike = draftDirty || textInputFocused
-  const deferReason: VersionDeferReason = !draftLike && !modalOpen
-    ? null
-    : draftLike && modalOpen
-      ? 'draft-and-modal'
-      : draftLike
-        ? 'draft'
-        : 'modal'
+  const foregroundDraft = hasForegroundComposerDirty || hasForegroundStandbyDirty || focusedInputDirty
+  const backgroundDraft = !foregroundDraft && draftDirty
+  const deferReason: VersionDeferReason = resolveVersionDeferReason({
+    foregroundDraft,
+    backgroundDraft,
+    modalOpen,
+  })
   const clearPreloadError = useCallback((): void => {
     setPreloadError(false)
   }, [])

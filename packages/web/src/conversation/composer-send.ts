@@ -166,6 +166,21 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
   const syncLiveDraft = useCallback((text: string, target: number | null, attachments: ReadonlyArray<PendingAttachment>): void => {
     liveDraftRef.current = draftVersionOf(text, target, attachments)
   }, [])
+  const dirtySinkRef = useRef(dirtySink)
+  dirtySinkRef.current = dirtySink
+  const publishHiddenDirty = useCallback((): void => {
+    const sink = dirtySinkRef.current
+    if (sink == null) return
+    const live = liveDraftRef.current
+    const snap: ComposerDirtySnapshot = {
+      hasDraftText: live.text.trim() !== '',
+      editingEntry: live.targetEntryId !== null,
+      hasAttachments: live.attachments.length > 0,
+      busy: sendingRef.current || uploadingRef.current > 0,
+    }
+    sink.current = snap
+    sink.publish?.(snap)
+  }, [])
 
   const handleEnvBlocker = (blocker: SessionEnvBlocker): void => {
     envBlockedRef.current = blocker.blocked
@@ -268,22 +283,22 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
         try {
           if (file.size > 15 * 1024 * 1024) throw new Error('File exceeds the 15 MiB limit')
           const meta = await conversationsApi.uploadArtifact(conversation.id, file)
-          setAttachments((prev) => {
-            const next = [...prev, { artifactId: meta.id, name: meta.name, size: meta.size, mimeType: meta.mimeType }]
-            // The render snapshot is stale after the await: take live values
-            // for text/anchor, only replacing the attachment set.
-            syncLiveDraft(liveDraftRef.current.text, liveDraftRef.current.targetEntryId, next)
-            return next
-          })
+          const uploaded: PendingAttachment = { artifactId: meta.id, name: meta.name, size: meta.size, mimeType: meta.mimeType }
+          liveDraftRef.current = {
+            ...liveDraftRef.current,
+            attachments: [...liveDraftRef.current.attachments, meta.id],
+          }
+          setAttachments((prev) => [...prev, uploaded])
         } catch (err) {
           notifyError(t('composer.attach.uploadFailedTitle', { name: file.name }), err)
         } finally {
           uploadingRef.current--
           setUploading(uploadingRef.current)
+          publishHiddenDirty()
         }
       }
     },
-    [conversation.id, notifyError, t],
+    [conversation.id, notifyError, publishHiddenDirty, t],
   )
 
   // ⌘K and the slash menu share the same action addressing; failures must
@@ -541,13 +556,11 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
         ...(targetEntryId !== null ? { replaceFromEntryId: targetEntryId } : working ? { whenBusy: busyMode } : {}),
         ...(attachments.length > 0 ? { attachments: attachments.map((a) => a.artifactId) } : {}),
       })
-      setAttachments((current) => {
-        const next = current.filter((attachment) => !sentAttachments.has(attachment.artifactId))
-        // Sent attachments leave the live version too, so residue cannot
-        // mislead the onlyIfEmpty prefill or the rollback check.
-        syncLiveDraft(liveDraftRef.current.text, liveDraftRef.current.targetEntryId, next)
-        return next
-      })
+      liveDraftRef.current = {
+        ...liveDraftRef.current,
+        attachments: liveDraftRef.current.attachments.filter((artifactId) => !sentAttachments.has(artifactId)),
+      }
+      setAttachments((current) => current.filter((attachment) => !sentAttachments.has(attachment.artifactId)))
     } catch (err) {
       // Restore text and edit target only while the Composer is still in the
       // expected post-clear state; if the user already started new input or
@@ -565,8 +578,9 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
       sendingRef.current = false
       setSending(false)
       onSendingChange?.(false)
+      publishHiddenDirty()
     }
-  }, [text, attachments, editingEntryId, working, runSlashCommand, syncLiveDraft, onSendingChange, notifyError, pushNotice, conversation.id, uploadingRef, envBlocker, runPluginCommandFrom, slashPluginCommands, t])
+  }, [text, attachments, editingEntryId, working, runSlashCommand, syncLiveDraft, onSendingChange, notifyError, pushNotice, conversation.id, uploadingRef, envBlocker, runPluginCommandFrom, slashPluginCommands, publishHiddenDirty, t])
 
   // Explicit text submission: consumes no draft / edit anchor / attachments
   // (content not typed by the user, e.g. plugin command output). Shares the
@@ -603,8 +617,9 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
       sendingRef.current = false
       setSending(false)
       onSendingChange?.(false)
+      publishHiddenDirty()
     }
-  }, [working, onSendingChange, notifyError, pushNotice, conversation.id, uploadingRef, envBlocker, t])
+  }, [working, onSendingChange, notifyError, pushNotice, conversation.id, uploadingRef, envBlocker, publishHiddenDirty, t])
 
   const readLiveDraft = useCallback((): string => liveDraftRef.current.text, [])
 
@@ -627,8 +642,8 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
   // holds only dirtyKey, so re-renders never clear the report twice).
   useEffect(() => {
     if (dirtyKey === undefined) return
-    setComposerDirty(dirtyKey, dirtySnapshot)
-  }, [dirtyKey, dirtySnapshot])
+    setComposerDirty(dirtyKey, dirtySnapshot, conversation.id)
+  }, [dirtyKey, dirtySnapshot, conversation.id])
   useEffect(() => {
     if (dirtyKey === undefined) return
     return () => clearComposerDirty(dirtyKey)

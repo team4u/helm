@@ -21,12 +21,15 @@ import {
   detectDocumentProductionEntry,
   FINGERPRINT_RELOAD_GUARD_KEY,
   initialVersionWatchState,
+  isComposerManagedInput,
+  isElementVisibleInDocument,
   isTextInputElement,
   parseIndexHtmlProductionEntry,
   PRELOAD_RELOAD_GUARD_KEY,
   probeAllowed,
   probeLatestIndexEntry,
   RELOAD_CACHE_BUSTER_PARAM,
+  resolveVersionDeferReason,
   shouldReloadNow,
   versionDeferHint,
   versionUpdatePending,
@@ -35,6 +38,7 @@ import {
 import {
   clearComposerDirty,
   composerDirty,
+  getComposerDirtySummary,
   isComposerDirtySnapshot,
   setComposerDirty,
   subscribeComposerDirty,
@@ -42,6 +46,7 @@ import {
 } from '../src/conversation/composer-dirty.js'
 import {
   resetStandbyDrafts,
+  standbyDirtyDraftKeys,
   standbyDraftKey,
   standbyDraftsDirty,
   subscribeStandbyDrafts,
@@ -56,9 +61,9 @@ afterEach(() => {
 
 /** Test isolation: record the Composer report keys registered by this file; afterEach clears them all. */
 const usedComposerKeys: string[] = []
-function reportComposerDirty(key: string, snapshot: ComposerDirtySnapshot): void {
+function reportComposerDirty(key: string, snapshot: ComposerDirtySnapshot, conversationId?: number): void {
   if (!usedComposerKeys.includes(key)) usedComposerKeys.push(key)
-  setComposerDirty(key, snapshot)
+  setComposerDirty(key, snapshot, conversationId)
 }
 
 /** An index.html in the real Vite build shape (a unique module script in head + an inline theme script + a css link). */
@@ -243,25 +248,65 @@ test('throttle verdict: no history passes immediately; inside the window denies;
   assert.equal(probeAllowed(now, now - 5_000, 5_000), true)
 })
 
-test('focus-protection verdict: only input/textarea count as text input', { timeout: 60_000 }, () => {
+test('focus-protection verdict: only enabled editable text inputs/textareas count', { timeout: 60_000 }, () => {
   const input = docOf('<html><body><input id="a" /></body></html>').querySelector('input')
+  const search = docOf('<html><body><input type="search" /></body></html>').querySelector('input')
+  const checkbox = docOf('<html><body><input type="checkbox" /></body></html>').querySelector('input')
+  const file = docOf('<html><body><input type="file" /></body></html>').querySelector('input')
+  const disabled = docOf('<html><body><input disabled /></body></html>').querySelector('input')
+  const readonly = docOf('<html><body><input readonly /></body></html>').querySelector('input')
   const textarea = docOf('<html><body><textarea></textarea></body></html>').querySelector('textarea')
+  const managed = docOf('<html><body><textarea data-composer-draft-managed="true"></textarea></body></html>').querySelector('textarea')
   const div = docOf('<html><body><div></div></body></html>').querySelector('div')
   assert.equal(isTextInputElement(input), true)
+  assert.equal(isTextInputElement(search), true)
+  assert.equal(isTextInputElement(checkbox), false)
+  assert.equal(isTextInputElement(file), false)
+  assert.equal(isTextInputElement(disabled), false)
+  assert.equal(isTextInputElement(readonly), false)
   assert.equal(isTextInputElement(textarea), true)
   assert.equal(isTextInputElement(div), false)
   assert.equal(isTextInputElement(null), false)
+  assert.equal(isComposerManagedInput(managed), true)
+  assert.equal(isComposerManagedInput(textarea), false)
 })
 
-test('defer-reason copy: draft/modal/combination each describe accurately; null has no copy', { timeout: 60_000 }, () => {
+test('element visibility check: disconnected, hidden attr, or display:none ancestor returns false', { timeout: 60_000 }, () => {
+  const wrap = document.createElement('div')
+  const input = document.createElement('input')
+  wrap.appendChild(input)
+  assert.equal(isElementVisibleInDocument(input), false, 'disconnected element is not visible')
+
+  document.body.appendChild(wrap)
+  assert.equal(isElementVisibleInDocument(input), true)
+
+  wrap.style.display = 'none'
+  assert.equal(isElementVisibleInDocument(input), false, 'display:none ancestor hides input')
+
+  wrap.style.display = ''
+  wrap.hidden = true
+  assert.equal(isElementVisibleInDocument(input), false, 'hidden ancestor hides input')
+  wrap.remove()
+})
+
+test('defer-reason resolution and copy: foreground draft, background draft, modal, and combinations', { timeout: 60_000 }, () => {
+  assert.equal(resolveVersionDeferReason({ foregroundDraft: false, backgroundDraft: false, modalOpen: false }), null)
+  assert.equal(resolveVersionDeferReason({ foregroundDraft: true, backgroundDraft: true, modalOpen: false }), 'draft')
+  assert.equal(resolveVersionDeferReason({ foregroundDraft: false, backgroundDraft: true, modalOpen: false }), 'background-draft')
+  assert.equal(resolveVersionDeferReason({ foregroundDraft: false, backgroundDraft: true, modalOpen: true }), 'background-draft-and-modal')
+  assert.equal(resolveVersionDeferReason({ foregroundDraft: false, backgroundDraft: false, modalOpen: true }), 'modal')
+
   assert.ok(versionDeferHint('draft').includes('Unsubmitted input'))
   assert.ok(!versionDeferHint('draft').includes('window'), 'a pure draft never mentions a window')
+  assert.ok(versionDeferHint('background-draft').includes('Another conversation'))
   assert.ok(versionDeferHint('modal').includes('window is open'))
   assert.ok(!versionDeferHint('modal').includes('input'), 'a pure modal never mentions input')
   assert.ok(versionDeferHint('draft-and-modal').includes('Unsubmitted input'))
   assert.ok(versionDeferHint('draft-and-modal').includes('an open window'))
+  assert.ok(versionDeferHint('background-draft-and-modal').includes('Another conversation'))
+  assert.ok(versionDeferHint('background-draft-and-modal').includes('window is open'))
   assert.equal(versionDeferHint(null), '')
-  for (const reason of ['draft', 'modal', 'draft-and-modal'] as const) {
+  for (const reason of ['draft', 'background-draft', 'modal', 'draft-and-modal', 'background-draft-and-modal'] as const) {
     assert.ok(versionDeferHint(reason).endsWith('auto refresh deferred'))
   }
 })
@@ -361,8 +406,10 @@ test('standby-draft dirtiness: an empty draft is clean; any of text/localFiles/u
 
   updateStandbyDraft(key, { text: 'hello' })
   assert.equal(standbyDraftsDirty(), true)
+  assert.deepEqual(standbyDirtyDraftKeys(), [key])
   updateStandbyDraft(key, { text: '' })
   assert.equal(standbyDraftsDirty(), false)
+  assert.deepEqual(standbyDirtyDraftKeys(), [])
 
   updateStandbyDraft(key, { sending: true })
   assert.equal(standbyDraftsDirty(), true)
@@ -424,6 +471,11 @@ test('Composer dirty-state bridge: instance-key isolation, aggregation, unmount 
 })
 
 test('Composer dirty-state bridge: busy (in-flight send/upload) also constitutes an unsubmitted scene', { timeout: 60_000 }, () => {
-  reportComposerDirty('composer-busy', { ...CLEAN_COMPOSER, busy: true })
+  reportComposerDirty('composer-busy', { ...CLEAN_COMPOSER, busy: true }, 42)
   assert.equal(composerDirty(), true)
+  assert.deepEqual(getComposerDirtySummary(), {
+    anyDirty: true,
+    conversationIds: [42],
+    hasUnscopedDirty: false,
+  })
 })
