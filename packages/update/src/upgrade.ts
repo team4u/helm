@@ -69,6 +69,8 @@ export interface CheckForUpdateOptions {
   registryUrl?: string;
   currentVersion?: string;
   fetchFn?: typeof fetch;
+  /** npm dist-tag to track (`latest` by default; e.g. `beta` for a pre-release channel). */
+  tag?: string;
 }
 
 export interface UpdateCheckResult {
@@ -85,6 +87,8 @@ export interface PerformUpdateOptions {
   attemptId?: string;
   currentVersion?: string;
   fetchFn?: typeof fetch;
+  /** npm dist-tag used when resolving the default target version (`latest` unless overridden). */
+  tag?: string;
   /** Extra npm install args passed through to staging (consumer policy, e.g. `--ignore-scripts`). */
   npmInstallArgs?: string[];
   /** Overrides npm staging entirely (see `StageExtractor`). */
@@ -128,7 +132,7 @@ export async function checkForUpdate(
   const registryUrl = resolveRegistryUrl(options?.registryUrl);
   const fetchImpl = options?.fetchFn ?? fetch;
 
-  const latestVersion = await fetchLatestVersion(registryUrl, source.packageName, fetchImpl);
+  const latestVersion = await fetchLatestVersion(registryUrl, source.packageName, fetchImpl, options?.tag ?? 'latest');
   if (!isStrictSemver(latestVersion)) {
     throw new UpgradeRejectedError(
       `invalid SemVer version (latest): "${latestVersion}" (expected strict x.y.z[-pre][+build] without v prefix)`,
@@ -221,6 +225,7 @@ export async function performUpdate(
         registryUrl: options?.registryUrl,
         currentVersion: previousVersion,
         fetchFn: options?.fetchFn,
+        tag: options?.tag,
       });
       targetVersion = check.latestVersion;
     }

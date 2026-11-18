@@ -15,6 +15,7 @@ import fs from 'node:fs/promises';
 import rawFs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
+import { createHash } from 'node:crypto';
 import { sleep as delay } from '@helm/test-kit';
 import { makeTempDir as tempDir } from '@helm/test-kit/node';
 import { atomicWriteJson } from '@helm/env-io';
@@ -28,6 +29,8 @@ import {
   performUpdate,
   stageRelease,
   runNpm,
+  fetchLatestVersion,
+  downloadVerifiedTarball,
   readCurrentRelease,
   writeCurrentRelease,
   deleteCurrentRelease,
@@ -303,6 +306,109 @@ test('checkForUpdate: HTTP errors and timeouts throw explicitly', { timeout: 60_
   await assert.rejects(
     () => checkForUpdate(dir, NODE_SPEC, { currentVersion: '1.0.0', registryUrl: 'http://127.0.0.1:1', fetchFn: timeout_ }),
     /failed to query latest version.*request timed out/,
+  );
+  await fs.rm(dir, { recursive: true, force: true });
+});
+
+// ---------------------------------------------------------------------------
+// 4b. dist-tag channels and verified tarball download
+// ---------------------------------------------------------------------------
+
+/** Mock registry serving one package: dist-tag documents, exact manifests, and tarballs derived from a single body. */
+function makeVerifiedRegistryFetch(opts: { version: string; body?: string; tamperTarball?: boolean }) {
+  const body = opts.body ?? 'tarball-content';
+  const integrity = `sha512-${createHash('sha512').update(body).digest('base64')}`;
+  const urls: string[] = [];
+  const fetchFn: typeof fetch = async (input) => {
+    const url = typeof input === 'string' ? input : String(input);
+    urls.push(url);
+    if (url.includes('/-/')) {
+      return new Response(opts.tamperTarball ? `${body}-tampered` : body, { status: 200 });
+    }
+    const segments = url.replace(/^https?:\/\/[^/]+\//, '').split('/');
+    const pkgName = segments.slice(0, -1).join('/').replace('%2F', '/');
+    const last = segments[segments.length - 1]!;
+    if (/^\d+\.\d+\.\d+/.test(last)) {
+      // Exact-version manifest document
+      return new Response(JSON.stringify({ name: pkgName, version: last, dist: { integrity, tarball: `https://r/${pkgName}/-/${pkgName}-${last}.tgz` } }), { status: 200 });
+    }
+    // Dist-tag document
+    return new Response(JSON.stringify({ version: opts.version }), { status: 200 });
+  };
+  return { fetchFn, urls };
+}
+
+test('fetchLatestVersion: default tag queries /latest; tag parameter queries the requested dist-tag and rejects illegal tags', { timeout: 60_000 }, async () => {
+  const registry = 'https://registry.example.com';
+  const latest = makeVerifiedRegistryFetch({ version: '1.0.0' });
+  assert.equal(await fetchLatestVersion(registry, NODE_PACKAGE, latest.fetchFn), '1.0.0');
+  assert.match(latest.urls[0]!, /@helm\/node\/latest$/);
+
+  const beta = makeVerifiedRegistryFetch({ version: '2.0.0-beta.1' });
+  assert.equal(await fetchLatestVersion(registry, NODE_PACKAGE, beta.fetchFn, 'beta'), '2.0.0-beta.1');
+  assert.match(beta.urls[0]!, /@helm\/node\/beta$/);
+
+  for (const bad of ['', '..', '../x', 'foo/bar', 'a b', '^1.0.0', '.hidden', '_internal', '1.2.3']) {
+    await assert.rejects(() => fetchLatestVersion(registry, NODE_PACKAGE, latest.fetchFn, bad), UpgradeRejectedError);
+  }
+  // Version-shaped tags are rejected with an explicit pointer to the exact-version channel
+  await assert.rejects(() => fetchLatestVersion(registry, NODE_PACKAGE, latest.fetchFn, '1.2.3'), /not a dist-tag/);
+});
+
+test('checkForUpdate/performUpdate: tag option threads through to the dist-tag URL', { timeout: 60_000 }, async () => {
+  const dir = await tempDir('helm-update-');
+  const beta = makeVerifiedRegistryFetch({ version: '2.0.0-beta.1' });
+  const check = await checkForUpdate(dir, { ...NODE_SPEC, getFallbackVersion: () => '1.0.0' }, { fetchFn: beta.fetchFn, tag: 'beta' });
+  assert.equal(check.latestVersion, '2.0.0-beta.1');
+  assert.equal(check.updateAvailable, true);
+  assert.match(beta.urls[0]!, /@helm\/node\/beta$/);
+
+  // performUpdate resolves its default target from the same dist-tag channel
+  const { replacement } = makeReplacement(81);
+  const result = await performUpdate(dir, NODE_SPEC, {
+    currentVersion: '1.0.0',
+    fetchFn: beta.fetchFn,
+    tag: 'beta',
+    stageExtractor: fakeExtractor,
+    prepareReplacement: async () => replacement,
+  });
+  assert.equal(result.targetVersion, '2.0.0-beta.1');
+  assert.equal((await readCurrentRelease(dir))?.version, '2.0.0-beta.1');
+  await fs.rm(dir, { recursive: true, force: true });
+});
+
+test('downloadVerifiedTarball: fetches manifest, downloads, and verifies SHA-512 integrity', { timeout: 60_000 }, async () => {
+  const dir = await tempDir('helm-update-');
+  const dest = path.join(dir, 'pkg-1.0.0.tgz');
+  const good = makeVerifiedRegistryFetch({ version: '1.0.0' });
+  await downloadVerifiedTarball('https://registry.example.com', NODE_PACKAGE, '1.0.0', dest, good.fetchFn);
+  assert.equal(await fs.readFile(dest, 'utf8'), 'tarball-content');
+
+  // Tampered tarball content fails the integrity comparison with the original diagnostics
+  const tampered = makeVerifiedRegistryFetch({ version: '1.0.0', tamperTarball: true });
+  await assert.rejects(
+    () => downloadVerifiedTarball('https://registry.example.com', NODE_PACKAGE, '1.0.0', dest, tampered.fetchFn),
+    /integrity check failed/,
+  );
+
+  // Download-level HTTP failures surface the tarball URL
+  const httpFail = makeVerifiedRegistryFetch({ version: '1.0.0' });
+  const failing: typeof fetch = async (input) => {
+    const url = typeof input === 'string' ? input : String(input);
+    if (url.includes('/-/')) return new Response('gone', { status: 404, statusText: 'Not Found' });
+    return httpFail.fetchFn(input);
+  };
+  await assert.rejects(
+    () => downloadVerifiedTarball('https://registry.example.com', NODE_PACKAGE, '1.0.0', dest, failing),
+    /failed to download .* tarball .*404/,
+  );
+
+  // Manifest validation failures propagate unchanged
+  const wrongName: typeof fetch = async () =>
+    new Response(JSON.stringify({ name: '@evil/node', version: '1.0.0', dist: { integrity: 'sha512-abc', tarball: 'https://r/t.tgz' } }), { status: 200 });
+  await assert.rejects(
+    () => downloadVerifiedTarball('https://registry.example.com', NODE_PACKAGE, '1.0.0', dest, wrongName),
+    /package name mismatch/,
   );
   await fs.rm(dir, { recursive: true, force: true });
 });
