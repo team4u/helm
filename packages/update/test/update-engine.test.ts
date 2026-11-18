@@ -167,8 +167,13 @@ test('compareSemver: core numbers, pre-release precedence, and invalid inputs', 
   assert.equal(compareSemver('1.0.0-rc.1', '1.0.0-beta.9'), 1);
   // build metadata is valid but ignored in precedence (SemVer §10)
   assert.equal(compareSemver('1.0.0+build.123', '1.0.0+build.456'), 0);
-  assert.throws(() => compareSemver('1.0', '1.0.0'), UpgradeRejectedError);
-  assert.throws(() => compareSemver('v1.0.0', '1.0.0'), UpgradeRejectedError);
+  assert.equal(compareSemver('1.0.0+sha.a1b2c3', '1.0.0'), 0);
+  assert.equal(compareSemver('1.0.0-beta.1+exp.sha.5114f85', '1.0.0-beta.1'), 0);
+  assert.equal(compareSemver('1.0.1+a', '1.0.0+b'), 1); // core version takes precedence over build metadata
+  assert.equal(compareSemver('1.0.0-rc.1+b1', '1.0.0-rc.2+b2'), -1); // pre-release takes precedence over build metadata
+  for (const bad of ['v1.0.0', '1.0', '1.0.0.0', '01.0.0', 'not-a-version', '', '1.0.0-', '1.0.0+', '1.0.0+a_b', '1.0.0+a..b']) {
+    assert.throws(() => compareSemver(bad, '1.0.0'), UpgradeRejectedError, `should reject ${bad}`);
+  }
   assert.throws(() => compareSemver('1.0.0', 'not-a-version'), UpgradeRejectedError);
 });
 
@@ -176,10 +181,15 @@ test('normalizeTargetVersion: trims whitespace, strips single v prefix, and vali
   assert.equal(normalizeTargetVersion(' 1.2.3 '), '1.2.3');
   assert.equal(normalizeTargetVersion('v2.0.1'), '2.0.1');
   assert.equal(normalizeTargetVersion('V3.0.0'), '3.0.0');
+  assert.equal(normalizeTargetVersion(' v1.2.3-rc.1 '), '1.2.3-rc.1');
   assert.equal(normalizeTargetVersion('1.2.3-beta.1+meta'), '1.2.3-beta.1+meta');
+  assert.equal(normalizeTargetVersion('v1.2.3+build.7'), '1.2.3+build.7');
+  assert.equal(normalizeTargetVersion(' v1.2.3+build.7 '), '1.2.3+build.7');
   assert.throws(() => normalizeTargetVersion('vv1.0.0'), UpgradeRejectedError);
   assert.throws(() => normalizeTargetVersion(''), UpgradeRejectedError);
   assert.throws(() => normalizeTargetVersion('~1.2.3'), UpgradeRejectedError);
+  assert.throws(() => normalizeTargetVersion('1.2'), UpgradeRejectedError);
+  assert.throws(() => normalizeTargetVersion('1.2.3+bad_build'), UpgradeRejectedError);
 });
 
 // ---------------------------------------------------------------------------
