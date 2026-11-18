@@ -14,7 +14,8 @@
  * - controlled npm runner: shell-free spawn, capped output, process-group kill on timeout;
  * - update orchestration: `performUpdate` with drain gate, strict commit-at-replacement
  *   semantics, rollback plus failure cooldown, and the never-roll-back contract for
- *   `UpgradeCommitUnconfirmedError`.
+ *   `UpgradeCommitUnconfirmedError`; `current.json` disk format is codec-injectable
+ *   (`UpdateStateOps`) so consumers with pre-existing on-disk contracts keep them.
  *
  * The engine depends only on `@helm/protocol` (strict SemVer) and `@helm/env-io`
  * (atomic writes, process-tree termination); it never imports the kernel, plugins, or
@@ -45,8 +46,10 @@ export {
   readBlockedRelease,
   writeBlockedRelease,
   clearBlockedRelease,
+  readStateJson,
   type CurrentReleaseRecord,
   type BlockedReleaseRecord,
+  type UpdateStateOps,
 } from './state.js';
 export { runNpm } from './npm-runner.js';
 export {

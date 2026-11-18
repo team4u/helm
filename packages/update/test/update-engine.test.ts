@@ -17,6 +17,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { sleep as delay } from '@helm/test-kit';
 import { makeTempDir as tempDir } from '@helm/test-kit/node';
+import { atomicWriteJson } from '@helm/env-io';
 import {
   UpgradeRejectedError,
   UpgradeCommitUnconfirmedError,
@@ -33,6 +34,8 @@ import {
   readBlockedRelease,
   writeBlockedRelease,
   clearBlockedRelease,
+  readStateJson,
+  type CurrentReleaseRecord,
   type ReleaseLayout,
   type StagedRelease,
   type PreparedReplacement,
@@ -1063,6 +1066,127 @@ test('performUpdate: ordinary commit error still performs full rollback (contras
   assert.deepEqual(log.draining, [true, false]);
   assert.deepEqual(log.shutdownPids, []);
   await fs.rm(dir, { recursive: true, force: true });
+});
+
+// ---------------------------------------------------------------------------
+// 6b. UpdateStateOps codec injection (consumers with a pre-existing disk contract)
+// ---------------------------------------------------------------------------
+
+/**
+ * Node-adapter-shaped codec: keeps the legacy flat `{version, entryPath, cliBinDir?, updatedAt}`
+ * disk format so already-installed launchers keep reading it, mapping to/from the engine's
+ * canonical record at the disk boundary only.
+ */
+function makeFlatCodec() {
+  interface FlatRecord {
+    version: string;
+    entryPath: string;
+    updatedAt: string;
+    cliBinDir?: string;
+  }
+  const requireString = (raw: Record<string, unknown>, key: string): string => {
+    const value = raw[key];
+    if (typeof value !== 'string' || value === '') throw new Error(`field ${key} is missing or not a non-empty string`);
+    return value;
+  };
+  const validate = (raw: unknown): FlatRecord => {
+    if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('expected JSON object');
+    const rec = raw as Record<string, unknown>;
+    const flat: FlatRecord = {
+      version: requireString(rec, 'version'),
+      entryPath: requireString(rec, 'entryPath'),
+      updatedAt: requireString(rec, 'updatedAt'),
+    };
+    if (rec['cliBinDir'] !== undefined && typeof rec['cliBinDir'] !== 'string') throw new Error('field cliBinDir must be a string');
+    return rec['cliBinDir'] === undefined ? flat : { ...flat, cliBinDir: rec['cliBinDir'] as string };
+  };
+  const codecPath = (stateDir: string) => path.join(stateDir, 'current.json');
+  return {
+    /** Raw on-disk record as the consumer's own binaries see it. */
+    readFlat: async (stateDir: string): Promise<FlatRecord | null> =>
+      readStateJson<FlatRecord>(codecPath(stateDir), validate, 'current.json'),
+    ops: {
+      readCurrent: async (stateDir: string) => {
+        const flat = await readStateJson<FlatRecord>(codecPath(stateDir), validate, 'current.json');
+        if (flat === null) return null;
+        const entries: Record<string, string> = { entryPath: flat.entryPath };
+        if (flat.cliBinDir !== undefined) entries['cliBinDir'] = flat.cliBinDir;
+        return { version: flat.version, updatedAt: flat.updatedAt, entries };
+      },
+      writeCurrent: async (stateDir: string, record: CurrentReleaseRecord) => {
+        const flat: FlatRecord = {
+          version: record.version,
+          entryPath: record.entries['entryPath'] ?? '',
+          updatedAt: record.updatedAt,
+          ...(record.entries['cliBinDir'] !== undefined ? { cliBinDir: record.entries['cliBinDir'] } : {}),
+        };
+        if (flat.entryPath === '') throw new Error('flat codec requires an entryPath entry');
+        await atomicWriteJson(codecPath(stateDir), flat, { mode: 0o600 });
+      },
+      deleteCurrent: async (stateDir: string) => {
+        await fs.rm(codecPath(stateDir), { force: true });
+      },
+    },
+  };
+}
+
+test('UpdateStateOps codec: performUpdate reads, commits, and rolls back through the injected disk format', { timeout: 60_000 }, async () => {
+  const dir = await tempDir('helm-update-');
+  const codec = makeFlatCodec();
+  const spec: UpdateSpec = { ...NODE_SPEC, stateOps: codec.ops };
+
+  // Pre-existing flat record (as an already-installed launcher would have written it)
+  await atomicWriteJson(
+    path.join(dir, 'current.json'),
+    { version: '1.0.0', entryPath: '/old/dist/cli.js', updatedAt: '2026-01-01T00:00:00.000Z', cliBinDir: '/old/node_modules/.bin' },
+    { mode: 0o600 },
+  );
+  // checkForUpdate resolves currentVersion through the codec
+  const check = await checkForUpdate(dir, spec, { fetchFn: makeRegistryFetch('1.2.0').fetchFn });
+  assert.equal(check.currentVersion, '1.0.0');
+
+  // Successful update commits via the codec, keeping the flat on-disk shape
+  const { replacement } = makeReplacement(71);
+  const result = await performUpdate(dir, spec, {
+    currentVersion: '1.0.0',
+    fetchFn: makeRegistryFetch('1.2.0').fetchFn,
+    stageExtractor: fakeExtractor,
+    prepareReplacement: async () => replacement,
+  });
+  assert.equal(result.upgraded, true);
+  const flat = await codec.readFlat(dir);
+  assert.equal(flat?.version, '1.2.0');
+  assert.ok(flat?.entryPath.includes(path.join('releases', '1.2.0')), `entryPath should point into the staged release: ${flat?.entryPath}`);
+  assert.ok(flat?.cliBinDir?.endsWith('node_modules/.bin'));
+  // The default shared codec does NOT understand the flat shape -> explicit corruption error
+  await assert.rejects(() => readCurrentRelease(dir), /entries/);
+
+  // Commit failure rolls back through the codec, restoring the exact previous flat record
+  const dir2 = await tempDir('helm-update-');
+  await atomicWriteJson(
+    path.join(dir2, 'current.json'),
+    { version: '1.0.0', entryPath: '/old/dist/cli.js', updatedAt: '2026-01-01T00:00:00.000Z' },
+    { mode: 0o600 },
+  );
+  const { replacement: failing } = makeReplacement(72, { commitError: new Error('activate handshake timeout') });
+  await assert.rejects(
+    () =>
+      performUpdate(dir2, spec, {
+        targetVersion: '2.0.0',
+        stageExtractor: fakeExtractor,
+        prepareReplacement: async () => failing,
+      }),
+    /rolled back[\s\S]*activate handshake timeout/,
+  );
+  const restored = await codec.readFlat(dir2);
+  assert.deepEqual(restored, { version: '1.0.0', entryPath: '/old/dist/cli.js', updatedAt: '2026-01-01T00:00:00.000Z' });
+  assert.equal((await readBlockedRelease(dir2))?.version, '2.0.0', 'failed target is recorded in the shared blocked file');
+  await assert.rejects(
+    () => performUpdate(dir2, spec, { targetVersion: '2.0.0', stageExtractor: fakeExtractor, prepareReplacement: async () => failing }),
+    /cooldown/,
+  );
+  await fs.rm(dir, { recursive: true, force: true });
+  await fs.rm(dir2, { recursive: true, force: true });
 });
 
 // ---------------------------------------------------------------------------

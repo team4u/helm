@@ -9,7 +9,9 @@
  *
  * Product policy (what counts as in-flight work, how a replacement is spawned and
  * confirmed) is injected; the mechanism (lock, cooldown, drain gate, commit order)
- * lives here. `upgrade.lock` gives cross-process exclusion.
+ * lives here. `upgrade.lock` gives cross-process exclusion. `current.json` crosses disk
+ * through the source's `UpdateStateOps` codec (default: shared `entries` format), so a
+ * consumer can keep a pre-existing on-disk contract for already-installed binaries.
  */
 import fs, { type FileHandle } from 'node:fs/promises';
 import path from 'node:path';
@@ -27,6 +29,8 @@ import {
   writeCurrentRelease,
   deleteCurrentRelease,
   type BlockedReleaseRecord,
+  type CurrentReleaseRecord,
+  type UpdateStateOps,
 } from './state.js';
 import { stageRelease, type ReleaseLayout, type StageExtractor, type StagedRelease } from './staging.js';
 
@@ -48,6 +52,12 @@ export interface UpdateSource {
    * was passed (e.g. reading the running launcher's own `package.json`).
    */
   getFallbackVersion?: () => string;
+  /**
+   * Disk codec for `current.json`; defaults to the shared `entries` format. Consumers with a
+   * pre-existing on-disk contract (helm-node's flat `entryPath`/`cliBinDir` launcher format)
+   * inject their own so already-installed binaries keep reading the records they know.
+   */
+  stateOps?: UpdateStateOps;
 }
 
 export interface UpdateSpec extends UpdateSource {
@@ -136,6 +146,14 @@ export async function checkForUpdate(
   };
 }
 
+const DEFAULT_STATE_OPS: UpdateStateOps = {
+  readCurrent: readCurrentRelease,
+  writeCurrent: writeCurrentRelease,
+  deleteCurrent: deleteCurrentRelease,
+};
+
+const stateOpsOf = (source: UpdateSource): UpdateStateOps => source.stateOps ?? DEFAULT_STATE_OPS;
+
 async function resolveCurrentVersion(
   stateDir: string,
   source: UpdateSource,
@@ -143,7 +161,7 @@ async function resolveCurrentVersion(
   label: string,
 ): Promise<string> {
   if (explicit !== undefined && explicit !== '') return explicit;
-  const current = await readCurrentRelease(stateDir);
+  const current = await stateOpsOf(source).readCurrent(stateDir);
   if (current !== null) return current.version;
   if (source.getFallbackVersion !== undefined) return source.getFallbackVersion();
   throw new UpgradeRejectedError(
@@ -228,7 +246,8 @@ export async function performUpdate(
       }
     }
 
-    const existingCurrent = await readCurrentRelease(stateDir);
+    const state = stateOpsOf(spec);
+    const existingCurrent = await state.readCurrent(stateDir);
 
     const attemptId = options?.attemptId ?? randomUUID();
     let committed = false;
@@ -283,7 +302,7 @@ export async function performUpdate(
       }
 
       try {
-        await writeCurrentRelease(stateDir, {
+        await state.writeCurrent(stateDir, {
           version: targetVersion,
           entries: staged.entries,
           updatedAt: new Date().toISOString(),
@@ -309,10 +328,10 @@ export async function performUpdate(
         }
         try {
           if (existingCurrent) {
-            await writeCurrentRelease(stateDir, existingCurrent);
+            await state.writeCurrent(stateDir, existingCurrent);
             rollbackNotes.push(`current.json restored to ${existingCurrent.version}`);
           } else {
-            await deleteCurrentRelease(stateDir);
+            await state.deleteCurrent(stateDir);
             rollbackNotes.push('current.json deleted (was absent)');
           }
         } catch (restoreError) {

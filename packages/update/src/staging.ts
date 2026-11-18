@@ -11,7 +11,9 @@
  *
  * Layouts are declared per consumer via `ReleaseLayout`; nothing here hardcodes a
  * product's entry-point fields. Failure cleans the staging directory and reports it;
- * prior candidates are never deleted (in-use releases stay intact).
+ * prior candidates are never deleted (in-use releases stay intact). A state directory
+ * is owned by exactly one consumer — markers carry version and origin but are not
+ * namespaced across different consumers' layouts.
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
