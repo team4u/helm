@@ -70,9 +70,11 @@ export interface ConversationMirror {
   /** Lower-bound entry ID for input reconstruction (monotonically non-decreasing: new runs advance to run.first
    * and run end leaves it untouched so settled helm.input entries in the window never resurrect on the next snapshot). */
   runFirstEntry: number | undefined
-  /** Set of requestIds consumed during this turn (accumulated across the active run; reset on a new taskId). */
+  /** Set of requestIds consumed during this turn (accumulated across the active run, including generation
+   * handOver rounds; reset only when a new logical run starts). */
   consumedInputs: Set<string> | undefined
-  /** taskId of the current active run (constant across multi-round tool calls; consumed set resets only when changed). */
+  /** taskId of the generation currently owning the active run (changes on same-run handOver after each tool
+   * round; logical run identity is compared via run first/inputs, see isContinuedRun in conversations.ts). */
   runTaskId: number | undefined
   /** Insertion order of settled runKeys (for bounded eviction, synchronized with global settledRuns). */
   settledRunOrder: string[]

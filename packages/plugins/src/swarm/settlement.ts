@@ -1,5 +1,6 @@
 import type { HelmHostApi } from '@helm/protocol'
 import { redactJsonValue } from '@helm/protocol'
+import { lastAssistantText } from '../entry-text.js'
 
 /** 读取会话末条 assistant 脱敏文本摘要（不调用模型，不编造占位文本）。 */
 export async function collectMemberLastReplySummary(
@@ -32,28 +33,6 @@ export function entryDigestText(entry: { kind: string; data?: unknown; model?: u
   if (entry.data !== undefined) {
     const json = JSON.stringify(entry.data)
     return json.length > 400 ? `${json.slice(0, 399)}…` : json
-  }
-  return ''
-}
-
-export function lastAssistantText(entries: Array<{ kind?: string; model?: unknown }>): string {
-  for (let i = entries.length - 1; i >= 0; i -= 1) {
-    const model = entries[i]!.model
-    if (!Array.isArray(model)) continue
-    for (let j = model.length - 1; j >= 0; j -= 1) {
-      const blocks = (model[j] as { content?: unknown } | undefined)?.content
-      if (!Array.isArray(blocks)) continue
-      const texts = blocks
-        .filter(
-          (b): b is { type: string; text: string } =>
-            typeof b === 'object' &&
-            b !== null &&
-            (b as { type?: string }).type === 'text' &&
-            typeof (b as { text?: unknown }).text === 'string',
-        )
-        .map((b) => b.text)
-      if (texts.length > 0) return texts.join('\n')
-    }
   }
   return ''
 }

@@ -41,6 +41,7 @@ import {
   type GroupMemberState,
 } from '../src/swarm.js'
 import { checkCoordinatorEligibility } from '../src/swarm/actions.js'
+import { lastAssistantText } from '../src/entry-text.js'
 
 function makeMember(over: Partial<GroupMemberState> = {}): GroupMemberState {
   return {
@@ -455,4 +456,49 @@ test('swarm-unit5: checkCoordinatorEligibility rejects child, worker, archived-w
   assert.equal(checkCoordinatorEligibility({ ...baseConv, tags: [ARCHIVED_WORKER_TAG] }, 'human')?.code, 'conversation_scope_violation')
   assert.equal(checkCoordinatorEligibility(baseConv, 'helm')?.code, 'conversation_scope_violation')
   assert.equal(checkCoordinatorEligibility(baseConv, 'bot')?.code, 'conversation_scope_violation')
+})
+
+// ---------------------------------------------------------------------------
+// lastAssistantText：结算摘要只取 assistant 角色文本（回归：曾把 toolResult/user 文本当成员回复）
+// ---------------------------------------------------------------------------
+
+test('lastAssistantText skips toolResult and user text blocks, walking back to the newest assistant text', { timeout: 60_000 }, () => {
+  const toolResultEntry = {
+    kind: 'pi.tool-result',
+    model: [{ role: 'toolResult', content: [{ type: 'text', text: '/root/code/helm\ntotal 388\ndrwxr-xr-x ...' }] }],
+  }
+  const steerEntry = {
+    kind: 'pi.user',
+    model: [{ role: 'user', content: [{ type: 'text', text: 'please continue with the next step' }] }],
+  }
+  const assistantEntry = {
+    kind: 'pi.assistant',
+    model: [{ role: 'assistant', content: [{ type: 'thinking', thinking: 'hmm' }, { type: 'text', text: 'found the bug' }] }],
+  }
+  const assistantToolCallOnly = {
+    kind: 'pi.assistant',
+    model: [{ role: 'assistant', content: [{ type: 'toolCall', id: 'c1', name: 'bash', arguments: { command: 'ls' } }] }],
+  }
+
+  // Tail full of tool results and steers: must return the older assistant text, not tool output or user text.
+  assert.equal(
+    lastAssistantText([assistantEntry, toolResultEntry, toolResultEntry, steerEntry]),
+    'found the bug',
+  )
+  // Assistant entries without text blocks do not stop the backward scan.
+  assert.equal(lastAssistantText([assistantEntry, assistantToolCallOnly, toolResultEntry]), 'found the bug')
+  // Only tool results: no assistant reply exists -> '' (callers derive honest placeholders).
+  assert.equal(lastAssistantText([toolResultEntry]), '')
+  // Multiple text blocks of one assistant message join with newlines.
+  assert.equal(
+    lastAssistantText([
+      { kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: 'a' }, { type: 'text', text: 'b' }] }] },
+    ]),
+    'a\nb',
+  )
+  // User entries with plain-string content are ignored as well.
+  assert.equal(
+    lastAssistantText([{ kind: 'helm.input', model: [{ role: 'user', content: 'plain steer' }] }, assistantEntry]),
+    'found the bug',
+  )
 })
