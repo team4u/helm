@@ -143,7 +143,6 @@ export interface EnsureCoordinatorGroupInput {
   conversationId: number
   title: string
   objective?: string
-  coordinatorGuard?: boolean
   channels?: Array<{ name: string; topic?: string }>
   reuseExisting?: boolean
 }
@@ -190,10 +189,6 @@ export async function ensureCoordinatorGroup(
   if (eligibilityErr !== undefined) {
     throw new HelmError(eligibilityErr.code, eligibilityErr.message, eligibilityErr.status, eligibilityErr.details)
   }
-  if (input.coordinatorGuard !== undefined && typeof input.coordinatorGuard !== 'boolean') {
-    throw new HelmError('validation_error', 'coordinatorGuard 必须是布尔值', 400, {})
-  }
-  const coordinatorGuard = input.coordinatorGuard ?? true
 
   return enqueueDispatch(async () => {
     const syncTagAndProjections = async (groupId: string): Promise<{ groupId: string; group: BoardViewDoc['group'] }> => {
@@ -220,7 +215,6 @@ export async function ensureCoordinatorGroup(
       coordinatorConversationId: targetConvId,
       title: input.title.trim().slice(0, 120),
       ...(input.objective !== undefined ? { objective: input.objective } : {}),
-      coordinatorGuard,
       ...(input.channels !== undefined ? { channels: input.channels } : {}),
     })
     return syncTagAndProjections(created.id)
@@ -345,7 +339,6 @@ export function registerSwarmActions(
     input: {
       title: string
       objective?: string
-      coordinatorGuard?: boolean
       channels?: Array<{ name: string; topic?: string }>
       conversationId?: number
     },
@@ -374,20 +367,16 @@ export function registerSwarmActions(
       conversationId: targetConvId,
       title: input.title,
       ...(input.objective !== undefined ? { objective: input.objective } : {}),
-      ...(input.coordinatorGuard !== undefined ? { coordinatorGuard: input.coordinatorGuard } : {}),
       ...(input.channels !== undefined ? { channels: input.channels } : {}),
       reuseExisting: false,
     })
   }
 
   const updateGroup = async (
-    input: { groupId?: string; title?: string; objective?: string; coordinatorGuard?: boolean },
+    input: { groupId?: string; title?: string; objective?: string },
     conversationId: number | undefined,
   ): Promise<{ groupId: string; group: BoardViewDoc['group'] }> => {
     const group = resolveCoordinatorGroup(input.groupId, conversationId, true)
-    if (input.coordinatorGuard !== undefined && typeof input.coordinatorGuard !== 'boolean') {
-      throw new HelmError('validation_error', 'coordinatorGuard 必须是布尔值', 400, {})
-    }
     if (input.title !== undefined && (typeof input.title !== 'string' || input.title.trim() === '')) {
       throw new HelmError('validation_error', 'title 必须是非空字符串', 400, {})
     }
@@ -397,7 +386,6 @@ export function registerSwarmActions(
     await groups.updateGroup(group.id, {
       ...(input.title !== undefined ? { title: input.title.trim().slice(0, 120) } : {}),
       ...(input.objective !== undefined ? { objective: input.objective } : {}),
-      ...(input.coordinatorGuard !== undefined ? { coordinatorGuard: input.coordinatorGuard } : {}),
     })
     const view = groups.buildBoardView(group.id)
     return { groupId: group.id, group: view.group }
@@ -1215,7 +1203,7 @@ export function registerSwarmActions(
       const coordConv = readConversationOrUndefined(freshGroup.coordinatorConversationId)
       if (coordConv !== undefined && coordConv.tags.includes(COORDINATOR_TAG)) {
         // 结单后将活跃主控 tag 原地替换为历史 tag：workbench 编排面板仍可访问已完成编组，
-        // 但 swarm_create_group 解锁、主控守卫与工具注入按活跃组判定不再复活。
+        // 但 swarm_create_group 解锁与工具注入按活跃组判定不再复活。
         await ctx.host.updateConversation(freshGroup.coordinatorConversationId, {
           tags: [...coordConv.tags.filter((t) => t !== COORDINATOR_TAG), ARCHIVED_COORDINATOR_TAG],
         })
@@ -1325,7 +1313,7 @@ export function registerSwarmActions(
 
   ctx.tool({
     name: 'swarm_update_group',
-    description: 'Update the active swarm collaboration group title, objective, or coordinatorGuard setting.',
+    description: 'Update the active swarm collaboration group title or objective.',
     inputSchema: updateGroupInputSchema,
     scope: COORDINATOR_SCOPE,
     execute: (input: never, context: PluginToolContext) =>
@@ -1414,7 +1402,7 @@ export function registerSwarmActions(
   ctx.tool({
     name: 'swarm_close_group',
     description:
-      'Close the swarm collaboration group in full-cleanup mode or unlock-merge mode (keepWorktree: true releases holds, preserves modified branches, and restores coordinator bash tools).',
+      'Close the swarm collaboration group in full-cleanup mode or retain-branches mode (keepWorktree: true releases holds and preserves modified branches in retainedWorktrees).',
     inputSchema: closeGroupInputSchema,
     scope: COORDINATOR_SCOPE,
     execute: (input: never, context: PluginToolContext) =>
@@ -1436,10 +1424,10 @@ export function registerSwarmActions(
 
   ctx.action({
     id: 'update_group',
-    description: 'Update swarm collaboration group metadata or coordinatorGuard.',
+    description: 'Update swarm collaboration group metadata.',
     exposeAsTool: false,
     scope: COORDINATOR_SCOPE,
-    cli: { command: ['swarm', 'update-group'], description: 'Update swarm collaboration group metadata or guard' },
+    cli: { command: ['swarm', 'update-group'], description: 'Update swarm collaboration group metadata' },
     inputSchema: updateGroupInputSchema,
     outputSchema: { type: 'object' },
     handler: (input: Parameters<typeof updateGroup>[0], context) => updateGroup(input, context.conversationId),

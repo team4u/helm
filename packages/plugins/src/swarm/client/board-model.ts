@@ -113,7 +113,6 @@ export interface BoardHeadline {
 
 export interface BoardGroupView extends CollabGroupSummary {
   objective?: string
-  coordinatorGuard: boolean
   channels: BoardChannelInfo[]
   retainedWorktrees?: RetainedWorktreeInfo[]
   closeSummary?: string
@@ -428,7 +427,6 @@ export function parseBoardView(raw: unknown): BoardViewDoc | undefined {
       title: g.title,
       ...(typeof g.objective === 'string' && g.objective !== '' ? { objective: g.objective } : {}),
       coordinatorConversationId: g.coordinatorConversationId,
-      coordinatorGuard: typeof g.coordinatorGuard === 'boolean' ? g.coordinatorGuard : true,
       status,
       ...(g.coordinatorDetached === true ? { coordinatorDetached: true } : {}),
       activeWorkerCount: isNonNegInt(g.activeWorkerCount)

@@ -2,10 +2,7 @@ import { escapeXml, type HelmPluginContext } from '@helm/protocol'
 import {
   ACTIVE_SWARM_GROUP_SECTION_ID,
   ARCHIVED_WORKER_TAG,
-  COORDINATOR_BLOCKED_TOOL_NAMES,
   COORDINATOR_TAG,
-  READONLY_WORKER_BLOCKED_TOOL_NAMES,
-  SWARM_PLUGIN_ID,
   SWARM_SKILL_ID,
   WORKER_TAG,
   type SwarmCoordinator,
@@ -24,9 +21,9 @@ export function activeSwarmGroupCoordinatorSection(groupId: string): string {
   return [
     `<active_swarm_group id="${escapeXml(groupId)}" role="coordinator">`,
     `1. Before coordinating, call load_skill({ skillId: "${SWARM_SKILL_ID}" }) for the full blackboard collaboration rules. If the user only sent "/skill:swarm" with no task and no prior goal, confirm swarm mode is ready and briefly ask what task to coordinate.`,
-    '2. Dynamically decide the squad for the task itself (never follow fixed role-name templates): choose worker count, lowercase names, directory access ("readwrite" / "readonly"), workspace isolation ("worktree" / "inherit"), and optional profileId / model via swarm_dispatch_worker.',
+    '2. Do not write business code or sit inside long blocking builds yourself; delegate implementation and verification to workers (quick read-only lookups to size and split the work are fine). Dynamically decide the squad for the task itself (never follow fixed role-name templates): choose worker count, lowercase names, directory access ("readwrite" / "readonly"), workspace isolation ("worktree" / "inherit"), and optional profileId / model via swarm_dispatch_worker.',
     '3. Coordinate handoffs via swarm_board_post / swarm_board_read / swarm_board_status using #seq pointers in refs without copy-pasting diffs or long reports; keep wake=true strictly for the next actor who must act, and never close the group while activeWorkingMembers is non-empty.',
-    '4. When all slices pass verification and worktree branches await merging, call swarm_close_group({ keepWorktree: true }) to unlock bash and merge cleanly.',
+    '4. When all slices pass verification, merge worktree branches and call swarm_close_group (or pass keepWorktree: true to release holds while preserving unmerged branches).',
     '</active_swarm_group>',
   ].join('\n')
 }
@@ -48,17 +45,6 @@ export function activeSwarmGroupWorkerSection(
       : []),
     '</active_swarm_group>',
   ].join('\n')
-}
-
-function collectNonIdempotentDirectToolNames(ctx: HelmPluginContext): Set<string> {
-  const blocked = new Set<string>()
-  for (const manifest of ctx.host.listActions()) {
-    if (manifest.exposeAsTool === true && manifest.idempotent !== true) {
-      blocked.add(manifest.id)
-      blocked.add(`${manifest.pluginId.replaceAll(/[^a-zA-Z0-9_-]/g, '_')}_${manifest.id}`)
-    }
-  }
-  return blocked
 }
 
 export function registerSwarmHooks(
@@ -105,7 +91,6 @@ export function registerSwarmHooks(
         conversationId: conv.id,
         title,
         ...(objective !== undefined ? { objective } : {}),
-        coordinatorGuard: true,
         reuseExisting: true,
       })
     }
@@ -114,7 +99,7 @@ export function registerSwarmHooks(
   })
 
   // ------------------------------------------------------------------
-  // before_turn：互斥工具裁剪 + 恒定 sections 注入（零破 Cache）
+  // before_turn：swarm_create_group 入口可见性 + 恒定 sections 注入（零剥离业务工具）
   // ------------------------------------------------------------------
   ctx.hook.onBeforeTurn((turn) => {
     if (!isActive()) return
@@ -124,15 +109,8 @@ export function registerSwarmHooks(
 
     let nextTools = turn.tools
     let toolsChanged = false
-    const filterTools = (predicate: (toolName: string) => boolean): void => {
-      const filtered = nextTools.filter((t) => predicate(t.name))
-      if (filtered.length !== nextTools.length) {
-        nextTools = filtered
-        toolsChanged = true
-      }
-    }
 
-    // 1) swarm_create_group 对已挂 swarm-coordinator / swarm-worker / swarm-worker-archived、子会话或后台会话隐藏
+    // swarm_create_group 仅对未建组的顶层人类会话暴露；已挂协作标签、子会话或后台会话隐藏该建组入口
     const hideCreateGroup =
       conv.tags.includes(COORDINATOR_TAG) ||
       conv.tags.includes(WORKER_TAG) ||
@@ -141,18 +119,11 @@ export function registerSwarmHooks(
       activeCoordGroup !== undefined ||
       (conv.ownedBy !== undefined && conv.ownedBy !== 'human')
     if (hideCreateGroup) {
-      filterTools((name) => name !== 'swarm_create_group')
-    }
-
-    // 2) 主控守卫（coordinatorGuard === true）剥离重度阻塞工具
-    if (activeCoordGroup?.coordinatorGuard === true) {
-      filterTools((name) => !COORDINATOR_BLOCKED_TOOL_NAMES.has(name))
-    }
-
-    // 3) 只读成员（access: 'readonly'）剥离写文件、清理工作树与非幂等直暴外部工具
-    if (participant?.role === 'worker' && participant.member.access === 'readonly') {
-      const nonIdempotentTools = collectNonIdempotentDirectToolNames(ctx)
-      filterTools((name) => !READONLY_WORKER_BLOCKED_TOOL_NAMES.has(name) && !nonIdempotentTools.has(name))
+      const filtered = nextTools.filter((t) => t.name !== 'swarm_create_group')
+      if (filtered.length !== nextTools.length) {
+        nextTools = filtered
+        toolsChanged = true
+      }
     }
 
     let nextSections = turn.sections
@@ -184,56 +155,6 @@ export function registerSwarmHooks(
         ...(toolsChanged ? { tools: nextTools } : {}),
         ...(sectionsChanged ? { sections: nextSections } : {}),
       },
-    }
-  })
-
-  // ------------------------------------------------------------------
-  // tool_call：主控守卫与只读成员执行期硬拦截
-  // ------------------------------------------------------------------
-  ctx.hook.onToolCall((payload) => {
-    if (!isActive()) return
-    const activeCoordGroup = groups.findActiveGroupByCoordinator(payload.conversationId)
-
-    if (COORDINATOR_BLOCKED_TOOL_NAMES.has(payload.toolName) && activeCoordGroup?.coordinatorGuard === true) {
-      return {
-        action: 'block',
-        reason: `Swarm 主控守卫（coordinatorGuard）已剥离重度阻塞工具 ${payload.toolName}；请通过 swarm_dispatch_worker / swarm_board_post 委派组内成员执行，或在全员审过后调用 swarm_close_group({ keepWorktree: true }) 解锁合入`,
-      }
-    }
-
-    const participant = groups.findGroupByParticipant(payload.conversationId)
-    if (participant?.role === 'worker' && participant.member.access === 'readonly') {
-      if (READONLY_WORKER_BLOCKED_TOOL_NAMES.has(payload.toolName)) {
-        return {
-          action: 'block',
-          reason: `只读成员 @${participant.member.name}（access: readonly）禁止调用写工具 ${payload.toolName}；请使用 bash 运行只读测试并通过 swarm_board_post 提交审阅结果`,
-        }
-      }
-      if (payload.toolName === 'run_action') {
-        if (payload.input['describe'] === true) return
-        const qualified = typeof payload.input['actionId'] === 'string' ? payload.input['actionId'].trim() : ''
-        if (qualified === `${SWARM_PLUGIN_ID}.board_post`) return
-        const dot = qualified.indexOf('.')
-        if (dot > 0) {
-          const pluginId = qualified.slice(0, dot)
-          const actionId = qualified.slice(dot + 1)
-          const manifest = ctx.host.listActions().find((a) => a.pluginId === pluginId && a.id === actionId)
-          if (manifest !== undefined && manifest.idempotent !== true) {
-            return {
-              action: 'block',
-              reason: `只读成员 @${participant.member.name}（access: readonly）禁止通过 run_action 调用非幂等外部动作 ${qualified}`,
-            }
-          }
-        }
-      } else {
-        const nonIdempotentTools = collectNonIdempotentDirectToolNames(ctx)
-        if (nonIdempotentTools.has(payload.toolName)) {
-          return {
-            action: 'block',
-            reason: `只读成员 @${participant.member.name}（access: readonly）禁止调用非幂等外部动作工具 ${payload.toolName}`,
-          }
-        }
-      }
     }
   })
 

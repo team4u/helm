@@ -405,7 +405,6 @@ export function synthesizeBoardView(input: {
     group: {
       ...summary,
       ...(group.objective !== undefined ? { objective: group.objective } : {}),
-      coordinatorGuard: group.coordinatorGuard,
       channels: group.channels.map((c) => ({ ...c })),
       ...(group.retainedWorktrees !== undefined
         ? { retainedWorktrees: group.retainedWorktrees.map((rw) => ({ ...rw })) }
@@ -424,7 +423,6 @@ export function synthesizeBoardView(input: {
     status: group.status,
     title: group.title,
     objective: group.objective ?? '',
-    coordinatorGuard: group.coordinatorGuard,
     coordinatorDetached: Boolean(group.coordinatorDetached),
     channels: group.channels,
     retainedWorktrees: group.retainedWorktrees ?? [],

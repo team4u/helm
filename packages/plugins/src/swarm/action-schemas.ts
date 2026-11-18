@@ -45,10 +45,6 @@ export const createGroupInputSchema: Record<string, unknown> = {
   properties: {
     title: { type: 'string', minLength: 1, maxLength: 120, description: 'Swarm collaboration group title' },
     objective: { type: 'string', maxLength: 4000, description: 'Shared objective anchor for the squad' },
-    coordinatorGuard: {
-      type: 'boolean',
-      description: 'Strip direct heavy coding tools on the coordinator while active (defaults to true)',
-    },
     channels: {
       type: 'array',
       items: {
@@ -74,7 +70,6 @@ export const updateGroupInputSchema: Record<string, unknown> = {
     groupId: { type: 'string', minLength: 1, maxLength: 64 },
     title: { type: 'string', minLength: 1, maxLength: 120 },
     objective: { type: 'string', maxLength: 4000 },
-    coordinatorGuard: { type: 'boolean' },
   },
   additionalProperties: false,
 }
@@ -169,7 +164,7 @@ export const closeGroupInputSchema: Record<string, unknown> = {
     groupId: { type: 'string', minLength: 1, maxLength: 64 },
     keepWorktree: {
       type: 'boolean',
-      description: 'Release holds and archive members while keeping modified worktree branches and unlocking coordinator bash for merging',
+      description: 'Release holds and archive members while preserving modified worktree branches in retainedWorktrees for merging',
     },
     abortRunning: { type: 'boolean', description: 'Abort any running group members before closing' },
     summary: { type: 'string', maxLength: 2000 },

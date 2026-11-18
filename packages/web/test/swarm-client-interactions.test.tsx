@@ -288,7 +288,6 @@ function boardViewFixture(overrides: Record<string, unknown> = {}): Record<strin
       title: '协同审改组',
       objective: '零回归完成鉴权改造',
       coordinatorConversationId: 50,
-      coordinatorGuard: true,
       status: 'active',
       activeWorkerCount: 2,
       headSeq: 3,

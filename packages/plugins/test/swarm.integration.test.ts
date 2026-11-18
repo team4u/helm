@@ -1,9 +1,9 @@
 /**
  * builtin:swarm 协同黑板与对等交接真实组合层整链集成测试（Integration 档）：
  * 1) 默认启用、启动零常驻会话、空闲态不阻塞 disable('builtin:workflow')、受管技能 swarm 随启停显隐、
- *    create_group 同回合下一拍解锁团队工具并剥离重工具、扩缩容期间 <active_swarm_group> 100% 字节恒定、inUse 保护；
+ *    create_group 同回合下一拍解锁团队工具且不剥离常规工具、扩缩容期间 <active_swarm_group> 100% 字节恒定、inUse 保护；
  * 2) Author(worktree) + Verifier(readonly) 真实 Git Worktree 交接快照、空闲期 ManagedWorktreeHold 防删与阻塞 workflow 停用、
- *    只读成员写工具/非幂等外部动作拦截、两态 close_group(409 swarm_worktree_unmerged vs keepWorktree: true 解锁主控 bash 合入、
+ *    两态 close_group(409 swarm_worktree_unmerged vs keepWorktree: true 保留分支合入、
  *    主控 tag 原地替换为 swarm-coordinator-archived 历史 tag：工作台面板可达、建组解锁、协同工具不复活、重建组摘除历史 tag)、
  *    closed 与 coordinatorDetached 历史组 board_status / board_read 正常读取；
  * 3) forkFrom 干净锚点热分叉、manage_channel + #channel 寻址、被动留言(wake: false)与合并唤醒、
@@ -174,7 +174,7 @@ test('swarm-int1: default-enabled zero-resident boot, idle workflow-disable free
       { skillId: SWARM_SKILL_ID },
       { conversationId: coord.id },
     )) as { text: string }
-    assert.match(loadedSkill.text, /Zero-Coding Coordinator Rule/)
+    assert.match(loadedSkill.text, /Coordinator Rule: Do Not Do the Work/)
     assert.match(loadedSkill.text, /swarm_create_group/)
     assert.match(loadedSkill.text, /swarm_dispatch_worker/)
     assert.match(loadedSkill.text, /helm swarm/)
@@ -207,7 +207,7 @@ test('swarm-int1: default-enabled zero-resident boot, idle workflow-disable free
     assert.equal(beforeTools.includes('swarm_board_post'), false)
     assert.equal(preCapture[0]!.sectionsById['swarm.active_group'], undefined)
 
-    // Next beat inside the SAME turn: squad tools unlocked, swarm_create_group & heavy tools stripped!
+    // Next beat inside the SAME turn: squad tools unlocked, swarm_create_group hidden, general tools preserved!
     const afterTools = preCapture[1]!.toolNames
     for (const expected of [
       'swarm_update_group',
@@ -220,12 +220,15 @@ test('swarm-int1: default-enabled zero-resident boot, idle workflow-disable free
       'swarm_inspect_worker',
       'swarm_archive_worker',
       'swarm_close_group',
+      'subagent',
+      'SubagentWorkflow',
+      'bash',
+      'edit',
+      'write',
     ]) {
-      assert.ok(afterTools.includes(expected), `expected ${expected} unlocked after swarm_create_group (actual: ${afterTools.join(',')})`)
+      assert.ok(afterTools.includes(expected), `expected ${expected} available after swarm_create_group (actual: ${afterTools.join(',')})`)
     }
-    for (const stripped of ['swarm_create_group', 'subagent', 'SubagentWorkflow', 'bash', 'edit', 'write']) {
-      assert.equal(afterTools.includes(stripped), false, `expected ${stripped} stripped on guarded coordinator`)
-    }
+    assert.equal(afterTools.includes('swarm_create_group'), false, 'expected swarm_create_group hidden on active coordinator')
     const sectionInitial = preCapture[1]!.sectionsById['swarm.active_group']
     assert.ok(typeof sectionInitial === 'string' && sectionInitial.includes('<active_swarm_group'))
 
@@ -293,17 +296,17 @@ test('swarm-int1: default-enabled zero-resident boot, idle workflow-disable free
       coordinator: [
         (ctx) => {
           sectionAfterScaling = captureRequestMeta(ctx.messages as unknown as Record<string, unknown>[]).sectionsById['swarm.active_group']
-          return fauxAssistantMessage([fauxToolCall('bash', { command: 'echo blocked' })], { stopReason: 'toolUse' })
+          return fauxAssistantMessage([fauxToolCall('bash', { command: 'echo quick-lookup-ok' })], { stopReason: 'toolUse' })
         },
-        fauxAssistantMessage('Guard blocked bash as expected.'),
+        fauxAssistantMessage('Quick lookup finished.'),
       ],
     })
-    await kernel.submitInput(coord.id, 'Check prompt cache stability and guard')
+    await kernel.submitInput(coord.id, 'Check prompt cache stability')
     await kernel.waitForIdle(coord.id)
 
     assert.equal(sectionAfterScaling, sectionInitial, 'active_swarm_group section must stay 100% byte-constant across member scaling and metadata edits')
     const detail = await kernel.getConversationDetail(coord.id, { limit: 10 })
-    assert.match(JSON.stringify(detail.entries), /coordinatorGuard/, 'tool_call guard must block coordinator bash')
+    assert.match(JSON.stringify(detail.entries), /quick-lookup-ok/, 'coordinator retains bash for lightweight lookups')
 
     // Close group -> skill disappears once plugin is disabled
     await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
@@ -319,7 +322,7 @@ test('swarm-int1: default-enabled zero-resident boot, idle workflow-disable free
   }
 })
 
-test('swarm-int2: Author(worktree) + Verifier(readonly) handoff, hold blocks workflow disable & cleanup_worktree, readonly write-blocking, two-mode close_group unlock & merge, and closed/detached board_status', { timeout: 60_000 }, async (t) => {
+test('swarm-int2: Author(worktree) + Verifier(readonly) handoff, hold blocks workflow disable & cleanup_worktree, two-mode close_group retain & merge, and closed/detached board_status', { timeout: 60_000 }, async (t) => {
   const env = await openSwarmEnv(useTempDir(t, 'helm-swarm-int-'))
   try {
     const { kernel } = env.app
@@ -351,11 +354,13 @@ test('swarm-int2: Author(worktree) + Verifier(readonly) handoff, hold blocks wor
     await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
     await kernel.waitForIdle(coord.id)
 
-    const verifierBlockedReasons: string[] = []
+    let verifierSectionSeen = ''
+    let verifierToolsSeen: string[] = []
     let authorStep = 0
     let verifierStep = 0
     const routeSquadStep = (ctx: { messages: unknown[] }) => {
-      const groupSec = captureRequestMeta(ctx.messages as unknown as Record<string, unknown>[]).sectionsById['swarm.active_group'] ?? ''
+      const meta = captureRequestMeta(ctx.messages as unknown as Record<string, unknown>[])
+      const groupSec = meta.sectionsById['swarm.active_group'] ?? ''
       if (groupSec.includes('name="author"')) {
         authorStep += 1
         if (authorStep === 1) {
@@ -385,26 +390,12 @@ test('swarm-int2: Author(worktree) + Verifier(readonly) handoff, hold blocks wor
       }
       if (groupSec.includes('name="verifier"')) {
         verifierStep += 1
+        verifierSectionSeen = groupSec
+        verifierToolsSeen = meta.toolNames
         if (verifierStep === 1) {
-          return fauxAssistantMessage([fauxToolCall('write', { path: 'hack.txt', content: 'nope' })], { stopReason: 'toolUse' })
-        }
-        if (verifierStep === 2) {
-          verifierBlockedReasons.push(JSON.stringify(ctx.messages.slice(-2)))
-          return fauxAssistantMessage(
-            [
-              fauxToolCall('run_action', {
-                actionId: 'builtin:workflow.cleanup_worktree',
-                input: { path: env.repoDir },
-              }),
-            ],
-            { stopReason: 'toolUse' },
-          )
-        }
-        if (verifierStep === 3) {
-          verifierBlockedReasons.push(JSON.stringify(ctx.messages.slice(-2)))
           return fauxAssistantMessage([fauxToolCall('bash', { command: 'git log -n 1 --oneline' })], { stopReason: 'toolUse' })
         }
-        if (verifierStep === 4) {
+        if (verifierStep === 2) {
           return fauxAssistantMessage(
             [
               fauxToolCall('swarm_board_post', {
@@ -441,10 +432,11 @@ test('swarm-int2: Author(worktree) + Verifier(readonly) handoff, hold blocks wor
     await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
     await kernel.waitForIdle(coord.id)
 
-    // Verify readonly blocks occurred for both write and non-idempotent run_action
-    assert.equal(verifierBlockedReasons.length, 2)
-    assert.match(verifierBlockedReasons[0]!, /readonly/)
-    assert.match(verifierBlockedReasons[1]!, /非幂等外部动作/)
+    // Verify readonly worker receives prompt guidance without stripping tools
+    assert.match(verifierSectionSeen, /access="readonly"/)
+    assert.match(verifierSectionSeen, /without modifying files/)
+    assert.ok(verifierToolsSeen.includes('write'), 'readonly worker does not strip tools from tool definitions')
+    assert.ok(verifierToolsSeen.includes('bash'), 'readonly worker retains bash')
 
     // Verify handoff post #3 carries auto-inlined worktreeSnapshot
     const readRes = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'board_read', { groupId })) as {
@@ -994,12 +986,10 @@ test('swarm-int5: /skill:swarm activation loop (task auto-create + same-turn too
       '/skill:swarm 重构鉴权模块并交叉验收',
       'helm.input must preserve original /skill:swarm text verbatim without system-prompt wall',
     )
-    for (const expected of ['swarm_dispatch_worker', 'swarm_board_post', 'swarm_board_read', 'swarm_close_group']) {
+    for (const expected of ['swarm_dispatch_worker', 'swarm_board_post', 'swarm_board_read', 'swarm_close_group', 'bash', 'edit', 'write', 'subagent', 'SubagentWorkflow']) {
       assert.ok(turnMeta.toolNames.includes(expected), `expected ${expected} exposed on turn 1 after /skill:swarm`)
     }
-    for (const stripped of ['swarm_create_group', 'bash', 'edit', 'write', 'subagent', 'SubagentWorkflow']) {
-      assert.equal(turnMeta.toolNames.includes(stripped), false, `expected ${stripped} stripped on turn 1 after /skill:swarm`)
-    }
+    assert.equal(turnMeta.toolNames.includes('swarm_create_group'), false, 'expected swarm_create_group hidden on turn 1 after /skill:swarm')
     const coordSection = turnMeta.sectionsById['swarm.active_group'] ?? ''
     assert.match(coordSection, /^<active_swarm_group id="[^"]+" role="coordinator">/)
     assert.match(coordSection, /load_skill\(\{ skillId: "swarm" \}\)/)

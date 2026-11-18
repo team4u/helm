@@ -68,7 +68,6 @@ function makeGroup(over: Partial<CollabGroupRecord> = {}): CollabGroupRecord {
     title: 'Auth Refactor Squad',
     objective: 'Ship clean auth refactor with full test coverage',
     coordinatorConversationId: 1,
-    coordinatorGuard: true,
     status: 'active',
     channels: [
       { name: 'main' },

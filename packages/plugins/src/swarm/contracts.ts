@@ -22,7 +22,7 @@ export const ARCHIVED_WORKER_TAG = 'swarm-worker-archived'
 export const WORKER_ARCHIVED_TAG = ARCHIVED_WORKER_TAG
 /**
  * 结单后主控会话的历史 tag：仅供 UI（workbench 编排面板）继续访问已完成编组，
- * 不进入任何工具/动作 scope，也不触发主控守卫或 <active_swarm_group> 注入
+ * 不进入任何工具/动作 scope，也不触发 <active_swarm_group> 注入
  * （协作铁律按活跃组判定，与 tag 无关）。重新建组时由 ensureCoordinatorGroup 原地摘除。
  */
 export const ARCHIVED_COORDINATOR_TAG = 'swarm-coordinator-archived'
@@ -34,12 +34,6 @@ export const INDEX_DOC_NAME = 'index'
 export const BOARD_BADGES_DOC_NAME = 'board-badges'
 export const BOARD_VIEW_DOC_NAME = 'board-view'
 export const ACTIVE_SWARM_GROUP_SECTION_ID = 'swarm.active_group'
-
-/** 主控守卫（coordinatorGuard: true）剥离并拦截的重度阻塞工具（精确名匹配）。 */
-export const COORDINATOR_BLOCKED_TOOL_NAMES = new Set(['edit', 'write', 'bash', 'subagent', 'SubagentWorkflow'])
-
-/** 只读成员（access: 'readonly'）剥离并拦截的写类工具（保留 bash 供运行测试）。 */
-export const READONLY_WORKER_BLOCKED_TOOL_NAMES = new Set(['edit', 'write', 'cleanup_worktree'])
 
 /** 协作组成员保留字（禁止作为对等成员短名）。 */
 export const RESERVED_MEMBER_NAMES = new Set(['coordinator', 'all', 'system'])
@@ -152,7 +146,6 @@ export interface CollabGroupRecord {
   title: string
   objective?: string
   coordinatorConversationId: number
-  coordinatorGuard: boolean
   status: CollabGroupStatus
   channels: CollabChannelSpec[]
   members: GroupMemberState[]
@@ -231,7 +224,6 @@ export interface BoardViewEdge {
 export interface BoardViewDoc {
   group: CollabGroupSummary & {
     objective?: string
-    coordinatorGuard: boolean
     channels: CollabChannelSpec[]
     retainedWorktrees?: RetainedWorktreeInfo[]
     closeSummary?: string
@@ -272,12 +264,11 @@ export interface CollabGroupRuntime {
     coordinatorConversationId: number
     title: string
     objective?: string
-    coordinatorGuard: boolean
     channels?: Array<{ name: string; topic?: string }>
   }): Promise<CollabGroupRecord>
   updateGroup(
     groupId: string,
-    patch: { title?: string; objective?: string; coordinatorGuard?: boolean },
+    patch: { title?: string; objective?: string },
   ): Promise<CollabGroupRecord>
   manageChannel(
     groupId: string,
@@ -544,7 +535,6 @@ export function assertCollabGroupRecord(value: unknown): CollabGroupRecord {
   if (typeof value.title !== 'string' || value.title.trim() === '') throw corrupt('title 非法')
   if (value.objective !== undefined && typeof value.objective !== 'string') throw corrupt('objective 必须是字符串')
   if (!isPosIntId(value.coordinatorConversationId)) throw corrupt('coordinatorConversationId 必须是正整数')
-  if (typeof value.coordinatorGuard !== 'boolean') throw corrupt('coordinatorGuard 必须是布尔值')
   if (value.status !== 'active' && value.status !== 'closed') throw corrupt('status 非法')
   if (!Array.isArray(value.channels) || value.channels.length === 0) throw corrupt('channels 必须是非空数组')
   const seenChannels = new Set<string>()
