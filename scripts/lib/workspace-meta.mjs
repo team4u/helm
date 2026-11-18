@@ -39,6 +39,7 @@ export const PACKAGE_TIERS = {
   kernel: 'integration',
   plugins: 'integration',
   hub: 'integration',
+  'hub-launcher': 'integration',
   node: 'integration',
   update: 'integration',
   payload: 'integration',

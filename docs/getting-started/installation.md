@@ -11,7 +11,41 @@
 | Git | 已安装 | `builtin:workflow` 的 Worktree 隔离与代码门禁需要 Git |
 | 操作系统 | Linux / macOS / WSL2 | 主流 POSIX 环境 |
 
-当前未发布安装制品，以下流程即源代码模式安装：所有命令直接从仓库运行。
+## 安装方式
+
+helm 当前有两种安装方式：**npm 制品模式**（一次安装，推荐日常使用）与**源代码模式**（开发贡献）。npm 制品随 `v*` tag 的 release 工作流发布（见[发布流程](../releasing.md)）；在第一个正式版本发布之前，registry 上尚无制品，请先使用源代码模式。
+
+## npm 制品安装（一次安装）
+
+稳定 launcher（`@team4u/helm-hub-launcher`，零依赖单文件 bundle）全局安装后即可管理本机 Hub：安装/更新 Hub payload、启动、健康门控与回滚，全程不需要源码 checkout。
+
+```bash
+npm install -g @team4u/helm-hub-launcher
+
+helm-hub-launcher update                 # 安装最新 Hub payload 并启动（staging → 自检 → 提交 → 健康门控）
+helm-hub-launcher status                 # 安装/运行/blocked 概览（--json 机器可读）
+helm-hub-launcher stop                   # 身份核验后优雅停止 Hub
+helm-hub-launcher update                 # 日常升级：重复执行即可（运行中会平滑重启，失败自动回滚旧版）
+```
+
+目录与边界：
+
+| 目录 | 内容 | 说明 |
+| :--- | :--- | :--- |
+| `~/.helm-hub`（`HELM_HUB_INSTALL_ROOT`） | `releases/<版本>/`、`current.json`、`hub.pid`、`logs/hub.log` | 程序状态：launcher 管理的 release 与运行记录，与用户数据严格分离 |
+| `~/.helm`（`HELM_DATA_DIR`） | 会话数据库、凭据、插件数据 | 用户数据：卸载重装 launcher 不影响，与源代码模式共用同一布局 |
+
+启动配置（端口/绑定地址/数据目录/默认模型）按「CLI flags > 环境变量 > `launch.json` 粘性配置 > 默认值（`3202` / `127.0.0.1`）」解析，启动成功后写入 `~/.helm-hub/launch.json`，升级重启沿用；显式参数详见 `helm-hub-launcher --help`。候选版本健康检查失败会回滚旧版并写入 `update-blocked.json` 冷却（默认 30 分钟），诊断链含 `logs/hub.log` 尾部快照。
+
+说明：
+
+- launcher 是**稳定外部安装**，绝不被它管理的 release 覆盖；升级 launcher 本身即重新 `npm install -g @team4u/helm-hub-launcher`；
+- 定时自动更新：launcher 侧交付前台常驻的 `run` 定时入口（周期检查 + 升级，间隔与 npm dist-tag 可配，契约以交付版的 `helm-hub-launcher --help` 为准）；在其落地前，用系统 cron 周期执行 `helm-hub-launcher update` 是等价替代；
+- `helm`（控制 CLI）与 `helm-node`（节点守护进程）不在该制品内：控制端可继续用源代码模式或 `pnpm link:bins` 挂载；`helm-node` 双包分发属于独立机制。
+
+## 源代码模式安装
+
+所有命令直接从仓库运行：
 
 ```bash
 git clone https://github.com/team4u/helm.git && cd helm

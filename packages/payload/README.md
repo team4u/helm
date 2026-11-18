@@ -1,12 +1,13 @@
 # @helm/payload
 
-Hub npm payload 组装器：把 Hub 组合根、kernel、官方插件、共享运行时包、web dist、CLI 与内置插件运行时资产（client / skill / assets）组织为一个自描述、可直接 `npm pack` / `npm publish` 的目录，并提供零依赖启动入口与 manifest/version/entry 契约。它是桌面端（`@helm/desktop`）业务更新的下载物。本文只覆盖本包的职责、构建、产物、测试与限制；发布流水线见[发布流程](../../docs/releasing.md)。
+Hub npm payload 组装器：把 Hub 组合根、kernel、官方插件、共享运行时包、web dist、CLI 与内置插件运行时资产（client / skill / assets）组织为一个自描述、可直接 `npm pack` / `npm publish` 的目录，并提供零依赖启动入口与 manifest/version/entry 契约。同一构建还组装**稳定 launcher 制品**（`dist-launcher/`：`helm-hub-launcher` 的零依赖单文件 bundle，消费者一步 `npm install -g`；仅在 `packages/hub-launcher` 存在时组装）。本文只覆盖本包的职责、构建、产物、测试与限制；发布流水线见[发布流程](../../docs/releasing.md)。
 
 ## 职责
 
 - `build.mjs` 组装 `dist/` 发布包：以 hub/kernel/plugins/plugin-build/plugin-client/env-io/protocol/cli 的构建产物为输入，外部依赖取仓库已安装 pnpm 精确版本锁定，`@helm/*` 物化为 `file:./<pkg>.tgz`，携带 `web/dist` 与内置插件运行时资产；
 - 产出 `start.mjs`（零依赖启动入口）与 `manifest.json`（`formatVersion=1` / `name` / `version` / `builtAt` / `nodeEngines` / `entries` / `entryChecksums`）；
-- 自动扫描依赖闭包 peer 冲突生成 npm `overrides`（`.npmrc` 无法随 tarball 分发）。
+- 自动扫描依赖闭包 peer 冲突生成 npm `overrides`（`.npmrc` 无法随 tarball 分发）；
+- 组装 `dist-launcher/` launcher 发布包（`src/assemble-launcher.mjs`）：esbuild 把 `packages/hub-launcher/dist/main.js` 连同 `@helm/update` → `@helm/env-io` / `@helm/protocol` → `typebox` 闭包内联为单文件 ESM（保留 shebang），manifest 零 `dependencies`、bin `helm-hub-launcher`、版本与 payload 同源。组装期硬校验 bundle 不得残留任何 `@helm/*` import（本仓库不发布 `@helm/*` 源码包，残留即全局安装必坏）。
 
 ## 构建命令
 
@@ -15,7 +16,7 @@ pnpm build                              # 仓库根：全仓拓扑构建，paylo
 pnpm --filter @helm/payload run build   # 单独组装（要求 kernel/web/cli dist 已存在，缺失显式报错）
 ```
 
-本包永远 `private: true`（组装器不是发布物）；发布只认 `dist/package.json`（默认名 `@team4u/helm-hub`，构建 env `HELM_PAYLOAD_PACKAGE` 可覆盖；`manifest.name` 与其同源，`manifest.version` 恒等于本包版本）。
+本包永远 `private: true`（组装器不是发布物）；发布只认两个构建产物 manifest：`dist/package.json`（默认名 `@team4u/helm-hub`，env `HELM_PAYLOAD_PACKAGE` 可覆盖；`manifest.name` 与其同源，`manifest.version` 恒等于本包版本）与 `dist-launcher/package.json`（默认名 `@team4u/helm-hub-launcher`，env `HELM_LAUNCHER_PACKAGE` 可覆盖；版本与 payload 同源，`dependencies` 恒为空）。
 
 ## 产物布局
 
@@ -29,7 +30,7 @@ dist/
   web/dist/           # Vite 产物（start.mjs 以 HELM_WEB_DIST_DIR 显式定位）
 ```
 
-tarball 内 manifest / start 位于包根（不是 `dist/` 子目录）。
+tarball 内 manifest / start 位于包根（不是 `dist/` 子目录）。launcher 制品同理：`dist-launcher/` 即包根（`package.json` + `main.js`），发布须进入该目录 `npm pack` / `npm publish`。
 
 ## 启动入口
 
@@ -48,3 +49,5 @@ node start.mjs start   # 依赖可解析时拉起 Hub 组合根（透传环境�
 ## 测试
 
 `test/payload.test.ts`（integration 档）：真实执行组装与启动子进程，覆盖 manifest/checksum 契约、资产落位、web 同级探测命中、无 node_modules 断言、依赖缺失/篡改的显式退出码。网络验收（真实 npm pack、安装、候选目录改名与 Hub 启动）由 CI 以 `PAYLOAD_NPM_SMOKE=1` 执行，默认跳过。
+
+`test/launcher.test.ts`（integration 档）：launcher 制品验收——组装契约（零依赖、bin、files 白名单、shebang）、bundle 真跑 `status --json`、真实 tarball `npm install -g` 到隔离 prefix 后 bin 可用；黄金序列（launcher 从真实 payload tarball 安装并健康门控启停）由 CI 以 `PAYLOAD_NPM_SMOKE=1` 执行，默认跳过。

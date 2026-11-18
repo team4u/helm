@@ -247,6 +247,19 @@ importers:
         specifier: ^8.18.0
         version: 8.22.1
 
+  packages/hub-launcher:
+    dependencies:
+      '@helm/env-io':
+        specifier: workspace:*
+        version: link:../env-io
+      '@helm/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+    devDependencies:
+      '@helm/test-kit':
+        specifier: workspace:*
+        version: link:../test-kit
+
   packages/kernel:
     dependencies:
       '@earendil-works/chord':
@@ -332,6 +345,9 @@ importers:
       '@helm/hub':
         specifier: workspace:*
         version: link:../hub
+      '@helm/hub-launcher':
+        specifier: workspace:*
+        version: link:../hub-launcher
       '@helm/kernel':
         specifier: workspace:*
         version: link:../kernel
@@ -341,6 +357,9 @@ importers:
       '@helm/web':
         specifier: workspace:*
         version: link:../web
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
       tar:
         specifier: 7.5.23
         version: 7.5.23

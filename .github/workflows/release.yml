@@ -1,21 +1,27 @@
 # Release pipeline: triggered only by v* tags, responsibility chain —
 #   verify → build (full build and tests on ubuntu)
-#   → npm-payload (published only once on ubuntu, after all gates pass).
+#   → npm-payload → npm-launcher (each published only once on ubuntu, after all gates pass).
 #
-# npm publishing converges to a single entry point: the sole authority is
-# packages/payload/dist/package.json (a build artifact; default name @team4u/helm-hub,
-# overridable at build time via the HELM_PAYLOAD_PACKAGE env). The workspace's
-# @helm/payload is forever a private assembler: publishing must run npm pack /
-# npm publish inside the dist directory (the tarball root is the payload root, with
-# the manifest at the root); never run pnpm pack on the workspace package
-# — that would nest everything under the dist/ path prefix, and the updater's
-# root-layout probing would inevitably fail.
+# npm publishing authority is per artifact, exactly one manifest each: the Hub payload's sole
+# authority is packages/payload/dist/package.json (a build artifact; default name @team4u/helm-hub,
+# overridable at build time via the HELM_PAYLOAD_PACKAGE env), and the stable launcher's sole
+# authority is packages/payload/dist-launcher/package.json (a build artifact; default name
+# @team4u/helm-hub-launcher, overridable via HELM_LAUNCHER_PACKAGE). The workspace's @helm/payload
+# is forever a private assembler: publishing must run npm pack / npm publish inside the respective
+# dist directory (the tarball root is the package root, with the manifest at the root); never run
+# pnpm pack on the workspace package — that would nest everything under the dist/ path prefix, and
+# the updater's root-layout probing would inevitably fail.
 #
 # Honesty constraints:
-#   - Publishing gate = the private / version (locked to the tag) / repository fields of
-#     dist/package.json + the existence of NPM_TOKEN (injected as NODE_AUTH_TOKEN); if
-#     any item is unmet, fail or skip explicitly before publishing;
-#   - The npm payload is built and published once on ubuntu only.
+#   - Each publishing gate = the private / version (locked to the tag) / repository fields of its
+#     dist manifest + the existence of NPM_TOKEN (injected as NODE_AUTH_TOKEN); if any item is
+#     unmet, fail or skip explicitly before publishing;
+#   - The launcher additionally requires an empty dependency set (it ships as a zero-dependency
+#     single-file bundle; a workspace: / file: / @helm/* dependency would break `npm install -g`
+#     for every consumer because no @helm/* package is published), and publishes only after the
+#     payload published in the same run (the launcher's default update path resolves the payload
+#     from the npm registry);
+#   - Both artifacts are built and published once on ubuntu only.
 
 name: Release
 
@@ -44,6 +50,7 @@ jobs:
     outputs:
       version: ${{ steps.scan.outputs.version }}
       payload-present: ${{ steps.scan.outputs.payload-present }}
+      launcher-present: ${{ steps.scan.outputs.launcher-present }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -53,9 +60,10 @@ jobs:
         with:
           node-version: 24.12.0
 
-      # Only validate the tag shape and assembler existence; npm publish decisions always
-      # defer to the build artifact packages/payload/dist/package.json (see npm-payload);
-      # no repo-wide non-private scan — there is exactly one publish entry point.
+      # Only validate the tag shape and assembler existence; npm publish decisions always defer to
+      # the build-artifact manifests (packages/payload/dist/package.json, and after the launcher
+      # package lands packages/payload/dist-launcher/package.json — see npm-payload / npm-launcher);
+      # no repo-wide non-private scan — there is exactly one publish manifest per artifact.
       - name: Verify tag and payload builder
         id: scan
         run: |
@@ -85,6 +93,17 @@ jobs:
             }
             if (typeof builder.version === 'string' && builder.version !== tagVersion) {
               warn(`assembler ${builder.name}@${builder.version} differs from tag version ${tagVersion} (the payload version has a single source; keep them in lockstep).`);
+            }
+          }
+
+          const launcherPresent = existsSync('packages/hub-launcher/package.json');
+          out('launcher-present', launcherPresent ? 'true' : 'false');
+          if (!launcherPresent) {
+            warn('packages/hub-launcher does not exist: the launcher artifact is not assembled and npm-launcher will be skipped (no launcher npm publish runs at all).');
+          } else {
+            const launcher = JSON.parse(readFileSync('packages/hub-launcher/package.json', 'utf8'));
+            if (launcher.private !== true) {
+              warn(`launcher workspace package ${launcher.name} must stay private: true (its publish form is the assembled packages/payload/dist-launcher bundle, never the workspace package).`);
             }
           }
           EOF
@@ -129,8 +148,16 @@ jobs:
           PAYLOAD_NPM_SMOKE: '1'
         run: node scripts/run-tests.mjs packages/payload/test/payload.test.ts
 
+      # Launcher artifact acceptance in the same gate: assembly contract + real-tarball global
+      # install always run; the payload golden sequence (launcher installs a real payload tarball,
+      # health-gates, stops) rides the same PAYLOAD_NPM_SMOKE network gate.
+      - name: Verify launcher artifact pack/install and payload golden sequence
+        env:
+          PAYLOAD_NPM_SMOKE: '1'
+        run: node scripts/run-tests.mjs packages/payload/test/launcher.test.ts
+
   # ------------------------------------------------------------------
-  # Stage 3A: conditional npm Hub payload publish (the single npm entry point,
+  # Stage 3A: conditional npm Hub payload publish (per-artifact single manifest authority,
   # ubuntu only, once).
   # ------------------------------------------------------------------
   npm-payload:
@@ -227,6 +254,9 @@ jobs:
       # payload root (manifest.json, package.json, start.mjs at the root). Never pnpm
       # pack the workspace package — tar would nest the manifest under the dist/ path
       # prefix, and the updater's root-layout probing would inevitably fail.
+      # Prerelease versions (a hyphen in the tag version, e.g. 1.2.3-rc.1) publish under the
+      # beta dist-tag so latest never picks them up implicitly; stable versions keep the npm
+      # default (latest). The launcher artifact follows the same policy (npm-launcher job).
       - name: Publish payload package from dist (provenance, public)
         id: publish
         if: env.PAYLOAD_PRESENT == 'true' && steps.payload.outputs.skip == 'false'
@@ -242,9 +272,13 @@ jobs:
           (cd packages/payload/dist && npm pack --pack-destination "$dest" >/dev/null)
           tgz=$(ls "$dest"/*.tgz | head -n 1)
           echo "tarball: $tgz ($(du -h "$tgz" | cut -f1))"
-          npm publish "$tgz" --provenance --access public
+          dist_tag=""
+          case "$TAG_VERSION" in
+            *-*) dist_tag="--tag beta" ;;
+          esac
+          npm publish "$tgz" --provenance --access public $dist_tag
 
-      # Summarize the actual outcome for desktop-release's Release notes: state facts only.
+      # Summarize the actual outcome for the release record: state facts only.
       - name: Record publish result
         id: result
         if: always()
@@ -267,6 +301,164 @@ jobs:
           else
             published=false
             line="npm publish did not complete (npm-payload job ${PUBLISH_CONCLUSION:-not executed}); this draft contains no npm publish result."
+          fi
+          echo "published=$published" >> "$GITHUB_OUTPUT"
+          echo "status-line<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$line" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+          echo "published=$published"
+          echo "status: $line"
+
+  # ------------------------------------------------------------------
+  # Stage 3B: conditional npm launcher publish (the zero-dependency helm-hub-launcher bundle;
+  # runs after npm-payload because the launcher's default update path resolves the Hub payload
+  # from the npm registry — shipping a launcher whose default flow 404s would be dishonest).
+  # ------------------------------------------------------------------
+  npm-launcher:
+    name: npm launcher (conditional publish)
+    needs: [verify, build, npm-payload]
+    permissions:
+      contents: read
+      id-token: write # npm provenance relies on OIDC to attest provenance
+    runs-on: ubuntu-latest
+    outputs:
+      published: ${{ steps.result.outputs.published }}
+      status-line: ${{ steps.result.outputs.status-line }}
+    env:
+      LAUNCHER_PRESENT: ${{ needs.verify.outputs.launcher-present }}
+      TAG_VERSION: ${{ needs.verify.outputs.version }}
+      PAYLOAD_PUBLISHED: ${{ needs.npm-payload.outputs.published }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 12.16.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.12.0
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Rebuild the workspace artifacts on this runner: packages/payload build assembles both
+      # dist/ (Hub payload) and dist-launcher/ (launcher bundle).
+      - name: Build packages (assemble launcher dist)
+        run: pnpm build
+
+      # The build artifact dist-launcher/package.json is the launcher's sole publishing authority:
+      # missing file = the assembler contract is broken (explicit failure); private = explicitly not
+      # publishing (skip branch); public requires the version locked to the tag, the repository field
+      # (required by provenance), and an empty dependency set (a workspace:/file:/@helm/* dependency
+      # would break `npm install -g` for every consumer) before publishing proceeds.
+      - name: Inspect launcher npm package
+        id: launcher
+        if: env.LAUNCHER_PRESENT == 'true'
+        run: |
+          set -eu
+          pkg=packages/payload/dist-launcher/package.json
+          if [ ! -f "$pkg" ]; then
+            echo "::error::packages/payload build did not produce $pkg (assembler contract: the launcher package must bundle into dist-launcher with a publishable package.json)."
+            exit 1
+          fi
+          name=$(jq -r '.name // empty' "$pkg")
+          version=$(jq -r '.version // empty' "$pkg")
+          if [ -z "$name" ] || [ -z "$version" ]; then
+            echo "::error::$pkg is missing the name or version field; refusing to publish."
+            exit 1
+          fi
+          echo "launcher npm package: ${name}@${version}"
+          if [ "$(jq -r '.private // false' "$pkg")" = "true" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::launcher npm package ${name} is marked private: true; skipped as a placeholder (no launcher npm publish runs at all)."
+            exit 0
+          fi
+          if [ "$PAYLOAD_PUBLISHED" != "true" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::launcher publish skipped: the Hub payload was not published in this run (npm-payload reported published=false); the launcher's default update path resolves the payload from the npm registry, so shipping it now would advertise a broken one-shot install."
+            exit 0
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [ "$version" != "$TAG_VERSION" ]; then
+            echo "::error::launcher npm package ${name}@${version} does not match tag ${TAG_VERSION}; keep versions in lockstep before tagging."
+            exit 1
+          fi
+          if [ "$(jq -r 'has("repository")' "$pkg")" != "true" ]; then
+            echo "::error::launcher npm package ${name} is missing the repository field (required by npm provenance, and it must point to this repository)."
+            exit 1
+          fi
+          deps=$(jq -r '(.dependencies // {}) | length' "$pkg")
+          if [ "$deps" != "0" ]; then
+            echo "::error::launcher npm package ${name} declares ${deps} runtime dependencies; the launcher ships as a zero-dependency single-file bundle (no @helm/* package is published, so any dependency would break npm install -g)."
+            exit 1
+          fi
+
+      # Fail fast here when a package is due to publish but the secret is missing: an explicit
+      # gate, never falsely claim a publish.
+      - name: Require NPM_TOKEN secret
+        if: env.LAUNCHER_PRESENT == 'true' && steps.launcher.outputs.skip == 'false'
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -eu
+          if [ -z "$NPM_TOKEN" ]; then
+            echo "::error::launcher npm package is due to publish but NPM_TOKEN is not configured (Settings -> Secrets and variables -> Actions), or switch to npm Trusted Publishing (not enabled)."
+            exit 1
+          fi
+
+      # Run npm pack / npm publish inside the dist-launcher directory: the tarball root is the
+      # package root (package.json + main.js bin target). The same prerelease dist-tag policy as
+      # npm-payload: hyphenated tag versions publish under beta, stable versions under latest.
+      - name: Publish launcher package from dist-launcher (provenance, public)
+        id: publish
+        if: env.LAUNCHER_PRESENT == 'true' && steps.launcher.outputs.skip == 'false'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -eu
+          dest="$RUNNER_TEMP/pack"
+          mkdir -p "$dest"
+          (cd packages/payload/dist-launcher && npm pack --pack-destination "$dest" >/dev/null)
+          tgz=$(ls "$dest"/*.tgz | head -n 1)
+          echo "tarball: $tgz ($(du -h "$tgz" | cut -f1))"
+          dist_tag=""
+          case "$TAG_VERSION" in
+            *-*) dist_tag="--tag beta" ;;
+          esac
+          npm publish "$tgz" --provenance --access public $dist_tag
+
+      # Summarize the actual outcome for the release record: state facts only.
+      - name: Record publish result
+        id: result
+        if: always()
+        env:
+          LAUNCHER_PRESENT: ${{ needs.verify.outputs.launcher-present }}
+          LAUNCHER_SKIP: ${{ steps.launcher.outputs.skip }}
+          LAUNCHER_NAME: ${{ steps.launcher.outputs.name }}
+          LAUNCHER_VERSION: ${{ steps.launcher.outputs.version }}
+          PUBLISH_CONCLUSION: ${{ steps.publish.conclusion }}
+        run: |
+          set -eu
+          if [ "$LAUNCHER_PRESENT" != "true" ]; then
+            published=false
+            line='packages/hub-launcher does not exist; the launcher artifact was not assembled and no launcher npm publish was executed.'
+          elif [ "$LAUNCHER_SKIP" = "true" ]; then
+            published=false
+            line='launcher npm package is marked private, or the Hub payload did not publish in this run; no launcher npm publish was executed.'
+          elif [ "$PUBLISH_CONCLUSION" = "success" ]; then
+            published=true
+            line="Published \`${LAUNCHER_NAME}@${LAUNCHER_VERSION}\` (zero-dependency helm-hub-launcher bundle) to npmjs.com (with provenance); see the npm-launcher job logs."
+          else
+            published=false
+            line="launcher npm publish did not complete (npm-launcher job ${PUBLISH_CONCLUSION:-not executed}); this run contains no launcher publish result."
           fi
           echo "published=$published" >> "$GITHUB_OUTPUT"
           echo "status-line<<EOF" >> "$GITHUB_OUTPUT"
