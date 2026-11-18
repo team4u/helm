@@ -258,6 +258,9 @@ importers:
       '@helm/update':
         specifier: workspace:*
         version: link:../update
+      tar:
+        specifier: 7.5.23
+        version: 7.5.23
     devDependencies:
       '@helm/test-kit':
         specifier: workspace:*

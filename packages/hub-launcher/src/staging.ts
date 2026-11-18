@@ -9,10 +9,13 @@
  * 1. obtain the payload tarball — registry (manifest fetch + tarball download + sha512 SRI
  *    verification, all engine primitives behind the port) or a local `--tarball` file (verified
  *    by the payload's own `start.mjs check` checksum contract);
- * 2. `npm install <tarball> --omit=dev --ignore-scripts` inside the staging directory (the payload
- *    ships its `@helm/*` dependencies as bundled `file:./<pkg>.tgz` archives, so one install
- *    completes the whole dependency closure — esbuild platform binaries arrive via
- *    optionalDependencies);
+ * 2. unpack the tarball into the candidate's `node_modules/<pkg>` slot, then run
+ *    `npm install --omit=dev --ignore-scripts` inside the unpacked payload root (the payload
+ *    ships its `@helm/*` dependencies as relative `file:./<pkg>.tgz` archives; npm resolves those
+ *    against the outer tarball's cache extraction path when installing the tarball directly —
+ *    before the outer package lands on disk, which fails with ENOENT on real artifacts — while
+ *    the unpacked root is the layout npm resolves correctly; esbuild platform binaries arrive via
+ *    optionalDependencies). Both entry points (registry and `--tarball`) share this exact path;
  * 3. verify the installed package identity (name/version) and the `start.mjs` + `manifest.json`
  *    contract files, including the manifest's `nodeEngines` floor against the launcher's own Node;
  * 4. run `node start.mjs check` — the payload's own zero-dependency self-verification (entry
@@ -28,6 +31,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { killProcessTree } from '@helm/env-io';
 import { isStrictSemver } from '@helm/protocol';
+import { extract as tarExtract } from 'tar';
 import { DEFAULTS, assertInstallIsolation, packageModulesDir, pathsOf, resolveRegistryUrl } from './layout.js';
 import { resolveInsideRelease } from './records.js';
 import type { LauncherIo } from './io.js';
@@ -150,6 +154,46 @@ function assertNodeEngines(nodeEngines: unknown, manifestPath: string, nodeVersi
   }
 }
 
+/**
+ * Unpack a packed payload tarball into `destDir` (the candidate's `node_modules/<pkg>` slot).
+ *
+ * Why unpack instead of `npm install <tarball>`: the payload manifest carries `@helm/*`
+ * dependencies as relative `file:./<pkg>.tgz` archives, and npm resolves those against the outer
+ * tarball's cache extraction path before the outer package lands on disk (ENOENT with real
+ * artifacts); `npm install` inside the unpacked payload root is the layout npm resolves correctly.
+ *
+ * Security boundary: only regular files and directories under the `package/` prefix are
+ * extracted — links, device nodes, absolute paths, and `..` segments are rejected outright.
+ */
+async function extractPayloadTarball(tarballPath: string, destDir: string): Promise<void> {
+  await fsp.mkdir(destDir, { recursive: true });
+  let accepted = 0;
+  await tarExtract({
+    f: tarballPath,
+    cwd: destDir,
+    strip: 1,
+    filter: (entryPath: string, entry) => {
+      const rel = entryPath.replace(/\\/g, '/');
+      if (rel.split('/').includes('..')) return false;
+      if (rel !== 'package' && !rel.startsWith('package/')) return false;
+      const entryType = (entry as { type?: string }).type;
+      if (entryType !== 'File' && entryType !== 'Directory') return false;
+      accepted += 1;
+      return true;
+    },
+  });
+  if (accepted === 0) {
+    throw new Error(`payload tarball ${tarballPath} contains no extractable package/ entries`);
+  }
+  try {
+    await fsp.access(path.join(destDir, 'package.json'));
+  } catch {
+    throw new Error(
+      `payload tarball ${tarballPath} did not contain a package/ root (package.json missing after unpack)`,
+    );
+  }
+}
+
 /** Verify the npm-installed payload package identity and contract files inside `rootDir`. */
 async function verifyPayloadLayout(
   rootDir: string,
@@ -233,14 +277,20 @@ export async function stageHubRelease(options: StageHubOptions): Promise<StagedH
       tarballRef = dest;
     }
 
-    await fsp.writeFile(
-      path.join(stagingDir, 'package.json'),
-      JSON.stringify({ name: 'helm-hub-release', private: true }, null, 2) + '\n',
-      'utf8',
-    );
+    // Unpack into the candidate's node_modules/<pkg> slot, then install inside the unpacked
+    // payload root (see extractPayloadTarball for why the direct `npm install <tarball>` form
+    // fails on real payloads). The registry download must not ride into the immutable candidate.
+    const payloadDir = packageModulesDir(path.join(stagingDir, 'node_modules'), pkgName);
+    try {
+      await extractPayloadTarball(tarballRef, payloadDir);
+    } finally {
+      if (options.tarballPath === undefined) {
+        await fsp.rm(path.join(stagingDir, '.downloads'), { recursive: true, force: true }).catch(() => {});
+      }
+    }
     await core.runNpm(
-      ['install', tarballRef, '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund', '--registry', registryUrl],
-      stagingDir,
+      ['install', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund', '--registry', registryUrl],
+      payloadDir,
       npmInstallTimeoutMs,
     );
 

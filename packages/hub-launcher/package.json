@@ -14,7 +14,8 @@
   "dependencies": {
     "@helm/env-io": "workspace:*",
     "@helm/protocol": "workspace:*",
-    "@helm/update": "workspace:*"
+    "@helm/update": "workspace:*",
+    "tar": "7.5.23"
   },
   "devDependencies": {
     "@helm/test-kit": "workspace:*"
