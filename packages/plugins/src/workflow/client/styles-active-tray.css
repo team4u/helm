@@ -71,6 +71,18 @@
   font-size: 11.5px;
 }
 
+/* 展开态顶栏的简洁任务数（不复制任务名）。 */
+.workflow-active-tray-count {
+  flex-shrink: 0;
+  white-space: nowrap;
+  color: var(--fg-secondary);
+  font-size: 11.5px;
+}
+
+.workflow-active-tray-spacer {
+  flex: 1;
+}
+
 .workflow-active-tray-elapsed {
   font-family: var(--font-mono);
   font-size: 11px;
@@ -98,13 +110,15 @@
 }
 
 /* 行主体即详情入口：真实 button 覆盖整行主要信息位（无嵌套交互）；
-   detach / 中止为右侧同级 sibling 按钮组。 */
+   detach / 中止为右侧同级 sibling 按钮组。两层布局：主行承载标题/编号/
+   进度/耗时，当前实际执行内容独立为第二行（可读至少两行，标题不抢占）。 */
 .workflow-active-tray-row-main {
   flex: 1;
   min-width: 0;
   display: flex;
-  align-items: center;
-  gap: 6px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
   padding: 5px 0 5px 8px;
   background: none;
   border: none;
@@ -130,6 +144,13 @@ button.workflow-active-tray-row-clickable:focus-visible {
   border-bottom: none;
 }
 
+.workflow-active-tray-row-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
 .workflow-active-tray-row-title {
   font-weight: 500;
   color: var(--fg);
@@ -146,12 +167,20 @@ button.workflow-active-tray-row-clickable:focus-visible {
   color: var(--fg-subtle);
 }
 
-.workflow-active-tray-row-doing {
-  color: var(--fg-muted);
-  font-size: 11px;
+/* 第二行实际执行内容：live 工具语义/输出/思考/审批标题或模型降级摘要；
+   独占行宽（动作按钮不与它同列抢宽），至少可读两行后截断。 */
+.workflow-active-tray-row-live {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  color: var(--fg-muted);
+  font-size: 11.5px;
+  line-height: 1.45;
   min-width: 0;
 }
 
@@ -160,7 +189,7 @@ button.workflow-active-tray-row-clickable:focus-visible {
   align-items: center;
   gap: 4px;
   flex-shrink: 0;
-  padding: 3px 8px 3px 0;
+  padding: 5px 8px 5px 0;
 }
 
 /* Timeline single-row trace helper styles (same structure as the host .trace-row 26px) */
@@ -337,7 +366,9 @@ button.workflow-active-tray-row-clickable:focus-visible {
   .workflow-active-tray-bar-toggle {
     padding-left: 6px;
   }
-  .workflow-active-tray-frontline {
+  /* 移动/窄分屏不隐藏当前进展：frontline（live 内容/审批）保持可见可收缩，
+     次要的耗时让位。 */
+  .workflow-active-tray-elapsed {
     display: none;
   }
   .workflow-active-tray-row {

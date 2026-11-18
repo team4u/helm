@@ -31,6 +31,14 @@ export interface ActiveTrayItem {
   isWorking: boolean
   isBlocked: boolean
   conversationId?: number
+  /**
+   * Live-facts target of the row activity line: the row's own conversation
+   * when it is itself working/blocked, else (container rows) the deepest
+   * active descendant conversation whose live snippet is reused. Navigation
+   * targets stay conversationId / runId — the activity target never changes
+   * what a row click opens.
+   */
+  activityConversationId?: number
   runId?: string
   progress?: { done: number; total: number }
   doing?: string
@@ -83,6 +91,16 @@ function nodeProgressOf(node: ExecutionNode): { done: number; total: number } | 
   return undefined
 }
 
+/** Deepest-first active descendant conversation (live-facts target for container rows). */
+function firstActiveDescendantConversationId(node: ExecutionNode): number | undefined {
+  for (const child of node.children) {
+    const deeper = firstActiveDescendantConversationId(child)
+    if (deeper !== undefined) return deeper
+    if (isExecutionNodeActive(child) && child.conversationId !== undefined) return child.conversationId
+  }
+  return undefined
+}
+
 export function buildActiveTraySummary(
   input: {
     rootConversationId: number
@@ -128,12 +146,48 @@ export function buildActiveTraySummary(
 
     const frontlineItem = collectExecutionFrontline([node], 1, locale)[0]
     const approvalItem = isBlocked ? collectExecutionApprovals([node], 1, locale)[0] : undefined
-    const doing =
-      approvalItem?.text ??
-      frontlineItem?.text ??
-      (node.summary?.doing !== undefined && node.summary.doing.trim() !== ''
-        ? node.summary.doing.trim()
-        : undefined)
+    // A childless working conversation's frontline digest embeds this row's
+    // own title/#id again; only descendant-sourced items (a genuinely
+    // different identity) may serve as the row activity fallback — dedupe by
+    // node key, never by string surgery.
+    const descendantFrontline =
+      frontlineItem !== undefined && frontlineItem.key !== node.key ? frontlineItem : undefined
+
+    let doing: string | undefined
+    let activityConversationId: number | undefined
+    if (node.kind === 'conversation') {
+      // Native rows: the model fallback is the conversation's own raw doing;
+      // live facts (tool semantics / output / thinking / approval title) come
+      // from the host snapshot via useConversation in the row component.
+      // A row whose self already settled while descendants keep running must
+      // surface the descendants' activity — never its own stale doing.
+      const selfActive = node.status === 'working' || node.status === 'blocked'
+      if (approvalItem !== undefined) {
+        doing = approvalItem.text
+        activityConversationId = approvalItem.conversationId
+      } else if (selfActive) {
+        const ownDoing = node.summary?.doing?.trim()
+        doing = ownDoing !== undefined && ownDoing !== '' ? ownDoing : descendantFrontline?.text
+        activityConversationId = node.conversationId
+      } else {
+        doing = descendantFrontline?.text
+        activityConversationId =
+          descendantFrontline?.conversationId ?? firstActiveDescendantConversationId(node)
+      }
+    } else {
+      // Container rows (workflow / external runs) keep the real descendant
+      // progress and approval digests, reusing the deepest active descendant
+      // conversation for live facts without changing the navigation target.
+      const ownDoing = node.summary?.doing?.trim()
+      doing =
+        approvalItem?.text ??
+        frontlineItem?.text ??
+        (ownDoing !== undefined && ownDoing !== '' ? ownDoing : undefined)
+      activityConversationId =
+        approvalItem?.conversationId ??
+        descendantFrontline?.conversationId ??
+        firstActiveDescendantConversationId(node)
+    }
     const progress = nodeProgressOf(node)
 
     return {
@@ -144,6 +198,7 @@ export function buildActiveTraySummary(
       isWorking,
       isBlocked,
       ...(node.conversationId !== undefined ? { conversationId: node.conversationId } : {}),
+      ...(activityConversationId !== undefined ? { activityConversationId } : {}),
       ...(node.run !== undefined ? { runId: node.run.id } : {}),
       ...(progress !== undefined ? { progress } : {}),
       ...(doing !== undefined ? { doing } : {}),

@@ -1070,6 +1070,184 @@ test('WorkflowActiveTray 清亮化：展开行主体真实按钮进抽屉/工作
   }
 })
 
+test('WorkflowActiveTray 展开行两层布局：标题/编号主行、实际执行内容独立第二行不重复，live 工具语义/思考/审批优先且 includeDetail:false', { timeout: 60_000 }, async () => {
+  const hookCalls: Array<{ id: number | undefined; options?: { includeDetail?: boolean } }> = []
+  let view: Record<string, unknown> = {
+    summary: undefined,
+    detail: undefined,
+    live: undefined,
+    pendingAsks: [],
+    loadError: undefined,
+    reload: () => {},
+  }
+  const child = { ...summary(11, 'working'), parentConversationId: 1, title: '重构活动托盘', doing: '旧摘要收尾' }
+  const trayRuns = [
+    {
+      id: 'wf_tray_live',
+      kind: 'subagent',
+      name: '重构活动托盘',
+      conversationId: 1,
+      status: 'running',
+      createdAt: 1,
+      updatedAt: 100,
+      nodes: [{ id: 'a11', kind: 'agent', status: 'running', conversationId: 11 }],
+    },
+  ]
+  setWorkflowClientStub({
+    docValue: { runs: trayRuns },
+    conversations: [child],
+    conversation: (id, options) => {
+      hookCalls.push({ id, options })
+      return view
+    },
+  })
+  const spy = makeSpyCtx()
+  const mod = await importWorkflowClientModule('index.tsx')
+  const Tray = mod['WorkflowActiveTray'] as React.ComponentType<Record<string, unknown>>
+  const { host, rerender, unmount } = await mountClient(spy, e(Tray, { conversation: summary(1, 'working') }))
+  try {
+    const toggle = host.querySelector('button.workflow-active-tray-bar-toggle') as HTMLButtonElement
+    await act(async () => { toggle.click() })
+    const row = host.querySelector('.workflow-active-tray-row') as HTMLElement
+    const main = row.querySelector('button.workflow-active-tray-row-main') as HTMLButtonElement | null
+    assert.ok(main !== null, '行主体是真实 button')
+    assert.equal(main.querySelectorAll('button').length, 0, '行主体按钮内无嵌套交互')
+    // 两层 DOM：主行承载标题/#id，实际执行内容独立第二行。
+    const head = main.querySelector('.workflow-active-tray-row-head') as HTMLElement | null
+    assert.ok(head !== null, '主行独立渲染')
+    assert.equal(head.querySelector('.workflow-active-tray-row-title')?.textContent, '重构活动托盘')
+    assert.equal(head.querySelector('.workflow-active-tray-row-id')?.textContent, '#11')
+    const liveOf = (): HTMLElement | null => row.querySelector('.workflow-active-tray-row-live') as HTMLElement | null
+
+    // live 运行中 bash 工具 → 语义命令进第二行，不再把任务名/编号拼进活动文案。
+    view = {
+      ...view,
+      live: {
+        conversationId: 11,
+        text: '',
+        tools: [{ callId: 'c1', toolName: 'bash', input: { command: 'pnpm -r test' }, status: 'running' }],
+        updatedAt: 5,
+      },
+    }
+    await rerender(e(Tray, { conversation: summary(1, 'working') }))
+    const live = liveOf()
+    assert.ok(live !== null && live.textContent?.includes('pnpm -r test'), '实际 bash 命令优先展示在第二行')
+    assert.equal((live?.textContent?.match(/重构活动托盘/g) ?? []).length, 0, '活动行不得再次嵌入任务名')
+    assert.equal((row.textContent?.match(/重构活动托盘/g) ?? []).length, 1, '整行任务名只出现一次')
+
+    // 思考流：无运行工具时显示 thinking 末行。
+    view = {
+      ...view,
+      live: { conversationId: 11, text: '', thinking: '先核对测试基线再动手', tools: [], updatedAt: 6 },
+    }
+    await rerender(e(Tray, { conversation: summary(1, 'working') }))
+    assert.ok(liveOf()?.textContent?.includes('先核对测试基线再动手'), '实时思考内容进入第二行')
+
+    // 缺 live：降级 summary.doing 原文（不嵌名）。
+    view = { ...view, live: undefined, summary: child }
+    await rerender(e(Tray, { conversation: summary(1, 'working') }))
+    assert.ok(liveOf()?.textContent?.includes('旧摘要收尾'), '缺 live 时降级 summary.doing')
+    assert.equal((liveOf()?.textContent?.match(/子会话 11|#11/g) ?? []).length, 0, '降级文案不得拼入会话名/编号')
+
+    // blocked + pendingAsk → 审批标题进第二行。
+    setWorkflowClientStub({
+      docValue: { runs: trayRuns },
+      conversations: [{ ...child, status: 'blocked', pendingAskCount: 1 }],
+      conversation: (id, options) => {
+        hookCalls.push({ id, options })
+        return view
+      },
+    })
+    view = {
+      ...view,
+      pendingAsks: [{ id: 'ask1', conversationId: 11, title: '确认删除旧构建产物', fields: [], status: 'pending', createdAt: 1 }],
+    }
+    await rerender(e(Tray, { conversation: summary(1, 'working') }))
+    assert.ok(liveOf()?.textContent?.includes('确认删除旧构建产物'), '审批标题进入第二行')
+
+    // 所有 useConversation 调用都显式 includeDetail:false（不主动拉取会话详情）。
+    assert.ok(hookCalls.length > 0, '托盘 live 行确实订阅了会话实时事实')
+    for (const call of hookCalls) {
+      assert.equal(call.options?.includeDetail, false, 'useConversation 必须以 includeDetail:false 订阅')
+    }
+  } finally {
+    unmount()
+  }
+})
+
+test('WorkflowActiveTray 顶栏：收起优先审批与可见任务数，展开仅留任务数不复制任务名', { timeout: 60_000 }, async () => {
+  const working = { ...summary(11, 'working'), parentConversationId: 1, title: '跑测试任务', doing: 'pnpm test 执行中' }
+  const blocked = { ...summary(12, 'blocked'), parentConversationId: 1, title: '等待合并确认', pendingAskCount: 1 }
+  setWorkflowClientStub({
+    docValue: {
+      runs: [
+        {
+          id: 'wf_tray_p11',
+          kind: 'subagent',
+          name: '跑测试任务',
+          conversationId: 1,
+          status: 'running',
+          createdAt: 1,
+          updatedAt: 100,
+          nodes: [{ id: 'a11', kind: 'agent', status: 'running', conversationId: 11 }],
+        },
+        {
+          id: 'wf_tray_p12',
+          kind: 'subagent',
+          name: '等待合并确认',
+          conversationId: 1,
+          status: 'running',
+          createdAt: 1,
+          updatedAt: 90,
+          nodes: [{ id: 'a12', kind: 'agent', status: 'running', conversationId: 12 }],
+        },
+      ],
+    },
+    conversations: [working, blocked],
+    conversation: (id) =>
+      id === 11
+        ? {
+            summary: undefined,
+            detail: undefined,
+            live: {
+              conversationId: 11,
+              text: '',
+              tools: [{ callId: 'c1', toolName: 'bash', input: { command: 'pnpm test' }, status: 'running' }],
+              updatedAt: 5,
+            },
+            pendingAsks: [],
+            loadError: undefined,
+            reload: () => {},
+          }
+        : { summary: undefined, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} },
+  })
+  const spy = makeSpyCtx()
+  const mod = await importWorkflowClientModule('index.tsx')
+  const Tray = mod['WorkflowActiveTray'] as React.ComponentType<Record<string, unknown>>
+  const { host, unmount } = await mountClient(spy, e(Tray, { conversation: summary(1, 'working') }))
+  try {
+    const bar = host.querySelector('.workflow-active-tray-bar') as HTMLElement
+    // 收起：审批优先于第一个 working 任务的实时内容，且多任务时任务数可见。
+    assert.ok(bar.textContent?.includes('等待合并确认'), '存在阻塞时顶栏优先展示审批')
+    assert.ok(bar.textContent?.includes('1 awaiting approval · 2 running'), '多任务时顶栏可见任务数（blocked 行的 run 未结算仍计运行）')
+    assert.equal(bar.textContent?.includes('pnpm test'), false, '审批在场时 working 任务内容不得抢占顶栏')
+
+    const toggle = host.querySelector('button.workflow-active-tray-bar-toggle') as HTMLButtonElement
+    await act(async () => { toggle.click() })
+    // 展开：顶栏简洁显示任务数，不再复制任务名/活动文案。
+    assert.ok(bar.textContent?.includes('1 awaiting approval · 2 running'), '展开后顶栏保留任务数')
+    assert.equal(bar.textContent?.includes('等待合并确认'), false, '展开后顶栏不得复制任务名')
+    assert.equal(bar.textContent?.includes('跑测试任务'), false, '展开后顶栏不得复制另一任务名')
+    // 展开清单中两行各自完整承载标题与活动内容。
+    const rows = [...host.querySelectorAll('.workflow-active-tray-row')] as HTMLElement[]
+    assert.equal(rows.length, 2)
+    assert.ok(rows.some((r) => r.textContent?.includes('跑测试任务') && r.textContent?.includes('pnpm test')))
+    assert.ok(rows.some((r) => r.textContent?.includes('等待合并确认')))
+  } finally {
+    unmount()
+  }
+})
+
 test('WorkflowRunCardBody 头部整块可点展开：主体真实按钮切换，动作按钮为同级 sibling 不触发切换', { timeout: 60_000 }, async () => {
   setWorkflowClientStub({
     docValue: {

@@ -2,6 +2,9 @@
  * builtin:workflow 三区零重复与无损信息客户端全链路验收测试：
  * 1. 底部活动托盘（WorkflowActiveTray）：无在途返回 null（0px），有在途渲染 32px 单行 HUD，
  *    支持展开列清单与中止/转入后台/直达工作台/子会话抽屉，全部收敛后自动归零。
+ *    展开行为两层（标题/编号/进度主行 + 实际执行内容第二行），live 事实经
+ *    useConversation(includeDetail:false) 复用子代理卡片推导：容器行活动目标取自身子树最深
+ *    活动会话但导航对象不变；顶栏收起优先审批/实况、展开仅任务数。
  * 2. 时间线单行 26px `.trace-row` 收口：
  *    - SubagentToolView：原生子会话点击开抽屉、外部代理点击定位工作台 run.id、前置错误可原地展开、
  *      后台派发句柄在途阶段绝不展示 ~34ms 派发确认耗时；
@@ -29,6 +32,7 @@ import {
   type AskSpec,
   type ConversationDetail,
   type ConversationEntry,
+  type ConversationLive,
   type ConversationSummary,
 } from '@helm/protocol'
 import type { WorkflowRunSummary } from '../src/contracts.js'
@@ -96,6 +100,7 @@ interface HostStubLog {
   workbenchOpens: boolean[]
   screens: string[]
   notices: Array<{ message: string; tone: string }>
+  loadDetailCalls: number[]
   activeToolCallIds: Set<string>
 }
 
@@ -124,6 +129,7 @@ function createHostHarness(init: {
   conversationId: number
   conversations?: ConversationSummary[]
   conversationDetails?: Record<number, ConversationDetail>
+  conversationLives?: Record<number, ConversationLive>
   pendingAsks?: AskSpec[]
   runsByConversation?: Record<number, WorkflowRunSummary[]>
   pluginDocs?: Record<string, unknown>
@@ -138,6 +144,7 @@ function createHostHarness(init: {
     workbenchOpens: [],
     screens: [],
     notices: [],
+    loadDetailCalls: [],
     activeToolCallIds,
   }
   const conversations = init.conversations ?? [createConv({ id: init.conversationId, ownedBy: 'human' })]
@@ -166,7 +173,7 @@ function createHostHarness(init: {
     locale: init.locale,
     conversations,
     conversationDetails: init.conversationDetails ?? {},
-    conversationLives: {},
+    conversationLives: init.conversationLives ?? {},
     pendingAsks: init.pendingAsks ?? [],
     loadErrors: {},
     plugins: [],
@@ -212,7 +219,9 @@ function createHostHarness(init: {
     notify: (message, tone) => {
       log.notices.push({ message, tone })
     },
-    loadConversationDetail: () => undefined,
+    loadConversationDetail: (convId) => {
+      log.loadDetailCalls.push(convId)
+    },
     slots: {
       collectItems: () => [],
       renderItem: () => null,
@@ -399,6 +408,235 @@ describe('Workflow 三区零重复与无损呈现', () => {
       assert.equal(mounted.container.innerHTML, '', '任务全部结算后底部托盘必须归零消失')
     } finally {
       mounted.unmount()
+    }
+  })
+
+  test('WorkflowActiveTray 容器行复用子树 live：bash 实况进第二行、includeDetail:false 不拉详情、导航仍开原容器工作台', { timeout: 60_000 }, () => {
+    const deployLive: ConversationLive = {
+      conversationId: 11,
+      text: '',
+      tools: [{ callId: 'c1', toolName: 'bash', input: { command: 'pnpm --filter @helm/plugins test' }, status: 'running' }],
+      updatedAt: 1_700_000_020_000,
+    }
+    const deepWf: WorkflowRunSummary = {
+      id: 'wf_tray_deep',
+      name: '深水流水线',
+      conversationId: 1,
+      status: 'running',
+      kind: 'workflow',
+      createdAt: 1_700_000_000_000,
+      updatedAt: 1_700_000_005_000,
+      nodes: [
+        { id: 'build', label: '编译构建', kind: 'action', status: 'done' },
+        { id: 'deploy', label: '部署验证', kind: 'agent', status: 'running', conversationId: 11 },
+      ],
+    }
+    const harness = createHostHarness({
+      conversationId: 1,
+      conversations: [
+        createConv({ id: 1, ownedBy: 'human' }),
+        createConv({ id: 11, parentConversationId: 1, status: 'working', title: '部署子会话' }),
+      ],
+      conversationLives: { 11: deployLive },
+      runsByConversation: { 1: [deepWf] },
+    })
+    const mounted = harness.mountNode(e(mod.WorkflowActiveTray, { conversation: createConv({ id: 1, ownedBy: 'human' }) }))
+    try {
+      // 收起顶栏：单一容器任务的活动目标是其最深活动子孙会话，实时命令直达顶栏。
+      assert.ok(
+        mounted.container.textContent?.includes('pnpm --filter @helm/plugins test'),
+        '顶栏应展示容器子树会话的实时 bash 命令',
+      )
+      // live 订阅不得拉取会话详情（includeDetail:false）。
+      assert.deepEqual(harness.log.loadDetailCalls, [], '托盘 live 行不得主动拉取会话详情')
+
+      const toggle = mounted.container.querySelector('button.workflow-active-tray-bar-toggle') as HTMLButtonElement
+      act(() => {
+        toggle.click()
+      })
+      const row = ([...mounted.container.querySelectorAll('.workflow-active-tray-row')] as HTMLElement[]).find((r) =>
+        (r.textContent ?? '').includes('深水流水线'),
+      )
+      assert.ok(row !== undefined, '容器行存在')
+      const main = row!.querySelector('button.workflow-active-tray-row-main') as HTMLButtonElement
+      assert.equal(main.querySelectorAll('button').length, 0, '行主体按钮内无嵌套交互')
+      const live = main.querySelector('.workflow-active-tray-row-live') as HTMLElement | null
+      assert.ok(live !== null, '容器行第二行实际执行内容存在')
+      assert.ok(live!.textContent?.includes('pnpm --filter @helm/plugins test'), '第二行展示子树 live 命令')
+      assert.equal((row!.textContent?.match(/深水流水线/g) ?? []).length, 1, '容器标题整行只出现一次')
+      // 活动目标改变导航对象：整行点击仍打开容器 run 的工作台，而不是子孙会话抽屉。
+      act(() => {
+        main.click()
+      })
+      assert.equal(harness.log.workbenchTabs.at(-1), 'plugin:builtin:workflow/tasks', '容器行点击定位工作台')
+      assert.deepEqual(harness.log.drawers, [], '不得因活动目标指向子孙而改开抽屉')
+      assert.deepEqual(harness.log.loadDetailCalls, [], '展开与点击均不触发会话详情拉取')
+    } finally {
+      mounted.unmount()
+    }
+  })
+
+  test('WorkflowActiveTray 审批优先于 working 实况；自身 settled 的行展示子孙活动而非旧 doing', { timeout: 60_000 }, () => {
+    // 容器聚合 blocked（子孙 #31 待审批）而另一子孙 #21 仍在跑 bash：行与顶栏都以审批为优先。
+    const mixedWf: WorkflowRunSummary = {
+      id: 'wf_tray_mixed',
+      name: '混合流水线',
+      conversationId: 1,
+      status: 'running',
+      kind: 'workflow',
+      createdAt: 1_700_000_000_000,
+      updatedAt: 1_700_000_005_000,
+      nodes: [
+        { id: 'compile', label: '编译', kind: 'agent', status: 'running', conversationId: 21 },
+        { id: 'confirm', label: '确认', kind: 'agent', status: 'running', conversationId: 31 },
+      ],
+    }
+    const harness = createHostHarness({
+      conversationId: 1,
+      conversations: [
+        createConv({ id: 1, ownedBy: 'human' }),
+        createConv({ id: 21, parentConversationId: 1, status: 'working', title: '编译模块', doing: 'pnpm build 执行中' }),
+        createConv({ id: 31, parentConversationId: 1, status: 'blocked', title: '确认删除文件' }),
+      ],
+      conversationLives: {
+        21: { conversationId: 21, text: '', tools: [{ callId: 'c21', toolName: 'bash', input: { command: 'pnpm build' }, status: 'running' }], updatedAt: 1_700_000_020_000 },
+        31: { conversationId: 31, text: '', tools: [], updatedAt: 1_700_000_020_000 },
+      },
+      pendingAsks: [{ id: 'ask-31', conversationId: 31, title: '确认删除旧构建产物', fields: [], status: 'pending', createdAt: 1 }],
+      runsByConversation: { 1: [mixedWf] },
+    })
+    const mounted = harness.mountNode(e(mod.WorkflowActiveTray, { conversation: createConv({ id: 1, ownedBy: 'human' }) }))
+    try {
+      // 收起态顶栏优先展示审批摘要（不是黄灯配 working 实况正文）。
+      assert.equal(
+        (mounted.container.querySelector('.workflow-active-tray-bar')?.textContent ?? '').includes('确认删除文件'),
+        true,
+        '收起顶栏优先展示审批摘要',
+      )
+      const toggle = mounted.container.querySelector('button.workflow-active-tray-bar-toggle') as HTMLButtonElement
+      act(() => {
+        toggle.click()
+      })
+      const row = ([...mounted.container.querySelectorAll('.workflow-active-tray-row')] as HTMLElement[]).find((r) =>
+        (r.textContent ?? '').includes('混合流水线'),
+      )
+      assert.ok(row !== undefined)
+      const live = row!.querySelector('.workflow-active-tray-row-live') as HTMLElement | null
+      assert.ok(live?.textContent?.includes('确认删除旧构建产物') === true, '容器行活动目标指向待审批子孙并显示审批标题')
+      assert.equal(live?.textContent?.includes('pnpm build'), false, '审批在场时 working 实况不得抢占该行')
+    } finally {
+      mounted.unmount()
+    }
+
+    // A working native conversation may itself contain a blocked child. Its row must target that
+    // approval conversation instead of pairing the aggregate blocked light with the parent's command.
+    const parentAgentRun: WorkflowRunSummary = {
+      id: 'wf_tray_parent_agent',
+      kind: 'subagent',
+      name: '运行子代理',
+      conversationId: 1,
+      status: 'running',
+      createdAt: 1_700_000_000_000,
+      updatedAt: 1_700_000_005_000,
+      nodes: [{ id: 'parent-agent', kind: 'agent', status: 'running', conversationId: 21 }],
+    }
+    const blockedChildRun: WorkflowRunSummary = {
+      id: 'wf_tray_blocked_child',
+      kind: 'subagent',
+      name: '待审批子代理',
+      conversationId: 21,
+      status: 'running',
+      createdAt: 1_700_000_000_000,
+      updatedAt: 1_700_000_005_000,
+      nodes: [{ id: 'blocked-child', kind: 'agent', status: 'running', conversationId: 31 }],
+    }
+    const nestedApprovalHarness = createHostHarness({
+      conversationId: 1,
+      conversations: [
+        createConv({ id: 1, ownedBy: 'human' }),
+        createConv({ id: 21, parentConversationId: 1, status: 'working', title: '正在构建', doing: 'pnpm build' }),
+        createConv({ id: 31, parentConversationId: 21, status: 'blocked', title: '确认部署', pendingAskCount: 1 }),
+      ],
+      conversationLives: {
+        21: { conversationId: 21, text: '', tools: [{ callId: 'c21', toolName: 'bash', input: { command: 'pnpm build' }, status: 'running' }], updatedAt: 1_700_000_020_000 },
+        31: { conversationId: 31, text: '', tools: [], updatedAt: 1_700_000_020_000 },
+      },
+      pendingAsks: [{ id: 'ask-nested', conversationId: 31, title: '确认部署到生产环境', fields: [], status: 'pending', createdAt: 1 }],
+      runsByConversation: { 1: [parentAgentRun, blockedChildRun] },
+    })
+    const nestedApprovalMount = nestedApprovalHarness.mountNode(
+      e(mod.WorkflowActiveTray, { conversation: createConv({ id: 1, ownedBy: 'human' }) }),
+    )
+    try {
+      const toggle = nestedApprovalMount.container.querySelector('button.workflow-active-tray-bar-toggle') as HTMLButtonElement
+      act(() => {
+        toggle.click()
+      })
+      const parentRow = ([...nestedApprovalMount.container.querySelectorAll('.workflow-active-tray-row')] as HTMLElement[]).find((r) =>
+        (r.textContent ?? '').includes('正在构建'),
+      )
+      assert.ok(parentRow !== undefined, '工作中的父子代理行存在')
+      assert.ok(
+        parentRow!.querySelector('.workflow-active-tray-row-live')?.textContent?.includes('确认部署到生产环境'),
+        '父代理行的活动目标指向阻塞子孙并展示实际审批标题',
+      )
+      assert.equal(
+        parentRow!.querySelector('.workflow-active-tray-row-live')?.textContent?.includes('pnpm build'),
+        false,
+        '子孙审批优先于父代理自身 working 命令',
+      )
+    } finally {
+      nestedApprovalMount.unmount()
+    }
+
+    // 自身已 settled（done）但子孙 #21 仍 running：活动取子孙 live，不得拿旧 doing 冒充。
+    const settledRootRun: WorkflowRunSummary = {
+      id: 'wf_tray_settled',
+      kind: 'subagent',
+      name: '调度子代理',
+      conversationId: 1,
+      status: 'completed',
+      createdAt: 1_700_000_000_000,
+      updatedAt: 1_700_000_005_000,
+      nodes: [{ id: 's0', kind: 'agent', status: 'done', conversationId: 11 }],
+    }
+    const descendantRun: WorkflowRunSummary = {
+      id: 'wf_tray_desc',
+      kind: 'subagent',
+      name: '子代理任务',
+      conversationId: 11,
+      status: 'running',
+      createdAt: 1_700_000_006_000,
+      updatedAt: 1_700_000_008_000,
+      nodes: [{ id: 'd0', kind: 'agent', status: 'running', conversationId: 21 }],
+    }
+    const harness2 = createHostHarness({
+      conversationId: 1,
+      conversations: [
+        createConv({ id: 1, ownedBy: 'human' }),
+        createConv({ id: 11, parentConversationId: 1, status: 'done', title: '调度子代理', doing: '旧收尾文案' }),
+        createConv({ id: 21, parentConversationId: 11, status: 'working', title: '实际干活', doing: 'bash: pnpm build' }),
+      ],
+      conversationLives: {
+        21: { conversationId: 21, text: '', tools: [{ callId: 'c21b', toolName: 'bash', input: { command: 'pnpm --filter web build' }, status: 'running' }], updatedAt: 1_700_000_020_000 },
+      },
+      runsByConversation: { 1: [settledRootRun, descendantRun] },
+    })
+    const mounted2 = harness2.mountNode(e(mod.WorkflowActiveTray, { conversation: createConv({ id: 1, ownedBy: 'human' }) }))
+    try {
+      const toggle = mounted2.container.querySelector('button.workflow-active-tray-bar-toggle') as HTMLButtonElement
+      act(() => {
+        toggle.click()
+      })
+      const row = ([...mounted2.container.querySelectorAll('.workflow-active-tray-row')] as HTMLElement[]).find((r) =>
+        (r.textContent ?? '').includes('调度子代理'),
+      )
+      assert.ok(row !== undefined, '自身 settled 但子孙在途的行仍在托盘')
+      const live = row!.querySelector('.workflow-active-tray-row-live') as HTMLElement | null
+      assert.ok(live?.textContent?.includes('pnpm --filter web build') === true, '活动目标取自运行中子孙的 live')
+      assert.equal(live?.textContent?.includes('旧收尾文案'), false, '不得拿 settled 自身的旧 doing 冒充活动')
+    } finally {
+      mounted2.unmount()
     }
   })
 
