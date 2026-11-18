@@ -330,6 +330,7 @@ test('Ctrl+L: precisely toggles the ModelPicker per data-helm-panel in split vie
   assert.equal(patched.length, 1)
   assert.deepEqual(patched[0], { id: 2, body: { model: 'faux/m3' } })
   assert.ok(document.body.querySelector('.composer-model-popover') === null, 'the popover closes after the Enter pick')
+  await waitForCondition(() => document.activeElement === splitTa)
   assert.ok(document.activeElement === splitTa, 'focus returns to the current panel Composer textarea after close')
 
   // Ctrl+L again reopens; one more Ctrl+L closes and returns focus
@@ -341,6 +342,7 @@ test('Ctrl+L: precisely toggles the ModelPicker per data-helm-panel in split vie
     window.dispatchEvent(new CustomEvent(HELM_SHORTCUT_EVENT, { detail: { action: 'toggle-model-picker', panel: 'split' } }))
   })
   assert.ok(document.body.querySelector('.composer-model-popover') === null, 'a second Ctrl+L closes the popover')
+  await waitForCondition(() => document.activeElement === splitTa)
   assert.ok(document.activeElement === splitTa, 'focus returns to the split textarea after the Ctrl+L close')
 
   // Ctrl+L reopens, Esc closes: it must stopPropagation so the outer double-Esc abort never fires, and return focus
@@ -362,6 +364,7 @@ test('Ctrl+L: precisely toggles the ModelPicker per data-helm-panel in split vie
     })
     assert.ok(document.body.querySelector('.composer-model-popover') === null, 'Esc closes the ModelPicker')
     assert.equal(escLeakedToWindow, false, 'the ModelPicker Esc must stopPropagation to avoid the outer double-Esc')
+    await waitForCondition(() => document.activeElement === splitTa)
     assert.ok(document.activeElement === splitTa, 'focus returns to the split textarea after the Esc close')
     assert.ok(document.activeElement !== primaryTa)
   } finally {
