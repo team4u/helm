@@ -22,7 +22,7 @@ import { randomUUID } from 'node:crypto';
 import { atomicWriteJson } from '@helm/env-io';
 import { UpgradeRejectedError } from './errors.js';
 import { isStrictSemver } from '@helm/protocol';
-import { computeSri, downloadTarball, fetchExactManifest, resolveRegistryUrl } from './registry.js';
+import { downloadVerifiedTarball, resolveRegistryUrl } from './registry.js';
 import { runNpm } from './npm-runner.js';
 
 const NPM_INSTALL_TIMEOUT_MS = 300_000;
@@ -276,21 +276,8 @@ async function stageViaNpm(
   await fs.mkdir(downloads, { recursive: true });
   const tarballPaths: string[] = [];
   for (const pkgSpec of layout.packages) {
-    const manifest = await fetchExactManifest(registryUrl, pkgSpec.name, targetVersion, fetchImpl);
     const tarballPath = path.join(downloads, `${pkgSpec.name.replace('/', '+')}-${targetVersion}.tgz`);
-    try {
-      await downloadTarball(manifest.tarball, tarballPath, { fetchFn: fetchImpl });
-    } catch (error) {
-      throw new Error(
-        `failed to download ${pkgSpec.name}@${targetVersion} tarball (${manifest.tarball}): ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-    const actual = await computeSri(tarballPath);
-    if (actual !== manifest.integrity) {
-      throw new Error(
-        `${pkgSpec.name}@${targetVersion} tarball sha512 integrity check failed: expected ${manifest.integrity}, got ${actual}`,
-      );
-    }
+    await downloadVerifiedTarball(registryUrl, pkgSpec.name, targetVersion, tarballPath, fetchImpl);
     tarballPaths.push(tarballPath);
   }
 
