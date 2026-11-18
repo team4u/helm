@@ -4,7 +4,8 @@
  * Recognizes safe workspace-relative paths, bare absolute paths strictly contained
  * within `conversationCwd`, and `file://` URLs strictly contained within
  * `conversationCwd`, normalizing relative references against `workspaceBaseDir`
- * and extracting optional `#L<start>(C<col>)?(-L?<end>(C<col>)?)?` line ranges.
+ * and extracting optional line ranges from either an `#L<start>(C<col>)?(-L?<end>(C<col>)?)?`
+ * fragment or a compiler-style trailing `:line(:col)?(-line(:col)?)?` suffix.
  */
 import { normalizeTargetPath, pathRulesForShape, targetPathShape } from '@helm/protocol/browser'
 
@@ -20,6 +21,8 @@ const BARE_LOCALHOST_RE = /^localhost(?::\d+)?$/i
 const BARE_IPV4_RE = /^\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?$/
 const BARE_WEB_TLD_RE = /\.(?:com|org|net|io|dev|app|ai|cn|edu|gov|co|me|xyz|info|biz)(?::\d+)?$/i
 const LINE_FRAGMENT_RE = /^L(\d+)(?:C\d+)?(?:-L?(\d+)(?:C\d+)?)?$/i
+// Compiler-style trailing line suffix: file.ts:420, file.ts:420:10, file.ts:420-430, file.ts:420:10-430:5
+const TRAILING_COLON_LINE_RE = /:(\d{1,7})(?::\d{1,5})?(?:-(\d{1,7})(?::\d{1,5})?)?$/
 
 function isWindowsDriveOrUnc(raw: string): boolean {
   return WINDOWS_DRIVE_ABS_RE.test(raw) || raw.startsWith('\\\\')
@@ -48,6 +51,31 @@ function parseLineRange(fragment: string): { startLine?: number; endLine?: numbe
     return { startLine }
   }
   return { startLine, endLine }
+}
+
+/**
+ * Strip a compiler-style trailing `:line(:col)?(-line(:col)?)?` suffix (e.g.
+ * `src/app.ts:420`, `src/app.ts:420:10`, `src/app.ts:420-430`) into the bare
+ * path plus a line range, mirroring `parseLineRange` semantics. Only applies
+ * when the remainder still looks like a path (contains `/`, `\`, or `.`), so
+ * scheme-ish tokens such as `telnet:23` or hosts like `localhost:3000` keep
+ * their original classification. Returns null when no valid suffix is present.
+ */
+function splitTrailingLineSuffix(
+  raw: string,
+): { path: string; startLine?: number; endLine?: number } | null {
+  const match = TRAILING_COLON_LINE_RE.exec(raw)
+  if (match === null || match.index === 0) return null
+  const path = raw.slice(0, match.index)
+  if (path === '' || !/[./\\]/.test(path)) return null
+  const startLine = Number(match[1])
+  if (!Number.isSafeInteger(startLine) || startLine <= 0) return null
+  if (match[2] === undefined) return { path, startLine }
+  const endLine = Number(match[2])
+  if (!Number.isSafeInteger(endLine) || endLine < startLine) {
+    return { path, startLine }
+  }
+  return { path, startLine, endLine }
 }
 
 /**
@@ -169,17 +197,34 @@ export function parseWorkspaceFileRef(
       return null
     }
     if (decodedAbs.includes('?')) return null
-    const relPath = relativizeInsideCwd(decodedAbs, opts?.conversationCwd, { allowRootCwd: false })
+    const suffix = splitTrailingLineSuffix(decodedAbs)
+    const relPath = relativizeInsideCwd(
+      suffix !== null ? suffix.path : decodedAbs,
+      opts?.conversationCwd,
+      { allowRootCwd: false },
+    )
     if (relPath === null) return null
-    return { path: relPath, ...parseLineRange(fragment) }
+    return {
+      path: relPath,
+      ...(suffix !== null
+        ? { startLine: suffix.startLine, ...(suffix.endLine !== undefined ? { endLine: suffix.endLine } : {}) }
+        : {}),
+      ...parseLineRange(fragment),
+    }
   }
 
-  if (EXPLICIT_SCHEME_RE.test(beforeHash)) return null
-  if (beforeHash.includes('\\')) return null
+  // Strip a trailing compiler-style `:line` suffix before scheme/host
+  // classification so `src/app.ts:420` resolves as a workspace file with a
+  // line range instead of a scheme-ish URL or a path with the suffix baked in.
+  const suffix = splitTrailingLineSuffix(beforeHash)
+  const candidate = suffix !== null ? suffix.path : beforeHash
+
+  if (EXPLICIT_SCHEME_RE.test(candidate)) return null
+  if (candidate.includes('\\')) return null
 
   // Reject bare domain/host links that do not explicitly start with ./ or ../
-  if (!beforeHash.startsWith('./') && !beforeHash.startsWith('../')) {
-    const firstSeg = beforeHash.split('/')[0] ?? ''
+  if (!candidate.startsWith('./') && !candidate.startsWith('../')) {
+    const firstSeg = candidate.split('/')[0] ?? ''
     if (
       BARE_LOCALHOST_RE.test(firstSeg) ||
       BARE_IPV4_RE.test(firstSeg) ||
@@ -191,7 +236,7 @@ export function parseWorkspaceFileRef(
 
   let decodedRel: string
   try {
-    decodedRel = decodeURIComponent(beforeHash)
+    decodedRel = decodeURIComponent(candidate)
   } catch {
     return null
   }
@@ -232,6 +277,9 @@ export function parseWorkspaceFileRef(
 
   return {
     path: normalized,
+    ...(suffix !== null
+      ? { startLine: suffix.startLine, ...(suffix.endLine !== undefined ? { endLine: suffix.endLine } : {}) }
+      : {}),
     ...parseLineRange(fragment),
   }
 }

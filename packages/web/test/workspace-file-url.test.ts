@@ -120,6 +120,37 @@ describe('workspace-file-url: parseWorkspaceFileRef', { timeout: 60_000 }, () =>
     assert.equal(parseWorkspaceFileRef('/api/artifacts/1/content', { conversationCwd: 'C:\\Users\\Alice\\Repo' }), null)
   })
 
+  test('parses compiler-style trailing :line(:col) suffixes', { timeout: 60_000 }, () => {
+    assert.deepEqual(
+      parseWorkspaceFileRef('packages/protocol/src/plugin.ts:420'),
+      { path: 'packages/protocol/src/plugin.ts', startLine: 420 },
+    )
+    assert.deepEqual(parseWorkspaceFileRef('plugin.ts:420'), { path: 'plugin.ts', startLine: 420 })
+    assert.deepEqual(parseWorkspaceFileRef('./src/app.ts:8'), { path: 'src/app.ts', startLine: 8 })
+    assert.deepEqual(parseWorkspaceFileRef('src/app.ts:12:5'), { path: 'src/app.ts', startLine: 12 })
+    assert.deepEqual(parseWorkspaceFileRef('src/app.ts:12-34'), { path: 'src/app.ts', startLine: 12, endLine: 34 })
+    assert.deepEqual(parseWorkspaceFileRef('src/app.ts:12:5-34:9'), { path: 'src/app.ts', startLine: 12, endLine: 34 })
+    assert.deepEqual(
+      parseWorkspaceFileRef('../src/index.ts:8', { workspaceBaseDir: 'docs' }),
+      { path: 'src/index.ts', startLine: 8 },
+    )
+    assert.deepEqual(
+      parseWorkspaceFileRef('/repo/src/a.ts:10-20', { conversationCwd: '/repo' }),
+      { path: 'src/a.ts', startLine: 10, endLine: 20 },
+    )
+    assert.deepEqual(
+      parseWorkspaceFileRef('C:/repo/src/a.ts:7', { conversationCwd: 'C:\\repo' }),
+      { path: 'src/a.ts', startLine: 7 },
+    )
+    // Explicit #L fragment wins over the colon suffix when both are present.
+    assert.deepEqual(parseWorkspaceFileRef('src/app.ts:12#L30'), { path: 'src/app.ts', startLine: 30 })
+    assert.deepEqual(parseWorkspaceFileRef('src/app.ts:12#L30-L40'), { path: 'src/app.ts', startLine: 30, endLine: 40 })
+    // Invalid line numbers keep the suffix as part of the path (no silent rewrites).
+    assert.deepEqual(parseWorkspaceFileRef('src/app.ts:0'), { path: 'src/app.ts:0' })
+    assert.deepEqual(parseWorkspaceFileRef('src/app.ts:20-10'), { path: 'src/app.ts', startLine: 20 })
+    assert.deepEqual(parseWorkspaceFileRef('src/app.ts:12345678'), { path: 'src/app.ts:12345678' })
+  })
+
   test('rejects anchors, protocol-relative, API/root paths, query strings, schemes, and bare web hosts', { timeout: 60_000 }, () => {
     const rejected = [
       undefined,
@@ -136,13 +167,18 @@ describe('workspace-file-url: parseWorkspaceFileRef', { timeout: 60_000 }, () =>
       'javascript:alert(1)',
       'artifact:art-123',
       'localhost:3000/foo',
+      'localhost:3000',
       'localhost/foo',
       '127.0.0.1/foo',
       '127.0.0.1:8080/bar',
+      '127.0.0.1:8080',
       'github.com/foo/bar',
       'EXAMPLE.ORG:8443/docs',
+      'EXAMPLE.ORG:8443',
       'docs.io/guide',
       'app.dev/index',
+      // Scheme-ish single tokens must not be reinterpreted as file:line refs.
+      'telnet:23',
     ]
     for (const input of rejected) {
       assert.equal(parseWorkspaceFileRef(input, { conversationCwd: '/repo' }), null, `should reject ${String(input)}`)
