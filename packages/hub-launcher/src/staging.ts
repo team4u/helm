@@ -22,7 +22,9 @@
  *
  * Cache reuse is the engine's marker contract: a valid `.complete` marker short-circuits with
  * structural revalidation (entry files exist inside the immutable candidate); the extractor above
- * is not re-run for cached candidates.
+ * is not re-run for cached candidates. On a cache hit the launcher re-runs its own offline
+ * verification (`verifyPayloadLayout` + `start.mjs check`) before returning the candidate, so a
+ * post-staging mutation cannot ride an offline update into `current.json`.
  */
 import { spawn } from 'node:child_process';
 import fsp from 'node:fs/promises';
@@ -283,10 +285,26 @@ export async function stageHubRelease(options: StageHubOptions): Promise<StagedH
   if (entryPath === undefined) {
     throw new Error(`staged release has no "entryPath" entry (got: ${Object.keys(staged.entries).join(', ') || 'none'})`);
   }
+  const reusedCached = candidatesBefore.includes(path.basename(staged.releaseDir));
+  if (reusedCached) {
+    // Cache revalidation (#92/#131): the engine's marker contract proves the candidate was
+    // produced by a successful stage, but its reuse check only verifies entry existence — the
+    // payload files could have changed on disk since. Re-run the offline verification (package
+    // identity, manifest contract, nodeEngines floor, `start.mjs check` dependency closure)
+    // before anything may commit a cached candidate. No new state, no parallel install path.
+    const verifiedEntry = await verifyPayloadLayout(staged.releaseDir, pkgName, version, nodeVersion);
+    const resolvedEntry = resolveInsideRelease(staged.releaseDir, entryPath, 'payload entry path');
+    if (resolvedEntry !== path.join(staged.releaseDir, verifiedEntry)) {
+      throw new Error(
+        `cached candidate shape drifted: marker entry is "${entryPath}" but the payload layout verifies as "${verifiedEntry}" (${staged.releaseDir})`,
+      );
+    }
+    await runPayloadSelfCheck(resolvedEntry, payloadCheckTimeoutMs);
+  }
   return {
     version: staged.version,
     releaseDir: staged.releaseDir,
     entryPath,
-    reusedCached: candidatesBefore.includes(path.basename(staged.releaseDir)),
+    reusedCached,
   };
 }
