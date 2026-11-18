@@ -31,7 +31,6 @@ import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
 import { ConfirmDialog } from '../ui/AlertDialog.js'
 import { Composer } from './Composer.js'
 import { formatEnvSubtitle, sendingPendingVisible } from './composer-model.js'
-import { buildAncestorChain } from './ancestry-model.js'
 import { ConversationOutlinePopover, type OutlineJumpTarget } from './ConversationOutlinePopover.js'
 import { ConversationTimeline, type OutlineScrollRequest } from './ConversationTimeline.js'
 import { buildConversationOutline } from './outline-model.js'
@@ -68,7 +67,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
   const detailError = useLoadError(`conversation:${conversationId}`)
   const { profiles } = useProfilesSlice()
   const plugins = usePlugins()
-  const { primaryTarget, splitTarget } = useLocationTargets()
+  const { splitTarget } = useLocationTargets()
   const { workbenchOpen, workbenchTab } = useWorkbenchState()
   const {
     loadConversationDetail,
@@ -76,7 +75,6 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
     pushNotice,
     closeSplit,
     openTarget,
-    setActiveModal,
     setWorkbenchTab,
     setWorkbenchOpen,
   } = useStoreActions()
@@ -123,14 +121,6 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
       void loadConversationDetail(conversationId, true)
     }
   }, [conversationId, detail, loadConversationDetail])
-
-  // 祖先面包屑链（根在前）：仅由 conversations 摘要推导，不引入平行路由状态。
-  const ancestors = useMemo(
-    () => buildAncestorChain(conversations, conversationId, conversation),
-    [conversations, conversationId, conversation],
-  )
-  const ancestorTitle = (id: number): string =>
-    conversations.find((conv) => conv.id === id)?.title ?? ''
 
   // 切换会话时关闭更多菜单、重置大纲滚动状态与清空未消费的 prefill（组件复用时也保持确定语义）
   useEffect(() => {
@@ -300,26 +290,6 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
     openTarget({ kind: 'conversation', conversationId }, { split: true })
   }
 
-  // 祖先导航：主屏/分屏内直接切换该面板目标；抽屉内不顶掉主屏——
-  // 祖先已在主屏/分屏时仅需收起抽屉，否则抽屉原位切换到祖先会话。
-  const navigateToAncestor = (ancestorId: number): void => {
-    if (isDrawer) {
-      const onStage = [primaryTarget, splitTarget].some(
-        (target) => target?.kind === 'conversation' && target.conversationId === ancestorId,
-      )
-      if (onStage) {
-        onCloseDrawer?.()
-        return
-      }
-      setActiveModal({ kind: 'conversation-drawer', conversationId: ancestorId })
-      return
-    }
-    openTarget(
-      { kind: 'conversation', conversationId: ancestorId },
-      isSplit ? { split: true } : undefined,
-    )
-  }
-
   // 新话题：进入该智能体待命页并继承当前会话环境（远端节点/目录不回落本机）；
   // 首次发送才创建会话，不再预建空会话。
   const startNewThread = (): void => {
@@ -338,33 +308,6 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
     <div className="helm-pane">
       <header className="pane-topbar conversation-topbar">
         <div className="pane-title-group">
-          {ancestors.length > 0 ? (
-            <nav className="pane-breadcrumb" aria-label={t('conv.pane.ancestorNav')}>
-              {ancestors.map((ancestorId, index) => {
-                const label = `#${ancestorId}`
-                const tooltip = ancestorTitle(ancestorId) !== '' ? `${label} ${ancestorTitle(ancestorId)}` : t('conv.pane.ancestorFallback', { label })
-                return (
-                  <span className="pane-breadcrumb-item" key={ancestorId}>
-                    {index > 0 ? (
-                      <span className="pane-breadcrumb-sep" aria-hidden="true">
-                        <HelmIcon name="chevron-right" size={10} />
-                      </span>
-                    ) : null}
-                    <button
-                      type="button"
-                      className="btn btn-sm pane-parent-nav-btn"
-                      title={tooltip}
-                      aria-label={t('conv.pane.goToAncestor', { id: ancestorId })}
-                      onClick={() => navigateToAncestor(ancestorId)}
-                    >
-                      {index === 0 ? <HelmIcon name="arrow-left" size={12} /> : null}
-                      <span className="pane-parent-nav-label">{label}</span>
-                    </button>
-                  </span>
-                )
-              })}
-            </nav>
-          ) : null}
           {renaming ? (
             <input
               className="input"

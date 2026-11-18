@@ -68,9 +68,9 @@ export interface ActivitySnapshot {
  * deleted/unknown) stop at the current highest surviving node; cycles and
  * absurdly deep dirty data are truncated by the same defensive cap as
  * ancestry-model, MAX_ANCESTRY_DEPTH, guaranteeing finite termination and no
- * runaway recursion. Unlike buildAncestorChain's breadcrumb semantics, only a
- * surviving representative is taken — missing ids are not kept (a notification
- * body cannot provide a title or jump target for a non-existent conversation).
+ * runaway recursion. Only a surviving representative is taken — missing ids
+ * are not kept (a notification body cannot provide a title or jump target
+ * for a non-existent conversation).
  */
 export function resolveNotificationRootId(
   byId: ReadonlyMap<number, ConversationSummary>,

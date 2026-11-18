@@ -69,10 +69,6 @@ button, a, input, select, textarea { touch-action: manipulation; }
 @container (max-width: 450px) {
   .conversation-topbar .pane-title { min-width: 40px; }
   .conversation-topbar .pane-cwd-subtitle { max-width: 30vw; }
-  .conversation-topbar .pane-parent-nav-btn { height: 22px; padding: 0 6px 0 5px; font-size: 11px; gap: 3px; }
-  /* 深链祖先面包屑在窄容器隐藏分隔符，只留紧凑 ID 胶囊 */
-  .conversation-topbar .pane-breadcrumb { gap: 1px; }
-  .conversation-topbar .pane-breadcrumb-sep { display: none; }
   .composer-widgets .card { padding: 8px 10px; }
 }
 @media (hover: none) {

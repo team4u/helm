@@ -9,10 +9,8 @@ import { hangingEventStream } from './helpers/sse-stream.js'
 import type { ResolvedTarget, ActiveModal } from '../src/lib/types.js'
 
 /**
- * 子会话抽屉（conversation-drawer）与祖先面包屑导航闭环回归：
- * - 任意深度祖先链渲染（根在前）；
- * - 抽屉内点祖先：祖先在主屏/分屏时只收抽屉、不动主屏；否则抽屉原位切换祖先、不顶掉主屏；
- * - 主屏/分屏内点祖先：仅切换所在面板目标；
+ * 子会话抽屉（conversation-drawer）导航闭环回归：
+ * - 全站不再渲染祖先回退按钮（抽屉/主屏/分屏顶栏均无面包屑）；
  * - 普通关闭与浏览器后退只关抽屉，工作台保留。
  */
 GlobalRegistrator.register()
@@ -150,14 +148,6 @@ async function mount(hash: string, fixture?: FetchFixture): Promise<void> {
 
 function ancestorButtons(scope: string): HTMLButtonElement[] {
   return [...document.querySelectorAll<HTMLButtonElement>(`${scope} .pane-parent-nav-btn`)]
-    .filter((b) => (b.getAttribute('aria-label') ?? '').includes('Go to ancestor conversation'))
-}
-
-async function clickAncestor(scope: string, ancestorId: number): Promise<void> {
-  const btn = ancestorButtons(scope).find((b) => b.getAttribute('aria-label') === `Go to ancestor conversation #${ancestorId}`)
-  assert.ok(btn, `${scope} 应渲染祖先 #${ancestorId} 面包屑按钮`)
-  await act(async () => { btn!.click() })
-  await settle()
 }
 
 function reset(): void {
@@ -172,55 +162,17 @@ function reset(): void {
 
 afterEach(reset)
 
-test('抽屉内点击在主屏的祖先：仅收起抽屉，主屏与工作台不动', { timeout: 60_000 }, async () => {
-  await mount('#/c/1?wb=artifacts&modal=drawer&id=111')
-  assert.equal(observed?.primary.kind === 'conversation' ? observed.primary.conversationId : undefined, 1)
+test('全站不再渲染祖先回退按钮：抽屉/主屏/分屏顶栏均无面包屑', { timeout: 60_000 }, async () => {
+  await mount('#/c/999?split=c/111&wb=artifacts&modal=drawer&id=111')
+  assert.equal(observed?.primary.kind === 'conversation' ? observed.primary.conversationId : undefined, 999)
+  assert.deepEqual(observed?.split, { kind: 'conversation', conversationId: 111 })
   assert.equal(observed?.modal?.kind, 'conversation-drawer')
   assert.ok(observed?.workbenchOpen)
-  // 任意深度面包屑：#111 的祖先链应为 [#1, #11]（根在前）
-  const labels = ancestorButtons('.conversation-drawer').map((b) => b.getAttribute('aria-label'))
-  assert.deepEqual(labels, ['Go to ancestor conversation #1', 'Go to ancestor conversation #11'], '抽屉应渲染完整祖先链（根在前）')
-  await clickAncestor('.conversation-drawer', 1)
-  assert.deepEqual(observed?.primary, { kind: 'conversation', conversationId: 1 }, '主屏保持原会话 #1')
-  assert.equal(observed?.modal, null, '祖先已在主屏：只收起抽屉')
-  assert.equal(observed?.workbenchOpen, true, '工作台保留（有自己的关闭按钮，导航不动它）')
-})
-
-test('抽屉内点击不在屏祖先：抽屉原位切换到祖先，不顶掉主屏', { timeout: 60_000 }, async () => {
-  await mount('#/c/999?modal=drawer&id=111')
-  assert.equal(observed?.primary.kind === 'conversation' ? observed.primary.conversationId : undefined, 999)
-  assert.equal(observed?.modal?.kind, 'conversation-drawer')
-  await clickAncestor('.conversation-drawer', 1)
-  assert.deepEqual(observed?.primary, { kind: 'conversation', conversationId: 999 }, '主屏不被顶掉')
-  assert.deepEqual(observed?.modal, { kind: 'conversation-drawer', conversationId: 1 }, '抽屉应原位切换到祖先 #1')
-  // 抽屉内容确实切到根会话 #1：无祖先面包屑可再点
-  assert.equal(ancestorButtons('.conversation-drawer').length, 0, '根会话抽屉不再渲染祖先链')
-})
-
-test('抽屉内点击直接父级（不在屏）：同样原位切换抽屉', { timeout: 60_000 }, async () => {
-  await mount('#/c/999?modal=drawer&id=111')
-  await clickAncestor('.conversation-drawer', 11)
-  assert.deepEqual(observed?.primary, { kind: 'conversation', conversationId: 999 }, '主屏不动')
-  assert.deepEqual(observed?.modal, { kind: 'conversation-drawer', conversationId: 11 }, '抽屉原位切换到父会话 #11')
-  const labels = ancestorButtons('.conversation-drawer').map((b) => b.getAttribute('aria-label'))
-  assert.deepEqual(labels, ['Go to ancestor conversation #1'], '切换后面包屑随新会话更新')
-})
-
-test('主屏会话点击祖先面包屑：主屏切换到祖先', { timeout: 60_000 }, async () => {
-  await mount('#/c/111')
-  assert.equal(observed?.modal, null)
-  const labels = ancestorButtons('.helm-panes > .helm-pane').map((b) => b.getAttribute('aria-label'))
-  assert.deepEqual(labels, ['Go to ancestor conversation #1', 'Go to ancestor conversation #11'])
-  await clickAncestor('.helm-panes > .helm-pane', 11)
-  assert.deepEqual(observed?.primary, { kind: 'conversation', conversationId: 11 }, '主屏应导航到祖先 #11')
-})
-
-test('分屏会话点击祖先面包屑：仅分屏切换，主屏不动', { timeout: 60_000 }, async () => {
-  await mount('#/c/999?split=c/111')
-  assert.deepEqual(observed?.split, { kind: 'conversation', conversationId: 111 })
-  await clickAncestor('.helm-split-pane', 1)
-  assert.deepEqual(observed?.primary, { kind: 'conversation', conversationId: 999 }, '主屏不动')
-  assert.deepEqual(observed?.split, { kind: 'conversation', conversationId: 1 }, '分屏应导航到祖先 #1')
+  // 抽屉（子会话 #111）、主屏（根 #999）、分屏（子会话 #111）均不渲染祖先回退按钮
+  assert.equal(ancestorButtons('.conversation-drawer').length, 0, '抽屉不应渲染祖先回退按钮')
+  assert.equal(ancestorButtons('.helm-panes > .helm-pane').length, 0, '主屏不应渲染祖先回退按钮')
+  assert.equal(ancestorButtons('.helm-split-pane').length, 0, '分屏不应渲染祖先回退按钮')
+  assert.ok(document.querySelector('.conversation-drawer .conversation-drawer-close-btn'), '抽屉仍有关闭按钮')
 })
 
 test('子会话抽屉普通关闭只关抽屉，不影响工作台', { timeout: 60_000 }, async () => {

@@ -6,7 +6,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { ConversationEntry, ConversationLive, ConversationSummary } from '@helm/protocol'
 import { conversationsApi, ApiClientError } from '../src/lib/api.js'
-import { buildAncestorChain, collectSubtreeIds, MAX_ANCESTRY_DEPTH } from '../src/conversation/ancestry-model.js'
+import { collectSubtreeIds } from '../src/conversation/ancestry-model.js'
 import {
   archiveBatchNotice,
   patchConversationArchived,
@@ -891,7 +891,7 @@ test('buildTimelineItems：compacting 未开启时不插入 pending compaction �
 })
 
 // ---------------------------------------------------------------------------
-// 祖先链与后代收集（原 ancestry-model.test.ts 合并）
+// 后代收集（原 ancestry-model.test.ts 合并）
 // ---------------------------------------------------------------------------
 
 function ancestrySummary(id: number, parentConversationId?: number): ConversationSummary {
@@ -914,26 +914,6 @@ function ancestrySummary(id: number, parentConversationId?: number): Conversatio
     ...(parentConversationId !== undefined ? { parentConversationId } : {}),
   }
 }
-
-test('buildAncestorChain 返回根在前的任意深度祖先链', { timeout: 60_000 }, () => {
-  const conversations = [ancestrySummary(1), ancestrySummary(11, 1), ancestrySummary(111, 11), ancestrySummary(1111, 111)]
-  assert.deepEqual(buildAncestorChain(conversations, 1111), [1, 11, 111])
-  assert.deepEqual(buildAncestorChain(conversations, 11), [1])
-  assert.deepEqual(buildAncestorChain(conversations, 1), [], '根会话无祖先链')
-})
-
-test('buildAncestorChain 对环与缺失摘要安全截断', { timeout: 60_000 }, () => {
-  const cyclic = [ancestrySummary(1, 2), ancestrySummary(2, 1), ancestrySummary(3, 2)]
-  assert.deepEqual(buildAncestorChain(cyclic, 3), [1, 2])
-  const missing = [ancestrySummary(5, 99)]
-  assert.deepEqual(buildAncestorChain(missing, 5), [99])
-  const deep: ConversationSummary[] = [ancestrySummary(0)]
-  for (let i = 1; i <= MAX_ANCESTRY_DEPTH + 10; i++) deep.push(ancestrySummary(i, i - 1))
-  const chain = buildAncestorChain(deep, MAX_ANCESTRY_DEPTH + 10)
-  assert.equal(chain.length, MAX_ANCESTRY_DEPTH)
-  assert.equal(chain[0], 10, '超深截断时保留最靠近根的 MAX_ANCESTRY_DEPTH 级（根在前）')
-  assert.equal(chain[chain.length - 1], MAX_ANCESTRY_DEPTH + 9, '链尾是最近祖先')
-})
 
 test('collectSubtreeIds 收集含自身的全部后代且防环', { timeout: 60_000 }, () => {
   const conversations = [ancestrySummary(1), ancestrySummary(11, 1), ancestrySummary(12, 1), ancestrySummary(111, 11), ancestrySummary(9)]
