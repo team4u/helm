@@ -111,6 +111,37 @@ export function packageModulesDir(modulesRoot: string, pkgName: string): string 
 }
 
 /**
+ * npm dist-tag channel for payload updates: explicit flag > `HELM_PAYLOAD_DIST_TAG` > `latest`.
+ * Mirrors the engine's dist-tag contract (single path-safe segment; version-shaped values are
+ * rejected — those belong to the exact `--version` channel) so misconfiguration fails at the
+ * boundary instead of inside a registry request.
+ */
+const DIST_TAG_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+export function resolveDistTag(env: NodeJS.ProcessEnv, explicit?: string): string {
+  const value = explicit ?? (env.HELM_PAYLOAD_DIST_TAG !== undefined && env.HELM_PAYLOAD_DIST_TAG !== '' ? env.HELM_PAYLOAD_DIST_TAG : 'latest');
+  if (!DIST_TAG_PATTERN.test(value)) {
+    throw new Error(`invalid dist-tag: "${value}" (expected a single path segment of letters, digits, ".", "_" or "-", not starting with a symbol)`);
+  }
+  return value;
+}
+
+/**
+ * Scheduled auto-update check interval: explicit seconds > `HELM_HUB_UPDATE_INTERVAL` (seconds)
+ * > 1 hour. Sub-second values are rejected — a foreground supervisor polling the registry that
+ * fast is a misconfiguration.
+ */
+export function resolveRunIntervalMs(env: NodeJS.ProcessEnv, explicitSeconds?: number): number {
+  const rawSeconds =
+    explicitSeconds ?? (env.HELM_HUB_UPDATE_INTERVAL !== undefined && env.HELM_HUB_UPDATE_INTERVAL !== '' ? Number(env.HELM_HUB_UPDATE_INTERVAL) : undefined);
+  if (rawSeconds === undefined) return 60 * 60 * 1000;
+  if (!Number.isFinite(rawSeconds) || !Number.isInteger(rawSeconds) || rawSeconds < 1) {
+    throw new Error(`invalid update check interval: "${String(rawSeconds)}" seconds (expected an integer >= 1; see --interval / HELM_HUB_UPDATE_INTERVAL)`);
+  }
+  return rawSeconds * 1000;
+}
+
+/**
  * Program/data separation guard: the launcher install root (releases, records, logs — written and
  * replaced by updates) must never overlap the Hub's data directory (conversations, plugins,
  * credentials — user data). Nesting in either direction is rejected explicitly: an update wiping

@@ -2,14 +2,13 @@
  * Real adapter binding the Hub launcher's narrow update port to the shared `@helm/update`
  * engine. The port (`UpdateCore`) exists so tests can fake the registry/npm seams without a
  * network; production always uses `defaultUpdateCore()`, which delegates every generic
- * mechanism — registry manifest fetch with SHA512 SRI verification, the shell-free npm runner,
- * immutable staging with `.complete` markers and cache revalidation — to the engine. Nothing
- * generic is reimplemented here.
+ * mechanism — registry manifest fetch with SHA-512 SRI verification (`downloadVerifiedTarball`,
+ * the engine's single verified-download seam), dist-tag-aware `latest` lookup, the shell-free
+ * npm runner, immutable staging with `.complete` markers and cache revalidation — to the
+ * engine. Nothing generic is reimplemented here.
  */
 import {
-  computeSri,
-  downloadTarball,
-  fetchExactManifest,
+  downloadVerifiedTarball,
   fetchLatestVersion,
   resolveRegistryUrl,
   runNpm,
@@ -20,12 +19,15 @@ import {
 export interface UpdateCoreFetchOptions {
   registryUrl?: string;
   fetchFn?: typeof fetch;
+  /** npm dist-tag channel (default `latest`; e.g. `beta` for pre-release channels). */
+  tag?: string;
 }
 
 /**
- * Narrow update port consumed by `staging.ts` / `update.ts`; `defaultUpdateCore()` is the only
- * production implementation. `stageRelease` keeps the extractor channel (download + install run
- * inside the consumer's extractor) so registry and local-tarball installs share one code path.
+ * Narrow update port consumed by `staging.ts` / `update.ts` / `run.ts`; `defaultUpdateCore()` is
+ * the only production implementation. `stageRelease` keeps the extractor channel (download +
+ * unpack + install run inside the consumer's extractor) so registry and local-tarball installs
+ * share one code path.
  */
 export interface UpdateCore {
   fetchLatestVersion(pkgName: string, options?: UpdateCoreFetchOptions): Promise<string>;
@@ -50,18 +52,15 @@ export interface UpdateCore {
 export function defaultUpdateCore(): UpdateCore {
   return {
     async fetchLatestVersion(pkgName, options) {
-      return await fetchLatestVersion(resolveRegistryUrl(options?.registryUrl), pkgName, options?.fetchFn ?? fetch);
+      return await fetchLatestVersion(
+        resolveRegistryUrl(options?.registryUrl),
+        pkgName,
+        options?.fetchFn ?? fetch,
+        options?.tag ?? 'latest',
+      );
     },
-    async downloadVerifiedTarball(registryUrl, pkgName, version, destPath, fetchImpl) {
-      const fetchFn = fetchImpl ?? fetch;
-      const manifest = await fetchExactManifest(registryUrl, pkgName, version, fetchFn);
-      await downloadTarball(manifest.tarball, destPath, { fetchFn });
-      const actual = await computeSri(destPath);
-      if (actual !== manifest.integrity) {
-        throw new Error(
-          `${pkgName}@${version} tarball sha512 integrity check failed: expected ${manifest.integrity}, got ${actual}`,
-        );
-      }
+    downloadVerifiedTarball(registryUrl, pkgName, version, destPath, fetchImpl) {
+      return downloadVerifiedTarball(registryUrl, pkgName, version, destPath, fetchImpl ?? fetch);
     },
     runNpm(args, cwd, timeoutMs) {
       return runNpm([...args], cwd, timeoutMs);

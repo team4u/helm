@@ -17,6 +17,7 @@ import {
   captureIo,
   cleanupPid,
   createFakeCore,
+  createTarballOf,
   createFakeRegistry,
   freePort,
   getJson,
@@ -39,6 +40,15 @@ test('argument parsing accepts valid commands and rejects malformed input', { ti
   assert.equal(parsed.flags.tarball, '/tmp/x.tgz');
   assert.equal(parsed.flags.force, true);
   assert.equal(parsed.flags.json, true);
+
+  const runParsed = parseLauncherArgs(['run', '--interval', '60', '--tag', 'beta', '--port', '4568']);
+  assert.equal(runParsed.command, 'run');
+  assert.equal(runParsed.flags.intervalSeconds, 60);
+  assert.equal(runParsed.flags.tag, 'beta');
+  assert.equal(runParsed.flags.port, 4568);
+  assert.throws(() => parseLauncherArgs(['run', '--interval', 'abc']), /expects a positive integer/);
+  assert.throws(() => parseLauncherArgs(['run', '--version', '1.0.0']), /not valid for command/);
+  assert.throws(() => parseLauncherArgs(['update', '--interval', '60']), /not valid for command/);
 
   assert.equal(parseLauncherArgs(['status', '--json']).flags.json, true);
   assert.equal(parseLauncherArgs(['--help']).flags.help, true);
@@ -122,7 +132,9 @@ test('end-to-end CLI: tarball install, start, status, update, stop', { timeout: 
   const port = await freePort();
 
   const payloadDir = await writeFakePayload({ dir: path.join(root, 'payload-1.0.0'), pkgName: PKG, version: '1.0.0' });
-  const tarballPath = await packPayloadTarball(payloadDir);
+  payloads.set('1.0.0', payloadDir);
+  const tarballPath = path.join(root, 'payload.tgz');
+  await createTarballOf(payloadDir, tarballPath);
   await writeFakePayload({ dir: path.join(root, 'payload-1.1.0'), pkgName: PKG, version: '1.1.0' });
   payloads.set('1.1.0', path.join(root, 'payload-1.1.0'));
 
