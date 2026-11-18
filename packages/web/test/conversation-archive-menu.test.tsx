@@ -6,13 +6,10 @@
  * - 分屏目标被归档：分屏原地替换为待命页（与「新话题」分屏语义一致），主屏不动；
  * - 抽屉会话被归档：归档不删除会话，抽屉与主屏均不动；
  * - 归档非当前打开会话、恢复会话、迟到迁移事件（用户已切走）：一律不导航；
+ * - 归档当前会话后，侧栏「已归档」折叠组保持收起，不自动展开；
  * - 已归档会话：菜单切换为「恢复会话」，PATCH 移除 helm:archived 且保留其他 tags；
  * - bot/helm 托管会话与子代理派生会话：菜单不渲染归档项（无归档资格）；
  * - SSE conversation.upsert 推送新 tags 后，菜单动作随最新归档态切换。
- *
- * 侧栏「已归档」折叠组不自动展开的断言位于 background-activity.test.ts（侧栏域
- * renderSidebar 基座）：happy-dom 下本文件若同时引用侧栏组件模块，Radix 菜单
- * 内容的挂载会失效，故按域分置。
  */
 import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
@@ -29,6 +26,7 @@ GlobalRegistrator.register()
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
 const { createRoot } = await import('react-dom/client')
 const { ConversationPane } = await import('../src/conversation/ConversationPane.js')
+const { ArchivedConversationsGroup } = await import('../src/shell/SidebarArchivedConversations.js')
 const { HelmStoreProvider } = await import('../src/lib/HelmStoreProvider.js')
 const { useHelmStore } = await import('../src/lib/store-context.js')
 const e = React.createElement
@@ -155,6 +153,7 @@ function App(): React.ReactNode {
     store.activeModal?.kind === 'conversation-drawer'
       ? pane({ kind: 'conversation', conversationId: store.activeModal.conversationId }, `drawer:${store.activeModal.conversationId}`, { isDrawer: true })
       : null,
+    e(ArchivedConversationsGroup, { background: new Map() }),
   )
 }
 
@@ -269,6 +268,11 @@ test('明细菜单归档当前主屏会话：PATCH 追加 helm:archived，replac
   assert.equal(last.method, 'replace')
   assert.equal(last.hash, `#/a/assistant?cwd=${encodeURIComponent('/tmp')}`)
   assert.equal(window.location.hash, `#/a/assistant?cwd=${encodeURIComponent('/tmp')}`)
+  const archivedGroup = document.querySelector<HTMLButtonElement>(
+    '.archived-conversations-group .sidebar-group-header-toggle',
+  )
+  assert.ok(archivedGroup, 'the archived sidebar group should render after the archive')
+  assert.equal(archivedGroup.getAttribute('aria-expanded'), 'false', 'the archived group stays collapsed after navigation')
 })
 
 test('明细菜单归档远端主屏会话：待命目标继承节点与目录，不悄悄切回本机', { timeout: 60_000 }, async () => {

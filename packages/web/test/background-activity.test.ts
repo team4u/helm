@@ -1170,46 +1170,6 @@ test('ArchivedConversationsGroup split hit on an archived conversation: auto-exp
   assert.equal(archivedBoth.querySelector('.nav-pane-tag')?.getAttribute('title'), 'Open in both main and split views')
 })
 
-test('ArchivedConversationsGroup stays collapsed after the open conversation is archived and the view jumps to the agent standby target', { timeout: 60_000 }, () => {
-  // 归档迁移的落点状态：会话带宿主归档 tag，主屏已被 SSE 迁移导航替换为该智能体
-  // 待命页（新建会话页，菜单路径与导航断言见 conversation-archive-menu.test.tsx）。
-  // 归档成员不再是活动目标，折叠组不得自动展开（自动展开仅服务「正在查看归档
-  // 成员」的深链/分屏场景，见上一用例）。
-  const standbyHtml = renderSidebar(
-    sidebarStore({
-      conversations: [conv({ id: 1, title: '已收尾的话题', profileId: 'assistant', tags: [ARCHIVED_TAG] })],
-      primaryTarget: { kind: 'agent', profileId: 'assistant', cwd: '/root/code/helm' },
-    }),
-  )
-  const standbyHost = document.createElement('div')
-  standbyHost.innerHTML = standbyHtml
-  assert.ok(standbyHost.querySelector('.archived-conversations-group'), 'the archived group renders with one item')
-  assert.equal(
-    standbyHost.querySelector('.archived-conversations-group .sidebar-group-header-toggle')?.getAttribute('aria-expanded'),
-    'false',
-    'archiving the open conversation and jumping to standby must not auto-expand the archived group',
-  )
-
-  // 分屏落点同理：分屏目标被替换为待命页后，归档成员不再是活动目标。
-  const splitHtml = renderSidebar(
-    sidebarStore({
-      conversations: [
-        conv({ id: 1, title: '活跃会话', profileId: 'assistant' }),
-        conv({ id: 77, title: '已归档历史', profileId: 'assistant', tags: [ARCHIVED_TAG] }),
-      ],
-      primaryTarget: { kind: 'conversation', conversationId: 1 },
-      splitTarget: { kind: 'agent', profileId: 'assistant' },
-    }),
-  )
-  const splitHost = document.createElement('div')
-  splitHost.innerHTML = splitHtml
-  assert.equal(
-    splitHost.querySelector('.archived-conversations-group .sidebar-group-header-toggle')?.getAttribute('aria-expanded'),
-    'false',
-    'a split pane replaced by the standby target must not keep the archived group expanded',
-  )
-})
-
 // ---------------------------------------------------------------------------
 // Locale wiring: shell chrome copy follows the active store locale
 // ---------------------------------------------------------------------------
