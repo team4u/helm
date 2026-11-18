@@ -17,6 +17,7 @@ import { createHash } from 'node:crypto';
 import fsp from 'node:fs/promises';
 import net from 'node:net';
 import path from 'node:path';
+import * as tar from 'tar';
 import { killProcessTree } from '@helm/env-io';
 import { defaultUpdateCore, type UpdateCore } from '../src/update-core.js';
 import type { LauncherIo } from '../src/io.js';
@@ -32,7 +33,9 @@ export type FakePayloadMode =
 
 const START_MJS = `#!/usr/bin/env node
 import { createServer } from 'node:http';
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
+import { createRequire } from 'node:module';
+const requireDep = createRequire(import.meta.url);
 const version = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')).version;
 const mode = readFileSync(new URL('./payload-mode.txt', import.meta.url), 'utf8').trim();
 const command = process.argv[2];
@@ -42,6 +45,18 @@ if (command === 'check') {
     console.log('[fake-payload] self-check hanging');
     setInterval(() => {}, 1 << 30);
     await new Promise(() => {}); // park forever (top-level await; never falls through)
+  }
+  // file: dependency channel (#88): when the marker exists, the bundled file:./dep.tgz
+  // dependency must resolve from the installed payload — proving the unpack-then-install path.
+  if (existsSync(new URL('./require-file-dep', import.meta.url))) {
+    try {
+      const dep = requireDep('@fake/dep');
+      if (dep?.value !== 'file-dep-ok') throw new Error('wrong dep export');
+    } catch (err) {
+      console.error('[fake-payload] file dependency not installed:', err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    }
+    console.log('[fake-payload] file dependency resolved');
   }
   console.log('[fake-payload] check ok');
   process.exit(0);
@@ -83,6 +98,11 @@ export interface FakePayloadOptions {
   mode?: FakePayloadMode;
   /** Written into manifest.json; the staging nodeEngines gate compares it against the launcher's Node. */
   nodeEngines?: string;
+  /**
+   * Bundle a real `file:./dep.tgz` dependency (the #88 repro shape: the outer payload archive
+   * carries inner tarballs that only resolve after unpacking). `packPayloadTarball` includes it.
+   */
+  fileDep?: boolean;
 }
 
 /** Materialize a fake payload package directory (package.json + manifest.json + start.mjs + mode). */
@@ -90,10 +110,14 @@ export async function writeFakePayload(options: FakePayloadOptions): Promise<str
   const { dir, pkgName, version } = options;
   const mode = options.mode ?? 'ok';
   await fsp.mkdir(dir, { recursive: true });
-  await fsp.writeFile(
-    path.join(dir, 'package.json'),
-    `${JSON.stringify({ name: pkgName, version, private: true }, null, 2)}\n`,
-  );
+  const packageJson: Record<string, unknown> = { name: pkgName, version, private: true };
+  if (options.fileDep === true) {
+    packageJson.dependencies = { '@fake/dep': 'file:./dep.tgz' };
+    await writeFakeFileDep(path.join(dir, 'dep-src'));
+    await createTarballOf(path.join(dir, 'dep-src'), path.join(dir, 'dep.tgz'));
+    await fsp.writeFile(path.join(dir, 'require-file-dep'), '', 'utf8');
+  }
+  await fsp.writeFile(path.join(dir, 'package.json'), `${JSON.stringify(packageJson, null, 2)}\n`);
   await fsp.writeFile(
     path.join(dir, 'manifest.json'),
     `${JSON.stringify(
@@ -113,6 +137,25 @@ export async function writeFakePayload(options: FakePayloadOptions): Promise<str
   await fsp.writeFile(path.join(dir, 'payload-mode.txt'), mode, 'utf8');
   await fsp.writeFile(path.join(dir, 'start.mjs'), START_MJS, 'utf8');
   return dir;
+}
+
+/** Write the tiny dependency package referenced by `file:./dep.tgz` fixtures. */
+async function writeFakeFileDep(dir: string): Promise<void> {
+  await fsp.mkdir(dir, { recursive: true });
+  await fsp.writeFile(
+    path.join(dir, 'package.json'),
+    `${JSON.stringify({ name: '@fake/dep', version: '1.0.0', private: true, main: 'index.cjs' }, null, 2)}\n`,
+  );
+  await fsp.writeFile(
+    path.join(dir, 'index.cjs'),
+    "module.exports = { value: 'file-dep-ok' };\n",
+    'utf8',
+  );
+}
+
+/** Create a real npm-layout tarball (`package/` prefix) from a package directory, without npm. */
+export function createTarballOf(packageDir: string, destPath: string): Promise<void> {
+  return tar.create({ cwd: packageDir, file: destPath, gzip: true, portable: true, prefix: 'package' }, ['.']);
 }
 
 /** Pack a fixture payload directory into a real npm tarball (`npm pack`); returns its path. */
@@ -236,8 +279,6 @@ export interface FakeCoreOptions {
   latest: string;
   /** version → fixture payload directory served by the fake registry. */
   payloads: Map<string, string>;
-  /** local tarball path → fixture payload directory (--tarball installs). */
-  localTarballs?: Map<string, string>;
   failLatest?: Error;
   failDownload?: Error;
   failNpm?: Error;
@@ -245,8 +286,10 @@ export interface FakeCoreOptions {
 
 export interface FakeUpdateCore extends UpdateCore {
   npmCalls: string[][];
-  /** Register a local tarball ref (path) as installing the given fixture payload directory. */
-  registerLocalTarball(ref: string, payloadDir: string): void;
+  /** Bump the served `latest` dist-tag (scheduled-loop tests advance the channel between cycles). */
+  setLatest(version: string): void;
+  /** Toggle a simulated registry outage for `latest` lookups (resilience tests). */
+  setFailLatest(error: Error | undefined): void;
 }
 
 /**
@@ -255,33 +298,46 @@ export interface FakeUpdateCore extends UpdateCore {
  * (`.complete` markers, cache reuse, staging cleanup) are the production ones.
  */
 export function createFakeCore(options: FakeCoreOptions): FakeUpdateCore {
-  const downloadedByDest = new Map<string, string>();
-  const localTarballs = options.localTarballs ?? new Map<string, string>();
   const real = defaultUpdateCore();
+  let latest = options.latest;
+  let failLatest = options.failLatest;
   const core: FakeUpdateCore = {
     npmCalls: [],
-    registerLocalTarball(ref, payloadDir) {
-      localTarballs.set(ref, payloadDir);
+    setLatest(version) {
+      latest = version;
     },
-    async fetchLatestVersion() {
-      if (options.failLatest !== undefined) throw options.failLatest;
-      return options.latest;
+    setFailLatest(error) {
+      failLatest = error;
+    },
+    async fetchLatestVersion(_pkgName, fetchOptions) {
+      if (fetchOptions?.tag !== undefined && fetchOptions.tag !== 'latest') {
+        throw new Error(`fake registry: dist-tag ${fetchOptions.tag} is not served by this fake`);
+      }
+      if (failLatest !== undefined) throw failLatest;
+      return latest;
     },
     async downloadVerifiedTarball(_registryUrl, _pkgName, version, destPath) {
       if (options.failDownload !== undefined) throw options.failDownload;
       const source = options.payloads.get(version);
       if (source === undefined) throw new Error(`fake registry: no payload fixture for ${version}`);
       await fsp.mkdir(path.dirname(destPath), { recursive: true });
-      await fsp.writeFile(destPath, `fake-tarball:${version}\n`, { mode: 0o600 });
-      downloadedByDest.set(destPath, source);
+      // A real npm-layout tarball: the production extractor unpacks it before installing.
+      await createTarballOf(source, destPath);
     },
     async runNpm(args, cwd) {
       core.npmCalls.push([...args]);
       if (options.failNpm !== undefined) throw options.failNpm;
       if (args[0] !== 'install') throw new Error(`fake npm: unsupported command ${args[0]}`);
-      const ref = args[1] ?? '';
-      const source = downloadedByDest.get(ref) ?? localTarballs.get(ref);
-      if (source === undefined) throw new Error(`fake npm: unknown tarball ref ${ref}`);
+      // The ref is the unpacked package directory: copy the fixture payload into node_modules.
+      const packageDir = args[1] ?? '';
+      let pkgJson: Record<string, unknown>;
+      try {
+        pkgJson = JSON.parse(await fsp.readFile(path.join(packageDir, 'package.json'), 'utf8')) as Record<string, unknown>;
+      } catch {
+        throw new Error(`fake npm: not an unpacked package directory: ${packageDir}`);
+      }
+      const source = options.payloads.get(String(pkgJson.version));
+      if (source === undefined) throw new Error(`fake npm: no payload fixture for ${String(pkgJson.version)}`);
       const target = path.join(cwd, 'node_modules', ...options.pkgName.split('/'));
       await fsp.mkdir(path.dirname(target), { recursive: true });
       await fsp.cp(source, target, { recursive: true });
@@ -297,6 +353,8 @@ export interface FakeRegistry {
   registryUrl: string;
   /** Map an explicit version to a packed tarball (call before staging that version). */
   serve(version: string, tarballPath: string, options?: { integrity?: string }): Promise<void>;
+  /** Point a dist-tag (e.g. `beta`) at a served version; `latest` defaults to the constructor arg. */
+  tag(distTag: string, version: string): void;
   fetchImpl: typeof fetch;
 }
 
@@ -309,6 +367,7 @@ export interface FakeRegistry {
 export async function createFakeRegistry(pkgName: string, latest: string): Promise<FakeRegistry> {
   const registryUrl = 'https://registry.fake.local';
   const tarballs = new Map<string, { file: string; integrity?: string }>();
+  const distTags = new Map<string, string>([['latest', latest]]);
   const fetchImpl: typeof fetch = (async (input: RequestInfo | URL) => {
     const url = String(input);
     const tarballMatch = /\/tarball\/([^/]+)$/.exec(url);
@@ -318,12 +377,14 @@ export async function createFakeRegistry(pkgName: string, latest: string): Promi
       const bytes = await fsp.readFile(served.file);
       return new Response(new Uint8Array(bytes), { status: 200 });
     }
-    if (/\/latest$/.test(url)) {
-      return Response.json({ name: pkgName, version: latest });
+    const pathSuffix = url.replace(registryUrl, '');
+    const segmentMatch = /\/([^/]+)$/.exec(pathSuffix);
+    if (segmentMatch !== null && distTags.has(segmentMatch[1]!)) {
+      return Response.json({ name: pkgName, version: distTags.get(segmentMatch[1]!)! });
     }
-    const exactMatch = new RegExp(`/([^/]+)/([0-9][^/]*)$`).exec(url.replace(registryUrl, ''));
+    const exactMatch = /\/([0-9][^/]*)$/.exec(pathSuffix);
     if (exactMatch !== null) {
-      const version = exactMatch[2]!;
+      const version = exactMatch[1]!;
       const served = tarballs.get(version);
       if (served === undefined) return new Response('version not found', { status: 404 });
       return Response.json({
@@ -341,6 +402,9 @@ export async function createFakeRegistry(pkgName: string, latest: string): Promi
     registryUrl,
     async serve(version, tarballPath, options) {
       tarballs.set(version, { file: tarballPath, ...(options?.integrity !== undefined ? { integrity: options.integrity } : {}) });
+    },
+    tag(distTag, version) {
+      distTags.set(distTag, version);
     },
     fetchImpl,
   };

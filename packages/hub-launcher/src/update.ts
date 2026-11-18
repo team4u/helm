@@ -56,6 +56,8 @@ export interface PerformUpdateOptions {
   /** Launch flags for the post-commit start (highest precedence, persisted on success). */
   launchFlags?: LaunchConfig;
   fetchFn?: typeof fetch;
+  /** npm dist-tag channel used when resolving the registry latest version (default `latest`). */
+  tag?: string;
   /** Test seam: port-shaped fake standing in for the real adapter (registry/npm seams). */
   core?: UpdateCore;
   healthTimeoutMs?: number;
@@ -90,6 +92,7 @@ async function resolveTargetVersion(options: PerformUpdateOptions): Promise<stri
   const latest = await core.fetchLatestVersion(options.pkgName, {
     ...(options.registryUrl !== undefined ? { registryUrl: options.registryUrl } : {}),
     ...(options.fetchFn !== undefined ? { fetchFn: options.fetchFn } : {}),
+    ...(options.tag !== undefined ? { tag: options.tag } : {}),
   });
   if (!isStrictSemver(latest)) {
     throw new Error(`registry latest version is not strict SemVer: "${latest}"`);
@@ -255,12 +258,15 @@ export async function checkHubUpgrade(options: {
   pkgName: string;
   registryUrl?: string;
   fetchFn?: typeof fetch;
+  /** npm dist-tag channel (default `latest`). */
+  tag?: string;
   core?: UpdateCore;
 }): Promise<HubUpgradeCheckResult> {
   const core = options.core ?? defaultUpdateCore();
   const latestVersion = await core.fetchLatestVersion(options.pkgName, {
     ...(options.registryUrl !== undefined ? { registryUrl: options.registryUrl } : {}),
     ...(options.fetchFn !== undefined ? { fetchFn: options.fetchFn } : {}),
+    ...(options.tag !== undefined ? { tag: options.tag } : {}),
   });
   if (!isStrictSemver(latestVersion)) {
     throw new Error(`registry latest version is not strict SemVer: "${latestVersion}"`);

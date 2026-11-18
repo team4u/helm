@@ -16,6 +16,7 @@ import type { UpdateCore } from './update-core.js';
 import {
   cmdCheck,
   cmdRestart,
+  cmdRun,
   cmdStart,
   cmdStatus,
   cmdStop,
@@ -28,9 +29,16 @@ const USAGE = `helm-hub-launcher - stable local launcher and updater for the Hel
 Usage: helm-hub-launcher <command> [options]
 
 Commands:
-  check                          Query the registry for the latest payload version (no state changes)
-  update                         Stage, commit, and (when running) restart onto a new release with
+  check [--tag <tag>]            Query the registry dist-tag for the latest payload version (no
+                                 state changes)
+  update [--tag <tag>]           Stage, commit, and (when running) restart onto a new release with
                                  readiness-gated rollback; --tarball installs a local payload archive
+  run [--interval <s>] [--tag <tag>]
+                                 Foreground supervisor: ensure the Hub is installed and running, then
+                                 check the dist-tag every interval and auto-update across it (graceful
+                                 stop -> commit -> banner-gated start with rollback). Check/update
+                                 failures keep the current Hub running and retry next cycle. Ctrl-C
+                                 stops the owned Hub gracefully, then exits
   start [--port N] [--host H]    Start the committed release detached and wait for readiness
   stop                           Stop the running Hub gracefully (identity-verified, then escalate)
   restart                        Stop (if running) then start
@@ -42,8 +50,13 @@ process stays alive; the health endpoint is only an auxiliary confirmation.
 
 Options:
   --version <ver>        Target payload version for update (strict SemVer; required with --tarball)
-  --tarball <path>       Install from a local payload .tgz instead of the registry
+  --tarball <path>       Install from a local payload .tgz (unpacked and installed like the registry
+                         channel; verified by the payload self-check contract)
   --registry <url>       npm registry (defaults to HELM_NPM_REGISTRY or registry.npmjs.org)
+  --tag <tag>            npm dist-tag channel for check/update/run (default HELM_PAYLOAD_DIST_TAG
+                         or "latest"; e.g. "beta" for pre-release channels)
+  --interval <seconds>   Auto-update check interval for run (default HELM_HUB_UPDATE_INTERVAL or
+                         3600; minimum 1)
   --force                Bypass same-version no-op, downgrade guard, and blocked cooldown
   --start                Start the Hub after updating even when it was not running
   --port <port>          Hub listen port (default 3202; persisted to launch.json after first start)
@@ -65,6 +78,7 @@ Install layout (program state, strictly separate from Hub user data in ~/.helm):
 
 Environment: HELM_HUB_INSTALL_ROOT (default ~/.helm-hub), HELM_PORT, HELM_HOST, HELM_DATA_DIR,
 HELM_MODEL, HELM_WEB_DIST_DIR, HELM_NPM_REGISTRY, HELM_PAYLOAD_PACKAGE (default @team4u/helm-hub),
+HELM_PAYLOAD_DIST_TAG (default latest), HELM_HUB_UPDATE_INTERVAL (seconds, default 3600),
 HELM_UPGRADE_BLOCK_COOLDOWN_MS (default 1800000).
 
 Cross-platform: graceful stop is POSIX-first; on Windows SIGTERM terminates without handlers, so
@@ -75,6 +89,8 @@ const VALUE_FLAGS = new Set([
   'version',
   'tarball',
   'registry',
+  'tag',
+  'interval',
   'port',
   'host',
   'data-dir',
@@ -86,8 +102,9 @@ const BOOL_FLAGS = new Set(['force', 'start', 'json', 'help', 'h']);
 
 /** Allowed options per command (beyond --json/--help); unknown options fail explicitly. */
 const COMMAND_FLAGS: Record<string, ReadonlySet<string>> = {
-  check: new Set(['registry']),
-  update: new Set(['version', 'registry', 'tarball', 'force', 'start', 'health-timeout', 'port', 'host', 'data-dir', 'model', 'web-dist-dir']),
+  check: new Set(['registry', 'tag']),
+  update: new Set(['version', 'registry', 'tag', 'tarball', 'force', 'start', 'health-timeout', 'port', 'host', 'data-dir', 'model', 'web-dist-dir']),
+  run: new Set(['interval', 'tag', 'registry', 'health-timeout', 'port', 'host', 'data-dir', 'model', 'web-dist-dir']),
   start: new Set(['port', 'host', 'data-dir', 'model', 'web-dist-dir', 'health-timeout']),
   stop: new Set(),
   restart: new Set(['port', 'host', 'data-dir', 'model', 'web-dist-dir', 'health-timeout']),
@@ -141,6 +158,9 @@ export function parseLauncherArgs(argv: readonly string[]): ParsedArgs {
         case 'registry':
           flags.registry = raw;
           break;
+        case 'tag':
+          flags.tag = raw;
+          break;
         case 'host':
           flags.host = raw;
           break;
@@ -158,6 +178,9 @@ export function parseLauncherArgs(argv: readonly string[]): ParsedArgs {
           break;
         case 'health-timeout':
           flags.healthTimeoutMs = parseIntFlag('health-timeout', raw);
+          break;
+        case 'interval':
+          flags.intervalSeconds = parseIntFlag('interval', raw);
           break;
       }
       continue;
@@ -239,6 +262,8 @@ export async function runLauncherCli(
         return await cmdCheck(ctx, parsed.flags);
       case 'update':
         return await cmdUpdate(ctx, parsed.flags);
+      case 'run':
+        return await cmdRun(ctx, parsed.flags);
       case 'start':
         return await cmdStart(ctx, parsed.flags);
       case 'stop':

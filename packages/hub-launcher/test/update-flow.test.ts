@@ -23,6 +23,7 @@ import {
   captureIo,
   cleanupPid,
   createFakeCore,
+  createTarballOf,
   createFakeRegistry,
   freePort,
   getJson,
@@ -196,8 +197,7 @@ test('tarball installs require an explicit version and stage from the local file
 
   const payloadDir = await h.addPayload('2.0.0');
   const tarballPath = path.join(h.root, 'local-payload.tgz');
-  writeFileSync(tarballPath, 'fake local tarball bytes\n');
-  h.core.registerLocalTarball(tarballPath, payloadDir);
+  await createTarballOf(payloadDir, tarballPath);
   h.core.npmCalls.length = 0;
   const outcome = await performHubUpdate({
     ...baseOptions(h),
@@ -207,7 +207,8 @@ test('tarball installs require an explicit version and stage from the local file
   assert.equal(outcome.changed, true);
   assert.equal((await readCurrentRelease(h.root))?.version, '2.0.0');
   assert.equal(h.core.npmCalls.length, 1);
-  assert.equal(h.core.npmCalls[0]![1], tarballPath);
+  // The install runs against the unpacked package directory, not the tarball file (#88).
+  assert.match(h.core.npmCalls[0]![1]!, /payload-src[/\\]package$/);
 });
 
 test('running update: old hub stops, new hub serves, pid/launch records follow', { timeout: 60_000 }, async (t) => {
@@ -333,6 +334,22 @@ test('staged releases are reused via the engine .complete cache instead of reins
   assert.equal(current.entries['entryPath'], firstCurrent.entries['entryPath']); // same immutable candidate
 });
 
+test('a tampered cached candidate fails revalidation and is restaged fresh (#92)', { timeout: 60_000 }, async (t) => {
+  const h = await setupFlow(t, useTempDir(t, 'helm-launcher-flow-'), '1.1.0');
+  await h.addPayload('1.1.0');
+  const first = await stageHubRelease({ ...baseOptions(h), version: '1.1.0' });
+  assert.equal(first.reusedCached, false);
+  // Sabotage the immutable candidate on disk (e.g. a truncated install): the engine's structural
+  // entry check still passes (start.mjs exists), so the launcher's own revalidation must catch it.
+  await rm(path.join(first.releaseDir, 'node_modules', ...PKG.split('/'), 'manifest.json'));
+  h.core.npmCalls.length = 0;
+  const second = await stageHubRelease({ ...baseOptions(h), version: '1.1.0' });
+  assert.equal(second.reusedCached, false, 'a tampered cache must not be reused');
+  assert.notEqual(second.releaseDir, first.releaseDir);
+  assert.ok(existsSync(path.join(second.releaseDir, 'node_modules', ...PKG.split('/'), 'manifest.json')));
+  assert.equal(h.core.npmCalls.length, 1, 'restage ran a fresh install');
+});
+
 test('staging enforces the manifest nodeEngines floor against the launcher Node', { timeout: 60_000 }, async (t) => {
   const h = await setupFlow(t, useTempDir(t, 'helm-launcher-flow-'), '1.1.0');
   await h.addPayload('1.1.0', 'ok', '>=99.0.0');
@@ -384,6 +401,59 @@ test('check reports current/latest/blocked without touching state', { timeout: 6
   assert.equal(result.latestVersion, '1.2.0');
   assert.equal(result.updateAvailable, true);
   assert.equal(result.blocked, null);
+});
+
+test('check honors the npm dist-tag channel and rejects malformed tags', { timeout: 60_000 }, async (t) => {
+  const root = useTempDir(t, 'helm-launcher-tag-');
+  const registry = await createFakeRegistry(PKG, '1.0.0');
+  const betaPayload = await writeFakePayload({ dir: path.join(root, 'fixture-beta'), pkgName: PKG, version: '2.0.0-beta.1' });
+  await registry.serve('2.0.0-beta.1', await packPayloadTarball(betaPayload));
+  registry.tag('beta', '2.0.0-beta.1');
+  const { io } = captureIo(sanitizedHostEnv({ HELM_PAYLOAD_PACKAGE: PKG }));
+
+  const result = await checkHubUpgrade({ io, root, pkgName: PKG, registryUrl: registry.registryUrl, fetchFn: registry.fetchImpl, tag: 'beta' });
+  assert.equal(result.latestVersion, '2.0.0-beta.1');
+  assert.equal(result.updateAvailable, true);
+  const latestResult = await checkHubUpgrade({ io, root, pkgName: PKG, registryUrl: registry.registryUrl, fetchFn: registry.fetchImpl });
+  assert.equal(latestResult.latestVersion, '1.0.0');
+
+  await assert.rejects(
+    checkHubUpgrade({ io, root, pkgName: PKG, registryUrl: registry.registryUrl, fetchFn: registry.fetchImpl, tag: '^1.0.0' }),
+    /invalid dist-tag/,
+  );
+  await assert.rejects(
+    checkHubUpgrade({ io, root, pkgName: PKG, registryUrl: registry.registryUrl, fetchFn: registry.fetchImpl, tag: '1.2.3' }),
+    /is a version, not a dist-tag/,
+  );
+});
+
+test('golden path (#88): a payload bundling file:./dep.tgz installs via unpack-then-install', { timeout: 60_000 }, async (t) => {
+  const root = useTempDir(t, 'helm-launcher-filedep-');
+  const registry = await createFakeRegistry(PKG, '2.5.0');
+  const payloadDir = await writeFakePayload({
+    dir: path.join(root, 'fixture-payload'),
+    pkgName: PKG,
+    version: '2.5.0',
+    fileDep: true,
+  });
+  await registry.serve('2.5.0', await packPayloadTarball(payloadDir));
+  const { io } = captureIo(sanitizedHostEnv({ HELM_PAYLOAD_PACKAGE: PKG }));
+
+  // Direct `npm install <outer.tgz>` fails ENOENT on the inner file: tarball (the #88 repro);
+  // the production extractor unpacks first, so the inner dependency resolves and the payload's
+  // own self-check (which requires @fake/dep) passes.
+  const staged = await stageHubRelease({
+    io,
+    root,
+    version: '2.5.0',
+    pkgName: PKG,
+    dataDir: path.join(path.dirname(root), `${path.basename(root)}-user-data`),
+    registryUrl: registry.registryUrl,
+    fetchFn: registry.fetchImpl,
+  });
+  assert.ok(existsSync(staged.entryPath));
+  const depDir = path.join(staged.releaseDir, 'node_modules', '@fake', 'dep');
+  assert.ok(existsSync(path.join(depDir, 'index.cjs')), `file: dependency not installed: ${depDir}`);
 });
 
 test('golden path: real npm pack tarball stages through the production extractor (registry channel)', { timeout: 60_000 }, async (t) => {
