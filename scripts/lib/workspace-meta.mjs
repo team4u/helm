@@ -40,6 +40,7 @@ export const PACKAGE_TIERS = {
   plugins: 'integration',
   hub: 'integration',
   node: 'integration',
+  update: 'integration',
   payload: 'integration',
 };
 

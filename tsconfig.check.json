@@ -42,6 +42,8 @@
     "packages/hub/test/**/*.ts",
     "packages/node/src/**/*.ts",
     "packages/node/test/**/*.ts",
+    "packages/update/src/**/*.ts",
+    "packages/update/test/**/*.ts",
     "packages/cli/src/**/*.ts",
     "packages/cli/test/**/*.ts",
     "packages/payload/test/**/*.ts",
