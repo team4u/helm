@@ -182,12 +182,34 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
     setEnvBlocker(ENV_BLOCKER_CLEAR)
   }, [envConfigurable])
 
+  // Consume each prefill request at most once (by reference and tick):
+  // <Activity> keep-alive re-runs effects on wake while preserving parent
+  // prefill state, and locale/callback dep updates must never re-inject an
+  // already sent or manually cleared prefill back into the textarea.
+  const lastPrefillRef = useRef<ComposerPrefill | null>(null)
+  const lastPrefillTickRef = useRef<number | null>(null)
+  const prevConversationIdRef = useRef(conversation.id)
+
+  // Leaving history-edit mode only when the conversation actually switches
+  // (<Activity> wake re-runs effects for the same conversation.id and must
+  // preserve any in-progress history edit).
+  useEffect(() => {
+    if (prevConversationIdRef.current === conversation.id) return
+    prevConversationIdRef.current = conversation.id
+    lastPrefillRef.current = null
+    lastPrefillTickRef.current = null
+    setEditingEntryId(null)
+  }, [conversation.id])
+
   // Prefill (edit and resend): any prefill reference change triggers it, and
   // repeated prefills of the same text also apply. Each picked edit target
   // wholly replaces the attachments (cleared when the target has none);
   // residue from the previous target is never kept.
   useEffect(() => {
     if (prefill === null) return
+    if (prefill === lastPrefillRef.current || prefill.tick === lastPrefillTickRef.current) return
+    lastPrefillRef.current = prefill
+    lastPrefillTickRef.current = prefill.tick
     // onlyIfEmpty: refuse prefill while the draft is non-empty/editing/in
     // flight (read via ref; no extra effect deps).
     if (prefill.onlyIfEmpty === true) {
@@ -217,12 +239,6 @@ export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslato
     syncLiveDraft(prefill.text, nextEditing, nextAttachments)
     textareaRef.current?.focus()
   }, [prefill, syncLiveDraft, t, pushNotice, conversation.id, textareaRef])
-
-  // Leaving history-edit mode when the conversation switches (popover resets
-  // are the component-side effect of the same name).
-  useEffect(() => {
-    setEditingEntryId(null)
-  }, [conversation.id])
 
   const cancelEdit = useCallback((): void => {
     setEditingEntryId(null)

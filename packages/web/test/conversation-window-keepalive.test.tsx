@@ -4,7 +4,7 @@ import * as React from 'react'
 import { act } from 'react'
 import type { Root } from 'react-dom/client'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
-import type { ConversationSummary } from '@helm/protocol'
+import type { ConversationEntry, ConversationSummary } from '@helm/protocol'
 import { hangingEventStream, type SseFrameSender } from './helpers/sse-stream.js'
 import { typeIntoControl } from './helpers/dom-harness.js'
 import type { ResolvedTarget } from '../src/lib/types.js'
@@ -37,6 +37,7 @@ let host: HTMLElement | undefined
 let sendEvent: SseFrameSender | undefined
 let navigateTo: ((target: ResolvedTarget, opts?: { split?: boolean }) => void) | undefined
 const detailFetchLog: number[] = []
+let detailEntriesOverride: Record<number, ConversationEntry[]> = {}
 
 function summary(id: number, overrides: Partial<ConversationSummary> = {}): ConversationSummary {
   return {
@@ -91,7 +92,7 @@ function installFetch(): void {
       const conversationId = Number(detailMatch[1])
       detailFetchLog.push(conversationId)
       const found = conversations.find((item) => item.id === conversationId)
-      return new Response(JSON.stringify({ ...(found ?? summary(conversationId)), entries: [] }), { status: 200 })
+      return new Response(JSON.stringify({ ...(found ?? summary(conversationId)), entries: detailEntriesOverride[conversationId] ?? [] }), { status: 200 })
     }
     if (method === 'GET') return new Response(JSON.stringify([]), { status: 200 })
     return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })
@@ -216,6 +217,7 @@ function reset(): void {
   globalThis.fetch = originalFetch
   sendEvent = undefined
   navigateTo = undefined
+  detailEntriesOverride = {}
 }
 
 function eventFrame(seq: number, event: unknown): Uint8Array {
@@ -445,4 +447,69 @@ test('real App shell keeps conversation windows alive across hash navigation', {
   await navigateHash('#/c/1')
   assert.ok(stageElement().classList.contains('is-idle') === false, '返回会话后舞台应恢复')
   assert.ok(scrollerA.scrollTop === 240, '设置中心往返后阅读位置应恢复')
+})
+
+test('consumed edit prefill does not resurrect in composer after sending or clearing across A -> B -> A', { timeout: 60_000 }, async () => {
+  detailEntriesOverride = {
+    1: [{ id: '42', kind: 'helm.input', data: { text: 'steer message', origin: 'human' } }],
+  }
+  await mount('#/c/1')
+  const paneA = findPane(1)
+  assert.ok(paneA)
+  const textareaA = paneTextarea(paneA)
+  const editButton = (): HTMLButtonElement => {
+    const btn = paneA.querySelector<HTMLButtonElement>('button[title="Edit and resend"]')
+    assert.ok(btn, '应渲染 Edit and resend 按钮')
+    return btn
+  }
+
+  // 1. Trigger prefill -> send -> switch A -> B -> A -> textarea must stay empty.
+  await act(async () => { editButton().click() })
+  await settle()
+  assert.equal(textareaA.value, 'steer message', '点击编辑后应回填内容')
+  assert.ok(paneA.querySelector('.composer-edit-banner') !== null, '应进入历史编辑态')
+
+  const sendButton = paneA.querySelector<HTMLButtonElement>('.btn-send')
+  assert.ok(sendButton)
+  await act(async () => { sendButton.click() })
+  await settle()
+  assert.equal(textareaA.value, '', '发送后输入框应清空')
+
+  await openConversation(2)
+  await openConversation(1)
+  assert.equal(textareaA.value, '', '切走再切回后，已发送的 prefill 不得复活到输入框')
+  assert.ok(paneA.querySelector('.composer-edit-banner') === null, '切走再切回后不应复活编辑横幅')
+
+  // 2. Trigger prefill again -> manually clear -> switch A -> B -> A -> textarea must stay empty.
+  await act(async () => { editButton().click() })
+  await settle()
+  assert.equal(textareaA.value, 'steer message', '再次点击编辑仍可正常回填')
+  await act(async () => { typeIntoControl(textareaA, '') })
+  assert.equal(textareaA.value, '', '手工清空输入框')
+
+  await openConversation(2)
+  await openConversation(1)
+  assert.equal(textareaA.value, '', '手工清空后切走再切回，旧 prefill 仍不得重复出现')
+})
+
+test('in-progress history edit mode survives A -> B -> A Activity wake', { timeout: 60_000 }, async () => {
+  detailEntriesOverride = {
+    1: [{ id: '42', kind: 'helm.input', data: { text: 'pending edit', origin: 'human' } }],
+  }
+  await mount('#/c/1')
+  const paneA = findPane(1)
+  assert.ok(paneA)
+  const textareaA = paneTextarea(paneA)
+  const editButton = paneA.querySelector<HTMLButtonElement>('button[title="Edit and resend"]')
+  assert.ok(editButton)
+
+  await act(async () => { editButton.click() })
+  await settle()
+  assert.equal(textareaA.value, 'pending edit')
+  assert.ok(paneA.querySelector('.composer-edit-banner') !== null, '进入历史编辑态')
+
+  await openConversation(2)
+  await openConversation(1)
+  assert.equal(textareaA.value, 'pending edit', '唤醒后编辑草稿应保留')
+  assert.ok(paneA.querySelector('.composer-edit-banner') !== null, '唤醒后历史编辑态横幅应保留')
 })

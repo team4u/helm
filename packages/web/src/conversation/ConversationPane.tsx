@@ -93,6 +93,8 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
   const [activeOutlineEntryId, setActiveOutlineEntryId] = useState<string | undefined>(undefined)
   const [loadingOlderOutline, setLoadingOlderOutline] = useState(false)
   const outlineTickRef = useRef(0)
+  const prefillTickRef = useRef(0)
+  const prevConversationIdRef = useRef(conversationId)
   const moreMenuRef = useRef<HTMLSpanElement | null>(null)
   const moreButtonRef = useRef<HTMLButtonElement | null>(null)
 
@@ -130,11 +132,14 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
   const ancestorTitle = (id: number): string =>
     conversations.find((conv) => conv.id === id)?.title ?? ''
 
-  // 切换会话时关闭更多菜单与重置大纲滚动状态（组件复用时也保持确定语义）
+  // 切换会话时关闭更多菜单、重置大纲滚动状态与清空未消费的 prefill（组件复用时也保持确定语义）
   useEffect(() => {
+    if (prevConversationIdRef.current === conversationId) return
+    prevConversationIdRef.current = conversationId
     setMoreOpen(false)
     setOutlineScrollReq(null)
     setActiveOutlineEntryId(undefined)
+    setPrefill(null)
   }, [conversationId])
 
   // 失去舞台（窗口被 <Activity> 隐藏）：关闭瞬态浮层（更多菜单、确认弹窗、重命名），
@@ -269,12 +274,18 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
 
   const requestEdit = (target: EditRequestTarget): void => {
     // prefill 绑定会话 id：即使未来 Pane 复用不重挂载，旧会话的编辑目标也不会注入新会话 Composer
-    setPrefill(target.text.trim() === '' && target.entryId === undefined ? null : { ...target, tick: Date.now() })
+    if (target.text.trim() === '' && target.entryId === undefined) {
+      setPrefill(null)
+      return
+    }
+    prefillTickRef.current += 1
+    setPrefill({ ...target, tick: prefillTickRef.current })
   }
 
   // 空白会话引导词：仅回填草稿（onlyIfEmpty 交 Composer 原子保护，非空草稿不覆盖）
   const requestStarter = (text: string): void => {
-    setPrefill({ text, tick: Date.now(), onlyIfEmpty: true })
+    prefillTickRef.current += 1
+    setPrefill({ text, tick: prefillTickRef.current, onlyIfEmpty: true })
   }
 
   const toggleSplit = (): void => {
