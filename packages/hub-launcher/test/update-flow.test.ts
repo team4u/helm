@@ -342,6 +342,45 @@ test('staged releases are reused via the engine .complete cache instead of reins
   assert.equal(current.entries['entryPath'], firstCurrent.entries['entryPath']); // same immutable candidate
 });
 
+test('cache reuse revalidates the candidate: a post-staging mutation never commits', { timeout: 60_000 }, async (t) => {
+  const h = await setupFlow(t, useTempDir(t, 'helm-launcher-cachereval-'), '1.1.0');
+  await h.addPayload('1.0.0');
+  const first = await stageHubRelease({ ...baseOptions(h), version: '1.0.0' });
+  assert.equal(first.reusedCached, false);
+  const releaseDir = first.releaseDir;
+
+  // Leg 1 — package identity tamper: the engine's entry-existence reuse check passes, but the
+  // launcher's offline verification rejects the mutated manifest before anything commits.
+  const manifestPath = path.join(releaseDir, 'manifest.json');
+  const originalManifest = await import('node:fs/promises').then((fsp) => fsp.readFile(manifestPath, 'utf8'));
+  await import('node:fs/promises').then((fsp) =>
+    fsp.writeFile(manifestPath, JSON.stringify({ name: PKG, version: '9.9.9' })),
+  );
+  await assert.rejects(
+    stageHubRelease({ ...baseOptions(h), version: '1.0.0' }),
+    /unpacked payload manifest mismatch: expected @fake\/hub-payload@1\.0\.0, got @fake\/hub-payload@9\.9\.9/,
+  );
+  await import('node:fs/promises').then((fsp) => fsp.writeFile(manifestPath, originalManifest, 'utf8'));
+
+  // Untampered: the same cached candidate verifies and is reused (no new npm install).
+  h.core.npmCalls.length = 0;
+  const clean = await stageHubRelease({ ...baseOptions(h), version: '1.0.0' });
+  assert.equal(clean.reusedCached, true);
+  assert.equal(clean.releaseDir, releaseDir);
+  assert.equal(h.core.npmCalls.length, 0);
+
+  // Leg 2 — dependency-closure tamper: removing the installed inner file: dependency passes the
+  // layout check but `start.mjs check` (which imports it) refuses the candidate.
+  const depDir = path.join(releaseDir, 'node_modules', 'fixture-inner-dep');
+  const depBackup = path.join(path.dirname(releaseDir), 'inner-dep-backup');
+  await import('node:fs/promises').then((fsp) => fsp.rename(depDir, depBackup));
+  await assert.rejects(
+    stageHubRelease({ ...baseOptions(h), version: '1.0.0' }),
+    /payload self-check failed with exit code 3/,
+  );
+  await import('node:fs/promises').then((fsp) => fsp.rename(depBackup, depDir));
+});
+
 test('staging enforces the manifest nodeEngines floor against the launcher Node', { timeout: 60_000 }, async (t) => {
   const h = await setupFlow(t, useTempDir(t, 'helm-launcher-flow-'), '1.1.0');
   await h.addPayload('1.1.0', 'ok', '>=99.0.0');
