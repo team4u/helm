@@ -114,22 +114,23 @@ export function resolveSpaceSwitch(
 }
 
 /**
- * When the deleted conversation is exactly the current primary target, fall
- * back to the owning agent's standby state, inheriting the remote node and
- * working directory (the local node is omitted per the URL contract; without a
- * conversation summary, fall back to the profile center).
+ * The standby (new-conversation) fallback target of a conversation leaving the
+ * current view (deleted, or archived while open): the owning agent's standby
+ * page, inheriting the remote node and working directory (the local node is
+ * omitted per the URL contract; without a conversation summary, fall back to
+ * the profile center).
  */
-export function deletedConversationFallbackTarget(
-  deletedSummary: Pick<ConversationSummary, 'profileId' | 'nodeId' | 'cwd'> | undefined,
+export function standbyFallbackTarget(
+  summary: Pick<ConversationSummary, 'profileId' | 'nodeId' | 'cwd'> | undefined,
 ): ResolvedTarget {
-  if (deletedSummary === undefined) return { kind: 'profiles' }
+  if (summary === undefined) return { kind: 'profiles' }
   return {
     kind: 'agent',
-    profileId: deletedSummary.profileId,
-    ...(deletedSummary.nodeId !== undefined && deletedSummary.nodeId !== '' && deletedSummary.nodeId !== 'local'
-      ? { nodeId: deletedSummary.nodeId }
+    profileId: summary.profileId,
+    ...(summary.nodeId !== undefined && summary.nodeId !== '' && summary.nodeId !== 'local'
+      ? { nodeId: summary.nodeId }
       : {}),
-    ...(deletedSummary.cwd !== undefined && deletedSummary.cwd !== '' ? { cwd: deletedSummary.cwd } : {}),
+    ...(summary.cwd !== undefined && summary.cwd !== '' ? { cwd: summary.cwd } : {}),
   }
 }
 

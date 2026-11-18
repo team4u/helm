@@ -28,7 +28,8 @@ import {
 } from './live-state.js'
 import { evictPluginClientCache, reconcilePluginClientCache } from './plugin-client.js'
 import { evictSessionDocsOfConversation, evictSessionDocSubscriptions } from './session-docs.js'
-import { deletedConversationFallbackTarget } from './space-navigation.js'
+import { isConversationArchived } from '../conversation/archive-model.js'
+import { standbyFallbackTarget } from './space-navigation.js'
 import type { ActiveModal, ResolvedTarget, ToastNotice } from './types.js'
 import {
   isArtifactsWatermarkCurrent,
@@ -275,6 +276,7 @@ function dispatchFrameSideEffects(
   event: HelmEvent,
   deletedConversationId: number | undefined,
   deletedSummary: ConversationSummary | undefined,
+  archivedSummary: ConversationSummary | undefined,
   ctx: FrameHandlerContext,
 ): void {
   if (event.type === 'notification' && 'title' in event) ctx.pushNotice(event)
@@ -308,13 +310,29 @@ function dispatchFrameSideEffects(
     }
     if (visible && conv.unread) ctx.clearVisibleConversationUnread(conv.id, conv)
   }
+  if (archivedSummary !== undefined) {
+    // 归档导航唯一事实源：仅当被归档的正是当前主屏/分屏目标时，以 replace 跳到
+    // 该智能体待命页（新建会话页，继承节点/目录）；归档不删除会话，其余目标
+    // （含抽屉）不动——已归档会话仍可打开查看，用户已切走时不覆盖新导航。
+    const fallback = standbyFallbackTarget(archivedSummary)
+    const primaryHit =
+      ctx.targets.current.primaryTarget.kind === 'conversation' &&
+      ctx.targets.current.primaryTarget.conversationId === archivedSummary.id
+    const splitHit =
+      ctx.targets.current.splitTarget?.kind === 'conversation' &&
+      ctx.targets.current.splitTarget.conversationId === archivedSummary.id
+    if (primaryHit || splitHit) ctx.pendingHistoryMode.current = 'replace'
+    if (primaryHit) ctx.applyPrimaryTarget(fallback)
+    // 分屏命中时分屏原地变为待命页（与「新话题」的分屏语义一致），不收起分屏布局。
+    if (splitHit) ctx.setSplitTarget(fallback)
+  }
   if (deletedConversationId !== undefined) {
     ctx.unreadClearInFlight.current.delete(deletedConversationId)
     ctx.unreadClearedSeq.current.delete(deletedConversationId)
     // 删除导航唯一事实源：仅当被删的正是当前主屏/分屏/抽屉目标时，
     // 以 replace 回到该智能体待命态（无 Profile 信息时显式回角色中心）；
     // 绝不选中其他会话，批量连续删除不闪烁，用户已切走时不覆盖新导航。
-    const fallback = deletedConversationFallbackTarget(deletedSummary)
+    const fallback = standbyFallbackTarget(deletedSummary)
     const primaryHit =
       ctx.targets.current.primaryTarget.kind === 'conversation' &&
       ctx.targets.current.primaryTarget.conversationId === deletedConversationId
@@ -350,6 +368,18 @@ function handleEventFrame(payload: unknown, ctx: FrameHandlerContext): void {
   const deletedSummary = deletedEvent !== undefined
     ? ctx.liveRef.current.conversations.find((c) => c.id === deletedEvent.conversationId)
     : undefined
+  // 归档迁移同样需要前置快照判定「未归档 → 已归档」（upsert 高频到达，仅在
+  // 真迁移时才触发导航；恢复与其余 upsert 一律不动）。
+  const upsertEvent = frame.event.type === 'conversation.upsert' && 'conversation' in frame.event ? frame.event : undefined
+  const prevUpsertedSummary = upsertEvent !== undefined
+    ? ctx.liveRef.current.conversations.find((c) => c.id === upsertEvent.conversation.id)
+    : undefined
+  const archivedSummary = upsertEvent !== undefined &&
+      prevUpsertedSummary !== undefined &&
+      !isConversationArchived(prevUpsertedSummary) &&
+      isConversationArchived(upsertEvent.conversation)
+    ? upsertEvent.conversation
+    : undefined
   ctx.updateLive((state) => applyEventFrame(state, frame))
   // 按帧实际应用推进续传水位（应用失败已在边界作废凭据，绝不提前推进）。
   const applied = ctx.sseCursorRef.current
@@ -360,7 +390,7 @@ function handleEventFrame(payload: unknown, ctx: FrameHandlerContext): void {
     ctx.announceLive()
   }
   if (frame.seq <= oldSeq) return
-  dispatchFrameSideEffects(frame.event, deletedEvent?.conversationId, deletedSummary, ctx)
+  dispatchFrameSideEffects(frame.event, deletedEvent?.conversationId, deletedSummary, archivedSummary, ctx)
 }
 
 export function useSseEvents(options: UseSseEventsOptions): void {

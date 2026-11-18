@@ -8,7 +8,7 @@ import { ARCHIVED_TAG } from '../src/conversation/archive-model.js'
 import {
   applyScreenParamsPatch,
   defaultSpaceTarget,
-  deletedConversationFallbackTarget,
+  standbyFallbackTarget,
   isSpaceTargetAvailable,
   partitionScreenParamsPatch,
   resolveSpaceSwitch,
@@ -260,21 +260,21 @@ test('resolveSpaceSwitch: same space no-op; valid memory first; stale memory cle
 })
 
 // ---------------------------------------------------------------------------
-// space-navigation: deletedConversationFallbackTarget & screen params patch
+// space-navigation: standbyFallbackTarget & screen params patch
 // ---------------------------------------------------------------------------
 
-test('deletedConversationFallbackTarget: no summary falls to the profile center; remote coordinates kept, local/empty omitted', { timeout: 60_000 }, () => {
-  assert.deepEqual(deletedConversationFallbackTarget(undefined), { kind: 'profiles' })
+test('standbyFallbackTarget: no summary falls to the profile center; remote coordinates kept, local/empty omitted', { timeout: 60_000 }, () => {
+  assert.deepEqual(standbyFallbackTarget(undefined), { kind: 'profiles' })
   assert.deepEqual(
-    deletedConversationFallbackTarget({ profileId: 'assistant', nodeId: 'local', cwd: '/tmp' }),
+    standbyFallbackTarget({ profileId: 'assistant', nodeId: 'local', cwd: '/tmp' }),
     { kind: 'agent', profileId: 'assistant', cwd: '/tmp' },
   )
   assert.deepEqual(
-    deletedConversationFallbackTarget({ profileId: 'assistant', nodeId: 'gpu-1', cwd: '/remote/dir' }),
+    standbyFallbackTarget({ profileId: 'assistant', nodeId: 'gpu-1', cwd: '/remote/dir' }),
     { kind: 'agent', profileId: 'assistant', nodeId: 'gpu-1', cwd: '/remote/dir' },
   )
   assert.deepEqual(
-    deletedConversationFallbackTarget({ profileId: 'assistant', nodeId: '', cwd: '' }),
+    standbyFallbackTarget({ profileId: 'assistant', nodeId: '', cwd: '' }),
     { kind: 'agent', profileId: 'assistant' },
   )
 })
