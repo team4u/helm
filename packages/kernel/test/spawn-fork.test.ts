@@ -1196,6 +1196,24 @@ describe('KernelRuntime.forkConversation optional entryId clean anchor', { timeo
       // Post-reset without handoff has no completed non-system entries -> 409 fork_empty_history.
       await kernel.resetConversation(emptyConv.id)
       await assertRejectsCode(() => kernel.forkConversation(emptyConv.id), 'fork_empty_history', 409)
+
+      // Explicit parentConversationId flattens peer fork hierarchy; non-positive or missing parent rejects cleanly.
+      const topTarget = await kernel.createConversation({ title: 'top coord target' })
+      const flattened = await pluginHost!.forkConversation(capturedForkIds!.workerId, {
+        title: 'flat sibling fork',
+        parentConversationId: topTarget.id,
+      })
+      assert.equal(flattened.parentConversationId, topTarget.id)
+      await assertRejectsCode(
+        () => pluginHost!.forkConversation(capturedForkIds!.workerId, { parentConversationId: -1 }),
+        'validation_error',
+        400,
+      )
+      await assertRejectsCode(
+        () => pluginHost!.forkConversation(capturedForkIds!.workerId, { parentConversationId: 999999 }),
+        'not_found',
+        404,
+      )
     } finally {
       await kernel.close()
     }

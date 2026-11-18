@@ -36,7 +36,14 @@ import {
   type ToolViewProps,
 } from '@helm/protocol'
 import type { PluginClientHostPort, PluginSessionDocKey } from '@helm/plugin-client'
-import { parseBoardView, postDigestLine } from '../../plugins/src/swarm/client/board-model.js'
+import {
+  boardProgressOf,
+  isMemberDelivered,
+  parseBoardPost,
+  parseBoardReadPosts,
+  parseBoardView,
+  postDigestLine,
+} from '../../plugins/src/swarm/client/board-model.js'
 import { SWARM_WORKBENCH_PANEL_TARGET } from '../../plugins/src/swarm/client/models.js'
 import { registerSwarmUi } from '../../plugins/src/swarm/ui.js'
 import { ensureHappyDom } from './helpers/dom-harness.js'
@@ -169,10 +176,16 @@ const EMPTY_SESSION_DOC_STATE = Object.freeze({
 
 let stubDocs: Record<string, unknown> = {}
 let stubSessionStates: Record<string, { value: unknown; hasValue: boolean; deleted: boolean; connected: boolean }> = {}
+let stubConversationLives: Record<number, unknown> = {}
+let stubPendingAsks: unknown[] = []
+let stubLoadErrors: Record<string, string> = {}
 
 function setStubState(options: {
   docs?: Record<string, unknown>
   sessionDocs?: Record<string, unknown>
+  conversationLives?: Record<number, unknown>
+  pendingAsks?: unknown[]
+  loadErrors?: Record<string, string>
 }): void {
   if (options.docs !== undefined) stubDocs = options.docs
   if (options.sessionDocs !== undefined) {
@@ -184,10 +197,14 @@ function setStubState(options: {
     }
     stubSessionStates = next
   }
+  if (options.conversationLives !== undefined) stubConversationLives = options.conversationLives
+  if (options.pendingAsks !== undefined) stubPendingAsks = options.pendingAsks
+  if (options.loadErrors !== undefined) stubLoadErrors = options.loadErrors
 }
 
 const noopUnsubscribe = (): (() => void) => () => {}
 const noopEnsurePluginDoc = async (): Promise<unknown> => undefined
+const noopLoadConversationDetail = async (): Promise<void> => {}
 
 async function mount(
   ctx: PluginClientContextType,
@@ -212,6 +229,11 @@ async function mount(
     ensurePluginDoc: noopEnsurePluginDoc,
     subscribeSessionDoc: noopUnsubscribe,
     getSessionDocState,
+    conversationDetails: {},
+    conversationLives: stubConversationLives,
+    pendingAsks: stubPendingAsks,
+    loadErrors: stubLoadErrors,
+    loadConversationDetail: noopLoadConversationDetail,
   } as unknown as PluginClientHostPort
   await act(async () => {
     root.render(
@@ -239,6 +261,9 @@ function resetDefaultStubs(): void {
       'board-badges': { byConversation: {} },
     },
     sessionDocs: {},
+    conversationLives: {},
+    pendingAsks: [],
+    loadErrors: {},
   })
 }
 
@@ -442,8 +467,8 @@ test('UI 注册契约：toolView/slot/workbenchPanel/回执/补全源，零 scre
   assert.equal(panels[0]!['id'], 'groups')
   assert.deepEqual(
     panels[0]!['scope'],
-    { tags: ['swarm-coordinator', 'swarm-coordinator-archived', 'swarm-worker'] },
-    '普通会话不出现该 Tab；结单历史主控仍可访问已完成编组',
+    { tags: ['swarm-coordinator', 'swarm-coordinator-archived', 'swarm-worker', 'swarm-worker-archived'] },
+    '普通会话不出现该 Tab；结单历史主控与已归档成员仍可访问历史编组',
   )
   assert.deepEqual(panels[0]!['badge'], { doc: 'board-badges', byConversationField: 'byConversation' })
   assert.equal(SWARM_WORKBENCH_PANEL_TARGET, 'plugin:builtin:swarm/groups', '客户端面板目标与注册 id 锁定一致')
@@ -1000,13 +1025,145 @@ test('单行回执胶囊：展示计数/动态/成员，点击打开协同工作
 // 6. Pure model spot checks & static hard rules
 // ---------------------------------------------------------------------------
 
-test('纯模型抽查：自然动态截断与宽对象守卫解析', { timeout: 60_000 }, () => {
-  const view = parseBoardView(boardViewFixture())
-  assert.ok(view !== undefined)
+test('纯模型抽查：严格边界解析、正交交付进度、SwarmToolView/ActiveTray/Panel 回退补齐', { timeout: 60_000 }, async () => {
+  const validView = parseBoardView(boardViewFixture())
+  assert.ok(validView !== undefined)
   assert.equal(postDigestLine('line one\nline two', 10), 'line one')
   assert.equal(postDigestLine('   \n second  line ', 40), 'second line', '空白折叠取首行')
   assert.equal(parseBoardView({ group: null }), undefined, '非法结构显式拒绝')
   assert.equal(parseBoardView(undefined), undefined)
+
+  // Strict parsing rejects bad enums/missing required fields rather than fabricating defaults
+  const badStatus = boardViewFixture()
+  ;(badStatus.group as { status: string }).status = 'weird'
+  assert.equal(parseBoardView(badStatus), undefined)
+
+  const badKindPost = (boardViewFixture().posts as Array<Record<string, unknown>>)[0]!
+  assert.equal(parseBoardPost({ ...badKindPost, kind: 'invented' }), undefined)
+  assert.equal(parseBoardPost({ ...badKindPost, channel: '' }), undefined)
+  assert.equal(parseBoardReadPosts({ posts: [{ ...badKindPost, kind: 'bad' }] }), undefined)
+
+  // Orthogonal completion progress: active + idle + caught-up cursor + lastOutboundEdge done/handoff
+  const baseMember = validView!.members[0]!
+  assert.equal(
+    isMemberDelivered({
+      ...baseMember,
+      liveState: 'idle',
+      lastOutboundEdge: { seq: 2, to: ['verifier'], kind: 'handoff' },
+    }),
+    true,
+  )
+  assert.equal(
+    isMemberDelivered({
+      ...baseMember,
+      liveState: 'idle',
+      lastOutboundEdge: undefined,
+    }),
+    false,
+  )
+  assert.deepEqual(
+    boardProgressOf([
+      { ...baseMember, liveState: 'idle', lastOutboundEdge: { seq: 2, to: ['coordinator'], kind: 'done' } },
+      { ...validView!.members[1]!, liveState: 'working' },
+    ]),
+    { done: 1, total: 2 },
+  )
+
+  // SwarmToolView scopes @member lookup to current group, renders .trace-row, prefers structuredOutput
+  setStubState({
+    docs: {
+      index: {
+        workers: [
+          { conversationId: 901, coordinatorConversationId: 900, profileId: 'coder', groupId: 'grp-other', name: 'author', createdAt: 1 },
+          { conversationId: 51, coordinatorConversationId: 50, profileId: 'coder', groupId: 'grp-live', name: 'author', createdAt: 2 },
+        ],
+        groups: [],
+      },
+      'board-badges': { byConversation: {} },
+    },
+  })
+  const tvSpy = makeSpyCtx({ conversationId: 50 })
+  const tvMount = await mount(
+    tvSpy,
+    e(components.SwarmToolView, toolViewProps({
+      toolName: 'swarm_inspect_worker',
+      input: { groupId: 'grp-live', name: 'author' },
+      result: 'Member @author (#51)',
+      structuredOutput: { groupId: 'grp-live', conversationId: 51, name: 'author' },
+    })),
+  )
+  try {
+    const btn = tvMount.host.querySelector<HTMLButtonElement>('.sw-trace-row-btn')!
+    assert.ok(btn.classList.contains('trace-row'), '必须挂载宿主 .trace-row 基础类')
+    await act(async () => {
+      btn.click()
+    })
+    assert.deepEqual(tvSpy.drawerCalls, [51], '按当前组过滤同短名成员，绝不跳到并发他组 #901')
+  } finally {
+    tvMount.unmount()
+  }
+
+  // SwarmActiveTray consumes live.tools / pendingAsks from useConversation(includeDetail: false)
+  setStubState({
+    docs: { index: coordinatorIndexFixture(), 'board-badges': { byConversation: {} } },
+    sessionDocs: { 'builtin:swarm/board-view/50': boardViewFixture() },
+    conversationLives: {
+      52: {
+        conversationId: 52,
+        text: '',
+        tools: [{ callId: 'c1', toolName: 'bash', input: { command: 'pnpm test:unit' }, status: 'running' }],
+        updatedAt: Date.now(),
+      },
+    },
+  })
+  const liveTraySpy = makeSpyCtx({ conversationId: 50 })
+  const liveTray = await mount(
+    liveTraySpy,
+    e(components.SwarmActiveTray, { conversation: convSummary(50, '主控', { tags: ['swarm-coordinator'] }) }),
+  )
+  try {
+    assert.match(liveTray.host.textContent ?? '', /pnpm test:unit/)
+    await act(async () => {
+      liveTray.host.querySelector<HTMLButtonElement>('.sw-tray-bar-toggle')!.click()
+    })
+    assert.match(liveTray.host.querySelector('.sw-tray-row-live')?.textContent ?? '', /bash: pnpm test:unit/)
+  } finally {
+    liveTray.unmount()
+  }
+
+  // Archived worker evicted from index falls back via board_status({}) + board_read({ groupId })
+  const evictedBoard = boardViewFixture()
+  ;(evictedBoard.group as { id: string; status: string }).id = 'grp-evicted'
+  ;(evictedBoard.group as { status: string }).status = 'closed'
+  setStubState({ docs: { index: { workers: [], groups: [] }, 'board-badges': { byConversation: {} } }, sessionDocs: {} })
+  const calls: Array<{ actionId: string; input: unknown }> = []
+  const archWorkerSpy = makeSpyCtx({
+    conversationId: 52,
+    callAction: async (actionId: string, input: unknown) => {
+      calls.push({ actionId, input })
+      if (actionId === 'board_status') return evictedBoard
+      if (actionId === 'board_read') return { groupId: 'grp-evicted', headSeq: 3, posts: evictedBoard.posts }
+      return {}
+    },
+  })
+  const archWorkerPanel = await mount(
+    archWorkerSpy,
+    e(components.SwarmWorkbenchPanel, {
+      conversation: convSummary(52, 'verifier archived', { tags: ['swarm-worker-archived'] }),
+    }),
+  )
+  try {
+    assert.match(archWorkerPanel.host.textContent ?? '', /Completed/)
+    assert.match(archWorkerPanel.host.textContent ?? '', /helm\/author/)
+    assert.deepEqual(calls, [{ actionId: 'board_status', input: {} }])
+    await act(async () => {
+      archWorkerPanel.host.querySelector<HTMLButtonElement>('.sw-panel-history-toggle')!.click()
+    })
+    assert.deepEqual(calls[1], { actionId: 'board_read', input: { groupId: 'grp-evicted', limit: 200 } })
+  } finally {
+    archWorkerPanel.unmount()
+  }
+  resetDefaultStubs()
 })
 
 test('静态铁律检查：swarm/client 全目录零 Emoji / 原生控件 / history / 本地状态灯样式', { timeout: 60_000 }, () => {

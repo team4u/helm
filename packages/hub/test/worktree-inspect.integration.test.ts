@@ -178,6 +178,7 @@ describe('builtin:workflow managed worktree read-only inspection actions', { tim
         `dirtyFiles should list both untracked files (got ${JSON.stringify(dirtyFiles)})`,
       )
       assert.equal(inspect['commitsAhead'], 1, 'should be 1 commit ahead of registered baseCommit')
+      assert.equal(inspect['unmergedCommits'], 1, 'should have 1 unmerged commit before merging into baseBranch/main')
       assert.equal(inspect['diffBase'], 'baseCommit')
       const diffStat = inspect['diffStat'] as string
       assert.ok(diffStat.includes('feature.txt'), `diffStat should include committed change (got ${diffStat})`)
@@ -192,6 +193,12 @@ describe('builtin:workflow managed worktree read-only inspection actions', { tim
       // ---- Read-only invariant: inspect causes no write side effects. ----
       assert.equal(existsSync(join(path, 'draft.txt')), true)
       assert.equal(existsSync(join(path, 'feature.txt')), true)
+
+      // ---- Merge branch into main repo -> unmergedCommits drops to 0 while commitsAhead stays 1. ----
+      execFileSync('git', ['merge', '--no-ff', branch, '-m', 'merge worker branch'], { cwd: repo, encoding: 'utf-8' })
+      const afterMerge = await env.invoke.inspectWorktree({ worktreeId, diff: false })
+      assert.equal(afterMerge['commitsAhead'], 1)
+      assert.equal(afterMerge['unmergedCommits'], 0, 'merged branch must report unmergedCommits=0')
     } finally {
       await env.close()
     }

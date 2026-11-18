@@ -4,7 +4,7 @@
  * - 双向游标批合并信封组装（附统一反回声守则与主控 objective / activeWorkingMembers 锚点）；
  * - 看板投影（BoardViewDoc + BoardBadgesDoc）合成与 (headSeq, memberStateDigest) 去重指纹。
  */
-import { HelmError } from '@helm/protocol'
+import { HelmError, escapeXml } from '@helm/protocol'
 import {
   SWARM_PLUGIN_ID,
   toGroupSummary,
@@ -159,23 +159,26 @@ export function resolveBoardTargets(
 function formatSinglePostBlock(post: BoardPost): string {
   const refsPart = post.refs.length > 0 ? ` refs=[${post.refs.map((r) => `#${r}`).join(', ')}]` : ''
   const passivePart = post.wake ? '' : ' (wake=false)'
-  const header = `#${post.seq} [${post.kind}] @${post.from} -> ${post.to.join(', ')} (channel: ${post.channel})${refsPart}${passivePart}`
+  const targetsText = post.to.map((t) => escapeXml(t)).join(', ')
+  const header = `#${post.seq} [${post.kind}] @${escapeXml(post.from)} -> ${targetsText} (channel: ${escapeXml(post.channel)})${refsPart}${passivePart}`
   const snapLines: string[] = []
   if (post.worktreeSnapshot !== undefined) {
     const s = post.worktreeSnapshot
     const parts = [
-      `worktreeId=${s.worktreeId}`,
-      ...(s.branch !== undefined ? [`branch=${s.branch}`] : []),
+      `worktreeId=${escapeXml(s.worktreeId)}`,
+      ...(s.branch !== undefined ? [`branch=${escapeXml(s.branch)}`] : []),
       ...(s.commitsAhead !== undefined ? [`commitsAhead=${s.commitsAhead}`] : []),
       `dirtyCount=${s.dirtyCount}`,
-      ...(s.changedFilesPreview.length > 0 ? [`files=[${s.changedFilesPreview.join(', ')}]`] : []),
+      ...(s.changedFilesPreview.length > 0
+        ? [`files=[${s.changedFilesPreview.map((f) => escapeXml(f)).join(', ')}]`]
+        : []),
     ]
     snapLines.push(`  [worktree] ${parts.join(' | ')}`)
   }
-  return [header, post.body, ...snapLines].join('\n')
+  return [header, escapeXml(post.body), ...snapLines].join('\n')
 }
 
-/** 组装发往对等成员的合并唤醒信封（包含 (fromSeq-1, toSeq] 内该成员可见记录及前置被动留言）。 */
+/** 组装发往对等成员的合并唤醒信封（包含 (fromSeq-1, toSeq] 内定向、订阅子频道与主频道被动背景记录）。 */
 export function selectPostsForMemberWakeup(
   member: GroupMemberState,
   posts: readonly BoardPost[],
@@ -187,7 +190,9 @@ export function selectPostsForMemberWakeup(
       p.seq >= fromSeq &&
       p.seq <= toSeq &&
       p.from !== member.name &&
-      (p.resolvedTargets.includes(member.name) || p.channel === 'main' || member.channels.includes(p.channel)),
+      (p.resolvedTargets.includes(member.name) ||
+        (p.channel !== 'main' && member.channels.includes(p.channel)) ||
+        (p.channel === 'main' && !p.wake)),
   )
 }
 
@@ -200,14 +205,16 @@ export function formatWorkerWakeupEnvelope(input: {
 }): string {
   const { group, member, posts, fromSeq, toSeq } = input
   const lines: string[] = [
-    `<swarm_board_wakeup group="${group.id}" worker="${member.name}" seq="${fromSeq}..${toSeq}">`,
-    `Group: ${group.title} (${group.id})`,
-    ...(group.objective !== undefined && group.objective.trim() !== '' ? [`Objective: ${group.objective}`] : []),
-    `Your role: @${member.name} (access=${member.access}, isolation=${member.isolation})`,
+    `<swarm_board_wakeup group="${escapeXml(group.id)}" worker="${escapeXml(member.name)}" seq="${fromSeq}..${toSeq}">`,
+    `Group: ${escapeXml(group.title)} (${escapeXml(group.id)})`,
+    ...(group.objective !== undefined && group.objective.trim() !== ''
+      ? [`Objective: ${escapeXml(group.objective)}`]
+      : []),
+    `Your role: @${escapeXml(member.name)} (access=${member.access}, isolation=${member.isolation})`,
     '',
     ...posts.map((p) => formatSinglePostBlock(p)),
     '',
-    `Action rule: Complete the work requested of @${member.name}, then publish your result via swarm_board_post (handoff / review / done / blocker, citing #seq in refs).`,
+    `Action rule: Complete the work requested of @${escapeXml(member.name)}, then publish your result via swarm_board_post (handoff / review / done / blocker, citing #seq in refs).`,
     ANTI_ECHO_RULE_FOOTER,
     '</swarm_board_wakeup>',
   ]
@@ -230,11 +237,14 @@ export function formatCoordinatorReportEnvelope(input: {
   activeWorkingMembers: readonly string[]
 }): string {
   const { group, posts, fromSeq, toSeq, activeWorkingMembers } = input
-  const workingText = activeWorkingMembers.length > 0 ? activeWorkingMembers.map((m) => `@${m}`).join(', ') : '(none)'
+  const workingText =
+    activeWorkingMembers.length > 0 ? activeWorkingMembers.map((m) => `@${escapeXml(m)}`).join(', ') : '(none)'
   const lines: string[] = [
-    `<swarm_board_report group="${group.id}" seq="${fromSeq}..${toSeq}">`,
-    `Group: ${group.title} (${group.id})`,
-    ...(group.objective !== undefined && group.objective.trim() !== '' ? [`Objective: ${group.objective}`] : []),
+    `<swarm_board_report group="${escapeXml(group.id)}" seq="${fromSeq}..${toSeq}">`,
+    `Group: ${escapeXml(group.title)} (${escapeXml(group.id)})`,
+    ...(group.objective !== undefined && group.objective.trim() !== ''
+      ? [`Objective: ${escapeXml(group.objective)}`]
+      : []),
     `activeWorkingMembers: ${workingText}`,
     '',
     ...posts.map((p) => formatSinglePostBlock(p)),

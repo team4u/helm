@@ -32,9 +32,18 @@
   outline-offset: -1.5px;
 }
 
-/* 宿主 .trace-tool-name 为 flex-shrink:0，长摘要在窄屏挤压状态灯；插件受控允许收缩省略。 */
+/* 长摘要与窄屏下工具名温和收缩省略，确保右侧状态灯、seq 与耗时不被挤出视口。 */
+.sw-trace-row-btn .trace-row-left {
+  flex: 1;
+  min-width: 0;
+}
+
 .sw-trace-row-btn .trace-tool-name {
-  flex-shrink: 0;
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .sw-trace-row-btn .trace-tool-summary {
@@ -147,6 +156,17 @@
   font-size: 11.5px;
 }
 
+.sw-tray-count {
+  flex-shrink: 0;
+  white-space: nowrap;
+  color: var(--fg-secondary);
+  font-size: 11.5px;
+}
+
+.sw-tray-spacer {
+  flex: 1;
+}
+
 .sw-tray-elapsed {
   font-family: var(--font-mono);
   font-size: 11px;
@@ -178,13 +198,14 @@
 }
 
 /* 行主体即详情入口：真实 button 覆盖整行主要信息位（无嵌套交互）；
-   中止为右侧同级 sibling 按钮。 */
+   中止为右侧同级 sibling 按钮。两层布局：主行承载名称与编号，第二行独占行宽展示实况。 */
 .sw-tray-row-main {
   flex: 1;
   min-width: 0;
   display: flex;
-  align-items: center;
-  gap: 6px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
   padding: 5px 0 5px 8px;
   background: none;
   border: none;
@@ -203,6 +224,13 @@
   outline-offset: -1.5px;
 }
 
+.sw-tray-row-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
 .sw-tray-row-title {
   font-weight: 500;
   color: var(--fg);
@@ -219,12 +247,18 @@
   color: var(--fg-subtle);
 }
 
-.sw-tray-row-doing {
-  color: var(--fg-muted);
-  font-size: 11px;
+.sw-tray-row-live {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  color: var(--fg-muted);
+  font-size: 11.5px;
+  line-height: 1.45;
   min-width: 0;
 }
 
@@ -284,6 +318,32 @@
   font-size: 12px;
   color: var(--fg-secondary);
   overflow-wrap: anywhere;
+}
+
+.sw-panel-headline {
+  margin: 0;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-subtle);
+  font-size: 12px;
+  color: var(--fg-secondary);
+  overflow-wrap: anywhere;
+}
+
+.sw-panel-headline-ok {
+  border-color: var(--ok-border, var(--border));
+  color: var(--ok, var(--fg-secondary));
+}
+
+.sw-panel-headline-warn {
+  border-color: var(--warn-border);
+  color: var(--warn);
+}
+
+.sw-panel-headline-err {
+  border-color: var(--err-border, var(--warn-border));
+  color: var(--err);
 }
 
 .sw-panel-objective {
@@ -397,6 +457,19 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
+  padding-left: 2px;
+}
+
+.sw-panel-member-worktree {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--fg-muted);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   padding-left: 2px;
 }
 
@@ -548,7 +621,8 @@
   .sw-tray-bar-toggle {
     padding-left: 6px;
   }
-  .sw-tray-frontline {
+  /* 移动/窄分屏保留当前进展 frontline，次要耗时让位。 */
+  .sw-tray-elapsed {
     display: none;
   }
   .sw-tray-row {

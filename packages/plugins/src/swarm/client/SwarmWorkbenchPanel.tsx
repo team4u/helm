@@ -73,7 +73,16 @@ import {
 import { PostBodyText } from './PostBodyText.tsx'
 
 const RECENT_LIMIT_COLLAPSED = 6
-const RECENT_LIMIT_EXPANDED = 80
+const RECENT_LIMIT_EXPANDED = 200
+
+const LIVE_STATE_LIGHT_STATUS: Record<string, string> = {
+  working: 'running',
+  blocked: 'blocked',
+  error: 'failed',
+  done: 'done',
+  missing: 'pending',
+  idle: 'idle',
+}
 
 function panelHeadLight(status: 'running' | 'attention' | 'completed'):
   | 'running'
@@ -97,9 +106,13 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
   }, [conversationId])
 
   const link = useMemo(
-    () => resolveConversationBoardLink(conversationId, {}, index),
+    () => resolveConversationBoardLink(conversationId, index),
     [conversationId, index],
   )
+  const currentConv = props?.conversation ?? conversations.find((c) => c.id === conversationId)
+  const hasArchivedSwarmTag =
+    currentConv?.tags.includes('swarm-coordinator-archived') === true ||
+    currentConv?.tags.includes('swarm-worker-archived') === true
 
   const rawBoard = usePluginSessionDoc<BoardViewDoc | null>(
     'board-view',
@@ -113,28 +126,34 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
     return parsed
   }, [rawBoard, link])
 
+  const needsFallback = (link !== undefined || hasArchivedSwarmTag) && liveBoard === undefined
   const fallback = useSwarmBoardStatusFallback(link?.groupId, {
     conversationId,
-    enabled: link !== undefined && liveBoard === undefined,
+    enabled: needsFallback,
+    allowConversationLookup: hasArchivedSwarmTag,
   })
 
   const board = liveBoard ?? fallback.view
-  const loading = link !== undefined && liveBoard === undefined && fallback.loading && board === undefined
+  const loading = needsFallback && fallback.loading && board === undefined
   const loadError = liveBoard === undefined ? fallback.error : undefined
   const isFallbackData = liveBoard === undefined && board !== undefined
+  const resolvedGroupId = link?.groupId ?? board?.group.id
 
+  const needsFullRead =
+    historyExpanded &&
+    (isFallbackData || (board !== undefined && board.posts.length < board.group.headSeq))
   const readState = useSwarmBoardReadOnce(
-    link?.groupId,
-    historyExpanded && isFallbackData,
-    { conversationId },
+    resolvedGroupId,
+    needsFullRead,
+    { conversationId, headSeq: board?.group.headSeq },
   )
 
   const effectiveBoard = useMemo(
     () =>
-      board !== undefined && isFallbackData && readState.posts.length > 0
+      board !== undefined && readState.posts.length > 0
         ? mergeBoardViewWithRead(board, readState.posts)
         : board,
-    [board, isFallbackData, readState.posts],
+    [board, readState.posts],
   )
 
   const model = useMemo(
@@ -157,7 +176,7 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
       ? formatDurationMs(nowMs - effectiveBoard.group.createdAt)
       : undefined
 
-  if (conversationId === undefined || link === undefined) {
+  if (conversationId === undefined || (link === undefined && !hasArchivedSwarmTag)) {
     return (
       <div className="sw-panel">
         <div className="empty-state empty-state-compact">
@@ -217,6 +236,12 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
         ) : null}
       </div>
 
+      {model.headlineText !== '' ? (
+        <p className={`sw-panel-headline sw-panel-headline-${model.headlineTone}`}>
+          {model.headlineText}
+        </p>
+      ) : null}
+
       {model.objective !== undefined ? (
         <div className="sw-panel-objective">
           <span className="sw-panel-kv-key">{resolveLocalizedText(PANEL_OBJECTIVE, locale)}</span>
@@ -250,15 +275,7 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
                 >
                   <span className="sw-panel-member-main">
                     <StatusLight
-                      status={
-                        row.liveState === 'working'
-                          ? 'running'
-                          : row.liveState === 'blocked'
-                            ? 'blocked'
-                            : row.liveState === 'error'
-                              ? 'error'
-                              : 'done'
-                      }
+                      status={LIVE_STATE_LIGHT_STATUS[row.liveState] ?? 'pending'}
                       label={memberLiveStateLabel(row.liveState, locale)}
                     />
                     <span className="sw-panel-member-name">@{row.name}</span>
@@ -273,6 +290,15 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
                   <span className="sw-panel-member-activity" title={activityText}>
                     {activityText !== undefined ? activityText : `#${row.conversationId}`}
                   </span>
+                  {row.worktree !== undefined ? (
+                    <span
+                      className="sw-panel-member-worktree"
+                      title={`${row.worktree.worktreeId}${row.worktree.branch ? ` · ${row.worktree.branch}` : ''}`}
+                    >
+                      <HelmIcon name="git-branch" size={11} />
+                      <span>{panelWorktreeSummary(row.worktree, locale)}</span>
+                    </span>
+                  ) : null}
                 </button>
               )
             })}
@@ -337,7 +363,13 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
           </ol>
         )}
         {readState.error !== undefined ? (
-          <div className="sw-panel-empty-hint">{readState.error}</div>
+          <div className="sw-panel-empty-hint stack-row">
+            <span>{readState.error}</span>
+            <button type="button" className="btn btn-xs" onClick={readState.retry}>
+              <HelmIcon name="rotate-cw" size={11} />
+              <span>{resolveLocalizedText(PANEL_RETRY, locale)}</span>
+            </button>
+          </div>
         ) : null}
       </div>
     </div>

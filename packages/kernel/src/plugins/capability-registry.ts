@@ -95,6 +95,7 @@ interface ActionEntry {
   outputSchema: JsonSchema;
   cli?: PluginActionSpec<unknown, unknown>['cli'];
   exposeAsTool: boolean;
+  exposeToPrompt?: boolean;
   idempotent?: boolean;
   /** Usage guidance paragraph (projected when reachable via `run_action` or direct tool; defensively copied). */
   promptSnippet?: string;
@@ -172,6 +173,7 @@ function toManifest(entry: ActionEntry): ActionManifest {
     inputSchema: entry.inputSchema,
     outputSchema: entry.outputSchema,
     exposeAsTool: entry.exposeAsTool,
+    ...(entry.exposeToPrompt !== undefined ? { exposeToPrompt: entry.exposeToPrompt } : {}),
     ...(entry.scope !== undefined ? { scope: entry.scope } : {}),
     ...(entry.idempotent !== undefined ? { idempotent: entry.idempotent } : {}),
     ...(entry.promptSnippet !== undefined ? { promptSnippet: entry.promptSnippet } : {}),
@@ -338,6 +340,9 @@ export class CapabilityRegistry {
       );
     }
     assertConversationScope(pluginId, `Plugin ${pluginId} action ${spec.id}`, spec.scope);
+    if (spec.exposeToPrompt !== undefined && typeof spec.exposeToPrompt !== 'boolean') {
+      throw new HelmError('invalid_action_spec', `Plugin ${pluginId} action ${spec.id} exposeToPrompt must be a boolean`, 400);
+    }
     if (spec.idempotent !== undefined && typeof spec.idempotent !== 'boolean') {
       throw new HelmError('validation_error', `Plugin ${pluginId} action ${spec.id} idempotent must be a boolean`, 400);
     }
@@ -363,6 +368,7 @@ export class CapabilityRegistry {
       outputSchema: spec.outputSchema,
       cli: spec.cli,
       exposeAsTool: spec.exposeAsTool === true,
+      ...(spec.exposeToPrompt !== undefined ? { exposeToPrompt: spec.exposeToPrompt } : {}),
       ...(spec.idempotent !== undefined ? { idempotent: spec.idempotent } : {}),
       ...(prompt.promptSnippet !== undefined ? { promptSnippet: prompt.promptSnippet } : {}),
       ...(prompt.promptGuidelines !== undefined ? { promptGuidelines: prompt.promptGuidelines } : {}),

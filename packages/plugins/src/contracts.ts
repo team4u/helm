@@ -553,3 +553,77 @@ export function workflowExecutionMeta(
   merged[WORKFLOW_META_NAMESPACE] = slot as JsonSafeObject
   return merged
 }
+
+// ---------------------------------------------------------------------------
+// 受管 Git Worktree 共享契约（builtin:workflow 真源产出，builtin:swarm 等跨插件消费）
+// ---------------------------------------------------------------------------
+
+/** 跨回合持久持有锁（供上层协同插件阻止空闲期 worktree 被误清理）。 */
+export interface ManagedWorktreeHold {
+  /** 持有锁的插件 ID（如 'builtin:swarm'）。 */
+  pluginId: string
+  /** 插件内稳定持有标识（如 '<groupId>:<workerName>'）。 */
+  holdId: string
+  /** 面向拒绝诊断与列表展示的可读说明（写入前经 redact 脱敏）。 */
+  label: string
+  acquiredAt: number
+}
+
+/** 单条受管 worktree 记录。 */
+export interface ManagedWorktreeRecord {
+  /** 唯一标识（`${nodeId}:${path}`）。 */
+  id: string
+  nodeId: string
+  /** 主工作树路径（权威 `git worktree list` 首条登记；external 首次清理时解析并持久化）。 */
+  repoRoot: string
+  path: string
+  branch: string
+  baseCommit: string
+  /** 创建时源目录检出的本地分支名（detached HEAD 时缺省）。 */
+  baseBranch?: string
+  /** 源目录本身是受管 Worktree 时记录其登记 ID（多级派生父子关系）。 */
+  parentWorktreeId?: string
+  dirtySource: boolean
+  parentConversationId: number
+  conversationId?: number
+  executionId?: string
+  origin: 'native' | 'external'
+  status: 'active' | 'removed'
+  createdAt: number
+  removedAt?: number
+  /** 分支是否已删除（worktree 已移除但分支删除部分失败时为 false，可重试 cleanup deleteBranch）。 */
+  branchDeleted?: boolean
+  /** 分支删除失败的最后诊断（已脱敏；重试成功后清除）。 */
+  branchDeleteError?: string
+  /** 可选持久持有锁（活跃期间即便是 force: true 清理也显式拒绝）。 */
+  hold?: ManagedWorktreeHold
+}
+
+/** builtin:workflow inspect_worktree 只读检视结果契约。 */
+export interface WorktreeInspectResult {
+  record: ManagedWorktreeRecord
+  exists: boolean
+  unavailableReason?: 'removed' | 'directory_missing'
+  currentBranch?: string
+  currentHead?: string
+  branchChanged?: boolean
+  dirtyFiles: string[]
+  dirtyFileCount: number
+  dirtyFilesTruncated: boolean
+  commitsAhead?: number
+  /** 相对目标合入参考提交（baseBranch 优先，回退主工作树 HEAD）仍未合入的提交数。 */
+  unmergedCommits?: number
+  diffStat?: string
+  diffPreview?: string
+  diffTruncated: boolean
+  diffBase: 'baseCommit' | 'HEAD'
+}
+
+/** builtin:workflow acquire_worktree 动作返回结果契约。 */
+export interface AcquireWorktreeResult {
+  worktreeId: string
+  path: string
+  branch: string
+  baseCommit: string
+  nodeId: string
+}

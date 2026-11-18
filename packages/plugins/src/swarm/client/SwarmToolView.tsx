@@ -25,11 +25,11 @@ import {
   useToolActivity,
 } from '@helm/plugin-client'
 import type { SwarmIndexDoc } from './models.ts'
+import { isPlainObject, resolveConversationBoardLink } from './board-model.ts'
 import {
   parseToolResultRecord,
   resolveSwarmToolClickTarget,
   resolveSwarmToolFacts,
-  type SwarmToolClickTarget,
   type SwarmToolFacts,
 } from './model-tool-view.ts'
 import { ToolCallDetailsInline } from './ToolCallDetailsInline.tsx'
@@ -142,23 +142,56 @@ export function SwarmToolView(props: ToolViewProps): ReactNode {
   const [detailsOpen, setDetailsOpen] = useState(false)
   const detailsId = useId()
 
-  const resultRecord = useMemo(() => parseToolResultRecord(props.result), [props.result])
+  const resultRecord = useMemo(
+    () => parseToolResultRecord(props.structuredOutput) ?? parseToolResultRecord(props.result),
+    [props.structuredOutput, props.result],
+  )
   const facts = useMemo(
     () => resolveSwarmToolFacts(props.toolName, props.input, resultRecord),
     [props.toolName, props.input, resultRecord],
   )
 
+  const viewerConversationId = props.conversationId ?? ctx.conversationId
+  const targetGroupId = useMemo(() => {
+    if (typeof resultRecord?.['groupId'] === 'string' && resultRecord['groupId'] !== '') {
+      return resultRecord['groupId']
+    }
+    if (
+      isPlainObject(resultRecord?.['post']) &&
+      typeof resultRecord['post']['groupId'] === 'string' &&
+      resultRecord['post']['groupId'] !== ''
+    ) {
+      return resultRecord['post']['groupId']
+    }
+    if (
+      isPlainObject(resultRecord?.['group']) &&
+      typeof resultRecord['group']['id'] === 'string' &&
+      resultRecord['group']['id'] !== ''
+    ) {
+      return resultRecord['group']['id']
+    }
+    if (isPlainObject(props.input) && typeof props.input['groupId'] === 'string' && props.input['groupId'] !== '') {
+      return props.input['groupId']
+    }
+    return resolveConversationBoardLink(viewerConversationId, index)?.groupId
+  }, [resultRecord, props.input, viewerConversationId, index])
+
   const memberLookup = useMemo(() => {
     const byName = new Map<string, number>()
-    if (Array.isArray(index?.workers)) {
+    if (targetGroupId !== undefined && Array.isArray(index?.workers)) {
       for (const w of index.workers) {
-        if (typeof w?.name === 'string' && w.name !== '' && typeof w.conversationId === 'number') {
+        if (
+          w?.groupId === targetGroupId &&
+          typeof w.name === 'string' &&
+          w.name !== '' &&
+          typeof w.conversationId === 'number'
+        ) {
           if (!byName.has(w.name)) byName.set(w.name, w.conversationId)
         }
       }
     }
     return (name: string): number | undefined => byName.get(name)
-  }, [index])
+  }, [index, targetGroupId])
 
   const clickTarget = useMemo(
     () => resolveSwarmToolClickTarget(facts, { memberLookup }),
@@ -220,7 +253,7 @@ export function SwarmToolView(props: ToolViewProps): ReactNode {
     <div className="trace-entry">
       <button
         type="button"
-        className={`sw-trace-row-btn${isError ? ' trace-row-error' : ''}`}
+        className={`trace-row sw-trace-row-btn${isError ? ' trace-row-error' : ''}`}
         aria-label={`${ariaTitle} — ${labelTarget}`}
         aria-expanded={clickTarget === undefined ? detailsOpen : undefined}
         aria-controls={clickTarget === undefined ? detailsId : undefined}

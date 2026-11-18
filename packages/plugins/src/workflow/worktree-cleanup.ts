@@ -239,8 +239,18 @@ export async function cleanupWorktree(
   assertWorktreeNotHeld(store, redact, record)
   const checkWorking = deps.isConversationWorking ?? ((id) => store.isConversationWorking(id))
   const checkPathInUse = deps.isPathInUse ?? ((n, p) => store.isPathInUse(n, p))
+  const isConvActive = (id: number | undefined): boolean => {
+    if (id === undefined) return false
+    try {
+      return checkWorking(id)
+    } catch (err) {
+      // 会话已删除（not_found）不可能在运行，允许清理其遗留孤儿 worktree；其他读取错误继续 fail-closed 上抛
+      if (err instanceof HelmError && err.code === 'not_found') return false
+      throw err
+    }
+  }
 
-  if (record.conversationId !== undefined && checkWorking(record.conversationId)) {
+  if (isConvActive(record.conversationId)) {
     throw new HelmError(
       'worktree_in_use',
       `worktree '${record.path}' 关联的子代理仍在运行中，拒绝清理`,
@@ -286,7 +296,7 @@ export async function cleanupWorktree(
       return
     }
     assertWorktreeNotHeld(store, redact, fresh)
-    if (fresh.conversationId !== undefined && checkWorking(fresh.conversationId)) {
+    if (isConvActive(fresh.conversationId)) {
       throw new HelmError(
         'worktree_in_use',
         `worktree '${fresh.path}' 关联的子代理仍在运行中，拒绝清理`,

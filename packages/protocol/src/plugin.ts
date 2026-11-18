@@ -291,6 +291,11 @@ export interface PluginActionSpec<TIn, TOut> extends PluginPromptFields {
   /** true 直接注入模型工具列表；否则经元工具 run_action 按需调用。 */
   exposeAsTool?: boolean
   /**
+   * 非直暴工具动作是否展示于 `<available_actions>` 系统提示词目录（默认 true）。
+   * 仅供 UI 补全等内部界面消费者调用的动作可设为 `false`，保留 HTTP / CLI / invokeAction 入口而不挤占模型上下文。
+   */
+  exposeToPrompt?: boolean
+  /**
    * 该动作是否为幂等/只读操作（默认 false）：
    * - false：中断或失败时账本标记 workflow_action_uncertain，拒绝自动恢复重跑副作用；
    * - true：成功时前缀缓存复用，中断或失败时允许 resumeFromRunId 从该步起安全重跑。
@@ -644,7 +649,7 @@ export interface HelmHostApi {
    */
   forkConversation(
     id: number,
-    opts?: { entryId?: number; title?: string },
+    opts?: { entryId?: number; title?: string; parentConversationId?: number },
   ): Promise<ConversationSummary>
   listConversations(filter?: ConversationListFilter): ConversationSummary[]
   /** 读取单个会话摘要；不存在时抛 HelmError。 */
