@@ -61,8 +61,6 @@ export interface PerformUpdateOptions {
   /** Launch flags for the post-commit start (highest precedence, persisted on success). */
   launchFlags?: LaunchConfig;
   fetchFn?: typeof fetch;
-  /** npm dist-tag channel used when resolving the registry latest version (default `latest`). */
-  tag?: string;
   /** Test seam: port-shaped fake standing in for the real adapter (registry/npm seams). */
   core?: UpdateCore;
   /**
@@ -296,8 +294,6 @@ export async function checkHubUpgrade(options: {
   registryUrl?: string;
   tag?: string;
   fetchFn?: typeof fetch;
-  /** npm dist-tag channel (default `latest`). */
-  tag?: string;
   core?: UpdateCore;
 }): Promise<HubUpgradeCheckResult> {
   const core = options.core ?? defaultUpdateCore();
