@@ -1,12 +1,8 @@
 # 工作流与子代理编排插件
 
-`builtin:workflow` 为需要多智能体协作的使用者提供确定性编排：把「派一个子代理」「跑一个多阶段流水线」「在隔离 Git Worktree 里写代码并跑门禁」变成可重放、可恢复、可观测的运行记录。适合编写编排脚本的开发者、需要委派任务的会话使用者，以及排查子代理/工作树状态的维护者。本文是该插件的权威文档；DSL 语法与执行模型的完整参考另见[原生 JavaScript DSL 手册](../workflows/dsl-guide.md)。
+`builtin:workflow` 默认启用。委派一个子任务时用 `subagent`，要固定一连串步骤时用 `SubagentWorkflow` 或 `helmx workflows run`。运行记录可在会话工作台查看。需要执行真实测试来验收代码时，可以为子代理分配 Git worktree，并指定一条测试命令。 [第一个工作流](../getting-started/first-workflow.md) · [JavaScript 编排 API](../workflows/dsl-guide.md)
 
-## 当前状态
-
-默认启用、非 `locked` 可停用。三个模型工具（`subagent` / `SubagentWorkflow` / `cleanup_worktree`）、DSL 编排引擎（journal 重放 + 前缀缓存）与受管 Git Worktree 生命周期全部归属本插件——内核对 Git 零语义，无本插件时 `isolation: 'worktree'` 等执行环境要求无插件兑现而原样到达原生执行行时显式返回 `unsupported_runtime`。引擎为插件自有资产（`packages/plugins/src/workflow/engine/`），内核不 import 本目录。
-
-## 能力和入口
+插件负责创建和清理受管工作树。`isolation: 'worktree'` 到达原生执行路径时若仍未由插件处理，会返回 `unsupported_runtime`。 [工作树与门禁](../workflows/worktree-and-gate.md)
 
 ### 模型工具（3 个）
 
@@ -50,7 +46,7 @@
 | :--- | :--- | :--- | :--- |
 | `maxConcurrentAgents` | integer | 按 CPU 并行度计算（2..32） | 单个 run 的并发 agent 上限（1..128） |
 | `maxSubagentDepth` | integer | 2 | 受管子代理嵌套深度上限（1..5）；主会话为第 0 层，变更只影响新派生任务树 |
-| `autoRecoverOnRestart` | boolean | `true` | Hub 重启无感原位恢复开关；设为 `false` 或设 `HELMX_AUTO_RECOVER=0` 时回退关停中止与启动标记失败路径 |
+| `autoRecoverOnRestart` | boolean | `true` | Hub 重启后尝试恢复在途任务。设为 `false` 或 `HELMX_AUTO_RECOVER=0` 时，关停会中止任务，启动时会把遗留的运行标为失败。 |
 
 状态分布在五个文档，按消费面精确划分：
 
@@ -68,11 +64,11 @@
 
 ## 停用与失败语义
 
-- **liveTasks**：运行中 run 以 `workflow:<runId>` 标签声明——停用本插件时 `409 plugin_has_live_tasks` 硬阻断，不可 force；
-- **两阶段崩溃恢复（关闭自动恢复时） / Hub 重启无感原位恢复（默认开启）**：全局 `prepare` 屏障内阶段一 `prepareRecovery` 仅对不可原位恢复的遗留子会话（如关闭 `autoRecoverOnRestart`、触发 `crashRecoveries > 3` 熔断或 `actionUncertain`）经 `abortConversationGuarded` 落持久 abort 标记，健康 `running` 任务予以保留；阶段二 `init` 对优雅关停/异常崩溃后的健康后台子代理与 DSL 工作流执行原位重挂续跑（`subagent` / `SubagentWorkflow` 凭 `replay: 'safe'` 幂等接回），并补发崩溃前未送达的父会话汇报，详见[状态流水与故障恢复](../workflows/journaling-recovery.md#hub-重启恢复)；
-- **受控停用**：先置 stopping 拦截后台回调并停掉 `runs` / `run-badges` 瞬态投影更新，await 引擎 close 后 `await records.flush()`；持久层损坏时发显式 notification 后不阻断拆毁；
-- **级联取消**：`turn_settled`（outcome=aborted）取消该会话子树内在途 run；受管子会话中止一律经 `abortConversationGuarded` 内核原子复核（human 红线）；
-- **Worktree 租约 fail-closed**：分配路径在 `git worktree add` 副作用之前持久登记占位，崩溃后不能证明停止就阻塞清理（`worktree_execution_unknown`），一切未知状态保留租约。
+- 有任务正在运行时，停用插件会返回 `409 plugin_has_live_tasks`，`--force` 也无法继续。
+- Hub 重启时，默认保留可恢复的 `running` 任务。启动阶段会在调度器恢复前为无法原位恢复的子会话写入中止标记，再重新接上符合条件的后台子代理与工作流，并补发未送达的汇报。关闭自动恢复、连续崩溃超过上限或遇到未确认的动作副作用，都会改变恢复结果。 [Hub 重启恢复](../workflows/journaling-recovery.md#hub-重启恢复)
+- 插件停用时先停止发布 `runs` 和 `run-badges`，再关闭引擎并等待 `records.flush()`。持久记录损坏时发出通知。
+- 父会话中止后，`turn_settled` 会取消其子树里的在途运行。中止受管子会话前，内核用 `abortConversationGuarded` 复核会话归属。
+- 工作树租约会在 `git worktree add` 前持久登记。崩溃后无法确认执行已经停止时，清理会返回 `worktree_execution_unknown` 并保留租约。
 
 ## 源码与测试入口
 

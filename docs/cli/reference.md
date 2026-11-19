@@ -1,20 +1,15 @@
 # CLI 命令参考
 
-本手册覆盖 `helmx`（控制端客户端）与 `helmx-node`（受控节点守护进程）的全量命令，面向在终端操作 Helmx 的使用者和编写自动化脚本的工程师。所有命令与 Web API 严格同权；`helmx-hub` 为内核 Hub 服务端入口（`HELMX_PORT=3202 pnpm dev:kernel` 同源），三者的全局命令挂载（`pnpm link:bins` 源码模式）见[安装与配置指南](../getting-started/installation.md)。命令清单以 `packages/cli/src/commands/` 源码与 `@helmx/protocol` 的 `CORE_CLI_COMMAND_PATHS` 双向锁定为准，本手册不枚举未在代码中存在的命令。
+`helmx` 用来管理 Hub、会话和插件。`helmx-node` 运行在参与执行的机器上。首次安装或连接远端 Hub 时，先配置地址和登录凭据。 [安装与配置](../getting-started/installation.md)
 
-## 当前状态与命令分发模型
-
-命令分两层：
-
-- **核心静态命令**：编译进 CLI 的固定命令表（下文「核心命令」各节），与 `CORE_CLI_COMMAND_PATHS` 全等校验。静态表优先精确匹配执行，**管理面永不因坏插件 manifest 或 Hub 插件故障而不可用**；
-- **动态插件命令**：仅当无核心匹配时才拉取 `GET /api/actions` 动作清单生成（`helmx <plugin> <action>`）。插件停用后其动态命令随清单一并消失。
+`helmx` 先匹配内置命令，再从 Hub 的 `GET /api/actions` 查询插件命令。`workflows`、`swarm` 等命令需要对应插件启用。内置命令以 `packages/cli/src/commands/` 和 `CORE_CLI_COMMAND_PATHS` 为准。
 
 ## 全局选项与环境变量
 
 | 标志 / 变量 | 说明 |
 | :--- | :--- |
 | `--json` | 全局生效：成功 stdout 输出 JSON；失败 stderr 输出错误信封并返回非零退出码。`helmx --json` 单独使用属非法组合（帮助是纯文本） |
-| `--help`, `-h` | 打印帮助；`helmx <command> --help` 只依赖静态声明，不依赖 Hub 可用 |
+| `--help`, `-h` | 打印帮助。内置命令的帮助可离线查看，插件命令的帮助需要连接 Hub。 |
 | `HELMX_HUB_URL` | Hub 基地址，默认 `http://127.0.0.1:3202` |
 | `HELMX_TOKEN` | 显式 Bearer 令牌，优先于凭据文件（用户自己保证其属于目标 Hub；指向另一 Hub 时不携带旧 token） |
 | `HELMX_DATA_DIR` | 数据目录，默认 `~/.helmx` |
@@ -221,11 +216,11 @@ PUT 为整体替换契约：update 走语义化标志时 CLI 先 GET 完整 Prof
 | `helmx workflows save [nameOrFile]` / `delete <name>` | builtin:workflow | 保存 / 删除工作流定义（`save` 可 `--from-run-id` 固化既有运行；重复默认 409，`--overwrite` 覆盖） |
 | `helmx workflows steer <runId> --text "<指导>"` | builtin:workflow | 向运行中的后台子代理插话纠偏；原生执行按归属与 CAS 水位经内核 guarded 提交，外部执行按节点委托对应插件并如实返回守卫级别；插话成功不代表指导已执行 |
 | `helmx workflows detach <runId>` | builtin:workflow | 把运行中的前台同步运行转入后台（阻塞中的工具调用立即返回后台句柄）；仅前台同步标记且 running 的运行可转 |
-| `helmx workflows resume-failed [--conversation-id <id> \| --current \| --all]` | builtin:workflow | 批量续接指定会话或全局下所有可恢复的失败工作流与后台单子代理；不可恢复项如实记入 `skipped` |
+| `helmx workflows resume-failed [--conversation-id <id> \| --current \| --all]` | builtin:workflow | 续跑失败的工作流和后台子代理。可指定会话或用 `--all` 查全局，跳过的运行列在 `skipped`。 |
 | `helmx worktrees list / inspect / cleanup` | builtin:workflow | 受管 Git 工作树登记、只读检视（含有上限 diff 预览）与清理（选择器三选一互斥，`--delete-branch` / `--force`） |
-| `helmx swarm create-group / update-group / channel / dispatch-worker` | builtin:swarm | Swarm 对等协同编组管理、子频道操作与具名成员派工（支持 `worktree` 隔离、分叉、换模） |
-| `helmx swarm board-post / board-read / board-status` | builtin:swarm | 序号黑板发帖（结构化 `to` + 正交 `wake`）、分页读取与实时态势快照 |
-| `helmx swarm abort-worker / switch-model / inspect-worker / archive-worker / close-group` | builtin:swarm | 成员原地刹停、空闲换模型续跑、只读检视、归档与两态结单（默认全清，`--keep-worktree` 保留待合入分支） |
+| `helmx swarm create-group / update-group / channel / dispatch-worker` | builtin:swarm | 建立或修改协作组、管理子频道、派工。派工时可指定工作树隔离、分叉来源和模型。 |
+| `helmx swarm board-post / board-read / board-status` | builtin:swarm | 发看板消息、分页读消息、查看组和成员状态。发消息时用 `to` 指定收件人，用 `wake` 决定是否唤醒。 |
+| `helmx swarm abort-worker / switch-model / inspect-worker / archive-worker / close-group` | builtin:swarm | 中止成员当前回合、给闲置成员换模型、查看或归档成员、结单。用 `--keep-worktree` 保留有改动或未合入的工作树。 |
 | `helmx memory get / set / configure` | builtin:memory | 长期记忆管理；均以 `--profile-id <id>` 或 `--current` 选目标，皆缺 `400 validation_error`；`set --text <str> [--mode replace\|append]`；`configure --enabled <bool> [--text <str>]` |
 | `helmx apps validate / publish / list / update_meta / remove` | builtin:apps | 全栈微应用生命周期（见[应用中心](../plugins/apps.md)） |
 | `helmx profile list_mentionable` | builtin:profile | 列出可 `@` 点名协作的 Profile 候选（`--current` / `--conversation-id` / `--profile-id` 选上下文） |

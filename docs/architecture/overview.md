@@ -1,8 +1,6 @@
 # 微内核架构总览
 
-本文面向需要理解 Helmx 内部结构的开发者：内核与插件贡献者、做架构评审的读者、以及要判断「某个能力应该实现在内核还是插件」的工程师。读完你应当能回答：内核到底保留了什么、为什么只有这四块机制、包之间的依赖方向如何、插件宿主的生命周期边界在哪里。操作层面的内容（安装、命令、写工作流）不在本文范围，请从[文档中心](../README.md)按角色选读。
-
-Helmx 是极简持久微内核的多智能体编排系统。内核只提供四块通用机制——持久会话状态机、跨平台执行底座、模型接入与插件宿主；角色、编排、记忆、巡检等一切策略性能力全部由插件在机制之上组合实现。后端 Hook 与前端扩展点的完整契约见[扩展点详解](extension-points.md)，跨节点执行底座见 [EnvFabric](envfabric.md)，会话与存储见 [pi-durable 集成](pi-durable.md)。
+Hub 负责把产品接起来。`@helmx/kernel` 管理会话、节点执行、模型与鉴权，以及插件的加载和运行。`@helmx/hub` 选择要加载的插件，并提供 Web 服务入口。子代理和工作流由 Workflow 管理，成员之间的派工和交接由 Swarm 管理。两者都使用内核提供的会话与执行端口。 [插件契约](../plugins/overview.md) · [扩展点](extension-points.md)
 
 ## 微内核四块通用机制
 
@@ -116,7 +114,7 @@ flowchart TD
 `@helmx/hub` 的 `createHelmx()`（`packages/hub/src/app.ts`）只做三件事：
 
 1. **注入构建实现**：默认注入 `@helmx/plugin-build` 的 provider（client.tsx 编译 + 外部 TS 转译），调用方可整体替换；内核机制与构建工具分离。
-2. **注册内置插件并设定启停**：`builtin:profile`（locked 常驻）、`builtin:workflow`、`builtin:swarm`、`builtin:memory`、`builtin:json-render`、`builtin:mermaid`、`builtin:apps`、`builtin:triggers`、`builtin:magpie`、`builtin:token-speed` 十个默认启用；`builtin:herdr`、`builtin:superagent` 两个默认停用。随后从数据目录加载外部插件。
+2. **注册内置插件并设定启停**：`builtin:profile`（locked 常驻）、`builtin:workflow`、`builtin:swarm`、`builtin:memory`、`builtin:json-render`、`builtin:mermaid`、`builtin:apps`、`builtin:triggers`、`builtin:magpie`、`builtin:token-speed` 十个默认启用；`builtin:herdr`、`builtin:superagent` 两个默认停用。随后从数据目录加载外部插件。启停规则和各插件的用途见 [内置插件清单](../plugins/overview.md#当前状态)。
 3. **统一启动**：全部插件注册后执行 `kernel.start()`——先按依赖拓扑对全体服务 `prepare()`，再依次 `start()`，最后恢复 SDK 调度器。
 
 直接使用 `KernelRuntime.open()` 时不隐式注册任何内置插件，可独立验证内核机制；使用 `createHelmx()` 得到完整产品。Web 静态目录托管属于产品层：直接使用内核 HTTP handler 时缺省只服务 API，提供 `webDistDir` 才启用静态托管。
