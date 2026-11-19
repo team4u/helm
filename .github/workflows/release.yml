@@ -18,8 +18,11 @@
 #
 # Honesty constraints:
 #   - Each publishing gate = the private / version (locked to the tag) / repository fields of its
-#     dist manifest + the existence of NPM_TOKEN (injected as NODE_AUTH_TOKEN); if any item is
-#     unmet, fail or skip explicitly before publishing;
+#     dist manifest + tokenless npm Trusted Publishing (OIDC): the npm-publish job holds
+#     id-token: write, npm >= 11.5.0 picks up the GitHub Actions OIDC token automatically, and
+#     each artifact's trusted publisher registered on npmjs.com must match this repository
+#     (team4u/helmx) and this workflow filename (release.yml, environment unset); no NPM_TOKEN
+#     secret is read anywhere. If any item is unmet, fail or skip explicitly before publishing;
 #   - The CLI additionally requires an empty dependency set (it ships as a zero-dependency
 #     single-file bundle of the complete helmx CLI; a workspace: / file: / @helmx/* dependency would
 #     break `npm install -g` for every consumer because no @helmx/* package is published), and
@@ -210,8 +213,12 @@ jobs:
         with:
           version: 12.16.1
 
-      # registry-url makes setup-node write ~/.npmrc; the auth token comes from
-      # NODE_AUTH_TOKEN (a secret reference, never committed, never logged).
+      # registry-url makes setup-node write ~/.npmrc pointing at registry.npmjs.org; publishing
+      # authenticates via npm Trusted Publishing (OIDC, tokenless): npm >= 11.5.0 in GitHub
+      # Actions automatically exchanges the job's OIDC token for registry credentials, so no
+      # NODE_AUTH_TOKEN / NPM_TOKEN secret exists here. The trusted publisher registered on
+      # npmjs.com per artifact must match this repository (team4u/helmx), this workflow filename
+      # (release.yml), and leave the environment field unset.
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -267,19 +274,22 @@ jobs:
             exit 1
           fi
 
-      # Fail fast when a package is due to publish but the secret is missing: an explicit gate,
-      # never falsely claim a publish. The CLI publishes only after the payload did, and the node
-      # only after the CLI did, so this single gate covers all three artifacts' due-publish paths.
-      - name: Require NPM_TOKEN secret
+      # Fail fast when a package is due to publish but the runner's npm cannot do Trusted
+      # Publishing: an explicit gate, never falsely claim a publish. npm >= 11.5.0 is the first
+      # release supporting the tokenless OIDC publish flow; the CLI publishes only after the
+      # payload did, and the node only after the CLI did, so this single gate covers all three
+      # artifacts' due-publish paths.
+      - name: Require npm >= 11.5.0 (Trusted Publishing)
         if: env.PAYLOAD_PRESENT == 'true' && steps.payload.outputs.skip == 'false'
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -eu
-          if [ -z "$NPM_TOKEN" ]; then
-            echo "::error::payload npm package is due to publish but NPM_TOKEN is not configured (Settings -> Secrets and variables -> Actions), or switch to npm Trusted Publishing (not enabled)."
+          npm_version=$(npm -v)
+          lowest=$(printf '%s\n11.5.0\n' "$npm_version" | sort -V | head -n 1)
+          if [ "$lowest" != "11.5.0" ]; then
+            echo "::error::npm ${npm_version} predates 11.5.0, the first release supporting tokenless Trusted Publishing (OIDC); bump the node-version pinned in this workflow so its bundled npm is >= 11.5.0."
             exit 1
           fi
+          echo "npm ${npm_version} supports Trusted Publishing (OIDC, tokenless)."
 
       # Run npm pack / npm publish inside the dist directory: the tarball root is the
       # payload root (manifest.json, package.json, start.mjs at the root). Never pnpm
@@ -288,8 +298,6 @@ jobs:
       - name: Publish payload package from dist (provenance, public)
         id: publish-payload
         if: env.PAYLOAD_PRESENT == 'true' && steps.payload.outputs.skip == 'false'
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -eu
           dest="$RUNNER_TEMP/pack-payload"
@@ -356,8 +364,6 @@ jobs:
       - name: Publish cli package from dist-cli (provenance, public)
         id: publish-cli
         if: steps.cli.outputs.skip == 'false' && steps.publish-payload.conclusion == 'success'
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -eu
           dest="$RUNNER_TEMP/pack-cli"
@@ -441,8 +447,6 @@ jobs:
       - name: Publish node package from dist-node (provenance, public)
         id: publish-node
         if: steps.node.outputs.skip == 'false' && steps.publish-cli.conclusion == 'success'
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -eu
           dest="$RUNNER_TEMP/pack-node"

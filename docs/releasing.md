@@ -31,7 +31,9 @@
 - **node 制品依赖集必须恰为四个外部精确版本**：多一个少一个、出现 `@helmx/*` 或浮动 semver 范围（`^` / `~` / `workspace:` / `file:`）都在发布期显式失败——守护进程自升级按精确版本绑定，依赖漂移即升级契约破坏；
 - **绝不伪称已发布**：发布记录的 npm 状态由各作业实际输出渲染，成功 / 明确跳过 / 未完成三种结论如实陈述（payload、CLI、node 三行独立记录）。
 
-发布门槛（三个制品同构，全部满足才 `npm publish`）：制品源包存在（payload → `packages/payload`，占位期可跳过；CLI → `packages/cli`、node → `packages/node`，**硬性要求**，verify 阶段缺失即失败）→ 构建后制品 manifest 存在（缺失即组装器契约破裂显式失败）→ `private !== true`（`private: true` 走占位跳过分支，绿色成功不 publish）→ `version` 与 tag 锁步 + `repository` 字段存在（provenance 必需）→ `NPM_TOKEN` secret 已配置（注入为 `NODE_AUTH_TOKEN`；缺失快速失败给指引）。满足后在各自制品目录内 `npm pack` 打 tarball 再 `npm publish <tarball> --provenance --access public`（provenance 依赖 OIDC，作业声明 `id-token: write`）。npm Trusted Publishing（OIDC 免令牌）当前未启用。
+发布门槛（三个制品同构，全部满足才 `npm publish`）：制品源包存在（payload → `packages/payload`，占位期可跳过；CLI → `packages/cli`、node → `packages/node`，**硬性要求**，verify 阶段缺失即失败）→ 构建后制品 manifest 存在（缺失即组装器契约破裂显式失败）→ `private !== true`（`private: true` 走占位跳过分支，绿色成功不 publish）→ `version` 与 tag 锁步 + `repository` 字段存在（provenance 必需）→ npm ≥ 11.5.0（**npm Trusted Publishing，OIDC 免令牌**：`npm-publish` 作业声明 `id-token: write`，npm 在 GitHub Actions 内自动用 OIDC 换取 registry 凭据，仓库不读取任何令牌 secret；版本不足在发布前快速失败给指引）。满足后在各自制品目录内 `npm pack` 打 tarball 再 `npm publish <tarball> --provenance --access public`（provenance 与认证同走 OIDC）。
+
+**Trusted Publishing 前置（一次性，人工在 npmjs.com 配置）**：三个制品已在 npm 上存在（`@helmx/hub` / `@helmx/cli` / `@helmx/node`），以维护者身份（需 2FA）进入各包 Settings → Trusted Publishing，登记 **repository `team4u/helmx`、workflow 文件名 `release.yml`、environment 留空**，与 `release.yml` 中 `npm-publish` 作业的实际运行参数严格一致（多一个 environment 绑定都会 403）。配置完成后可在 GitHub 仓库 Settings → Secrets → Actions 删除不再使用的 `NPM_TOKEN`。
 
 dist-tag 策略（三个制品一致，`verify` 作业按 semver 判定一次）：版本核心含连字符（预发布，如 `1.2.3-rc.1`）→ `npm publish --tag beta`；build 元数据（`+` 之后）不算预发布（如 `1.2.3+build-7` 仍走 `latest`）。预发布绝不隐式进入 `latest`，消费者 `npm install -g` 与 CLI 的 `latest` 解析默认只看到正式版（CLI 侧的 beta 通道由 `helmx update --channel beta` 显式选择）。
 
@@ -44,6 +46,8 @@ CLI 与 node 的附加门：
 ## 发布操作步骤
 
 ```bash
+# 0. 一次性前置：在 npmjs.com 为 @helmx/hub / @helmx/cli / @helmx/node 配置 Trusted
+#    Publisher（repository team4u/helmx、workflow release.yml、environment 留空），见上文；
 # 1. 全量锁步 bump 版本（payload 版本单一来源需与 tag 一致；CLI 与 node 制品与 payload 同源）
 # 2. 提交变更
 git commit -am "chore(release): v0.1.0"
@@ -90,7 +94,8 @@ python3 -c "import yaml; yaml.safe_load(open('.github/workflows/release.yml'))"
 | `npm-publish`：CLI 因 payload 未发布而跳过 | 如实跳过：先解决 payload 发布步骤的失败/跳过原因，CLI 与 payload 需同轮发布 |
 | `npm-publish`：node 因 CLI 未发布而跳过 | 如实跳过：先解决 CLI 发布步骤的失败/跳过原因，三制品需同轮按序发布 |
 | `npm-publish`：版本与 tag 不一致 | 版本单一来源锁步 tag 后重新打 tag |
-| `npm-publish`：未配置 NPM_TOKEN | Settings -> Secrets and variables -> Actions 配置后重跑 |
+| `npm-publish`：版本门槛失败（npm < 11.5.0） | Trusted Publishing 免令牌发布依赖 npm ≥ 11.5.0：提升工作流 `node-version` 使捆绑 npm 达标后重打 tag |
+| `npm publish` 被 registry 拒绝（trusted publisher 不匹配） | 到 npmjs.com 对应包 Settings → Trusted Publishing 核对：repository `team4u/helmx`、workflow `release.yml`、environment 留空，三者与运行参数完全一致 |
 | `npm publish` 被 registry 拒绝（provenance） | 确认制品 `repository` 与实际仓库一致、令牌有目标包权限 |
 
 ## 源码与测试入口
