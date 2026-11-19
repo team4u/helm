@@ -36,6 +36,7 @@ import {
   type WorkspaceLocationState,
 } from './lib/url-hash-model.js'
 import { ScreenHost } from './screens/ScreenHost.js'
+import { ConversationOverview } from './overview/ConversationOverview.js'
 import { AuthGate } from './shell/AuthGate.js'
 import { Sidebar } from './shell/Sidebar.js'
 import { ToastOverlay } from './shell/ToastOverlay.js'
@@ -43,6 +44,8 @@ import { TooltipProvider } from './ui/Tooltip.js'
 import { useQuietNotifier } from './shell/use-quiet-notifier.js'
 import { useVersionWatcher } from './shell/use-version-watcher.js'
 import { versionDeferHint } from './shell/version-watch-model.js'
+import { composeAttentionSummary } from './shell/attention-model.js'
+import { useGlobalAttention } from './shell/use-attention-indicator.js'
 
 /** SSE 断线横幅展示防抖：短于 1500ms 的瞬断或页面初始握手不闪现重连提示。 */
 const CONNECTION_BANNER_DELAY_MS = 1500
@@ -201,6 +204,13 @@ function HelmxShellInner() {
 
   // Version awareness and auto refresh: mounted once globally (sleeps when no production entry is detected).
   const versionWatch = useVersionWatcher()
+  // 全局并发态势微标（与桌面折叠 Rail 同源 indicator；排除正在查看的根树，
+  // 用户盯着看的会话树不反向提醒自己）。抽屉关闭时也保持计算——badge doc 的
+  // 发现与按需加载内聚在 Hook，不依赖侧栏抽屉是否展开。
+  const attention = useGlobalAttention()
+  const attentionSummary = composeAttentionSummary(attention.indicator, t)
+  const navToggleLabel =
+    attentionSummary !== '' ? `${t('shell.nav.toggleNav')} · ${attentionSummary}` : t('shell.nav.toggleNav')
   const closeModal = useCallback(() => setActiveModal(null), [setActiveModal])
   const focusPrimary = useCallback(() => setFocusedPanel?.('primary'), [setFocusedPanel])
   const focusSplit = useCallback(() => setFocusedPanel?.('split'), [setFocusedPanel])
@@ -288,10 +298,16 @@ function HelmxShellInner() {
         <button
           type="button"
           className="btn btn-ghost mobile-nav-toggle"
-          aria-label={t('shell.nav.toggleNav')}
+          aria-label={navToggleLabel}
+          title={navToggleLabel}
           onClick={() => setSidebarOpen((open) => !open)}
         >
           <HelmxIcon name="menu" />
+          {attention.indicator.tone !== null && (
+            <span className="mobile-nav-attention" data-tone={attention.indicator.tone}>
+              {attention.indicator.totalCount > 99 ? '99+' : attention.indicator.totalCount}
+            </span>
+          )}
         </button>
         {sidebarOpen && (
           <button
@@ -361,6 +377,8 @@ function HelmxShellInner() {
                         pluginId={primaryTarget.pluginId}
                         screenId={primaryTarget.screenId}
                       />
+                    ) : primaryTarget.kind === 'overview' ? (
+                      <ConversationOverview key="primary-overview" />
                     ) : primaryTarget.kind === 'plugins' ? (
                       <PluginCenter key="primary-plugins" />
                     ) : primaryTarget.kind === 'profiles' ? (
@@ -410,6 +428,8 @@ function HelmxShellInner() {
                       isSplit
                       onCloseSplit={closeSplit}
                     />
+                  ) : splitTarget.kind === 'overview' ? (
+                    <ConversationOverview key="split-overview" isSplit onCloseSplit={closeSplit} />
                   ) : splitTarget.kind === 'plugins' ? (
                     <PluginCenter key="split-plugins" isSplit onCloseSplit={closeSplit} />
                   ) : splitTarget.kind === 'profiles' ? (

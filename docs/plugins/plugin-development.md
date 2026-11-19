@@ -137,7 +137,7 @@ export default {
 
 | 分类 | 符号 |
 | :--- | :--- |
-| Hooks | `usePluginContext`（`callAction / submitInput / openScreen / openSplitScreen / openConversationDrawer / openArtifact / notify / theme / composer` 等）、`usePluginDoc`、`usePluginSessionDoc`、`useConversations`、`useConversation`、`usePlugins`、`useToolActivity` |
+| Hooks | `usePluginContext`（`callAction / submitInput / openScreen / openSplitScreen / openConversationDrawer / openArtifact / notify / theme / composer` 等）、`usePluginDoc`、`usePluginSessionDoc`、`useConversations`、`useConversation`、`useConversationBackground`（宿主标准按会话后台在途快照 `{ unknown, byConversation }`；`unknown` 为 true 时如实渲染未知，不得当作「无后台任务」）、`usePlugins`、`useToolActivity` |
 | 无障碍控件 | `Switch`、`Select` / `MultiSelect`、`Checkbox`、`Tabs` / `SegmentedControl`、`Dialog` 系列、`ViewBoundary`、`Callout` |
 | 布局原语 | `Screen`、`ScreenSection`、`DataTable`（统一 loading/empty）、`KvGrid` |
 | 内容展示 | `HelmxIcon`、`MarkdownView`、`CodeBlockView`、`CopyButton`、`formatTime` 等格式化纯函数 |

@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { SearchHit } from '@helmx/protocol/browser'
+import type { ConversationSummary, SearchHit } from '@helmx/protocol/browser'
 import { searchApi } from '../lib/api.js'
 import { commandActionPluginId, commandHint, commandsForConversation } from '../lib/commands-model.js'
 import { resolveLocalizedText } from '@helmx/protocol/browser'
 import { HelmxIcon, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle } from '@helmx/plugin-client'
 import {
+  useAuthConnection,
   useConversations,
   useGroupedUi,
   useLocationTargets,
+  usePluginDocsState,
   usePlugins,
   useSidebarCollapsed,
   useStoreActions,
@@ -25,20 +27,27 @@ import {
   type HelmxShortcutDetail,
 } from '../shell/shortcuts-model.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
+import { ConversationStatusDot } from '../shell/SidebarPrimitives.js'
+import {
+  collectBackgroundBadgeDocs,
+  summarizeConversationBackgroundActivity,
+} from '../shell/background-activity-model.js'
 import type { CommandSpec } from '@helmx/protocol/browser'
 
 type PaletteRow =
   | { kind: 'command'; id: string; title: string; hint?: string; shortcut?: string; icon?: string; keywords?: string[]; run: () => void }
-  | { kind: 'search-hit'; id: string; hit: SearchHit }
+  | { kind: 'search-hit'; id: string; hit: SearchHit; conv?: ConversationSummary }
 
 export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
   const conversations = useConversations()
+  const { authenticated } = useAuthConnection()
   const { primaryTarget, splitTarget, focusedPanel } = useLocationTargets()
   const { workbenchOpen } = useWorkbenchState()
   const sidebarCollapsed = useSidebarCollapsed()
   const { themePreference, localePreference: storeLocalePref, quietNotifyEnabled } = useThemePreferencesState()
   const groupedUi = useGroupedUi()
   const plugins = usePlugins()
+  const pluginDocs = usePluginDocsState()
   const actions = useStoreActions()
   const { locale, t } = useWebLocale()
   const [query, setQuery] = useState('')
@@ -87,6 +96,27 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
       )
       .slice(0, 6)
   }, [query, conversations])
+
+  // 会话行灯位与态势排序共享的后台在途索引（workbench badge 契约 + 上下文精简）；
+  // badge doc 的按需加载与侧栏同链路（ensurePluginDoc 幂等，不重复请求）。
+  const background = useMemo(
+    () =>
+      summarizeConversationBackgroundActivity({
+        panels: groupedUi.workbenchPanels,
+        conversations,
+        pluginDocs,
+        t,
+      }),
+    [groupedUi.workbenchPanels, conversations, pluginDocs, t],
+  )
+  const badgeDocs = useMemo(
+    () => collectBackgroundBadgeDocs(groupedUi.workbenchPanels, conversations),
+    [groupedUi.workbenchPanels, conversations],
+  )
+  useEffect(() => {
+    if (!authenticated) return
+    for (const ref of badgeDocs) void actions.ensurePluginDoc(ref.pluginId, ref.doc)
+  }, [badgeDocs, authenticated, actions.ensurePluginDoc])
 
   const close = () => onClose()
 
@@ -308,6 +338,31 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
     },
   ], [actions, localePref, quietNotifyEnabled, sidebarCollapsed, t, themePreference])
 
+  // 全部插件视图（screen）直达行：任何启用插件注册的视图都能在面板搜到并
+  // 一键跳转（含 quickEntry 快捷入口的视图）；停用插件的贡献从 store 消失，
+  // 行随之消失。点击走标准 store 路由（支持主屏/分屏上下文）。
+  const viewRows = useMemo<Array<PaletteRow>>(
+    () =>
+      groupedUi.screens.map((screen) => {
+        const plugin = plugins?.find((p) => p.id === screen.pluginId)
+        const pluginName = plugin !== undefined ? resolveLocalizedText(plugin.name, locale) || screen.pluginId : screen.pluginId
+        const label = resolveLocalizedText(screen.spec.label, locale) || `${screen.pluginId}/${screen.spec.id}`
+        return {
+          kind: 'command' as const,
+          id: `view:${screen.pluginId}/${screen.spec.id}`,
+          title: label,
+          hint: pluginName,
+          icon: screen.spec.icon ?? 'panel-right',
+          keywords: [label, screen.pluginId, screen.spec.id, pluginName, 'view', 'screen', '视图'],
+          run: () => {
+            close()
+            actions.openTarget({ kind: 'screen', pluginId: screen.pluginId, screenId: screen.spec.id })
+          },
+        }
+      }),
+    [groupedUi.screens, plugins, locale, actions.openTarget, close],
+  )
+
   // 声明了 client 内容的插件命令：作为可选中命令行列出（选中即内联渲染）
   const pluginContentCommands = useMemo(
     () =>
@@ -356,6 +411,7 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
       conversationMatches.map((conv) => ({
         kind: 'search-hit' as const,
         id: `conv:${conv.id}`,
+        conv,
         hit: {
           conversationId: conv.id,
           title: conv.title,
@@ -367,8 +423,14 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
   )
 
   const searchRows = useMemo<Array<PaletteRow>>(
-    () => hits.map((hit) => ({ kind: 'search-hit' as const, id: `hit:${hit.conversationId}/${hit.entryId}`, hit })),
-    [hits],
+    () =>
+      hits.map((hit) => ({
+        kind: 'search-hit' as const,
+        id: `hit:${hit.conversationId}/${hit.entryId}`,
+        hit,
+        conv: conversations.find((c) => c.id === hit.conversationId),
+      })),
+    [hits, conversations],
   )
 
   const pluginRows = useMemo<Array<PaletteRow>>(
@@ -400,9 +462,10 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
 
   const recentConversationRows = useMemo<Array<PaletteRow>>(
     () =>
-      selectRecentConversationsForPalette(conversations, paletteConversation?.id, 5).map((conv) => ({
+      selectRecentConversationsForPalette(conversations, paletteConversation?.id, 5, background).map((conv) => ({
         kind: 'search-hit' as const,
         id: `recent-conv:${conv.id}`,
+        conv,
         hit: {
           conversationId: conv.id,
           title: conv.title,
@@ -410,22 +473,23 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
           snippet: t('modals.palette.recentSnippet', { id: conv.id, profileId: conv.profileId }),
         },
       })),
-    [conversations, paletteConversation?.id, t],
+    [conversations, paletteConversation?.id, background, t],
   )
 
   const rows = useMemo<Array<PaletteRow>>(() => {
     const q = query.trim().toLowerCase()
     if (!q) {
-      // 空搜索词首屏优先级：当前上下文高频操作 → 最近活跃会话（前 5 条）→ 空间与中心导航 → 插件命令与配置
+      // 空搜索词首屏优先级：当前上下文高频操作 → 最近活跃会话（前 5 条）→ 空间与中心导航 → 插件视图直达 → 插件命令与配置
       return [
         ...contextCommands,
         ...recentConversationRows,
         ...navCommands,
+        ...viewRows,
         ...pluginCommands,
         ...pluginRows,
       ]
     }
-    const commands = [...contextCommands, ...navCommands, ...pluginCommands, ...pluginRows].filter((row) => {
+    const commands = [...contextCommands, ...navCommands, ...viewRows, ...pluginCommands, ...pluginRows].filter((row) => {
       if (row.kind !== 'command') return true
       return (
         row.title.toLowerCase().includes(q) ||
@@ -440,6 +504,7 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
     contextCommands,
     recentConversationRows,
     navCommands,
+    viewRows,
     pluginCommands,
     pluginRows,
     conversationRows,
@@ -613,7 +678,13 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
                 onMouseEnter={() => setSelectedIdx(idx)}
               >
                 <span className="nav-item-main">
-                  <HelmxIcon name="message-square" size={14} />
+                  <span className="nav-status-slot">
+                    {row.conv !== undefined ? (
+                      <ConversationStatusDot conv={row.conv} background={background.get(row.conv.id)} />
+                    ) : (
+                      <HelmxIcon name="message-square" size={14} />
+                    )}
+                  </span>
                   <span style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
                     <span className="nav-item-label">
                       {row.hit.title || t('shell.conversationFallback', { id: row.hit.conversationId })}

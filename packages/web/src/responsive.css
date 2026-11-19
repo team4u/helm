@@ -157,6 +157,31 @@ button, a, input, select, textarea { touch-action: manipulation; }
   .mobile-nav-toggle:active {
     background: var(--bg-hover);
   }
+  /* 汉堡按钮右上角全局态势微标（与桌面折叠 Rail 同源 indicator）：灯色 + 紧凑计数；
+     排除正在查看的根树，无信号时不渲染。 */
+  .mobile-nav-attention {
+    position: absolute;
+    top: -1px;
+    right: -3px;
+    min-width: 15px;
+    height: 15px;
+    padding: 0 4px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    font-size: 9.5px;
+    font-weight: 600;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+    color: #fff;
+    box-sizing: border-box;
+    pointer-events: none;
+  }
+  .mobile-nav-attention[data-tone='error'] { background: var(--err); }
+  .mobile-nav-attention[data-tone='blocked'] { background: var(--warn); }
+  .mobile-nav-attention[data-tone='running'] { background: var(--accent); }
+  .mobile-nav-attention[data-tone='done'] { background: var(--ok); }
   .sidebar-open .mobile-nav-toggle { display: none; }
   .mobile-sidebar-close {
     display: inline-flex;

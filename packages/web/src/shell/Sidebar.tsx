@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import type { ConversationSummary } from '@helmx/protocol/browser'
 import { resolveLocalizedText } from '@helmx/protocol/browser'
 import { HelmxIcon } from '@helmx/plugin-client'
@@ -8,7 +8,6 @@ import {
   useGroupedUi,
   useLocationTargets,
   usePendingAsks,
-  usePluginDocsState,
   usePlugins,
   useProfilesSlice,
   useStoreActions,
@@ -20,9 +19,11 @@ import { PluginUiView } from '../ui/PluginUiView.js'
 import { Tooltip } from '../ui/Tooltip.js'
 import { ConversationRowActionsMenu } from '../ui/ConversationRowActionsMenu.js'
 import { isSameResolvedTarget, resolveTargetString, CENTER_TARGETS, spaceForTarget, type SidebarSpace } from '../lib/types.js'
+import { useIsMobileViewport } from '../lib/use-media-query.js'
 import { readBrowserNotificationPermission } from '../lib/browser-notification.js'
 import { formatModShortcut } from './shortcuts-model.js'
 import {
+  extractRailQuickEntries,
   extractSidebarViews,
   filterConversationsByTag,
   getConversationPresence,
@@ -32,15 +33,14 @@ import {
   shouldSkipNavRowClick,
   type SidebarStoreView,
   type SidebarTargetPresence,
+  type SidebarViewItem,
 } from './sidebar-model.js'
-import {
-  collectBackgroundBadgeDocs,
-  summarizeConversationBackgroundActivity,
-  type ConversationBackgroundActivity,
-  type ConversationBackgroundIndex,
-} from './background-activity-model.js'
+import type { ConversationBackgroundActivity, ConversationBackgroundIndex } from './background-activity-model.js'
 import { AgentStandingsGroup } from './SidebarAgentStandings.js'
 import { ArchivedConversationsGroup } from './SidebarArchivedConversations.js'
+import { SidebarAttentionGroup } from './SidebarAttentionGroup.js'
+import { useGlobalAttention } from './use-attention-indicator.js'
+import { composeAttentionSummary, type GlobalAttentionIndicator } from './attention-model.js'
 import {
   ConversationStatusDot,
   HoverIconButton,
@@ -296,6 +296,8 @@ const SPACE_LABEL_KEYS: Record<
  * Activity Rail（48px）：仅空间切换（对话/视图/设置）+ 主题按钮。
  * 桌面与移动抽屉共用；空间按钮直接导航主舞台到对应空间的最近目标（store.openSpace），
  * 系统中心入口收敛到「设置」空间内的纵向列表。
+ * 「对话空间」按钮常驻挂载全局态势微标（与移动端汉堡同源 indicator）：桌面折叠
+ * 侧栏时也能一眼感知全局并发（需处理/运行中/未读完成的紧凑计数与灯色）。
  */
 function ActivityRail({
   sseConnected,
@@ -305,6 +307,10 @@ function ActivityRail({
   onToggleSidebarCollapsed,
   space,
   onOpenSpace,
+  attentionIndicator,
+  quickEntries,
+  store,
+  onNavigate,
 }: {
   sseConnected: boolean
   theme: 'dark' | 'light'
@@ -313,6 +319,10 @@ function ActivityRail({
   onToggleSidebarCollapsed?: () => void
   space: SidebarSpace
   onOpenSpace: (space: SidebarSpace) => void
+  attentionIndicator: GlobalAttentionIndicator
+  quickEntries: SidebarViewItem[]
+  store: SidebarStoreView
+  onNavigate?: () => void
 }) {
   const { t } = useWebLocale()
   const expandWithShortcut = t('shell.sidebar.expandNavWithShortcut', { shortcut: formatModShortcut('B') })
@@ -330,6 +340,10 @@ function ActivityRail({
       : themePreference === 'light'
         ? t('shell.theme.light')
         : t('shell.theme.dark')
+  const attentionSummary = composeAttentionSummary(attentionIndicator, t)
+  const overviewTooltipLabel =
+    attentionSummary !== '' ? `${t('shell.overview.railTooltip')} · ${attentionSummary}` : t('shell.overview.railTooltip')
+  const overviewPresence = resolveSidebarTargetPresence(store, (target) => target.kind === 'overview')
 
   return (
     <nav className="activity-rail" aria-label={t('shell.sidebar.mainNavigation')}>
@@ -351,22 +365,75 @@ function ActivityRail({
       <div className="activity-rail-spaces">
         {(Object.keys(SPACE_LABEL_KEYS) as SidebarSpace[]).map((key) => {
           const spaceLabel = t(SPACE_LABEL_KEYS[key])
+          const carriesAttention = key === 'conversations' && attentionIndicator.tone !== null
+          const labelWithAttention = carriesAttention && attentionSummary !== ''
+            ? `${spaceLabel} · ${attentionSummary}`
+            : spaceLabel
           return (
-            <Tooltip content={spaceLabel} side="right" key={key}>
+            <Tooltip content={labelWithAttention} side="right" key={key}>
               <button
                 type="button"
                 className={`rail-btn rail-space-btn${space === key ? ' rail-btn-active' : ''}`}
-                title={spaceLabel}
-                aria-label={spaceLabel}
+                title={labelWithAttention}
+                aria-label={labelWithAttention}
                 aria-current={space === key ? 'page' : undefined}
                 onClick={() => onOpenSpace(key)}
               >
                 <HelmxIcon name={SPACE_ICONS[key]} size={16} />
+                {carriesAttention && (
+                  <span className="rail-attention-badge" data-tone={attentionIndicator.tone}>
+                    {attentionIndicator.totalCount > 99 ? '99+' : attentionIndicator.totalCount}
+                  </span>
+                )}
               </button>
             </Tooltip>
           )
         })}
       </div>
+      {/* 宿主「会话总览」直达按钮（#/overview，对话空间）：紧邻态势微标，
+          桌面折叠 Rail 与移动抽屉同源一键直达；tone 灯点复用同源 indicator。 */}
+      <Tooltip content={overviewTooltipLabel} side="right">
+        <button
+          type="button"
+          className={`rail-btn rail-overview-btn${overviewPresence.active ? ' rail-btn-active' : ''}`}
+          title={overviewTooltipLabel}
+          aria-label={overviewTooltipLabel}
+          aria-current={overviewPresence.active ? 'page' : undefined}
+          onClick={() => {
+            store.openTarget({ kind: 'overview' })
+            onNavigate?.()
+          }}
+        >
+          <HelmxIcon name="activity" size={16} />
+          {attentionIndicator.tone !== null && (
+            <span className="rail-overview-dot" data-tone={attentionIndicator.tone} />
+          )}
+        </button>
+      </Tooltip>
+      {quickEntries.length > 0 && (
+        <div className="activity-rail-quick">
+          {quickEntries.map((entry) => {
+            const presence = resolveSidebarTargetPresence(store, (t) => isSameResolvedTarget(t, entry.target))
+            return (
+              <Tooltip content={entry.label} side="right" key={entry.key}>
+                <button
+                  type="button"
+                  className={`rail-btn rail-quick-btn${presence.active ? ' rail-btn-active' : ''}`}
+                  title={entry.label}
+                  aria-label={entry.label}
+                  aria-current={presence.active ? 'page' : undefined}
+                  onClick={() => {
+                    store.openTarget(entry.target)
+                    onNavigate?.()
+                  }}
+                >
+                  <HelmxIcon name={entry.icon} size={16} />
+                </button>
+              </Tooltip>
+            )
+          })}
+        </div>
+      )}
       <div className="activity-rail-footer">
         <LocaleMenuButton tooltipSide="right" menuSide="right" menuAlign="end" />
         <Tooltip content={themeTooltip} side="right">
@@ -437,19 +504,17 @@ function SettingsNavGroup({ store, onNavigate }: { store: SidebarStoreView; onNa
 }
 
 export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
-  const { authenticated, sseConnected } = useAuthConnection()
+  const { sseConnected } = useAuthConnection()
   const { theme, themePreference, locale, quietNotifyEnabled } = useThemePreferencesState()
   const { primaryTarget, splitTarget, focusedPanel } = useLocationTargets()
   const groupedUi = useGroupedUi()
   const plugins = usePlugins()
   const conversations = useConversations()
-  const pluginDocs = usePluginDocsState()
   const pendingAsks = usePendingAsks()
   const { profiles } = useProfilesSlice()
   const {
     openTarget,
     pushNotice,
-    ensurePluginDoc,
     openSpace,
     setQuietNotify,
     setActiveModal,
@@ -491,26 +556,28 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
   // 该空间最近的主舞台目标，URL 即该空间真实锚点，刷新/前进/后退天然可还原。
   const space = spaceForTarget(primaryTarget)
 
-  // 后台在途摘要（纯推导，零插件 ID 特判）：workbench.panel badge 契约 → 按会话
-  // 索引；badge doc 的按需加载在下方 effect（纯函数内不做副作用）。插件停用后
-  // UI 贡献与 doc 均从 store 消失，摘要自然归零，指示立即消失。
-  const background = useMemo(
+  // 全局并发态势（跨角色平铺条目 + 汉堡/Rail 微标 + 后台在途索引）：badge doc
+  // 的按需加载内聚在 Hook（ensurePluginDoc 幂等，移动端合着抽屉也不漏后台任务）。
+  // 插件停用后其 UI 贡献与 doc 均从 store 消失，态势自然归零。
+  const { items: attentionItems, indicator: attentionIndicator, background } = useGlobalAttention()
+
+  // 移动端视口：抽屉形态。任何空间拉开汉堡都能看到态势平铺区并一键行动；
+  // 桌面非对话空间保持原布局（态势经 Rail 微标感知，点击「对话空间」直达）。
+  const isMobileViewport = useIsMobileViewport()
+
+  // 插件全局快捷入口（sidebar.item quickEntry，最薄通用声明）：仅收当前启用
+  // 插件确实注册了的 screen（插件停用后贡献即时消失，入口零残留）；点击走标准
+  // store 路由并收起移动抽屉——PC 折叠 Rail 与移动抽屉同源一键直达。
+  const railQuickEntries = useMemo(
     () =>
-      summarizeConversationBackgroundActivity({
-        panels: groupedUi.workbenchPanels,
+      extractRailQuickEntries(
+        groupedUi.sidebarItems,
+        groupedUi.screens,
         conversations,
-        pluginDocs,
-      }),
-    [groupedUi.workbenchPanels, conversations, pluginDocs],
+        locale,
+      ),
+    [groupedUi.sidebarItems, groupedUi.screens, conversations, locale],
   )
-  const badgeDocs = useMemo(
-    () => collectBackgroundBadgeDocs(groupedUi.workbenchPanels, conversations),
-    [groupedUi.workbenchPanels, conversations],
-  )
-  useEffect(() => {
-    if (!authenticated) return
-    for (const ref of badgeDocs) void ensurePluginDoc(ref.pluginId, ref.doc)
-  }, [badgeDocs, authenticated, ensurePluginDoc])
 
   // 后台浏览器通知开关：权限现场读取（浏览器设置可随时收回），
   // 偏好开而权限未授予时如实提示，绝不静默装作已开启。
@@ -544,6 +611,10 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
         onOpenSpace={(nextSpace) => {
           openSpace(nextSpace)
         }}
+        attentionIndicator={attentionIndicator}
+        quickEntries={railQuickEntries}
+        store={sidebarStore}
+        onNavigate={onClose}
       />
       <div className="sidebar-context">
         <div className="sidebar-header">
@@ -608,9 +679,15 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
         </div>
 
         <div className="sidebar-scroll">
+          {/* 移动端抽屉在任何空间都先看到态势平铺区（一键行动）；对话空间的
+              常规挂载点在下方 PendingAsksPanel 之后，此处避免重复渲染。 */}
+          {space !== 'conversations' && isMobileViewport && (
+            <SidebarAttentionGroup items={attentionItems} store={sidebarStore} onNavigate={onClose} />
+          )}
           {space === 'conversations' ? (
             <>
               <PendingAsksPanel store={sidebarStore} />
+              <SidebarAttentionGroup items={attentionItems} store={sidebarStore} onNavigate={onClose} />
               <AgentStandingsGroup store={sidebarStore} background={background} onNavigate={onClose} />
               <SidebarSectionGroups store={sidebarStore} background={background} />
               <ArchivedConversationsGroup background={background} onNavigate={onClose} />
