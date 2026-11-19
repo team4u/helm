@@ -32,7 +32,7 @@ import {
   type TaskRecord,
 } from '../src/tasks.js'
 import { assertDependenciesValid, recoverInterruptedStartups } from '../src/tasks/store.js'
-import { activeTaskSection, buildTaskKickoffPrompt } from '../src/tasks/prompts.js'
+import { activeTaskSection, buildMergeClosingPrompt, buildTaskKickoffPrompt } from '../src/tasks/prompts.js'
 import { filterTaskToolsForTurn, shouldMarkStalled, subtreeHasWorkingOrBlocked } from '../src/tasks/hooks.js'
 
 function makeTask(over: Partial<TaskRecord> = {}): TaskRecord {
@@ -179,8 +179,8 @@ test('tasks-unit5: <active_task> section is byte-constant and kickoff prompt car
 
   const planFirst = activeTaskSection(makeTask({ planFirst: true, autoMerge: true }))
   assert.match(planFirst, /plan-first="true" auto-merge="true"/)
-  assert.match(planFirst, /send an explicit Ask/)
-  assert.match(planFirst, /before writing any code/)
+  assert.match(planFirst, /task_request_plan_approval/)
+  assert.match(planFirst, /before the plan is approved/)
   assert.match(planFirst, /merge your isolated branch/)
 
   const kickoff = buildTaskKickoffPrompt(task)
@@ -188,7 +188,10 @@ test('tasks-unit5: <active_task> section is byte-constant and kickoff prompt car
   assert.match(kickoff, /Fix the login redirect loop/)
   assert.match(kickoff, /NEVER merge into the main line yourself/)
   const planKickoff = buildTaskKickoffPrompt(makeTask({ planFirst: true }))
-  assert.match(planKickoff, /send an explicit Ask requesting the user to approve the plan/)
+  assert.match(planKickoff, /task_request_plan_approval with your concise plan/)
+  const mergeClosing = buildMergeClosingPrompt(makeTask({ id: 'T-9' }), 'do it')
+  assert.match(mergeClosing, /explicitly authorized merging it now/)
+  assert.match(mergeClosing, /no second manual approval is needed/)
 })
 
 test('tasks-unit6: tool filtering isolates planner vs assignee vs child/automated sessions', { timeout: 60_000 }, () => {

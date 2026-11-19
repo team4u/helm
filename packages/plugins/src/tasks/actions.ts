@@ -48,6 +48,11 @@ export interface TasksRuntime {
   track<T>(label: string, task: () => Promise<T>): Promise<T>
 }
 
+/** 持久化输入统一脱敏：brief/title/summary/feedback 等用户文本进 doc 前过宿主唯一脱敏入口（机密已登记则替换为标记）。 */
+function sanitizeText(ctx: HelmxPluginContext, value: string): string {
+  return ctx.host.redact(value)
+}
+
 function conversationLive(runtime: TasksRuntime, conversationId: number | undefined) {
   if (conversationId === undefined) return null
   const conv = runtime.readConversationOrUndefined(conversationId)
@@ -248,6 +253,12 @@ interface ResolvedCoordinates {
   cwd?: string
 }
 
+/**
+ * 解析执行角色：显式指定时同样强校验（存在、humanSelectable !== false、未绑定外部
+ * runtime——外部 runtime Profile 的生命周期归其宿主插件管理，不能作为看板执行者）；
+ * 缺省链（config.defaultAssigneeProfile -> 发起会话 Profile -> assistant）逐级回退，
+ * 跳过不可指派的候选。显式校验失败显式报错，缺省回退链耗尽报 tasks_no_assignee。
+ */
 async function resolveAssigneeProfile(
   ctx: HelmxPluginContext,
   runtime: TasksRuntime,
@@ -261,19 +272,28 @@ async function resolveAssigneeProfile(
         ? [runtime.readConversationOrUndefined(originConversationId)?.profileId]
         : []), 'assistant']
 
+  const assignable = (profile: { humanSelectable?: boolean; runtime?: unknown }): boolean =>
+    profile.humanSelectable !== false && profile.runtime === undefined
+
   let lastMissing: string | undefined
+  let lastReason: 'missing' | 'not_assignable' | undefined
   for (const candidate of candidates) {
     if (candidate === undefined || candidate.trim() === '') continue
     const profile = await ctx.host.profiles.get(candidate)
     if (profile === undefined) {
       lastMissing = candidate
+      lastReason = 'missing'
       continue
     }
-    if (explicitProfileId === undefined && profile.humanSelectable === false) continue
+    if (!assignable(profile)) {
+      lastMissing = candidate
+      lastReason = 'not_assignable'
+      continue
+    }
     return { profileId: profile.id, ...(profile.nodeId !== undefined ? { nodeId: profile.nodeId } : {}), ...(profile.cwd !== undefined ? { cwd: profile.cwd } : {}) }
   }
   if (explicitProfileId !== undefined) {
-    if (lastMissing !== undefined) {
+    if (lastReason === 'missing') {
       throw new HelmxError('not_found', `执行角色 Profile '${explicitProfileId}' 不存在`, 404, {
         pluginId: TASKS_PLUGIN_ID,
         profileId: explicitProfileId,
@@ -281,7 +301,7 @@ async function resolveAssigneeProfile(
     }
     throw new HelmxError(
       'validation_error',
-      `执行角色 Profile '${explicitProfileId}' 不可被指派（humanSelectable 为 false）`,
+      `执行角色 Profile '${explicitProfileId}' 不可被指派（humanSelectable 为 false 或绑定了外部 runtime，生命周期归其宿主插件管理）`,
       400,
       { pluginId: TASKS_PLUGIN_ID, profileId: explicitProfileId },
     )
@@ -291,7 +311,12 @@ async function resolveAssigneeProfile(
   })
 }
 
-function resolveCoordinates(input: {
+/**
+ * 解析执行坐标：nodeId 与 cwd 必须成对继承——cwd 只在其来源节点与最终 nodeId 一致时
+ * 才可用（显式换节点时旧 Profile 的 cwd 属于另一台机器，绝不可串用）；显式 cwd 恒可用
+ * （调用者对配对负责）。远端节点最终无 cwd 显式拒绝，绝不盲执行远端默认目录。
+ */
+export function resolveCoordinates(input: {
   explicitNodeId?: string
   explicitCwd?: string
   profileNodeId?: string
@@ -299,19 +324,18 @@ function resolveCoordinates(input: {
   originConversation?: ConversationSummary
 }): ResolvedCoordinates {
   const originConv = input.originConversation
-  const nodeId =
-    input.explicitNodeId ??
-    input.profileNodeId ??
-    originConv?.nodeId ??
-    'local'
-  let cwd = input.explicitCwd ?? input.profileCwd
+  const nodeId = input.explicitNodeId ?? input.profileNodeId ?? originConv?.nodeId ?? 'local'
+  let cwd = input.explicitCwd
+  if (cwd === undefined && input.profileNodeId === nodeId && input.profileCwd !== undefined) {
+    cwd = input.profileCwd
+  }
   if (cwd === undefined && originConv !== undefined && originConv.nodeId === nodeId) {
     cwd = originConv.cwd
   }
   if (nodeId !== 'local' && cwd === undefined) {
     throw new HelmxError(
       'validation_error',
-      `任务目标节点 '${nodeId}' 缺少工作目录（cwd）：远端节点必须显式提供 cwd（或为执行角色 Profile 配置默认 cwd）`,
+      `任务目标节点 '${nodeId}' 缺少工作目录（cwd）：远端节点必须显式提供与该节点配对的 cwd（或为执行角色 Profile 配置同节点默认 cwd）`,
       400,
       { nodeId },
     )
@@ -372,7 +396,7 @@ async function launchTaskExecution(
     await runtime.flushRecords()
     await ctx.host.submitInput(created.id, buildTaskKickoffPrompt(task), {
       origin: 'agent',
-      whenBusy: 'steer',
+      whenBusy: 'followUp',
       requestId: `${TASKS_PLUGIN_ID}:kickoff:${taskId}`,
     })
   } catch (err) {
@@ -406,6 +430,89 @@ async function launchTaskExecution(
 }
 
 // ---------------------------------------------------------------------------
+// planFirst 真实方案审批：ctx.host.createAsk confirm 卡片 -> 持久化决定
+// ---------------------------------------------------------------------------
+
+/**
+ * planFirst 方案审批（真实 AskDoc 闭环）：向执行会话发 confirm Ask，等待用户明确
+ * 批准 / 拒绝（cancelled / superseded 视为未获批准），把决定持久化到任务记录。
+ * 工具执行期间会话 blocked（pendingAskCount > 0），看板如实显示等待人类决策；
+ * task_submit 门禁只认 decision === 'approved'。
+ */
+async function requestPlanApproval(
+  ctx: HelmxPluginContext,
+  runtime: TasksRuntime,
+  input: { plan: string },
+  conversationId: number,
+  signal?: AbortSignal,
+): Promise<{ taskId: string; decision: 'approved' | 'rejected' | 'cancelled' | 'superseded'; askId: string }> {
+  const store = runtime.store.read()
+  const task = Object.values(store.tasks).find(
+    (t) => t.conversationId === conversationId && (t.column === 'in_progress' || t.column === 'in_review'),
+  )
+  if (task === undefined) {
+    throw new HelmxError(
+      'task_not_found_in_conversation',
+      `当前会话 #${conversationId} 未绑定进行中的看板任务`,
+      404,
+      { pluginId: TASKS_PLUGIN_ID, conversationId },
+    )
+  }
+  if (task.planFirst !== true) {
+    throw new HelmxError(
+      'task_plan_first_not_enabled',
+      `任务 ${task.id} 未开启 planFirst，无需方案审批（直接执行并 task_submit 交卷）`,
+      409,
+      { pluginId: TASKS_PLUGIN_ID, taskId: task.id },
+    )
+  }
+  if (task.planApproval?.decision === 'approved') {
+    return { taskId: task.id, decision: 'approved', askId: task.planApproval.askId }
+  }
+
+  const askedAt = Date.now()
+  const askId = `${TASKS_PLUGIN_ID}:plan:${task.id}:${askedAt}`
+  let settled: Awaited<ReturnType<typeof ctx.host.createAsk>>
+  try {
+    settled = await ctx.host.createAsk({
+      id: askId,
+      conversationId,
+      ownerPluginId: TASKS_PLUGIN_ID,
+      title: `任务 ${task.id} 方案审批（planFirst）`,
+      description: ctx.host.redact(input.plan),
+      fields: [{ name: 'approve', label: `批准该方案并允许动工（任务 ${task.id}）`, type: 'confirm', required: true }],
+    })
+  } catch (err) {
+    if (err instanceof HelmxError && err.code === 'ask_id_conflict') {
+      // 同 ID 已存在（含已结算）：视为本次未获新决定，诚实返回未批准
+      return { taskId: task.id, decision: 'superseded', askId }
+    }
+    throw err
+  }
+  if (signal?.aborted) {
+    return { taskId: task.id, decision: 'cancelled', askId }
+  }
+
+  const decision: 'approved' | 'rejected' =
+    settled.status === 'answered' && settled.answers['approve'] === 'true' ? 'approved' : 'rejected'
+  const outcome = settled.status === 'answered' ? decision : settled.status
+  if (settled.status === 'answered') {
+    await runtime.store.enqueueMutation((draft) => {
+      const target = draft.tasks[task.id]
+      if (target === undefined) return
+      target.planApproval = {
+        decision,
+        askedAt,
+        decidedAt: Date.now(),
+        askId,
+      }
+      target.updatedAt = Date.now()
+    })
+  }
+  return { taskId: task.id, decision: outcome, askId }
+}
+
+// ---------------------------------------------------------------------------
 // 注册入口
 // ---------------------------------------------------------------------------
 
@@ -423,6 +530,9 @@ export function registerTasksActions(ctx: HelmxPluginContext, runtime: TasksRunt
   }> => {
     assertPlannerAuthority(runtime, context, 'create')
     const parsed = parseCreateInput(input)
+    parsed.title = sanitizeText(ctx, parsed.title)
+    parsed.brief = sanitizeText(ctx, parsed.brief)
+    if (parsed.project !== undefined) parsed.project = sanitizeText(ctx, parsed.project)
     return runtime.track('task:create', async () => {
       const decision = await runtime.store.enqueueMutation(async (draft) => {
         const taskId = `T-${draft.nextSeq}`
@@ -569,6 +679,9 @@ export function registerTasksActions(ctx: HelmxPluginContext, runtime: TasksRunt
     context: PluginActionContext,
   ): Promise<{ task: TaskRecord }> => {
     assertPlannerAuthority(runtime, context, 'update')
+    if (input.title !== undefined) input.title = sanitizeText(ctx, input.title)
+    if (input.brief !== undefined) input.brief = sanitizeText(ctx, input.brief)
+    if (input.project !== undefined && input.project !== null) input.project = sanitizeText(ctx, input.project)
     return runtime.track('task:update', () =>
       runtime.store.enqueueMutation(async (draft) => {
         const task = requireTaskInDraft(draft.tasks, input.taskId)
@@ -742,8 +855,12 @@ export function registerTasksActions(ctx: HelmxPluginContext, runtime: TasksRunt
         throw new HelmxError('validation_error', `${field} 必须是字符串数组`, 400, {})
       }
     }
-    return runtime.track('task:submit', () =>
-      runtime.store.enqueueMutation((draft) => {
+    if (input.verification !== undefined) input.verification = sanitizeText(ctx, input.verification)
+    if (input.branch !== undefined) input.branch = sanitizeText(ctx, input.branch)
+    if (input.worktreePath !== undefined) input.worktreePath = sanitizeText(ctx, input.worktreePath)
+    const summary = sanitizeText(ctx, input.summary)
+    return runtime.track('task:submit', async () => {
+      const submitted = await runtime.store.enqueueMutation((draft) => {
         let task: TaskRecord
         if (input.taskId !== undefined) {
           task = requireTaskInDraft(draft.tasks, input.taskId)
@@ -789,9 +906,20 @@ export function registerTasksActions(ctx: HelmxPluginContext, runtime: TasksRunt
             { pluginId: TASKS_PLUGIN_ID, taskId: task.id, column: task.column },
           )
         }
+        // planFirst 门禁：未经用户明确批准方案的交付一律拒绝（task_request_plan_approval -> createAsk 真实审批）
+        if (task.planFirst === true && task.planApproval?.decision !== 'approved') {
+          throw new HelmxError(
+            'task_plan_not_approved',
+            `任务 ${task.id} 开启了 planFirst：动工前必须先调用 task_request_plan_approval 获得用户的明确方案批准（当前${
+              task.planApproval === undefined ? '尚未发起审批' : `上次审批结果为 ${task.planApproval.decision}`
+            }）`,
+            409,
+            { pluginId: TASKS_PLUGIN_ID, taskId: task.id },
+          )
+        }
         const now = Date.now()
         task.submission = {
-          summary: input.summary.trim(),
+          summary: summary.trim(),
           ...(input.verification !== undefined && input.verification.trim() !== ''
             ? { verification: input.verification.trim() }
             : {}),
@@ -803,13 +931,109 @@ export function registerTasksActions(ctx: HelmxPluginContext, runtime: TasksRunt
           ...(input.artifactIds !== undefined ? { artifactIds: input.artifactIds } : {}),
           submittedAt: now,
         }
+        // merge_and_close 授权闭环：mergePending 任务提交携合并证据（branch 或 verification）即一步结单
+        // （用户已审过并显式授权合并结单，不要求第二次人工点击）；无证据维持 in_review 待人工复核。
+        const mergeEvidence =
+          task.mergePending === true &&
+          ((input.branch !== undefined && input.branch.trim() !== '') ||
+            (input.verification !== undefined && input.verification.trim() !== ''))
+        if (mergeEvidence) {
+          return { task, autoFinalized: true as const }
+        }
         task.column = 'in_review'
         delete task.silenceState
-        delete task.mergePending
         task.updatedAt = now
-        return { task }
-      }),
-    )
+        return { task, autoFinalized: false as const }
+      })
+      if (submitted.autoFinalized) {
+        const finalized = await finalizeTaskDone(submitted.task.id)
+        return { task: finalized.task }
+      }
+      return { task: submitted.task }
+    })
+  }
+
+  /**
+   * 共享终转：done 核心事实先落盘 flush；衍生动作（会话换归档标签、下游依赖接棒）
+   * 失败容忍上报、不回滚验收事实。approve(close_only) 与 merge_and_close 授权下的
+   * 证据交付 submit 共用同一条链。
+   */
+  const finalizeTaskDone = async (taskId: string): Promise<{
+    task: TaskRecord
+    unblockedTaskIds: string[]
+    autoStartedTaskIds: string[]
+  }> => {
+    const { task, conversationId, downstream } = await runtime.store.enqueueMutation((draft) => {
+      const task = requireTaskInDraft(draft.tasks, taskId)
+      if (task.column !== 'in_review' && task.column !== 'in_progress') {
+        throw new HelmxError(
+          'task_invalid_column',
+          `任务 ${task.id} 当前位于 ${task.column} 列，仅待验收（或确认中的进行中）任务可验收通过`,
+          409,
+          { pluginId: TASKS_PLUGIN_ID, taskId: task.id, column: task.column },
+        )
+      }
+      const now = Date.now()
+      task.column = 'done'
+      task.completedAt = now
+      delete task.mergePending
+      delete task.silenceState
+      task.updatedAt = now
+
+      // 下游依赖解锁扫描：backlog 中依赖本任务的任务，全部前置 done 即解锁（启动在落盘后逐个执行）
+      const downstream: Array<{ id: string; autoStartOnUnblock: boolean }> = []
+      for (const candidate of Object.values(draft.tasks)) {
+        if (candidate.column !== 'backlog' || !candidate.dependsOn.includes(task.id)) continue
+        if (blockedDependenciesOf(candidate, draft.tasks).length > 0) continue
+        downstream.push({ id: candidate.id, autoStartOnUnblock: candidate.autoStartOnUnblock === true })
+      }
+      return { task, conversationId: task.conversationId, downstream }
+    })
+    await runtime.flushRecords()
+
+    // 衍生 1：会话换归档标签（失败仅影响侧栏分组展示，容忍上报）
+    if (conversationId !== undefined) {
+      await swapConversationTag(ctx, runtime, conversationId, TASK_ARCHIVED_TAG).catch((err) => {
+        runtime.reportError(`任务 ${task.id} 结单后会话 #${conversationId} 换标签失败（不影响验收结果）`, err)
+      })
+    }
+
+    // 衍生 2：下游接棒逐个两阶段启动（单个失败上报继续，不阻断其余与验收事实）
+    const unblockedTaskIds = downstream.map((d) => d.id)
+    const autoStartedTaskIds: string[] = []
+    for (const candidate of downstream) {
+      if (!candidate.autoStartOnUnblock) continue
+      try {
+        const occupied = await runtime.store.enqueueMutation((draft) => {
+          const target = draft.tasks[candidate.id]
+          if (target === undefined || target.column !== 'backlog') return false
+          const { maxConcurrentTasks } = runtime.getConfig()
+          const inProgress = Object.values(draft.tasks).filter((t) => t.column === 'in_progress').length
+          if (maxConcurrentTasks > 0 && inProgress >= maxConcurrentTasks) return false
+          target.column = 'in_progress'
+          target.startedAt = Date.now()
+          target.updatedAt = target.startedAt
+          delete target.silenceState
+          return true
+        })
+        if (!occupied) continue
+        await runtime.flushRecords()
+        await launchTaskExecution(ctx, runtime, candidate.id)
+        autoStartedTaskIds.push(candidate.id)
+      } catch (err) {
+        runtime.reportError(`任务结单后下游任务 ${candidate.id} 自动接棒启动失败（任务保留待办可手动 start）`, err)
+        await runtime.store
+          .enqueueMutation((draft) => {
+            const target = draft.tasks[candidate.id]
+            if (target === undefined || target.conversationId !== undefined || target.column !== 'in_progress') return
+            target.column = 'backlog'
+            delete target.startedAt
+            target.updatedAt = Date.now()
+          })
+          .catch(() => undefined)
+      }
+    }
+    return { task, unblockedTaskIds, autoStartedTaskIds }
   }
 
   // ---------------- approve ----------------
@@ -830,6 +1054,7 @@ export function registerTasksActions(ctx: HelmxPluginContext, runtime: TasksRunt
       throw new HelmxError('validation_error', `mergeAction 非法（收到：${String(input.mergeAction)}）`, 400, {})
     }
     const mergeAction = input.mergeAction ?? 'close_only'
+    const note = input.note !== undefined ? sanitizeText(ctx, input.note) : undefined
     return runtime.track('task:approve', async () => {
       if (mergeAction === 'merge_and_close') {
         // 投递原子模式：状态变更与指令投递在同一串行 mutation 内，submitInput 成功后才 write；
@@ -859,7 +1084,7 @@ export function registerTasksActions(ctx: HelmxPluginContext, runtime: TasksRunt
           delete task.silenceState
           task.updatedAt = Date.now()
           const conversationId = task.conversationId!
-          await ctx.host.submitInput(conversationId, buildMergeClosingPrompt(task, input.note), {
+          await ctx.host.submitInput(conversationId, buildMergeClosingPrompt(task, note), {
             origin: 'agent',
             whenBusy: 'followUp',
             requestId: `${TASKS_PLUGIN_ID}:merge:${task.id}:${task.submission?.submittedAt ?? Date.now()}`,
@@ -870,78 +1095,8 @@ export function registerTasksActions(ctx: HelmxPluginContext, runtime: TasksRunt
         return { task, unblockedTaskIds: [], autoStartedTaskIds: [] }
       }
 
-      // close_only：核心事实（done 终转）先落盘 flush，衍生动作（会话换标签、下游接棒）失败容忍上报不回滚
-      const { task, conversationId, downstream } = await runtime.store.enqueueMutation((draft) => {
-        const task = requireTaskInDraft(draft.tasks, input.taskId)
-        if (task.column !== 'in_review' && task.column !== 'in_progress') {
-          throw new HelmxError(
-            'task_invalid_column',
-            `任务 ${task.id} 当前位于 ${task.column} 列，仅待验收（或确认中的进行中）任务可验收通过`,
-            409,
-            { pluginId: TASKS_PLUGIN_ID, taskId: task.id, column: task.column },
-          )
-        }
-        const now = Date.now()
-        task.column = 'done'
-        task.completedAt = now
-        delete task.mergePending
-        delete task.silenceState
-        task.updatedAt = now
-
-        // 下游依赖解锁扫描：backlog 中依赖本任务的任务，全部前置 done 即解锁（启动在落盘后逐个执行）
-        const downstream: Array<{ id: string; autoStartOnUnblock: boolean }> = []
-        for (const candidate of Object.values(draft.tasks)) {
-          if (candidate.column !== 'backlog' || !candidate.dependsOn.includes(task.id)) continue
-          if (blockedDependenciesOf(candidate, draft.tasks).length > 0) continue
-          downstream.push({ id: candidate.id, autoStartOnUnblock: candidate.autoStartOnUnblock === true })
-        }
-        return { task, conversationId: task.conversationId, downstream }
-      })
-      await runtime.flushRecords()
-
-      // 衍生 1：会话换归档标签（失败仅影响侧栏分组展示，容忍上报）
-      if (conversationId !== undefined) {
-        await swapConversationTag(ctx, runtime, conversationId, TASK_ARCHIVED_TAG).catch((err) => {
-          runtime.reportError(`任务 ${task.id} 结单后会话 #${conversationId} 换标签失败（不影响验收结果）`, err)
-        })
-      }
-
-      // 衍生 2：下游接棒逐个两阶段启动（单个失败上报继续，不阻断其余与验收事实）
-      const unblockedTaskIds = downstream.map((d) => d.id)
-      const autoStartedTaskIds: string[] = []
-      for (const candidate of downstream) {
-        if (!candidate.autoStartOnUnblock) continue
-        try {
-          const occupied = await runtime.store.enqueueMutation((draft) => {
-            const target = draft.tasks[candidate.id]
-            if (target === undefined || target.column !== 'backlog') return false
-            const { maxConcurrentTasks } = runtime.getConfig()
-            const inProgress = Object.values(draft.tasks).filter((t) => t.column === 'in_progress').length
-            if (maxConcurrentTasks > 0 && inProgress >= maxConcurrentTasks) return false
-            target.column = 'in_progress'
-            target.startedAt = Date.now()
-            target.updatedAt = target.startedAt
-            delete target.silenceState
-            return true
-          })
-          if (!occupied) continue
-          await runtime.flushRecords()
-          await launchTaskExecution(ctx, runtime, candidate.id)
-          autoStartedTaskIds.push(candidate.id)
-        } catch (err) {
-          runtime.reportError(`任务 ${task.id} 验收后下游任务 ${candidate.id} 自动接棒启动失败（任务保留待办可手动 start）`, err)
-          await runtime.store
-            .enqueueMutation((draft) => {
-              const target = draft.tasks[candidate.id]
-              if (target === undefined || target.conversationId !== undefined || target.column !== 'in_progress') return
-              target.column = 'backlog'
-              delete target.startedAt
-              target.updatedAt = Date.now()
-            })
-            .catch(() => undefined)
-        }
-      }
-      return { task, unblockedTaskIds, autoStartedTaskIds }
+      // close_only：复用共享终转（done 先落盘 flush，衍生容忍）
+      return finalizeTaskDone(input.taskId)
     })
   }
 
@@ -953,6 +1108,10 @@ export function registerTasksActions(ctx: HelmxPluginContext, runtime: TasksRunt
     assertPlannerAuthority(runtime, context, 'rework')
     if (typeof input.feedback !== 'string' || input.feedback.trim() === '') {
       throw new HelmxError('validation_error', 'feedback 必须是非空返工意见', 400, {})
+    }
+    const feedback = sanitizeText(ctx, input.feedback).trim()
+    if (feedback === '') {
+      throw new HelmxError('validation_error', 'feedback 脱敏后为空（原文本仅含机密标记）', 400, {})
     }
     return runtime.track('task:rework', async () => {
       // 投递原子模式：状态变更 + 意见投递同一串行 mutation，submitInput 成功后才 write（失败 draft 丢弃可干净重试）；
@@ -989,7 +1148,7 @@ export function registerTasksActions(ctx: HelmxPluginContext, runtime: TasksRunt
         }
         task.column = 'in_progress'
         task.reworkCount += 1
-        task.lastReworkFeedback = input.feedback.trim()
+        task.lastReworkFeedback = feedback
         delete task.mergePending
         delete task.silenceState
         task.updatedAt = Date.now()
@@ -998,7 +1157,7 @@ export function registerTasksActions(ctx: HelmxPluginContext, runtime: TasksRunt
           const conversationId = task.conversationId!
           await ctx.host.submitInput(conversationId, buildReworkDeliveryPrompt(task, input.feedback), {
             origin: 'agent',
-            whenBusy: 'steer',
+            whenBusy: 'followUp',
             requestId: `${TASKS_PLUGIN_ID}:rework:${task.id}:${task.reworkCount}`,
           })
           await swapConversationTag(ctx, runtime, conversationId, TASK_ACTIVE_TAG)
@@ -1078,6 +1237,18 @@ export function registerTasksActions(ctx: HelmxPluginContext, runtime: TasksRunt
               { pluginId: TASKS_PLUGIN_ID, taskId: task.id, column: task.column },
             )
           }
+        }
+        // 前置引用守卫：仍被其他未删除任务 dependsOn 引用时拒删（先解除引用或删除引用方）
+        const referencedBy = Object.values(draft.tasks)
+          .filter((other) => other.id !== task.id && other.dependsOn.includes(task.id))
+          .map((other) => other.id)
+        if (referencedBy.length > 0) {
+          throw new HelmxError(
+            'task_dependency_referenced',
+            `任务 ${task.id} 仍被 ${referencedBy.join(', ')} 作为前置依赖引用，不可删除（先在引用方的 dependsOn 中移除 '${task.id}'，或先删除引用方任务）`,
+            409,
+            { pluginId: TASKS_PLUGIN_ID, taskId: task.id, referencedBy },
+          )
         }
         const conversationId = task.conversationId
         delete draft.tasks[task.id]
@@ -1272,6 +1443,31 @@ export function registerTasksActions(ctx: HelmxPluginContext, runtime: TasksRunt
   })
 
   ctx.action({
+    id: 'request_plan_approval',
+    description: 'Request explicit user approval of the plan for the planFirst task bound to a conversation (real AskDoc confirm; blocks until answered).',
+    exposeAsTool: false,
+    scope: { tags: [TASK_ACTIVE_TAG] },
+    cli: { command: ['tasks', 'request-plan-approval'], description: 'Request plan approval for the bound planFirst task' },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        plan: { type: 'string', minLength: 1, description: 'Concise implementation plan for the user to approve' },
+        conversationId: { type: 'integer', minimum: 1, description: 'Task execution conversation to ask in (defaults to the calling conversation)' },
+      },
+      required: ['plan'],
+      additionalProperties: false,
+    } as never,
+    outputSchema: { type: 'object' } as never,
+    handler: async (input: { plan: string; conversationId?: number }, context) => {
+      const conversationId = input.conversationId ?? context.conversationId
+      if (conversationId === undefined) {
+        throw new HelmxError('validation_error', 'conversationId 必填（会话外人工调用无法定位绑定任务）', 400, {})
+      }
+      return requestPlanApproval(ctx, runtime, input, conversationId, context.signal)
+    },
+  })
+
+  ctx.action({
     id: 'archive',
     description: 'Archive a backlog or done task off the active board (running tasks are refused).',
     exposeAsTool: false,
@@ -1314,11 +1510,12 @@ export function registerTasksActions(ctx: HelmxPluginContext, runtime: TasksRunt
     name: 'task_create',
     description:
       'Create a task board card with a self-contained brief (context, scope, acceptance criteria) and optionally start it immediately on an independent top-level execution conversation. Use when the user wants to delegate a well-defined unit of work instead of doing it in the current conversation.',
-    promptSnippet: 'Delegate well-defined units of work to the task board (`task_create`) and keep this conversation for planning and review.',
+    promptSnippet: 'Put work on the task board (`task_create`) only when the user explicitly asks to delegate or track it as a board card; keep ordinary requests inline.',
     promptGuidelines: [
+      'Call task_create only when the user explicitly asks to put work on the board / delegate it (e.g. "create a task for this", "track this on the board"), or confirms a breakdown you proposed; never auto-delegate ordinary requests you can simply do inline.',
+      'A bare go-ahead continues the already-agreed intent in the current conversation; do not reinterpret it as delegation to the board.',
+      'Confirm multi-card breakdowns (with dependsOn wiring) with the user before creating them.',
       'Write a self-contained brief: background, scope, acceptance criteria, and target directory; never rely on unstated here-and-now context.',
-      'Do not write the business code yourself in the planning conversation; delegate it via task_create and review via task_approve / task_rework.',
-      'Split large efforts into multiple tasks wired with dependsOn; chained tasks auto-start when their prerequisites pass review.',
     ],
     inputSchema: {
       type: 'object',
@@ -1456,13 +1653,51 @@ export function registerTasksActions(ctx: HelmxPluginContext, runtime: TasksRunt
   })
 
   ctx.tool({
+    name: 'task_request_plan_approval',
+    description:
+      'Request explicit user approval of your implementation plan for the planFirst task bound to this conversation. Blocks until the user answers a real Ask card (confirm); only after an approved result can task_submit hand in the work. Use exactly once per plan revision on planFirst tasks.',
+    promptSnippet: 'On a planFirst task, call `task_request_plan_approval` with your concise plan and wait for the explicit user decision before writing code.',
+    promptGuidelines: [
+      'Call task_request_plan_approval only inside the planFirst execution conversation this tool is bound to; provide a concise, checkable plan.',
+      'If the user rejects the plan, revise it and ask again (or surface the disagreement); never start coding after a rejection.',
+      'task_submit is refused until the plan approval decision is approved.',
+    ],
+    inputSchema: {
+      type: 'object',
+      properties: {
+        plan: { type: 'string', minLength: 1, description: 'Concise implementation plan for the user to approve' },
+      },
+      required: ['plan'],
+      additionalProperties: false,
+    } as never,
+    structuredOutputSchema: { type: 'object' } as never,
+    scope: { tags: [TASK_ACTIVE_TAG] },
+    replay: 'unsafe',
+    execute: async (input: never, toolContext: PluginToolContext) => {
+      const req = input as { plan: string }
+      if (typeof req.plan !== 'string' || req.plan.trim() === '') {
+        throw new HelmxError('validation_error', 'plan 必须是非空方案摘要', 400, {})
+      }
+      const res = await requestPlanApproval(ctx, runtime, req, toolContext.conversationId, toolContext.signal)
+      const output =
+        res.decision === 'approved'
+          ? `Plan for task ${res.taskId} approved by the user; you may start implementing.`
+          : res.decision === 'rejected'
+            ? `Plan for task ${res.taskId} was rejected by the user; revise it and request approval again.`
+            : `Plan approval ask for task ${res.taskId} ended without a decision (${res.decision}); no approval was recorded.`
+      return { output, structuredOutput: res }
+    },
+  })
+
+  ctx.tool({
     name: 'task_approve',
     description:
       'Accept a reviewed task (planner/human action): close_only marks it done and auto-unblocks downstream dependsOn tasks; merge_and_close asks the assignee to merge its branch and clean up first.',
-    promptSnippet: 'Close the review loop with `task_approve` (close_only or merge_and_close) or `task_rework` with concrete feedback.',
+    promptSnippet: 'Close the review loop with `task_approve` (close_only or merge_and_close) or `task_rework` with concrete feedback — only after explicit user acceptance.',
     promptGuidelines: [
-      'Approve with close_only when the submission passes; the task moves to done and blocked downstream tasks auto-start.',
-      'Use merge_and_close when the assignee must merge its isolated branch and clean up the worktree before completion.',
+      'Call task_approve only after the user has explicitly accepted the submission; the tool being callable never implies default authorization to approve on your own.',
+      'Approve with close_only when the user accepts; the task moves to done and blocked downstream tasks auto-start.',
+      'Use merge_and_close when the user accepts AND authorizes merging the assignee branch now; the assignee merges, cleans up, and its evidence-bearing task_submit completes the task directly.',
       'Never approve from inside a task execution conversation; approval belongs to the planning side.',
     ],
     inputSchema: {

@@ -240,6 +240,8 @@ export {
   type TaskRecord,
   type TaskSubmission,
   type TaskSilenceState,
+  type TaskPlanApproval,
+  type TaskBoardEntry,
 } from './tasks/contracts.js'
 export { activeTaskSection, buildTaskKickoffPrompt } from './tasks/prompts.js'
 export {

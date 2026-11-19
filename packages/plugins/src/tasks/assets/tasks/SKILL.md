@@ -33,7 +33,7 @@ Use `builtin:tasks` when work should run in **independent execution conversation
 
 - `assigneeProfileId`: pick the profile that matches the work (default falls back to plugin config `defaultAssigneeProfile`, then this conversation's profile, then `assistant`). Verify the profile exists and is selectable.
 - `nodeId` / `cwd`: default to the executor profile's binding, then the current conversation's coordinates. **Remote nodes require an explicit cwd** — never assume a remote node's default directory.
-- `planFirst: true` when the approach is risky or contested: the assignee must post a plan and ask for user approval through a real Ask (the conversation question mechanism) before coding; while the Ask is pending the board shows the task as blocked on a human decision.
+- `planFirst: true` when the approach is risky or contested: the assignee must call `task_request_plan_approval` with its plan; a real Ask card blocks until the user explicitly approves or rejects, and `task_submit` is refused until an approval is recorded.
 - `autoMerge: false` (default) keeps the assignee on an isolated branch; only you merge after review. Set `true` only for trusted routine work.
 
 ## 4. Splitting into Dependency Chains
@@ -47,7 +47,7 @@ Use `builtin:tasks` when work should run in **independent execution conversation
 - Check status: `task_list` (filters: column / project / assignee / node), `task_inspect` for one task with live conversation state, recent entries, artifacts, and dependency status.
 - Review: when a card reaches `in_review`, read its `submission` (summary, verification, branch, changed files). Then:
   - `task_approve` (default `close_only`): marks done, archives the execution conversation, unblocks/downstream auto-start.
-  - `task_approve` with `mergeAction: 'merge_and_close'`: asks the assignee to merge its branch, clean the worktree, and submit again.
+  - `task_approve` with `mergeAction: 'merge_and_close'`: explicitly authorizes the merge now (overriding autoMerge=false for this closure); the assignee merges, cleans up, and its evidence-bearing `task_submit` (branch or verification) completes the task in one step.
   - `task_rework` with concrete `feedback`: returns the card to in_progress and delivers the feedback to the execution conversation.
 - Be honest: never approve work you have not checked; never fabricate progress. If a card shows "stalled" (turn settled without submission) or a missing conversation, surface it to the user instead of papering over it — the plugin never auto-nudges a human-owned execution conversation; ask the user to open the conversation and continue explicitly, or send it back with `task_rework`.
 

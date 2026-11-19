@@ -455,13 +455,16 @@ test('tasks-int4: merge_and_close loop, dependency cycle rejection, blocked star
     )
     assert.equal(mergeDelivered, true, 'merge closing instruction must be delivered')
     await kernel.waitForIdle(convId)
+    // Evidence-bearing submit under merge authorization completes the task in one step (no second manual click)
     await waitFor(async () => {
       const task = await taskFromAction(env, 'T-1')
-      return task.column === 'in_review' && task.mergePending === undefined
+      return task.column === 'done' && task.mergePending === undefined
     })
-    // Final close
-    await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'approve', { taskId: 'T-1' })
-    assert.equal((await taskFromAction(env, 'T-1')).column, 'done')
+    const merged = await taskFromAction(env, 'T-1')
+    assert.equal(merged.column, 'done')
+    assert.match(merged.submission?.branch ?? '', /feat\/t-1/)
+    const mergedConv = kernel.listConversations().find((c) => c.id === convId)
+    assert.equal(mergedConv!.tags.includes(TASK_ARCHIVED_TAG), true, 'one-step merge closure archives the conversation')
   } finally {
     await env.close()
   }
@@ -656,6 +659,189 @@ test('tasks-int6: disable hides tools/UI/skill immediately while execution conve
     const task = await taskFromAction(env, 'T-1')
     assert.equal(task.column, 'done')
     assert.equal(boardDoc(env).tasks.some((entry) => entry.id === 'T-1'), true)
+  } finally {
+    await env.close()
+  }
+})
+
+test('tasks-int7: planFirst real AskDoc approval gate (request tool blocks until answered; submit refused until approved)', { timeout: 60_000 }, async (t) => {
+  const env = await openTasksEnv(useTempDir(t, 'helmx-tasks-int7-'))
+  try {
+    const { kernel } = env.app
+    setRoutedResponses(env.faux, {
+      assignee: [
+        (ctx) => {
+          const meta = captureRequestMeta(ctx.messages as unknown as Record<string, unknown>[])
+          assert.ok(
+            meta.toolNames.includes('task_request_plan_approval'),
+            'assignee must see task_request_plan_approval on a planFirst task',
+          )
+          assert.match(meta.sectionsById[ACTIVE_TASK_SECTION_ID]!, /task_request_plan_approval/)
+          return fauxAssistantMessage(
+            [fauxToolCall('task_request_plan_approval', { plan: '1) probe repo 2) implement fix 3) run tests' })],
+            { stopReason: 'toolUse' },
+          )
+        },
+        (ctx) => {
+          const meta = captureRequestMeta(ctx.messages as unknown as Record<string, unknown>[])
+          assert.match(meta.sectionsById[ACTIVE_TASK_SECTION_ID]!, /task_request_plan_approval/)
+          return fauxAssistantMessage(
+            [fauxToolCall('task_submit', { summary: 'implemented per approved plan', verification: 'tests green' })],
+            { stopReason: 'toolUse' },
+          )
+        },
+        fauxAssistantMessage('Handed in.'),
+      ],
+      planner: [fauxAssistantMessage('planner idle')],
+      child: [fauxAssistantMessage('ok')],
+    })
+    const created = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'create', {
+      title: 'Risky refactor',
+      brief: 'Refactor the auth path. Acceptance: tests pass.',
+      planFirst: true,
+    })) as { conversationId?: number }
+    const convId = created.conversationId!
+
+    // Gate proof before any approval: a direct submit is refused (same handler the model tool hits)
+    await assert.rejects(
+      () => kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'submit', { taskId: 'T-1', summary: 'premature' }),
+      (err: unknown) => err instanceof HelmxError && err.code === 'task_plan_not_approved' && err.status === 409,
+    )
+
+    // The approval tool call blocks the turn on a real pending Ask; answer it from the test side (same chain as HTTP)
+    let askId: string | undefined
+    await waitFor(async () => {
+      const pending = kernel.listAsks('pending').find((a) => a.conversationId === convId)
+      if (pending === undefined) return false
+      askId = pending.id
+      return true
+    })
+    assert.match(askId!, /^builtin:tasks:plan:T-1:/)
+    const pendingAsk = kernel.listAsks('pending').find((a) => a.id === askId)!
+    assert.equal(pendingAsk.fields[0]!.type, 'confirm')
+    await kernel.answerAsk(askId!, { approve: 'true' })
+
+    await kernel.waitForIdle(convId)
+    await waitFor(async () => (await taskFromAction(env, 'T-1')).column === 'in_review')
+    const task = await taskFromAction(env, 'T-1')
+    assert.equal(task.planApproval?.decision, 'approved')
+    assert.equal(task.planApproval?.askId, askId)
+    assert.equal(task.submission?.summary, 'implemented per approved plan')
+  } finally {
+    await env.close()
+  }
+})
+
+test('tasks-int7b: rejected plan keeps the submit gate closed; the ask stays visible until answered', { timeout: 60_000 }, async (t) => {
+  const env = await openTasksEnv(useTempDir(t, 'helmx-tasks-int7b-'))
+  try {
+    const { kernel } = env.app
+    setRoutedResponses(env.faux, {
+      assignee: [
+        fauxAssistantMessage(
+          [fauxToolCall('task_request_plan_approval', { plan: 'rewrite everything from scratch' })],
+          { stopReason: 'toolUse' },
+        ),
+        fauxAssistantMessage('User rejected; I will revise the plan and stay put.'),
+      ],
+      planner: [fauxAssistantMessage('planner idle')],
+      child: [fauxAssistantMessage('ok')],
+    })
+    const created = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'create', {
+      title: 'Contested change',
+      brief: 'Change the storage layer. Acceptance: migration passes.',
+      planFirst: true,
+    })) as { conversationId?: number }
+    const convId = created.conversationId!
+    let askId: string | undefined
+    await waitFor(async () => {
+      const pending = kernel.listAsks('pending').find((a) => a.conversationId === convId)
+      if (pending === undefined) return false
+      askId = pending.id
+      return true
+    })
+    await kernel.answerAsk(askId!, { approve: 'false' })
+    await kernel.waitForIdle(convId)
+    const task = await taskFromAction(env, 'T-1')
+    assert.equal(task.planApproval?.decision, 'rejected')
+    assert.equal(task.column, 'in_progress', 'rejection must not fake progress')
+    // Direct submit attempt still refused after rejection
+    await assert.rejects(
+      () =>
+        kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'submit', {
+          taskId: 'T-1',
+          summary: 'went ahead anyway',
+        }),
+      (err: unknown) => err instanceof HelmxError && err.code === 'task_plan_not_approved' && err.status === 409,
+    )
+  } finally {
+    await env.close()
+  }
+})
+
+test('tasks-int8: dependency-referenced delete guard, force-disable drops the active_task section, recreate delivers kickoff + feedback', { timeout: 60_000 }, async (t) => {
+  const env = await openTasksEnv(useTempDir(t, 'helmx-tasks-int8-'))
+  try {
+    const { kernel } = env.app
+    // --- delete guard: T-1 still referenced by T-2 ---
+    await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'create', { title: 'A', brief: 'a', autoStart: false })
+    await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'create', {
+      title: 'B',
+      brief: 'b',
+      autoStart: false,
+      dependsOn: ['T-1'],
+    })
+    await assert.rejects(
+      () => kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'delete', { taskId: 'T-1' }),
+      (err: unknown) =>
+        err instanceof HelmxError && err.code === 'task_dependency_referenced' && err.status === 409,
+    )
+    // Removing the reference unblocks deletion
+    await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'update', { taskId: 'T-2', dependsOn: [] })
+    await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'delete', { taskId: 'T-1' })
+
+    // --- force-disable while a task is running: the injected section disappears on the next turn ---
+    const sections: Array<Record<string, string>> = []
+    env.faux.setResponses(
+      Array.from({ length: 8 }, () => async (ctx) => {
+        const meta = captureRequestMeta(ctx.messages as unknown as Record<string, unknown>[])
+        sections.push(meta.sectionsById)
+        return fauxAssistantMessage('ok')
+      }),
+    )
+    const created = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'create', {
+      title: 'Section probe',
+      brief: 'Acceptance: n/a.',
+    })) as { conversationId?: number }
+    const convId = created.conversationId!
+    await kernel.waitForIdle(convId)
+    assert.ok(sections[0]![ACTIVE_TASK_SECTION_ID] !== undefined, 'section injected while enabled')
+    await kernel.plugins.disable(TASKS_PLUGIN_ID, { force: true })
+    assert.equal(kernel.plugins.list().find((p) => p.id === TASKS_PLUGIN_ID)?.enabled, false)
+    await kernel.submitInput(convId, 'still there?')
+    await kernel.waitForIdle(convId)
+    assert.equal(sections[sections.length - 1]![ACTIVE_TASK_SECTION_ID], undefined, 'no phantom section after disable')
+    await kernel.plugins.enable(TASKS_PLUGIN_ID)
+
+    // --- recreate delivers both the fresh kickoff brief and the rework feedback ---
+    const repro = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'create', {
+      title: 'Recreate probe',
+      brief: 'Original brief body.',
+    })) as { task: TaskRecord; conversationId?: number }
+    await kernel.deleteConversation(repro.conversationId!)
+    await waitFor(async () => (await taskFromAction(env, repro.task.id)).conversationMissing === true)
+    const recreated = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'rework', {
+      taskId: repro.task.id,
+      feedback: 'please redo it carefully',
+      recreateConversation: true,
+    })) as { conversationId?: number }
+    await kernel.waitForIdle(recreated.conversationId!)
+    const detail = await kernel.getConversationDetail(recreated.conversationId!, { limit: 20 })
+    const inputs = detail.entries.filter((e) => e.kind === 'helmx.input')
+    const joined = inputs.map((e) => JSON.stringify(e.model ?? e.data ?? '')).join('\n')
+    assert.match(joined, /<task_kickoff id=/)
+    assert.match(joined, /Original brief body\./)
+    assert.match(joined, /please redo it carefully/)
   } finally {
     await env.close()
   }
