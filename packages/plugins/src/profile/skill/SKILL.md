@@ -58,6 +58,7 @@ managedByPlugin: {{MANAGED_BY}}
 
 ### Nodes and cross-machine execution
 - `helm nodes list`: nodes and online status; `helm nodes issue <nodeId>`: issue a join token (the plaintext is returned exactly once); `helm nodes remove <nodeId>`; `helm nodes upgrade <nodeId> [--check]`: check or perform a node upgrade; `helm nodes forward [<nodeId> | --current] <listenHost:listenPort> [<targetHost>:]<targetPort>`: foreground local TCP port forwarding (the event stream is the holder; Ctrl-C exits and closes); `helm nodes forwards` / `helm nodes forward-inspect <forwardId>` / `helm nodes forward-stop <forwardId>`: active forward list/detail/stop.
+- Remote machines join as nodes with a one-time npm install of the node daemon (`npm install -g @team4u/helm-node`) followed by `helm-node start -d --hub <url> --token <nodeId>:<secret>`; later versions arrive via `helm nodes upgrade` (the daemon binds the `@team4u/helm-node` + `@team4u/helm-cli` npm artifacts at one version).
 - `helm env exec [--node <id>] [--cwd <dir>] [--timeout <ms>] [--stream] [--current] -- <command...>`: execute a command directly across nodes; the timeout unit is milliseconds.
 
 ### Plugins and actions
