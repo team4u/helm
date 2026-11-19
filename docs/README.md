@@ -1,6 +1,6 @@
-# Helm 文档中心
+# Helmx 文档中心
 
-Helm 是极简持久微内核多智能体编排系统：内核只保留持久会话、跨平台节点执行底座、Model/Auth 与插件宿主四块通用机制，编排引擎、角色资产、终端协同等一切业务能力由插件提供。本文档中心是全部文档的总索引：先按读者角色选入口，再按目录深入。
+Helmx 是极简持久微内核多智能体编排系统：内核只保留持久会话、跨平台节点执行底座、Model/Auth 与插件宿主四块通用机制，编排引擎、角色资产、终端协同等一切业务能力由插件提供。本文档中心是全部文档的总索引：先按读者角色选入口，再按目录深入。
 
 ## 按读者角色选读
 
@@ -10,7 +10,7 @@ Helm 是极简持久微内核多智能体编排系统：内核只保留持久会
 
 **插件开发者**：先读[极简微内核哲学](architecture/overview.md)与[生命周期 Hook 与全界面扩展点](architecture/extension-points.md)理解机制边界，再读[插件系统设计与契约](plugins/overview.md)和[自定义插件开发实战](plugins/plugin-development.md)上手 `definePlugin(ctx)`。只想扩展某个内置插件时，从下方插件索引进入同名文档。
 
-**Web 界面开发者**：读 [Web 前端设计系统与开发约定](conventions/web-frontend.md)（视图形态分级、Radix 原语底座、移动端规范）与 [Web 导航与 URL Hash 约定](conventions/web-navigation.md)（深链、分屏参数与前进后退语义）；`@helm/plugin-client` 的共享原语契约随[插件系统设计与契约](plugins/overview.md)一并给出。
+**Web 界面开发者**：读 [Web 前端设计系统与开发约定](conventions/web-frontend.md)（视图形态分级、Radix 原语底座、移动端规范）与 [Web 导航与 URL Hash 约定](conventions/web-navigation.md)（深链、分屏参数与前进后退语义）；`@helmx/plugin-client` 的共享原语契约随[插件系统设计与契约](plugins/overview.md)一并给出。
 
 **运维与节点管理**：按[安装与配置指南](getting-started/installation.md)规划端口、数据目录与凭据隔离（含 Docker 部署拓扑），读 [EnvFabric 分布式执行底座](architecture/envfabric.md)了解远端节点零 SSH 接入、透传隧道与自升级，日常操作查 [CLI 全量命令参考手册](cli/reference.md)。
 
@@ -67,7 +67,7 @@ Helm 是极简持久微内核多智能体编排系统：内核只保留持久会
 
 | 文档 | 说明 |
 | :--- | :--- |
-| [CLI 全量命令参考手册](cli/reference.md) | `helm` 与 `helm-node` 全量命令字典（含 `--json` 与 `--current`） |
+| [CLI 全量命令参考手册](cli/reference.md) | `helmx` 与 `helmx-node` 全量命令字典（含 `--json` 与 `--current`） |
 | [Web 前端设计系统与开发约定](conventions/web-frontend.md) | 视图形态分级、Radix 原语与移动端规范 |
 | [Web 导航与 URL Hash 约定](conventions/web-navigation.md) | 深链、分屏与刷新恢复的路由规范 |
 | [发布流程](releasing.md) | `release.yml` 职责链、发布门槛与 npm Hub payload 发布 |

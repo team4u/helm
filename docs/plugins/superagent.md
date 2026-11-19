@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-默认停用，显式 `helm plugins enable builtin:superagent` 启用。启用时自举两个常驻 Profile（`superagent` 中枢、`watchdog` 看门狗，含 SYSTEM.md 资产与 `watchdog-playbooks` 技能包），创建两个受管会话（`manageConversation` 删除保护、归属标记 `helm`）。停用期间 `helm.rewind` 造成的 RecallGraph 漂移在下次启用时分页重放补偿。
+默认停用，显式 `helmx plugins enable builtin:superagent` 启用。启用时自举两个常驻 Profile（`superagent` 中枢、`watchdog` 看门狗，含 SYSTEM.md 资产与 `watchdog-playbooks` 技能包），创建两个受管会话（`manageConversation` 删除保护、归属标记 `helmx`）。停用期间 `helmx.rewind` 造成的 RecallGraph 漂移在下次启用时分页重放补偿。
 
 ## 能力和入口
 
@@ -13,7 +13,7 @@
 - **L0 确定性路由（`trigger` 钩子）**：`mutedSources` 命中的事件 0-Token 丢弃；`threadKey` 命中活跃 Worker 订阅时 `transform` 直投该 Worker（0ms 直通）；失效订阅清理后回落常规路由；无显式目标的信封缺省路由中枢会话。
 - **路由收敛模式**（`routerMode`，默认开启）：`before_turn` 对中枢会话剥离重度阻塞工具（`edit / write / bash / subagent / SubagentWorkflow`）并注入 `<active_workers>` 态势段落；`tool_call` 钩子二次守卫。中枢保持轻量回合，耗时执行全部发生在 Worker 会话。
 - **输入 origin 追踪与自动汇报**：Worker 回合 `turn_settled` 时先写 RecallGraph；本回合消费输入含 `agent` / `trigger` 来源即向中枢投递结构化汇报卡（`meta.renderer: 'superagent:worker-report'`，前端 timelineRenderer 渲染）；纯 `human` 回合仅静默更新图谱。
-- **RecallGraph**：公开文档 `recall-graph` 持久化结算节点（会话 / profileId / completionSeq / inputIds / outcome / 摘要 / 产物元数据 / 关键词）。`helm.rewind` 回退输入时（实时事件 + 启用期重放补偿）`omittedInputIds` 命中节点即时删除。
+- **RecallGraph**：公开文档 `recall-graph` 持久化结算节点（会话 / profileId / completionSeq / inputIds / outcome / 摘要 / 产物元数据 / 关键词）。`helmx.rewind` 回退输入时（实时事件 + 启用期重放补偿）`omittedInputIds` 命中节点即时删除。
 
 ### 动作与工具（五端复用）
 
@@ -27,7 +27,7 @@
 | `watchdog_inspect` / `watchdog_recover` / `watchdog_abort` | 工具 + 同名动作 | L2 认知排障专属工具；`scope` 限定 watchdog Profile 且执行期核对会话 ID；`inspect` 附会话 cwd 进程占用快照（`activeProcesses`，探测失败不伪造空清单） |
 | `watchdog_tick` | 动作 | 手动触发一次巡检 |
 
-`dispatch_worker` 是本插件专属协议，与 `subagent` 的 `background` 参数无关、不得当作通用后台派生入口。Worker 会话属 `ownedBy: 'helm'` 自动化会话，其派生任务按归属策略缺省同步。
+`dispatch_worker` 是本插件专属协议，与 `subagent` 的 `background` 参数无关、不得当作通用后台派生入口。Worker 会话属 `ownedBy: 'helmx'` 自动化会话，其派生任务按归属策略缺省同步。
 
 ### 两层巡检看门狗
 
@@ -42,7 +42,7 @@
 | 持续 error 或连续错误达 `errorThreshold`（默认 3） | `wake_watchdog` |
 | 停滞达 `stalledAfterMs`（默认 5 分钟） | `wake_watchdog` |
 | human 归属异常 / 外部窗格无权威 seq | 仅只读通知 |
-| `workflow_run` 失败探针（helm 归属，冷却期满） | `auto_resume` 断点续跑 |
+| `workflow_run` 失败探针（helmx 归属，冷却期满） | `auto_resume` 断点续跑 |
 
 去重状态持久化于私有 doc：同 `(targetKind, nodeId, targetId, stateChangeSeq)` 同类动作恰好一次，跨重启不重复危险动作；文档损坏显式报错拒绝巡检。`workflow_run` 续跑链路：冷却退避按已续跑次数 0/1/2 → 2/5/15 分钟，达 3 次上限交人类；每 tick 最多恢复 1 个且最旧失败优先；经 `host.invokeAction('builtin:workflow', 'run', { resumeFromRunId, ... })` 从断点恢复。
 

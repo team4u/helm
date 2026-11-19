@@ -14,26 +14,26 @@
 - **`SubagentWorkflow`**：确定性 DSL 编排（内联 `script` / `scriptPath` / 已保存 `name`），journal 账本支持 `resumeFromRunId` 断点恢复；
 - **`cleanup_worktree`**：清理受管隔离 Git Worktree（错误分支绝不伪造 metadata）。
 
-后台策略按**当前会话归属**判定：human 会话缺省后台（终态后幂等汇报自动到达父会话，禁止 sleep 轮询）、显式 `background: false` 同步等待；`bot` / `helm` 自动化会话缺省同步、显式 `background: true` 拒绝。`helm workflows run` 动作与模型工具的 `background` 是不同参数、不同入口。
+后台策略按**当前会话归属**判定：human 会话缺省后台（终态后幂等汇报自动到达父会话，禁止 sleep 轮询）、显式 `background: false` 同步等待；`bot` / `helmx` 自动化会话缺省同步、显式 `background: true` 拒绝。`helmx workflows run` 动作与模型工具的 `background` 是不同参数、不同入口。
 
 ### 动作（14 个，五端复用）
 
 | 动作 | CLI 映射 | 说明 |
 | :--- | :--- | :--- |
-| `list` | `helm workflows list` | 列出已保存定义（每条携带真实文件事实 `updatedAt` / `size`；元数据非法条目保留并附 `metadataError`） |
-| `get` | `helm workflows get <name>` | 读取完整定义（只读源码 + 元数据；Web/AI 只读，不提供编辑） |
-| `save` | `helm workflows save [nameOrFile]` | `script`（位置参数为本地脚本文件时自动读入）或 `--from-run-id` 二选一；缺省名用 `meta.name`；默认拒绝覆盖，`--overwrite` 才覆盖；保存前语法预检，原子写入 |
-| `delete` | `helm workflows delete <name>` | 删除定义文件（历史运行记录不受影响）；防目录外符号链接 |
-| `run` | `helm workflows run [nameOrFile]` | 启动运行；新 run 必须显式指定会话（CLI `--current` 或 `--conversation-id`）；`--wait` 同步等终态；`--resume-from-run-id` 同时支持失败 DSL 工作流与具可续接句柄的 `failed/aborted` 单子代理 |
-| `runs` | `helm workflows runs` | 列出运行记录，支持按会话过滤 |
-| `inspect` | `helm workflows inspect <runId>` | 单个运行详情（节点状态 + 进度时间线） |
-| `abort` | `helm workflows abort <runId>` | 中止运行中的工作流或后台子代理 |
-| `steer` | `helm workflows steer <runId> --text` | 向在途后台子代理插话纠偏；原生执行经内核 guarded 端口按归属与 CAS 水位提交，外部执行按节点 `controls.steer` 委托目标插件并如实返回 `guardLevel`（`preflight` / `cas`）；`steered=true` 仅代表投递成功 |
-| `detach` | `helm workflows detach <runId>` | 把运行中的**前台同步** run 转入后台：阻塞中的工具调用立即返回后台句柄，终态 followUp 汇报；仅 running 且前台同步标记的 run 可转，run 发起会话必须 human-owned |
-| `resume_failed` | `helm workflows resume-failed` | 批量续接指定会话（`--conversation-id` / `--current`）或全局（`--all`）下所有可恢复的 `failed` 工作流与后台单子代理；不可恢复项如实记入 `skipped` |
-| `cleanup_worktree` | `helm worktrees cleanup` | 与工具同款；选择器 `--worktree-id` / `--conversation-id` / `--path [--node-id]` 三选一互斥 |
-| `list_worktrees` | `helm worktrees list` | 受管工作树登记（含已清理记录的元数据） |
-| `inspect_worktree` | `helm worktrees inspect <worktreeId>` | 只读检视：登记元数据 + 目标节点真实 git 只读探测（状态/统计/有上限 diff 预览）；仅登记记录可检视 |
+| `list` | `helmx workflows list` | 列出已保存定义（每条携带真实文件事实 `updatedAt` / `size`；元数据非法条目保留并附 `metadataError`） |
+| `get` | `helmx workflows get <name>` | 读取完整定义（只读源码 + 元数据；Web/AI 只读，不提供编辑） |
+| `save` | `helmx workflows save [nameOrFile]` | `script`（位置参数为本地脚本文件时自动读入）或 `--from-run-id` 二选一；缺省名用 `meta.name`；默认拒绝覆盖，`--overwrite` 才覆盖；保存前语法预检，原子写入 |
+| `delete` | `helmx workflows delete <name>` | 删除定义文件（历史运行记录不受影响）；防目录外符号链接 |
+| `run` | `helmx workflows run [nameOrFile]` | 启动运行；新 run 必须显式指定会话（CLI `--current` 或 `--conversation-id`）；`--wait` 同步等终态；`--resume-from-run-id` 同时支持失败 DSL 工作流与具可续接句柄的 `failed/aborted` 单子代理 |
+| `runs` | `helmx workflows runs` | 列出运行记录，支持按会话过滤 |
+| `inspect` | `helmx workflows inspect <runId>` | 单个运行详情（节点状态 + 进度时间线） |
+| `abort` | `helmx workflows abort <runId>` | 中止运行中的工作流或后台子代理 |
+| `steer` | `helmx workflows steer <runId> --text` | 向在途后台子代理插话纠偏；原生执行经内核 guarded 端口按归属与 CAS 水位提交，外部执行按节点 `controls.steer` 委托目标插件并如实返回 `guardLevel`（`preflight` / `cas`）；`steered=true` 仅代表投递成功 |
+| `detach` | `helmx workflows detach <runId>` | 把运行中的**前台同步** run 转入后台：阻塞中的工具调用立即返回后台句柄，终态 followUp 汇报；仅 running 且前台同步标记的 run 可转，run 发起会话必须 human-owned |
+| `resume_failed` | `helmx workflows resume-failed` | 批量续接指定会话（`--conversation-id` / `--current`）或全局（`--all`）下所有可恢复的 `failed` 工作流与后台单子代理；不可恢复项如实记入 `skipped` |
+| `cleanup_worktree` | `helmx worktrees cleanup` | 与工具同款；选择器 `--worktree-id` / `--conversation-id` / `--path [--node-id]` 三选一互斥 |
+| `list_worktrees` | `helmx worktrees list` | 受管工作树登记（含已清理记录的元数据） |
+| `inspect_worktree` | `helmx worktrees inspect <worktreeId>` | 只读检视：登记元数据 + 目标节点真实 git 只读探测（状态/统计/有上限 diff 预览）；仅登记记录可检视 |
 
 `run`、`resume_failed` 与 `cleanup_worktree` 对会话目标有显式冲突校验：输入 `conversationId` 与调用上下文同时存在且不一致时显式 `400 validation_error`；`resume_failed` 同时要求 `conversationId` 与 `all: true` 互斥。
 
@@ -50,7 +50,7 @@
 | :--- | :--- | :--- | :--- |
 | `maxConcurrentAgents` | integer | 按 CPU 并行度计算（2..32） | 单个 run 的并发 agent 上限（1..128） |
 | `maxSubagentDepth` | integer | 2 | 受管子代理嵌套深度上限（1..5）；主会话为第 0 层，变更只影响新派生任务树 |
-| `autoRecoverOnRestart` | boolean | `true` | Hub 重启无感原位恢复开关；设为 `false` 或设 `HELM_AUTO_RECOVER=0` 时回退关停中止与启动标记失败路径 |
+| `autoRecoverOnRestart` | boolean | `true` | Hub 重启无感原位恢复开关；设为 `false` 或设 `HELMX_AUTO_RECOVER=0` 时回退关停中止与启动标记失败路径 |
 
 状态分布在五个文档，按消费面精确划分：
 

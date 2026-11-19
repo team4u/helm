@@ -108,7 +108,7 @@ const tasks = planOutput.strategy === "direct" ? [] : validateTasks(planOutput.t
 phase("执行开发")
 let reviewNotes = ""
 if (planOutput.strategy === "review_then_tasks") {
-  // 运行前先保存 cross-review.js：helm workflows save docs/workflows/examples/cross-review.js
+  // 运行前先保存 cross-review.js：helmx workflows save docs/workflows/examples/cross-review.js
   const review = await workflow("cross-review", {
     mode: "create_and_refine",
     cwd: modWt.path,

@@ -1,23 +1,23 @@
 # 微内核架构总览
 
-本文面向需要理解 Helm 内部结构的开发者：内核与插件贡献者、做架构评审的读者、以及要判断「某个能力应该实现在内核还是插件」的工程师。读完你应当能回答：内核到底保留了什么、为什么只有这四块机制、包之间的依赖方向如何、插件宿主的生命周期边界在哪里。操作层面的内容（安装、命令、写工作流）不在本文范围，请从[文档中心](../README.md)按角色选读。
+本文面向需要理解 Helmx 内部结构的开发者：内核与插件贡献者、做架构评审的读者、以及要判断「某个能力应该实现在内核还是插件」的工程师。读完你应当能回答：内核到底保留了什么、为什么只有这四块机制、包之间的依赖方向如何、插件宿主的生命周期边界在哪里。操作层面的内容（安装、命令、写工作流）不在本文范围，请从[文档中心](../README.md)按角色选读。
 
-Helm 是极简持久微内核的多智能体编排系统。内核只提供四块通用机制——持久会话状态机、跨平台执行底座、模型接入与插件宿主；角色、编排、记忆、巡检等一切策略性能力全部由插件在机制之上组合实现。后端 Hook 与前端扩展点的完整契约见[扩展点详解](extension-points.md)，跨节点执行底座见 [EnvFabric](envfabric.md)，会话与存储见 [pi-durable 集成](pi-durable.md)。
+Helmx 是极简持久微内核的多智能体编排系统。内核只提供四块通用机制——持久会话状态机、跨平台执行底座、模型接入与插件宿主；角色、编排、记忆、巡检等一切策略性能力全部由插件在机制之上组合实现。后端 Hook 与前端扩展点的完整契约见[扩展点详解](extension-points.md)，跨节点执行底座见 [EnvFabric](envfabric.md)，会话与存储见 [pi-durable 集成](pi-durable.md)。
 
 ## 微内核四块通用机制
 
-`@helm/kernel` 的职责收敛为四块机制，每块都与具体业务正交。`helm-hub` 进程入口属于 `@helm/hub`，由它选择插件、注入构建实现并启动内核：
+`@helmx/kernel` 的职责收敛为四块机制，每块都与具体业务正交。`helmx-hub` 进程入口属于 `@helmx/hub`，由它选择插件、注入构建实现并启动内核：
 
 | 机制 | 核心内容 | 明确不包含 |
 | :--- | :--- | :--- |
 | `pi-durable` 持久会话 | 通用 `Conversation(nodeId, cwd)` 五态状态机、`state.sqlite` + FTS5 派生索引、`AskDoc` 审批流、`SecretStash` 机密隔离、纯文件资产热重载、原生 `spawnAgent` 子会话派生（`agent_spawn` Hook 管道 + 默认执行行） | 编排引擎、Worktree 租约（均在 `builtin:workflow`） |
-| `EnvFabric` + `NodeRegistry` | `/ws/node` 反向 WebSocket 网关、`/ws/node-tunnel` 节点任意 TCP 透传隧道（`openTunnel` 原语 + `nodeFetch` 适配层）、内建 `local` 节点 + 远端 `@helm/node` 守护进程、`bash / read / write / edit` 内核工具与 `runGate` / `env exec` 宿主端口、按 `nodeId + canonicalPath` 的文件互斥 | 终端主控逻辑（`builtin:herdr`） |
+| `EnvFabric` + `NodeRegistry` | `/ws/node` 反向 WebSocket 网关、`/ws/node-tunnel` 节点任意 TCP 透传隧道（`openTunnel` 原语 + `nodeFetch` 适配层）、内建 `local` 节点 + 远端 `@helmx/node` 守护进程、`bash / read / write / edit` 内核工具与 `runGate` / `env exec` 宿主端口、按 `nodeId + canonicalPath` 的文件互斥 | 终端主控逻辑（`builtin:herdr`） |
 | Model 与 Auth | 模型供应商接入、模型禁用过滤、凭据（`credentials.json`）与令牌管理 | 业务级模型路由策略（`builtin:magpie`） |
 | `PluginHost` | 唯一强类型插件宿主 `definePlugin(ctx)`：生命周期 Hook、动作/工具/路由注册、doc 持久化、服务协调 | 任何具体插件的功能实现 |
 
 ```mermaid
 flowchart TD
-    subgraph Core["@helm/kernel 微内核"]
+    subgraph Core["@helmx/kernel 微内核"]
         Durable["pi-durable 持久会话 + 原生 spawnAgent"]
         Fabric["EnvFabric + NodeRegistry 执行底座"]
         ModelAuth["Model 与 Auth"]
@@ -57,7 +57,7 @@ export interface ConversationSummary {
   title: string
   profileId: string        // 身份：提示词 / 记忆 / 技能 / 模型
   tags: string[]           // 运行态：生命周期与分组标记
-  ownedBy?: 'human' | 'helm' | 'bot'  // 归属权（自动化红线的判定依据）
+  ownedBy?: 'human' | 'helmx' | 'bot'  // 归属权（自动化红线的判定依据）
   nodeId?: string          // 绑定计算节点（缺省 'local'）
   cwd: string              // 目标节点视角工作目录
   status: ConversationStatus
@@ -71,54 +71,54 @@ export interface ConversationSummary {
 
 ```mermaid
 flowchart TD
-    Hub["@helm/hub 产品组合根"] --> Kernel["@helm/kernel 机制"]
-    Hub --> Plugins["@helm/plugins 官方插件"]
-    Hub --> Build["@helm/plugin-build 构建实现"]
-    Kernel --> Protocol["@helm/protocol 通用契约"]
+    Hub["@helmx/hub 产品组合根"] --> Kernel["@helmx/kernel 机制"]
+    Hub --> Plugins["@helmx/plugins 官方插件"]
+    Hub --> Build["@helmx/plugin-build 构建实现"]
+    Kernel --> Protocol["@helmx/protocol 通用契约"]
     Plugins --> Protocol
-    Plugins --> Client["@helm/plugin-client 浏览器 SDK"]
+    Plugins --> Client["@helmx/plugin-client 浏览器 SDK"]
     Build --> Protocol
     Client --> Protocol
-    Web["@helm/web 应用"] --> Client
+    Web["@helmx/web 应用"] --> Client
     Web --> Protocol
-    Cli["@helm/cli"] --> Protocol
-    Node["@helm/node"] --> Protocol
-    Kernel --> EnvIo["@helm/env-io 执行侧共享实现"]
+    Cli["@helmx/cli"] --> Protocol
+    Node["@helmx/node"] --> Protocol
+    Kernel --> EnvIo["@helmx/env-io 执行侧共享实现"]
     Cli --> EnvIo
     Node --> EnvIo
     EnvIo --> Protocol
 ```
 
-- `@helm/protocol` 只放通用跨包契约（会话、RPC、插件契约类型、错误码与 `CORE_CLI_COMMAND_PATHS`），零运行时重依赖；工作流、工作树等插件业务契约归属 `@helm/plugins`。
+- `@helmx/protocol` 只放通用跨包契约（会话、RPC、插件契约类型、错误码与 `CORE_CLI_COMMAND_PATHS`），零运行时重依赖；工作流、工作树等插件业务契约归属 `@helmx/plugins`。
 - 内核不得依赖插件或组合根；生产源码不得通过相对路径跨包或导入其他包的私有 `src`；新增依赖必须声明，包依赖图必须无环。
-- `@helm/plugin-client` 是独立浏览器 SDK，不反向依赖 Web 应用；插件 client.tsx 与宿主共享同一份 React 运行时。
-- `@helm/plugin-build` 提供构建实现，由产品层通过端口注入宿主；内核自身不携带 esbuild，未注入端口时对 client UI 与 TS 插件显式拒绝。
+- `@helmx/plugin-client` 是独立浏览器 SDK，不反向依赖 Web 应用；插件 client.tsx 与宿主共享同一份 React 运行时。
+- `@helmx/plugin-build` 提供构建实现，由产品层通过端口注入宿主；内核自身不携带 esbuild，未注入端口时对 client UI 与 TS 插件显式拒绝。
 
 | 包 | 可执行 | 职责 |
 | :--- | :--- | :--- |
-| `@helm/protocol` | — | 通用类型、Schema、错误码与 `CORE_CLI_COMMAND_PATHS` |
-| `@helm/kernel` | — | 持久会话、EnvFabric、Model/Auth、PluginHost 与 HTTP 服务机制 |
-| `@helm/plugins` | — | 官方插件、插件业务契约、客户端视图与技能资产 |
-| `@helm/plugin-client` | — | 共享 UI 原语、上下文、Hooks 与宿主接入端口 |
-| `@helm/plugin-build` | — | 插件源码构建实现，由产品组合根注入宿主 |
-| `@helm/env-io` | — | 执行侧共享 I/O 与共享自更新引擎（路径进程占用扫描；更新引擎位于 `src/update/`，从包根导出） |
-| `@helm/hub` | `helm-hub` | 默认插件注册、构建实现接线、服务进程启动与关闭 |
-| `@helm/node` | `helm-node` | 远端执行、文件系统操作与自升级 |
-| `@helm/cli` | `helm` | 静态核心命令表 + 动作清单动态命令（含 `src/launcher/` 的 `helm update` 生命周期面） |
-| `@helm/web` | — | Web 应用（开发端口 3201，代理至 Hub 3202） |
-| `@helm/payload` | — | npm 三制品组装器（Hub payload / CLI bundle / node 守护进程 bundle） |
+| `@helmx/protocol` | — | 通用类型、Schema、错误码与 `CORE_CLI_COMMAND_PATHS` |
+| `@helmx/kernel` | — | 持久会话、EnvFabric、Model/Auth、PluginHost 与 HTTP 服务机制 |
+| `@helmx/plugins` | — | 官方插件、插件业务契约、客户端视图与技能资产 |
+| `@helmx/plugin-client` | — | 共享 UI 原语、上下文、Hooks 与宿主接入端口 |
+| `@helmx/plugin-build` | — | 插件源码构建实现，由产品组合根注入宿主 |
+| `@helmx/env-io` | — | 执行侧共享 I/O 与共享自更新引擎（路径进程占用扫描；更新引擎位于 `src/update/`，从包根导出） |
+| `@helmx/hub` | `helmx-hub` | 默认插件注册、构建实现接线、服务进程启动与关闭 |
+| `@helmx/node` | `helmx-node` | 远端执行、文件系统操作与自升级 |
+| `@helmx/cli` | `helmx` | 静态核心命令表 + 动作清单动态命令（含 `src/launcher/` 的 `helmx update` 生命周期面） |
+| `@helmx/web` | — | Web 应用（开发端口 3201，代理至 Hub 3202） |
+| `@helmx/payload` | — | npm 三制品组装器（Hub payload / CLI bundle / node 守护进程 bundle） |
 
-`helm`（控制 CLI）与 `helm-node`（节点守护进程）不得混装在同一包或同一命令中：二者的信任模型与部署位置完全不同。
+`helmx`（控制 CLI）与 `helmx-node`（节点守护进程）不得混装在同一包或同一命令中：二者的信任模型与部署位置完全不同。
 
 ## Hub 组合根：唯一选择默认插件的地方
 
-`@helm/hub` 的 `createHelm()`（`packages/hub/src/app.ts`）只做三件事：
+`@helmx/hub` 的 `createHelmx()`（`packages/hub/src/app.ts`）只做三件事：
 
-1. **注入构建实现**：默认注入 `@helm/plugin-build` 的 provider（client.tsx 编译 + 外部 TS 转译），调用方可整体替换；内核机制与构建工具分离。
+1. **注入构建实现**：默认注入 `@helmx/plugin-build` 的 provider（client.tsx 编译 + 外部 TS 转译），调用方可整体替换；内核机制与构建工具分离。
 2. **注册内置插件并设定启停**：`builtin:profile`（locked 常驻）、`builtin:workflow`、`builtin:memory`、`builtin:json-render`、`builtin:mermaid`、`builtin:apps`、`builtin:triggers`、`builtin:magpie`、`builtin:token-speed` 九个默认启用；`builtin:herdr`、`builtin:superagent` 两个默认停用。随后从数据目录加载外部插件。
 3. **统一启动**：全部插件注册后执行 `kernel.start()`——先按依赖拓扑对全体服务 `prepare()`，再依次 `start()`，最后恢复 SDK 调度器。
 
-直接使用 `KernelRuntime.open()` 时不隐式注册任何内置插件，可独立验证内核机制；使用 `createHelm()` 得到完整产品。Web 静态目录托管属于产品层：直接使用内核 HTTP handler 时缺省只服务 API，提供 `webDistDir` 才启用静态托管。
+直接使用 `KernelRuntime.open()` 时不隐式注册任何内置插件，可独立验证内核机制；使用 `createHelmx()` 得到完整产品。Web 静态目录托管属于产品层：直接使用内核 HTTP handler 时缺省只服务 API，提供 `webDistDir` 才启用静态托管。
 
 插件的 `dependencies` 字段声明插件间依赖（仅 ID，不做版本解析）：启用时逐项校验依赖必须已注册且已启用，否则 `409 plugin_dependency_missing` / `plugin_dependency_not_enabled`；注册边界检测环路（含自依赖）返回 `409 plugin_dependency_cycle`；全局启动屏障按依赖拓扑序 prepare/start，stop/dispose 按逆拓扑序。
 
@@ -142,20 +142,20 @@ flowchart TD
 
 ## API 与 CLI 同权
 
-Hub 不存在仅 Web 可用或仅 CLI 可用的私有接口。新增面向用户的 HTTP 接口必须在同一次改动补齐 CLI 映射（`packages/cli/src/commands/`，含 `--json` 与 `--current` 会话/节点自动感知），并同步 `@helm/protocol` 的 `CORE_CLI_COMMAND_PATHS` 与 `builtin:profile` 的 `helm-cli` 技能文档（测试双向锁定校验）。
+Hub 不存在仅 Web 可用或仅 CLI 可用的私有接口。新增面向用户的 HTTP 接口必须在同一次改动补齐 CLI 映射（`packages/cli/src/commands/`，含 `--json` 与 `--current` 会话/节点自动感知），并同步 `@helmx/protocol` 的 `CORE_CLI_COMMAND_PATHS` 与 `builtin:profile` 的 `helmx-cli` 技能文档（测试双向锁定校验）。
 
 插件通过 `ctx.action({ id, inputSchema, outputSchema })` 单点声明动作，自动获得五端映射：
 
 ```mermaid
 flowchart LR
     Action["ctx.action() 单点声明"] --> Http["POST /api/actions/:pluginId/:actionId"]
-    Action --> Cli["helm &lt;plugin&gt; &lt;action&gt;"]
+    Action --> Cli["helmx &lt;plugin&gt; &lt;action&gt;"]
     Action --> Tool["Agent Tool（exposeAsTool 或 run_action）"]
     Action --> Wf["Workflow action()"]
     Action --> Web["Web UI invokeAction"]
 ```
 
-关键规则：`pluginId` 含 `:` 时按 URI 编码；内置插件自动剥离 `builtin:` 前缀生成 CLI 命令路径，`cli.command` 可整体覆写（如 `builtin:workflow` 的 `cleanup_worktree` 动作注册为 `helm worktrees cleanup`）；`cli.positional` 声明位置参数映射，`readFileInto` 支持把本地文件内容读入目标字段；`cli.timeoutMs = 0` 表示无超时，供长耗时动作使用；`idempotent: true` 的动作在工作流中断后允许从该步安全重跑。人工 HTTP/CLI 调用可无 `conversationId`，模型路径（`run_action`）与 Workflow 路径必须携带 `conversationId` 供宿主校验会话作用域（`scope`），防止绕过会话边界。
+关键规则：`pluginId` 含 `:` 时按 URI 编码；内置插件自动剥离 `builtin:` 前缀生成 CLI 命令路径，`cli.command` 可整体覆写（如 `builtin:workflow` 的 `cleanup_worktree` 动作注册为 `helmx worktrees cleanup`）；`cli.positional` 声明位置参数映射，`readFileInto` 支持把本地文件内容读入目标字段；`cli.timeoutMs = 0` 表示无超时，供长耗时动作使用；`idempotent: true` 的动作在工作流中断后允许从该步安全重跑。人工 HTTP/CLI 调用可无 `conversationId`，模型路径（`run_action`）与 Workflow 路径必须携带 `conversationId` 供宿主校验会话作用域（`scope`），防止绕过会话边界。
 
 ## 边界纪律
 
@@ -163,6 +163,6 @@ flowchart LR
 
 1. **边界处强校验**：所有外部输入——HTTP body、插件产物、工作流 DSL、事件载荷、外部交接文件——在入口处执行类型/Schema 校验，非法输入显式拒绝而非静默降级；能力不支持、节点离线、交接失败必须显式报错并附诊断，绝不静默回退本机或编造数据。
 2. **公共接口消费方普查**：改动跨包类型或导出符号前先改契约所属包，再全仓搜索全部消费方并同步，漏改即事故。
-3. **开发阶段不兼容、不迁移**：允许对 helm 代码、公共接口、配置、数据库结构和开发数据直接做破坏性修改；严禁编写向后兼容层、旧格式读取、迁移脚本或双写。旧开发数据按新结构重建，历史仓库（botx/botd/herdr）严格只读，运行数据仅限 `~/.helm`。
+3. **开发阶段不兼容、不迁移**：允许对 helmx 代码、公共接口、配置、数据库结构和开发数据直接做破坏性修改；严禁编写向后兼容层、旧格式读取、迁移脚本或双写。旧开发数据按新结构重建，历史仓库（botx/botd/herdr）严格只读，运行数据仅限 `~/.helmx`。
 
-验证覆盖两条路径：无默认插件打开 `KernelRuntime` 确认会话与节点机制可用、缺少构建端口时相关请求显式失败；使用 `createHelm` 注册官方插件确认工具、动作、UI 与技能生效且停用后贡献消失。全量验收命令见根 [AGENTS.md](../../AGENTS.md)。
+验证覆盖两条路径：无默认插件打开 `KernelRuntime` 确认会话与节点机制可用、缺少构建端口时相关请求显式失败；使用 `createHelmx` 注册官方插件确认工具、动作、UI 与技能生效且停用后贡献消失。全量验收命令见根 [AGENTS.md](../../AGENTS.md)。

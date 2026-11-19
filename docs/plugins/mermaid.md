@@ -19,11 +19,11 @@
 
 Mermaid 库体量大且迭代频繁，本插件采用**受控 npm 依赖**机制打包进编译产物：
 
-- 插件定义声明 `npmDependencies: { mermaid: <@helm/plugins 包根> }`——版本由仓库 pnpm-lock 锁定，插件自身不携带依赖；
+- 插件定义声明 `npmDependencies: { mermaid: <@helmx/plugins 包根> }`——版本由仓库 pnpm-lock 锁定，插件自身不携带依赖；
 - 宿主编译器把该说明符解析进 bundle，逐文件 containment 校验（不越解析根）；依赖文件 hash 随缓存清单持久化，缓存命中时复查——解析根消失或文件变化即失效重编译，绝不静默复用旧产物；
 - 浏览器端**零预加载**：宿主不预先加载任何图表库，`mermaid` 只在本插件编译产物 chunk 中按需 `import()`。
 
-外部插件等价机制是在 `plugin.json` / `package.json` `helm` 字段声明 `clientDependencies: string[]`，宿主映射为「解析根 = 插件自身目录」的受控依赖（代码内自指解析根对外部插件无效）。
+外部插件等价机制是在 `plugin.json` / `package.json` `helmx` 字段声明 `clientDependencies: string[]`，宿主映射为「解析根 = 插件自身目录」的受控依赖（代码内自指解析根对外部插件无效）。
 
 ## 配置与数据边界
 

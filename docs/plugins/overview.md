@@ -1,10 +1,10 @@
 # 插件系统设计与契约
 
-本文面向两类读者：想理解 Helm 插件宿主如何工作的内核/插件贡献者，以及准备为自己的能力选择承载形态（内置插件、外部插件还是全栈微应用）的开发者。读完你应当能回答：插件能拿到哪些宿主能力、一次 `ctx.action` 声明如何映射到五个消费端、插件的状态存放在哪里、停用一个插件会发生什么。插件开发的上手教程见[插件开发实战](plugin-development.md)，Hook 与 UI 扩展点的逐项契约见[扩展点详解](../architecture/extension-points.md)。
+本文面向两类读者：想理解 Helmx 插件宿主如何工作的内核/插件贡献者，以及准备为自己的能力选择承载形态（内置插件、外部插件还是全栈微应用）的开发者。读完你应当能回答：插件能拿到哪些宿主能力、一次 `ctx.action` 声明如何映射到五个消费端、插件的状态存放在哪里、停用一个插件会发生什么。插件开发的上手教程见[插件开发实战](plugin-development.md)，Hook 与 UI 扩展点的逐项契约见[扩展点详解](../architecture/extension-points.md)。
 
 ## 当前状态
 
-插件系统是 Helm 的核心生产能力：内核（`@helm/kernel`）只保留持久会话、跨节点执行底座、Model/Auth 与插件宿主四块通用机制，其余一切业务能力由插件承载。官方插件实现与资产位于 `packages/plugins`，由产品组合根 `packages/hub/src/app.ts` 的 `createHelm` 注册，共 12 个内置插件：
+插件系统是 Helmx 的核心生产能力：内核（`@helmx/kernel`）只保留持久会话、跨节点执行底座、Model/Auth 与插件宿主四块通用机制，其余一切业务能力由插件承载。官方插件实现与资产位于 `packages/plugins`，由产品组合根 `packages/hub/src/app.ts` 的 `createHelmx` 注册，共 12 个内置插件：
 
 | 插件 ID | 名称 | 职责一句话 | 默认状态 | locked |
 | :--- | :--- | :--- | :--- | :--- |
@@ -29,7 +29,7 @@
 
 ### `definePlugin(ctx)` 契约
 
-每个插件实现 `definePlugin(ctx)`（`PluginDefinition`，见 `@helm/protocol` 的 `packages/protocol/src/plugin.ts`）。内置插件经 TypeScript 工厂函数构造；外部插件在 `plugin.json` 声明入口后 `export default` 定义对象。上下文能力面：
+每个插件实现 `definePlugin(ctx)`（`PluginDefinition`，见 `@helmx/protocol` 的 `packages/protocol/src/plugin.ts`）。内置插件经 TypeScript 工厂函数构造；外部插件在 `plugin.json` 声明入口后 `export default` 定义对象。上下文能力面：
 
 | 接口 | 职责 | 关键约束 |
 | :--- | :--- | :--- |
@@ -44,7 +44,7 @@
 | `ctx.service(spec)` | 注册后台长驻服务 | `prepare / start / stop / liveTasks / inUse` |
 | `ctx.provider(provider)` | 注册模型供应商网关 | 启用时挂载、停用后注销，宿主统一协调 |
 | `ctx.ui` | 前端扩展点注册表（16 个 surface） | 见[扩展点详解](../architecture/extension-points.md) |
-| `ctx.host` | 宿主运行时能力（`HelmHostApi`） | 见下文 |
+| `ctx.host` | 宿主运行时能力（`HelmxHostApi`） | 见下文 |
 
 启动时序遵守**全局 prepare 后 start 屏障**：`PluginHost.start` 先对全体已启用服务执行 `prepare()`，全部完成后才依次 `start()`，最后恢复会话调度。热启用单个插件同样先 prepare 后 start。`stop()` 返回后本周期 doc 句柄失效；宿主在 await `stop()` 链期间开放受控停止窗口，允许本插件当前周期的 doc 句柄完成最终写入（`builtin:workflow` 在此窗口做最终 runs 投影并 `await flush()`）。
 
@@ -55,16 +55,16 @@
 | 消费端 | 映射形态 |
 | :--- | :--- |
 | HTTP | `POST /api/actions/:pluginId/:actionId`（pluginId 含 `:` 时 URI 编码） |
-| CLI | `helm <plugin> <action>` 顶层动态命令（`builtin:` 前缀剥离，`cli.command` 可整体覆写） |
+| CLI | `helmx <plugin> <action>` 顶层动态命令（`builtin:` 前缀剥离，`cli.command` 可整体覆写） |
 | Agent Tool | `exposeAsTool: true` 直接注入工具列表；否则经 `run_action` 元工具按需调用 |
 | Workflow | 编排脚本 `action('pluginId.actionId', input, options)` |
-| Web UI | 声明式 Spec `{ type: 'helm:action', pluginId, actionId, input }` 或 `ctx.callAction` |
+| Web UI | 声明式 Spec `{ type: 'helmx:action', pluginId, actionId, input }` 或 `ctx.callAction` |
 
 输入输出在边界处统一 JSON Schema 强校验；输出经宿主统一脱敏。启用且匹配会话 `scope`、未 `exposeAsTool` 的动作会投射进系统提示 `<available_actions>` 目录，随插件启停即时增删，不留幻影提示词。`idempotent: true` 是作者对安全重试的承诺：工作流账本在成功后进入前缀缓存复用，中断恢复可安全重跑；缺省 `false` 的动作一旦执行状态不确定，账本标记 `workflow_action_uncertain`，恢复时显式交由人类确认。
 
 ### `ctx.host` 能力面
 
-`ctx.host`（`HelmHostApi`）是插件调用内核机制的唯一受信通道，实现已绑定插件自身 ID。按职责分组：
+`ctx.host`（`HelmxHostApi`）是插件调用内核机制的唯一受信通道，实现已绑定插件自身 ID。按职责分组：
 
 | 分组 | 端口 |
 | :--- | :--- |
@@ -79,13 +79,13 @@
 
 三条使用纪律：受管 Git Worktree 清理不在 `ctx.host`——需要清理时调用 `builtin:workflow` 的 `cleanup_worktree` 动作；`execEnv` 目标节点或目录缺省继承请求会话坐标，节点离线显式报 `409 node_offline`，绝不静默回退本机。
 
-第三条纪律：插件做「清理/重置会话上下文」必须走 `resetConversationGuarded` / `compactConversationGuarded`（或复用既有 HTTP/CLI 面向人类开放的语义），**不得**用 `createConversation` 另起会话冒充上下文清理，也不得经 `execEnv`/`executionEnv` 反向调用宿主 `helm` CLI 绕过类型契约与归属红线（`execEnv` 是节点命令执行端口，不是宿主 API 通道）。
+第三条纪律：插件做「清理/重置会话上下文」必须走 `resetConversationGuarded` / `compactConversationGuarded`（或复用既有 HTTP/CLI 面向人类开放的语义），**不得**用 `createConversation` 另起会话冒充上下文清理，也不得经 `execEnv`/`executionEnv` 反向调用宿主 `helmx` CLI 绕过类型契约与归属红线（`execEnv` 是节点命令执行端口，不是宿主 API 通道）。
 
 ## 配置与数据边界
 
 - **专属数据目录**：每个插件分配 `<dataDir>/plugins/<id>/`，`ctx.doc` / `ctx.sessionDoc` 在 state.sqlite 中按插件划分命名空间。文档是紧凑状态而非数据仓库：单文档 JSON 序列化超过 **2 MiB** 即显式拒绝（`413 plugin_doc_too_large`），大体量内容应落盘为文件资产。
 - **公共与私有文档**：`public: true` 的 `ctx.doc` 进入全局 SSE 首帧 `pluginDocs` 并广播更新；`ctx.sessionDoc` 按会话分片、经专用 SSE 按需订阅（`builtin:workflow` 的 `runs` 与 `builtin:token-speed` 的 `speed` 即此形态）。公共文档禁止包含未脱敏机密。
-- **配置与机密**：`ctx.configSchema` 声明 `secret: true` 的字段自动分离到 `credentials.json` 的 `pluginSecrets.<pluginId>`（恒 0600）并注册 SecretStash 脱敏；插件配置经插件中心或 `helm plugins config <id>` 同权读写。
+- **配置与机密**：`ctx.configSchema` 声明 `secret: true` 的字段自动分离到 `credentials.json` 的 `pluginSecrets.<pluginId>`（恒 0600）并注册 SecretStash 脱敏；插件配置经插件中心或 `helmx plugins config <id>` 同权读写。
 - **技能与 Profile 资产**：插件可经 `ctx.host.skills.ensureSkill` 自举受管技能（frontmatter `managedByPlugin` 绑定本插件 ID，随启停进出技能目录），经 `ctx.host.profiles` 读写 Profile 资产。
 
 ## 插件间依赖与停用/失败语义
@@ -121,6 +121,6 @@
 ## 相关文档
 
 - 各内置插件深度文档：[workflow](workflow.md) · [swarm](swarm.md) · [profile](profile.md) · [memory](memory.md) · [apps](apps.md) · [herdr](herdr.md) · [superagent](superagent.md) · [triggers](triggers.md) · [magpie](magpie.md) · [json-render](json-render.md) · [mermaid](mermaid.md) · [token-speed](token-speed.md)
-- [插件开发实战](plugin-development.md)：从 `helm plugins init` 到 doctor / rescan / enable / reload 的完整闭环
+- [插件开发实战](plugin-development.md)：从 `helmx plugins init` 到 doctor / rescan / enable / reload 的完整闭环
 - [生命周期 Hook 与全界面扩展点](../architecture/extension-points.md)：7 个 Hook 与 16 个 UI surface 的逐项契约
 - [微内核架构总览](../architecture/overview.md)：内核四块机制与包依赖方向

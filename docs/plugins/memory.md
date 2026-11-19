@@ -1,6 +1,6 @@
 # 长期记忆插件
 
-`builtin:memory` 解决「跨会话记住用户偏好与约定」的问题：按 Profile 维护一份 `MEMORY.md`，每回合注入模型上下文，并提供单 Profile 粒度的开关。适合想让助理记住稳定偏好的使用者，以及排查记忆丢失/超限的维护者。记忆与人格正交——SYSTEM.md 归 [`builtin:profile`](profile.md)，MEMORY.md 归本插件；内核与 `@helm/protocol` 对记忆零感知。
+`builtin:memory` 解决「跨会话记住用户偏好与约定」的问题：按 Profile 维护一份 `MEMORY.md`，每回合注入模型上下文，并提供单 Profile 粒度的开关。适合想让助理记住稳定偏好的使用者，以及排查记忆丢失/超限的维护者。记忆与人格正交——SYSTEM.md 归 [`builtin:profile`](profile.md)，MEMORY.md 归本插件；内核与 `@helmx/protocol` 对记忆零感知。
 
 ## 当前状态
 
@@ -11,13 +11,13 @@
 ### 工具与动作
 
 - **`update_memory` 工具**：更新当前会话 Profile 的 MEMORY.md。`append` 追加、`replace` 替换全文；Profile 已关闭时执行期复核并返回 `403 memory_disabled_for_profile`。大小防线唯一权威点在 MemoryStore 文件锁内（合并后检查），跨会话同 Profile 并发 `append` 不可能叠加突破上限。
-- **三个 `ctx.action`**（五端复用，CLI `helm memory <action>`）：
+- **三个 `ctx.action`**（五端复用，CLI `helmx memory <action>`）：
 
 | 动作 | CLI | 说明 |
 | :--- | :--- | :--- |
-| `get` | `helm memory get` | 返回 `{profileId, enabled, content, initialized}`；文件不存在如实返回空串 |
-| `set` | `helm memory set --text <str> [--mode replace\|append]` | 写入 MEMORY.md；关闭的 Profile 403；超限 `400 memory_limit_exceeded` |
-| `configure` | `helm memory configure --enabled <bool> [--text <str>]` | 先写文本、成功后才提交开关，失败不留半配置；开启且未初始化时惰性创建文件 |
+| `get` | `helmx memory get` | 返回 `{profileId, enabled, content, initialized}`；文件不存在如实返回空串 |
+| `set` | `helmx memory set --text <str> [--mode replace\|append]` | 写入 MEMORY.md；关闭的 Profile 403；超限 `400 memory_limit_exceeded` |
+| `configure` | `helmx memory configure --enabled <bool> [--text <str>]` | 先写文本、成功后才提交开关，失败不留半配置；开启且未初始化时惰性创建文件 |
 
 目标解析纪律统一：显式 `--profile-id` 优先；省略时从调用会话上下文解析（CLI `--current`）；两者皆缺显式 `400 validation_error`，不猜测默认角色。Profile 不存在返回 `404 profile_not_found`。
 
@@ -43,7 +43,7 @@ Profile 关闭记忆时不读文件、不注入段落，并剥离 `update_memory
 
 ## 停用与失败语义
 
-停用本插件后：`update_memory` 工具、`helm memory` 动态命令、Profile 详情抽屉的记忆编辑器与注入段落即时消失；磁盘 MEMORY.md 文件保留，重新启用即恢复。开关影响后续调用与回合，不取消在途写入。Profile 删除后以相同 ID 重建时，开关状态仍按 ID 生效；本设计不提供 Profile 删除时的记忆状态清理。
+停用本插件后：`update_memory` 工具、`helmx memory` 动态命令、Profile 详情抽屉的记忆编辑器与注入段落即时消失；磁盘 MEMORY.md 文件保留，重新启用即恢复。开关影响后续调用与回合，不取消在途写入。Profile 删除后以相同 ID 重建时，开关状态仍按 ID 生效；本设计不提供 Profile 删除时的记忆状态清理。
 
 初始化语义的诚实边界：从未初始化的合法 Profile 首次需要记忆时惰性创建默认骨架（不误报缺失）；已初始化后被外部删除时显式 warning 通知（按 profileId 独立去重）+ 注入 `memory.assets-missing`，绝不启动时无条件重建掩盖丢失；文件恢复或工具写入后自愈。
 
@@ -60,4 +60,4 @@ Profile 关闭记忆时不读文件、不注入段落，并剥离 `update_memory
 
 - [角色与技能底座](profile.md)：SYSTEM.md 注入（与本插件正交）
 - [插件系统设计与契约](overview.md)：`ctx.doc` / `ctx.action` 宿主机制
-- [CLI 命令参考](../cli/reference.md)：`helm memory` 命令与 `--current`
+- [CLI 命令参考](../cli/reference.md)：`helmx memory` 命令与 `--current`

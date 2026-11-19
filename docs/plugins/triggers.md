@@ -21,20 +21,20 @@
 
 | 动作 | CLI | 说明 |
 | :--- | :--- | :--- |
-| `cron_create` | `helm cron create` | `--id`（1..64 位 `[A-Za-z0-9_-]`，禁点号）/ `--schedule` / `--text` 必填；可选 `--timezone` / `--description` / `--enabled` / `--catchUp` / `--target-conversation-id`（与 `--target-profile-id` 互斥）/ `--thread-key`。会话动作目录附三条使用指引（五字段语义、IANA 时区与投递目标、触发只投递 text 文本而非任意 shell 定时器） |
-| `cron_delete` | `helm cron delete <id>` | 删除任务；在途投递自然终止，不复活 |
-| `cron_trigger` | `helm cron trigger <id>` | 手动立即真实投递一次（失败抛错，不影响后续计划调度） |
-| `cron_list` | `helm cron list` | 全部任务含 `lastRunAt` / `nextRunAt` / `lastError` |
+| `cron_create` | `helmx cron create` | `--id`（1..64 位 `[A-Za-z0-9_-]`，禁点号）/ `--schedule` / `--text` 必填；可选 `--timezone` / `--description` / `--enabled` / `--catchUp` / `--target-conversation-id`（与 `--target-profile-id` 互斥）/ `--thread-key`。会话动作目录附三条使用指引（五字段语义、IANA 时区与投递目标、触发只投递 text 文本而非任意 shell 定时器） |
+| `cron_delete` | `helmx cron delete <id>` | 删除任务；在途投递自然终止，不复活 |
+| `cron_trigger` | `helmx cron trigger <id>` | 手动立即真实投递一次（失败抛错，不影响后续计划调度） |
+| `cron_list` | `helmx cron list` | 全部任务含 `lastRunAt` / `nextRunAt` / `lastError` |
 
 ### Webhook 签名入站
 
-宿主挂载公开路由 `POST /api/plugins/builtin:triggers/routes/webhook/:id`（`public: true` 跳过 Token 鉴权，插件自行验签）。握手链：请求体流式限制 256 KiB（超限 `413 payload_too_large`）→ HMAC-SHA256 验签（`x-helm-signature: sha256=<hex>` 覆盖原始 body 字节，`timingSafeEqual` 常时比较；无签名/错签名 401，ID 不存在 404，坏 UTF-8 显式 400）→ 配置一致性复核（读 body 期间端点被删/重建返回 `409 webhook_changed`）→ 投递（`202 {accepted: true}`；失败显式 `500 webhook_dispatch_failed`）。
+宿主挂载公开路由 `POST /api/plugins/builtin:triggers/routes/webhook/:id`（`public: true` 跳过 Token 鉴权，插件自行验签）。握手链：请求体流式限制 256 KiB（超限 `413 payload_too_large`）→ HMAC-SHA256 验签（`x-helmx-signature: sha256=<hex>` 覆盖原始 body 字节，`timingSafeEqual` 常时比较；无签名/错签名 401，ID 不存在 404，坏 UTF-8 显式 400）→ 配置一致性复核（读 body 期间端点被删/重建返回 `409 webhook_changed`）→ 投递（`202 {accepted: true}`；失败显式 `500 webhook_dispatch_failed`）。
 
 | 动作 | CLI | 说明 |
 | :--- | :--- | :--- |
-| `webhook_create` | `helm webhook create` | `--id` / `--secret` 必填；可选 `--description` 与定向参数。**secret 仅允许人工 HTTP/CLI 配置**：检测到会话调用上下文（`run_action` / workflow）显式 `403 webhook_secret_context_forbidden`——raw secret 经工具参数已进入模型上下文，handler 拒绝无法清理已入上下文的秘密 |
-| `webhook_list` | `helm webhook list` | 端点元数据（不含 secret） |
-| `webhook_delete` | `helm webhook delete <id>` | 先删 doc（下线入口）再删 secret；secret 删除失败显式报错 |
+| `webhook_create` | `helmx webhook create` | `--id` / `--secret` 必填；可选 `--description` 与定向参数。**secret 仅允许人工 HTTP/CLI 配置**：检测到会话调用上下文（`run_action` / workflow）显式 `403 webhook_secret_context_forbidden`——raw secret 经工具参数已进入模型上下文，handler 拒绝无法清理已入上下文的秘密 |
+| `webhook_list` | `helmx webhook list` | 端点元数据（不含 secret） |
+| `webhook_delete` | `helmx webhook delete <id>` | 先删 doc（下线入口）再删 secret；secret 删除失败显式报错 |
 
 ### 共享投递与目标解析
 
@@ -50,7 +50,7 @@ Cron 与 Webhook 共用 `delivery.ts` 投递 helper：`targetConversationId` 优
 
 ## 停用与失败语义
 
-已启用的 cron 任务与已配置 webhook 端点是 `inUse()` 停用占用项：`helm plugins disable builtin:triggers` 默认 `409 plugin_in_use` 并列出占用清单，`--force` 可知情越过（磁盘配置保留，重新启用后恢复）。停用后动态命令、管理界面与调度器即时消失。cron 文档损坏（坏 JSON、缺字段、重复 ID）显式抛 `cron_doc_corrupt`，绝不静默重置。
+已启用的 cron 任务与已配置 webhook 端点是 `inUse()` 停用占用项：`helmx plugins disable builtin:triggers` 默认 `409 plugin_in_use` 并列出占用清单，`--force` 可知情越过（磁盘配置保留，重新启用后恢复）。停用后动态命令、管理界面与调度器即时消失。cron 文档损坏（坏 JSON、缺字段、重复 ID）显式抛 `cron_doc_corrupt`，绝不静默重置。
 
 ## 源码与测试入口
 
@@ -65,4 +65,4 @@ Cron 与 Webhook 共用 `delivery.ts` 投递 helper：`targetConversationId` 优
 
 - [SuperAgent 双层中枢](superagent.md)：`threadKey` 直通路由与 `mutedSources` 的消费方
 - [插件系统设计与契约](overview.md)：`ctx.route` 公开路由与 `inUse` 停用预检
-- [CLI 命令参考](../cli/reference.md)：`helm cron` / `helm webhook` 动态命令
+- [CLI 命令参考](../cli/reference.md)：`helmx cron` / `helmx webhook` 动态命令

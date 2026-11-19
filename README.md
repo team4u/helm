@@ -1,4 +1,4 @@
-# Helm
+# Helmx
 
 > 极简持久微内核个人助理 · 多智能体确定性编排 · 跨平台终端协同主控台
 
@@ -8,13 +8,13 @@
 [![Architecture](https://img.shields.io/badge/Architecture-Microkernel-black?style=flat-square)](docs/architecture/overview.md)
 [![License](https://img.shields.io/badge/License-MIT-blue?style=flat-square)](LICENSE)
 
-Helm 是面向复杂工程任务的轻量持久微内核系统，用于解决多智能体协作不可控、跨机运维繁重与终端工具脱节三类问题。内核（`@helm/kernel`）只保留四块通用机制：基于 `pi-durable` 的持久会话状态机（SQLite 全量落盘、FTS5 全文检索、`AskDoc` 审批与原生 `spawnAgent` 子会话派生）、跨平台执行编排底座 `EnvFabric` 与 `NodeRegistry`（WebSocket 反向连接，统一驱动本地与远端节点的 `bash / read / write / edit / gate` 与文件互斥）、Model 与 Auth（模型供应商接入、凭据与令牌管理），以及唯一强类型插件宿主 `PluginHost`（`definePlugin(ctx)`，提供后端生命周期 Hook 与前端全界面扩展点）。业务角色一律通过 `profileId` 与 `tags` 表达，内核零硬编码；`subagent`、`SubagentWorkflow`、Git Worktree 租约等编排能力全部由 `builtin:workflow` 等插件承载，停用即整体消失。
+Helmx 是面向复杂工程任务的轻量持久微内核系统，用于解决多智能体协作不可控、跨机运维繁重与终端工具脱节三类问题。内核（`@helmx/kernel`）只保留四块通用机制：基于 `pi-durable` 的持久会话状态机（SQLite 全量落盘、FTS5 全文检索、`AskDoc` 审批与原生 `spawnAgent` 子会话派生）、跨平台执行编排底座 `EnvFabric` 与 `NodeRegistry`（WebSocket 反向连接，统一驱动本地与远端节点的 `bash / read / write / edit / gate` 与文件互斥）、Model 与 Auth（模型供应商接入、凭据与令牌管理），以及唯一强类型插件宿主 `PluginHost`（`definePlugin(ctx)`，提供后端生命周期 Hook 与前端全界面扩展点）。业务角色一律通过 `profileId` 与 `tags` 表达，内核零硬编码；`subagent`、`SubagentWorkflow`、Git Worktree 租约等编排能力全部由 `builtin:workflow` 等插件承载，停用即整体消失。
 
 项目处于活跃开发阶段：接口与存储结构可能发生不兼容变更，当前未发布安装制品，以源代码模式运行（见下方「5 分钟源代码启动」）。
 
-## 为什么选择 Helm
+## 为什么选择 Helmx
 
-| 维度 | 套壳对话应用 | 常见 Python Agent 框架 | Helm 架构 |
+| 维度 | 套壳对话应用 | 常见 Python Agent 框架 | Helmx 架构 |
 | :--- | :--- | :--- | :--- |
 | 会话持久化 | 内存暂存或本地缓存，重启丢失状态 | 进程内存易失状态，中断无法精准续接 | `pi-durable` 五态状态机，SQLite 与 FTS5 全量落盘 |
 | 编排确定性 | 黑盒提示词循环，结果不可重现 | 图编排 DSL 抽象重，调试排障链路长 | 原生 JavaScript 编排，状态流水精准记录与安全断点续跑 |
@@ -30,16 +30,16 @@ Helm 是面向复杂工程任务的轻量持久微内核系统，用于解决多
 ```mermaid
 flowchart TD
     subgraph Client["接入层"]
-        Web["@helm/web（端口 3201 / SPA）"]
-        CLI["@helm/cli（helm 命令）"]
+        Web["@helmx/web（端口 3201 / SPA）"]
+        CLI["@helmx/cli（helmx 命令）"]
     end
 
-    Hub["@helm/hub（helm-hub / 端口 3202）"]
-    Build["@helm/plugin-build"]
-    ClientSdk["@helm/plugin-client"]
-    Prot["@helm/protocol（数据模型 / 状态机 / RPC / 事件）"]
+    Hub["@helmx/hub（helmx-hub / 端口 3202）"]
+    Build["@helmx/plugin-build"]
+    ClientSdk["@helmx/plugin-client"]
+    Prot["@helmx/protocol（数据模型 / 状态机 / RPC / 事件）"]
 
-    subgraph Kernel["@helm/kernel 机制"]
+    subgraph Kernel["@helmx/kernel 机制"]
         Durable["持久微内核（pi-durable / SQLite / FTS5 / AskDoc / spawnAgent）"]
         Fabric["跨平台底座（EnvFabric / NodeRegistry / 节点文件互斥）"]
         ModelAuth["Model 与 Auth"]
@@ -48,10 +48,10 @@ flowchart TD
 
     subgraph Nodes["受控计算节点"]
         Local["本机环境（local）"]
-        Remote["远端守护（@helm/node / helm-node 反向 WS 连接）"]
+        Remote["远端守护（@helmx/node / helmx-node 反向 WS 连接）"]
     end
 
-    subgraph Plugins["@helm/plugins 内置插件（12 个）"]
+    subgraph Plugins["@helmx/plugins 内置插件（12 个）"]
         Enabled["默认启用（10 个）：profile / workflow / swarm / memory / json-render / mermaid / apps / triggers / magpie / token-speed"]
         Disabled["默认停用（2 个）：herdr / superagent"]
     end
@@ -71,34 +71,34 @@ flowchart TD
 
 ## 包边界与单向依赖
 
-Helm 按机制、插件和产品组合分包。`@helm/hub` 是产品组合根：连接 `@helm/kernel`、`@helm/plugins` 与构建实现，并提供 `helm-hub` 命令；内核可以独立使用，不依赖内置插件与组合根。`@helm/plugin-client` 是可独立构建的浏览器 SDK，由 Web 应用注入数据与导航能力，不反向依赖 Web 应用。通用契约放在 `@helm/protocol`（零运行时重依赖），插件业务契约归属插件包。
+Helmx 按机制、插件和产品组合分包。`@helmx/hub` 是产品组合根：连接 `@helmx/kernel`、`@helmx/plugins` 与构建实现，并提供 `helmx-hub` 命令；内核可以独立使用，不依赖内置插件与组合根。`@helmx/plugin-client` 是可独立构建的浏览器 SDK，由 Web 应用注入数据与导航能力，不反向依赖 Web 应用。通用契约放在 `@helmx/protocol`（零运行时重依赖），插件业务契约归属插件包。
 
 | 包名 | 职责说明 | 交付产物 |
 | :--- | :--- | :--- |
-| `@helm/protocol` | 共享契约与数据结构，零重依赖 | 核心类型、状态机、RPC 与事件契约 |
-| `@helm/kernel` | 持久微内核与插件宿主 | 可嵌入的运行时与 HTTP 服务机制 |
-| `@helm/hub` | 产品组合根与进程入口 | Hub 服务（`helm-hub`） |
-| `@helm/plugins` | 内置插件、业务契约、客户端视图与技能资产 | 官方插件集合（12 个内置插件） |
-| `@helm/plugin-client` | 共享 UI 原语、上下文与宿主能力端口 | 浏览器 SDK |
-| `@helm/plugin-build` | 插件前后端源码构建 | 注入式构建实现 |
-| `@helm/env-io` | Hub 与节点共享的执行侧 I/O 与自更新引擎实现 | 路径进程占用扫描、共享更新引擎（`src/update/`） |
-| `@helm/cli` | 命令行客户端，与 API 完全同权 | 控制命令（`helm`，含 `src/launcher/` 的 `helm update` 生命周期面） |
-| `@helm/node` | 受控节点守护进程，反向连接 Hub | 节点服务（`helm-node`） |
-| `@helm/web` | 响应式 Web 主控台 | Web 界面（Vite SPA） |
-| `@helm/payload` | npm 三制品组装器：Hub payload、CLI bundle 与 node 守护进程 bundle | npm 制品（`@team4u/helm-hub` / `@team4u/helm-cli` / `@team4u/helm-node`） |
-| `@helm/test-kit` | 测试共享基座（仅限 `devDependencies` 与 `test/`，不进生产依赖） | 测试工具库 |
+| `@helmx/protocol` | 共享契约与数据结构，零重依赖 | 核心类型、状态机、RPC 与事件契约 |
+| `@helmx/kernel` | 持久微内核与插件宿主 | 可嵌入的运行时与 HTTP 服务机制 |
+| `@helmx/hub` | 产品组合根与进程入口 | Hub 服务（`helmx-hub`） |
+| `@helmx/plugins` | 内置插件、业务契约、客户端视图与技能资产 | 官方插件集合（12 个内置插件） |
+| `@helmx/plugin-client` | 共享 UI 原语、上下文与宿主能力端口 | 浏览器 SDK |
+| `@helmx/plugin-build` | 插件前后端源码构建 | 注入式构建实现 |
+| `@helmx/env-io` | Hub 与节点共享的执行侧 I/O 与自更新引擎实现 | 路径进程占用扫描、共享更新引擎（`src/update/`） |
+| `@helmx/cli` | 命令行客户端，与 API 完全同权 | 控制命令（`helmx`，含 `src/launcher/` 的 `helmx update` 生命周期面） |
+| `@helmx/node` | 受控节点守护进程，反向连接 Hub | 节点服务（`helmx-node`） |
+| `@helmx/web` | 响应式 Web 主控台 | Web 界面（Vite SPA） |
+| `@helmx/payload` | npm 三制品组装器：Hub payload、CLI bundle 与 node 守护进程 bundle | npm 制品（`@helmx/hub` / `@helmx/cli` / `@helmx/node`） |
+| `@helmx/test-kit` | 测试共享基座（仅限 `devDependencies` 与 `test/`，不进生产依赖） | 测试工具库 |
 
 ## 内置插件生态（12 个）
 
-Helm 采用微内核设计，所有扩展能力均由插件提供。停用插件后，其工具、动作、CLI 命令、受管技能与 UI 贡献即时消失，不留幻影提示词。
+Helmx 采用微内核设计，所有扩展能力均由插件提供。停用插件后，其工具、动作、CLI 命令、受管技能与 UI 贡献即时消失，不留幻影提示词。
 
 | 插件标识 | 插件名称 | 核心职责 | 默认状态 |
 | :--- | :--- | :--- | :--- |
 | `builtin:profile` | 角色与技能底座 | 为全部 Profile 注入 SYSTEM.md 与可用技能目录，提供 `load_skill` 工具与默认助理角色 | 常驻（locked，不可停用） |
-| `builtin:workflow` | 确定性编排引擎 | 提供 `subagent` / `SubagentWorkflow` / `cleanup_worktree` 工具、DSL 编排引擎、Git Worktree 租约与 `helm workflows` / `helm worktrees` 动态命令 | 默认启用 |
+| `builtin:workflow` | 确定性编排引擎 | 提供 `subagent` / `SubagentWorkflow` / `cleanup_worktree` 工具、DSL 编排引擎、Git Worktree 租约与 `helmx workflows` / `helmx worktrees` 动态命令 | 默认启用 |
 | `builtin:swarm` | 多智能体协同黑板 | 扁平对等序号黑板、正交唤醒与 `turn_settled` 纯事件自愈；零常驻会话，按需复用 workflow 的 Worktree | 默认启用 |
-| `builtin:memory` | 长期记忆 | 自管各 Profile 的 MEMORY.md 注入、单角色记忆启停（`helm memory`）与 `update_memory` 工具 | 默认启用 |
-| `builtin:apps` | 应用中心与微应用工坊 | 全栈微应用目录（`catalog`）、`validate/publish/list/update_meta/remove` 动作（`helm apps`）与 `app-builder` 技能 | 默认启用 |
+| `builtin:memory` | 长期记忆 | 自管各 Profile 的 MEMORY.md 注入、单角色记忆启停（`helmx memory`）与 `update_memory` 工具 | 默认启用 |
+| `builtin:apps` | 应用中心与微应用工坊 | 全栈微应用目录（`catalog`）、`validate/publish/list/update_meta/remove` 动作（`helmx apps`）与 `app-builder` 技能 | 默认启用 |
 | `builtin:json-render` | 声明式渲染 | 聊天 `ui` 代码围栏的 JSON DSL、求值器与界面原语，并维护 `generative-ui` 技能 | 默认启用 |
 | `builtin:mermaid` | 图表渲染 | 接管 Markdown 中 Mermaid 代码块渲染；停用后回退普通代码块 | 默认启用 |
 | `builtin:triggers` | 自动化触发器 | 提供 Cron 定时调度与 Webhook 入站，HMAC 验签并防逃逸投递 | 默认启用 |
@@ -111,7 +111,7 @@ Helm 采用微内核设计，所有扩展能力均由插件提供。停用插件
 
 ## 5 分钟源代码启动
 
-前置条件：Node.js `>= 24.12.0`、pnpm 12.x、Git；Linux / macOS / WSL2。数据目录固定 `~/.helm`（可用 `HELM_DATA_DIR` 覆盖），与旧系统数据完全隔离。
+前置条件：Node.js `>= 24.12.0`、pnpm 12.x、Git；Linux / macOS / WSL2。数据目录固定 `~/.helmx`（可用 `HELMX_DATA_DIR` 覆盖），与旧系统数据完全隔离。
 
 ```bash
 # 1. 获取源码并安装依赖
@@ -120,22 +120,22 @@ pnpm install
 pnpm build
 
 # 2. 启动前后端（Web 3201 + Hub 3202）
-HELM_PORT=3202 pnpm dev
+HELMX_PORT=3202 pnpm dev
 
-# 3. 初始化管理员并登录（setup 自动完成登录，凭据写入 ~/.helm/cli-token，权限 0600）
-pnpm helm setup --password '<your-admin-password>'
+# 3. 初始化管理员并登录（setup 自动完成登录，凭据写入 ~/.helmx/cli-token，权限 0600）
+pnpm helmx setup --password '<your-admin-password>'
 # 后续登录（凭据丢失或换机时）
-pnpm helm login --password '<your-admin-password>'
+pnpm helmx login --password '<your-admin-password>'
 
 # 4. 验证：与入口会话 #1 对话
-pnpm helm send 1 "请列出当前项目的核心包" --wait
+pnpm helmx send 1 "请列出当前项目的核心包" --wait
 
 # 5. 运行首个确定性工作流（必须显式指定目标会话）
-pnpm helm workflows run demo/hello-orchestra.workflow.js \
+pnpm helmx workflows run demo/hello-orchestra.workflow.js \
   --args '{"word":"开源"}' --conversation-id 1 --wait
 ```
 
-启动后 Web 主控台在 `http://127.0.0.1:3201`，Hub API 在 `http://127.0.0.1:3202`。端口固定约束：`3000/3001/3002/3101/3102` 为外部与历史系统保留，Helm 任何组件永不占用。
+启动后 Web 主控台在 `http://127.0.0.1:3201`，Hub API 在 `http://127.0.0.1:3202`。端口固定约束：`3000/3001/3002/3101/3102` 为外部与历史系统保留，Helmx 任何组件永不占用。
 
 工作流没有私有配置 DSL，就是标准 JavaScript 模块。上面运行的 demo 全文：
 
@@ -165,19 +165,19 @@ return { replies, summary }
 
 ## 远端节点接入速览
 
-`EnvFabric` 统一调度本地与远端受控节点：目标机器运行 `helm-node` 守护进程并主动反向连接 Hub 的 `/ws/node` 接口，全程无需开放任何入站 SSH 端口或分发密钥。
+`EnvFabric` 统一调度本地与远端受控节点：目标机器运行 `helmx-node` 守护进程并主动反向连接 Hub 的 `/ws/node` 接口，全程无需开放任何入站 SSH 端口或分发密钥。
 
 ```bash
 # 1. 在 Hub 签发受控节点接入令牌（明文 token 仅返回一次）
-pnpm helm nodes issue build-server --json
+pnpm helmx nodes issue build-server --json
 
 # 2. 在目标机器绑定身份并启动后台守护进程
-pnpm helm-node connect http://<hub-host>:3202 --token 'build-server:<secret>'
-pnpm helm-node start -d
+pnpm helmx-node connect http://<hub-host>:3202 --token 'build-server:<secret>'
+pnpm helmx-node start -d
 
 # 3. 在指定节点流式执行命令，或创建绑定远端节点的会话
-pnpm helm env exec --node build-server --cwd /workspace --stream -- git status
-pnpm helm conversations create --node build-server --cwd /workspace --title "远程构建"
+pnpm helmx env exec --node build-server --cwd /workspace --stream -- git status
+pnpm helmx conversations create --node build-server --cwd /workspace --title "远程构建"
 ```
 
 终端 CLI Agent 深度协同（`pi` / `claude` / `codex` 等 23 种，经 `builtin:herdr` 插件按需启用）、Docker 容器部署 Hub 等场景见[安装与配置指南](docs/getting-started/installation.md)与[Herdr 终端协同主控](docs/plugins/herdr.md)。
@@ -185,10 +185,10 @@ pnpm helm conversations create --node build-server --cwd /workspace --title "远
 ## 开发与测试
 
 ```bash
-HELM_PORT=3202 pnpm dev        # 前后端一起（Web 3201 -> Hub 3202）
-HELM_PORT=3202 pnpm dev:kernel # 只起内核
+HELMX_PORT=3202 pnpm dev        # 前后端一起（Web 3201 -> Hub 3202）
+HELMX_PORT=3202 pnpm dev:kernel # 只起内核
 pnpm dev:web                   # 只起前端（需内核已在 3202）
-pnpm link:bins                 # 可选：在 /usr/local/bin 挂载 helm / helm-node / helm-hub 源码命令
+pnpm link:bins                 # 可选：在 /usr/local/bin 挂载 helmx / helmx-node / helmx-hub 源码命令
 pnpm unlink:bins               # 撤销挂载
 
 pnpm build && pnpm typecheck && pnpm lint && pnpm check:hygiene && pnpm test:all  # 全量验收
@@ -198,32 +198,32 @@ pnpm build && pnpm typecheck && pnpm lint && pnpm check:hygiene && pnpm test:all
 
 ## CLI 核心命令速查
 
-所有命令支持 `--json`（成功输出到 stdout，失败输出错误信封到 stderr 并返回非零退出码）。插件动作经 `GET /api/actions` 动态生成为顶层命令（如 `helm workflows run`）。
+所有命令支持 `--json`（成功输出到 stdout，失败输出错误信封到 stderr 并返回非零退出码）。插件动作经 `GET /api/actions` 动态生成为顶层命令（如 `helmx workflows run`）。
 
 | 分类 | 命令 | 功能说明 |
 | :--- | :--- | :--- |
-| **系统与鉴权** | `helm setup / login --password <pwd>` | 初始化管理员并登录、后续登录 |
-| | `helm status --json` | 查看鉴权与管理员配置状态 |
-| **模型与角色** | `helm models list / providers / default / refresh / filter` | 模型目录、供应商、默认模型、刷新与禁用过滤 |
-| | `helm profiles list / get / create / update / delete` | 角色配置管理 |
-| | `helm providers list / set`、`helm credentials list / set / delete` | 供应商与模型密钥凭据管理 |
-| | `helm skills list / read` | 可用技能目录 |
-| **会话管理** | `helm conversations list / get / entry / create / update / delete` | 会话 CRUD 与筛选 |
-| | `helm send <id> "<text>" --wait` | 向会话投递输入并等待回答（`--current` 读 `HELM_CONVERSATION_ID`） |
-| | `helm conversations reset / compact / fork / withdraw` | 重置、压缩、分叉与撤回输入 |
-| | `helm abort <id>`、`helm asks list / answer / cancel` | 中止回合与审批单处理 |
-| | `helm events watch`、`helm search "<关键词>"` | 全局 SSE 订阅与 FTS5 全文检索 |
-| **确定性编排** | `helm workflows list / runs` | 已保存工作流与运行记录 |
-| | `helm workflows run <file> --args '<json>' --conversation-id <id> --wait` | 启动工作流（`--current` / `--resume-from-run-id`） |
-| | `helm workflows inspect / abort <runId>` | 查看运行详情与中止在途任务 |
-| | `helm worktrees list / inspect / cleanup` | 受管 Git Worktree 检视与清理 |
-| **受控节点** | `helm nodes list / issue / remove / upgrade / forward` | 节点清单、令牌签发、移除、升级与端口转发 |
-| | `helm env exec --node <id> --cwd <path> --stream -- <cmd>` | 跨节点流式执行命令 |
-| **插件治理** | `helm plugins list / enable / disable` | 插件状态与启停（停用遇在途任务返回 `409`） |
-| | `helm plugins init / doctor / rescan / reload` | 脚手架、四阶段静态自检、增量发现、受控热重载 |
-| | `helm plugins install / update / remove` | npm / git / 本地路径的受管安装生命周期 |
-| | `helm actions list`、`helm api <method> <path>` | 全部插件动作清单与原始 HTTP 逃生舱 |
-| **产物** | `helm artifacts list / put / get` | 会话产物登记与读取 |
+| **系统与鉴权** | `helmx setup / login --password <pwd>` | 初始化管理员并登录、后续登录 |
+| | `helmx status --json` | 查看鉴权与管理员配置状态 |
+| **模型与角色** | `helmx models list / providers / default / refresh / filter` | 模型目录、供应商、默认模型、刷新与禁用过滤 |
+| | `helmx profiles list / get / create / update / delete` | 角色配置管理 |
+| | `helmx providers list / set`、`helmx credentials list / set / delete` | 供应商与模型密钥凭据管理 |
+| | `helmx skills list / read` | 可用技能目录 |
+| **会话管理** | `helmx conversations list / get / entry / create / update / delete` | 会话 CRUD 与筛选 |
+| | `helmx send <id> "<text>" --wait` | 向会话投递输入并等待回答（`--current` 读 `HELMX_CONVERSATION_ID`） |
+| | `helmx conversations reset / compact / fork / withdraw` | 重置、压缩、分叉与撤回输入 |
+| | `helmx abort <id>`、`helmx asks list / answer / cancel` | 中止回合与审批单处理 |
+| | `helmx events watch`、`helmx search "<关键词>"` | 全局 SSE 订阅与 FTS5 全文检索 |
+| **确定性编排** | `helmx workflows list / runs` | 已保存工作流与运行记录 |
+| | `helmx workflows run <file> --args '<json>' --conversation-id <id> --wait` | 启动工作流（`--current` / `--resume-from-run-id`） |
+| | `helmx workflows inspect / abort <runId>` | 查看运行详情与中止在途任务 |
+| | `helmx worktrees list / inspect / cleanup` | 受管 Git Worktree 检视与清理 |
+| **受控节点** | `helmx nodes list / issue / remove / upgrade / forward` | 节点清单、令牌签发、移除、升级与端口转发 |
+| | `helmx env exec --node <id> --cwd <path> --stream -- <cmd>` | 跨节点流式执行命令 |
+| **插件治理** | `helmx plugins list / enable / disable` | 插件状态与启停（停用遇在途任务返回 `409`） |
+| | `helmx plugins init / doctor / rescan / reload` | 脚手架、四阶段静态自检、增量发现、受控热重载 |
+| | `helmx plugins install / update / remove` | npm / git / 本地路径的受管安装生命周期 |
+| | `helmx actions list`、`helmx api <method> <path>` | 全部插件动作清单与原始 HTTP 逃生舱 |
+| **产物** | `helmx artifacts list / put / get` | 会话产物登记与读取 |
 
 ## 文档地图
 

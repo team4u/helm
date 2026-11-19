@@ -12,7 +12,7 @@
 1. **何时使用、何时不用与如何开启**：明确区分适用场景（多模块并行协同、writer ↔ 只读 verifier 多轮交接审改、动态调角/换模）与不适用场景（单线程小改、单点外派 `subagent`、拓扑固定的确定性脚本/子会话内编排），且仅限顶层人类会话开启；输入 `/skill:swarm <任务>` 时由 `onInput` 自动建组并同回合解锁 `swarm_*` 工具，普通对话中则由模型在 `<available_skills>` 主动发现或按用户自然语言请求先调用 `swarm_create_group` 建组再调度；
 2. **主控职责边界（Skill 约束、零剥离业务工具）**：主控专注任务切分、具名派工、冲突裁决与最终合入收尾，允许快速只读探查以划分边界，不直接写业务代码或跑长时构建阻塞看板调度；
 3. **动态拆角 + 按需只读交叉验收**：主控按任务本身动态决定成员数量、小写角色名、权限语义（`readwrite` / `readonly`，由 `<active_swarm_group>` 与 `swarm` 技能约束职责，不强制剥离或硬拦截工具）、隔离方式（并发写代码必须 `worktree` 防冲突；只读检索或交叉验收可选 `inherit` 搭配 `readonly`）及 `profileId` / `model` / `channels`；
-4. **`#seq` 指针、`wake` 门铃与两阶段收尾**：跨成员交接统一通过 `refs: [seq]` 与 `#seq` 引用黑板记录（`worktree` 成员发 `handoff / done` 自动内联 `worktreeSnapshot`）；`wake: true` 仅唤醒下一跳责任人（不抄送闲人、不发空确认）；关闭前确认 `activeWorkingMembers` 为空，未合入分支可合并后 `swarm_close_group()` 或传 `keepWorktree: true` 释放锁并保留分支（会话内经 `swarm_*` 工具驱动，对应主机 CLI 为 `helm swarm <subcommand>`）。
+4. **`#seq` 指针、`wake` 门铃与两阶段收尾**：跨成员交接统一通过 `refs: [seq]` 与 `#seq` 引用黑板记录（`worktree` 成员发 `handoff / done` 自动内联 `worktreeSnapshot`）；`wake: true` 仅唤醒下一跳责任人（不抄送闲人、不发空确认）；关闭前确认 `activeWorkingMembers` 为空，未合入分支可合并后 `swarm_close_group()` 或传 `keepWorktree: true` 释放锁并保留分支（会话内经 `swarm_*` 工具驱动，对应主机 CLI 为 `helmx swarm <subcommand>`）。
 
 ## 能力和入口
 
@@ -32,7 +32,7 @@
 ### Fail-Closed 寻址、双向批合并与纯事件自愈
 
 - **`board_post.to` 严格解析**：支持 `'coordinator'`、`'all'`（仅主控或人工可用，成员调用返 `403`）、`'#<channel>'`（`#main` 返 `400`，未知或已归档频道返 `404 / 409`）与精确活跃成员名（未知或已归档返 `404`），自动剔除发帖者防自回声；`wake` 与 `to` 正交分离（`comment` 缺省 `false`，其余缺省 `true`）。
-- **双向游标批合并**：Worker 侧将 `(readCursorSeq, pendingWakeupSeq]` 合并为单封 `swarm:board-wakeup`，经 `submitInputGuarded(..., { expectedOwnership: 'helm', whenBusy: 'followUp' })` 投递；主控侧经 `50ms` 微批与忙时合并投递单封 `swarm:board-report`（携带协作组 `objective`、`activeWorkingMembers` 与反回声守则）。
+- **双向游标批合并**：Worker 侧将 `(readCursorSeq, pendingWakeupSeq]` 合并为单封 `swarm:board-wakeup`，经 `submitInputGuarded(..., { expectedOwnership: 'helmx', whenBusy: 'followUp' })` 投递；主控侧经 `50ms` 微批与忙时合并投递单封 `swarm:board-report`（携带协作组 `objective`、`activeWorkingMembers` 与反回声守则）。
 - **`turn_settled` 纯事件自愈**：
   1. **失败即上板**：成员回合 `outcome === 'failed'` 时自动追加 `system -> coordinator` 的 `kind: 'blocker'`（含脱敏错误与模型名）并排队汇报主控；
   2. **防哑巴退场单次续催**：成员因 `brief / handoff / review` 唤醒后零发帖完成回合，触发最多 1 次确定性续催（`silentExitNudgeSeq`）；二次仍沉默则摘取末条回复脱敏摘要代发 `kind: 'blocker'` 上板，绝不死循环；
@@ -40,20 +40,20 @@
 
 ### 动作与工具（五端复用）
 
-`ctx.action` 动作 ID 与 CLI（`helm swarm <cmd>`）使用插件命名空间短名；面向模型的 11 个 `ctx.tool` 统一带 `swarm_` 前缀，确保与 `builtin:superagent`（`dispatch_worker / inspect_worker / archive_worker`）或外部插件同时启用时满足全局工具名唯一性（零 `duplicate_tool_name`）：
+`ctx.action` 动作 ID 与 CLI（`helmx swarm <cmd>`）使用插件命名空间短名；面向模型的 11 个 `ctx.tool` 统一带 `swarm_` 前缀，确保与 `builtin:superagent`（`dispatch_worker / inspect_worker / archive_worker`）或外部插件同时启用时满足全局工具名唯一性（零 `duplicate_tool_name`）：
 
 | 动作 ID (`ctx.action`) | 模型工具名 (`ctx.tool`) | CLI 命令 | 作用域与核心说明 |
 | :--- | :--- | :--- | :--- |
-| `create_group` | `swarm_create_group` | `helm swarm create-group` | 在顶层会话创建活跃协作组（同会话限 1 个活跃组），挂载 `swarm-coordinator` 标签 |
-| `update_group` | `swarm_update_group` | `helm swarm update-group` | 主控独享：修改组 `title / objective` |
-| `manage_channel` | 仅 `ctx.action` | `helm swarm channel` | 主控独享动作：子频道 `create / subscribe / unsubscribe / archive`（`main` 禁归档/退订） |
-| `dispatch_worker` | `swarm_dispatch_worker` | `helm swarm dispatch-worker` | 主控独享：招募具名对等成员（支持 `profileId`、`access`、`isolation: 'worktree'` 持锁、`forkFrom` 干净锚点分叉、`forkEntryId`、`model`、`effort`、`channels`），写入首条 `brief` 并唤醒 |
-| `board_post` | `swarm_board_post` | `helm swarm board-post` | 主控/成员/人工向黑板发帖（结构化 `to` + 正交 `wake`；绑有工作树且发 `handoff / done` 时自动内联 `worktreeSnapshot`） |
-| `board_read` / `board_status` | `swarm_board_read` / `swarm_board_status` | `helm swarm board-read` / `board-status` | 幂等分页读取黑板记录 / 读取完整 `BoardViewDoc` 态势快照（覆盖 `active`、`closed` 与 `coordinatorDetached` 组） |
-| `abort_worker` | `swarm_abort_worker` | `helm swarm abort-worker` | 主控独享：经 `abortConversationGuarded` 原地刹停成员当前回合，保留上下文与 Worktree 锁 |
-| `switch_worker_model` | `swarm_switch_worker_model` | `helm swarm switch-model` | 主控独享：对空闲成员调用 `updateConversation` 原地切换模型续跑 |
-| `inspect_worker` / `archive_worker` | `swarm_inspect_worker` / `swarm_archive_worker` | `helm swarm inspect-worker` / `archive-worker` | 幂等读取成员最近时间线摘要、产物与绑定 `worktreeId` / 校验工作树干净后释放锁并归档成员 |
-| `close_group` | `swarm_close_group` | `helm swarm close-group` | 主控独享：两态结单（默认要求工作树干净并全清，未合入返 `409 swarm_worktree_unmerged`；`keepWorktree: true` 释放锁、保留待合入分支写入 `retainedWorktrees`，并将 `swarm-coordinator` 标签原地替换为 `swarm-coordinator-archived` 历史 tag——保留工作台面板回看已完成编组并允许重新建组） |
+| `create_group` | `swarm_create_group` | `helmx swarm create-group` | 在顶层会话创建活跃协作组（同会话限 1 个活跃组），挂载 `swarm-coordinator` 标签 |
+| `update_group` | `swarm_update_group` | `helmx swarm update-group` | 主控独享：修改组 `title / objective` |
+| `manage_channel` | 仅 `ctx.action` | `helmx swarm channel` | 主控独享动作：子频道 `create / subscribe / unsubscribe / archive`（`main` 禁归档/退订） |
+| `dispatch_worker` | `swarm_dispatch_worker` | `helmx swarm dispatch-worker` | 主控独享：招募具名对等成员（支持 `profileId`、`access`、`isolation: 'worktree'` 持锁、`forkFrom` 干净锚点分叉、`forkEntryId`、`model`、`effort`、`channels`），写入首条 `brief` 并唤醒 |
+| `board_post` | `swarm_board_post` | `helmx swarm board-post` | 主控/成员/人工向黑板发帖（结构化 `to` + 正交 `wake`；绑有工作树且发 `handoff / done` 时自动内联 `worktreeSnapshot`） |
+| `board_read` / `board_status` | `swarm_board_read` / `swarm_board_status` | `helmx swarm board-read` / `board-status` | 幂等分页读取黑板记录 / 读取完整 `BoardViewDoc` 态势快照（覆盖 `active`、`closed` 与 `coordinatorDetached` 组） |
+| `abort_worker` | `swarm_abort_worker` | `helmx swarm abort-worker` | 主控独享：经 `abortConversationGuarded` 原地刹停成员当前回合，保留上下文与 Worktree 锁 |
+| `switch_worker_model` | `swarm_switch_worker_model` | `helmx swarm switch-model` | 主控独享：对空闲成员调用 `updateConversation` 原地切换模型续跑 |
+| `inspect_worker` / `archive_worker` | `swarm_inspect_worker` / `swarm_archive_worker` | `helmx swarm inspect-worker` / `archive-worker` | 幂等读取成员最近时间线摘要、产物与绑定 `worktreeId` / 校验工作树干净后释放锁并归档成员 |
+| `close_group` | `swarm_close_group` | `helmx swarm close-group` | 主控独享：两态结单（默认要求工作树干净并全清，未合入返 `409 swarm_worktree_unmerged`；`keepWorktree: true` 释放锁、保留待合入分支写入 `retainedWorktrees`，并将 `swarm-coordinator` 标签原地替换为 `swarm-coordinator-archived` 历史 tag——保留工作台面板回看已完成编组并允许重新建组） |
 | `complete_board_members` / `complete_board_channels` | 仅 `ctx.action` | 隐藏内部动作 | 幂等补全源：为组内会话输入框提供 `@` 活跃成员与 `#` 活跃子频道候选 |
 
 ### Web 会话内协同界面（对齐 `builtin:workflow` 心智模型）
@@ -81,7 +81,7 @@ Swarm 不再拥有独立的全屏 Board 控制台或顶栏入口：所有 UI 都
 - **启动屏障孤儿回收（`service.start`）**：加载组状态后、调度器恢复前，按 `meta.json` 单真源收敛孤儿/错配的会话标签与归属权，并释放回收半途强杀遗留的 `builtin:swarm` 孤儿 Worktree 锁（不影响 `keepWorktree: true` 已主动释放锁的分支）。
 - **工具 `replay: 'safe'` 幂等重放**：全部 `swarm_*` 工具声明 `replay: 'safe'`，建组（`createKey`）、派工（`dispatchKey`）、发帖（`idempotencyKey`）凭 `${conversationId}:${callId}` 幂等重放，归档与结单先落盘 `meta.json` 再切标签。
 - **`runtime.started` 恢复对账**：内核恢复在途 `pi-durable` 回合后，对账 `inflightWakeup` / `inflightNudge` / `inflightReport` 提交意图（区分仍在跑 / 已完成未刷盘 / 未提交），幂等补发未送达唤醒与汇总信封，并对已停机未回帖成员补跑一次失败 `[blocker]`、哑巴退场续催或全组 `[stall]` 检查。
-- **停用与人工刹停**：遇在途任务、对账或微批投递经 `liveTasks` 硬阻断（`409 plugin_has_live_tasks`）；存在活跃协作组时经 `inUse` 返回 `409 plugin_in_use`。任意时刻可执行 `helm swarm close-group --group-id <id> --abort-running --keep-worktree` 刹停成员、保留代码分支并解锁主控会话。
+- **停用与人工刹停**：遇在途任务、对账或微批投递经 `liveTasks` 硬阻断（`409 plugin_has_live_tasks`）；存在活跃协作组时经 `inUse` 返回 `409 plugin_in_use`。任意时刻可执行 `helmx swarm close-group --group-id <id> --abort-running --keep-worktree` 刹停成员、保留代码分支并解锁主控会话。
 
 ## 源码与测试入口
 

@@ -1,6 +1,6 @@
 # Token 速率插件
 
-`builtin:token-speed` 解决「直观看到当前会话解码有多快」的问题：在宿主输入区状态行显示实时解码速率（tok/s）、首字延迟与终态对账值。适合关心模型响应速度的使用者。它是机制与策略分离的典型案例——内核只透传 `ConversationLive.generation` 通用流式事实（taskId + attempt + 受限 message 投影），零速率计算；滑动窗口、chars/4 估算、TTFT、burst/stall 平滑、按 taskId 对账、工具执行时间剔除等全部策略在本插件。算法参考本机 pi-token-speed 扩展（npm 包）按 helm 观察层事实重写。
+`builtin:token-speed` 解决「直观看到当前会话解码有多快」的问题：在宿主输入区状态行显示实时解码速率（tok/s）、首字延迟与终态对账值。适合关心模型响应速度的使用者。它是机制与策略分离的典型案例——内核只透传 `ConversationLive.generation` 通用流式事实（taskId + attempt + 受限 message 投影），零速率计算；滑动窗口、chars/4 估算、TTFT、burst/stall 平滑、按 taskId 对账、工具执行时间剔除等全部策略在本插件。算法参考本机 pi-token-speed 扩展（npm 包）按 helmx 观察层事实重写。
 
 ## 当前状态
 
@@ -14,7 +14,7 @@
 
 ```
 内核 conversation.live 帧（generation 事实）→ 状态机（tracker.ts）
-conversation.entry：pi.reset / pi.compaction / helm.rewind → 彻底清空该会话状态
+conversation.entry：pi.reset / pi.compaction / helmx.rewind → 彻底清空该会话状态
                     pi.assistant 完成事实 → 按请求身份精确对账补算尾帧
 turn_settled：failed/aborted → 清空当前测量；completed 链终点 → 终态写入 sessionDoc
 conversation.deleted → 状态机与会话文档彻底清理
@@ -41,7 +41,7 @@ conversation.deleted → 状态机与会话文档彻底清理
 本插件数据全部是**派生测量**（可由新流量重建，无迁移、无回退）：
 
 - **启用周期开始**（`prepare` 屏障，先于任何服务 start 与输入恢复）：清空上一周期遗留的全部 `speed` 会话文档——重启或中途启用拿不到完整测量，宁可显示空，绝不把上周期 decoding/tools 态冒充当前；
-- **上下文失效**：`pi.reset` / `pi.compaction` / `helm.rewind` 落库即彻底清空该会话状态，不回读旧上下文、不回退旧 TPS；
+- **上下文失效**：`pi.reset` / `pi.compaction` / `helmx.rewind` 落库即彻底清空该会话状态，不回读旧上下文、不回退旧 TPS；
 - **失败/中止回合**：直接清空当前测量，未完成回答绝不冒充正常终态；completed 终态保留显示到下一回合首测覆盖；
 - **停用**：UI 贡献、事件监听与文档订阅即时消失，无幻影残留；内核照常透传事实，零额外计算。
 
