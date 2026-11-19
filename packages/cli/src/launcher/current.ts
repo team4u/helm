@@ -1,9 +1,9 @@
 /**
- * Access to the engine-owned `current.json` from the launcher side: the shared `@helm/update`
- * record ({version, updatedAt, entries}) is the single source of truth; the Hub launcher's only
+ * Access to the engine-owned `current.json` from the launcher side: the shared update-engine
+ * record in `@helm/env-io` ({version, updatedAt, entries}) is the single source of truth; the Hub launcher's only
  * contract on top is the `entryPath` entry (absolute path to the committed payload `start.mjs`).
  */
-import { readCurrentRelease, type CurrentReleaseRecord } from '@helm/update';
+import { readCurrentRelease, type CurrentReleaseRecord } from '@helm/env-io';
 import { UsageError } from './io.js';
 
 export interface HubCurrentRelease {

@@ -9,8 +9,8 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { test } from 'node:test';
 import { useTempDir } from '@helm/test-kit/node';
-import { readProcessStartTime, type HubPidRecord } from '../src/records.js';
-import { describeActivityCounts, readHubActivityGate } from '../src/activity.js';
+import { readProcessStartTime, type HubPidRecord } from '../../src/launcher/records.js';
+import { describeActivityCounts, readHubActivityGate } from '../../src/launcher/activity.js';
 import { captureIo, cleanupPid, spawnAlienProcess } from './fixtures.js';
 
 function baseRecord(pid: number, startTime: number, port: number): HubPidRecord {

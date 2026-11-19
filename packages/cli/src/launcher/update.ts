@@ -3,7 +3,7 @@
  * rollback. Product policy lives here (cooldowns, stop-before-commit ordering, restart, blocked
  * bookkeeping); every generic mechanism — registry lookup, verified staging, immutable
  * `releases/`, `current.json`/`update-blocked.json` state, `upgrade.lock` — comes from
- * `@helm/update`.
+ * the shared update engine in `@helm/env-io`.
  *
  * Flow (engine `upgrade.lock` critical section; the stop→commit→start tail additionally holds
  *   `lifecycle.lock` so start/stop/update never interleave):
@@ -39,7 +39,7 @@ import {
   writeBlockedRelease,
   writeCurrentRelease,
   type CurrentReleaseRecord,
-} from '@helm/update';
+} from '@helm/env-io';
 import { defaultHubDataDir, pathsOf, resolveBlockedCooldownMs } from './layout.js';
 import {
   isBlockedActive,

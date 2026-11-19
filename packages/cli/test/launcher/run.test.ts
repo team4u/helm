@@ -20,11 +20,11 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { useTempDir, sanitizedHostEnv } from '@helm/test-kit/node';
-import { readBlockedRelease, readCurrentRelease } from '@helm/update';
-import { readPidRecord } from '../src/records.js';
-import { startHub, stopHub } from '../src/process.js';
-import { runSupervised } from '../src/run.js';
-import { UsageError } from '../src/io.js';
+import { readBlockedRelease, readCurrentRelease } from '@helm/env-io';
+import { readPidRecord } from '../../src/launcher/records.js';
+import { startHub, stopHub } from '../../src/launcher/process.js';
+import { runSupervised } from '../../src/launcher/run.js';
+import { UsageError } from '../../src/launcher/io.js';
 import {
   captureIo,
   cleanupPid,
@@ -40,7 +40,7 @@ import {
 } from './fixtures.js';
 
 const PKG = '@fake/hub-payload';
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..');
 
 interface RunHarness {
   root: string;
@@ -346,7 +346,7 @@ test('a bad candidate rolls back inside the run loop and keeps the old hub servi
 test('run refuses to adopt a hub it did not start', { timeout: 60_000 }, async (t) => {
   const h = await setupRun(t, useTempDir(t, 'helm-launcher-runadopt-'));
   await h.addPayload('1.0.0');
-  const { performHubUpdate } = await import('../src/update.js');
+  const { performHubUpdate } = await import('../../src/launcher/update.js');
   await performHubUpdate({
     io: h.io,
     core: h.core,

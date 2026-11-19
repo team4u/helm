@@ -8,13 +8,17 @@
     "test": "tsx --test"
   },
   "devDependencies": {
+    "@earendil-works/chord": "1.5.2",
+    "@earendil-works/pi-durable": "1.5.2",
     "@helm/cli": "workspace:*",
     "@helm/hub": "workspace:*",
-    "@helm/hub-launcher": "workspace:*",
     "@helm/kernel": "workspace:*",
+    "@helm/node": "workspace:*",
     "@helm/plugins": "workspace:*",
     "@helm/web": "workspace:*",
+    "birpc": "^2.9.0",
     "esbuild": "0.28.2",
-    "tar": "7.5.23"
+    "tar": "7.5.23",
+    "ws": "^8.18.0"
   }
 }

@@ -262,13 +262,14 @@ async function startManagedDaemon(options: {
 async function seedStagedRelease(dataDir: string, version: string): Promise<void> {
   const versionRoot = path.join(dataDir, 'releases', version);
   const candidate = path.join(versionRoot, 'seeded');
-  await fs.mkdir(path.join(candidate, 'node_modules', '@helm', 'node', 'dist'), { recursive: true });
+  const nodePkgDir = path.join(candidate, 'node_modules', '@team4u', 'helm-node');
+  await fs.mkdir(path.join(nodePkgDir, 'dist'), { recursive: true });
   await fs.mkdir(path.join(candidate, 'node_modules', '.bin'), { recursive: true });
-  const entryPath = path.join(candidate, 'node_modules', '@helm', 'node', 'dist', 'cli.js');
+  const entryPath = path.join(nodePkgDir, 'dist', 'cli.js');
   await fs.writeFile(entryPath, '#!/usr/bin/env node\n');
   await fs.writeFile(
-    path.join(candidate, 'node_modules', '@helm', 'node', 'package.json'),
-    JSON.stringify({ name: '@helm/node', version }),
+    path.join(nodePkgDir, 'package.json'),
+    JSON.stringify({ name: '@team4u/helm-node', version }),
   );
   await fs.writeFile(
     path.join(versionRoot, '.complete'),

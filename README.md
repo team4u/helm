@@ -51,9 +51,9 @@ flowchart TD
         Remote["远端守护（@helm/node / helm-node 反向 WS 连接）"]
     end
 
-    subgraph Plugins["@helm/plugins 内置插件（11 个）"]
-        Enabled["默认启用（7 个）：profile / workflow / memory / apps / json-render / mermaid / triggers"]
-        Disabled["默认停用（4 个）：herdr / superagent / magpie / token-speed"]
+    subgraph Plugins["@helm/plugins 内置插件（12 个）"]
+        Enabled["默认启用（10 个）：profile / workflow / swarm / memory / json-render / mermaid / apps / triggers / magpie / token-speed"]
+        Disabled["默认停用（2 个）：herdr / superagent"]
     end
 
     Web --> ClientSdk
@@ -78,17 +78,17 @@ Helm 按机制、插件和产品组合分包。`@helm/hub` 是产品组合根：
 | `@helm/protocol` | 共享契约与数据结构，零重依赖 | 核心类型、状态机、RPC 与事件契约 |
 | `@helm/kernel` | 持久微内核与插件宿主 | 可嵌入的运行时与 HTTP 服务机制 |
 | `@helm/hub` | 产品组合根与进程入口 | Hub 服务（`helm-hub`） |
-| `@helm/plugins` | 内置插件、业务契约、客户端视图与技能资产 | 官方插件集合（11 个内置插件） |
+| `@helm/plugins` | 内置插件、业务契约、客户端视图与技能资产 | 官方插件集合（12 个内置插件） |
 | `@helm/plugin-client` | 共享 UI 原语、上下文与宿主能力端口 | 浏览器 SDK |
 | `@helm/plugin-build` | 插件前后端源码构建 | 注入式构建实现 |
-| `@helm/env-io` | Hub 与节点共享的执行侧 I/O 实现 | 路径进程占用扫描 |
-| `@helm/cli` | 命令行客户端，与 API 完全同权 | 控制命令（`helm`） |
+| `@helm/env-io` | Hub 与节点共享的执行侧 I/O 与自更新引擎实现 | 路径进程占用扫描、共享更新引擎（`src/update/`） |
+| `@helm/cli` | 命令行客户端，与 API 完全同权 | 控制命令（`helm`，含 `src/launcher/` 的 `helm update` 生命周期面） |
 | `@helm/node` | 受控节点守护进程，反向连接 Hub | 节点服务（`helm-node`） |
 | `@helm/web` | 响应式 Web 主控台 | Web 界面（Vite SPA） |
-| `@helm/payload` | Hub npm 发布包组装器，组织可发布目录与零依赖启动入口 | npm Hub payload |
+| `@helm/payload` | npm 三制品组装器：Hub payload、CLI bundle 与 node 守护进程 bundle | npm 制品（`@team4u/helm-hub` / `@team4u/helm-cli` / `@team4u/helm-node`） |
 | `@helm/test-kit` | 测试共享基座（仅限 `devDependencies` 与 `test/`，不进生产依赖） | 测试工具库 |
 
-## 内置插件生态（11 个）
+## 内置插件生态（12 个）
 
 Helm 采用微内核设计，所有扩展能力均由插件提供。停用插件后，其工具、动作、CLI 命令、受管技能与 UI 贡献即时消失，不留幻影提示词。
 
@@ -96,6 +96,7 @@ Helm 采用微内核设计，所有扩展能力均由插件提供。停用插件
 | :--- | :--- | :--- | :--- |
 | `builtin:profile` | 角色与技能底座 | 为全部 Profile 注入 SYSTEM.md 与可用技能目录，提供 `load_skill` 工具与默认助理角色 | 常驻（locked，不可停用） |
 | `builtin:workflow` | 确定性编排引擎 | 提供 `subagent` / `SubagentWorkflow` / `cleanup_worktree` 工具、DSL 编排引擎、Git Worktree 租约与 `helm workflows` / `helm worktrees` 动态命令 | 默认启用 |
+| `builtin:swarm` | 多智能体协同黑板 | 扁平对等序号黑板、正交唤醒与 `turn_settled` 纯事件自愈；零常驻会话，按需复用 workflow 的 Worktree | 默认启用 |
 | `builtin:memory` | 长期记忆 | 自管各 Profile 的 MEMORY.md 注入、单角色记忆启停（`helm memory`）与 `update_memory` 工具 | 默认启用 |
 | `builtin:apps` | 应用中心与微应用工坊 | 全栈微应用目录（`catalog`）、`validate/publish/list/update_meta/remove` 动作（`helm apps`）与 `app-builder` 技能 | 默认启用 |
 | `builtin:json-render` | 声明式渲染 | 聊天 `ui` 代码围栏的 JSON DSL、求值器与界面原语，并维护 `generative-ui` 技能 | 默认启用 |
@@ -103,8 +104,8 @@ Helm 采用微内核设计，所有扩展能力均由插件提供。停用插件
 | `builtin:triggers` | 自动化触发器 | 提供 Cron 定时调度与 Webhook 入站，HMAC 验签并防逃逸投递 | 默认启用 |
 | `builtin:herdr` | 终端 Agent 主控 | 连接 Herdr 终端 IPC，调度 23 种终端 CLI，负责结构化交接、追问自愈与 CAS 审批桥 | 默认停用 |
 | `builtin:superagent` | 双层中枢与看门狗 | 零阻塞路由中枢、后台驻留 Worker、两层巡检与状态自愈（巡检周期由插件服务自管） | 默认停用 |
-| `builtin:magpie` | 动态模型网关 | 连接动态模型网关，原生协议分发，提供目录热重载与配额路由视图 | 默认停用 |
-| `builtin:token-speed` | Token 速率徽标 | 输入区状态行实时解码速率；滑动窗口 / TTFT / 终态对账全在插件，内核只透传通用流式事实 | 默认停用 |
+| `builtin:magpie` | 动态模型网关 | 连接动态模型网关，原生协议分发，提供目录热重载与配额路由视图 | 默认启用 |
+| `builtin:token-speed` | Token 速率徽标 | 输入区状态行实时解码速率；滑动窗口 / TTFT / 终态对账全在插件，内核只透传通用流式事实 | 默认启用 |
 
 插件通过 `ctx.action({ id, inputSchema, outputSchema })` 单点声明动作，自动获得五端映射：HTTP 端点（`POST /api/actions/<pluginId>/<actionId>`）、CLI 顶层命令、Agent Tool、Workflow `action()` 原语与 Web UI。编写自定义插件的完整流程（脚手架、四阶段自检、增量发现、受控热重载）见[自定义插件开发实战](docs/plugins/plugin-development.md)。
 
@@ -193,7 +194,7 @@ pnpm unlink:bins               # 撤销挂载
 pnpm build && pnpm typecheck && pnpm lint && pnpm check:hygiene && pnpm test:all  # 全量验收
 ```
 
-测试分两档：`pnpm test:unit`（protocol / env-io / test-kit / cli / web / plugin-client，纯内存与 happy-dom，不起真实服务）与 `pnpm test:integration`（kernel / plugins / hub / plugin-build / node / payload，真实进程、SQLite、Git、WS 与构建）；合并前跑 `pnpm test:all`。增量反馈用 `pnpm check:changed`（按变更集选反向闭包受影响包，先 typecheck 再跑测试），配合 `pnpm check:hygiene`（AST 门禁：显式超时、skip 附理由等红线）。参与开发前先阅读 [AGENTS.md](AGENTS.md) 的环境隔离、端口铁律与破坏性变更授权约定。
+测试分两档：`pnpm test:unit`（protocol / env-io / test-kit / cli / web / plugin-client，纯内存与 happy-dom，不起真实服务）与 `pnpm test:integration`（kernel / plugins / hub / plugin-build / node / payload，真实进程、SQLite、Git、WS 与构建；另含两个路径级条目——`packages/cli/test/launcher/` 与 `packages/env-io/test/update/` 的真实进程测试归属 integration 档）；合并前跑 `pnpm test:all`。增量反馈用 `pnpm check:changed`（按变更集选反向闭包受影响包，先 typecheck 再跑测试），配合 `pnpm check:hygiene`（AST 门禁：显式超时、skip 附理由等红线）。参与开发前先阅读 [AGENTS.md](AGENTS.md) 的环境隔离、端口铁律与破坏性变更授权约定。
 
 ## CLI 核心命令速查
 
@@ -231,7 +232,7 @@ pnpm build && pnpm typecheck && pnpm lint && pnpm check:hygiene && pnpm test:all
 - **新手入门**：[新手起步导览](docs/getting-started/index.md) · [安装与配置指南](docs/getting-started/installation.md) · [编写首个工作流](docs/getting-started/first-workflow.md)
 - **架构与原理**：[极简微内核哲学](docs/architecture/overview.md) · [生命周期 Hook 与全界面扩展点](docs/architecture/extension-points.md) · [EnvFabric 分布式执行底座](docs/architecture/envfabric.md) · [pi-durable 持久会话状态机](docs/architecture/pi-durable.md)
 - **确定性多智能体编排**：[原生 JavaScript DSL 手册](docs/workflows/dsl-guide.md) · [Git Worktree 与自动化门禁](docs/workflows/worktree-and-gate.md) · [状态流水与意外恢复](docs/workflows/journaling-recovery.md)
-- **插件系统与内置生态**：[插件系统设计与契约](docs/plugins/overview.md) · [自定义插件开发实战](docs/plugins/plugin-development.md) 及 11 个内置插件同名文档（[workflow](docs/plugins/workflow.md) / [profile](docs/plugins/profile.md) / [memory](docs/plugins/memory.md) / [apps](docs/plugins/apps.md) / [herdr](docs/plugins/herdr.md) / [superagent](docs/plugins/superagent.md) / [triggers](docs/plugins/triggers.md) / [magpie](docs/plugins/magpie.md) / [json-render](docs/plugins/json-render.md) / [mermaid](docs/plugins/mermaid.md) / [token-speed](docs/plugins/token-speed.md)）
+- **插件系统与内置生态**：[插件系统设计与契约](docs/plugins/overview.md) · [自定义插件开发实战](docs/plugins/plugin-development.md) 及 12 个内置插件同名文档（[workflow](docs/plugins/workflow.md) / [profile](docs/plugins/profile.md) / [swarm](docs/plugins/swarm.md) / [memory](docs/plugins/memory.md) / [apps](docs/plugins/apps.md) / [herdr](docs/plugins/herdr.md) / [superagent](docs/plugins/superagent.md) / [triggers](docs/plugins/triggers.md) / [magpie](docs/plugins/magpie.md) / [json-render](docs/plugins/json-render.md) / [mermaid](docs/plugins/mermaid.md) / [token-speed](docs/plugins/token-speed.md)）
 - **Web 开发约定**：[Web 前端设计系统](docs/conventions/web-frontend.md) · [Web 导航与 URL Hash 约定](docs/conventions/web-navigation.md)
 - **参考与归档**：[CLI 全量命令参考手册](docs/cli/reference.md) · [发布流程](docs/releasing.md) · [历史设计与开发交接归档](docs/archive/README.md)（只读）
 

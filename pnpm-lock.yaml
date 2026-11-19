@@ -190,12 +190,12 @@ importers:
       '@helm/env-io':
         specifier: workspace:*
         version: link:../env-io
-      '@helm/hub-launcher':
-        specifier: workspace:*
-        version: link:../hub-launcher
       '@helm/protocol':
         specifier: workspace:*
         version: link:../protocol
+      tar:
+        specifier: 7.5.23
+        version: 7.5.23
     devDependencies:
       '@helm/plugin-build':
         specifier: workspace:*
@@ -209,6 +209,10 @@ importers:
       '@helm/protocol':
         specifier: workspace:*
         version: link:../protocol
+    devDependencies:
+      '@helm/test-kit':
+        specifier: workspace:*
+        version: link:../test-kit
 
   packages/hub:
     dependencies:
@@ -249,25 +253,6 @@ importers:
       ws:
         specifier: ^8.18.0
         version: 8.22.1
-
-  packages/hub-launcher:
-    dependencies:
-      '@helm/env-io':
-        specifier: workspace:*
-        version: link:../env-io
-      '@helm/protocol':
-        specifier: workspace:*
-        version: link:../protocol
-      '@helm/update':
-        specifier: workspace:*
-        version: link:../update
-      tar:
-        specifier: 7.5.23
-        version: 7.5.23
-    devDependencies:
-      '@helm/test-kit':
-        specifier: workspace:*
-        version: link:../test-kit
 
   packages/kernel:
     dependencies:
@@ -329,9 +314,6 @@ importers:
       '@helm/protocol':
         specifier: workspace:*
         version: link:../protocol
-      '@helm/update':
-        specifier: workspace:*
-        version: link:../update
       birpc:
         specifier: ^2.9.0
         version: 2.9.0
@@ -348,30 +330,42 @@ importers:
 
   packages/payload:
     devDependencies:
+      '@earendil-works/chord':
+        specifier: 1.5.2
+        version: 1.5.2(esbuild@0.28.2)(ws@8.22.1)
+      '@earendil-works/pi-durable':
+        specifier: 1.5.2
+        version: 1.5.2(@aws-sdk/credential-provider-node@3.972.93)(@smithy/signature-v4@5.7.5)(esbuild@0.28.2)(supports-color@7.2.0)(undici@7.30.2)(ws@8.22.1)
       '@helm/cli':
         specifier: workspace:*
         version: link:../cli
       '@helm/hub':
         specifier: workspace:*
         version: link:../hub
-      '@helm/hub-launcher':
-        specifier: workspace:*
-        version: link:../hub-launcher
       '@helm/kernel':
         specifier: workspace:*
         version: link:../kernel
+      '@helm/node':
+        specifier: workspace:*
+        version: link:../node
       '@helm/plugins':
         specifier: workspace:*
         version: link:../plugins
       '@helm/web':
         specifier: workspace:*
         version: link:../web
+      birpc:
+        specifier: ^2.9.0
+        version: 2.9.0
       esbuild:
         specifier: 0.28.2
         version: 0.28.2
       tar:
         specifier: 7.5.23
         version: 7.5.23
+      ws:
+        specifier: ^8.18.0
+        version: 8.22.1
 
   packages/plugin-build:
     dependencies:
@@ -507,19 +501,6 @@ importers:
       typescript:
         specifier: ^5.9.0
         version: 5.9.3
-
-  packages/update:
-    dependencies:
-      '@helm/env-io':
-        specifier: workspace:*
-        version: link:../env-io
-      '@helm/protocol':
-        specifier: workspace:*
-        version: link:../protocol
-    devDependencies:
-      '@helm/test-kit':
-        specifier: workspace:*
-        version: link:../test-kit
 
   packages/web:
     dependencies:

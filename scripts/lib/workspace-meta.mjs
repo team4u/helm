@@ -27,7 +27,11 @@ export const FULL_TIER_TRIGGERS = new Set([
   'scripts/run-tests.mjs',
   'scripts/test-suites.mjs',
 ]);
-/** Mirror of scripts/test-suites.mjs SUITES: package dir -> tier (display-only). */
+/**
+ * Mirror of scripts/test-suites.mjs SUITES: package dir (or packages/-relative tier-override
+ * path such as 'cli/test/launcher') -> tier (display-only; locked by
+ * packages/cli/test/check-changed.test.ts; changing SUITES tiers must update this too).
+ */
 export const PACKAGE_TIERS = {
   protocol: 'unit',
   'env-io': 'unit',
@@ -39,10 +43,10 @@ export const PACKAGE_TIERS = {
   kernel: 'integration',
   plugins: 'integration',
   hub: 'integration',
-  'hub-launcher': 'integration',
+  'cli/test/launcher': 'integration',
   node: 'integration',
-  update: 'integration',
   payload: 'integration',
+  'env-io/test/update': 'integration',
 };
 
 export const TEST_SUFFIXES = ['.test.ts', '.test.tsx'];
@@ -165,19 +169,31 @@ export function computeAffectedPackages(files, pkgs) {
   return { affected, fullTier: false, outside: outside.sort() };
 }
 
-/** Enumerate every test file under a package's test/ directory (same rules as test-suites.mjs). */
+/**
+ * Enumerate every test file under a package's test/ directory, subdirectories included (same
+ * enumeration scope as test-suites.mjs's recursive coverage invariant): subdirectory suites
+ * such as cli/test/launcher belong to that package for change-driven selection even though
+ * their tier differs from the package's top-level tests.
+ */
 export function testFilesOfPackage(repoRoot, pkgDir) {
-  const dir = path.join(repoRoot, 'packages', pkgDir, 'test');
-  let entries;
-  try {
-    entries = readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-  return entries
-    .filter((e) => e.isFile() && TEST_SUFFIXES.some((s) => e.name.endsWith(s)))
-    .map((e) => `packages/${pkgDir}/test/${e.name}`)
-    .sort();
+  const files = [];
+  const walk = (dir, prefix) => {
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      if (e.isFile() && TEST_SUFFIXES.some((s) => e.name.endsWith(s))) {
+        files.push(`${prefix}/${e.name}`);
+      } else if (e.isDirectory()) {
+        walk(path.join(dir, e.name), `${prefix}/${e.name}`);
+      }
+    }
+  };
+  walk(path.join(repoRoot, 'packages', pkgDir, 'test'), `packages/${pkgDir}/test`);
+  return files.sort();
 }
 
 /**

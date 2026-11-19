@@ -526,7 +526,7 @@ export function analyzeTestSource(ts, filePath, source) {
   return { violations, stats };
 }
 
-/** Collect all test files across the repo (same enumeration scope as scripts/test-suites.mjs: *.test.ts / *.test.tsx under each package's test dir). */
+/** Collect all test files across the repo (same enumeration scope as scripts/test-suites.mjs: *.test.ts / *.test.tsx under each package's test dir, subdirectories included). */
 export function collectAllTestFiles(repoRoot) {
   const packagesDir = path.join(repoRoot, 'packages');
   let entries;
@@ -536,19 +536,24 @@ export function collectAllTestFiles(repoRoot) {
     return [];
   }
   const files = [];
-  for (const e of entries) {
-    if (!e.isDirectory()) continue;
+  const walkTestDir = (dir, prefix) => {
     let testEntries;
     try {
-      testEntries = readdirSync(path.join(packagesDir, e.name, 'test'), { withFileTypes: true });
+      testEntries = readdirSync(dir, { withFileTypes: true });
     } catch {
-      continue;
+      return;
     }
     for (const f of testEntries) {
       if (f.isFile() && TEST_SUFFIXES.some((s) => f.name.endsWith(s))) {
-        files.push(`packages/${e.name}/test/${f.name}`);
+        files.push(`${prefix}/${f.name}`);
+      } else if (f.isDirectory()) {
+        walkTestDir(path.join(dir, f.name), `${prefix}/${f.name}`);
       }
     }
+  };
+  for (const e of entries) {
+    if (!e.isDirectory()) continue;
+    walkTestDir(path.join(packagesDir, e.name, 'test'), `packages/${e.name}/test`);
   }
   return files.sort();
 }

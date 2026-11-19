@@ -1,9 +1,9 @@
 /**
- * `helm-node` self-upgrade adapter over the shared `@helm/update` engine.
+ * `helm-node` self-upgrade adapter over the shared update engine in `@helm/env-io`.
  *
  * Node-specific policy kept here:
- * - the dual-package release layout (`@helm/node` + `@helm/cli`, package names via
- *   `HELM_NPM_PACKAGE` / `HELM_NPM_CLI_PACKAGE`, read at call time);
+ * - the dual-package release layout (`@team4u/helm-node` + `@team4u/helm-cli`, package
+ *   names via `HELM_NPM_PACKAGE` / `HELM_NPM_CLI_PACKAGE`, read at call time);
  * - the launcher-compatible flat `current.json` disk contract
  *   `{version, entryPath, cliBinDir?, updatedAt}` — an already-installed launcher reads
  *   `entryPath` directly after a self-upgrade, so the shared entries-map state stays an
@@ -13,7 +13,7 @@
  *
  * All generic mechanism — registry access, SHA-512 SRI verified staging, immutable
  * `.complete` candidates, `upgrade.lock`, drain gate, strict commit-at-replacement
- * ordering, rollback plus cooldown — lives in `@helm/update`. Error classes are
+ * ordering, rollback plus cooldown — lives in `@helm/env-io`'s update engine. Error classes are
  * re-exported from the single shared module copy so `instanceof` identity holds.
  */
 import fs from 'node:fs/promises';
@@ -48,7 +48,7 @@ import {
   type StageExtractor,
   type UpdateSpec,
   type UpdateStateOps,
-} from '@helm/update';
+} from '@helm/env-io';
 
 export { UpgradeRejectedError, UpgradeCommitUnconfirmedError };
 export {
@@ -70,7 +70,7 @@ export interface StagedNodeRelease {
   version: string;
   /** Immutable release directory (`releases/<ver>/<uuid>`). */
   releaseDir: string;
-  /** Absolute path to `@helm/node`'s `dist/cli.js` entrypoint. */
+  /** Absolute path to the node package's `dist/cli.js` entrypoint. */
   entryPath: string;
   /** Absolute path to `node_modules/.bin` containing the staged `helm` CLI binary. */
   cliBinDir: string;
@@ -118,12 +118,25 @@ export interface CurrentReleaseRecord {
 
 let cachedPackageVersion: string | undefined;
 
-/** Read `@helm/node`'s own `package.json` version (`HELM_VERSION_OVERRIDE` overrides for dev). */
+/** Read the node package's own `package.json` version (`HELM_VERSION_OVERRIDE` overrides for dev). */
 export function getNodeVersion(): string {
   const override = process.env.HELM_VERSION_OVERRIDE?.trim();
   if (override) return override;
   if (!cachedPackageVersion) {
-    const pkgPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../package.json');
+    const selfDir = path.dirname(fileURLToPath(import.meta.url));
+    // Published single-file bundle layout (<pkg>/dist/cli.js) keeps package.json one level up;
+    // the workspace source layout (dist/daemon/upgrader.js) keeps it two levels up.
+    const pkgCandidates = [path.resolve(selfDir, '../package.json'), path.resolve(selfDir, '../../package.json')];
+    let pkgPath: string | undefined;
+    for (const candidate of pkgCandidates) {
+      if (rawFs.existsSync(candidate)) {
+        pkgPath = candidate;
+        break;
+      }
+    }
+    if (pkgPath === undefined) {
+      throw new Error(`failed to locate node package.json (tried ${pkgCandidates.join(', ')})`);
+    }
     let version: string;
     try {
       const parsed = JSON.parse(rawFs.readFileSync(pkgPath, 'utf8')) as { version?: unknown };
@@ -132,7 +145,7 @@ export function getNodeVersion(): string {
       }
       version = parsed.version;
     } catch (error) {
-      throw new Error(`failed to read @helm/node version (${pkgPath}): ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(`failed to read node package version (${pkgPath}): ${error instanceof Error ? error.message : String(error)}`);
     }
     cachedPackageVersion = version;
   }
@@ -222,16 +235,17 @@ const nodeStateOps: UpdateStateOps = {
 // Dual-package layout + update source
 // ---------------------------------------------------------------------------
 
-const nodePackageName = (): string => process.env.HELM_NPM_PACKAGE || '@helm/node';
-const cliPackageName = (): string => process.env.HELM_NPM_CLI_PACKAGE || '@helm/cli';
+const nodePackageName = (): string => process.env.HELM_NPM_PACKAGE || '@team4u/helm-node';
+const cliPackageName = (): string => process.env.HELM_NPM_CLI_PACKAGE || '@team4u/helm-cli';
 
-/** Dual `@helm/node` + `@helm/cli` staging layout; mirrors the previous local validation order. */
+/** Dual `@team4u/helm-node` + `@team4u/helm-cli` staging layout; mirrors the previous local validation order. */
 function makeNodeReleaseLayout(): ReleaseLayout {
   const nodePkg = nodePackageName();
   const cliPkg = cliPackageName();
   const packages: NpmPackageSpec[] = [
     { name: nodePkg, requiredFiles: ['dist/cli.js'] },
-    { name: cliPkg, requiredFiles: ['dist/index.js'], requiredBins: ['helm'] },
+    // The published CLI artifact ships a root-level single-file bundle (bin `helm` -> `./index.js`).
+    { name: cliPkg, requiredFiles: ['index.js'], requiredBins: ['helm'] },
   ];
   return {
     packages,

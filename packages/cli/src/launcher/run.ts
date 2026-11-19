@@ -27,7 +27,7 @@ import type { ChildProcess } from 'node:child_process';
 import fsp from 'node:fs/promises';
 import process from 'node:process';
 import { killProcessTree } from '@helm/env-io';
-import { readCurrentRelease } from '@helm/update';
+import { readCurrentRelease } from '@helm/env-io';
 import { DEFAULTS, pathsOf } from './layout.js';
 import { readPidRecord, removePidFileIfMatch, type LaunchConfig } from './records.js';
 import { isAliveOf, UsageError, type LauncherIo } from './io.js';

@@ -3,10 +3,10 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 import { useTempDir, sanitizedHostEnv } from '@helm/test-kit/node';
-import { readCurrentRelease } from '@helm/update';
-import { cmdCheck, cmdStatus, cmdStop, cmdUpdate } from '../src/commands.js';
-import { defaultUpdateCore } from '../src/update-core.js';
-import { readPidRecord } from '../src/records.js';
+import { readCurrentRelease } from '@helm/env-io';
+import { cmdCheck, cmdStatus, cmdStop, cmdUpdate } from '../../src/launcher/commands.js';
+import { defaultUpdateCore } from '../../src/launcher/update-core.js';
+import { readPidRecord } from '../../src/launcher/records.js';
 import {
   captureIo,
   cleanupPid,

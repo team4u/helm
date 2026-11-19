@@ -1,6 +1,7 @@
 /**
- * @helm/update: the shared self-update engine for long-running Helm processes
- * (`@helm/node` daemon today, the local Hub launcher next).
+ * The shared self-update engine for long-running Helm processes (`@helm/node` daemon
+ * today, the local Hub launcher next), living under `@helm/env-io`'s `update/` subtree
+ * and re-exported from the package root.
  *
  * Mechanisms provided (policy stays with the consumer):
  * - npm registry access: dist-tag/exact metadata fetch with timeouts, SHA-512 SRI verified
@@ -17,9 +18,9 @@
  *   `UpgradeCommitUnconfirmedError`; `current.json` disk format is codec-injectable
  *   (`UpdateStateOps`) so consumers with pre-existing on-disk contracts keep them.
  *
- * The engine depends only on `@helm/protocol` (strict SemVer) and `@helm/env-io`
- * (atomic writes, process-tree termination); it never imports the kernel, plugins, or
- * the Hub, and keeps no product policy inside.
+ * The engine depends only on `@helm/protocol` (strict SemVer) and the host package's own
+ * I/O helpers (atomic writes, process-tree termination); it never imports the kernel,
+ * plugins, or the Hub, and keeps no product policy inside.
  */
 export {
   UpgradeRejectedError,
@@ -73,4 +74,3 @@ export {
   type PreparedReplacement,
   type UpdateResult,
 } from './upgrade.js';
-export { killProcessTree } from '@helm/env-io';

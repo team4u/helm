@@ -18,5 +18,8 @@
   },
   "dependencies": {
     "@helm/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "@helm/test-kit": "workspace:*"
   }
 }
