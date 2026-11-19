@@ -416,7 +416,7 @@ jobs:
             echo "::error::node npm package ${name} must declare exactly one bin entry named helm-node (single-sourced from packages/node)."
             exit 1
           fi
-          if [ "$(jq -r '.bin // {} | .["helm-node"] // empty' "$pkg")" != "dist/cli.js" ]; then
+          if [ "$(jq -r '.bin // {} | .["helm-node"] // empty | ltrimstr("./")' "$pkg")" != "dist/cli.js" ]; then
             echo "::error::node npm package ${name} must point the helm-node bin at dist/cli.js (the bundled daemon entrypoint)."
             exit 1
           fi
