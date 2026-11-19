@@ -107,16 +107,31 @@ test('pluginSlashCommandsFor: only commands declaring slash+actionId and matchin
 test('buildSlashMenuItems: three-source merge; plugin commands run without write-back', { timeout: 60_000 }, () => {
   const executed: string[] = []
   const items = buildSlashMenuItems(
-    [{ id: 'review', name: '代码审查' }],
+    [
+      {
+        id: 'review',
+        name: '代码审查',
+        description: `审查当前改动。\n逐文件核对 ${'x'.repeat(200)} 一致性`,
+      },
+      { id: 'bare', name: '裸技能' },
+    ],
     [cmd('p1', { slash: 'archive', actionId: 'archive', title: '归档' })],
     (c) => executed.push(c.pluginId),
     'en',
   )
   assert.deepEqual(
     items.map((i) => i.id),
-    ['/new', '/clear', '/compact', '/skill:review', 'plugin:p1/cmd-p1'],
+    ['/new', '/clear', '/compact', '/skill:review', '/skill:bare', 'plugin:p1/cmd-p1'],
   )
-  const pluginItem = items[4]!
+  // 技能 hint：优先描述摘要（换行折叠为空格、超长截断加省略号），无描述回落 name
+  const reviewItem = items[3]!
+  assert.equal(reviewItem!.label, '/skill:review')
+  assert.ok(reviewItem!.hint!.startsWith('审查当前改动。 逐文件核对 x'))
+  assert.ok(reviewItem!.hint!.endsWith('…'), '超长描述截断加省略号')
+  assert.ok(Array.from(reviewItem!.hint!).length <= 120, '摘要不超过 120 字符')
+  assert.ok(!reviewItem!.hint!.includes('\n'), '块标量换行折叠为单行')
+  assert.equal(items[4]!.hint, '裸技能', '无描述回落技能名')
+  const pluginItem = items[5]!
   assert.equal(pluginItem!.label, '/archive')
   assert.equal(pluginItem!.apply, undefined, 'plugin commands never write the trigger word back')
   pluginItem!.run!()

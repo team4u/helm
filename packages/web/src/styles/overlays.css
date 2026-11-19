@@ -972,6 +972,19 @@
 .profile-starter-remove { position: absolute; top: 6px; right: 4px; }
 .profile-starter-add { margin-top: 6px; }
 
+/* Profile 详情抽屉：技能白名单复选行的描述摘要（两行截断，完整内容走 title 悬浮）。 */
+.profile-skill-desc {
+  font-size: 11px;
+  color: var(--fg-subtle);
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow-wrap: break-word;
+}
+
 /* ConversationTimeline：空白会话引导词按钮组（仅回填草稿，不直接发送）。 */
 .timeline-starters { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 0 12px; }
 .timeline-starter-btn {

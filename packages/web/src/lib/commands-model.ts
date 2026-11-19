@@ -14,6 +14,7 @@ import {
   type NotificationEvent,
 } from '@helmx/protocol/browser'
 import { matchesUiScope } from './types.js'
+import { summarizeSingleLine } from './format.js'
 
 /** 宿主保留的会话内管理命令斜杠词；插件 slash 声明不得覆盖（后端注册边界拒绝，前端防御性跳过）。 */
 export const RESERVED_SLASH_WORDS: ReadonlySet<string> = new Set(RESERVED_SLASH_COMMANDS)
@@ -108,7 +109,7 @@ export interface SlashMenuItem {
  * 解析后的 description/title 显示文案。
  */
 export function buildSlashMenuItems(
-  visibleSkills: ReadonlyArray<{ id: string; name: string }>,
+  visibleSkills: ReadonlyArray<{ id: string; name: string; description?: string }>,
   pluginSlash: ReadonlyArray<QualifiedCommand>,
   runPluginCommand: (cmd: QualifiedCommand) => void,
   locale: HelmxLocale,
@@ -121,7 +122,9 @@ export function buildSlashMenuItems(
   const skills: SlashMenuItem[] = visibleSkills.map((s) => ({
     id: `/${SKILL_SLASH_PREFIX}${s.id}`,
     label: `/${SKILL_SLASH_PREFIX}${s.id}`,
-    hint: s.name,
+    // The hint prefers the description summary (whitespace-collapsed, capped);
+    // the name (usually equal to the id already shown in the label) is the fallback.
+    hint: summarizeSingleLine(s.description) || s.name,
     apply: `/${SKILL_SLASH_PREFIX}${s.id} `,
   }))
   const plugins: SlashMenuItem[] = pluginSlash.map((cmd) => {

@@ -62,3 +62,19 @@ export function formatFullTimestamp(ms: number | undefined, options?: { placehol
   const pad = (n: number) => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }
+
+/**
+ * Collapse long text (e.g. SKILL.md block-scalar descriptions spanning lines)
+ * into a single-line summary and truncate beyond maxChars with an ellipsis:
+ * - whitespace (incl. newlines) collapses to single spaces;
+ * - empty/whitespace-only input returns '' (callers decide the fallback);
+ * - truncation cuts on the code-point boundary via Array.from and keeps the
+ *   trimmed head plus '…', never exceeding maxChars total.
+ */
+export function summarizeSingleLine(text: string | undefined | null, maxChars = 120): string {
+  const line = (text ?? '').replace(/\s+/g, ' ').trim()
+  if (line === '') return ''
+  const chars = Array.from(line)
+  if (chars.length <= maxChars) return line
+  return `${chars.slice(0, Math.max(0, maxChars - 1)).join('').trimEnd()}…`
+}
