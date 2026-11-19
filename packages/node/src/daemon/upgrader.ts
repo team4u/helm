@@ -118,12 +118,25 @@ export interface CurrentReleaseRecord {
 
 let cachedPackageVersion: string | undefined;
 
-/** Read `@helm/node`'s own `package.json` version (`HELM_VERSION_OVERRIDE` overrides for dev). */
+/** Read the node package's own `package.json` version (`HELM_VERSION_OVERRIDE` overrides for dev). */
 export function getNodeVersion(): string {
   const override = process.env.HELM_VERSION_OVERRIDE?.trim();
   if (override) return override;
   if (!cachedPackageVersion) {
-    const pkgPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../package.json');
+    const selfDir = path.dirname(fileURLToPath(import.meta.url));
+    // Published single-file bundle layout (<pkg>/dist/cli.js) keeps package.json one level up;
+    // the workspace source layout (dist/daemon/upgrader.js) keeps it two levels up.
+    const pkgCandidates = [path.resolve(selfDir, '../package.json'), path.resolve(selfDir, '../../package.json')];
+    let pkgPath: string | undefined;
+    for (const candidate of pkgCandidates) {
+      if (rawFs.existsSync(candidate)) {
+        pkgPath = candidate;
+        break;
+      }
+    }
+    if (pkgPath === undefined) {
+      throw new Error(`failed to locate node package.json (tried ${pkgCandidates.join(', ')})`);
+    }
     let version: string;
     try {
       const parsed = JSON.parse(rawFs.readFileSync(pkgPath, 'utf8')) as { version?: unknown };
@@ -132,7 +145,7 @@ export function getNodeVersion(): string {
       }
       version = parsed.version;
     } catch (error) {
-      throw new Error(`failed to read @helm/node version (${pkgPath}): ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(`failed to read node package version (${pkgPath}): ${error instanceof Error ? error.message : String(error)}`);
     }
     cachedPackageVersion = version;
   }
