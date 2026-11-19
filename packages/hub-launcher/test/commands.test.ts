@@ -72,8 +72,9 @@ test('local control: install and start, report status, upgrade, and stop', { tim
   await writeFakePayload({ dir: path.join(root, 'payload-1.1.0'), pkgName: PKG, version: '1.1.0' });
   payloads.set('1.1.0', path.join(root, 'payload-1.1.0'));
 
+  const dataDir = useTempDir(t, 'helm-launcher-local-data-');
   const install = ioWith(root);
-  assert.equal(await cmdUpdate({ root, io: install.io, core }, { tarball: tarballPath, version: '1.0.0', port }), 0);
+  assert.equal(await cmdUpdate({ root, io: install.io, core }, { tarball: tarballPath, version: '1.0.0', port, dataDir }), 0);
   assert.match(install.outText(), /updated: \(none\) -> 1\.0\.0/);
 
   assert.match(install.outText(), /hub started \(pid \d+/);
@@ -95,7 +96,7 @@ test('local control: install and start, report status, upgrade, and stop', { tim
   assert.equal(statusPayload.launch.port, port);
 
   const update = ioWith(root);
-  assert.equal(await cmdUpdate({ root, io: update.io, core }, {}), 0);
+  assert.equal(await cmdUpdate({ root, io: update.io, core }, { dataDir }), 0);
   assert.match(update.outText(), /1\.0\.0 -> 1\.1\.0/);
   assert.match(update.outText(), /hub restarted/);
   const updatedPid = await readPidRecord(root);
