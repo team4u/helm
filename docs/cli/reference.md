@@ -44,6 +44,21 @@
 
 **`helm api <method> <path> [--input <json>] [--field <k=v>]`** — 原始 HTTP 逃生舱。method 为 `GET|POST|PUT|PATCH|DELETE`（大小写不敏感）；path 自动补齐前导 `/`；`--field` 可重复且值按 JSON boolean/number 解析，与 `--input` 混用时仅对象基底可合并；GET 不接受请求体。
 
+### 本机 Hub 生命周期（npm 制品）
+
+**`helm update [--check] [--watch] [--status] [--stop] [--channel <tag>] [--interval-ms <ms>] [--tarball <path> --version <ver>]`** — 本机 Hub payload 的安装、更新与生命周期管理（`npm install -g @team4u/helm` 制品的主入口；经 `@helm/hub-launcher` 内部 typed API 实现，launcher 不单独发布 bin）。安装根 `~/.helm-hub`（`HELM_HUB_INSTALL_ROOT`）与用户数据 `~/.helm` 严格分离。
+
+| 调用 | 说明 |
+| :--- | :--- |
+| `helm update` | 一次性更新：本机尚无已提交 release 时安装所选通道最新版**并启动**（默认动作，无 `--start`）；已安装则升级到最新（同版本为 no-op） |
+| `helm update --check` | 只读检查 registry 所选通道是否有更新，不改状态 |
+| `helm update --watch` | **推荐的常驻入口**：安装（如需）→ 启动 → 按周期自动更新；只监督自己启动的 Hub，本机已有实例在跑时显式拒绝（先 `--stop`） |
+| `helm update --status` | 安装/运行/blocked 状态摘要；`--json` 输出快照对象（`current` / `running` / `blocked`） |
+| `helm update --stop` | 优雅停止运行中的 Hub（跨进程身份核验 fail-closed，见[安装指南](../getting-started/installation.md)） |
+| `helm update --tarball <path> --version <ver>` | 从本地 payload tgz 安装并启动（离线/内网；`--version` 必填） |
+
+通道与周期：`--channel <dist-tag>`（默认 `latest`，预发布 `beta`；env `HELM_HUB_UPDATE_TAG`）与 `--interval-ms <毫秒>`（`--watch` 周期，默认 `900000` 即 15 分钟；env `HELM_HUB_UPDATE_INTERVAL_MS`）。升级编排与健康门控/回滚、启动配置（`HELM_PORT` / `HELM_HOST` / `HELM_DATA_DIR` / `HELM_MODEL` > `launch.json` 粘性配置 > 默认值）详见[安装与配置指南](../getting-started/installation.md)。
+
 ### 会话与输入
 
 **`helm conversations list [--profile <id>] [--status <st>] [--tag <tag>] [--all | --parent <id>]`** — 列出会话。`--status` 取值 `working|blocked|done|idle|error`。默认仅顶层会话；`--all` 全量；`--parent <id>` 仅列出直接子会话（与 `--all` 互斥）。
@@ -168,6 +183,8 @@ PUT 为整体替换契约：update 走语义化标志时 CLI 先 GET 完整 Prof
 **`helm plugins rescan`** — 增量重扫描插件目录：只注册新外部插件（默认停用），已注册插件不重载。
 
 **`helm plugins init [name] [--dir <dir>] [--name <str>] [--template minimal|full|app] [--force]`** — 本地脚手架（不访问 Hub）。名称需匹配 `^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$` 且禁止 `builtin:` 前缀；目标目录非空默认拒绝，`--force` 继续（同名文件被覆盖，不删除现有文件）。
+
+**`helm plugins build [dir] [--dir <dir>] [--out <dir>] [--module <m>]`** — 本地预编译插件前端为静态 `dist-client/`（不访问 Hub）。编译器（`@helm/plugin-build`，含平台原生 esbuild）按运行位置解析：源码模式/Hub payload 布局内由同级 `node_modules` 提供；npm 制品全局 CLI 需要本机已安装 Helm 管理的 payload release（其 release 目录依赖闭包含该编译器），不可解析时显式报 `plugin_build_unavailable`（诚实边界：编译器无法零依赖交付）。
 
 **`helm plugins install <source> [--enable]`** — 从 npm/Git/本地路径安装。source 四种写法：`npm:<spec>`、`git:<repo>[@<ref>]`（可含子目录）、HTTPS Git URL（`#<ref>` 可选）、本地路径（相对 Hub 主机解析）。**安装并启用即在 Hub 进程内执行可信插件代码（无沙箱），仅装可信来源**。
 

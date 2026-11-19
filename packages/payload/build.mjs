@@ -20,15 +20,17 @@
  *                                 TS transform; hub injects it as the kernel build port; file: dependency)
  *   env-io/{package.json, dist/} @helm/env-io execution-side shared I/O implementation
  *   protocol/{package.json, dist/} protocol build output (file: dependency)
- *   cli/{package.json, dist/}      CLI output (package.json kept for locating/auditing; the runtime entry
- *                                  can be pointed at cli/dist/index.js via HELM_CLI_ENTRY)
+ *   cli/{package.json, dist/}      CLI output (package.json kept for locating/auditing; dist/index.js is
+ *                                  the same zero-dependency single-file bundle as the dist-cli artifact,
+ *                                  so the payload-side `helm` and the globally installed `helm` are one CLI)
  *   web/dist/                      Vite output (start.mjs points at it explicitly via HELM_WEB_DIST_DIR)
  *   start.mjs + manifest.json      zero-dependency launch entry and the version/entry/checksum contract
  *
- * The same build also assembles the stable launcher artifact (see src/assemble-launcher.mjs):
- * dist-launcher/ is a second publish package — a zero-dependency, single-file bundle of
- * helm-hub-launcher + @helm/update that installs globally via one `npm install -g`. The Hub payload
- * contract above is unchanged by that artifact; a missing launcher package aborts the build.
+ * The same build also assembles the stable CLI artifact (see src/assemble-cli.mjs): dist-cli/ is a
+ * second publish package — a zero-dependency, single-file bundle of the complete control CLI
+ * (packages/cli/dist/index.js incl. the @helm/hub-launcher update-path closure) that installs
+ * globally via one `npm install -g` (bin helm). The Hub payload contract above is unchanged by that
+ * artifact except for the cli entry bytes; a missing CLI bundle aborts the build.
  *
  * Note: `@helm/plugin-client` is a browser-only SDK already bundled into `web/dist` and virtualized by
  * `@helm/plugin-build` via `globalThis.__helm_shared_plugin_client`, so neither `@helm/plugin-client`
@@ -41,11 +43,11 @@
  */
 import { createHash } from 'node:crypto';
 import { create as createTar } from 'tar';
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { scanPeerOverrides, resolveDepRealDir } from './src/dep-closure.mjs';
-import { assembleLauncherArtifact } from './src/assemble-launcher.mjs';
+import { assembleCliArtifact } from './src/assemble-cli.mjs';
 
 const payloadPkgRoot = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(payloadPkgRoot, '../..');
@@ -192,10 +194,28 @@ const distPackageJson = {
 rmSync(stagingDir, { recursive: true, force: true });
 mkdirSync(stagingDir, { recursive: true });
 
+// --- Stable CLI artifact (second publish entry) + the payload CLI entry: one esbuild bundle, two consumers.
+// assembleCliArtifact bundles packages/cli/dist/index.js (the full control CLI incl. the
+// @helm/hub-launcher typed-API update path) into dist-cli/index.js — a hard release input; a broken
+// bundle contract aborts the build inside assemble-cli.mjs. The same bytes are shipped inside the
+// Hub payload as cli/dist/index.js below, so both artifacts run one identical CLI.
+const cliArtifact = await assembleCliArtifact({
+  repoRoot,
+  version: payloadPkg.version,
+  enginesNode: distPackageJson.engines.node,
+});
+
 for (const dir of ['hub', 'kernel', 'plugins', 'plugin-build', 'env-io', 'protocol', 'cli']) {
   cpSync(path.join(repoRoot, 'packages', dir, 'dist'), path.join(stagingDir, dir, 'dist'), { recursive: true });
   cpSync(path.join(repoRoot, 'packages', dir, 'package.json'), path.join(stagingDir, dir, 'package.json'));
 }
+// The payload's CLI entry is the same single-file bundle as the dist-cli artifact: the bundle
+// self-contains the CLI's workspace closure (@helm/hub-launcher / @helm/update / tar ride along via
+// the update path), so the payload root dependency set needs no additions for the CLI to run and
+// start.mjs check keeps resolving from the cli entry point. The remaining cli/dist tsc outputs stay
+// as layout/auditing helper assets; `helm plugins build`'s computed dynamic import of
+// @helm/plugin-build resolves at runtime from the payload root node_modules (plugin-build.tgz).
+copyFileSync(cliArtifact.bundleFile, path.join(stagingDir, 'cli', 'dist', 'index.js'));
 cpSync(path.join(repoRoot, 'packages/web/dist'), path.join(stagingDir, 'web/dist'), { recursive: true });
 cpSync(path.join(payloadPkgRoot, 'src/start.mjs'), path.join(stagingDir, 'start.mjs'));
 cpSync(path.join(repoRoot, 'LICENSE'), path.join(stagingDir, 'LICENSE'));
@@ -312,11 +332,4 @@ console.log(`[payload] root dependencies: ${Object.keys(rootDependencies).length
 console.log(`[payload] ${stats.files} files, ${(stats.bytes / 1024 / 1024).toFixed(1)} MiB total`);
 console.log(`[payload] runtime asset directories: ${copiedAssets.length}: ${copiedAssets.join(', ')}`);
 console.log('[payload] note: node_modules is not bundled; consumers unpack the tgz files and run npm install --omit=dev --ignore-scripts to complete dependencies (verified by start.mjs check)');
-
-// --- Stable launcher artifact (second publish entry): a hard release input — a missing launcher
-// package or broken bundle contract aborts the build inside assemble-launcher.mjs. ---
-await assembleLauncherArtifact({
-  repoRoot,
-  version: payloadPkg.version,
-  enginesNode: distPackageJson.engines.node,
-});
+console.log(`[payload] cli entry: cli/dist/index.js is the same zero-dependency bundle as the dist-cli artifact (${path.basename(cliArtifact.bundleFile)})`);

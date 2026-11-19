@@ -171,7 +171,7 @@ test('current entry access: engine record shape, entryPath extraction, explicit 
 });
 
 test('layout helpers: update interval, dist-tag channels, and their invalid forms', { timeout: 60_000 }, () => {
-  assert.equal(resolveUpdateIntervalMs({}), 6 * 60 * 60 * 1000);
+  assert.equal(resolveUpdateIntervalMs({}), 15 * 60 * 1000);
   assert.equal(resolveUpdateIntervalMs({ HELM_HUB_UPDATE_INTERVAL_MS: '5000' }), 5000);
   assert.throws(() => resolveUpdateIntervalMs({ HELM_HUB_UPDATE_INTERVAL_MS: '0' }), /invalid HELM_HUB_UPDATE_INTERVAL_MS/);
   assert.throws(() => resolveUpdateIntervalMs({ HELM_HUB_UPDATE_INTERVAL_MS: 'abc' }), /invalid HELM_HUB_UPDATE_INTERVAL_MS/);

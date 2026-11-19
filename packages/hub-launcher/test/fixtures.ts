@@ -40,7 +40,9 @@ export type FakePayloadMode =
 
 const START_MJS = `#!/usr/bin/env node
 import { createServer } from 'node:http';
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
 const version = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')).version;
 const mode = readFileSync(new URL('./payload-mode.txt', import.meta.url), 'utf8').trim();
 const command = process.argv[2];
@@ -72,6 +74,42 @@ else {
   const host = process.env.HELM_HOST ?? '127.0.0.1';
   const displayHost = host === '0.0.0.0' || host === '::' ? '127.0.0.1' : host;
   const bannerPort = mode === 'wrong-port-banner' ? (port === 1 ? 2 : 1) : port;
+
+  // ---- activity heartbeat writer (mirrors the real hub's @helm/kernel activity-heartbeat) ----
+  // Enabled only when a data directory is resolvable (HELM_DATA_DIR): the launcher's update
+  // busy-gate binds this record to hub.pid's wrapper identity. The state file (optional) is
+  // re-read every tick so tests can flip busy/idle/stale/missing/garbage at runtime.
+  const activityFile = process.env.HELM_FIXTURE_ACTIVITY_FILE ??
+    (process.env.HELM_DATA_DIR ? path.join(process.env.HELM_DATA_DIR, 'hub-activity.json') : null);
+  const stateFile = process.env.HELM_FIXTURE_ACTIVITY_STATE ?? null;
+  const startTimeSelf = (() => {
+    try {
+      const stat = readFileSync('/proc/self/stat', 'utf8');
+      const fields = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\\s+/);
+      const raw = fields[19];
+      return raw !== undefined && /^\\d+$/.test(raw) ? Number(raw) : null;
+    } catch { return null; }
+  })();
+  const defaultCounts = { activeConversations: 0, activeCompactions: 0, queuedConversations: 0, settlingConversations: 0 };
+  const readActivityState = () => {
+    if (stateFile === null) return { mode: 'idle', counts: defaultCounts };
+    try {
+      const parsed = JSON.parse(readFileSync(stateFile, 'utf8'));
+      return { mode: parsed.mode ?? 'idle', counts: { ...defaultCounts, ...(parsed.counts ?? {}) } };
+    } catch { return { mode: 'idle', counts: defaultCounts }; }
+  };
+  const writeActivity = () => {
+    if (activityFile === null) return;
+    const state = readActivityState();
+    if (state.mode === 'missing') { try { unlinkSync(activityFile); } catch {} return; }
+    try { mkdirSync(path.dirname(activityFile), { recursive: true }); } catch {}
+    if (state.mode === 'garbage') { try { writeFileSync(activityFile, '{not-json', { flag: 'w' }); } catch {} return; }
+    const updatedAt = state.mode === 'stale' ? Date.now() - 3_600_000 : Date.now();
+    const record = { schema: 1, pid: process.pid, ppid: process.ppid, port, startTime: startTimeSelf, updatedAt, counts: state.counts };
+    const tmp = activityFile + '.tmp';
+    try { writeFileSync(tmp, JSON.stringify(record) + '\\n', { mode: 0o600 }); renameSync(tmp, activityFile); } catch {}
+  };
+
   // Preceding log lines on purpose: the readiness scan must find the banner mid-chunk (#72).
   console.log('[fake-payload] layout validated');
   console.log('[fake-payload] dependencies resolved');
@@ -89,7 +127,16 @@ else {
     res.writeHead(404);
     res.end();
   });
-  server.listen(port, host, () => console.log(\`Helm Hub: http://\${displayHost}:\${bannerPort}\`));
+  server.listen(port, host, () => {
+    writeActivity(); // write before the banner: readiness implies a bound heartbeat record
+    console.log(\`Helm Hub: http://\${displayHost}:\${bannerPort}\`);
+  });
+  if (activityFile !== null && mode !== 'ignore-signal') setInterval(writeActivity, 300).unref?.();
+  if (mode !== 'ignore-signal') {
+    const shutdown = () => { if (activityFile !== null) { try { unlinkSync(activityFile); } catch {} } process.exit(0); };
+    process.on('SIGTERM', shutdown);
+    process.on('SIGINT', shutdown);
+  }
 }
 `;
 

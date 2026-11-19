@@ -33,6 +33,7 @@ import { readPidRecord, removePidFileIfMatch, type LaunchConfig } from './record
 import { isAliveOf, UsageError, type LauncherIo } from './io.js';
 import { startHubLocked, withLifecycleLock } from './process.js';
 import { checkHubUpgrade, performHubUpdate, type HubLifecycleDriver } from './update.js';
+import { describeActivityCounts } from './activity.js';
 import type { UpdateCore } from './update-core.js';
 
 export interface RunLauncherOptions {
@@ -246,6 +247,12 @@ export async function runSupervised(options: RunLauncherOptions): Promise<number
         return;
       }
       const outcome = await performHubUpdate({ ...updateCommon, tag });
+      if (outcome.deferred !== undefined) {
+        io.out(
+          `update to ${outcome.targetVersion} deferred: hub is busy (${describeActivityCounts(outcome.deferred.counts)}); nothing stopped, retrying next cycle\n`,
+        );
+        return;
+      }
       if (!outcome.changed) {
         io.out(`already at ${outcome.targetVersion}; nothing to do\n`);
         return;

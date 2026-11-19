@@ -3,8 +3,11 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "bin": {
-    "helm-hub-launcher": "./dist/main.js"
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
   },
   "scripts": {
     "build": "node scripts/clean-dist.mjs && tsc -p tsconfig.json",

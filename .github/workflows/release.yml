@@ -4,23 +4,23 @@
 #
 # npm publishing authority is per artifact, exactly one manifest each: the Hub payload's sole
 # authority is packages/payload/dist/package.json (a build artifact; default name @team4u/helm-hub,
-# overridable at build time via the HELM_PAYLOAD_PACKAGE env), and the stable launcher's sole
-# authority is packages/payload/dist-launcher/package.json (a build artifact; default name
-# @team4u/helm-hub-launcher, overridable via HELM_LAUNCHER_PACKAGE). The workspace's @helm/payload
-# is forever a private assembler: publishing must run npm pack / npm publish inside the respective
-# dist directory (the tarball root is the package root, with the manifest at the root); never run
-# pnpm pack on the workspace package — that would nest everything under the dist/ path prefix, and
-# the updater's root-layout probing would inevitably fail.
+# overridable at build time via the HELM_PAYLOAD_PACKAGE env), and the stable CLI's sole authority
+# is packages/payload/dist-cli/package.json (a build artifact; default name @team4u/helm, bin helm,
+# overridable via HELM_CLI_PACKAGE). The workspace's @helm/payload is forever a private assembler:
+# publishing must run npm pack / npm publish inside the respective dist directory (the tarball root
+# is the package root, with the manifest at the root); never run pnpm pack on the workspace package —
+# that would nest everything under the dist/ path prefix, and the updater's root-layout probing
+# would inevitably fail.
 #
 # Honesty constraints:
 #   - Each publishing gate = the private / version (locked to the tag) / repository fields of its
 #     dist manifest + the existence of NPM_TOKEN (injected as NODE_AUTH_TOKEN); if any item is
 #     unmet, fail or skip explicitly before publishing;
-#   - The launcher additionally requires an empty dependency set (it ships as a zero-dependency
-#     single-file bundle; a workspace: / file: / @helm/* dependency would break `npm install -g`
-#     for every consumer because no @helm/* package is published), and publishes only after the
-#     payload published in the same run (the launcher's default update path resolves the payload
-#     from the npm registry);
+#   - The CLI additionally requires an empty dependency set (it ships as a zero-dependency
+#     single-file bundle of the complete helm CLI; a workspace: / file: / @helm/* dependency would
+#     break `npm install -g` for every consumer because no @helm/* package is published), and
+#     publishes only after the payload published in the same run (the CLI's default update path
+#     resolves the payload from the npm registry);
 #   - dist-tag policy (both artifacts, decided once in verify): a semver prerelease (a hyphen in
 #     the version core, e.g. 1.2.3-rc.1) publishes under `beta`; build metadata (e.g. 1.2.3+build-7)
 #     is not a prerelease and stays on `latest`. Pre-releases never implicitly become latest;
@@ -65,9 +65,9 @@ jobs:
 
       # Only validate the tag shape and assembler existence; npm publish decisions always defer to
       # the build-artifact manifests (packages/payload/dist/package.json and
-      # packages/payload/dist-launcher/package.json — see npm-publish); no repo-wide non-private
-      # scan — there is exactly one publish manifest per artifact. The launcher package is a hard
-      # release input (its absence means the tag cannot produce the launcher artifact at all).
+      # packages/payload/dist-cli/package.json — see npm-publish); no repo-wide non-private
+      # scan — there is exactly one publish manifest per artifact. The CLI package is a hard
+      # release input (its absence means the tag cannot produce the CLI artifact at all).
       - name: Verify tag and payload builder
         id: scan
         run: |
@@ -105,12 +105,12 @@ jobs:
             }
           }
 
-          if (!existsSync('packages/hub-launcher/package.json')) {
-            fail('packages/hub-launcher is a required release input (the launcher npm artifact is assembled from it) but is missing from this tag.');
+          if (!existsSync('packages/cli/package.json')) {
+            fail('packages/cli is a required release input (the helm CLI npm artifact bundles its dist entry) but is missing from this tag.');
           }
-          const launcher = JSON.parse(readFileSync('packages/hub-launcher/package.json', 'utf8'));
-          if (launcher.private !== true) {
-            warn(`launcher workspace package ${launcher.name} must stay private: true (its publish form is the assembled packages/payload/dist-launcher bundle, never the workspace package).`);
+          const cli = JSON.parse(readFileSync('packages/cli/package.json', 'utf8'));
+          if (cli.private !== true) {
+            warn(`CLI workspace package ${cli.name} must stay private: true (its publish form is the assembled packages/payload/dist-cli bundle, never the workspace package).`);
           }
           EOF
 
@@ -149,21 +149,21 @@ jobs:
       - name: Run all tests
         run: pnpm test:all
 
-      # Payload + launcher artifact acceptance in one gate (both artifacts come from the same
+      # Payload + CLI artifact acceptance in one gate (both artifacts come from the same
       # build.mjs assembly): assembly contracts always run; the real-tarball/global-install,
-      # payload end-to-end, and launcher golden sequence ride the PAYLOAD_NPM_SMOKE network gate.
-      - name: Verify npm payload and launcher artifacts (pack, install, golden sequence)
+      # payload end-to-end, and CLI golden sequence ride the PAYLOAD_NPM_SMOKE network gate.
+      - name: Verify npm payload and cli artifacts (pack, install, golden sequence)
         env:
           PAYLOAD_NPM_SMOKE: '1'
         run: node scripts/run-tests.mjs packages/payload/test/payload.test.ts
 
   # ------------------------------------------------------------------
-  # Stage 3: conditional npm publish of both artifacts (payload then launcher, one job —
-  # they share the checkout/install/build; sequential steps keep the launcher's
+  # Stage 3: conditional npm publish of both artifacts (payload then cli, one job —
+  # they share the checkout/install/build; sequential steps keep the cli's
   # "payload must have published" coupling honest without a second runner).
   # ------------------------------------------------------------------
   npm-publish:
-    name: npm publish (payload + launcher, conditional)
+    name: npm publish (payload + cli, conditional)
     needs: [verify, build]
     permissions:
       contents: read
@@ -172,8 +172,8 @@ jobs:
     outputs:
       payload-published: ${{ steps.result.outputs.payload-published }}
       payload-status-line: ${{ steps.result.outputs.payload-status-line }}
-      launcher-published: ${{ steps.result.outputs.launcher-published }}
-      launcher-status-line: ${{ steps.result.outputs.launcher-status-line }}
+      cli-published: ${{ steps.result.outputs.cli-published }}
+      cli-status-line: ${{ steps.result.outputs.cli-status-line }}
     env:
       PAYLOAD_PRESENT: ${{ needs.verify.outputs.payload-present }}
       TAG_VERSION: ${{ needs.verify.outputs.version }}
@@ -201,8 +201,8 @@ jobs:
 
       # The build job ran on a separate runner; rebuild the workspace artifacts here once for
       # both publish steps: packages/payload build assembles dist/ (Hub payload) and
-      # dist-launcher/ (launcher bundle).
-      - name: Build packages (assemble dist and dist-launcher)
+      # dist-cli/ (helm CLI bundle).
+      - name: Build packages (assemble dist and dist-cli)
         run: pnpm build
 
       # ---- Hub payload -------------------------------------------------------------
@@ -245,7 +245,7 @@ jobs:
           fi
 
       # Fail fast when a package is due to publish but the secret is missing: an explicit gate,
-      # never falsely claim a publish. The launcher publishes only after the payload did, so this
+      # never falsely claim a publish. The CLI publishes only after the payload did, so this
       # single gate covers both artifacts' due-publish paths.
       - name: Require NPM_TOKEN secret
         if: env.PAYLOAD_PRESENT == 'true' && steps.payload.outputs.skip == 'false'
@@ -276,22 +276,22 @@ jobs:
           echo "tarball: $tgz ($(du -h "$tgz" | cut -f1))"
           npm publish "$tgz" --provenance --access public --tag "$DIST_TAG"
 
-      # ---- Stable launcher ---------------------------------------------------------
-      # The build artifact dist-launcher/package.json is the launcher's sole publishing authority:
+      # ---- Stable CLI ----------------------------------------------------------------
+      # The build artifact dist-cli/package.json is the CLI's sole publishing authority:
       # missing file = the assembler contract is broken (explicit failure); private = explicitly
       # not publishing (skip branch); publishing requires the version locked to the tag, the
       # repository field (provenance), an empty dependency set (a workspace:/file:/@helm/* dependency
       # would break `npm install -g` for every consumer), and the payload having published in this
-      # run (the launcher's default update path resolves the payload from the npm registry —
-      # shipping a launcher whose default flow 404s would be dishonest).
-      - name: Inspect launcher npm package
-        id: launcher
+      # run (the CLI's default update path resolves the payload from the npm registry — shipping a
+      # CLI whose default flow 404s would be dishonest).
+      - name: Inspect cli npm package
+        id: cli
         if: env.PAYLOAD_PRESENT == 'true'
         run: |
           set -eu
-          pkg=packages/payload/dist-launcher/package.json
+          pkg=packages/payload/dist-cli/package.json
           if [ ! -f "$pkg" ]; then
-            echo "::error::packages/payload build did not produce $pkg (assembler contract: the launcher package must bundle into dist-launcher with a publishable package.json)."
+            echo "::error::packages/payload build did not produce $pkg (assembler contract: the cli package must bundle into dist-cli with a publishable package.json)."
             exit 1
           fi
           name=$(jq -r '.name // empty' "$pkg")
@@ -300,41 +300,46 @@ jobs:
             echo "::error::$pkg is missing the name or version field; refusing to publish."
             exit 1
           fi
-          echo "launcher npm package: ${name}@${version}"
+          echo "cli npm package: ${name}@${version}"
           if [ "$(jq -r '.private // false' "$pkg")" = "true" ]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
             echo "skip_reason=private" >> "$GITHUB_OUTPUT"
-            echo "::notice::launcher npm package ${name} is marked private: true; skipped as a placeholder (no launcher npm publish runs at all)."
+            echo "::notice::cli npm package ${name} is marked private: true; skipped as a placeholder (no cli npm publish runs at all)."
             exit 0
           fi
           echo "skip=false" >> "$GITHUB_OUTPUT"
           echo "name=$name" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           if [ "$version" != "$TAG_VERSION" ]; then
-            echo "::error::launcher npm package ${name}@${version} does not match tag ${TAG_VERSION}; keep versions in lockstep before tagging."
+            echo "::error::cli npm package ${name}@${version} does not match tag ${TAG_VERSION}; keep versions in lockstep before tagging."
             exit 1
           fi
           if [ "$(jq -r 'has("repository")' "$pkg")" != "true" ]; then
-            echo "::error::launcher npm package ${name} is missing the repository field (required by npm provenance, and it must point to this repository)."
+            echo "::error::cli npm package ${name} is missing the repository field (required by npm provenance, and it must point to this repository)."
             exit 1
           fi
           deps=$(jq -r '(.dependencies // {}) | length' "$pkg")
           if [ "$deps" != "0" ]; then
-            echo "::error::launcher npm package ${name} declares ${deps} runtime dependencies; the launcher ships as a zero-dependency single-file bundle (no @helm/* package is published, so any dependency would break npm install -g)."
+            echo "::error::cli npm package ${name} declares ${deps} runtime dependencies; the cli ships as a zero-dependency single-file bundle (no @helm/* package is published, so any dependency would break npm install -g)."
+            exit 1
+          fi
+          bins=$(jq -r '.bin // {} | length' "$pkg")
+          if [ "$bins" != "1" ] || [ "$(jq -r '.bin // {} | keys[0]' "$pkg")" != "helm" ]; then
+            echo "::error::cli npm package ${name} must declare exactly one bin entry named helm (single-sourced from packages/cli)."
             exit 1
           fi
 
-      # Publish payload first: the launcher publishes only when the payload did (see Inspect).
-      - name: Publish launcher package from dist-launcher (provenance, public)
-        id: publish-launcher
-        if: steps.launcher.outputs.skip == 'false' && steps.publish-payload.conclusion == 'success'
+      # Publish payload first: the CLI publishes only when the payload did (see Inspect).
+      - name: Publish cli package from dist-cli (provenance, public)
+        id: publish-cli
+        if: steps.cli.outputs.skip == 'false' && steps.publish-payload.conclusion == 'success'
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -eu
-          dest="$RUNNER_TEMP/pack-launcher"
+          dest="$RUNNER_TEMP/pack-cli"
           mkdir -p "$dest"
-          (cd packages/payload/dist-launcher && npm pack --pack-destination "$dest" >/dev/null)
+          (cd packages/payload/dist-cli && npm pack --pack-destination "$dest" >/dev/null)
           tgz=$(ls "$dest"/*.tgz | head -n 1)
           echo "tarball: $tgz ($(du -h "$tgz" | cut -f1))"
           npm publish "$tgz" --provenance --access public --tag "$DIST_TAG"
@@ -348,11 +353,11 @@ jobs:
           PAYLOAD_NAME: ${{ steps.payload.outputs.name }}
           PAYLOAD_VERSION: ${{ steps.payload.outputs.version }}
           PAYLOAD_PUBLISH_CONCLUSION: ${{ steps.publish-payload.conclusion }}
-          LAUNCHER_SKIP: ${{ steps.launcher.outputs.skip }}
-          LAUNCHER_SKIP_REASON: ${{ steps.launcher.outputs.skip_reason }}
-          LAUNCHER_NAME: ${{ steps.launcher.outputs.name }}
-          LAUNCHER_VERSION: ${{ steps.launcher.outputs.version }}
-          LAUNCHER_PUBLISH_CONCLUSION: ${{ steps.publish-launcher.conclusion }}
+          CLI_SKIP: ${{ steps.cli.outputs.skip }}
+          CLI_SKIP_REASON: ${{ steps.cli.outputs.skip_reason }}
+          CLI_NAME: ${{ steps.cli.outputs.name }}
+          CLI_VERSION: ${{ steps.cli.outputs.version }}
+          CLI_PUBLISH_CONCLUSION: ${{ steps.publish-cli.conclusion }}
         run: |
           set -eu
           if [ "$PAYLOAD_PRESENT" != "true" ]; then
@@ -369,29 +374,29 @@ jobs:
             payload_line="payload npm publish did not complete (publish step ${PAYLOAD_PUBLISH_CONCLUSION:-not executed}); this run contains no payload publish result."
           fi
 
-          if [ "$LAUNCHER_SKIP" = "true" ] && [ "$LAUNCHER_SKIP_REASON" = "private" ]; then
-            launcher_published=false
-            launcher_line='launcher npm package is marked private; no launcher npm publish was executed.'
+          if [ "$CLI_SKIP" = "true" ] && [ "$CLI_SKIP_REASON" = "private" ]; then
+            cli_published=false
+            cli_line='cli npm package is marked private; no cli npm publish was executed.'
           elif [ "$payload_published" != "true" ]; then
-            launcher_published=false
-            launcher_line='launcher publish skipped: the Hub payload did not publish in this run (the launcher default update path resolves the payload from the npm registry, so shipping it now would advertise a broken one-shot install).'
-          elif [ "$LAUNCHER_PUBLISH_CONCLUSION" = "success" ]; then
-            launcher_published=true
-            launcher_line="Published \`${LAUNCHER_NAME}@${LAUNCHER_VERSION}\` (zero-dependency helm-hub-launcher bundle) to npmjs.com (with provenance, dist-tag ${DIST_TAG}); see the npm-publish job logs."
+            cli_published=false
+            cli_line='cli publish skipped: the Hub payload did not publish in this run (the cli default update path resolves the payload from the npm registry, so shipping it now would advertise a broken one-shot install).'
+          elif [ "$CLI_PUBLISH_CONCLUSION" = "success" ]; then
+            cli_published=true
+            cli_line="Published \`${CLI_NAME}@${CLI_VERSION}\` (zero-dependency helm CLI bundle, bin helm) to npmjs.com (with provenance, dist-tag ${DIST_TAG}); see the npm-publish job logs."
           else
-            launcher_published=false
-            launcher_line="launcher npm publish did not complete (publish step ${LAUNCHER_PUBLISH_CONCLUSION:-not executed}); this run contains no launcher publish result."
+            cli_published=false
+            cli_line="cli npm publish did not complete (publish step ${CLI_PUBLISH_CONCLUSION:-not executed}); this run contains no cli publish result."
           fi
 
           echo "payload-published=$payload_published" >> "$GITHUB_OUTPUT"
           echo "payload-status-line<<EOF" >> "$GITHUB_OUTPUT"
           echo "$payload_line" >> "$GITHUB_OUTPUT"
           echo "EOF" >> "$GITHUB_OUTPUT"
-          echo "launcher-published=$launcher_published" >> "$GITHUB_OUTPUT"
-          echo "launcher-status-line<<EOF" >> "$GITHUB_OUTPUT"
-          echo "$launcher_line" >> "$GITHUB_OUTPUT"
+          echo "cli-published=$cli_published" >> "$GITHUB_OUTPUT"
+          echo "cli-status-line<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$cli_line" >> "$GITHUB_OUTPUT"
           echo "EOF" >> "$GITHUB_OUTPUT"
           echo "payload published=$payload_published"
           echo "payload status: $payload_line"
-          echo "launcher published=$launcher_published"
-          echo "launcher status: $launcher_line"
+          echo "cli published=$cli_published"
+          echo "cli status: $cli_line"

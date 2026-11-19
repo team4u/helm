@@ -11,7 +11,7 @@
     "typecheck": "pnpm --filter @helm/protocol --filter @helm/env-io --filter @helm/update --filter @helm/node --filter @helm/plugin-build --filter @helm/kernel --filter @helm/plugins --filter @helm/hub --filter @helm/hub-launcher run build && tsc --noEmit -p tsconfig.check.json && tsc --noEmit -p packages/plugins/tsconfig.client.json",
     "test": "pnpm --filter @helm/protocol --filter @helm/env-io --filter @helm/update --filter @helm/node --filter @helm/plugin-build --filter @helm/kernel --filter @helm/plugins --filter @helm/hub --filter @helm/hub-launcher --filter @helm/cli --filter @helm/web run build && node scripts/test-suites.mjs all",
     "test:all": "pnpm --filter @helm/protocol --filter @helm/env-io --filter @helm/update --filter @helm/node --filter @helm/plugin-build --filter @helm/kernel --filter @helm/plugins --filter @helm/hub --filter @helm/hub-launcher --filter @helm/cli --filter @helm/web run build && node scripts/test-suites.mjs all",
-    "test:unit": "pnpm --filter @helm/protocol --filter @helm/env-io --filter @helm/plugin-build run build && node scripts/test-suites.mjs unit",
+    "test:unit": "pnpm --filter @helm/protocol --filter @helm/env-io --filter @helm/update --filter @helm/hub-launcher --filter @helm/plugin-build run build && node scripts/test-suites.mjs unit",
     "test:integration": "pnpm --filter @helm/protocol --filter @helm/env-io --filter @helm/update --filter @helm/node --filter @helm/plugin-build --filter @helm/kernel --filter @helm/plugins --filter @helm/hub --filter @helm/hub-launcher --filter @helm/cli --filter @helm/web run build && node scripts/test-suites.mjs integration",
     "test:unit:run": "node scripts/test-suites.mjs unit",
     "test:integration:run": "node scripts/test-suites.mjs integration",

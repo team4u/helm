@@ -39,6 +39,7 @@ import {
   type NodeUpgradeCheckResult,
   type NodeUpgradeResult,
   type PluginSkillAsset,
+  type HubActivityCounts,
 } from '@helm/protocol'
 import type { ConversationOwnership } from './runtime-ownership.js'
 import type { Harness, Registry, ToolRegistration } from '@earendil-works/pi-durable'
@@ -636,6 +637,20 @@ export class KernelRuntime {
 
   listConversations(filter?: ConversationListFilter): ConversationSummary[] {
     return this.conversations.listConversations(filter)
+  }
+
+  /** Read-only activity snapshot for the Hub's process-private heartbeat file (launcher update
+   * busy-gate): derived synchronously from the live conversation mirrors — active runs (including
+   * approval-blocked runs whose tool call is still in flight), in-flight context compactions,
+   * queued inbox input, and in-flight turn settlement all count as busy so the launcher never
+   * stops a Hub mid-work without an explicit --force. */
+  activitySnapshot(): HubActivityCounts {
+    return this.conversations.activitySnapshot()
+  }
+
+  /** Register a synchronous idle→busy activity transition listener (activity heartbeat wiring). */
+  onActivityBusyEntered(listener: () => void): () => void {
+    return this.conversations.onActivityBusyEntered(listener)
   }
 
   getConversation(id: number): ConversationSummary {
