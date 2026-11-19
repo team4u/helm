@@ -5,12 +5,14 @@
  * - npm: `npm:<spec>` (`<spec>` is any non-empty npm dependency specifier without whitespace);
  * - git: `git:<repo>[@<ref>][#<subdirectory>]` (`repo` may be https URL, `user@host:path` SCP, or `host/path` shorthand);
  * - HTTPS Git URL: `https://...(.git)?[#<ref>][#<subdirectory>]`;
- * - local: absolute path or Hub-cwd-relative path (`./` or `../`).
+ * - local: absolute path (POSIX `/...`, Windows drive `C:\...` / `C:/...`, or UNC `\\server\share\...`)
+ *   or Hub-cwd-relative path (`./` or `../`). Local forms are detected before the generic scheme
+ *   rejection because a Windows drive letter (`C:`) otherwise looks like a URI scheme prefix.
  *
  * Rejected: `file://`, plaintext `http://`, `builtin:` prefixes, empty strings, and bare relative names.
  */
-import { isAbsolute, resolve } from 'node:path';
-import { HelmxError, type PluginPackageSource } from '@helmx/protocol';
+import { resolve } from 'node:path';
+import { HelmxError, isAbsoluteTargetPath, type PluginPackageSource } from '@helmx/protocol';
 
 /** Minimal npm specifier check: non-empty with no whitespace (semver parsing belongs to npm). */
 const NPM_SPEC_PATTERN = /^\S+$/;
@@ -195,6 +197,18 @@ export function parsePluginSource(raw: string, cwd: string): PluginPackageSource
     }
     return { kind: 'git', raw, repo, ref, subdirectory };
   }
+  // Local path: cross-platform absolute (POSIX `/`, Windows drive `C:\…` / `C:/…`, UNC `\\server\share`,
+  // via the shared `isAbsoluteTargetPath` lexical predicate — same shapes as conversation cwd) or an
+  // explicit ./ / ../ relative path (bare names rejected to avoid npm/git ambiguity).
+  // Must run before the generic scheme rejection below: a Windows drive letter (`C:\…`) otherwise
+  // looks like a URI scheme prefix and gets rejected as an unsupported protocol.
+  if (isAbsoluteTargetPath(raw) || raw.startsWith('./') || raw.startsWith('../')) {
+    const path = resolve(cwd, raw);
+    if (path.includes('\0')) {
+      throw new HelmxError('validation_error', `Local path contains illegal character: ${raw}`, 400, { raw });
+    }
+    return { kind: 'local', raw, path };
+  }
   if (/^http:\/\//i.test(raw)) {
     throw new HelmxError(
       'validation_error',
@@ -210,14 +224,6 @@ export function parsePluginSource(raw: string, cwd: string): PluginPackageSource
       400,
       { raw },
     );
-  }
-  // Local path: absolute or explicit ./ / ../ relative path (bare names rejected to avoid npm/git ambiguity)
-  if (isAbsolute(raw) || raw.startsWith('./') || raw.startsWith('../') || /^[a-zA-Z]:[\\/]/.test(raw) || raw.startsWith('\\\\')) {
-    const path = resolve(cwd, raw);
-    if (path.includes('\0')) {
-      throw new HelmxError('validation_error', `Local path contains illegal character: ${raw}`, 400, { raw });
-    }
-    return { kind: 'local', raw, path };
   }
   throw new HelmxError(
     'validation_error',

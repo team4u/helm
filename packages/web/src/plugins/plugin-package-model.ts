@@ -6,6 +6,7 @@
  * 仅做前端输入引导；最终解析与校验由 Hub 安装器裁决。
  */
 import type { HelmxLocale, PluginDoctorReport, PluginPackageSource } from '@helmx/protocol/browser'
+import { isAbsoluteTargetPath } from '@helmx/protocol/browser'
 import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 
 /** 安装来源的本地识别结果（仅用于输入引导与安全提示，不预判服务端行为）。 */
@@ -28,12 +29,14 @@ export function isGitSource(input: string): boolean {
   return /^git:[^\s]+$/.test(value) || /^https:\/\/[^\s]+$/.test(value)
 }
 
-/** 识别本地路径：绝对路径（POSIX / Windows UNC）或显式 `./`、`../` 相对路径。 */
+/**
+ * 识别本地路径：跨平台绝对路径（POSIX `/`、Windows 盘符、UNC，复用 `@helmx/protocol` 的
+ * `isAbsoluteTargetPath` 词法判定——与 Hub 端 `parsePluginSource`、会话 cwd 校验同源，
+ * 前后端对路径形态的判定永不分裂）或显式 `./`、`../` 相对路径。
+ */
 export function isLocalSource(input: string): boolean {
   const value = input.trim()
-  if (value.startsWith('/')) return true
-  if (/^[a-zA-Z]:[\\/]/.test(value)) return true
-  if (value.startsWith('\\\\')) return true
+  if (isAbsoluteTargetPath(value)) return true
   return value.startsWith('./') || value.startsWith('../')
 }
 
