@@ -7,10 +7,12 @@
  * - Refresh chain lifecycle (pending / dirty): in-flight refreshes can outlive stopObserving (pending cleans up
  *   in finally, and re-triggers simply mark dirty), so they live outside ConversationMirror (see exception list in conversation-mirror.ts).
  *
- * Frame discipline (preserving original semantics):
+ * Frame discipline:
  * - Initial population stays silent (automatically visible on snapshot/HTTP read), except: (1) compacting=true
  *   on initial hydrate must publish (otherwise subscribers would never see it), or (2) explicit on-demand triggers;
- * - During active runs, only emit frames on compacting / contextWindow transitions (tokens settle with emitSettled);
+ * - Every persisted `pi.assistant` step (as well as compaction/reset/rewind boundaries, turn settlement, and catalog
+ *   changes) refreshes and publishes changed contextUsage immediately—even mid-run—so long multi-step turns never
+ *   freeze at stale/zero usage or stay stuck at `?` after in-run compaction;
  * - Publishes never advance stateChangeSeq (reserved exclusively for CAS watermarks; derived display metrics must not pollute it).
  */
 
@@ -166,9 +168,10 @@ export class ContextUsageRefresh {
     if (value > current) this.entryWatermark.set(conversationId, value)
   }
 
-  /** Scan context boundaries: trigger refresh only when a new entry beyond the watermark is pi.compaction /
-   * pi.reset / helmx.rewind, or when pi.live compaction state (compactions/compactionFailure) changes.
-   * Monotonic watermark prevents re-triggering on streaming snapshots (even when onEntryCommitted is inactive). */
+  /** Scan context-changing entries and compaction state: trigger refresh when a new entry beyond the watermark is
+   * pi.assistant / pi.compaction / pi.reset / helmx.rewind, or when pi.live compaction state changes.
+   * Monotonic watermark prevents re-triggering on streaming snapshots (each committed entry triggers at most once,
+   * and pending/dirty coalesces bursts). */
   noteBoundary(
     id: number,
     view: ConversationView,
@@ -183,7 +186,14 @@ export class ContextUsageRefresh {
       if (!Number.isFinite(numeric) || numeric <= old) continue
       if (numeric > watermark) watermark = numeric
       const kind = (raw as { kind?: unknown }).kind
-      if (kind === 'pi.compaction' || kind === 'pi.reset' || kind === 'helmx.rewind') boundary = true
+      if (
+        kind === 'pi.assistant' ||
+        kind === 'pi.compaction' ||
+        kind === 'pi.reset' ||
+        kind === 'helmx.rewind'
+      ) {
+        boundary = true
+      }
     }
     this.entryWatermark.set(id, watermark)
     // prev is always a mirror object ({} fallback on adopt) while raw live defaults to {}, preventing false diffs on initial empty snapshots.
@@ -242,7 +252,6 @@ export class ContextUsageRefresh {
       ...(compacting !== undefined ? { compacting } : {}),
     })
     const key = contextUsageKeyOf(usage)
-    const previous = this.cache.get(conversationId)
     const previousKey = this.keys.get(conversationId)
     const shouldPublishInitial = this.notifyInitial.delete(conversationId)
     // Update cache first so immediate HTTP / SSE snapshot reads observe the latest values.
@@ -257,16 +266,10 @@ export class ContextUsageRefresh {
       return
     }
     if (key === previousKey) return
-    // While a run is active, publish only compacting or contextWindow changes; intermediate token updates attach at
-    // turn settlement (emitSettled) instead of spamming summaries per token. Window changes reflect semantic catalog/model
-    // shifts and must emit immediately without advancing stateChangeSeq.
-    if (this.host.liveOf(conversationId)?.run !== undefined) {
-      const compactionChanged = (previous?.compacting ?? null) !== (usage.compacting ?? null)
-      const windowChanged = (previous?.contextWindow ?? null) !== (usage.contextWindow ?? null)
-      if (!compactionChanged && !windowChanged) return
-    }
     // Publish summary with updated usage without advancing stateChangeSeq—stateChangeSeq belongs strictly to state
     // machine / doing / Ask CAS semantics so display refreshes never trigger spurious 409/superseded conflicts.
+    // Trigger sources are already bounded to committed pi.assistant / boundary entries, settlement, and model changes
+    // (never per-token streaming deltas), so publishing changed tokens mid-run keeps long multi-step turns live.
     this.host.onSummaryChanged(this.host.summaryOf(conversationId))
   }
 }

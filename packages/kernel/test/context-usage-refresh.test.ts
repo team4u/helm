@@ -1,9 +1,9 @@
 /**
  * Deterministic unit tests for ConversationTracker contextUsage refresh (fake harness, real tracker):
  *
- * 1. Boundary watermark: historical markers in initial snapshot (e.g., pi.compaction) and subsequent ordinary
- *    observations never re-schedule refreshes (avoiding read/write amplification); only new marker entries above the
- *    prior watermark trigger a single refresh;
+ * 1. Boundary watermark: historical markers in initial snapshot (e.g., pi.compaction) and non-context-anchor
+ *    observations (pi.user / pi.tool-result) never re-schedule refreshes; each new pi.assistant step and each new
+ *    boundary marker (pi.compaction / pi.reset / helmx.rewind) above the prior watermark triggers a single refresh;
  * 2. ensureContextUsage: concurrent callers coalesce onto a single in-flight refresh; cached values skip refresh;
  * 3. Epoch generation guard (including undefined transitions): when an unobserved conversation refresh races with
  *    concurrent observe(), stale late results are discarded without poisoning cache;
@@ -17,8 +17,9 @@
  * 8. Registry-wide invalidation (onModelsChanged): unknown->known / known->removed window transitions update
  *    existing refresh chains, reach summaries via usage-only updates without advancing stateChangeSeq, filter out
  *    unrelated providers, deduplicate unchanged frames, and mark dirty during in-flight updates;
- * 9. Window transitions during active runs still publish immediately rather than waiting until turn end; unchanged
- *    windows do not re-emit frames.
+ * 9. Mid-run updates: both contextWindow shifts and newly persisted pi.assistant steps (tokens 0 -> measured,
+ *    or post-compaction null -> measured) publish immediately during active runs without advancing stateChangeSeq,
+ *    while identical values deduplicate without re-emitting.
  *
  * Determinism: scheduling and harness.conversation() invocations occur synchronously; async propagation uses
  * manually resolved deferreds or ensureContextUsage settlement without relying on sleeps or wall-clock timers.
@@ -236,7 +237,7 @@ async function flush(): Promise<void> {
 // ---------------------------------------------------------------------------
 
 describe('context usage refresh: boundary watermark', { timeout: 60_000 }, () => {
-  it('ignores historical markers, skips ordinary updates, and triggers once per new marker', { timeout: 60_000 }, async () => {
+  it('ignores historical markers, skips non-assistant/non-boundary entries, and triggers once per new assistant or boundary', { timeout: 60_000 }, async () => {
     const env = trackerEnv({
       initialEntries: [
         { id: 5, kind: 'pi.user' },
@@ -247,28 +248,55 @@ describe('context usage refresh: boundary watermark', { timeout: 60_000 }, () =>
     await env.tracker.ensureContextUsage(1)
     assert.equal(env.harness.contextCalls, 1, 'initial attach (idle conversation) refreshes once')
 
-    // Subsequent ordinary observations contain historical pi.compaction below watermark: must not re-schedule.
+    // Subsequent observations with only historical markers or non-anchor entries (pi.user / pi.tool-result) do not re-schedule.
     env.harness.advance(
       viewOf({
         entries: [
           { id: 5, kind: 'pi.user' },
           { id: 6, kind: 'pi.compaction' },
-          { id: 7, kind: 'pi.assistant' },
+          { id: 7, kind: 'pi.user' },
         ],
       }),
     )
-    assert.equal(env.harness.contextCalls, 1, 'ordinary new entry must not trigger refresh')
+    assert.equal(env.harness.contextCalls, 1, 'non-assistant/non-boundary new entry must not trigger refresh')
     env.harness.advance(
       viewOf({
         entries: [
           { id: 5, kind: 'pi.user' },
           { id: 6, kind: 'pi.compaction' },
-          { id: 7, kind: 'pi.assistant' },
-          { id: 8, kind: 'pi.user' },
+          { id: 7, kind: 'pi.user' },
+          { id: 8, kind: 'pi.tool-result' },
         ],
       }),
     )
-    assert.equal(env.harness.contextCalls, 1, 'repeated snapshot with historical markers must not trigger refresh')
+    assert.equal(env.harness.contextCalls, 1, 'repeated snapshot with historical markers and tool-result must not trigger refresh')
+
+    // New pi.assistant step above watermark: triggers exactly once (keeps long multi-step runs fresh).
+    env.harness.advance(
+      viewOf({
+        entries: [
+          { id: 5, kind: 'pi.user' },
+          { id: 6, kind: 'pi.compaction' },
+          { id: 7, kind: 'pi.user' },
+          { id: 8, kind: 'pi.tool-result' },
+          { id: 9, kind: 'pi.assistant' },
+        ],
+      }),
+    )
+    await env.tracker.ensureContextUsage(1)
+    assert.equal(env.harness.contextCalls, 2, 'new pi.assistant entry triggers exactly one refresh')
+
+    // Repeated snapshot containing the same pi.assistant does not re-trigger.
+    env.harness.advance(
+      viewOf({
+        entries: [
+          { id: 5, kind: 'pi.user' },
+          { id: 6, kind: 'pi.compaction' },
+          { id: 9, kind: 'pi.assistant' },
+        ],
+      }),
+    )
+    assert.equal(env.harness.contextCalls, 2, 'already-scanned pi.assistant must not trigger again')
 
     // New boundary entry (id above prior watermark): triggers exactly once.
     env.harness.advance(
@@ -276,13 +304,13 @@ describe('context usage refresh: boundary watermark', { timeout: 60_000 }, () =>
         entries: [
           { id: 5, kind: 'pi.user' },
           { id: 6, kind: 'pi.compaction' },
-          { id: 7, kind: 'pi.assistant' },
-          { id: 8, kind: 'pi.user' },
-          { id: 9, kind: 'helmx.rewind' },
+          { id: 9, kind: 'pi.assistant' },
+          { id: 10, kind: 'helmx.rewind' },
         ],
       }),
     )
-    assert.equal(env.harness.contextCalls, 2, 'new marker entry triggers exactly one refresh')
+    await env.tracker.ensureContextUsage(1)
+    assert.equal(env.harness.contextCalls, 3, 'new marker entry triggers exactly one refresh')
 
     // Watermark advanced: repeated snapshot containing the same marker does not re-trigger.
     env.harness.advance(
@@ -290,11 +318,11 @@ describe('context usage refresh: boundary watermark', { timeout: 60_000 }, () =>
         entries: [
           { id: 5, kind: 'pi.user' },
           { id: 6, kind: 'pi.compaction' },
-          { id: 9, kind: 'helmx.rewind' },
+          { id: 10, kind: 'helmx.rewind' },
         ],
       }),
     )
-    assert.equal(env.harness.contextCalls, 2, 'already-scanned marker must not trigger again')
+    assert.equal(env.harness.contextCalls, 3, 'already-scanned marker must not trigger again')
   })
 })
 
@@ -616,10 +644,10 @@ describe('context usage refresh: models.changed window backfill', { timeout: 60_
 })
 
 // ---------------------------------------------------------------------------
-// 9. Window change publishing during active run
+// 9. Mid-run publishing (window changes and per-step assistant token updates)
 // ---------------------------------------------------------------------------
 
-describe('context usage refresh: window changes during active run', { timeout: 60_000 }, () => {
+describe('context usage refresh: mid-run updates', { timeout: 60_000 }, () => {
   it('publishes immediately on window change rather than waiting for turn end; skips duplicate frames on unchanged window', { timeout: 60_000 }, async () => {
     let models = modelsWithWindowState(0, false, true)
     const env = trackerEnv({
@@ -642,5 +670,82 @@ describe('context usage refresh: window changes during active run', { timeout: 6
     env.tracker.onModelsChanged([])
     await env.tracker.ensureContextUsage(1)
     assert.equal(env.events.summaries.length, 1, 'duplicate events with unchanged window must not re-emit')
+  })
+
+  it('publishes updated tokens mid-run when new pi.assistant steps commit (never frozen at 0 or stuck at null after in-run compaction)', { timeout: 60_000 }, async () => {
+    const env = trackerEnv({
+      model: 'faux/m-known',
+      initialEntries: [{ id: 1, kind: 'helmx.input' }],
+      initialLive: { run: { taskId: 11, inputs: [] } },
+    })
+    // Initial attach sees an empty context (tokens=0) just like a freshly created conversation entering its first long run.
+    // (adoptInitial triggers initial refresh + seeds summaryOf while in-flight, queuing one dirty pass; keep both empty.)
+    const emptyView = { head: undefined, entries: [], contributions: [], messages: [] } as unknown as ContextView
+    env.harness.pushView(emptyView)
+    env.harness.pushView(emptyView)
+    await env.tracker.observe(1)
+    await env.tracker.ensureContextUsage(1)
+    assert.equal(env.tracker.summaryOf(1).contextUsage?.tokens, 0)
+    env.events.summaries.length = 0
+    const seqBefore = env.store.convs.get(1)!.stateChangeSeq
+    const entries = (ids: Array<[number, string]>): EntrySpec[] => ids.map(([id, kind]) => ({ id, kind }))
+
+    // Step 1 commits a pi.assistant entry while the run is still active (e.g. tool-use loop).
+    env.harness.pushView(usageView(4_000))
+    env.harness.advance(
+      viewOf({
+        entries: entries([
+          [1, 'helmx.input'],
+          [10, 'pi.assistant'],
+        ]),
+        live: { run: { taskId: 11, inputs: [] } },
+      }),
+    )
+    await env.tracker.ensureContextUsage(1)
+    assert.equal(env.tracker.summaryOf(1).contextUsage?.tokens, tokensOf(4_000))
+    const step1Frames = env.events.summaries.filter((s) => s.contextUsage?.tokens === tokensOf(4_000))
+    assert.equal(step1Frames.length, 1, 'first assistant step mid-run must publish non-zero tokens immediately')
+    assert.equal(env.store.convs.get(1)!.stateChangeSeq, seqBefore, 'mid-run usage publish must not advance stateChangeSeq')
+
+    // In-run compaction commits: transitions tokens to null (unknown until next assistant step).
+    env.harness.pushView({
+      head: { id: 11, kind: 'pi.compaction' } as never,
+      entries: [{ id: 11, kind: 'pi.compaction' } as never],
+      contributions: [[]],
+      messages: [],
+    } as unknown as ContextView)
+    env.harness.advance(
+      viewOf({
+        entries: entries([
+          [10, 'pi.assistant'],
+          [11, 'pi.compaction'],
+        ]),
+        live: { run: { taskId: 11, inputs: [] } },
+      }),
+    )
+    await env.tracker.ensureContextUsage(1)
+    assert.equal(env.tracker.summaryOf(1).contextUsage?.tokens, null)
+    assert.ok(
+      env.events.summaries.some((s) => s.contextUsage?.tokens === null),
+      'in-run compaction must publish tokens=null',
+    )
+
+    // Step 2 commits a new pi.assistant after compaction while the same run continues: recovers from null immediately.
+    env.harness.pushView(usageView(12_000))
+    env.harness.advance(
+      viewOf({
+        entries: entries([
+          [10, 'pi.assistant'],
+          [11, 'pi.compaction'],
+          [12, 'pi.assistant'],
+        ]),
+        live: { run: { taskId: 11, inputs: [] } },
+      }),
+    )
+    await env.tracker.ensureContextUsage(1)
+    assert.equal(env.tracker.summaryOf(1).contextUsage?.tokens, tokensOf(12_000))
+    const step2Frames = env.events.summaries.filter((s) => s.contextUsage?.tokens === tokensOf(12_000))
+    assert.equal(step2Frames.length, 1, 'post-compaction assistant step mid-run must recover from null immediately')
+    assert.equal(env.store.convs.get(1)!.stateChangeSeq, seqBefore, 'stateChangeSeq remains untouched across all usage updates')
   })
 })

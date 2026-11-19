@@ -37,6 +37,7 @@ interface RecordedUpsert {
   doing: string | undefined
   seq: number
   at: number
+  usageKey: string
 }
 
 let root = ''
@@ -75,6 +76,7 @@ function recordUpserts(kernel: KernelRuntime, conversationId: number): {
       doing: conversation.doing,
       seq: conversation.stateChangeSeq,
       at: frame.seq,
+      usageKey: JSON.stringify(conversation.contextUsage ?? null),
     })
   })
   return { frames, stop: unsubscribe }
@@ -146,12 +148,34 @@ describe('emitRunSummary: real-time summary on run start and doing semantic chan
         await kernel.waitForIdle(1)
         await waitFor(() => recorded.frames.some((f) => f.status === 'done'))
         const workings = recorded.frames.filter((f) => f.status === 'working')
-        const doings = workings.map((f) => f.doing ?? '')
+        // Separate state/doing transitions (which advance stateChangeSeq) from mid-run contextUsage-only refreshes
+        // (which share the current stateChangeSeq and must carry a genuinely changed usage payload).
+        const doingTransitions: RecordedUpsert[] = []
+        for (const frame of workings) {
+          const prev = doingTransitions[doingTransitions.length - 1]
+          if (prev !== undefined && frame.seq === prev.seq) {
+            assert.equal(
+              frame.doing,
+              prev.doing,
+              `usage-only frame sharing seq=${frame.seq} must not mutate doing: ${JSON.stringify(workings)}`,
+            )
+            assert.notEqual(
+              frame.usageKey,
+              prev.usageKey,
+              `same-seq working frame without contextUsage change is a duplicate: ${JSON.stringify(workings)}`,
+            )
+            // Keep latest usageKey on the group tail so consecutive usage updates also verify uniqueness.
+            prev.usageKey = frame.usageKey
+            continue
+          }
+          doingTransitions.push({ ...frame })
+        }
+        const doings = doingTransitions.map((f) => f.doing ?? '')
         // Identical doing semantics must never be pushed twice in a row (neither on token streaming nor on repeated snapshots).
         for (let i = 1; i < doings.length; i += 1) {
           assert.ok(
             doings[i] !== doings[i - 1],
-            `identical doing semantics pushed consecutively: ${JSON.stringify(workings)}`,
+            `identical doing semantics pushed consecutively: ${JSON.stringify(doingTransitions)}`,
           )
         }
         assert.ok(doings.includes('thinking...'), `run-start doing should include thinking...: ${JSON.stringify(doings)}`)
@@ -162,7 +186,7 @@ describe('emitRunSummary: real-time summary on run start and doing semantic chan
         // Streaming tokens must not emit extra frames: thinking... appears once per run start (two runs total).
         // During the second run's 20-word token-by-token stream, doing stays thinking... and must not re-emit.
         const thinkingCount = doings.filter((d) => d === 'thinking...').length
-        assert.equal(thinkingCount, 2, `thinking... must appear exactly twice (once per run start): ${JSON.stringify(workings)}`)
+        assert.equal(thinkingCount, 2, `thinking... must appear exactly twice (once per run start): ${JSON.stringify(doingTransitions)}`)
       } finally {
         recorded.stop()
       }

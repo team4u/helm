@@ -19,7 +19,7 @@ import { strict as assert } from 'node:assert'
 import { after, before, describe, it } from 'node:test'
 import { join } from 'node:path'
 import type { ContextView } from '@earendil-works/pi-durable'
-import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
+import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { AssistantMessage, Message, SystemMessage, Tool, UserMessage } from '@earendil-works/pi-ai'
 import type { ConversationSummary, HelmxEventFrame } from '@helmx/protocol'
 import { HelmxError } from '@helmx/protocol'
@@ -725,6 +725,56 @@ describe('integration: summary carries contextUsage and publishes events', { tim
       }, 20_000)
       assert.equal(recorded.notices.length, 1, 'same compaction failure must not notify twice')
     } finally {
+      recorded.stop()
+      await kernel.close()
+    }
+  })
+
+  it('first-turn multi-step run publishes measured tokens mid-run before settlement (never frozen at 0)', { timeout: 60_000 }, async () => {
+    const kernel = await openRuntime('mid-run-live-usage')
+    // Populate initial empty cache (tokens=0) before the first turn starts, reproducing a newly opened conversation.
+    await kernel.getConversationDetail(1, { limit: 10 })
+    await waitFor(() => kernel.getConversation(1).contextUsage?.tokens === 0, 10_000)
+
+    let releaseSecondStep = () => {}
+    const secondStepGate = new Promise<void>((resolve) => { releaseSecondStep = resolve })
+    let secondStepStarted = false
+    kernel.__faux.setResponses([
+      fauxAssistantMessage([fauxToolCall('bash', { command: 'printf ok' })], { stopReason: 'toolUse' }),
+      async () => {
+        secondStepStarted = true
+        await secondStepGate
+        return fauxAssistantMessage('final answer after tool call')
+      },
+    ])
+
+    const recorded = recordUpserts(kernel, 1)
+    try {
+      await kernel.submitInput(1, 'run a tool and answer')
+      await waitFor(() => secondStepStarted, 15_000)
+
+      // Still inside the very first run (completionSeq=0, status='working'): step 1 pi.assistant already committed,
+      // so contextUsage must leave 0 and push a working conversation.upsert with real tokens.
+      await waitFor(() => {
+        const usage = kernel.getConversation(1).contextUsage
+        return typeof usage?.tokens === 'number' && usage.tokens > 0
+      }, 15_000)
+      const midSummary = kernel.getConversation(1)
+      assert.equal(midSummary.status, 'working', 'run must still be active when mid-run usage arrives')
+      assert.equal(midSummary.completionSeq, 0, 'turn has not settled yet')
+      const midTokens = midSummary.contextUsage!.tokens as number
+      assert.ok(midTokens > 0, 'mid-run tokens must be measured and positive')
+      assert.ok(
+        recorded.frames.some((f) => f.status === 'working' && typeof f.contextUsage?.tokens === 'number' && f.contextUsage.tokens > 0),
+        'mid-run usage update must reach SSE subscribers via conversation.upsert',
+      )
+
+      releaseSecondStep()
+      await kernel.waitForIdle(1)
+      await waitFor(() => (kernel.getConversation(1).contextUsage?.tokens ?? 0) >= midTokens, 15_000)
+      assert.ok((kernel.getConversation(1).contextUsage?.tokens ?? 0) >= midTokens)
+    } finally {
+      releaseSecondStep()
       recorded.stop()
       await kernel.close()
     }

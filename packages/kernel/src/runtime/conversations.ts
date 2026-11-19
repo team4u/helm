@@ -721,8 +721,8 @@ export class ConversationTracker {
     // Never drop compaction failures silently: emit an error notification once per new compactionFailure.
     this.noteCompactionFailure(id, live)
 
-    // When a context boundary changes (compaction / reset / in-place rewrite persisted, or active compaction changes),
-    // schedule an async refresh (deduplicated synchronously; awaiting inside observe callbacks is forbidden).
+    // When a context-changing entry commits (assistant step / compaction / reset / in-place rewrite) or active
+    // compaction state changes, schedule an async refresh (deduplicated synchronously; awaiting in observe is forbidden).
     this.usage.noteBoundary(id, view, prev, live)
 
     // Assistant text: take the newest pi.assistant entry at the window tail.
