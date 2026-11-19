@@ -726,6 +726,7 @@ test('tasks-int7: planFirst real AskDoc approval gate (request tool blocks until
     const task = await taskFromAction(env, 'T-1')
     assert.equal(task.planApproval?.decision, 'approved')
     assert.equal(task.planApproval?.askId, askId)
+    assert.equal(task.pendingPlanAskId, undefined, 'in-flight ask marker cleared after the ask settled')
     assert.equal(task.submission?.summary, 'implemented per approved plan')
   } finally {
     await env.close()
@@ -907,6 +908,81 @@ test('tasks-int9: approve quiescence guard (still-running refused, explicit conf
       confirmStopped: true,
     })) as { task: TaskRecord }
     assert.equal(closed.task.column, 'done')
+  } finally {
+    await env.close()
+  }
+})
+
+test('tasks-int10: create idempotency key, explicit merged declaration for merge closure, orphan conversation recovery', { timeout: 60_000 }, async (t) => {
+  const env = await openTasksEnv(useTempDir(t, 'helmx-tasks-int10-'))
+  try {
+    const { kernel } = env.app
+    setRoutedResponses(env.faux, {
+      assignee: [
+        fauxAssistantMessage([fauxToolCall('task_submit', { summary: 'initial delivery' })], { stopReason: 'toolUse' }),
+        fauxAssistantMessage('initial handed in'),
+        fauxAssistantMessage(
+          [fauxToolCall('task_submit', { summary: 'honest failure', verification: 'merge FAILED: conflicts remain' })],
+          { stopReason: 'toolUse' },
+        ),
+        fauxAssistantMessage('honest failure reported'),
+        fauxAssistantMessage([fauxToolCall('task_submit', { summary: 'merged cleanly', merged: true })], { stopReason: 'toolUse' }),
+        fauxAssistantMessage('merged and closed'),
+        fauxAssistantMessage('standing by'),
+      ],
+      planner: [fauxAssistantMessage('planner idle')],
+      child: [fauxAssistantMessage('ok')],
+    })
+
+    // --- create idempotency: same key double-click returns the same task, no duplicate card/conversation ---
+    const first = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'create', {
+      title: 'Idempotent',
+      brief: 'Acceptance: one card only.',
+      idempotencyKey: 'dial-press-1',
+    })) as { task: TaskRecord; started: boolean; conversationId?: number }
+    const replay = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'create', {
+      title: 'Idempotent',
+      brief: 'Acceptance: one card only.',
+      idempotencyKey: 'dial-press-1',
+    })) as { task: TaskRecord; started: boolean; conversationId?: number }
+    assert.equal(replay.task.id, first.task.id, 'idempotent replay returns the same task id')
+    assert.equal(replay.task.conversationId, first.task.conversationId)
+    const listed = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'list', {})) as { total: number }
+    assert.equal(listed.total, 1, 'exactly one card exists after a double-click')
+
+    // --- merge closure requires explicit evidence: honest failure text stays in_review ---
+    const convId = first.conversationId!
+    const taskId = first.task.id
+    await kernel.waitForIdle(convId)
+    await waitFor(async () => (await taskFromAction(env, taskId)).column === 'in_review')
+    // Authorize merge -> the assignee honestly reports a merge FAILURE (verification-only, no branch, no merged)
+    await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'approve', { taskId, mergeAction: 'merge_and_close' })
+    await kernel.waitForIdle(convId)
+    await waitFor(async () => {
+      const task = await taskFromAction(env, taskId)
+      return task.submission?.summary === 'honest failure' && task.column === 'in_review'
+    })
+    const afterFailure = await taskFromAction(env, taskId)
+    assert.equal(afterFailure.column, 'in_review', 'honest merge-failure verification must not auto-close the task')
+    assert.equal(afterFailure.mergePending, true, 'merge authorization stays pending until real evidence arrives')
+    // Reviewer re-issues the merge instruction; the assignee now declares merged: true -> one-step done
+    await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'approve', { taskId, mergeAction: 'merge_and_close' })
+    await kernel.waitForIdle(convId)
+    await waitFor(async () => (await taskFromAction(env, taskId)).column === 'done')
+    const done = await taskFromAction(env, taskId)
+    assert.equal(done.column, 'done')
+
+    // --- orphan conversation recovery: an unbound, zero-input, task-tagged conversation gets archived on restart ---
+    const orphan = await kernel.createConversation({ title: 'Orphan', profileId: 'assistant', tags: ['task'] })
+    await kernel.plugins.disable(TASKS_PLUGIN_ID, { force: true })
+    await kernel.plugins.enable(TASKS_PLUGIN_ID)
+    await waitFor(async () => {
+      const conv = kernel.listConversations().find((c) => c.id === orphan.id)
+      return conv?.tags.includes('task-archived') === true
+    })
+    const survivor = kernel.listConversations().find((c) => c.id === convId)
+    assert.ok(survivor, 'bound execution conversation untouched by orphan recovery')
+    assert.equal(survivor!.tags.includes('task-archived'), true, 'bound done conversation keeps its archived tag')
   } finally {
     await env.close()
   }

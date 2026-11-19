@@ -79,6 +79,10 @@ export interface TaskRecord {
   lastReworkFeedback?: string
   mergePending?: boolean
   planApproval?: TaskPlanApproval
+  /** 发起中的方案审批 Ask ID（新一轮发起前先 cancelAsk 旧的，防重试遗留 pending 卡）。 */
+  pendingPlanAskId?: string
+  /** 建单幂等键（同 key 的重复 create 返回已建任务，防双击双开）。 */
+  createKey?: string
   silenceState?: TaskSilenceState
   archived?: boolean
   createdAt: number
@@ -268,7 +272,7 @@ export function assertTaskRecord(value: unknown): TaskRecord {
       pluginId: TASKS_PLUGIN_ID,
     })
   }
-  for (const key of ['project', 'nodeId', 'cwd', 'model', 'thinkingLevel', 'lastReworkFeedback'] as const) {
+  for (const key of ['project', 'nodeId', 'cwd', 'model', 'thinkingLevel', 'lastReworkFeedback', 'pendingPlanAskId', 'createKey'] as const) {
     const v = value[key]
     if (v !== undefined && typeof v !== 'string') {
       throw new HelmxError('tasks_doc_corrupt', `${where}.${key} 必须是字符串`, 500, { pluginId: TASKS_PLUGIN_ID })

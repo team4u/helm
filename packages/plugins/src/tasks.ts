@@ -20,6 +20,8 @@ import {
 import { resolvePluginClientAssets } from './asset-paths.js'
 import { readTasksSkillAsset } from './tasks/assets.js'
 import {
+  TASK_ACTIVE_TAG,
+  TASK_ARCHIVED_TAG,
   TASK_BOARD_DOC,
   TASK_RECORDS_DOC,
   TASKS_PLUGIN_ID,
@@ -196,6 +198,28 @@ export function createTasksPlugin(): PluginDefinition {
             console.error(
               `[tasks] 启动恢复：${interruptedIds.length} 个启动中断任务已回滚待办（${interruptedIds.join(', ')}），可手动重新开工`,
             )
+          }
+          // Q1 孤儿会话恢复：绑定前崩溃遗留的「task 标签 + 零输入 + 不绑任何任务」会话——
+          // 诚实贴 task-archived（保留现场，仅收口侧栏分组）并上报，绝不删除会话。
+          const boundConversationIds = new Set(
+            Object.values(runtime.store.read().tasks)
+              .map((t) => t.conversationId)
+              .filter((id): id is number => id !== undefined),
+          )
+          for (const conv of ctx.host.listConversations({ topLevelOnly: true })) {
+            if (!conv.tags.includes(TASK_ACTIVE_TAG) || boundConversationIds.has(conv.id)) continue
+            try {
+              const detail = await ctx.host.getConversationDetail(conv.id, { limit: 50 })
+              if (detail.entries.some((e) => e.kind === 'helmx.input')) continue
+              const nextTags = [...conv.tags.filter((tg) => tg !== TASK_ACTIVE_TAG), TASK_ARCHIVED_TAG]
+              await ctx.host.updateConversation(conv.id, { tags: nextTags })
+              console.error(
+                `[tasks] 启动恢复：检测到绑定前崩溃遗留的孤儿执行会话 #${conv.id}（已贴归档标签保留现场）`,
+              )
+            } catch (err) {
+              if (err instanceof HelmxError && err.code === 'not_found') continue
+              reportError(`孤儿执行会话 #${conv.id} 恢复检查失败`, err)
+            }
           }
           const reseededIds: string[] = []
           for (const task of runtime.store.list()) {

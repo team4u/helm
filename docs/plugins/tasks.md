@@ -29,7 +29,7 @@
 
 | 动作 | CLI | 模型工具 | 说明 |
 | :--- | :--- | :--- | :--- |
-| `create` | `helmx tasks create` | `task_create` | 建卡（仅用户明确要求建单/委派时调用，裸 go-ahead 不构成委派）；无阻塞且 `autoStart`（默认 true）时经两阶段启动起独立执行会话并投递任务书 |
+| `create` | `helmx tasks create` | `task_create` | 建卡（仅用户明确要求建单/委派时调用，裸 go-ahead 不构成委派）；可选 `idempotencyKey` 幂等键（同键重复 create 返回已建任务，双击防抖兜底）；无阻塞且 `autoStart`（默认 true）时经两阶段启动起独立执行会话并投递任务书 |
 | `list` | `helmx tasks list` | `task_list` | 按 `column / project / assigneeProfileId / nodeId / includeArchived` 过滤，附实时会话状态与 `blockedBy` |
 | `inspect` | `helmx tasks inspect <id>` | `task_inspect` | 单卡全量：依赖状态、会话实况、近期摘要（脱敏）、产物列表 |
 | `update` | `helmx tasks update <id>` | — | 改标题/简报/项目/依赖等；已启动任务锁死执行角色/节点/目录；依赖图必须无环 |
@@ -107,7 +107,7 @@
 1. 串行 mutation 把任务占位为 `in_progress`（无 conversationId）并 `flush` 落盘——占位即计入并发额度，杜绝竞态双开会话；
 2. `createConversation`（内核自身持久化）→ 串行 mutation 绑定 `conversationId` + `startedAt`（flush）→ 投递任务书（requestId 按 taskId 幂等）；
 3. 任务书投递失败显式回滚：任务回 `backlog` 记 `lastError`（可重试 start），已建会话标 `task-archived` 保留现场，错误上抛绝不静默；
-4. 两阶段之间服务重启：启动时 `recoverInterruptedStartups` 把 `in_progress` 无绑定会话的残留任务诚实回滚 `backlog` 并在 `lastError` 记录原因（绝不假装在跑）；「绑定成功但任务书未被接纳」的窗口（绑定 flush 后、投递前崩溃）由启动恢复**补投任务书**兜底——requestId 按会话幂等，重复补投被内核去重，安全。
+4. 两阶段之间服务重启的三个兜底：启动时 `recoverInterruptedStartups` 把 `in_progress` 无绑定会话的残留任务诚实回滚 `backlog` 并在 `lastError` 记录原因（绝不假装在跑）；「绑定成功但任务书未被接纳」的窗口（绑定 flush 后、投递前崩溃）由启动恢复**补投任务书**兜底（requestId 按会话幂等，重复补投被内核去重）；「创建会话成功、绑定前崩溃」遗留的孤儿会话（task 标签 + 零输入 + 不绑任何任务）被启动恢复**贴 `task-archived` 收口并上报**（保留现场，绝不删除会话）。
 5. 初始任务书投递 `whenBusy: 'reject'`：新会话必 idle；若创建与投递之间被人类抢先输入（接管窗口），显式拒绝绝不串入。返工 / 合并指令为已存会话的授权投递，用 `followUp` 排队不打断在途输入，绝不用 steer。
 
 `rework` / `merge_and_close` 的意见与指令投递采用原子模式：状态变更与投递在同一串行 mutation 内，投递成功后才落盘；失败 draft 丢弃可干净重试，requestId 分别按 `reworkCount` / `submission.submittedAt`（无交付时 `reworkCount`）幂等（崩溃窗口内已投递的重试不重复投递）。rework 重建（`recreateConversation: true`）向新会话投递**单条合成任务书**（原 brief + 返工意见），不做 kickoff + 意见两条投递。`approve close_only` 与合并授权下的证据交付 `submit` 共用同一条终转链：`done` 核心事实先落盘（flush），衍生动作（会话换标签、下游接棒）失败容忍上报、不回滚验收事实。
@@ -117,7 +117,7 @@
 `approve mergeAction: 'merge_and_close'` 表示**用户已验收并显式授权本次合并**（显式授权
 覆盖任务 `autoMerge: false` 的默认隔离，合并指令文案如实注明）。插件向执行会话投递合并
 收尾指令后任务回 `in_progress` 并标记 `mergePending`；执行者完成合并清理后调用
-`task_submit` **携带合并证据（branch 或 verification）即一步终转 done**（会话归档、下游
+`task_submit` **携带明确合并证据（显式 `merged: true` 声明，或交付 branch）即一步终转 done**（会话归档、下游
 依赖解锁）——不要求用户第二次人工点击。无证据的提交维持 `in_review` 待人工复核
 （「不能证明合入，维持待复核」）。
 

@@ -175,6 +175,7 @@ interface CreateTaskInput {
   autoMerge?: boolean
   dependsOn?: string[]
   autoStart?: boolean
+  idempotencyKey?: string
 }
 
 function parseCreateInput(input: CreateTaskInput): {
@@ -190,6 +191,7 @@ function parseCreateInput(input: CreateTaskInput): {
   autoMerge?: boolean
   dependsOn: string[]
   autoStart: boolean
+  createKey?: string
 } {
   if (typeof input.title !== 'string') {
     throw new HelmxError('validation_error', 'title 必须是字符串', 400, {})
@@ -224,6 +226,10 @@ function parseCreateInput(input: CreateTaskInput): {
   }
   const nodeId = input.nodeId !== undefined ? assertWorkerNodeId(input.nodeId) : undefined
   const cwd = input.cwd !== undefined ? assertWorkerCwd(input.cwd) : undefined
+  const createKey =
+    input.idempotencyKey !== undefined && input.idempotencyKey.trim() !== ''
+      ? input.idempotencyKey.trim().slice(0, 128)
+      : undefined
   return {
     title,
     brief: input.brief.trim(),
@@ -241,6 +247,7 @@ function parseCreateInput(input: CreateTaskInput): {
     ...(optBool(input.autoMerge, 'autoMerge') !== undefined ? { autoMerge: optBool(input.autoMerge, 'autoMerge') } : {}),
     dependsOn,
     autoStart: optBool(input.autoStart, 'autoStart') ?? true,
+    ...(createKey !== undefined ? { createKey } : {}),
   }
 }
 
@@ -403,8 +410,16 @@ async function launchTaskExecution(
       requestId: options?.requestId ?? `${TASKS_PLUGIN_ID}:kickoff:${taskId}`,
     })
   } catch (err) {
-    // 干净回滚：任务回待办记 lastError（flush 后可重试 start），会话保留标 task-archived；显式抛错
-    runtime.reportError(`任务 ${taskId} 启动投递失败，执行回滚（会话 #${created.id} 已归档标记）`, err)
+    // 干净回滚：任务回待办记 lastError（flush 后可重试 start）；显式抛错。
+    // 接管窗口（whenBusy reject 命中 conversation_busy：人在创建与投递之间抢先输入）不贴
+    // task-archived——会话已被人类接管，保留 task 标签避免分组跳变，归位由后续流程处理。
+    const takeover = err instanceof HelmxError && err.code === 'conversation_busy'
+    runtime.reportError(
+      takeover
+        ? `任务 ${taskId} 初始任务书被拒（会话 #${created.id} 已被用户接管，kickoff 未串入）`
+        : `任务 ${taskId} 启动投递失败，执行回滚（会话 #${created.id} 已归档标记）`,
+      err,
+    )
     await runtime.store
       .enqueueMutation((draft) => {
         const target = draft.tasks[taskId]
@@ -420,7 +435,9 @@ async function launchTaskExecution(
       })
       .catch(() => undefined)
     await runtime.flushRecords().catch(() => undefined)
-    await swapConversationTag(ctx, runtime, created.id, TASK_ARCHIVED_TAG).catch(() => {})
+    if (!takeover) {
+      await swapConversationTag(ctx, runtime, created.id, TASK_ARCHIVED_TAG).catch(() => {})
+    }
     throw err instanceof HelmxError
       ? err
       : new HelmxError('task_start_failed', `任务 ${taskId} 启动失败：${err instanceof Error ? err.message : String(err)}`, 500, {
@@ -475,6 +492,22 @@ async function requestPlanApproval(
 
   const askedAt = Date.now()
   const askId = `${TASKS_PLUGIN_ID}:plan:${task.id}:${askedAt}`
+  // 重试防遗留：先撤销本任务上一张仍 pending 的审批卡（superseded），再建新卡
+  if (task.pendingPlanAskId !== undefined && task.pendingPlanAskId !== askId) {
+    try {
+      await ctx.host.cancelAsk(task.pendingPlanAskId, 'superseded')
+    } catch (err) {
+      if (!(err instanceof HelmxError && err.code === 'not_found')) throw err
+    }
+    await runtime.store.enqueueMutation((draft) => {
+      const target = draft.tasks[task.id]
+      if (target !== undefined) delete target.pendingPlanAskId
+    })
+  }
+  await runtime.store.enqueueMutation((draft) => {
+    const target = draft.tasks[task.id]
+    if (target !== undefined) target.pendingPlanAskId = askId
+  })
   let settled: Awaited<ReturnType<typeof ctx.host.createAsk>>
   try {
     settled = await ctx.host.createAsk({
@@ -486,6 +519,12 @@ async function requestPlanApproval(
       fields: [{ name: 'approve', label: `批准该方案并允许动工（任务 ${task.id}）`, type: 'confirm', required: true }],
     })
   } catch (err) {
+    await runtime.store
+      .enqueueMutation((draft) => {
+        const target = draft.tasks[task.id]
+        if (target !== undefined && target.pendingPlanAskId === askId) delete target.pendingPlanAskId
+      })
+      .catch(() => undefined)
     if (err instanceof HelmxError && err.code === 'ask_id_conflict') {
       // 同 ID 已存在（含已结算）：视为本次未获新决定，诚实返回未批准
       return { taskId: task.id, decision: 'superseded', askId }
@@ -499,19 +538,20 @@ async function requestPlanApproval(
   const decision: 'approved' | 'rejected' =
     settled.status === 'answered' && settled.answers['approve'] === 'true' ? 'approved' : 'rejected'
   const outcome = settled.status === 'answered' ? decision : settled.status
-  if (settled.status === 'answered') {
-    await runtime.store.enqueueMutation((draft) => {
-      const target = draft.tasks[task.id]
-      if (target === undefined) return
+  await runtime.store.enqueueMutation((draft) => {
+    const target = draft.tasks[task.id]
+    if (target === undefined) return
+    if (target.pendingPlanAskId === askId) delete target.pendingPlanAskId
+    if (settled.status === 'answered') {
       target.planApproval = {
         decision,
         askedAt,
         decidedAt: Date.now(),
         askId,
       }
-      target.updatedAt = Date.now()
-    })
-  }
+    }
+    target.updatedAt = Date.now()
+  })
   return { taskId: task.id, decision: outcome, askId }
 }
 
@@ -591,6 +631,18 @@ export function registerTasksActions(ctx: HelmxPluginContext, runtime: TasksRunt
     if (parsed.project !== undefined) parsed.project = sanitizeText(ctx, parsed.project)
     return runtime.track('task:create', async () => {
       const decision = await runtime.store.enqueueMutation(async (draft) => {
+        if (parsed.createKey !== undefined) {
+          const existing = Object.values(draft.tasks).find((t) => t.createKey === parsed.createKey)
+          if (existing !== undefined) {
+            // 幂等重放：返回既有任务当前事实，绝不重新 launch（首次调用自会完成两阶段启动）
+            return {
+              taskId: existing.id,
+              launch: false as const,
+              blockedBy: [],
+              idempotentReplay: true as const,
+            }
+          }
+        }
         const taskId = `T-${draft.nextSeq}`
         draft.nextSeq += 1
         const assignee = await resolveAssigneeProfile(ctx, runtime, parsed.assigneeProfileId, context.conversationId)
@@ -630,6 +682,7 @@ export function registerTasksActions(ctx: HelmxPluginContext, runtime: TasksRunt
         if (maxConcurrentTasks > 0 && inProgress >= maxConcurrentTasks) {
           return { taskId, launch: false as const, blockedBy, notStartedReason: 'concurrency_limit' as const }
         }
+        if (parsed.createKey !== undefined) task.createKey = parsed.createKey
         // 两阶段启动占位：in_progress 无 conversationId 先落盘（串行队列内原子占并发额度，杜绝双开）
         task.column = 'in_progress'
         task.startedAt = Date.now()
@@ -638,8 +691,27 @@ export function registerTasksActions(ctx: HelmxPluginContext, runtime: TasksRunt
       })
       // 占位事实已 write；flush 确保落盘后才执行创建会话副作用
       await runtime.flushRecords()
+      if (decision.idempotentReplay === true) {
+        const task = runtime.store.get(decision.taskId)
+        if (task === undefined) {
+          throw new HelmxError('not_found', `任务 '${decision.taskId}' 在幂等重放时消失（并发删除？）`, 404, {
+            pluginId: TASKS_PLUGIN_ID,
+          })
+        }
+        return {
+          task,
+          started: task.column === 'in_progress' && task.conversationId !== undefined,
+          ...(task.conversationId !== undefined ? { conversationId: task.conversationId } : {}),
+          blockedBy: [],
+        }
+      }
       if (!decision.launch) {
-        const task = runtime.store.get(decision.taskId)!
+        const task = runtime.store.get(decision.taskId)
+        if (task === undefined) {
+          throw new HelmxError('not_found', `任务 '${decision.taskId}' 在创建后消失（并发删除？）`, 404, {
+            pluginId: TASKS_PLUGIN_ID,
+          })
+        }
         return { task, started: false, blockedBy: decision.blockedBy, notStartedReason: decision.notStartedReason }
       }
       const conversationId = await launchTaskExecution(ctx, runtime, decision.taskId)
@@ -904,6 +976,7 @@ export function registerTasksActions(ctx: HelmxPluginContext, runtime: TasksRunt
       summary: string
       verification?: string
       branch?: string
+      merged?: boolean
       worktreePath?: string
       changedFiles?: string[]
       artifactIds?: string[]
@@ -929,6 +1002,9 @@ export function registerTasksActions(ctx: HelmxPluginContext, runtime: TasksRunt
     if (input.branch !== undefined) input.branch = sanitizeText(ctx, input.branch)
     if (input.worktreePath !== undefined) input.worktreePath = sanitizeText(ctx, input.worktreePath)
     const summary = sanitizeText(ctx, input.summary)
+    if (input.merged !== undefined && typeof input.merged !== 'boolean') {
+      throw new HelmxError('validation_error', 'merged 必须是布尔值（合并完成的显式声明）', 400, {})
+    }
     return runtime.track('task:submit', async () => {
       const submitted = await runtime.store.enqueueMutation((draft) => {
         let task: TaskRecord
@@ -1001,12 +1077,13 @@ export function registerTasksActions(ctx: HelmxPluginContext, runtime: TasksRunt
           ...(input.artifactIds !== undefined ? { artifactIds: input.artifactIds } : {}),
           submittedAt: now,
         }
-        // merge_and_close 授权闭环：mergePending 任务提交携合并证据（branch 或 verification）即一步结单
-        // （用户已审过并显式授权合并结单，不要求第二次人工点击）；无证据维持 in_review 待人工复核。
+        // merge_and_close 授权闭环：mergePending 任务提交携明确合并证据（显式 merged: true 声明，
+        // 或交付了 branch）即一步结单（用户已审过并显式授权，不要求第二次人工点击）；
+        // 仅 verification 文本不构成证据（诚实汇报「合并失败」的验证文本不得自动结单），
+        // 无证据维持 in_review 待人工复核。
         const mergeEvidence =
           task.mergePending === true &&
-          ((input.branch !== undefined && input.branch.trim() !== '') ||
-            (input.verification !== undefined && input.verification.trim() !== ''))
+          (input.merged === true || (input.branch !== undefined && input.branch.trim() !== ''))
         if (mergeEvidence) {
           return { task, autoFinalized: true as const }
         }
@@ -1386,6 +1463,7 @@ export function registerTasksActions(ctx: HelmxPluginContext, runtime: TasksRunt
         autoMerge: { type: 'boolean', description: 'Allow the assignee to merge the branch itself after verification (default false)' },
         dependsOn: { type: 'array', items: taskIdSchema, description: 'Prerequisite task ids; the task stays in backlog until all are done' },
         autoStart: { type: 'boolean', description: 'Start immediately when unblocked (default true)' },
+        idempotencyKey: { type: 'string', minLength: 1, maxLength: 128, description: 'Optional idempotency key: a repeated create with the same key returns the already-created task (double-click safe)' },
       },
       required: ['title', 'brief'],
       additionalProperties: false,
@@ -1488,6 +1566,7 @@ export function registerTasksActions(ctx: HelmxPluginContext, runtime: TasksRunt
         summary: { type: 'string', minLength: 1, description: 'What was delivered' },
         verification: { type: 'string', description: 'How it was verified (commands, results)' },
         branch: { type: 'string', description: 'Delivery branch name' },
+        merged: { type: 'boolean', description: 'Explicit declaration that the authorized merge is complete (one-step closure under merge_and_close)' },
         worktreePath: { type: 'string', description: 'Isolated worktree path used' },
         changedFiles: { type: 'array', items: { type: 'string' } },
         artifactIds: { type: 'array', items: { type: 'string' } },
@@ -1628,6 +1707,7 @@ export function registerTasksActions(ctx: HelmxPluginContext, runtime: TasksRunt
         autoMerge: { type: 'boolean' },
         dependsOn: { type: 'array', items: taskIdSchema },
         autoStart: { type: 'boolean' },
+        idempotencyKey: { type: 'string', minLength: 1, maxLength: 128 },
       },
       required: ['title', 'brief'],
       additionalProperties: false,
@@ -1730,6 +1810,7 @@ export function registerTasksActions(ctx: HelmxPluginContext, runtime: TasksRunt
         summary: { type: 'string', minLength: 1 },
         verification: { type: 'string' },
         branch: { type: 'string' },
+        merged: { type: 'boolean' },
         worktreePath: { type: 'string' },
         changedFiles: { type: 'array', items: { type: 'string' } },
         artifactIds: { type: 'array', items: { type: 'string' } },
