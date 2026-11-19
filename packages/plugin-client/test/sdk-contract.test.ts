@@ -192,6 +192,39 @@ test('usePluginDoc / useConversations / usePlugins fetch through the port; first
   void host
 })
 
+test('useConversationBackground: port snapshot forwards verbatim; absent host aggregation reports unknown (never fabricates)', { timeout: 60_000 }, () => {
+  const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
+  const byConversation = new Map<number, { active: boolean; summary: string }>([
+    [7, { active: true, summary: '2 Running' }],
+  ])
+  let fromPort: { unknown: boolean; active: boolean | undefined; summary: string | undefined } | undefined
+  let fromAbsentHost: { unknown: boolean; size: number } | undefined
+  function PortProbe(): React.ReactNode {
+    const snapshot = SDK.useConversationBackground()
+    const entry = snapshot.byConversation.get(7)
+    fromPort = { unknown: snapshot.unknown, active: entry?.active, summary: entry?.summary }
+    return null
+  }
+  function AbsentProbe(): React.ReactNode {
+    const snapshot = SDK.useConversationBackground()
+    fromAbsentHost = { unknown: snapshot.unknown, size: snapshot.byConversation.size }
+    return null
+  }
+  const port = makePort(log)
+  const withBackground = mount(
+    e(SDK.PluginClientHostContext.Provider, { value: { ...port, conversationBackground: { unknown: false, byConversation } } },
+      e(PortProbe)),
+  )
+  assert.equal(fromPort!.unknown, false, 'the snapshot forwards the host aggregation as-is')
+  assert.equal(fromPort!.active, true)
+  assert.equal(fromPort!.summary, '2 Running')
+  const withoutBackground = mount(e(SDK.PluginClientHostContext.Provider, { value: port }, e(AbsentProbe)))
+  assert.equal(fromAbsentHost!.unknown, true, 'a host without the aggregation reports unknown')
+  assert.equal(fromAbsentHost!.size, 0, 'the absent-host fallback index is empty, never fabricated')
+  act(() => { void withBackground.root.unmount() })
+  act(() => { void withoutBackground.root.unmount() })
+})
+
 test('usePluginDoc auto-triggers ensurePluginDoc for a missing key (port forwarding)', { timeout: 60_000 }, () => {
   const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
   const port = makePort(log)

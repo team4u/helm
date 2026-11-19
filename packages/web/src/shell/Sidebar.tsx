@@ -19,9 +19,11 @@ import { PluginUiView } from '../ui/PluginUiView.js'
 import { Tooltip } from '../ui/Tooltip.js'
 import { ConversationRowActionsMenu } from '../ui/ConversationRowActionsMenu.js'
 import { isSameResolvedTarget, resolveTargetString, CENTER_TARGETS, spaceForTarget, type SidebarSpace } from '../lib/types.js'
+import { useIsMobileViewport } from '../lib/use-media-query.js'
 import { readBrowserNotificationPermission } from '../lib/browser-notification.js'
 import { formatModShortcut } from './shortcuts-model.js'
 import {
+  extractRailQuickEntries,
   extractSidebarViews,
   filterConversationsByTag,
   getConversationPresence,
@@ -31,6 +33,7 @@ import {
   shouldSkipNavRowClick,
   type SidebarStoreView,
   type SidebarTargetPresence,
+  type SidebarViewItem,
 } from './sidebar-model.js'
 import type { ConversationBackgroundActivity, ConversationBackgroundIndex } from './background-activity-model.js'
 import { AgentStandingsGroup } from './SidebarAgentStandings.js'
@@ -305,6 +308,9 @@ function ActivityRail({
   space,
   onOpenSpace,
   attentionIndicator,
+  quickEntries,
+  store,
+  onNavigate,
 }: {
   sseConnected: boolean
   theme: 'dark' | 'light'
@@ -314,6 +320,9 @@ function ActivityRail({
   space: SidebarSpace
   onOpenSpace: (space: SidebarSpace) => void
   attentionIndicator: GlobalAttentionIndicator
+  quickEntries: SidebarViewItem[]
+  store: SidebarStoreView
+  onNavigate?: () => void
 }) {
   const { t } = useWebLocale()
   const expandWithShortcut = t('shell.sidebar.expandNavWithShortcut', { shortcut: formatModShortcut('B') })
@@ -378,6 +387,30 @@ function ActivityRail({
           )
         })}
       </div>
+      {quickEntries.length > 0 && (
+        <div className="activity-rail-quick">
+          {quickEntries.map((entry) => {
+            const presence = resolveSidebarTargetPresence(store, (t) => isSameResolvedTarget(t, entry.target))
+            return (
+              <Tooltip content={entry.label} side="right" key={entry.key}>
+                <button
+                  type="button"
+                  className={`rail-btn rail-quick-btn${presence.active ? ' rail-btn-active' : ''}`}
+                  title={entry.label}
+                  aria-label={entry.label}
+                  aria-current={presence.active ? 'page' : undefined}
+                  onClick={() => {
+                    store.openTarget(entry.target)
+                    onNavigate?.()
+                  }}
+                >
+                  <HelmxIcon name={entry.icon} size={16} />
+                </button>
+              </Tooltip>
+            )
+          })}
+        </div>
+      )}
       <div className="activity-rail-footer">
         <LocaleMenuButton tooltipSide="right" menuSide="right" menuAlign="end" />
         <Tooltip content={themeTooltip} side="right">
@@ -505,6 +538,24 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
   // 插件停用后其 UI 贡献与 doc 均从 store 消失，态势自然归零。
   const { items: attentionItems, indicator: attentionIndicator, background } = useGlobalAttention()
 
+  // 移动端视口：抽屉形态。任何空间拉开汉堡都能看到态势平铺区并一键行动；
+  // 桌面非对话空间保持原布局（态势经 Rail 微标感知，点击「对话空间」直达）。
+  const isMobileViewport = useIsMobileViewport()
+
+  // 插件全局快捷入口（sidebar.item quickEntry，最薄通用声明）：仅收当前启用
+  // 插件确实注册了的 screen（插件停用后贡献即时消失，入口零残留）；点击走标准
+  // store 路由并收起移动抽屉——PC 折叠 Rail 与移动抽屉同源一键直达。
+  const railQuickEntries = useMemo(
+    () =>
+      extractRailQuickEntries(
+        groupedUi.sidebarItems,
+        groupedUi.screens,
+        conversations,
+        locale,
+      ),
+    [groupedUi.sidebarItems, groupedUi.screens, conversations, locale],
+  )
+
   // 后台浏览器通知开关：权限现场读取（浏览器设置可随时收回），
   // 偏好开而权限未授予时如实提示，绝不静默装作已开启。
   const quietNotifyTooltip = !quietNotifyEnabled
@@ -538,6 +589,9 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
           openSpace(nextSpace)
         }}
         attentionIndicator={attentionIndicator}
+        quickEntries={railQuickEntries}
+        store={sidebarStore}
+        onNavigate={onClose}
       />
       <div className="sidebar-context">
         <div className="sidebar-header">
@@ -602,6 +656,11 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
         </div>
 
         <div className="sidebar-scroll">
+          {/* 移动端抽屉在任何空间都先看到态势平铺区（一键行动）；对话空间的
+              常规挂载点在下方 PendingAsksPanel 之后，此处避免重复渲染。 */}
+          {space !== 'conversations' && isMobileViewport && (
+            <SidebarAttentionGroup items={attentionItems} store={sidebarStore} onNavigate={onClose} />
+          )}
           {space === 'conversations' ? (
             <>
               <PendingAsksPanel store={sidebarStore} />

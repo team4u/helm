@@ -96,22 +96,28 @@ const BUCKET_ORDER: Record<AttentionBucket, number> = {
 }
 
 /**
- * 构建全局态势平铺条目：
+ * 构建全局态势模型（条目 + 微标一次成对推导）：
  * - 按根会话树聚合整棵子树（根 + 全部派生后代，走 resolveNotificationRootId）；
  * - 排除已归档根会话树、根会话 Profile 被已停用插件托管的树；
- * - 仅收录落入三桶之一的树：需关注（任一会话 error，或 blocked/待答 Ask）>
- *   运行中（任一会话 working 或后台在途）> 根 done 且未读；
- * - 桶内按 root.createdAt 倒序（同刻 id 倒序），不用 updatedAt 防流式跳位。
+ * - items（平铺区渲染）收录落入三桶之一的树：需关注（任一会话 error，或
+ *   blocked/待答 Ask）> 运行中（任一会话 working 或后台在途）> 根 done 且未读；
+ *   桶内按 root.createdAt 倒序（同刻 id 倒序），不用 updatedAt 防流式跳位；
+ * - indicator（汉堡/Rail 微标）按「成员级排除」重算：只剔除当前主屏/分屏正在
+ *   查看的那一个会话的信号——同根其他后代的 Ask / 运行事实绝不被正在查看的
+ *   面板抹掉；整棵树的信号都落在被查看会话上时该树才退出计数。
  */
-export function buildAttentionItems(input: {
+export function buildAttentionModel(input: {
   conversations: ReadonlyArray<ConversationSummary>
   background: ConversationBackgroundIndex
   profiles: ReadonlyArray<Profile>
   plugins: ReadonlyArray<{ id: string; enabled: boolean }>
+  /** 当前主屏/分屏正在查看的会话 ID（成员级排除；缺省不排除任何信号）。 */
+  viewedConversationIds?: ReadonlySet<number>
   /** Locale translator（后代运行计数文案）；缺省英文桥接。 */
   t?: WebMessageTranslator
-}): AttentionTreeItem[] {
+}): AttentionModelResult {
   const t = input.t ?? englishWebTranslator
+  const viewed = input.viewedConversationIds ?? EMPTY_VIEWED
   const byId = new Map<number, ConversationSummary>(
     input.conversations.map((conversation) => [conversation.id, conversation] as const),
   )
@@ -133,6 +139,12 @@ export function buildAttentionItems(input: {
   })
 
   const items: AttentionTreeItem[] = []
+  let needsAttentionCount = 0
+  let runningCount = 0
+  let unreadDoneCount = 0
+  let totalCount = 0
+  let toneRank = 0
+  let tone: GlobalAttentionTone = null
   for (const rootId of rootIds) {
     const root = byId.get(rootId)
     const members = trees.get(rootId)
@@ -162,6 +174,39 @@ export function buildAttentionItems(input: {
         : root.status === 'done' && root.unread === true
           ? 'unread_done'
           : null
+
+    // 微标成员级排除：剔除正在查看的会话信号后重算桶（同根其他后代的
+    // Ask/运行事实保留；整树信号都在被查看会话上才退出计数）。
+    let viewedHasError = false
+    let viewedHasWaiting = false
+    let viewedHasMachineActive = false
+    for (const member of members) {
+      if (viewed.has(member.id)) continue
+      if (member.status === 'error') viewedHasError = true
+      if (isWaitingForHuman(member)) viewedHasWaiting = true
+      if (isMachineActive(member, input.background)) viewedHasMachineActive = true
+    }
+    const indicatorBucket: AttentionBucket | null = viewedHasError || viewedHasWaiting
+      ? 'needs_attention'
+      : viewedHasMachineActive
+        ? 'running'
+        : !viewed.has(root.id) && root.status === 'done' && root.unread === true
+          ? 'unread_done'
+          : null
+
+    if (indicatorBucket !== null) {
+      totalCount += 1
+      if (indicatorBucket === 'needs_attention') needsAttentionCount += 1
+      else if (indicatorBucket === 'running') runningCount += 1
+      else unreadDoneCount += 1
+      const indicatorTone: Exclude<GlobalAttentionTone, null> =
+        indicatorBucket === 'needs_attention' ? (viewedHasError ? 'error' : 'blocked') : indicatorBucket === 'running' ? 'running' : 'done'
+      if (TONE_RANK[indicatorTone] > toneRank) {
+        toneRank = TONE_RANK[indicatorTone]
+        tone = indicatorTone
+      }
+    }
+
     if (bucket === null) continue
 
     // 代表位与后台聚合：成员按 updatedAt 倒序传入，平手保留最近更新者（确定性）。
@@ -211,31 +256,45 @@ export function buildAttentionItems(input: {
     })
   }
 
-  return items.sort(
-    (a, b) =>
-      BUCKET_ORDER[a.bucket] - BUCKET_ORDER[b.bucket] ||
-      b.root.createdAt - a.root.createdAt ||
-      b.root.id - a.root.id,
-  )
+  return {
+    items: items.sort(
+      (a, b) =>
+        BUCKET_ORDER[a.bucket] - BUCKET_ORDER[b.bucket] ||
+        b.root.createdAt - a.root.createdAt ||
+        b.root.id - a.root.id,
+    ),
+    indicator: { needsAttentionCount, runningCount, unreadDoneCount, totalCount, tone },
+  }
+}
+
+/** buildAttentionModel 的条目捷径（仅取平铺条目，不参与微标排除）。 */
+export function buildAttentionItems(input: {
+  conversations: ReadonlyArray<ConversationSummary>
+  background: ConversationBackgroundIndex
+  profiles: ReadonlyArray<Profile>
+  plugins: ReadonlyArray<{ id: string; enabled: boolean }>
+  t?: WebMessageTranslator
+}): AttentionTreeItem[] {
+  return buildAttentionModel(input).items
+}
+
+/** 态势模型成对输出：平铺条目（全量事实）+ 微标聚合（成员级排除正在查看的会话）。 */
+export interface AttentionModelResult {
+  items: AttentionTreeItem[]
+  indicator: GlobalAttentionIndicator
 }
 
 /**
- * 收集当前主屏/分屏正在查看的根会话树 ID（indicator 据此排除，避免用户
- * 盯着看的树反过来提醒自己）。
+ * 收集当前主屏/分屏正在查看的会话 ID（微标成员级排除的输入——精确到会话，
+ * 不上卷整棵根树：同根其他后代的 Ask / 运行事实不允许被正在查看的面板抹掉）。
  */
-export function collectViewedAttentionRootIds(input: {
-  conversations: ReadonlyArray<ConversationSummary>
+export function collectViewedConversationIds(input: {
   primaryTarget: ResolvedTarget | null
   splitTarget: ResolvedTarget | null
 }): Set<number> {
-  const byId = new Map<number, ConversationSummary>(
-    input.conversations.map((conversation) => [conversation.id, conversation] as const),
-  )
   const viewed = new Set<number>()
   for (const target of [input.primaryTarget, input.splitTarget]) {
-    if (target?.kind !== 'conversation') continue
-    if (viewed.has(target.conversationId)) continue
-    viewed.add(resolveNotificationRootId(byId, target.conversationId))
+    if (target?.kind === 'conversation') viewed.add(target.conversationId)
   }
   return viewed
 }
@@ -247,13 +306,15 @@ const TONE_RANK: Record<Exclude<GlobalAttentionTone, null>, number> = {
   done: 1,
 }
 
+const EMPTY_VIEWED: ReadonlySet<number> = new Set()
+
 /**
- * 汇总全局态势微标：排除正在查看的根树后按桶计数，tone 取剩余树中最高
- * 优先级（error > blocked > running > done）；无任何信号时 tone 为 null。
+ * 全量聚合微标（不做任何排除）：按桶计数，tone 取最高优先级
+ * （error > blocked > running > done）；无任何信号时 tone 为 null。
+ * 供无「正在查看」概念的调用方使用；带排除语义的微标走 buildAttentionModel。
  */
 export function resolveGlobalAttentionIndicator(
   items: ReadonlyArray<AttentionTreeItem>,
-  viewedRootIds?: ReadonlySet<number>,
 ): GlobalAttentionIndicator {
   let needsAttentionCount = 0
   let runningCount = 0
@@ -262,7 +323,6 @@ export function resolveGlobalAttentionIndicator(
   let toneRank = 0
   let tone: GlobalAttentionTone = null
   for (const item of items) {
-    if (viewedRootIds?.has(item.root.id)) continue
     totalCount += 1
     if (item.bucket === 'needs_attention') needsAttentionCount += 1
     else if (item.bucket === 'running') runningCount += 1

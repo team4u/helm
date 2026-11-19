@@ -25,19 +25,14 @@ import {
   type ConversationBackgroundIndex,
 } from './background-activity-model.js'
 import {
-  buildAttentionItems,
-  collectViewedAttentionRootIds,
-  resolveGlobalAttentionIndicator,
-  type AttentionTreeItem,
+  buildAttentionModel,
+  collectViewedConversationIds,
+  type AttentionModelResult,
   type GlobalAttentionIndicator,
 } from './attention-model.js'
 
-export interface GlobalAttentionValue {
-  /** 态势平铺条目（侧栏平铺区渲染）。 */
-  items: AttentionTreeItem[]
-  /** 全局态势微标（排除正在查看的根树）。 */
-  indicator: GlobalAttentionIndicator
-  /** 后台在途索引（与会话行单灯位共享同一事实源）。 */
+export interface GlobalAttentionValue extends AttentionModelResult {
+  /** 后台在途索引（与会话行单灯位、插件 SDK 快照共享同一事实源）。 */
   background: ConversationBackgroundIndex
 }
 
@@ -71,17 +66,13 @@ export function useGlobalAttention(): GlobalAttentionValue {
     for (const ref of badgeDocs) void ensurePluginDoc(ref.pluginId, ref.doc)
   }, [badgeDocs, authenticated, ensurePluginDoc])
 
-  const items = useMemo(
-    () => buildAttentionItems({ conversations, background, profiles, plugins, t }),
-    [conversations, background, profiles, plugins, t],
+  const viewedConversationIds = useMemo(
+    () => collectViewedConversationIds({ primaryTarget, splitTarget }),
+    [primaryTarget, splitTarget],
   )
-  const viewedRootIds = useMemo(
-    () => collectViewedAttentionRootIds({ conversations, primaryTarget, splitTarget }),
-    [conversations, primaryTarget, splitTarget],
+  const model = useMemo(
+    () => buildAttentionModel({ conversations, background, profiles, plugins, viewedConversationIds, t }),
+    [conversations, background, profiles, plugins, viewedConversationIds, t],
   )
-  const indicator = useMemo(
-    () => resolveGlobalAttentionIndicator(items, viewedRootIds),
-    [items, viewedRootIds],
-  )
-  return { items, indicator, background }
+  return { ...model, background }
 }

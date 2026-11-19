@@ -10,6 +10,7 @@ import type {
   HelmxLocale,
   LocalizedText,
   Profile,
+  ScreenSpec,
   SidebarItemSpec,
   SidebarSectionSpec,
   SkillSummary,
@@ -296,6 +297,39 @@ export function buildAgentStandings(input: AgentStandingsInput): AgentStanding[]
 
   standings.sort((a, b) => a.order - b.order || a.profileId.localeCompare(b.profileId))
   return standings
+}
+
+/**
+ * 提取 sidebar.item 中声明 quickEntry 的全局快捷入口（供 Activity Rail 与
+ * 移动抽屉渲染）：仅收 screen: 目标且目标 screen 确实存在于当前启用插件的
+ * screen 贡献中（插件停用后贡献即时消失，入口随之消失，无需特判插件 ID）。
+ * 排序 order 升序（缺省 100），同序按 key 字典序；点击走标准 store 路由。
+ */
+export function extractRailQuickEntries(
+  sidebarItems: Array<QualifiedUiSpec<SidebarItemSpec>>,
+  screens: ReadonlyArray<QualifiedUiSpec<ScreenSpec>>,
+  conversations: ConversationSummary[],
+  locale: HelmxLocale,
+): SidebarViewItem[] {
+  const screenKeys = new Set(screens.map((screen) => `${screen.pluginId}/${screen.spec.id}`))
+  const entries: SidebarViewItem[] = []
+  for (const item of sidebarItems) {
+    if (item.spec.quickEntry !== true) continue
+    const target = item.spec.target
+    if (!target) continue
+    const resolved = resolveTargetString(target, conversations)
+    if (resolved?.kind !== 'screen') continue
+    if (!screenKeys.has(`${resolved.pluginId}/${resolved.screenId}`)) continue
+    entries.push({
+      key: `${item.pluginId}/${item.spec.id}`,
+      pluginId: item.pluginId,
+      label: resolveLocalizedText(item.spec.label, locale),
+      icon: item.spec.icon ?? 'panel-right',
+      order: item.spec.order ?? 100,
+      target: resolved,
+    })
+  }
+  return entries.sort((a, b) => a.order - b.order || a.key.localeCompare(b.key))
 }
 
 /**

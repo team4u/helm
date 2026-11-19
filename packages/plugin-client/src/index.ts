@@ -23,6 +23,8 @@ export type {
   PluginSessionDocKey,
   PluginSessionDocState,
   PluginSlotPortItem,
+  ConversationBackgroundSnapshot,
+  ConversationBackgroundEntry,
 } from './host-port.js'
 
 // ---- Plugin context (usePluginContext) and factory ----
@@ -44,7 +46,7 @@ export type { HelmxLocale, LocalizedText, ExecutionText, LocaleTranslator } from
 // ---- hooks: doc subscriptions / conversations / plugin list / tool activity ----
 export { usePluginDoc, usePluginDocValue, usePluginSessionDoc, usePluginSessionDocState, usePluginSessionDocValue } from './docs.js'
 export type { ConversationHookOptions, ConversationHookResult } from './conversation-hooks.js'
-export { useConversation, useConversations, usePluginConfig, usePlugins, useSharedNowMs } from './conversation-hooks.js'
+export { useConversation, useConversationBackground, useConversations, usePluginConfig, usePlugins, useSharedNowMs } from './conversation-hooks.js'
 export { ToolActivityContext, useToolActivity } from './tool-activity.js'
 export type { ToolActivityRegistry } from './tool-activity.js'
 

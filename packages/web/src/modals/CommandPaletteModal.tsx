@@ -338,6 +338,31 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
     },
   ], [actions, localePref, quietNotifyEnabled, sidebarCollapsed, t, themePreference])
 
+  // 全部插件视图（screen）直达行：任何启用插件注册的视图都能在面板搜到并
+  // 一键跳转（含 quickEntry 快捷入口的视图）；停用插件的贡献从 store 消失，
+  // 行随之消失。点击走标准 store 路由（支持主屏/分屏上下文）。
+  const viewRows = useMemo<Array<PaletteRow>>(
+    () =>
+      groupedUi.screens.map((screen) => {
+        const plugin = plugins?.find((p) => p.id === screen.pluginId)
+        const pluginName = plugin !== undefined ? resolveLocalizedText(plugin.name, locale) || screen.pluginId : screen.pluginId
+        const label = resolveLocalizedText(screen.spec.label, locale) || `${screen.pluginId}/${screen.spec.id}`
+        return {
+          kind: 'command' as const,
+          id: `view:${screen.pluginId}/${screen.spec.id}`,
+          title: label,
+          hint: pluginName,
+          icon: screen.spec.icon ?? 'panel-right',
+          keywords: [label, screen.pluginId, screen.spec.id, pluginName, 'view', 'screen', '视图'],
+          run: () => {
+            close()
+            actions.openTarget({ kind: 'screen', pluginId: screen.pluginId, screenId: screen.spec.id })
+          },
+        }
+      }),
+    [groupedUi.screens, plugins, locale, actions.openTarget, close],
+  )
+
   // 声明了 client 内容的插件命令：作为可选中命令行列出（选中即内联渲染）
   const pluginContentCommands = useMemo(
     () =>
@@ -454,16 +479,17 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
   const rows = useMemo<Array<PaletteRow>>(() => {
     const q = query.trim().toLowerCase()
     if (!q) {
-      // 空搜索词首屏优先级：当前上下文高频操作 → 最近活跃会话（前 5 条）→ 空间与中心导航 → 插件命令与配置
+      // 空搜索词首屏优先级：当前上下文高频操作 → 最近活跃会话（前 5 条）→ 空间与中心导航 → 插件视图直达 → 插件命令与配置
       return [
         ...contextCommands,
         ...recentConversationRows,
         ...navCommands,
+        ...viewRows,
         ...pluginCommands,
         ...pluginRows,
       ]
     }
-    const commands = [...contextCommands, ...navCommands, ...pluginCommands, ...pluginRows].filter((row) => {
+    const commands = [...contextCommands, ...navCommands, ...viewRows, ...pluginCommands, ...pluginRows].filter((row) => {
       if (row.kind !== 'command') return true
       return (
         row.title.toLowerCase().includes(q) ||
@@ -478,6 +504,7 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
     contextCommands,
     recentConversationRows,
     navCommands,
+    viewRows,
     pluginCommands,
     pluginRows,
     conversationRows,

@@ -21,12 +21,13 @@ import * as React from 'react'
 import { renderToString } from 'react-dom/server'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import type { ConversationSummary, PluginUiContribution, WorkbenchPanelSpec } from '@helmx/protocol'
+import type { ConversationSummary, PluginUiContribution, ScreenSpec, SidebarItemSpec, WorkbenchPanelSpec } from '@helmx/protocol'
 import { ARCHIVED_TAG } from '../src/shell/sidebar-model.js'
 import type { ConversationBackgroundIndex } from '../src/shell/background-activity-model.js'
 import {
   buildAttentionItems,
-  collectViewedAttentionRootIds,
+  buildAttentionModel,
+  collectViewedConversationIds,
   composeAttentionSummary,
   resolveGlobalAttentionIndicator,
   type AttentionTreeItem,
@@ -69,13 +70,33 @@ function conv(partial: Partial<ConversationSummary> & { id: number }): Conversat
 function buildItems(
   conversations: ConversationSummary[],
   background: ConversationBackgroundIndex = new Map(),
-  overrides: { profiles?: Array<{ id: string; name?: string; managedByPlugin?: string }>; plugins?: Array<{ id: string; enabled: boolean }> } = {},
+  overrides: {
+    profiles?: Array<{ id: string; name?: string; managedByPlugin?: string }>
+    plugins?: Array<{ id: string; enabled: boolean }>
+    viewedConversationIds?: ReadonlySet<number>
+  } = {},
 ): AttentionTreeItem[] {
   return buildAttentionItems({
     conversations,
     background,
     profiles: overrides.profiles ?? [],
     plugins: overrides.plugins ?? [],
+    ...(overrides.viewedConversationIds !== undefined ? { viewedConversationIds: overrides.viewedConversationIds } : {}),
+  })
+}
+
+/** 无翻译器调用（英文桥接）时的成对模型构建捷径。 */
+function buildModel(
+  conversations: ConversationSummary[],
+  viewedConversationIds: ReadonlySet<number>,
+  background: ConversationBackgroundIndex = new Map(),
+) {
+  return buildAttentionModel({
+    conversations,
+    background,
+    profiles: [],
+    plugins: [],
+    viewedConversationIds,
   })
 }
 
@@ -216,27 +237,20 @@ test('representative and target selection are deterministic on recency ties', { 
 // 纯函数：indicator（微标聚合）与摘要
 // ---------------------------------------------------------------------------
 
-test('collectViewedAttentionRootIds: primary and split targets resolve to their root trees', { timeout: 60_000 }, () => {
-  const conversations = [
-    conv({ id: 1 }),
-    conv({ id: 11, parentConversationId: 1 }),
-    conv({ id: 2 }),
-  ]
-  const viewed = collectViewedAttentionRootIds({
-    conversations,
+test('collectViewedConversationIds: exact main/split conversation ids (member-level, no root rollup)', { timeout: 60_000 }, () => {
+  const viewed = collectViewedConversationIds({
     primaryTarget: { kind: 'conversation', conversationId: 11 },
     splitTarget: { kind: 'conversation', conversationId: 2 },
   })
-  assert.deepEqual([...viewed].sort(), [1, 2], 'a descendant target resolves up to its root; agent/screen targets contribute nothing')
-  const nonConversation = collectViewedAttentionRootIds({
-    conversations,
+  assert.deepEqual([...viewed].sort((a, b) => a - b), [2, 11], 'only the exact viewed conversations are excluded, never the whole root tree')
+  const nonConversation = collectViewedConversationIds({
     primaryTarget: { kind: 'agent', profileId: 'assistant' },
     splitTarget: null,
   })
-  assert.equal(nonConversation.size, 0)
+  assert.equal(nonConversation.size, 0, 'agent/screen targets exclude nothing')
 })
 
-test('resolveGlobalAttentionIndicator: viewed trees are excluded; tone priority error > blocked > running > done; empty is null', { timeout: 60_000 }, () => {
+test('resolveGlobalAttentionIndicator: aggregate-all counting with tone priority error > blocked > running > done', { timeout: 60_000 }, () => {
   const items = buildItems([
     conv({ id: 1, status: 'error' }),
     conv({ id: 2, status: 'blocked' }),
@@ -249,15 +263,37 @@ test('resolveGlobalAttentionIndicator: viewed trees are excluded; tone priority 
     [2, 1, 1, 4, 'error'],
     'error outranks every other tone',
   )
-  const withoutError = resolveGlobalAttentionIndicator(items, new Set([1]))
-  assert.equal(withoutError.tone, 'blocked', 'excluding the error tree falls back to blocked')
-  assert.equal(withoutError.totalCount, 3, 'excluded trees leave the counts')
-  const withoutNeeds = resolveGlobalAttentionIndicator(items, new Set([1, 2]))
-  assert.equal(withoutNeeds.tone, 'running')
-  const onlyUnread = resolveGlobalAttentionIndicator(items, new Set([1, 2, 3]))
-  assert.equal(onlyUnread.tone, 'done')
-  assert.equal(resolveGlobalAttentionIndicator([], new Set()).tone, null)
-  assert.equal(resolveGlobalAttentionIndicator(items, new Set([1, 2, 3, 4])).tone, null, 'viewing every tree silences the badge')
+  assert.equal(resolveGlobalAttentionIndicator([]).tone, null)
+})
+
+test('member-level exclusion: viewing one descendant never erases a sibling ask in the same root tree', { timeout: 60_000 }, () => {
+  const conversations = [
+    conv({ id: 1, status: 'idle', createdAt: 9000, updatedAt: 9000 }),
+    conv({ id: 11, parentConversationId: 1, status: 'blocked', createdAt: 9100, updatedAt: 9100 }),
+    conv({ id: 12, parentConversationId: 1, status: 'blocked', createdAt: 9200, updatedAt: 9200 }),
+  ]
+  // Viewing descendant 11 (main) while sibling 12 still waits: the badge must keep alerting.
+  const siblingWaiting = buildModel(conversations, new Set([11]))
+  assert.equal(siblingWaiting.items.length, 1, 'the flat item still renders (display is never excluded)')
+  assert.equal(siblingWaiting.indicator.needsAttentionCount, 1, 'the sibling blocked ask keeps the badge counting')
+  assert.equal(siblingWaiting.indicator.tone, 'blocked')
+  // Viewing the only waiting member: the tree's whole signal sits on the viewed conversation -> silent.
+  const allViewed = buildModel(conversations, new Set([11, 12]))
+  assert.equal(allViewed.indicator.totalCount, 0, 'no self-alerting when every signal is on the viewed conversation')
+  assert.equal(allViewed.indicator.tone, null)
+  // Viewed root with an un-viewed working child: the running fact still counts.
+  const rootViewed = buildModel(
+    [
+      conv({ id: 2, status: 'idle', createdAt: 8000, updatedAt: 8000 }),
+      conv({ id: 21, parentConversationId: 2, status: 'working', createdAt: 8100, updatedAt: 8100 }),
+    ],
+    new Set([2]),
+  )
+  assert.equal(rootViewed.indicator.runningCount, 1, 'viewing the root does not erase the running descendant')
+  // Viewed unread-done root: read-on-view honestly silences only that tree.
+  const unreadRoot = buildModel([conv({ id: 3, status: 'done', unread: true })], new Set([3]))
+  assert.equal(unreadRoot.indicator.totalCount, 0, 'viewing the unread completion drops it from the badge')
+  assert.equal(unreadRoot.items.length, 1, 'but the flat item still renders until marked read')
 })
 
 test('composeAttentionSummary lists only non-zero buckets', { timeout: 60_000 }, () => {
@@ -506,4 +542,240 @@ test('CommandPaletteModal: recent conversation rows render the status dot in the
     })
     container.remove()
   }
+})
+
+// ---------------------------------------------------------------------------
+// 插件全局快捷入口（sidebar.item quickEntry → Activity Rail）
+// ---------------------------------------------------------------------------
+
+const { extractRailQuickEntries } = await import('../src/shell/sidebar-model.js')
+
+function sidebarItemContribution(overrides: { pluginId?: string; spec?: Record<string, unknown> } = {}): PluginUiContribution {
+  return {
+    pluginId: overrides.pluginId ?? 'builtin:tasks',
+    surface: 'sidebar.item',
+    spec: {
+      id: 'task-board',
+      label: { en: 'Task Board', 'zh-CN': '任务看板' },
+      icon: 'check-square',
+      target: 'screen:builtin:tasks/board',
+      order: 5,
+      quickEntry: true,
+      ...overrides.spec,
+    },
+  }
+}
+
+function screenContribution(overrides: { pluginId?: string; spec?: Record<string, unknown> } = {}): PluginUiContribution {
+  return {
+    pluginId: overrides.pluginId ?? 'builtin:tasks',
+    surface: 'screen',
+    spec: { id: 'board', label: { en: 'Task Board', 'zh-CN': '任务看板' }, icon: 'check-square', ...overrides.spec },
+  }
+}
+
+test('extractRailQuickEntries: only screen-backed quickEntry items pass; missing screens and non-quick items never leak', { timeout: 60_000 }, () => {
+  const conversations = [conv({ id: 1 })]
+  const items = [
+    sidebarItemContribution(),
+    sidebarItemContribution({
+      pluginId: 'other',
+      spec: { id: 'plain', label: { en: 'Plain' }, target: 'screen:other/view', quickEntry: false },
+    }),
+    sidebarItemContribution({ spec: { id: 'no-target', label: { en: 'No Target' }, quickEntry: false } }),
+    sidebarItemContribution({ spec: { id: 'conv-target', label: { en: 'Conv' }, target: 'conversation:1', quickEntry: false } }),
+    sidebarItemContribution({ spec: { id: 'ghost-screen', label: { en: 'Ghost' }, target: 'screen:builtin:tasks/ghost', quickEntry: false } }),
+  ]
+  const screens = [screenContribution(), screenContribution({ pluginId: 'other', spec: { id: 'view', label: { en: 'Other View' } } })]
+  const qualifiedItems = items.map((item) => ({ pluginId: item.pluginId, spec: item.spec as SidebarItemSpec }))
+  const qualifiedScreens = screens.map((item) => ({ pluginId: item.pluginId, spec: item.spec as ScreenSpec }))
+  const entries = extractRailQuickEntries(qualifiedItems, qualifiedScreens, conversations, 'en')
+  assert.equal(entries.length, 1, 'only the screen-backed quickEntry item surfaces (non-quick screen items and quick items without a real screen never leak)')
+  assert.equal(entries[0]!.label, 'Task Board')
+  assert.equal(entries[0]!.icon, 'check-square')
+  assert.equal(entries[0]!.order, 5)
+  assert.equal(entries[0]!.target.kind, 'screen')
+  const zhEntries = extractRailQuickEntries(qualifiedItems, qualifiedScreens, conversations, 'zh-CN')
+  assert.equal(zhEntries[0]!.label, '任务看板', 'labels resolve per locale')
+})
+
+test('Sidebar renders rail quick entries and disables with the plugin contributions (store.live SSE path)', { timeout: 60_000 }, async () => {
+  const store = sidebarStore({
+    plugins: [{ id: 'builtin:tasks', name: 'Tasks', version: '0.0.0', enabled: true, locked: false, hooks: [], actions: [], tools: [] }],
+    conversations: [conv({ id: 50, title: '当前查看', profileId: 'coder' })],
+    primaryTarget: { kind: 'conversation', conversationId: 50 },
+    uiContributions: [sidebarItemContribution(), screenContribution()],
+  })
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  let root: Root | undefined
+  try {
+    await act(async () => {
+      root = createRoot(container)
+      root.render(e(HelmxExternalStoreContext.Provider, { value: store }, e(Sidebar)))
+    })
+    const quickBtn = container.querySelector<HTMLButtonElement>('.rail-quick-btn')
+    assert.ok(quickBtn !== null, 'the quick entry renders in the activity rail')
+    assert.ok(quickBtn.getAttribute('aria-label') === 'Task Board', 'the entry uses the plugin-provided localized label')
+    await act(async () => {
+      quickBtn.click()
+    })
+    const primary = store.getPrimaryTarget()
+    assert.ok(primary.kind === 'screen' && primary.pluginId === 'builtin:tasks' && primary.screenId === 'board', 'clicking navigates via the standard store routing')
+
+    // Simulate the SSE path of a disabled plugin: contributions vanish from the live state -> zero residue.
+    await act(async () => {
+      store.updateLive((state) => ({ ...state, uiContributions: [] }))
+    })
+    assert.equal(container.querySelectorAll('.rail-quick-btn').length, 0, 'a disabled plugin leaves no phantom quick entry')
+  } finally {
+    await act(async () => {
+      root?.unmount()
+    })
+    container.remove()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// 移动端抽屉：任何空间都能看到态势平铺区（拉开汉堡即可一键行动）
+// ---------------------------------------------------------------------------
+
+function stubMobileMatchMedia(): () => void {
+  const original = window.matchMedia
+  window.matchMedia = ((query: string) => ({
+    matches: query.includes('680'),
+    media: query,
+    onchange: null,
+    addEventListener() {},
+    removeEventListener() {},
+    addListener() {},
+    removeListener() {},
+    dispatchEvent() {
+      return false
+    },
+  })) as typeof window.matchMedia
+  return () => {
+    window.matchMedia = original
+  }
+}
+
+test('mobile drawer shows the attention group in every space; desktop non-conversation spaces stay clean', { timeout: 60_000 }, () => {
+  const htmlByViewport = (mobile: boolean): string => {
+    const restore = mobile ? stubMobileMatchMedia() : undefined
+    try {
+      return renderSidebar(
+        sidebarStore({
+          conversations: [
+            conv({ id: 2, title: '在跑的调研', profileId: 'coder', status: 'working', createdAt: 8000, updatedAt: 8000 }),
+            conv({ id: 50, title: '当前查看', profileId: 'coder', status: 'idle' }),
+          ],
+          primaryTarget: { kind: 'screen', pluginId: 'builtin:tasks', screenId: 'board' },
+        }),
+      )
+    } finally {
+      restore?.()
+    }
+  }
+  assert.ok(htmlByViewport(true).includes('sidebar-attention-group'), 'mobile: pulling the drawer open in the views space still shows the attention group')
+  assert.ok(!htmlByViewport(false).includes('sidebar-attention-group'), 'desktop: the views space stays clean (rail badge carries the signal)')
+})
+
+// ---------------------------------------------------------------------------
+// 命令面板：全部插件视图可搜、可直达
+// ---------------------------------------------------------------------------
+
+test('CommandPaletteModal: all plugin views are searchable rows and open via the standard routing', { timeout: 60_000 }, async () => {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = (async () =>
+    new Response(JSON.stringify([]), { status: 200, headers: { 'content-type': 'application/json' } })) as typeof fetch
+  const store = sidebarStore({
+    plugins: [{ id: 'builtin:tasks', name: { en: 'Tasks', 'zh-CN': '任务' }, version: '0.0.0', enabled: true, locked: false, hooks: [], actions: [], tools: [] }],
+    conversations: [conv({ id: 50, title: '当前查看', profileId: 'coder' })],
+    primaryTarget: { kind: 'conversation', conversationId: 50 },
+    uiContributions: [sidebarItemContribution(), screenContribution()],
+  })
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  let root: Root | undefined
+  try {
+    await act(async () => {
+      root = createRoot(container)
+      root.render(e(HelmxExternalStoreContext.Provider, { value: store }, e(CommandPaletteModal, { onClose: () => {} })))
+    })
+    let viewRow = [...document.body.querySelectorAll('.modal .nav-item')].find((row) => row.textContent?.includes('Task Board'))
+    assert.ok(viewRow !== undefined, 'the plugin view row renders in the empty-query palette')
+    assert.ok(viewRow.textContent?.includes('Tasks'), 'the row hints the owning plugin display name')
+
+    // Search narrows to the view row (Cmd+K finds every plugin view).
+    const input = document.body.querySelector<HTMLInputElement>('.modal .search-box input')
+    assert.ok(input !== null)
+    await act(async () => {
+      input.value = 'board'
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    viewRow = [...document.body.querySelectorAll('.modal .nav-item')].find((row) => row.textContent?.includes('Task Board'))
+    assert.ok(viewRow !== undefined, 'typing the view name keeps the view row visible')
+
+    const rowElement = viewRow as HTMLElement
+    await act(async () => {
+      rowElement.click()
+    })
+    const primary = store.getPrimaryTarget()
+    assert.ok(primary.kind === 'screen' && primary.screenId === 'board', 'selecting the view row navigates to the screen')
+  } finally {
+    globalThis.fetch = originalFetch
+    await act(async () => {
+      root?.unmount()
+    })
+    container.remove()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// 插件 SDK 共享宿主后台在途快照（useConversationBackground 经真实桥）
+// ---------------------------------------------------------------------------
+
+const { HostStoreProviders } = await import('./helpers/host-store.js')
+const { useConversationBackground } = await import('@helmx/plugin-client')
+
+test('useConversationBackground via the real host bridge: badge docs hydrate entries; missing docs report unknown', { timeout: 60_000 }, () => {
+  const WORKFLOW_PANEL_SPEC2: WorkbenchPanelSpec = {
+    id: 'tasks',
+    label: '工作流与子代理',
+    badge: { doc: 'run-badges', byConversationField: 'byConversation' },
+  }
+  const panelContribution2: PluginUiContribution = {
+    pluginId: 'builtin:workflow',
+    surface: 'workbench.panel',
+    spec: WORKFLOW_PANEL_SPEC2,
+  }
+  const plugins = [{ id: 'builtin:workflow', name: 'Workflow', version: '0.0.0', enabled: true, locked: false, hooks: [], actions: [], tools: [] }]
+  const conversations = [conv({ id: 1, title: '主会话', profileId: 'assistant' })]
+  const captured: Array<{ unknown: boolean; active: boolean | undefined; summary: string | undefined }> = []
+
+  function Probe(): React.ReactNode {
+    const snapshot = useConversationBackground()
+    const entry = snapshot.byConversation.get(1)
+    captured.push({ unknown: snapshot.unknown, active: entry?.active, summary: entry?.summary })
+    return null
+  }
+
+  const unloaded = makeTestStore({ plugins, conversations, uiContributions: [panelContribution2] })
+  renderToString(e(HostStoreProviders, { value: unloaded }, e(Probe)))
+  assert.ok(captured.at(-1)!.unknown === true, 'badge doc not yet loaded: facts are unknown, never "no background work"')
+  assert.ok(captured.at(-1)!.active === undefined)
+
+  const loaded = makeTestStore({
+    plugins,
+    conversations,
+    uiContributions: [panelContribution2],
+    pluginDocs: { 'builtin:workflow/run-badges': { byConversation: { '1': { count: 2, tone: 'accent', footerText: '2 Running' } } } },
+  })
+  renderToString(e(HostStoreProviders, { value: loaded }, e(Probe)))
+  const last = captured.at(-1)!
+  assert.ok(last.unknown === false, 'hydrated badge docs flip the snapshot to known')
+  assert.ok(last.active === true && last.summary === '2 Running', 'the entry carries the host-standard aggregation verdict')
 })
