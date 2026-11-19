@@ -55,7 +55,7 @@ const payloadPkgRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(payloadPkgRoot, '../..');
 const stagingDir = path.join(payloadPkgRoot, 'dist');
 const cliStagingDir = path.join(payloadPkgRoot, 'dist-cli');
-const cliPackageName = process.env.HELM_CLI_PACKAGE ?? '@team4u/helm';
+const cliPackageName = process.env.HELM_CLI_PACKAGE ?? '@team4u/helm-cli';
 
 /** Minimal type shape of the manifest contract (validated isomorphically on the start.mjs side). */
 interface PayloadManifest {
