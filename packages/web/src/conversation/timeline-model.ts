@@ -9,7 +9,10 @@
  * - Consecutive ordinary steps collapse into per-turn step groups: thinking and ordinary tool
  *   rows (including failures) fold into a step-group; tool.view business cards are always exempt.
  * - `pi.reset` / `pi.compaction` -> context dividers (reset may carry a handoff summary).
- * - live merge: real-time tools (running) and streaming text fold into the in-flight turn.
+ * - live merge: streaming thinking (per content block of the live generation message, legacy flat
+ *   snapshot as fallback), real-time tools (running) and streaming text fold into the in-flight turn.
+ * - thinking activity invariant: only the trailing thinking block of the live generation message is
+ *   ever "thinking now"; persisted blocks and blocks succeeded by text / toolCall are never active.
  */
 
 import type {
@@ -97,6 +100,12 @@ export interface ThinkingTrace {
   key: string
   text: string
   active?: boolean
+  /** Provenance of a streaming thinking block: 'generation' = a block of the live generation
+   * message (activity is settled by trailing-block position at merge time — the only "thinking
+   * now" source), 'flat' = legacy `live.thinking` snapshot without the generation projection
+   * (activity falls back to the trailing heuristic at fold time). Persisted pi.assistant blocks
+   * carry neither and are never active. */
+  live?: 'generation' | 'flat'
   /** Eligible model-response duration (ms) of the assistant message that produced this thinking
    * block (thinking + toolCall content, no non-empty visible text, finite positive durationMs).
    * Attached structurally to exactly one thinking block per message (turn-scope allocation covers
@@ -555,6 +564,8 @@ interface RawSegment {
   tool?: ToolTrace
   /** Eligible model-response duration attached to (only) the first thinking segment of its message. */
   responseDurationMs?: number
+  /** Streaming provenance of a live thinking block (see ThinkingTrace.live). */
+  live?: 'generation' | 'flat'
 }
 
 interface TurnAcc {
@@ -619,6 +630,7 @@ function foldableOfRaw(seg: RawSegment): FoldableStep {
       thinking: {
         key: seg.key,
         text: seg.text ?? '',
+        ...(seg.live !== undefined ? { live: seg.live } : {}),
         ...(seg.responseDurationMs !== undefined ? { responseDurationMs: seg.responseDurationMs } : {}),
       },
     }
@@ -629,8 +641,14 @@ function foldableOfRaw(seg: RawSegment): FoldableStep {
 /**
  * Raw segments -> render segments: consecutive foldable steps enter a step-group from the first step, avoiding node moves when steps append.
  * Exempt items (tool.view) and text blocks stay standalone.
- * While the turn is still running (live=true) and nothing follows the step-group yet (text or exempt
- * card), mark active=true (frontend expands by default).
+ *
+ * Thinking activity invariant (single source of truth, no successor-type enumeration): a thinking
+ * block is "thinking now" iff it is the trailing block of the live generation message (marked
+ * `live: 'generation'` at merge time). Persisted blocks and blocks a later text / toolCall block
+ * already succeeded are never active, whatever follows them in the timeline. Legacy snapshots
+ * without the generation projection (`live: 'flat'`) fall back to the trailing heuristic.
+ * The step-group container keeps its own expansion rule: live turn and either the trailing group
+ * (process ongoing in this area) or a running tool inside it.
  */
 export function foldTurnSegments(raw: ReadonlyArray<RawSegment>, live = false): AssistantSegment[] {
   const out: AssistantSegment[] = []
@@ -673,18 +691,25 @@ export function foldTurnSegments(raw: ReadonlyArray<RawSegment>, live = false): 
     const seg = out[i]!
     if (seg.kind !== 'step-group') continue
     const hasRunningTool = seg.steps.some((s) => s.kind === 'tool' && s.tool.status === 'running')
-    // 活动边只认「组之后没有任何渲染段」：正文与豁免卡片（tool.view 业务卡，如 swarm 派发）
-    // 都算已有后续——思考块随即折叠，不再挂着「思考中」转圈陪跑长任务；组内 running 工具
-    // 除外（正文先流的回合仍需保持展开显示在途工具）。
+    // 组容器活动边：live 回合中组是最后一个渲染段（过程仍在此区推进，含等待下一轮与参数
+    // 流式阶段），或组内有 running 工具（正文先流的回合也要展开显示在途工具）。
     const isTrailing = i === out.length - 1
     const groupActive = live && (isTrailing || hasRunningTool)
     seg.active = groupActive
 
     for (let sIdx = 0; sIdx < seg.steps.length; sIdx++) {
       const step = seg.steps[sIdx]!
-      if (step.kind === 'thinking') {
+      if (step.kind !== 'thinking') continue
+      if (step.thinking.live === 'generation') {
+        // 合并时已判定为 live generation 尾块：唯一「思考中」来源；回合不 live 则一律熄灭。
+        step.thinking.active = live === true
+      } else if (step.thinking.live === 'flat') {
+        // 旧式 live.thinking 扁平快照（无 generation 投影）：沿用尾随启发式。
         const hasSubsequentTool = seg.steps.slice(sIdx + 1).some((s) => s.kind === 'tool')
         step.thinking.active = groupActive && !hasSubsequentTool && !hasRunningTool && isTrailing
+      } else {
+        // 已落库的思考块一律不再「思考中」。
+        step.thinking.active = false
       }
     }
   }
@@ -955,12 +980,31 @@ function appendToolResultEntry(acc: TurnAcc, entry: ConversationEntry, opts: Bui
   }
 }
 
-/** Live merge: streaming thinking; same callId updates the existing tool row (only pending fields); new calls append a running row; streaming text appends as a text segment. */
+/** Live merge: streaming thinking per content block (or the legacy flat snapshot); same callId updates the existing
+ * tool row (only pending fields); new calls append a running row; streaming text appends as a text segment. */
 function mergeLiveIntoTurn(acc: TurnAcc, live: ConversationLive, opts: BuildTimelineOptions): void {
-  if (typeof live.thinking === 'string' && live.thinking.trim() !== '') {
+  const genContent = live.generation?.message?.content
+  if (genContent !== undefined) {
+    // 按内容块序合并流式思考。流式期间只渲染思考块：正文走下方 live.text 路径（同一累计串），
+    // 工具调用在开始执行后才浮出（live.tools 槽位由响应分类创建，参数流式阶段尚不存在）。
+    // 已逐字落库的块（entry 与 live 重叠窗口）绝不重复渲染。
+    for (let bi = 0; bi < genContent.length; bi++) {
+      const block = genContent[bi]
+      if (block?.type !== 'thinking' || block.thinking.trim() === '') continue
+      if (acc.segments.some((s) => s.kind === 'thinking' && s.text === block.thinking)) continue
+      acc.segments.push({
+        kind: 'thinking',
+        key: `think:live:${bi}`,
+        text: block.thinking,
+        // 唯一「思考中」来源：本块是消息尾块。尾随 toolCall（参数流式中）或 text 与已落库的
+        // 后继一样，都意味着思考阶段已结束。
+        ...(bi === genContent.length - 1 ? { live: 'generation' as const } : {}),
+      })
+    }
+  } else if (typeof live.thinking === 'string' && live.thinking.trim() !== '') {
     const persistedThinking = acc.segments.findLast((segment) => segment.kind === 'thinking')?.text
     if (!persistedThinking?.startsWith(live.thinking)) {
-      acc.segments.push({ kind: 'thinking', key: 'think:live', text: live.thinking })
+      acc.segments.push({ kind: 'thinking', key: 'think:live', text: live.thinking, live: 'flat' })
     }
   }
   for (const lt of live.tools) {

@@ -533,6 +533,101 @@ test('live 回合中思考后派发 tool.view 卡片（swarm/subagent）：思�
   assert.equal(liveThink.thinking.active, true)
 })
 
+test('思考活动不变量：仅 live generation 尾块思考为「思考中」，其余一律折叠', { timeout: 60_000 }, () => {
+  type GenBlock = { type: 'thinking'; thinking: string } | { type: 'text'; text: string } | { type: 'toolCall'; name: string; arguments?: unknown }
+  const genLive = (content: GenBlock[], extra: Partial<ConversationLive> = {}): ConversationLive => ({
+    conversationId: 1,
+    text: '',
+    tools: [],
+    updatedAt: 1,
+    generation: { taskId: 7, attempt: 1, message: { content } },
+    ...extra,
+  })
+
+  // 1) 思考后跟着思考（同一响应两个思考块，第二块仍在增长）：前一块立即折叠，仅尾块思考中
+  const twoThinking = buildTimelineItems([], { live: genLive([
+    { type: 'thinking', thinking: '第一段推理已经结束' },
+    { type: 'thinking', thinking: '第二段推理正在增长' },
+  ]) })
+  const turn = twoThinking[0]
+  assert.ok(turn?.kind === 'assistant')
+  const group = turn.segments[0]
+  assert.ok(group?.kind === 'step-group')
+  assert.equal(group.steps.length, 2)
+  assert.ok(group.steps[0]!.kind === 'thinking')
+  assert.equal(group.steps[0]!.thinking.active, false)
+  assert.ok(group.steps[1]!.kind === 'thinking')
+  assert.equal(group.steps[1]!.thinking.active, true)
+  assert.equal(group.active, true)
+
+  // 2) 思考结束后流式生成 toolCall 参数（工具尚未开始执行、live.tools 为空）：思考立即折叠，无幻影工具段
+  const argStreaming = buildTimelineItems([], { live: genLive([
+    { type: 'thinking', thinking: '规划完毕，开始写参数' },
+    { type: 'toolCall', name: 'write', arguments: { file_path: '/x' } },
+  ]) })
+  const argTurn = argStreaming[0]
+  assert.ok(argTurn?.kind === 'assistant')
+  assert.equal(argTurn.segments.length, 1, '未开始执行的 toolCall 不渲染工具段')
+  const argGroup = argTurn.segments[0]
+  assert.ok(argGroup?.kind === 'step-group')
+  assert.ok(argGroup.steps[0]!.kind === 'thinking')
+  assert.equal(argGroup.steps[0]!.thinking.active, false)
+  assert.equal(argGroup.active, true, '组仍是回合尾段（过程推进中），容器保持展开')
+
+  // 3) 已落库的思考（含思考后跟思考）永不「思考中」，即使回合仍在 working 等待下一轮
+  const persisted = buildTimelineItems(
+    [assistantEntry('1', [
+      { type: 'thinking', thinking: '第一段落库' },
+      { type: 'thinking', thinking: '第二段落库' },
+      toolCallBlock('c1', 'bash', { command: 'ls' }),
+    ])],
+    { working: true },
+  )
+  const persistedTurn = persisted[0]
+  assert.ok(persistedTurn?.kind === 'assistant')
+  const persistedGroup = persistedTurn.segments[0]
+  assert.ok(persistedGroup?.kind === 'step-group')
+  assert.equal(persistedGroup.steps.filter((s) => s.kind === 'thinking').every((s) => s.kind === 'thinking' && s.thinking.active === false), true)
+  assert.equal(persistedGroup.active, true, '组容器在等待期保持既有展开行为')
+
+  // 4) 落库与 live 重叠窗口（同文本块已逐字持久化）：不重复渲染、不点亮
+  const overlap = buildTimelineItems(
+    [assistantEntry('1', [{ type: 'thinking', thinking: '完全一致的思考' }])],
+    { live: genLive([{ type: 'thinking', thinking: '完全一致的思考' }]) },
+  )
+  const overlapTurn = overlap[0]
+  assert.ok(overlapTurn?.kind === 'assistant')
+  const overlapGroup = overlapTurn.segments[0]
+  assert.ok(overlapGroup?.kind === 'step-group')
+  assert.equal(overlapGroup.steps.length, 1)
+  assert.equal(overlapGroup.steps[0]!.kind === 'thinking' && overlapGroup.steps[0]!.thinking.active, false)
+
+  // 5) 尾块是正文（text 开始流式）：思考折叠，正文作为独立段跟随
+  const textTrailing = buildTimelineItems([], { live: genLive([
+    { type: 'thinking', thinking: '想完了' },
+    { type: 'text', text: '正在输出' },
+  ], { text: '正在输出' }) })
+  const textTurn = textTrailing[0]
+  assert.ok(textTurn?.kind === 'assistant')
+  const textGroup = textTurn.segments[0]
+  assert.ok(textGroup?.kind === 'step-group')
+  assert.equal(textGroup.steps[0]!.kind === 'thinking' && textGroup.steps[0]!.thinking.active, false)
+  assert.equal(textGroup.active, false)
+  assert.ok(textTurn.segments.some((s) => s.kind === 'text' && s.text === '正在输出'))
+
+  // 6) 回合不 live（working=false 残留快照）：即使带 generation 标记也不点亮
+  const settled = buildTimelineItems([], {
+    working: false,
+    live: genLive([{ type: 'thinking', thinking: '残留快照' }]),
+  })
+  const settledTurn = settled[0]
+  assert.ok(settledTurn?.kind === 'assistant')
+  const settledGroup = settledTurn.segments[0]
+  assert.ok(settledGroup?.kind === 'step-group')
+  assert.equal(settledGroup.steps[0]!.kind === 'thinking' && settledGroup.steps[0]!.thinking.active, false)
+  assert.equal(settledGroup.active, false)
+})
+
 test('多轮工具执行期间 turn.key 恒定不变，且 running 工具保留在同一 step-group 内不跳出', { timeout: 60_000 }, () => {
   const userMsg = entry('10', 'helmx.input', { data: { text: '检查目录与配置', origin: 'human' } })
 

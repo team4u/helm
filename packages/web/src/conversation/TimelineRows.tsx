@@ -182,7 +182,7 @@ export function StepGroup({
     return (
       <ThinkingRow
         text={firstStep.thinking.text}
-        active={firstStep.thinking.active ?? active}
+        active={firstStep.thinking.active === true}
         conversationId={conversationId}
         shortcutToggle={shortcutToggle}
         isRootProcessToggle
