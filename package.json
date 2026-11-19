@@ -18,6 +18,7 @@
     "test:all:run": "node scripts/test-suites.mjs all",
     "test:force-exit": "node scripts/run-tests.mjs --test-force-exit \"packages/*/test/*.test.ts\" \"packages/*/test/*.test.tsx\"",
     "check:changed": "node scripts/check-changed.mjs",
+    "release": "node scripts/release.mjs",
     "check:hygiene": "node scripts/check-test-hygiene.mjs",
     "lint": "oxlint",
     "dev": "pnpm --filter @helmx/protocol run build && pnpm --parallel --stream --filter @helmx/hub --filter @helmx/web run dev",
