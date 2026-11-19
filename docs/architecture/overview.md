@@ -8,7 +8,7 @@ Hub 负责把产品接起来。`@helmx/kernel` 管理会话、节点执行、模
 
 | 机制 | 核心内容 | 明确不包含 |
 | :--- | :--- | :--- |
-| `pi-durable` 持久会话 | 通用 `Conversation(nodeId, cwd)` 五态状态机、`state.sqlite` + FTS5 派生索引、`AskDoc` 审批流、`SecretStash` 机密隔离、纯文件资产热重载、原生 `spawnAgent` 子会话派生（`agent_spawn` Hook 管道 + 默认执行行） | 编排引擎、Worktree 租约（均在 `builtin:workflow`） |
+| `pi-durable` 持久会话 | 通用 `Conversation(nodeId, cwd)` 五态状态机、`state.sqlite` + FTS5 派生索引、`AskDoc` 审批流、`SecretStash` 机密隔离、纯文件资产热重载、原生 `spawnAgent` 子会话派生（`agent_spawn` Hook 管道 + 默认执行行） | 编排引擎（`builtin:workflow`）、Worktree 租约（`builtin:worktree`） |
 | `EnvFabric` + `NodeRegistry` | `/ws/node` 反向 WebSocket 网关、`/ws/node-tunnel` 节点任意 TCP 透传隧道（`openTunnel` 原语 + `nodeFetch` 适配层）、内建 `local` 节点 + 远端 `@helmx/node` 守护进程、`bash / read / write / edit` 内核工具与 `runGate` / `env exec` 宿主端口、按 `nodeId + canonicalPath` 的文件互斥 | 终端主控逻辑（`builtin:herdr`） |
 | Model 与 Auth | 模型供应商接入、模型禁用过滤、凭据（`credentials.json`）与令牌管理 | 业务级模型路由策略（`builtin:magpie`） |
 | `PluginHost` | 唯一强类型插件宿主 `definePlugin(ctx)`：生命周期 Hook、动作/工具/路由注册、doc 持久化、服务协调 | 任何具体插件的功能实现 |
@@ -22,7 +22,8 @@ flowchart TD
         Host["PluginHost 强类型宿主"]
     end
     subgraph Plugins["插件生态"]
-        Workflow["builtin:workflow 编排与 Worktree 租约"]
+        Workflow["builtin:workflow 编排引擎"]
+        Worktree["builtin:worktree 受管工作树"]
         Swarm["builtin:swarm 对等协同黑板"]
         Profile["builtin:profile 角色技能底座"]
         Memory["builtin:memory 长期记忆"]
@@ -37,7 +38,8 @@ flowchart TD
 
 以下能力**不在内核**，这是架构红线而非实现现状的描述：
 
-- **编排引擎与 Worktree 管理**：`subagent` / `SubagentWorkflow` / `cleanup_worktree` 三个模型工具、DSL 编排引擎（`packages/plugins/src/workflow/engine`）与受管 Git Worktree 的租约分配、断点续接、安全清理，全部由 `builtin:workflow` 插件承载。内核对 Git 零语义——`AgentSpawnRequest.isolation` 等执行环境要求由插件层经 `agent_spawn` continuation 改写请求兑现，无插件兑现而原样到达原生执行行时显式返回 `unsupported_runtime`。
+- **编排引擎**：`subagent` / `SubagentWorkflow` 两个模型工具与 DSL 编排引擎（`packages/plugins/src/workflow/engine`）由 `builtin:workflow` 插件承载。
+- **Worktree 管理**：受管 Git Worktree 的分配、租约、持有锁与安全清理由 `builtin:worktree` 插件承载（与 `builtin:workflow` 零静态依赖，仅经共享契约与 execution meta 命名空间协作）。内核对 Git 零语义——`AgentSpawnRequest.isolation` 等执行环境要求由插件层经 `agent_spawn` continuation 改写请求兑现，无插件兑现而原样到达原生执行行时显式返回 `unsupported_runtime`。
 - **角色与技能**：`SYSTEM.md` 注入、技能目录与 `load_skill` 工具由 `builtin:profile`（常驻不可卸载）提供；`builtin:memory` 自管 `profiles/<id>/MEMORY.md`。内核对「角色」这个概念零感知。
 - **巡检定时器**：内核不提供 `watchdog` 定时器，也不存在 `watchdog_tick` Hook。周期性任务一律由插件自管服务调度——`builtin:superagent` 用自有 `ctx.service` 驱动巡检周期，`builtin:herdr` 通过通用进程内事件采集终端诊断。
 - **声明式 JSON 渲染与 Mermaid**：分别由 `builtin:json-render` 与 `builtin:mermaid` 插件提供，停用后相关围栏回退普通代码块。
@@ -114,7 +116,7 @@ flowchart TD
 `@helmx/hub` 的 `createHelmx()`（`packages/hub/src/app.ts`）只做三件事：
 
 1. **注入构建实现**：默认注入 `@helmx/plugin-build` 的 provider（client.tsx 编译 + 外部 TS 转译），调用方可整体替换；内核机制与构建工具分离。
-2. **注册内置插件并设定启停**：`builtin:profile`（locked 常驻）、`builtin:workflow`、`builtin:swarm`、`builtin:memory`、`builtin:json-render`、`builtin:mermaid`、`builtin:apps`、`builtin:triggers`、`builtin:magpie`、`builtin:token-speed` 十个默认启用；`builtin:herdr`、`builtin:superagent` 两个默认停用。随后从数据目录加载外部插件。启停规则和各插件的用途见 [内置插件清单](../plugins/overview.md#当前状态)。
+2. **注册内置插件并设定启停**：`builtin:profile`（locked 常驻）、`builtin:workflow`、`builtin:worktree`、`builtin:swarm`、`builtin:memory`、`builtin:json-render`、`builtin:mermaid`、`builtin:apps`、`builtin:triggers`、`builtin:magpie`、`builtin:token-speed` 十一个默认启用；`builtin:herdr`、`builtin:superagent` 两个默认停用。其中 `builtin:workflow` 固定先于 `builtin:worktree` 注册：`runtime.started` 监听器按注册顺序执行，先收敛遗留子会话再回收崩溃租约。随后从数据目录加载外部插件。启停规则和各插件的用途见 [内置插件清单](../plugins/overview.md#当前状态)。
 3. **统一启动**：全部插件注册后执行 `kernel.start()`——先按依赖拓扑对全体服务 `prepare()`，再依次 `start()`，最后恢复 SDK 调度器。
 
 直接使用 `KernelRuntime.open()` 时不隐式注册任何内置插件，可独立验证内核机制；使用 `createHelmx()` 得到完整产品。Web 静态目录托管属于产品层：直接使用内核 HTTP handler 时缺省只服务 API，提供 `webDistDir` 才启用静态托管。
@@ -154,7 +156,7 @@ flowchart LR
     Action --> Web["Web UI invokeAction"]
 ```
 
-关键规则：`pluginId` 含 `:` 时按 URI 编码；内置插件自动剥离 `builtin:` 前缀生成 CLI 命令路径，`cli.command` 可整体覆写（如 `builtin:workflow` 的 `cleanup_worktree` 动作注册为 `helmx worktrees cleanup`）；`cli.positional` 声明位置参数映射，`readFileInto` 支持把本地文件内容读入目标字段；`cli.timeoutMs = 0` 表示无超时，供长耗时动作使用；`idempotent: true` 的动作在工作流中断后允许从该步安全重跑。人工 HTTP/CLI 调用可无 `conversationId`，模型路径（`run_action`）与 Workflow 路径必须携带 `conversationId` 供宿主校验会话作用域（`scope`），防止绕过会话边界。
+关键规则：`pluginId` 含 `:` 时按 URI 编码；内置插件自动剥离 `builtin:` 前缀生成 CLI 命令路径，`cli.command` 可整体覆写（如 `builtin:worktree` 的 `cleanup_worktree` 动作注册为 `helmx worktrees cleanup`）；`cli.positional` 声明位置参数映射，`readFileInto` 支持把本地文件内容读入目标字段；`cli.timeoutMs = 0` 表示无超时，供长耗时动作使用；`idempotent: true` 的动作在工作流中断后允许从该步安全重跑。人工 HTTP/CLI 调用可无 `conversationId`，模型路径（`run_action`）与 Workflow 路径必须携带 `conversationId` 供宿主校验会话作用域（`scope`），防止绕过会话边界。
 
 ## 边界纪律
 
