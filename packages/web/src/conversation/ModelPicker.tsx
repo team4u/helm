@@ -19,16 +19,15 @@ import {
 // ModelPicker (extracted from Composer.tsx): model and thinking level picking
 // in a Radix Popover. Conversation mode and the standby pane share
 // ModelPickerControl with unified keyboard navigation, Ctrl+L focus and
-// catalog refresh. Picking a model keeps the popover open so its thinking
-// level can be adjusted in the same session (re-picking the shown model, Esc
-// or an outside click closes).
+// catalog refresh. Clicking a model row only STAGES the candidate; the pinned
+// apply bar commits: a level chip applies model + level together, "use
+// default level" / Enter applies the model alone. Esc and outside clicks
+// discard the staged candidate.
 // ---------------------------------------------------------------------------
 
 export interface ModelPickerControlProps {
   /** Currently effective model id (button label, capability lookup, initial highlight). */
   effectiveModel: string | undefined
-  /** Explicitly selected model id (undefined while following defaults). */
-  selectedModel: string | undefined
   /** Current thinking level (converged against the model's supported list). */
   activeThinkingLevel: string
   /** Panel fallback when no `[data-helmx-panel]` ancestor exists. */
@@ -50,15 +49,14 @@ export interface ModelPickerControlProps {
   pending?: boolean
   /** Owning conversation id (refresh notices; omitted on the standby pane). */
   conversationId?: number
-  onPickModel: (modelId: string) => void | Promise<void>
+  /** Apply the candidate model; thinkingLevel null = follow the default chain. */
+  onApply: (model: string, thinkingLevel: string | null) => void | Promise<void>
   onResetDefault: () => void | Promise<void>
-  onPickThinking: (level: string) => void | Promise<void>
   onCatalogRefreshed?: () => void | Promise<void>
 }
 
 export function ModelPickerControl({
   effectiveModel,
-  selectedModel,
   activeThinkingLevel,
   fallbackPanel = 'primary',
   resetLabel,
@@ -72,9 +70,8 @@ export function ModelPickerControl({
   disabled = false,
   pending = false,
   conversationId,
-  onPickModel,
+  onApply,
   onResetDefault,
-  onPickThinking,
   onCatalogRefreshed,
 }: ModelPickerControlProps) {
   const models = useOptionalModels() ?? []
@@ -83,9 +80,9 @@ export function ModelPickerControl({
   const [open, setOpen] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [query, setQuery] = useState('')
-  // Optimistic model picked inside this popover session: drives the button label,
-  // row highlight and the thinking section before the (async) prop catches up.
-  const [previewModel, setPreviewModel] = useState<string | undefined>(undefined)
+  // Candidate staged inside this popover session (undefined = the effective
+  // model). Nothing commits until an explicit apply action in the pinned bar.
+  const [stagedModel, setStagedModel] = useState<string | undefined>(undefined)
   const rootRef = useRef<HTMLSpanElement | null>(null)
   const searchInputRef = useRef<HTMLInputElement | null>(null)
   const itemRefs = useRef<Array<HTMLButtonElement | null>>([])
@@ -107,23 +104,22 @@ export function ModelPickerControl({
 
   const filteredModels = models.filter((model) => model.available && model.disabled !== true && model.id.toLowerCase().includes(query.toLowerCase()))
   const filteredKeys = filteredModels.map((model) => model.id).join('|')
-  // Model shown while the popover session is live: the just-picked preview wins
-  // over the (possibly still in-flight) effective prop.
-  const displayModel = previewModel ?? effectiveModel
+  const candidateModel = stagedModel ?? effectiveModel
   const [activeIndex, setActiveIndex] = useState(() => initialModelActiveIndex(filteredModels, effectiveModel))
 
+  // Closing (Esc / outside click / toggle) discards the staged candidate.
   useEffect(() => {
     setQuery('')
-    setPreviewModel(undefined)
+    setStagedModel(undefined)
     interactedOutsideRef.current = false
   }, [open])
 
   useEffect(() => {
     if (!open) return
-    setActiveIndex(initialModelActiveIndex(filteredModels, displayModel))
+    setActiveIndex(initialModelActiveIndex(filteredModels, candidateModel))
     // filteredKeys precisely expresses changes of the filtered result set
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, query, filteredKeys, displayModel])
+  }, [open, query, filteredKeys, candidateModel])
 
   useEffect(() => {
     if (!open || activeIndex < 0) return
@@ -167,19 +163,15 @@ export function ModelPickerControl({
     }
   }
 
-  const pickThinking = (level: string): Promise<void> => Promise.resolve(onPickThinking(level))
+  // Staging only moves the candidate; nothing commits here.
+  const stageModel = (modelId: string): void => {
+    setStagedModel(modelId)
+  }
 
-  // Picking a model keeps the popover open so the thinking level for that very
-  // model can be adjusted in the same session (one open, model + level); the
-  // pick commits immediately and is previewed locally until the prop catches
-  // up. Re-picking the already-effective model acts as "confirm" and closes.
-  const chooseModel = (modelId: string): void => {
-    if (modelId === displayModel) {
-      setOpen(false)
-      return
-    }
-    setPreviewModel(modelId)
-    void onPickModel(modelId)
+  const applySelection = (model: string | undefined, level: string | null): void => {
+    if (model === undefined || model === '') return
+    setOpen(false)
+    void onApply(model, level)
   }
 
   const resetDefault = (): void => {
@@ -188,12 +180,12 @@ export function ModelPickerControl({
   }
 
   const rawShortName =
-    displayModel !== undefined && displayModel !== ''
-      ? displayModel.split('/').pop() ?? displayModel
+    effectiveModel !== undefined && effectiveModel !== ''
+      ? effectiveModel.split('/').pop() ?? effectiveModel
       : ''
   const shortName = rawShortName.trim() !== '' ? rawShortName : (placeholderLabel ?? t('composer.model.defaultLabel'))
-  const currentModel = displayModel !== undefined && displayModel !== ''
-    ? models.find((model) => model.id === displayModel)
+  const currentModel = effectiveModel !== undefined && effectiveModel !== ''
+    ? models.find((model) => model.id === effectiveModel)
     : undefined
   const currentLevels = currentModel?.thinkingLevels ?? ['off']
   const supportsThinking = currentLevels.some((level) => level !== 'off')
@@ -202,6 +194,22 @@ export function ModelPickerControl({
   const effectiveLevel = resolveEffectiveThinkingLevel(currentLevels, activeThinkingLevel)
   const showLevel = supportsThinking && effectiveLevel !== '' && effectiveLevel !== 'off'
   const allUnavailable = models.every((model) => !model.available || model.disabled === true)
+
+  // Apply-bar state targets the staged candidate. The level highlight is only
+  // honest for the committed model (the default chain for a different model
+  // resolves server-side), so staging another model shows no active chip.
+  const candidateShortName =
+    candidateModel !== undefined && candidateModel !== ''
+      ? candidateModel.split('/').pop() ?? candidateModel
+      : (placeholderLabel ?? t('composer.model.defaultLabel'))
+  const candidateEntry = candidateModel !== undefined && candidateModel !== ''
+    ? models.find((model) => model.id === candidateModel)
+    : undefined
+  const candidateLevels = candidateEntry?.thinkingLevels ?? ['off']
+  const candidateSupportsThinking = candidateLevels.some((level) => level !== 'off')
+  const candidateLevel = candidateModel === effectiveModel
+    ? resolveEffectiveThinkingLevel(candidateLevels, activeThinkingLevel)
+    : ''
 
   return (
     <span className="composer-picker-root" ref={rootRef}>
@@ -290,7 +298,7 @@ export function ModelPickerControl({
                       if (chosen !== undefined) {
                         event.preventDefault()
                         event.stopPropagation()
-                        chooseModel(chosen.id)
+                        applySelection(chosen.id, null)
                       }
                     }
                   }}
@@ -312,6 +320,7 @@ export function ModelPickerControl({
                 </button>
               </Tooltip>
             </div>
+            <div className="composer-model-scroll">
             <div className="popover-header">
               <span>{t('composer.model.listHeader')}</span>
               <span className="kbd-hint popover-kbd-hint">{t('composer.kbd.navConfirm')}</span>
@@ -325,10 +334,10 @@ export function ModelPickerControl({
                 title={m.id}
                 type="button"
                 disabled={disabled}
-                aria-current={m.id === (previewModel ?? selectedModel ?? effectiveModel) ? 'true' : undefined}
+                aria-current={m.id === candidateModel ? 'true' : undefined}
                 className={`popover-item${idx === activeIndex ? ' popover-item-active' : ''}`}
                 onMouseEnter={() => setActiveIndex(idx)}
-                onClick={() => chooseModel(m.id)}
+                onClick={() => stageModel(m.id)}
               >
                 <span className="mono">{m.modelId}</span>
                 <span className="popover-item-meta">{m.provider}</span>
@@ -339,22 +348,38 @@ export function ModelPickerControl({
             ) : filteredModels.length === 0 ? (
               <div className="popover-item composer-model-empty">{t('composer.model.noMatches')}</div>
             ) : null}
-            {supportsThinking ? (
-              <>
-                <div className="popover-header">
-                  <span>
-                    {t('composer.model.thinkingHeader')}
-                    <span className="composer-model-thinking-name"> · {shortName}</span>
-                  </span>
+            </div>
+            {allUnavailable ? null : (
+              <div className="composer-model-apply">
+                <div className="popover-header composer-model-apply-header">
+                  {candidateSupportsThinking ? (
+                    <span>
+                      {t('composer.model.thinkingHeader')}
+                      <span className="composer-model-thinking-name"> · {candidateShortName}</span>
+                    </span>
+                  ) : (
+                    <span className="composer-model-thinking-name">{candidateShortName}</span>
+                  )}
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm composer-model-default-btn"
+                    disabled={disabled || pending || candidateModel === undefined || candidateModel === ''}
+                    onClick={() => applySelection(candidateModel, null)}
+                  >
+                    {t('composer.model.applyDefault')}
+                  </button>
                 </div>
-                <ThinkingLevelControl
-                  value={effectiveLevel}
-                  levels={currentLevels}
-                  disabled={disabled || pending}
-                  onPick={(level) => void pickThinking(level)}
-                />
-              </>
-            ) : null}
+                {candidateSupportsThinking ? (
+                  <ThinkingLevelControl
+                    value={candidateLevel}
+                    levels={candidateLevels}
+                    allowEmpty
+                    disabled={disabled || pending}
+                    onPick={(level) => applySelection(candidateModel, level)}
+                  />
+                ) : null}
+              </div>
+            )}
           </PopoverContent>
         </PopoverPortal>
       </Popover>
@@ -368,33 +393,24 @@ export function ModelPicker({ conversation }: { conversation: ConversationSummar
   const { t } = useWebLocale()
   const [pending, setPending] = useState(false)
 
-  const pick = async (model: string): Promise<void> => {
-    if (model === conversation.model) return
+  const apply = async (model: string, level: string | null): Promise<void> => {
+    // Same model + null level only clears the thinking override (back to the
+    // default chain); a model switch without an explicit level lets the kernel
+    // drop the stale override automatically.
+    const sameModel = model === conversation.model
+    const body = sameModel
+      ? { thinkingLevel: level ?? '' }
+      : level === null
+        ? { model }
+        : { model, thinkingLevel: level }
     setPending(true)
     try {
-      await conversationsApi.patch(conversation.id, { model })
+      await conversationsApi.patch(conversation.id, body)
     } catch (err) {
       pushNotice({
         type: 'notification',
         level: 'error',
-        title: t('composer.model.switchFailed'),
-        body: err instanceof Error ? err.message : String(err),
-        conversationId: conversation.id,
-      })
-    } finally {
-      setPending(false)
-    }
-  }
-
-  const pickThinking = async (level: string): Promise<void> => {
-    setPending(true)
-    try {
-      await conversationsApi.patch(conversation.id, { thinkingLevel: level })
-    } catch (err) {
-      pushNotice({
-        type: 'notification',
-        level: 'error',
-        title: t('composer.model.thinkingSwitchFailed'),
+        title: sameModel ? t('composer.model.thinkingSwitchFailed') : t('composer.model.switchFailed'),
         body: err instanceof Error ? err.message : String(err),
         conversationId: conversation.id,
       })
@@ -429,7 +445,6 @@ export function ModelPicker({ conversation }: { conversation: ConversationSummar
   return (
     <ModelPickerControl
       effectiveModel={conversation.model}
-      selectedModel={conversation.model}
       activeThinkingLevel={conversation.thinkingLevel}
       resetLabel={t('composer.model.clearOverride')}
       resetTitle={t('composer.model.clearOverride')}
@@ -440,9 +455,8 @@ export function ModelPicker({ conversation }: { conversation: ConversationSummar
       })}
       pending={pending}
       conversationId={conversation.id}
-      onPickModel={pick}
+      onApply={apply}
       onResetDefault={resetToProfileDefault}
-      onPickThinking={pickThinking}
     />
   )
 }

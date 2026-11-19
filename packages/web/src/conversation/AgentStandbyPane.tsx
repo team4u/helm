@@ -824,16 +824,13 @@ function StandbyModelPicker({
   )
   const showThinkingBadge = supportsThinking && effectiveThinkingLevel !== '' && effectiveThinkingLevel !== 'off'
 
-  const pickModel = (model: string): void => {
-    // Reset the thinking level to undefined after a model switch so it
+  const applySelection = (model: string, level: string | null): void => {
+    // A null level leaves the draft override unset so the default chain
     // re-resolves against the new model's capabilities.
-    updateStandbyDraft(draftKey, { model, thinkingLevel: undefined })
+    updateStandbyDraft(draftKey, { model, thinkingLevel: level ?? undefined })
   }
   const resetToDefault = (): void => {
     updateStandbyDraft(draftKey, { model: undefined, thinkingLevel: undefined })
-  }
-  const pickThinking = (level: string): void => {
-    updateStandbyDraft(draftKey, { thinkingLevel: level })
   }
 
   const thinkingSuffix = showThinkingBadge ? t('composer.model.thinkingSuffix', { level: effectiveThinkingLevel }) : ''
@@ -841,7 +838,6 @@ function StandbyModelPicker({
   return (
     <ModelPickerControl
       effectiveModel={effectiveModel}
-      selectedModel={draft.model}
       activeThinkingLevel={effectiveThinkingLevel}
       fallbackPanel={isSplit ? 'split' : 'primary'}
       resetLabel={
@@ -858,9 +854,8 @@ function StandbyModelPicker({
             : t('composer.model.followsDefaultTitle', { thinking: thinkingSuffix, shortcut: COMPOSER_SHORTCUTS.toggleModelPicker })
       }
       disabled={disabled}
-      onPickModel={pickModel}
+      onApply={applySelection}
       onResetDefault={resetToDefault}
-      onPickThinking={pickThinking}
       onCatalogRefreshed={onCatalogRefreshed}
     />
   )

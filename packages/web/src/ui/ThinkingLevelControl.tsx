@@ -12,6 +12,9 @@ export interface ThinkingLevelControlProps {
   disabled?: boolean
   className?: string
   'aria-label'?: string
+  /** Render no active chip for an empty/unmatched value (picker apply bar);
+   * the default falls back to the first supported level. */
+  allowEmpty?: boolean
 }
 
 /**
@@ -32,10 +35,11 @@ export function ThinkingLevelControl({
   disabled = false,
   className = 'composer-thinking-row',
   'aria-label': ariaLabel,
+  allowEmpty = false,
 }: ThinkingLevelControlProps): React.JSX.Element | null {
   const { t } = useWebLocale()
   if (levels.length === 0) return null
-  const safeValue = levels.includes(value) ? value : (levels[0] ?? '')
+  const safeValue = levels.includes(value) ? value : (allowEmpty ? '' : (levels[0] ?? ''))
   // Single pick channel: the Tabs root onValueChange (mouse clicks route through the SDK
   // trigger context; keyboard activation goes through the root). A per-trigger onClick would
   // double-fire onPick for every value-changing click.

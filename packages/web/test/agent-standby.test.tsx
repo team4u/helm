@@ -578,17 +578,18 @@ test('model & thinking level: the model rides with create; the thinking level pa
   assert.ok(glm, 'an available model exists in the catalog')
   await act(async () => { glm!.click() })
   await settle()
-  // The popover STAYS OPEN after the model pick: the level for the very model is set
-  // in the same session (no reopen round trip)
+  // Clicking a row only STAGES the candidate (no draft commit yet); the pinned apply
+  // bar then applies model + level together in the same session
   const modelBtn = document.querySelector<HTMLButtonElement>('button.composer-model-button')
-  assert.ok(modelBtn!.textContent?.includes('glm-4.6'), 'the button shows the explicit pick')
   const stayingPopover = document.body.querySelector<HTMLElement>('.composer-model-popover')
-  assert.ok(stayingPopover !== null, 'the model popover stays open after the pick')
-  const high = [...stayingPopover!.querySelectorAll<HTMLButtonElement>('.segmented-control-btn')]
+  assert.ok(stayingPopover !== null, 'the model popover stays open after staging')
+  assert.ok(!modelBtn!.textContent?.includes('glm-4.6'), 'staging alone does not commit the draft model')
+  const high = [...stayingPopover!.querySelectorAll<HTMLButtonElement>('.composer-model-apply .segmented-control-btn')]
     .find((btn) => btn.textContent?.trim() === 'high')
-  assert.ok(high, 'the thinking-level control renders')
+  assert.ok(high, 'the apply-bar level control renders for the staged model')
   await act(async () => { high!.click() })
   await settle()
+  assert.ok(modelBtn!.textContent?.includes('glm-4.6'), 'the button shows the applied pick')
   const input = textarea(MAIN_LABEL)
   act(() => { typeInto(input, '带模型偏好') })
   await act(async () => { pressEnter(input) })
@@ -621,10 +622,10 @@ test('model selection restores defaults: after an explicit pick you can still re
     .find((btn) => btn.textContent?.includes('glm-4.6'))
   await act(async () => { glm!.click() })
   await settle()
-  assert.ok(document.querySelector('button.composer-model-button')?.textContent?.includes('glm-4.6'))
-  // The popover stays open after the pick; the restore-default item is reachable directly
+  // Staging does not commit; the restore-default item stays reachable in the open popover
   const stayingPopover = document.body.querySelector<HTMLElement>('.composer-model-popover')
-  assert.ok(stayingPopover !== null, 'the model popover stays open after the pick')
+  assert.ok(stayingPopover !== null, 'the model popover stays open after staging')
+  assert.ok(!document.querySelector('button.composer-model-button')?.textContent?.includes('glm-4.6'), 'staging alone does not commit the draft model')
   const resetBtn = [...stayingPopover!.querySelectorAll<HTMLButtonElement>('button.popover-item')]
     .find((btn) => btn.textContent?.includes('Follow profile default'))
   assert.ok(resetBtn, 'the restore-default item exists')

@@ -1094,6 +1094,30 @@ button.attachment-chip:disabled {
 .composer-popover.composer-model-popover {
   width: min(500px, calc(100vw - 24px));
   max-height: min(440px, 60dvh);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.composer-model-scroll {
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+.composer-model-apply {
+  flex-shrink: 0;
+  margin: 0 -4px -4px;
+  padding: 4px 10px 8px;
+  border-top: 1px solid var(--border-strong);
+  border-radius: 0 0 var(--radius-sm, 7px) var(--radius-sm, 7px);
+  background: var(--bg-elevated);
+}
+.composer-model-apply-header { padding: 4px 0 4px; }
+.composer-model-default-btn {
+  height: 22px;
+  padding: 0 8px;
+  font-size: 11px;
+  flex-shrink: 0;
 }
 .composer-model-popover .popover-item {
   display: flex;

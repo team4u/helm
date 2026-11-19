@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { assetsApi } from '../lib/api.js'
 import { HelmxIcon } from '@helmx/plugin-client'
-import { useOptionalModels, useOptionalStoreActions } from '../lib/store-context.js'
+import { useOptionalStoreActions } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { ModelPickerControl } from '../conversation/ModelPicker.js'
 import {
@@ -42,10 +42,8 @@ export function GlobalDefaultsPanel({
   defaultModelInfo,
   onSaved,
 }: GlobalDefaultsPanelProps): React.JSX.Element {
-  const storeModels = useOptionalModels()
   const actions = useOptionalStoreActions()
   const { t } = useWebLocale()
-  const catalogModels = storeModels ?? []
 
   const [formModel, setFormModel] = useState(() => defaultModelInfo?.defaultModel ?? '')
   const [formLevel, setFormLevel] = useState(() => defaultModelInfo?.defaultThinkingLevel ?? '')
@@ -78,22 +76,6 @@ export function GlobalDefaultsPanel({
       }
     }
   }, [defaultModelInfo])
-
-  const pickModelWithLevel = (
-    nextModel: string,
-    currentLevel: string,
-    setModel: (value: string) => void,
-    setLevel: (value: string) => void,
-  ) => {
-    setModel(nextModel)
-    const levels =
-      nextModel === ''
-        ? []
-        : catalogModels.find((m) => m.id === nextModel)?.thinkingLevels ?? []
-    if (currentLevel !== '' && !levels.includes(currentLevel)) {
-      setLevel('')
-    }
-  }
 
   const handleSave = async () => {
     setSaving(true)
@@ -180,19 +162,20 @@ export function GlobalDefaultsPanel({
               buttonTitle={formModel || t('models.defaults.optionUnset')}
               placeholderLabel={t('models.defaults.optionUnset')}
               effectiveModel={formModel}
-              selectedModel={formModel || undefined}
               activeThinkingLevel={formLevel}
               resetLabel={t('models.defaults.optionUnset')}
               resetTitle={t('models.defaults.optionUnset')}
               popoverSide="bottom"
               enableShortcut={false}
               disabled={saving}
-              onPickModel={(id) => pickModelWithLevel(id, formLevel, setFormModel, setFormLevel)}
+              onApply={(id, lvl) => {
+                setFormModel(id)
+                setFormLevel(lvl ?? '')
+              }}
               onResetDefault={() => {
                 setFormModel('')
                 setFormLevel('')
               }}
-              onPickThinking={(lvl) => setFormLevel(lvl)}
             />
             <span className="text-subtle">{t('models.defaults.modelHint')}</span>
           </div>
@@ -207,26 +190,20 @@ export function GlobalDefaultsPanel({
               buttonTitle={formCompactionModel || t('models.defaults.compactionOptionUnset')}
               placeholderLabel={t('models.defaults.compactionOptionUnset')}
               effectiveModel={formCompactionModel}
-              selectedModel={formCompactionModel || undefined}
               activeThinkingLevel={formCompactionLevel}
               resetLabel={t('models.defaults.compactionOptionUnset')}
               resetTitle={t('models.defaults.compactionOptionUnset')}
               popoverSide="bottom"
               enableShortcut={false}
               disabled={saving}
-              onPickModel={(id) =>
-                pickModelWithLevel(
-                  id,
-                  formCompactionLevel,
-                  setFormCompactionModel,
-                  setFormCompactionLevel,
-                )
-              }
+              onApply={(id, lvl) => {
+                setFormCompactionModel(id)
+                setFormCompactionLevel(lvl ?? '')
+              }}
               onResetDefault={() => {
                 setFormCompactionModel('')
                 setFormCompactionLevel('')
               }}
-              onPickThinking={(lvl) => setFormCompactionLevel(lvl)}
             />
             <span className="text-subtle">{t('models.defaults.compactionHint')}</span>
           </div>
@@ -257,35 +234,20 @@ export function GlobalDefaultsPanel({
                 buttonTitle={row.model || t('models.defaults.perModelPick')}
                 placeholderLabel={t('models.defaults.perModelPick')}
                 effectiveModel={row.model}
-                selectedModel={row.model || undefined}
                 activeThinkingLevel={row.level}
                 resetLabel={t('models.defaults.perModelClear')}
                 resetTitle={t('models.defaults.perModelClear')}
                 popoverSide="bottom"
                 enableShortcut={false}
                 disabled={saving}
-                onPickModel={(id) =>
+                onApply={(id, lvl) =>
                   setPerModelRows((rows) =>
-                    rows.map((existing, i) => {
-                      if (i !== index) return existing
-                      const levels =
-                        id === '' ? [] : catalogModels.find((m) => m.id === id)?.thinkingLevels ?? []
-                      // Keep the picked level only when the newly chosen model still supports it.
-                      return {
-                        model: id,
-                        level: existing.level !== '' && levels.includes(existing.level) ? existing.level : '',
-                      }
-                    }),
+                    rows.map((existing, i) => (i === index ? { model: id, level: lvl ?? '' } : existing)),
                   )
                 }
                 onResetDefault={() =>
                   setPerModelRows((rows) =>
                     rows.map((existing, i) => (i === index ? { model: '', level: '' } : existing)),
-                  )
-                }
-                onPickThinking={(lvl) =>
-                  setPerModelRows((rows) =>
-                    rows.map((existing, i) => (i === index ? { ...existing, level: lvl } : existing)),
                   )
                 }
               />

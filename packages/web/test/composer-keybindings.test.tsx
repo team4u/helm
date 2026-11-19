@@ -304,8 +304,8 @@ test('Ctrl+L: precisely toggles the ModelPicker per data-helmx-panel in split vi
   assert.equal(modelBtns.length, 3)
   assert.equal(modelBtns[1]!.classList.contains('popover-item-active'), true, 'the initial highlight points at the effective model m2')
 
-  // ArrowDown inside the search moves to m3; Enter picks: the patch fires while the popover
-  // STAYS OPEN so m3's thinking level can be adjusted in the same session
+  // ArrowDown inside the search moves to m3; Enter applies the model with the
+  // default level (no explicit thinking override) and closes the popover
   await act(async () => {
     searchInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }))
   })
@@ -316,32 +316,78 @@ test('Ctrl+L: precisely toggles the ModelPicker per data-helmx-panel in split vi
   })
   assert.equal(patched.length, 1)
   assert.deepEqual(patched[0], { id: 2, body: { model: 'faux/m3' } })
-  const stayingPopover = document.body.querySelector<HTMLElement>('.composer-model-popover')
-  assert.ok(stayingPopover !== null, 'the popover stays open after the model pick (level adjustable in the same session)')
-  assert.equal(modelBtns[2]!.getAttribute('aria-current'), 'true', 'the picked row is marked current via the optimistic preview')
-  assert.ok(document.activeElement === searchInput, 'focus stays in the search input for further filtering')
+  assert.ok(document.body.querySelector('.composer-model-popover') === null, 'Enter applies the model and closes the popover')
+  await waitForCondition(() => document.activeElement === splitTa)
+  assert.ok(document.activeElement === splitTa, 'focus returns to the current panel Composer textarea after the apply')
 
-  // The thinking section re-targets the just-picked m3 (levels off/max); picking max patches
-  // the level in the same session, without reopening the picker
-  const maxChip = Array.from(stayingPopover.querySelectorAll<HTMLButtonElement>('.segmented-control-btn'))
+  // Reopen: clicking a model row only STAGES the candidate (no patch, popover stays open);
+  // the pinned apply bar then commits model + level together in one patch
+  await act(async () => {
+    window.dispatchEvent(new CustomEvent(HELMX_SHORTCUT_EVENT, { detail: { action: 'toggle-model-picker', panel: 'split' } }))
+  })
+  const stagedPopover = document.body.querySelector<HTMLElement>('.composer-model-popover')
+  assert.ok(stagedPopover !== null, 'Ctrl+L reopens the picker')
+  const m3Row = Array.from(stagedPopover.querySelectorAll<HTMLButtonElement>('button.popover-item[title^="faux/"]'))
+    .find((btn) => btn.title === 'faux/m3')
+  assert.ok(m3Row !== undefined)
+  await act(async () => {
+    m3Row!.click()
+  })
+  assert.equal(patched.length, 1, 'staging a model fires no patch')
+  assert.ok(document.body.querySelector('.composer-model-popover') !== null, 'staging keeps the popover open')
+  assert.equal(m3Row!.getAttribute('aria-current'), 'true', 'the staged row is marked current')
+  const maxChip = Array.from(stagedPopover.querySelectorAll<HTMLButtonElement>('.composer-model-apply .segmented-control-btn'))
     .find((btn) => btn.textContent?.trim() === 'max')
-  assert.ok(maxChip !== undefined, 'm3 thinking levels render inside the still-open popover')
+  assert.ok(maxChip !== undefined, 'the apply bar shows the staged model levels')
   await act(async () => {
     maxChip!.click()
   })
   assert.equal(patched.length, 2)
-  assert.deepEqual(patched[1], { id: 2, body: { thinkingLevel: 'max' } })
-  assert.ok(document.body.querySelector('.composer-model-popover') !== null, 'a level pick keeps the popover open')
-
-  // Clicking the model already shown (optimistic preview) acts as "confirm" and closes; the
-  // focus returns to the current panel Composer textarea
-  await act(async () => {
-    modelBtns[2]!.click()
-  })
-  assert.equal(patched.length, 2, 'the confirm click fires no extra patch')
-  assert.ok(document.body.querySelector('.composer-model-popover') === null, 'clicking the already-shown model closes the picker')
+  assert.deepEqual(patched[1], { id: 2, body: { model: 'faux/m3', thinkingLevel: 'max' } }, 'a level chip applies model + level in one patch')
+  assert.ok(document.body.querySelector('.composer-model-popover') === null, 'the apply closes the popover')
   await waitForCondition(() => document.activeElement === splitTa)
-  assert.ok(document.activeElement === splitTa, 'focus returns to the current panel Composer textarea after close')
+
+  // Reopen: the "use default level" button applies the staged model without a level override
+  await act(async () => {
+    window.dispatchEvent(new CustomEvent(HELMX_SHORTCUT_EVENT, { detail: { action: 'toggle-model-picker', panel: 'split' } }))
+  })
+  const defaultPopover = document.body.querySelector<HTMLElement>('.composer-model-popover')
+  assert.ok(defaultPopover !== null)
+  const m1Row = Array.from(defaultPopover.querySelectorAll<HTMLButtonElement>('button.popover-item[title^="faux/"]'))
+    .find((btn) => btn.title === 'faux/m1')
+  assert.ok(m1Row !== undefined)
+  await act(async () => {
+    m1Row!.click()
+  })
+  const defaultBtn = Array.from(defaultPopover.querySelectorAll<HTMLButtonElement>('.composer-model-default-btn'))
+    .find((btn) => btn.textContent?.includes('Use default level'))
+  assert.ok(defaultBtn !== undefined, 'the apply bar offers the default-level action')
+  await act(async () => {
+    defaultBtn!.click()
+  })
+  assert.equal(patched.length, 3)
+  assert.deepEqual(patched[2], { id: 2, body: { model: 'faux/m1' } }, 'the default-level button applies the model alone')
+  assert.ok(document.body.querySelector('.composer-model-popover') === null)
+
+  // Reopen: Esc discards the staged candidate without any patch
+  await act(async () => {
+    window.dispatchEvent(new CustomEvent(HELMX_SHORTCUT_EVENT, { detail: { action: 'toggle-model-picker', panel: 'split' } }))
+  })
+  const cancelPopover = document.body.querySelector<HTMLElement>('.composer-model-popover')
+  assert.ok(cancelPopover !== null)
+  const cancelRow = Array.from(cancelPopover.querySelectorAll<HTMLButtonElement>('button.popover-item[title^="faux/"]'))
+    .find((btn) => btn.title === 'faux/m1')
+  await act(async () => {
+    cancelRow!.click()
+  })
+  await act(async () => {
+    cancelPopover.querySelector('input[aria-label="Search models"]')!.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }),
+    )
+  })
+  assert.equal(patched.length, 3, 'Esc cancels the staged candidate with no patch')
+  assert.ok(document.body.querySelector('.composer-model-popover') === null, 'Esc closes the picker')
+  await waitForCondition(() => document.activeElement === splitTa)
 
   // Ctrl+L again reopens; one more Ctrl+L closes and returns focus
   await act(async () => {
@@ -910,14 +956,12 @@ test('ModelPickerControl filters unavailable and disabled models at runtime; the
       <HostStoreProviders value={store}>
         <ModelPickerControl
           effectiveModel="faux/enabled-model"
-          selectedModel={undefined}
           activeThinkingLevel="off"
           resetLabel="跟随默认"
           resetTitle="Restore defaults"
           buttonTitle="Switch model"
-          onPickModel={() => {}}
+          onApply={() => {}}
           onResetDefault={() => {}}
-          onPickThinking={() => {}}
         />
       </HostStoreProviders>,
     )
