@@ -31,7 +31,7 @@ import {
   resolveTasksConfig,
   type TaskRecord,
 } from '../src/tasks.js'
-import { assertDependenciesValid, recoverInterruptedStartups } from '../src/tasks/store.js'
+import { assertDependenciesValid, recoverInterruptedStartups, recoverKickoffMarkers } from '../src/tasks/store.js'
 import { activeTaskSection, buildMergeClosingPrompt, buildTaskKickoffPrompt } from '../src/tasks/prompts.js'
 import { filterTaskToolsForTurn, shouldMarkStalled, subtreeHasWorkingOrBlocked } from '../src/tasks/hooks.js'
 
@@ -296,6 +296,27 @@ test('tasks-unit7b: restart recovery rolls back interrupted two-phase startups h
   assert.equal(draft.tasks['T-1']!.column, 'in_progress')
   assert.equal(draft.tasks['T-3']!.column, 'backlog')
   assert.equal(draft.tasks['T-3']!.silenceState, undefined)
+})
+
+test('tasks-unit7c: kickoff marker recovery marks undelivered for live tasks only, never auto-delivers', { timeout: 60_000 }, () => {
+  const draft = {
+    nextSeq: 9,
+    tasks: {
+      // in_progress + bound + marker pending -> honestly marked undelivered (board shows "resume")
+      'T-1': makeTask({ id: 'T-1', column: 'in_progress', conversationId: 11, kickoffPending: true }),
+      // backlog residue (e.g. rolled back concurrently): marker cleared, no false undelivered flag
+      'T-2': makeTask({ id: 'T-2', column: 'backlog', kickoffPending: true }),
+      // healthy task: no marker, untouched
+      'T-3': makeTask({ id: 'T-3', column: 'in_progress', conversationId: 13 }),
+    },
+  }
+  const marked = recoverKickoffMarkers(draft)
+  assert.deepEqual(marked, ['T-1'])
+  assert.equal(draft.tasks['T-1']!.kickoffPending, undefined)
+  assert.equal(draft.tasks['T-1']!.kickoffUndelivered, true)
+  assert.equal(draft.tasks['T-2']!.kickoffPending, undefined)
+  assert.equal(draft.tasks['T-2']!.kickoffUndelivered, undefined)
+  assert.equal(draft.tasks['T-3']!.kickoffUndelivered, undefined)
 })
 
 test('tasks-unit8: HelmxError contract sanity for store validators', { timeout: 60_000 }, () => {

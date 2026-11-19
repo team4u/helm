@@ -31,10 +31,9 @@ import {
   type TaskStoreDoc,
   type TasksConfig,
 } from './tasks/contracts.js'
-import { createTasksStore, recoverInterruptedStartups } from './tasks/store.js'
+import { createTasksStore, recoverInterruptedStartups, recoverKickoffMarkers } from './tasks/store.js'
 import { registerTasksActions, type TasksRuntime } from './tasks/actions.js'
 import { onTasksConversationDeleted, registerTasksHooks } from './tasks/hooks.js'
-import { buildTaskKickoffPrompt } from './tasks/prompts.js'
 import { registerTasksUi } from './tasks/ui.js'
 import { asConversationDeletedEvent } from './tasks/contracts.js'
 
@@ -224,25 +223,16 @@ export function createTasksPlugin(): PluginDefinition {
               reportError(`孤儿执行会话 #${conv.id} 恢复检查失败`, err)
             }
           }
-          const reseededIds: string[] = []
-          for (const task of runtime.store.list()) {
-            if (task.column !== 'in_progress' || task.conversationId === undefined) continue
-            try {
-              const detail = await ctx.host.getConversationDetail(task.conversationId, { limit: 50 })
-              if (detail.entries.some((e) => e.kind === 'helmx.input')) continue
-              await ctx.host.submitInput(task.conversationId, buildTaskKickoffPrompt(task), {
-                origin: 'agent',
-                whenBusy: 'reject',
-                requestId: `${TASKS_PLUGIN_ID}:kickoff:${task.id}`,
-              })
-              reseededIds.push(task.id)
-            } catch (err) {
-              if (err instanceof HelmxError && err.code === 'not_found') continue
-              reportError(`任务 ${task.id} 恢复补投任务书失败（会话 #${task.conversationId}）`, err)
-            }
-          }
-          if (reseededIds.length > 0) {
-            console.error(`[tasks] 启动恢复：已向绑定会话补投任务书（${reseededIds.join(', ')}）`)
+          // 开工未送达恢复（#59-2 红线口径）：kickoffPending 持久标记的残留 = 投递未完成的事实源，
+          // 重启后仅落 kickoffUndelivered 呈现态供看板显示「开工未送达，点继续」——绝不向
+          // human-owned 会话自动提交任何输入（尊重用户 reset 清空的意图，也不事件自唤醒）；
+          // 显式继续由 resume_kickoff 动作承担（requestId 幂等：若实际已送达则内核去重跳过）。
+          const undeliveredIds = await runtime.store.enqueueMutation((draft) => recoverKickoffMarkers(draft))
+          if (undeliveredIds.length > 0) {
+            await runtime.flushRecords()
+            console.error(
+              `[tasks] 启动恢复：${undeliveredIds.length} 个任务的开工任务书未送达（${undeliveredIds.join(', ')}），看板已标记待用户显式继续（tasks resume-kickoff）`,
+            )
           }
           deletedUnsubscribe = ctx.host.onEvent('conversation.deleted', (payload) => {
             if (!active || shutdown) return

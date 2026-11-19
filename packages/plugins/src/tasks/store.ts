@@ -127,6 +127,26 @@ export function assertDependenciesValid(
 }
 
 /**
+ * 重启恢复（开工未送达，#59-2 红线口径）：kickoffPending 持久标记的残留 = 投递未完成的
+ * 事实源。仅落 kickoffUndelivered 呈现态供看板显示「开工未送达，点继续」——绝不向
+ * human-owned 会话自动提交；显式继续由 resume_kickoff 动作承担。非进行中或无绑定的
+ * 残留标记只清除不标记。返回受影响任务 ID 供诊断上报。
+ */
+export function recoverKickoffMarkers(draft: TaskStoreDoc): string[] {
+  const undelivered: string[] = []
+  for (const task of Object.values(draft.tasks)) {
+    if (task.kickoffPending !== true) continue
+    delete task.kickoffPending
+    if (task.column === 'in_progress' && task.conversationId !== undefined) {
+      task.kickoffUndelivered = true
+      task.updatedAt = Date.now()
+      undelivered.push(task.id)
+    }
+  }
+  return undelivered
+}
+
+/**
  * 重启恢复：启动中断任务回滚（in_progress 但执行会话尚未绑定——服务在两阶段启动的
  * 占位落盘与绑定之间重启）。诚实回滚 backlog 并记录原因，绝不假装在跑；返回受影响
  * 任务 ID 供诊断上报。

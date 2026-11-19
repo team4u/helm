@@ -78,6 +78,10 @@ export interface TaskRecord {
   reworkCount: number
   lastReworkFeedback?: string
   mergePending?: boolean
+  /** 任务书投递前落盘的持久标记（投递成功后清除；重启残留即「开工未送达」事实源）。 */
+  kickoffPending?: boolean
+  /** 重启恢复呈现态：开工任务书未送达，等待用户显式继续（resume_kickoff），绝不自动投递。 */
+  kickoffUndelivered?: boolean
   planApproval?: TaskPlanApproval
   /** 发起中的方案审批 Ask ID（新一轮发起前先 cancelAsk 旧的，防重试遗留 pending 卡）。 */
   pendingPlanAskId?: string
@@ -300,7 +304,7 @@ export function assertTaskRecord(value: unknown): TaskRecord {
       throw new HelmxError('tasks_doc_corrupt', `${where}.${key} 必须是字符串`, 500, { pluginId: TASKS_PLUGIN_ID })
     }
   }
-  for (const key of ['planFirst', 'autoMerge', 'autoStartOnUnblock', 'conversationMissing', 'mergePending', 'archived'] as const) {
+  for (const key of ['planFirst', 'autoMerge', 'autoStartOnUnblock', 'conversationMissing', 'mergePending', 'archived', 'kickoffPending', 'kickoffUndelivered'] as const) {
     const v = value[key]
     if (v !== undefined && typeof v !== 'boolean') {
       throw new HelmxError('tasks_doc_corrupt', `${where}.${key} 必须是布尔值`, 500, { pluginId: TASKS_PLUGIN_ID })
