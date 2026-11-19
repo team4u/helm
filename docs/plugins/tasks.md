@@ -38,6 +38,7 @@
 | `approve` | `helmx tasks approve <id>` | `task_approve` | `close_only`（默认）置 done + 会话换归档标签 + 自动解锁下游依赖；`merge_and_close` 置 `mergePending` 并向执行会话投递合并收尾指令 |
 | `rework` | `helmx tasks rework <id>` | `task_rework` | 打回返工：回 `in_progress`、`reworkCount + 1`、意见投回原会话（保留上下文与分支）；原会话被删时显式 `409 task_conversation_missing`（或 `recreateConversation: true` 重建，新会话收到任务书 + 返工意见两条输入） |
 | `request_plan_approval` | `helmx tasks request-plan-approval` | `task_request_plan_approval` | planFirst 方案审批（真实 AskDoc confirm 卡片，阻塞至用户作答）；批准决定持久化到 `planApproval` 后 `task_submit` 才放行 |
+| `resume_kickoff` | `helmx tasks resume-kickoff <id>` | — | 显式继续「开工未送达」的任务：向绑定会话重投任务书（requestId 幂等），清除标记；唯一重投路径，绝不自动触发 |
 | `archive` | `helmx tasks archive <id>` | — | 归档 backlog/done 卡（进行中拒 `409 task_in_progress`） |
 | `delete` | `helmx tasks delete <id>` | — | 删除任务记录（进行中且会话忙碌拒 `409 task_in_progress`；仍被其他任务 `dependsOn` 引用时拒 `409 task_dependency_referenced`，先解除引用）；绝不删除会话历史 |
 
@@ -107,7 +108,7 @@
 1. 串行 mutation 把任务占位为 `in_progress`（无 conversationId）并 `flush` 落盘——占位即计入并发额度，杜绝竞态双开会话；
 2. `createConversation`（内核自身持久化）→ 串行 mutation 绑定 `conversationId` + `startedAt`（flush）→ 投递任务书（requestId 按 taskId 幂等）；
 3. 任务书投递失败显式回滚：任务回 `backlog` 记 `lastError`（可重试 start），已建会话标 `task-archived` 保留现场，错误上抛绝不静默；
-4. 两阶段之间服务重启的三个兜底：启动时 `recoverInterruptedStartups` 把 `in_progress` 无绑定会话的残留任务诚实回滚 `backlog` 并在 `lastError` 记录原因（绝不假装在跑）；「绑定成功但任务书未被接纳」的窗口（绑定 flush 后、投递前崩溃）由启动恢复**补投任务书**兜底（requestId 按会话幂等，重复补投被内核去重）；「创建会话成功、绑定前崩溃」遗留的孤儿会话（task 标签 + 零输入 + 不绑任何任务）被启动恢复**贴 `task-archived` 收口并上报**（保留现场，绝不删除会话）。
+4. 两阶段之间服务重启的兜底（零自动投递红线）：任务书投递前落盘 `kickoffPending` 持久标记、成功后清除——重启时标记残留即「开工未送达」事实源，恢复仅置 `kickoffUndelivered` 呈现态（看板显示「开工未送达，点继续」，**绝不向 human-owned 会话自动提交任何输入**，用户 reset 清空上下文的意图同样得到尊重）；显式继续走 `resume_kickoff`（requestId 按会话幂等，若实际已送达则内核去重跳过，不可能重复投递）。`recoverInterruptedStartups` 把 `in_progress` 无绑定会话的残留任务诚实回滚 `backlog` 并记 `lastError`；「创建会话成功、绑定前崩溃」遗留的孤儿会话（task 标签 + 零输入 + 不绑任何任务）被启动恢复贴 `task-archived` 收口并上报（保留现场，绝不删除会话）。
 5. 初始任务书投递 `whenBusy: 'reject'`：新会话必 idle；若创建与投递之间被人类抢先输入（接管窗口），显式拒绝绝不串入。返工 / 合并指令为已存会话的授权投递，用 `followUp` 排队不打断在途输入，绝不用 steer。
 
 `rework` / `merge_and_close` 的意见与指令投递采用原子模式：状态变更与投递在同一串行 mutation 内，投递成功后才落盘；失败 draft 丢弃可干净重试，requestId 分别按 `reworkCount` / `submission.submittedAt`（无交付时 `reworkCount`）幂等（崩溃窗口内已投递的重试不重复投递）。rework 重建（`recreateConversation: true`）向新会话投递**单条合成任务书**（原 brief + 返工意见），不做 kickoff + 意见两条投递。`approve close_only` 与合并授权下的证据交付 `submit` 共用同一条终转链：`done` 核心事实先落盘（flush），衍生动作（会话换标签、下游接棒）失败容忍上报、不回滚验收事实。
@@ -131,7 +132,7 @@
 
 ## UI 贡献
 
-- `sidebarItem` `task-board`（`order: 5`，先于 App Center）：Rail 视图图标一步直达看板；
+- `sidebarItem` `task-board`（`order: 5`，先于 App Center；`quickEntry: true` 随宿主快捷入口体系直达）：Rail 视图图标一步直达看板；
 - `screen` `board`：`TaskBoardScreen` 全屏看板（四列 + 移动端清零流，由前端切片实现）；
 - `sidebarSection` `task-conversations`（`filterTag: task`）与 `task-archived-conversations`（`filterTag: task-archived`）：任务执行会话收口分组，默认折叠；
 - `toolView` `task-tool-card`：`task_create / task_start / task_submit / task_approve / task_rework` 的时间线活体回执卡。

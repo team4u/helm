@@ -23,6 +23,7 @@ export function registerTasksUi(ctx: HelmxPluginContext): void {
     icon: 'check-square',
     target: 'screen:builtin:tasks/board',
     order: 5,
+    quickEntry: true,
   })
 
   ctx.ui.screen({

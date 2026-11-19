@@ -405,6 +405,12 @@ async function launchTaskExecution(
       target.updatedAt = target.startedAt
       delete target.conversationMissing
     })
+    // 投递前落盘持久标记（flush）：投递成功后清除；「标记设置后、清除前」崩溃的重启残留
+    // 即 kickoffUndelivered 事实源（若实际已送达，用户显式重投会被 requestId 幂等去重，安全）。
+    await runtime.store.enqueueMutation((draft) => {
+      const target = draft.tasks[taskId]
+      if (target !== undefined && target.conversationId === created.id) target.kickoffPending = true
+    })
     await runtime.flushRecords()
     // 初始投递用 reject：新会话必 idle，若创建与投递之间被人类抢先输入（接管窗口），
     // 显式拒绝绝不串入；返工重建的合成任务书同用 reject。
@@ -412,6 +418,13 @@ async function launchTaskExecution(
       origin: 'agent',
       whenBusy: options?.delivery ?? 'reject',
       requestId: options?.requestId ?? `${TASKS_PLUGIN_ID}:kickoff:${taskId}`,
+    })
+    await runtime.store.enqueueMutation((draft) => {
+      const target = draft.tasks[taskId]
+      if (target !== undefined && target.kickoffPending === true) {
+        delete target.kickoffPending
+        target.updatedAt = Date.now()
+      }
     })
   } catch (err) {
     // 干净回滚：任务回待办记 lastError（flush 后可重试 start）；显式抛错。
@@ -1098,10 +1111,7 @@ export function registerTasksActions(ctx: HelmxPluginContext, runtime: TasksRunt
         // 或交付了 branch）即一步结单（用户已审过并显式授权，不要求第二次人工点击）；
         // 仅 verification 文本不构成证据（诚实汇报「合并失败」的验证文本不得自动结单），
         // 无证据维持 in_review 待人工复核。
-        const mergeEvidence =
-          task.mergePending === true &&
-          (input.merged === true || (input.branch !== undefined && input.branch.trim() !== ''))
-        if (mergeEvidence) {
+        if (task.mergePending === true && input.merged === true) {
           return { task, autoFinalized: true as const }
         }
         task.column = 'in_review'
@@ -1656,6 +1666,57 @@ export function registerTasksActions(ctx: HelmxPluginContext, runtime: TasksRunt
         throw new HelmxError('validation_error', 'conversationId 必填（会话外人工调用无法定位绑定任务）', 400, {})
       }
       return requestPlanApproval(ctx, runtime, input, conversationId, context.signal)
+    },
+  })
+
+  ctx.action({
+    id: 'resume_kickoff',
+    description:
+      'Explicitly re-deliver the kickoff briefing of a task marked kickoffUndelivered after a restart (user-driven continuation; never automatic). Idempotent via the original kickoff requestId.',
+    exposeAsTool: false,
+    cli: { command: ['tasks', 'resume-kickoff'], description: 'Re-deliver the undelivered kickoff of a task', positional: [{ field: 'taskId', required: true }] },
+    inputSchema: {
+      type: 'object',
+      properties: { taskId: taskIdSchema },
+      required: ['taskId'],
+      additionalProperties: false,
+    } as never,
+    outputSchema: { type: 'object' } as never,
+    handler: async (input: { taskId: string }, context) => {
+      assertPlannerAuthority(runtime, context, 'resume_kickoff')
+      return runtime.track('task:resume-kickoff', async () => {
+        const task = getTaskOrThrow(runtime, input.taskId)
+        if (task.kickoffUndelivered !== true) {
+          throw new HelmxError(
+            'validation_error',
+            `任务 ${task.id} 不在「开工未送达」状态（无需重投；常规继续请在执行会话内直接发言）`,
+            400,
+            { pluginId: TASKS_PLUGIN_ID, taskId: task.id },
+          )
+        }
+        if (task.conversationId === undefined || conversationLive(runtime, task.conversationId) === null) {
+          throw new HelmxError(
+            'task_conversation_missing',
+            `任务 ${task.id} 无有效执行会话，无法重投任务书（可 rework recreateConversation 重建）`,
+            409,
+            { pluginId: TASKS_PLUGIN_ID, taskId: task.id },
+          )
+        }
+        const conversationId = task.conversationId
+        await ctx.host.submitInput(conversationId, buildTaskKickoffPrompt(task), {
+          origin: 'agent',
+          whenBusy: 'followUp',
+          requestId: `${TASKS_PLUGIN_ID}:kickoff:${task.id}`,
+        })
+        await runtime.store.enqueueMutation((draft) => {
+          const target = draft.tasks[task.id]
+          if (target === undefined) return
+          delete target.kickoffUndelivered
+          delete target.kickoffPending
+          target.updatedAt = Date.now()
+        })
+        return { task: runtime.store.get(task.id)!, conversationId }
+      })
     },
   })
 

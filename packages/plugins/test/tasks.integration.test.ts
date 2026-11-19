@@ -410,9 +410,15 @@ test('tasks-int4: merge_and_close loop, dependency cycle rejection, blocked star
       assignee: [
         fauxAssistantMessage([fauxToolCall('task_submit', { summary: 'ok' })], { stopReason: 'toolUse' }),
         fauxAssistantMessage('done'),
-        // merge_and_close beat: merge, clean up, then submit again
+        // merge_and_close beat: merge, clean up, then submit again with the explicit declaration
         fauxAssistantMessage(
-          [fauxToolCall('task_submit', { summary: 'Merged to main, worktree cleaned, checks green', branch: 'feat/t-1' })],
+          [
+            fauxToolCall('task_submit', {
+              summary: 'Merged to main, worktree cleaned, checks green',
+              branch: 'feat/t-1',
+              merged: true,
+            }),
+          ],
           { stopReason: 'toolUse' },
         ),
         fauxAssistantMessage('Merged and cleaned up.'),
@@ -877,7 +883,7 @@ test('tasks-int8: dependency-referenced delete guard, force-disable drops the ac
   }
 })
 
-test('tasks-int9: approve quiescence guard (still-running refused, explicit confirmStopped path) and restart reseed of an un-delivered kickoff', { timeout: 60_000 }, async (t) => {
+test('tasks-int9: approve quiescence guard (still-running refused, explicit confirmStopped path) and restart zero-auto-delivery (reset intent preserved)', { timeout: 60_000 }, async (t) => {
   const env = await openTasksEnv(useTempDir(t, 'helmx-tasks-int9-'))
   try {
     const { kernel } = env.app
@@ -918,16 +924,28 @@ test('tasks-int9: approve quiescence guard (still-running refused, explicit conf
       (err: unknown) => err instanceof HelmxError && err.code === 'task_invalid_column' && err.status === 409,
     )
 
-    // Restart reseed: simulate the crash window (bound conversation, zero delivered inputs) via reset,
-    // then a plugin disable/enable cycle must re-deliver exactly one kickoff (requestId idempotent)
+    // Restart recovery (#59 red-line scope): a reset conversation (user-cleared history) must NEVER
+    // receive an automatic re-delivery (user reset intent preserved); a task whose kickoff was
+    // already delivered is NOT mis-marked undelivered, and resume_kickoff refuses it explicitly.
     await kernel.resetConversation(convId)
+    const inputsAfterReset = (await kernel.getConversationDetail(convId, { limit: 20 })).entries.filter(
+      (e) => e.kind === 'helmx.input',
+    ).length
     await kernel.plugins.disable(TASKS_PLUGIN_ID, { force: true })
     await kernel.plugins.enable(TASKS_PLUGIN_ID)
-    await kernel.waitForIdle(convId).catch(() => undefined)
-    const reseeded = await kernel.getConversationDetail(convId, { limit: 20 })
-    const reseedInputs = reseeded.entries.filter((e) => e.kind === 'helmx.input')
-    assert.equal(reseedInputs.length, 1, 'reseed delivers exactly one kickoff after restart')
-    assert.match(JSON.stringify(reseedInputs[0]?.model ?? reseedInputs[0]?.data ?? ''), /task_kickoff id=..T-1/)
+    await new Promise((r) => setTimeout(r, 500))
+    const afterRestart = await kernel.getConversationDetail(convId, { limit: 20 })
+    assert.equal(
+      afterRestart.entries.filter((e) => e.kind === 'helmx.input').length,
+      inputsAfterReset,
+      'restart must NOT add any input into the human-owned conversation (reset context intent preserved)',
+    )
+    const notMarked = await taskFromAction(env, 'T-1')
+    assert.equal(notMarked.kickoffUndelivered, undefined, 'already-delivered kickoff is never mis-marked')
+    await assert.rejects(
+      () => kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'resume_kickoff', { taskId: 'T-1' }),
+      (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
+    )
 
     // Explicit manual close of an in_progress (quiescent) task via confirmStamped proceeds to done
     const closed = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'approve', {
@@ -954,6 +972,8 @@ test('tasks-int10: create idempotency key, explicit merged declaration for merge
           { stopReason: 'toolUse' },
         ),
         fauxAssistantMessage('honest failure reported'),
+        fauxAssistantMessage([fauxToolCall('task_submit', { summary: 'branch delivered', branch: 'feat/t-1' })], { stopReason: 'toolUse' }),
+        fauxAssistantMessage('branch handed over'),
         fauxAssistantMessage([fauxToolCall('task_submit', { summary: 'merged cleanly', merged: true })], { stopReason: 'toolUse' }),
         fauxAssistantMessage('merged and closed'),
         fauxAssistantMessage('standing by'),
@@ -993,7 +1013,17 @@ test('tasks-int10: create idempotency key, explicit merged declaration for merge
     const afterFailure = await taskFromAction(env, taskId)
     assert.equal(afterFailure.column, 'in_review', 'honest merge-failure verification must not auto-close the task')
     assert.equal(afterFailure.mergePending, true, 'merge authorization stays pending until real evidence arrives')
-    // Reviewer re-issues the merge instruction; the assignee now declares merged: true -> one-step done
+    // Reviewer re-issues the merge instruction; a branch-only delivery still proves nothing (#59-3)
+    await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'approve', { taskId, mergeAction: 'merge_and_close' })
+    await kernel.waitForIdle(convId)
+    await waitFor(async () => {
+      const task = await taskFromAction(env, taskId)
+      return task.submission?.summary === 'branch delivered'
+    })
+    const branchOnly = await taskFromAction(env, taskId)
+    assert.equal(branchOnly.column, 'in_review', 'branch alone must not prove the merge happened')
+    assert.equal(branchOnly.mergePending, true, 'merge authorization stays pending')
+    // One more re-issue; the explicit merged: true declaration completes in one step
     await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'approve', { taskId, mergeAction: 'merge_and_close' })
     await kernel.waitForIdle(convId)
     await waitFor(async () => (await taskFromAction(env, taskId)).column === 'done')
