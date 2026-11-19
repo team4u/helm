@@ -38,11 +38,12 @@ import { after, before, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { createEnvFabric } from '../../kernel/src/env/fabric.js'
 import { runNativeSpawn, type NativeSpawnDeps } from '../../kernel/src/runtime/spawn.js'
-import { WorktreeAllocator, type ManagedWorktreeRecord } from '../src/workflow/worktree.js'
-import type { ManagedWorktreeHold } from '../src/workflow/worktree-store.js'
-import { extractWorkflowExecutionMeta } from '../src/contracts.js'
-import { WorktreeIsolation, type WorktreeIsolationDeps } from '../src/workflow/isolation.js'
+import { WorktreeAllocator, type ManagedWorktreeRecord } from '../src/worktree/worktree.js'
+import type { ManagedWorktreeHold } from '../src/worktree/worktree-store.js'
+import { extractWorkflowExecutionMeta, extractWorktreeExecutionMeta } from '../src/contracts.js'
+import { WorktreeIsolation, type WorktreeIsolationDeps } from '../src/worktree/isolation.js'
 import { createWorkflowPlugin } from '../src/workflow.js'
+import { createWorktreePlugin } from '../src/worktree.js'
 import { PluginHost, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
 import { createPluginHostBackendFixture } from '../../kernel/test/helpers/plugin-host-backend.js'
 import { ArtifactService, SecretStash } from '../../kernel/src/services/index.js'
@@ -167,14 +168,14 @@ async function openSpawnHarness(repoDir: string, dataDir: string): Promise<{
   // 的 runtime/worktrees 键与租约表同层嵌套在 worktree-state 下）。
   const nestedDocStore = {
     get<T>(key: string, initial: T): T {
-      const all = (docs.get('builtin:workflow:worktree-state') as Record<string, unknown> | undefined) ?? {}
+      const all = (docs.get('builtin:worktree:worktree-state') as Record<string, unknown> | undefined) ?? {}
       const raw = all[key]
       return raw === undefined ? initial : (structuredClone(raw) as T)
     },
     set<T>(key: string, value: T): void {
-      const all = (docs.get('builtin:workflow:worktree-state') as Record<string, unknown> | undefined) ?? {}
+      const all = (docs.get('builtin:worktree:worktree-state') as Record<string, unknown> | undefined) ?? {}
       all[key] = structuredClone(value)
-      docs.set('builtin:workflow:worktree-state', all)
+      docs.set('builtin:worktree:worktree-state', all)
     },
   }
   const allocator = new WorktreeAllocator({
@@ -223,16 +224,16 @@ async function openSpawnHarness(repoDir: string, dataDir: string): Promise<{
     },
     docStore: {
       // 与生产插件同构：worktree-state 文档嵌套全部 allocator/租约键
-      //（键名与 builtin:workflow 的 ctx.doc('worktree-state') 一致）。
+      //（键名与 builtin:worktree 的 ctx.doc('worktree-state') 一致）。
       get<T>(key: string, initial: T): T {
-        const all = (docs.get('builtin:workflow:worktree-state') as Record<string, unknown> | undefined) ?? {}
+        const all = (docs.get('builtin:worktree:worktree-state') as Record<string, unknown> | undefined) ?? {}
         const raw = all[key]
         return raw === undefined ? initial : (structuredClone(raw) as T)
       },
       set<T>(key: string, value: T): void {
-        const all = (docs.get('builtin:workflow:worktree-state') as Record<string, unknown> | undefined) ?? {}
+        const all = (docs.get('builtin:worktree:worktree-state') as Record<string, unknown> | undefined) ?? {}
         all[key] = structuredClone(value)
-        docs.set('builtin:workflow:worktree-state', all)
+        docs.set('builtin:worktree:worktree-state', all)
       },
       flush: async () => {},
     },
@@ -421,7 +422,7 @@ describe('原生 isolation: worktree 基础链路', { timeout: 60_000 }, () => {
       assert.equal(result, '任务完成')
 
       // onResolved：worktree 元数据回传（path/branch），path 位于同级 .helmx-worktrees。
-      const resolvedWt = resolved !== undefined ? extractWorkflowExecutionMeta(resolved).worktree : undefined
+      const resolvedWt = resolved !== undefined ? extractWorktreeExecutionMeta(resolved).worktree : undefined
       assert.ok(resolvedWt, 'onResolved 应回传 worktree 元数据')
       const wtPath = resolvedWt!.path
       const wtBranch = resolvedWt!.branch
@@ -467,7 +468,7 @@ describe('原生 isolation: worktree 基础链路', { timeout: 60_000 }, () => {
         isolation: 'worktree',
         gate: 'pwd > .helmx-gate-pwd.txt && test -f README.md',
         onResolved: (info: AgentExecutionInfo) => {
-          wtPath = extractWorkflowExecutionMeta(info).worktree?.path ?? ''
+          wtPath = extractWorktreeExecutionMeta(info).worktree?.path ?? ''
         },
       } as never)
       assert.ok(wtPath !== '', '应回传 worktree path')
@@ -623,7 +624,7 @@ describe('resume 续接绑定 worktree 的子会话', { timeout: 60_000 }, () =>
         isolation: 'worktree',
         onResolved: (info: AgentExecutionInfo) => {
           childId = info.conversationId ?? 0
-          firstWt = extractWorkflowExecutionMeta(info).worktree
+          firstWt = extractWorktreeExecutionMeta(info).worktree
         },
       } as never)
       assert.ok(childId > 0 && firstWt)
@@ -636,7 +637,7 @@ describe('resume 续接绑定 worktree 的子会话', { timeout: 60_000 }, () =>
         prompt: '续接',
         resume: String(childId),
         onResolved: (info: AgentExecutionInfo) => {
-          resumedWt = extractWorkflowExecutionMeta(info).worktree
+          resumedWt = extractWorktreeExecutionMeta(info).worktree
         },
       } as never)
       assert.equal(second, '续接完成')
@@ -734,7 +735,7 @@ describe('resume 续接绑定 worktree 的子会话', { timeout: 60_000 }, () =>
 
 
 /**
- * 经 builtin:workflow 插件工具执行 cleanup_worktree（真实插件内隔离能力：
+ * 经 builtin:worktree 插件工具执行 cleanup_worktree（真实插件内隔离能力：
  * 本地真实 git 端口 + 共享 worktree-state doc）。docs 与 spawn 夹具共享，
  * 使工具清理同一批受管记录。
  */
@@ -804,12 +805,12 @@ async function executeCleanupTool(
       // 插件 worktree-state doc 与 allocator/租约共享同一底层 Map（跨夹具
       // 可见）；其余键（records 等）独立初始值即可。
       get: <T>(key: string, initial: T): T => {
-        if (key !== 'builtin:workflow:worktree-state') return initial
+        if (key !== 'builtin:worktree:worktree-state') return initial
         const all = docs.get(key)
         return all === undefined ? initial : (structuredClone(all) as T)
       },
       set: (key: string, value: unknown) => {
-        if (key !== 'builtin:workflow:worktree-state') return
+        if (key !== 'builtin:worktree:worktree-state') return
         docs.set(key, value)
       },
       deletePlugin: () => {},
@@ -826,6 +827,7 @@ async function executeCleanupTool(
   })
   try {
     await host.register(createWorkflowPlugin())
+    await host.register(createWorktreePlugin())
     const result = (await host.executeTool('cleanup_worktree', input, { conversationId: 1 })) as {
       output?: Array<{ type: string; text?: string }>
       structuredOutput?: Record<string, unknown>
@@ -1060,14 +1062,14 @@ function bareAllocator(docs: Map<string, unknown>, extra?: { isPathInUse?: (node
     inspectPathUsage: (nodeId, path, signal) => bareFabricOf().inspectPathUsage(nodeId, path, signal),
     docStore: {
       get<T>(key: string, initial: T): T {
-        const all = (docs.get('builtin:workflow:worktree-state') as Record<string, unknown> | undefined) ?? {}
+        const all = (docs.get('builtin:worktree:worktree-state') as Record<string, unknown> | undefined) ?? {}
         const raw = all[key]
         return raw === undefined ? initial : (structuredClone(raw) as T)
       },
       set<T>(key: string, value: T): void {
-        const all = (docs.get('builtin:workflow:worktree-state') as Record<string, unknown> | undefined) ?? {}
+        const all = (docs.get('builtin:worktree:worktree-state') as Record<string, unknown> | undefined) ?? {}
         all[key] = structuredClone(value)
-        docs.set('builtin:workflow:worktree-state', all)
+        docs.set('builtin:worktree:worktree-state', all)
       },
     },
     ...(extra?.redact !== undefined ? { redact: extra.redact } : {}),
@@ -1077,7 +1079,7 @@ function bareAllocator(docs: Map<string, unknown>, extra?: { isPathInUse?: (node
 
 /** 从 docStore 读全部受管记录（原始落库内容断言；无文档时空数组）。 */
 function rawRecords(docs: Map<string, unknown>): ManagedWorktreeRecord[] {
-  const all = (docs.get('builtin:workflow:worktree-state') as Record<string, unknown> | undefined) ?? {}
+  const all = (docs.get('builtin:worktree:worktree-state') as Record<string, unknown> | undefined) ?? {}
   return ((all['runtime/worktrees'] as { records?: ManagedWorktreeRecord[] } | undefined)?.records ?? []) as ManagedWorktreeRecord[]
 }
 
@@ -1284,7 +1286,7 @@ describe('登记路径被替换/挪用：归属校验拒绝', { timeout: 60_000 
       // 模拟记录被外部篡改）。
       const wtRecords = rawRecords(docs)
       wtRecords.length = 0
-      const wtAll = (docs.get('builtin:workflow:worktree-state') as Record<string, unknown> | undefined) ?? {}
+      const wtAll = (docs.get('builtin:worktree:worktree-state') as Record<string, unknown> | undefined) ?? {}
       wtAll['runtime/worktrees'] = {
         version: 1,
         records: [
@@ -1296,7 +1298,7 @@ describe('登记路径被替换/挪用：归属校验拒绝', { timeout: 60_000 
           },
         ],
       }
-      docs.set('builtin:workflow:worktree-state', wtAll)
+      docs.set('builtin:worktree:worktree-state', wtAll)
       // 主仓手工建同名分支，使权威登记 branch 匹配后进入 main-worktree 检查。
       execFileSync('git', ['branch', 'helmx/spawn-fake1'], { cwd: repo })
       await assert.rejects(
@@ -1696,7 +1698,7 @@ describe('inspect 只读检视：成功输出脱敏与 diff 驱动隔离（真�
     try {
       const record = await allocator.allocate({ nodeId: 'local', sourceCwd: repo, parentConversationId: 1 })
       // 篡改登记基线为不存在的提交（模拟 gc / 历史改写后失效）。
-      const all = docs.get('builtin:workflow:worktree-state') as { 'runtime/worktrees'?: { records: ManagedWorktreeRecord[] } }
+      const all = docs.get('builtin:worktree:worktree-state') as { 'runtime/worktrees'?: { records: ManagedWorktreeRecord[] } }
       all['runtime/worktrees']!.records[0]!.baseCommit = 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef'
       await assert.rejects(
         () => allocator.inspect({ worktreeId: record.id }),
@@ -1762,7 +1764,7 @@ describe('inspect 受限采集上限（受控 exec 分块注入）', { timeout: 
     // 块边界刻意切在行中间：验证 lines 模式流式按行结算不受分块影响。
     stub.setChunkSize(7)
     const docs = new Map<string, unknown>()
-    docs.set('builtin:workflow:worktree-state', {
+    docs.set('builtin:worktree:worktree-state', {
       'runtime/worktrees': {
         version: 1,
         records: [
@@ -1792,7 +1794,7 @@ describe('inspect 受限采集上限（受控 exec 分块注入）', { timeout: 
       },
       docStore: {
         get<T>(key: string, initial: T): T {
-          const all = (docs.get('builtin:workflow:worktree-state') as Record<string, unknown> | undefined) ?? {}
+          const all = (docs.get('builtin:worktree:worktree-state') as Record<string, unknown> | undefined) ?? {}
           const raw = all[key]
           return raw === undefined ? initial : (structuredClone(raw) as T)
         },
@@ -1836,7 +1838,7 @@ describe('inspect 受限采集上限（受控 exec 分块注入）', { timeout: 
       return { output: '' }
     })
     const docs = new Map<string, unknown>()
-    docs.set('builtin:workflow:worktree-state', {
+    docs.set('builtin:worktree:worktree-state', {
       'runtime/worktrees': {
         version: 1,
         records: [
@@ -1866,7 +1868,7 @@ describe('inspect 受限采集上限（受控 exec 分块注入）', { timeout: 
       },
       docStore: {
         get<T>(key: string, initial: T): T {
-          const all = (docs.get('builtin:workflow:worktree-state') as Record<string, unknown> | undefined) ?? {}
+          const all = (docs.get('builtin:worktree:worktree-state') as Record<string, unknown> | undefined) ?? {}
           const raw = all[key]
           return raw === undefined ? initial : (structuredClone(raw) as T)
         },
@@ -2088,7 +2090,7 @@ describe('cleanup mergedInto 与参考提交优先级', { timeout: 60_000 }, () 
 
 /** 读取隔离层租约表原始落库内容。 */
 function leasesOf(docs: Map<string, unknown>): Record<string, { phase: string; worktreeId: string }> {
-  const all = (docs.get('builtin:workflow:worktree-state') as Record<string, unknown> | undefined) ?? {}
+  const all = (docs.get('builtin:worktree:worktree-state') as Record<string, unknown> | undefined) ?? {}
   return ((all['worktree-leases'] as Record<string, unknown> | undefined) ?? {}) as never
 }
 
@@ -2116,7 +2118,7 @@ describe('运行租约释放（原生子会话失败路径）', { timeout: 60_00
       const record = th.allocator.getForConversation(5)
       assert.ok(record, 'Worktree 记录保留（供下一轮 resume / cleanup）')
       assert.equal(record!.conversationId, 5)
-      const state = th.docs.get('builtin:workflow:worktree-state') as Record<string, unknown>
+      const state = th.docs.get('builtin:worktree:worktree-state') as Record<string, unknown>
       const bindings = state['worktree-agent-bindings'] as Record<string, { childId: number; parentConversationId: number }>
       assert.deepEqual(
         bindings['agent-rel-1'],
@@ -2208,11 +2210,11 @@ describe('运行租约释放（原生子会话失败路径）', { timeout: 60_00
       const record = th.allocator.getForConversation(childId)
       assert.ok(record)
       // 注入残留旧租约（模拟此前失败/中断轮次未收敛）。
-      const state = th.docs.get('builtin:workflow:worktree-state') as Record<string, unknown>
+      const state = th.docs.get('builtin:worktree:worktree-state') as Record<string, unknown>
       const leases = (state['worktree-leases'] as Record<string, unknown>) ?? {}
       leases['stale-token'] = { phase: 'running', info: { nodeId: 'local' }, worktreeId: record!.id, createdAt: 1 }
       state['worktree-leases'] = leases
-      th.docs.set('builtin:workflow:worktree-state', state)
+      th.docs.set('builtin:worktree:worktree-state', state)
       await assert.rejects(
         () => th.isolation.cleanup({ conversationId: childId }),
         (err: unknown) => {
@@ -2287,7 +2289,7 @@ describe('运行租约释放（原生子会话失败路径）', { timeout: 60_00
       th.mirrors.delete(notFoundId)
       th.markWorking(workingId)
 
-      const state = th.docs.get('builtin:workflow:worktree-state') as Record<string, unknown>
+      const state = th.docs.get('builtin:worktree:worktree-state') as Record<string, unknown>
       state['worktree-leases'] = {
         'tok-pending-native': { phase: 'pending', info: { nodeId: 'local' }, worktreeId: idleRec.id, createdAt: 1 },
         'tok-idle-native': { phase: 'running', info: { nodeId: 'local', conversationId: idleId }, worktreeId: idleRec.id, createdAt: 2 },
@@ -2296,7 +2298,7 @@ describe('运行租约释放（原生子会话失败路径）', { timeout: 60_00
         'tok-ext-pending': { phase: 'pending', info: { nodeId: 'local', executionId: 'herdr-pane-9' }, worktreeId: extRec.id, createdAt: 5 },
         'tok-ext-running': { phase: 'running', info: { nodeId: 'local', conversationId: extId, executionId: 'herdr-pane-10' }, worktreeId: extRec.id, createdAt: 6 },
       }
-      th.docs.set('builtin:workflow:worktree-state', state)
+      th.docs.set('builtin:worktree:worktree-state', state)
 
       await th.isolation.reconcileStoppedNativeLeases()
 
@@ -2334,11 +2336,13 @@ describe('运行租约释放（原生子会话失败路径）', { timeout: 60_00
 // ManagedWorktreeHold + acquire_worktree / release_worktree_hold + inUse
 // ---------------------------------------------------------------------------
 
-/** 构造完整挂载 builtin:workflow 的真实 PluginHost，用于测试隐藏动作与 inUse 门禁。 */
+/** 构造完整挂载 builtin:workflow + builtin:worktree 的真实 PluginHost，用于测试隐藏动作与 inUse 门禁。 */
 async function openWorkflowPluginHost(options: {
   repoDir: string
   dataDir: string
   docs: Map<string, unknown>
+  /** 缺省双插件；'worktree-only' 验证独立注册（与 builtin:workflow 零静态依赖）。 */
+  plugins?: 'both' | 'worktree-only'
   stash?: SecretStash
   onResolveSpawnTarget?: (input: {
     parentConversationId: number
@@ -2442,7 +2446,10 @@ async function openWorkflowPluginHost(options: {
       flush: async () => {},
     },
   })
-  await host.register(createWorkflowPlugin())
+  // 注册顺序与 @helmx/hub 组合根一致：workflow 先于 worktree（runtime.started
+  // 监听器按注册顺序逐个 await）；'worktree-only' 模式验证独立注册。
+  if (options.plugins !== 'worktree-only') await host.register(createWorkflowPlugin())
+  await host.register(createWorktreePlugin())
   return {
     host,
     close: async () => {
@@ -2460,7 +2467,7 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
     const docs = new Map<string, unknown>()
     const { host, close } = await openWorkflowPluginHost({ repoDir: repo, dataDir: join(dir, 'data'), docs })
     try {
-      const actions = host.listActions().filter((a) => a.pluginId === 'builtin:workflow')
+      const actions = host.listActions().filter((a) => a.pluginId === 'builtin:worktree')
       const acquireManifest = actions.find((a) => a.id === 'acquire_worktree')
       const releaseManifest = actions.find((a) => a.id === 'release_worktree_hold')
       assert.ok(acquireManifest, '应注册 acquire_worktree 动作')
@@ -2469,6 +2476,17 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
       assert.equal(releaseManifest!.cli?.hidden, true, 'release_worktree_hold 必须隐藏 CLI 映射')
       assert.ok(!acquireManifest!.exposeAsTool, 'acquire_worktree 不得暴露为独立模型工具')
       assert.ok(!releaseManifest!.exposeAsTool, 'release_worktree_hold 不得暴露为独立模型工具')
+      // 内部跨插件动作不进模型 <available_actions> 目录（exposeToPrompt: false；
+      // 内核 renderActionDirectory 对该标记跳过，此处锁定登记事实防回归）。
+      assert.equal(acquireManifest!.exposeToPrompt, false, 'acquire_worktree 不得出现在模型动作目录')
+      assert.equal(releaseManifest!.exposeToPrompt, false, 'release_worktree_hold 不得出现在模型动作目录')
+      // 公开动作仍在目录（未显式关闭 exposeToPrompt）。
+      const publicActions = host.listActions().filter((a) => a.pluginId === 'builtin:worktree')
+      for (const id of ['cleanup_worktree', 'list_worktrees', 'inspect_worktree']) {
+        const manifest = publicActions.find((a) => a.id === id)
+        assert.ok(manifest !== undefined, `应注册 ${id} 动作`)
+        assert.notEqual(manifest!.exposeToPrompt, false, `${id} 是公开动作，不得关闭目录暴露`)
+      }
 
       const toolNames = host.listTools().map((t) => t.name)
       assert.ok(!toolNames.includes('acquire_worktree'))
@@ -2483,7 +2501,7 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
         { conversationId: 2, parentConversationId: 1, bogus: true, hold: { pluginId: 'p', holdId: 'h', label: 'l' } },
       ]) {
         await assert.rejects(
-          () => host.invokeAction('builtin:workflow', 'acquire_worktree', badAcquire),
+          () => host.invokeAction('builtin:worktree', 'acquire_worktree', badAcquire),
           (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
         )
       }
@@ -2494,7 +2512,7 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
         { worktreeId: 'local:/wt', pluginId: 'p', holdId: 'h', extra: true },
       ]) {
         await assert.rejects(
-          () => host.invokeAction('builtin:workflow', 'release_worktree_hold', badRelease),
+          () => host.invokeAction('builtin:worktree', 'release_worktree_hold', badRelease),
           (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
         )
       }
@@ -2525,7 +2543,7 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
     })
     try {
       const headCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim()
-      const acquired = (await host.invokeAction('builtin:workflow', 'acquire_worktree', {
+      const acquired = (await host.invokeAction('builtin:worktree', 'acquire_worktree', {
         conversationId: 12,
         parentConversationId: 1,
         profileId: 'coder',
@@ -2571,7 +2589,7 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
         { path: acquired.path, force: true },
       ]) {
         await assert.rejects(
-          () => host.invokeAction('builtin:workflow', 'cleanup_worktree', selector),
+          () => host.invokeAction('builtin:worktree', 'cleanup_worktree', selector),
           (err: unknown) => {
             assert.ok(err instanceof HelmxError)
             assert.equal(err.code, 'worktree_in_use')
@@ -2596,9 +2614,11 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
       )
       assert.ok(existsSync(acquired.path), '持锁期间目录绝不可被移除')
 
-      // builtin:workflow 的 inUse() 上报持锁活跃工作树，非 force 停用显式返 409 plugin_in_use。
+      // builtin:worktree 的 inUse() 上报持锁活跃工作树，非 force 停用显式返 409 plugin_in_use；
+      // 持锁不阻塞 builtin:workflow 停用（两个插件零静态依赖）。
+      await assert.doesNotReject(() => host.disable('builtin:workflow').then(() => host.enable('builtin:workflow')))
       await assert.rejects(
-        () => host.disable('builtin:workflow'),
+        () => host.disable('builtin:worktree'),
         (err: unknown) => {
           assert.ok(err instanceof HelmxError)
           assert.equal(err.code, 'plugin_in_use')
@@ -2612,7 +2632,7 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
       )
 
       // release_worktree_hold：未知 worktreeId 幂等返 { released: false }。
-      const missingRelease = (await host.invokeAction('builtin:workflow', 'release_worktree_hold', {
+      const missingRelease = (await host.invokeAction('builtin:worktree', 'release_worktree_hold', {
         worktreeId: 'local:/nonexistent-wt',
         pluginId: 'builtin:superagent',
         holdId: 'grp-alpha:author',
@@ -2625,7 +2645,7 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
         { worktreeId: acquired.worktreeId, pluginId: 'builtin:superagent', holdId: 'grp-alpha:verifier' },
       ]) {
         await assert.rejects(
-          () => host.invokeAction('builtin:workflow', 'release_worktree_hold', mismatch),
+          () => host.invokeAction('builtin:worktree', 'release_worktree_hold', mismatch),
           (err: unknown) =>
             err instanceof HelmxError && err.code === 'worktree_hold_mismatch' && err.status === 409,
         )
@@ -2634,7 +2654,7 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
 
       // release_worktree_hold：精确匹配清除 hold 并 flush；重复调用幂等返 { released: false }。
       const flushesBeforeRelease = flushes
-      const released = (await host.invokeAction('builtin:workflow', 'release_worktree_hold', {
+      const released = (await host.invokeAction('builtin:worktree', 'release_worktree_hold', {
         worktreeId: acquired.worktreeId,
         pluginId: 'builtin:superagent',
         holdId: 'grp-alpha:author',
@@ -2643,7 +2663,7 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
       assert.ok(flushes > flushesBeforeRelease, '释放 hold 必须触发 docStore.flush')
       assert.equal(rawRecords(docs).find((r) => r.id === acquired.worktreeId)?.hold, undefined)
 
-      const releasedAgain = (await host.invokeAction('builtin:workflow', 'release_worktree_hold', {
+      const releasedAgain = (await host.invokeAction('builtin:worktree', 'release_worktree_hold', {
         worktreeId: acquired.worktreeId,
         pluginId: 'builtin:superagent',
         holdId: 'grp-alpha:author',
@@ -2653,11 +2673,11 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
       // 释放后：非 force 仍受脏文件保护（worktree_dirty），传 force: true 可正常清理（Linux）且插件可正常停用。
       if (PROCESS_SCAN_ON) {
         await assert.rejects(
-          () => host.invokeAction('builtin:workflow', 'cleanup_worktree', { worktreeId: acquired.worktreeId }),
+          () => host.invokeAction('builtin:worktree', 'cleanup_worktree', { worktreeId: acquired.worktreeId }),
           (err: unknown) => err instanceof HelmxError && err.code === 'worktree_dirty' && err.status === 409,
         )
         try {
-          const cleaned = (await host.invokeAction('builtin:workflow', 'cleanup_worktree', {
+          const cleaned = (await host.invokeAction('builtin:worktree', 'cleanup_worktree', {
             worktreeId: acquired.worktreeId,
             force: true,
             deleteBranch: true,
@@ -2672,9 +2692,65 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
           )
         }
       }
-      await host.disable('builtin:workflow')
-      const summary = host.list().find((p) => p.id === 'builtin:workflow')
-      assert.equal(summary?.enabled, false, '锁释放后无 force 停用 builtin:workflow 应放行')
+      await host.disable('builtin:worktree')
+      const summary = host.list().find((p) => p.id === 'builtin:worktree')
+      assert.equal(summary?.enabled, false, '锁释放后无 force 停用 builtin:worktree 应放行')
+    } finally {
+      await close()
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('独立注册：只挂 builtin:worktree（不注册 builtin:workflow）时动作、acquire/release 与停用门禁同样正常', {
+    timeout: 60_000,
+  }, async () => {
+    const dir = join(rootDir, 't22-standalone')
+    const repo = makeGitRepo(join(dir, 'repo'))
+    const docs = new Map<string, unknown>()
+    const { host, close } = await openWorkflowPluginHost({
+      repoDir: repo,
+      dataDir: join(dir, 'data'),
+      docs,
+      plugins: 'worktree-only',
+    })
+    try {
+      // 零静态依赖：worktree 独立注册即可用（workflow 未注册不影响动作面）。
+      const ids = host.listActions().filter((a) => a.pluginId === 'builtin:worktree').map((a) => a.id).sort()
+      assert.deepEqual(ids, ['acquire_worktree', 'cleanup_worktree', 'inspect_worktree', 'list_worktrees', 'release_worktree_hold'])
+      assert.ok(host.listTools().some((t) => t.name === 'cleanup_worktree'), '独立注册即提供 cleanup_worktree 工具')
+
+      const acquired = (await host.invokeAction('builtin:worktree', 'acquire_worktree', {
+        conversationId: 30,
+        parentConversationId: 1,
+        requestCwd: repo,
+        hold: { pluginId: 'builtin:superagent', holdId: 'solo:worker', label: 'standalone hold' },
+      })) as { worktreeId: string; path: string }
+      await assert.rejects(
+        () => host.disable('builtin:worktree'),
+        (err: unknown) => err instanceof HelmxError && err.code === 'plugin_in_use' && err.status === 409,
+      )
+      const released = (await host.invokeAction('builtin:worktree', 'release_worktree_hold', {
+        worktreeId: acquired.worktreeId,
+        pluginId: 'builtin:superagent',
+        holdId: 'solo:worker',
+      })) as { released: boolean }
+      assert.equal(released.released, true)
+      try {
+        const cleaned = (await host.invokeAction('builtin:worktree', 'cleanup_worktree', {
+          worktreeId: acquired.worktreeId,
+          force: true,
+          deleteBranch: true,
+        })) as { removed: boolean; branchDeleted: boolean }
+        assert.equal(cleaned.removed, true)
+        assert.equal(cleaned.branchDeleted, true)
+      } catch (error) {
+        assert.ok(
+          error instanceof HelmxError && error.code === 'worktree_process_check_failed',
+          `独立注册清理只允许环境 /proc 限制，实得：${error instanceof HelmxError ? error.code : String(error)}`,
+        )
+      }
+      await host.disable('builtin:worktree')
+      assert.equal(host.list().find((p) => p.id === 'builtin:worktree')?.enabled, false, '独立注册下锁释放后停用放行')
     } finally {
       await close()
       rmSync(dir, { recursive: true, force: true })
@@ -2714,7 +2790,7 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
       assert.equal(th.isolation.isPathInUse('local', acquired.path), false, '释放锁后不再占用')
 
       // 若记录已为 removed 状态，即使残留 hold 也不再视为活跃占用。
-      const state = th.docs.get('builtin:workflow:worktree-state') as {
+      const state = th.docs.get('builtin:worktree:worktree-state') as {
         'runtime/worktrees': { version: 1; records: Array<ManagedWorktreeRecord> }
       }
       state['runtime/worktrees'].records[0] = {
@@ -2722,7 +2798,7 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
         status: 'removed',
         hold: { pluginId: 'builtin:superagent', holdId: 'grp-2:worker-1', label: 'stale', acquiredAt: 1 },
       }
-      th.docs.set('builtin:workflow:worktree-state', state)
+      th.docs.set('builtin:worktree:worktree-state', state)
       assert.equal(th.isolation.isPathInUse('local', acquired.path), false, 'removed 记录不得计入占用')
     } finally {
       await th.close()
@@ -2753,7 +2829,7 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
       ]) {
         await assert.rejects(
           () =>
-            host.invokeAction('builtin:workflow', 'acquire_worktree', {
+            host.invokeAction('builtin:worktree', 'acquire_worktree', {
               conversationId: 30,
               parentConversationId: 1,
               hold: badHold,
@@ -2771,7 +2847,7 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
       assert.equal(existsSync(join(dir, '.helmx-worktrees')), false, '机密前置拦截不得创建孤儿 worktree 目录')
 
       // 2) hold.label 含机密：写入前经 redact 脱敏，落盘原始 JSON 零明文泄漏。
-      const acquired = (await host.invokeAction('builtin:workflow', 'acquire_worktree', {
+      const acquired = (await host.invokeAction('builtin:worktree', 'acquire_worktree', {
         conversationId: 31,
         parentConversationId: 1,
         hold: {
@@ -2780,24 +2856,24 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
           label: `group ${secretVal} author`,
         },
       })) as { worktreeId: string; path: string }
-      const rawJson = JSON.stringify(docs.get('builtin:workflow:worktree-state'))
+      const rawJson = JSON.stringify(docs.get('builtin:worktree:worktree-state'))
       assert.ok(!rawJson.includes(secretVal), 'worktree-state 原始落库 JSON 不得含明文机密')
       const storedRecord = rawRecords(docs).find((r) => r.id === acquired.worktreeId)!
       assert.equal(storedRecord.hold?.label, `group ${placeholder} author`)
 
       // 3) 持久化文档中 hold 结构损坏：读取/停用检查显式报错（worktree_doc_corrupted -> plugin_in_use_check_failed），绝不静默放行。
-      const corruptedState = structuredClone(docs.get('builtin:workflow:worktree-state')) as {
+      const corruptedState = structuredClone(docs.get('builtin:worktree:worktree-state')) as {
         'runtime/worktrees': { version: 1; records: Array<Record<string, unknown>> }
       }
       corruptedState['runtime/worktrees'].records[0]!['hold'] = { pluginId: '', holdId: 'x', label: 'y', acquiredAt: -1 }
-      docs.set('builtin:workflow:worktree-state', corruptedState)
+      docs.set('builtin:worktree:worktree-state', corruptedState)
 
       await assert.rejects(
-        () => host.invokeAction('builtin:workflow', 'list_worktrees', {}),
+        () => host.invokeAction('builtin:worktree', 'list_worktrees', {}),
         (err: unknown) => err instanceof HelmxError && err.code === 'worktree_doc_corrupted' && err.status === 500,
       )
       await assert.rejects(
-        () => host.disable('builtin:workflow'),
+        () => host.disable('builtin:worktree'),
         (err: unknown) => err instanceof HelmxError && err.code === 'plugin_in_use_check_failed' && err.status === 500,
       )
     } finally {
@@ -2854,7 +2930,7 @@ describe('pruneConversation：裁剪绑定与已 removed 记录，绝不删 acti
       const rec3 = th.isolation.getForConversation(c3)!
 
       // 把 rec1 与一条被 fail-closed 租约引用的记录标为 removed；rec2 与 rec3 保持 active。
-      const state = th.docs.get('builtin:workflow:worktree-state') as Record<string, unknown>
+      const state = th.docs.get('builtin:worktree:worktree-state') as Record<string, unknown>
       const wtDoc = state['runtime/worktrees'] as { version: 1; records: ManagedWorktreeRecord[] }
       wtDoc.records = wtDoc.records.map((r) =>
         r.id === rec1.id ? { ...r, status: 'removed', removedAt: Date.now() } : r,
@@ -2887,7 +2963,7 @@ describe('pruneConversation：裁剪绑定与已 removed 记录，绝不删 acti
           createdAt: 2,
         },
       }
-      th.docs.set('builtin:workflow:worktree-state', state)
+      th.docs.set('builtin:worktree:worktree-state', state)
 
       // 1) 无关会话裁剪：完全无副作用
       th.isolation.pruneConversation(99999)
@@ -2895,7 +2971,7 @@ describe('pruneConversation：裁剪绑定与已 removed 记录，绝不删 acti
 
       // 2) 按子会话 c1 裁剪：ag-c1 绑定删除、rec1（removed）删除；leasedRemoved 因仍有租约保留；c2/c3 不变
       th.isolation.pruneConversation(c1)
-      let afterState = th.docs.get('builtin:workflow:worktree-state') as Record<string, unknown>
+      let afterState = th.docs.get('builtin:worktree:worktree-state') as Record<string, unknown>
       let bindings = afterState['worktree-agent-bindings'] as Record<string, unknown>
       assert.equal(bindings['ag-c1'], undefined, '子会话匹配时应清理 agentId 绑定')
       assert.ok(bindings['ag-c2'] !== undefined, '同父其他子会话绑定此时保留')
@@ -2907,7 +2983,7 @@ describe('pruneConversation：裁剪绑定与已 removed 记录，绝不删 acti
 
       // 3) 按父会话 10 裁剪：ag-c2 绑定因父会话匹配被清理，但 active 的 rec2 与全部租约严格保留
       th.isolation.pruneConversation(10)
-      afterState = th.docs.get('builtin:workflow:worktree-state') as Record<string, unknown>
+      afterState = th.docs.get('builtin:worktree:worktree-state') as Record<string, unknown>
       bindings = afterState['worktree-agent-bindings'] as Record<string, unknown>
       assert.equal(bindings['ag-c2'], undefined, '父会话匹配时应清理其名下 agentId 绑定')
       assert.ok(bindings['ag-c3'] !== undefined, '无关父会话 20 的绑定保留')
@@ -3120,7 +3196,7 @@ describe('WorktreeIsolation：外部运行时租约与并发窗口保护', { tim
           async (final) => {
             ;(final as AgentSpawnRequest).onResolved?.({
               nodeId: 'local',
-              meta: { 'builtin:workflow': { worktree: { path: '/wt/ext-1', branch: 'helmx/spawn-ext1' } } },
+              meta: { 'builtin:worktree': { worktree: { path: '/wt/ext-1', branch: 'helmx/spawn-ext1' } } },
               conversationId: 7,
               executionId: 'exec-1',
             })
@@ -3129,7 +3205,7 @@ describe('WorktreeIsolation：外部运行时租约与并发窗口保护', { tim
         )
         assert.equal(result, 'ext-done')
         assert.ok(
-          resolved !== undefined && extractWorkflowExecutionMeta(resolved).worktree?.id,
+          resolved !== undefined && extractWorktreeExecutionMeta(resolved).worktree?.id,
           'enriched worktree 元数据应回传调用方',
         )
         assert.equal(leaseCount(handle.docStore), 0, '结算后租约必须释放（settle 写重试整页落盘）')
@@ -3163,8 +3239,10 @@ describe('WorktreeIsolation：外部运行时租约与并发窗口保护', { tim
           conversationId: 7,
           executionId: 'exec-ns-1',
           meta: {
-            'builtin:workflow': {
+            'builtin:worktree': {
               worktree: { path: '/wt/ext-ns', branch: 'helmx/spawn-extns' },
+            },
+            'builtin:workflow': {
               controls: { steer: { pluginId: 'ext:demo', actionId: 'steer' } },
             },
             'other-plugin': { keep: ['ns', { roundtrip: true }] },
@@ -3177,12 +3255,12 @@ describe('WorktreeIsolation：外部运行时租约与并发窗口保护', { tim
     )
     assert.equal(result, 'ext-done')
     assert.ok(resolved !== undefined, 'onResolved 应回传 enriched 信息')
-    const wfMeta = extractWorkflowExecutionMeta(resolved)
-    assert.equal(wfMeta.worktree?.id, 'local:/wt/ext-ns', 'worktree 应被统一登记并回填稳定 id')
+    const wtMeta = extractWorktreeExecutionMeta(resolved)
+    assert.equal(wtMeta.worktree?.id, 'local:/wt/ext-ns', 'worktree 应被统一登记并回填稳定 id')
     assert.deepEqual(
-      wfMeta.controls,
+      extractWorkflowExecutionMeta(resolved).controls,
       { steer: { pluginId: 'ext:demo', actionId: 'steer' } },
-      'worktree 增强不得丢失同命名空间的 controls（steer 委托引用）',
+      'worktree 增强不得丢失正交 workflow 命名空间的 controls（steer 委托引用）',
     )
     assert.deepEqual(
       resolved.meta?.['other-plugin'],
@@ -3190,8 +3268,8 @@ describe('WorktreeIsolation：外部运行时租约与并发窗口保护', { tim
       '其他插件的命名空间必须原样保留（合并而非覆盖）',
     )
     assert.ok(midflightLeaseInfo !== undefined, '执行期间应有租约记录')
-    const leaseWf = extractWorkflowExecutionMeta(midflightLeaseInfo)
-    assert.equal(leaseWf.worktree?.id, 'local:/wt/ext-ns')
+    const leaseWt = extractWorktreeExecutionMeta(midflightLeaseInfo)
+    assert.equal(leaseWt.worktree?.id, 'local:/wt/ext-ns')
     assert.deepEqual(midflightLeaseInfo.meta?.['other-plugin'], { keep: ['ns', { roundtrip: true }] })
     assert.equal(leaseCount(handle.docStore), 0)
   })

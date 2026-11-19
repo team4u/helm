@@ -1,14 +1,14 @@
 /**
- * builtin:swarm 与 builtin:workflow 的跨插件 Worktree 协作桥接辅助：
- * - 只读检视 worktree 状态（inspect_worktree，由 builtin:workflow 权威计算 unmergedCommits）；
+ * builtin:swarm 与 builtin:worktree 的跨插件 Worktree 协作桥接辅助：
+ * - 只读检视 worktree 状态（inspect_worktree，由 builtin:worktree 权威计算 unmergedCommits）；
  * - 统一释放持久持有锁（release_worktree_hold）与清理工作树（cleanup_worktree）；
  * - 统一生成 Worktree 交接快照与未合入提交汇总。
  */
 import type { HelmxPluginContext } from '@helmx/protocol'
-import type { WorktreeInspectResult } from '../contracts.js'
+import { WORKTREE_PLUGIN_ID, type WorktreeInspectResult } from '../contracts.js'
 import { SWARM_PLUGIN_ID, type GroupMemberState, type WorktreeHandoffSnapshot } from './contracts.js'
 
-export const WORKFLOW_PLUGIN_ID = 'builtin:workflow'
+export { WORKTREE_PLUGIN_ID }
 
 export interface CheckedMemberWorktree {
   member: GroupMemberState
@@ -47,7 +47,7 @@ export async function inspectManagedWorktree(
   signal?: AbortSignal,
 ): Promise<WorktreeInspectResult> {
   const raw = await ctx.host.invokeAction(
-    WORKFLOW_PLUGIN_ID,
+    WORKTREE_PLUGIN_ID,
     'inspect_worktree',
     { worktreeId, diff: false },
     signal !== undefined ? { signal } : undefined,
@@ -92,7 +92,7 @@ export async function releaseWorktreeHoldById(
   signal?: AbortSignal,
 ): Promise<void> {
   await ctx.host.invokeAction(
-    WORKFLOW_PLUGIN_ID,
+    WORKTREE_PLUGIN_ID,
     'release_worktree_hold',
     {
       worktreeId,
@@ -120,7 +120,7 @@ export async function cleanupManagedWorktree(
   signal?: AbortSignal,
 ): Promise<void> {
   await ctx.host.invokeAction(
-    WORKFLOW_PLUGIN_ID,
+    WORKTREE_PLUGIN_ID,
     'cleanup_worktree',
     {
       worktreeId,

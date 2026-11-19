@@ -1,22 +1,20 @@
 /**
  * builtin:workflow 模型工具注册（自 workflow.ts 入口拆出；签名不变）。
  *
- * 3 个模型工具（五端复用的执行面）按域分治：
+ * 2 个模型工具（五端复用的执行面）按域分治：
  * - subagent：派生子代理（在 tool-subagent.ts）；
  * - SubagentWorkflow：DSL 确定性编排脚本（内联 / 文件 / 已保存定义）；
- * - cleanup_worktree：清理受管隔离 Git Worktree（错误分支绝不伪造 metadata）。
+ * （cleanup_worktree 已迁至 builtin:worktree 的 worktree/tools.ts。）
  */
 import { safeResultText, type HelmxPluginContext } from '@helmx/protocol'
 import type { WorkflowRunSummary } from '../contracts.js'
 import { normalizeWorkflowArgs } from './engine/runtime.js'
-import type { WorktreeIsolation } from './isolation.js'
 import type { WorkflowService } from './engine/index.js'
 import type { BackgroundPolicy } from './background.js'
 import { registerSubagentTool } from './tool-subagent.js'
 
 export interface WorkflowToolDeps {
   workflows: WorkflowService
-  isolation: WorktreeIsolation
   /** 嵌套深度前置拒绝（防线二）：达到子树上限的会话是叶子。 */
   assertCanSpawn(conversationId: number): void
   /** background 缺省与显式拒绝（权威 ownership 判定）。 */
@@ -35,32 +33,6 @@ const workflowOutputSchema = {
   required: ['ok'],
 } as const
 
-/** cleanup 成功分支（removed/worktreeId/path/branch/nodeId/branchDeleted 全为真实值）。 */
-const cleanupSuccessOutputSchema = {
-  type: 'object',
-  properties: {
-    ok: { type: 'boolean', const: true },
-    removed: { type: 'boolean' },
-    worktreeId: { type: 'string' },
-    path: { type: 'string' },
-    branch: { type: 'string' },
-    nodeId: { type: 'string' },
-    branchDeleted: { type: 'boolean' },
-  },
-  required: ['ok', 'removed', 'worktreeId', 'path', 'branch', 'nodeId', 'branchDeleted'],
-} as const
-
-/** cleanup 失败分支：仅 ok:false + error，绝不伪造空 metadata。 */
-const cleanupErrorOutputSchema = {
-  type: 'object',
-  properties: {
-    ok: { type: 'boolean', const: false },
-    error: { type: 'string' },
-  },
-  required: ['ok', 'error'],
-  additionalProperties: false,
-} as const
-
 /** workflow run -> 工具结果信封（failed/aborted 置 isError）。 */
 function workflowResultEnvelope(run: WorkflowRunSummary): {
   output: Array<{ type: 'text'; text: string }>
@@ -76,7 +48,7 @@ function workflowResultEnvelope(run: WorkflowRunSummary): {
 }
 
 export function registerWorkflowTools(ctx: HelmxPluginContext, deps: WorkflowToolDeps): void {
-  const { workflows, isolation, assertCanSpawn, resolveBackground, syncRunsDoc } = deps
+  const { workflows, assertCanSpawn, resolveBackground, syncRunsDoc } = deps
 
   // ---- 模型工具：subagent（见 tool-subagent.ts） ----
   registerSubagentTool(ctx, { workflows, assertCanSpawn, resolveBackground, syncRunsDoc })
@@ -239,64 +211,6 @@ export function registerWorkflowTools(ctx: HelmxPluginContext, deps: WorkflowToo
           output: [{ type: 'text', text: `workflow_failed: ${message}` }],
           isError: true,
           structuredOutput: { ok: false, summary: message },
-        }
-      }
-    },
-  })
-
-  // ---- 模型工具：cleanup_worktree ----
-  ctx.tool({
-    name: 'cleanup_worktree',
-    description:
-      "Clean up one managed isolated Git worktree (the workspace of a sub-conversation spawned with isolation: 'worktree'). Locate it by worktreeId (node:path), conversationId, or worktree path (may attach nodeId to disambiguate); refused by default when the workspace has uncommitted changes or unmerged commits (inspect/merge first, or pass force: true; force cannot bypass occupancy/ownership/locked checks); optionally pass deleteBranch: true to also delete the helmx/spawn-* branch (branch deletion failures can be retried). Only worktrees registered by helmx are cleaned; unregistered directories are never touched.",
-    inputSchema: {
-      type: 'object',
-      properties: {
-        worktreeId: { type: 'string', description: 'Managed worktree registration ID (node:path; exact selector, mutually exclusive with conversationId/path/nodeId)' },
-        conversationId: { type: 'number', description: 'Sub-conversation ID (mutually exclusive with path)' },
-        path: { type: 'string', description: 'Worktree absolute path (mutually exclusive with conversationId; same-name paths across nodes need nodeId)' },
-        nodeId: { type: 'string', description: 'Target node ID (only combinable with path, disambiguating same-name paths across nodes)' },
-        deleteBranch: { type: 'boolean', description: 'Also delete the helmx/spawn-* branch (kept by default)' },
-        mergedInto: { type: 'string', description: 'Target branch or commit already merged into; defaults to the recorded baseBranch, falling back to the main worktree HEAD' },
-        force: { type: 'boolean', description: 'Force cleanup (only bypasses the uncommitted-changes/unmerged-commits protection; never bypasses occupancy/ownership/locked checks)' },
-      },
-      additionalProperties: false,
-    },
-    structuredOutputSchema: { anyOf: [cleanupSuccessOutputSchema, cleanupErrorOutputSchema] } as unknown as typeof cleanupSuccessOutputSchema,
-    async execute(args, context) {
-      const a = args as Record<string, unknown>
-      // --current 语义：无任何显式选择器时以当前会话为选择器（子会话自身
-      // 的 worktree）；显式 worktreeId/path/nodeId 永不被上下文覆盖。
-      const hasExplicit = a['worktreeId'] !== undefined || a['path'] !== undefined || a['conversationId'] !== undefined
-      const selectorConversationId =
-        a['conversationId'] !== undefined ? Number(a['conversationId']) : hasExplicit ? undefined : context.conversationId
-      try {
-        const result = await isolation.cleanup(
-          {
-            ...(a['worktreeId'] !== undefined ? { worktreeId: String(a['worktreeId']) } : {}),
-            ...(selectorConversationId !== undefined ? { conversationId: selectorConversationId } : {}),
-            ...(a['path'] !== undefined ? { path: String(a['path']) } : {}),
-            ...(a['nodeId'] !== undefined ? { nodeId: String(a['nodeId']) } : {}),
-            ...(a['deleteBranch'] !== undefined ? { deleteBranch: a['deleteBranch'] === true } : {}),
-            ...(a['mergedInto'] !== undefined ? { mergedInto: String(a['mergedInto']) } : {}),
-            ...(a['force'] !== undefined ? { force: a['force'] === true } : {}),
-          },
-          context.signal,
-        )
-        const summary = result.removed
-          ? `已移除受管 worktree ${result.path}（branch: ${result.branch}，节点 ${result.nodeId}${result.branchDeleted ? '，分支已删除' : '，分支保留'}）`
-          : `受管 worktree ${result.path} 此前已清理（幂等跳过；branch: ${result.branch}${result.branchDeleted ? '，分支已删除' : ''}）`
-        return {
-          output: [{ type: 'text', text: summary }],
-          structuredOutput: { ok: true, ...result },
-        }
-      } catch (error) {
-        // 错误分支仅 ok:false + error：绝不伪造空 worktreeId/path/branch/nodeId。
-        const message = error instanceof Error ? error.message : String(error)
-        return {
-          output: [{ type: 'text', text: `cleanup_worktree 失败：${message}` }],
-          isError: true,
-          structuredOutput: { ok: false, error: message },
         }
       }
     },

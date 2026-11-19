@@ -29,7 +29,7 @@ import { HelmxError } from '@helmx/protocol'
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { createEnvFabric } from '../../kernel/src/env/fabric.js'
-import { WorktreeAllocator } from '../src/workflow/worktree.js'
+import { WorktreeAllocator } from '../src/worktree/worktree.js'
 import { createGitTemplate, type GitTemplate } from './helpers/plugin-test-env.js'
 
 let rootDir: string

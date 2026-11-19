@@ -1,5 +1,5 @@
 /**
- * Worktrees cleanup CLI tests (dynamic plugin action command for builtin:workflow).
+ * Worktrees cleanup CLI tests (dynamic plugin action command for builtin:worktree).
  *
  * Follows the same contract as cli.test.ts: spins up a temporary HTTP server mock Hub
  * (real fetch boundary + GET /api/actions manifest injection) and invokes real CLI dispatch
@@ -27,10 +27,10 @@ import {
 
 const CLEANUP_OK = { worktreeId: 'local:/wt/a', removed: true, path: '/wt/a', branch: 'helmx/spawn-x', nodeId: 'local', branchDeleted: false }
 
-/** Minimal action manifest for builtin:workflow cleanup_worktree. */
+/** Minimal action manifest for builtin:worktree cleanup_worktree. */
 const WT_MANIFESTS = [
   {
-    pluginId: 'builtin:workflow',
+    pluginId: 'builtin:worktree',
     id: 'cleanup_worktree',
     description: 'Clean up managed Git worktree',
     inputSchema: {
@@ -63,14 +63,14 @@ const WT_MANIFESTS = [
   },
 ]
 
-/** Mock Hub serving GET /api/actions + POST /api/actions/builtin:workflow/cleanup_worktree. */
+/** Mock Hub serving GET /api/actions + POST /api/actions/builtin:worktree/cleanup_worktree. */
 async function startWorktreesHub(
   t: CleanupRegistrar,
   respond: (body: unknown) => MockRouteResult = () => ({ body: CLEANUP_OK }),
 ): Promise<MockHubHandle> {
   return startMockHub(
     {
-      'POST /api/actions/builtin%3Aworkflow/cleanup_worktree': (body) => respond(body),
+      'POST /api/actions/builtin%3Aworktree/cleanup_worktree': (body) => respond(body),
     },
     { defaultActions: WT_MANIFESTS, autoRegisterCleanup: t },
   )

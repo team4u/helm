@@ -226,7 +226,7 @@ export function SubagentCardActions(props: {
             if (cleaning) return
             setCleaning(true)
             ctx
-              .callAction('cleanup_worktree', buildWorktreeSelector(worktree, inspectNodeId))
+              .callAction('cleanup_worktree', buildWorktreeSelector(worktree, inspectNodeId), { pluginId: 'builtin:worktree' })
               .then(() => ctx.notify(actionCleanupDone(worktree.branch, locale)))
               .catch((err: unknown) => ctx.notify(actionCleanupFailed(err instanceof Error ? err.message : String(err), locale), 'error'))
               .finally(() => setCleaning(false))

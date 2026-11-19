@@ -26,6 +26,10 @@
       "types": "./dist/workflow.d.ts",
       "import": "./dist/workflow.js"
     },
+    "./worktree": {
+      "types": "./dist/worktree.d.ts",
+      "import": "./dist/worktree.js"
+    },
     "./herdr": {
       "types": "./dist/herdr.d.ts",
       "import": "./dist/herdr.js"

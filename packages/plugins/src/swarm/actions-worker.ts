@@ -26,7 +26,7 @@ import {
   resolveCoordinatorGroup,
 } from './actions-group.js'
 import {
-  WORKFLOW_PLUGIN_ID,
+  WORKTREE_PLUGIN_ID,
   checkMemberWorktree,
   cleanupManagedWorktree,
   releaseWorktreeHold,
@@ -322,7 +322,7 @@ export function createWorkerHandlers(ctx: HelmxPluginContext, coordinator: Swarm
 
         if (isolation === 'worktree') {
           const wt = (await ctx.host.invokeAction(
-            WORKFLOW_PLUGIN_ID,
+            WORKTREE_PLUGIN_ID,
             'acquire_worktree',
             {
               conversationId: created.id,

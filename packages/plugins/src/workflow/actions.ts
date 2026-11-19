@@ -1,22 +1,19 @@
 /**
  * builtin:workflow 动作注册（自 workflow.ts 入口拆出；签名不变）。
  *
- * 13 个动作（五端复用：HTTP / CLI / run_action / Workflow / Web UI）按域分治：
+ * 11 个动作（五端复用：HTTP / CLI / run_action / Workflow / Web UI）按域分治：
  * - 工作流库（list/get/save/delete）与运行记录查询（runs/inspect/abort）
  *   保留在本模块；
- * - 运行族（run/steer/detach）在 actions-run.ts；
- * - 受管 Worktree（cleanup_worktree/list_worktrees/inspect_worktree）在
- *   actions-worktree.ts。
+ * - 运行族（run/steer/detach/resume_failed）在 actions-run.ts；
+ * （受管 Worktree（cleanup_worktree/list_worktrees/inspect_worktree/acquire/
+ * release）已迁至 builtin:worktree 的 worktree/actions.ts。）
  */
 import { HelmxError, type HelmxPluginContext } from '@helmx/protocol'
-import type { WorktreeIsolation } from './isolation.js'
 import type { WorkflowService } from './engine/index.js'
 import { registerWorkflowRunActions } from './actions-run.js'
-import { registerWorktreeActions } from './actions-worktree.js'
 
 export interface WorkflowActionDeps {
   workflows: WorkflowService
-  isolation: WorktreeIsolation
   /** 嵌套深度前置拒绝（防线二）：达到子树上限的会话是叶子。 */
   assertCanSpawn(conversationId: number): void
   /** run 启停后的 runs 投影刷新。 */
@@ -230,7 +227,6 @@ export function registerWorkflowActions(ctx: HelmxPluginContext, deps: WorkflowA
     },
   })
 
-  // ---- 运行族（run / steer）与受管 Worktree（cleanup/list/inspect） ----
+  // ---- 运行族（run / steer / detach / resume_failed） ----
   registerWorkflowRunActions(ctx, deps)
-  registerWorktreeActions(ctx, deps)
 }

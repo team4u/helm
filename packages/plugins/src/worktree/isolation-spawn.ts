@@ -12,7 +12,7 @@ import {
   type AgentExecutionInfo,
   type AgentSpawnRequest,
 } from '@helmx/protocol'
-import { extractWorkflowExecutionMeta, workflowExecutionMeta, type WorktreeExecutionDescriptor } from '../contracts.js'
+import { extractWorktreeExecutionMeta, worktreeExecutionMeta, type WorktreeExecutionDescriptor } from '../contracts.js'
 import type { ManagedWorktreeRecord, WorktreeAllocator } from './worktree.js'
 import type { WorktreeStore } from './worktree-store.js'
 import type { WorktreeIsolationDeps } from './isolation.js'
@@ -60,7 +60,7 @@ function withWorktreeExecutionMeta(
   info: AgentExecutionInfo,
   worktree: WorktreeExecutionDescriptor,
 ): AgentExecutionInfo {
-  return { ...info, meta: workflowExecutionMeta({ worktree }, info.meta) }
+  return { ...info, meta: worktreeExecutionMeta({ worktree }, info.meta) }
 }
 
 async function settleFailedNativeSpawn(
@@ -124,7 +124,7 @@ export async function spawnWithWorktree(
         ctx.store.updateLease(leaseToken, enriched)
         void ctx.deps.docStore.flush().catch((flushError: unknown) => {
           process.stderr.write(
-            `builtin:workflow: worktree ${record.id} 绑定落盘失败: ${
+            `builtin:worktree: worktree ${record.id} 绑定落盘失败: ${
               flushError instanceof Error ? flushError.message : String(flushError)
             }\n`,
           )
@@ -197,7 +197,7 @@ export async function resumeWithWorktree(
     await ctx.store.settleLease(leaseToken, true, false)
     await ctx.store.clearStaleLeases(record.id).catch((error: unknown) => {
       process.stderr.write(
-        `builtin:workflow: worktree ${record.id} 残留租约清理失败（后续 cleanup 可能被 worktree_execution_unknown 阻塞，可重试 resume 或人工核对）: ${
+        `builtin:worktree: worktree ${record.id} 残留租约清理失败（后续 cleanup 可能被 worktree_execution_unknown 阻塞，可重试 resume 或人工核对）: ${
           error instanceof Error ? error.message : String(error)
         }\n`,
       )
@@ -250,7 +250,7 @@ export async function reattachWithWorktree(
     await ctx.store.settleLease(leaseToken, true, false)
     await ctx.store.clearStaleLeases(record.id).catch((error: unknown) => {
       process.stderr.write(
-        `builtin:workflow: worktree ${record.id} 残留租约清理失败: ${
+        `builtin:worktree: worktree ${record.id} 残留租约清理失败: ${
           error instanceof Error ? error.message : String(error)
         }\n`,
       )
@@ -282,7 +282,7 @@ export async function trackWithoutPreallocation(
     ...request,
     onResolved: (raw) => {
       const info = sanitizeExecutionInfo(raw, { agentId: request.agentId ?? 'subagent' })
-      const externalWorktree = extractWorkflowExecutionMeta(info).worktree
+      const externalWorktree = extractWorktreeExecutionMeta(info).worktree
       if (externalWorktree !== undefined) {
         if (info.nodeId === undefined) {
           throw new HelmxError('execution_info_invalid', '隔离工作树必须回传实际 nodeId，不能推测外部运行时的节点', 502)
@@ -323,7 +323,7 @@ export async function trackWithoutPreallocation(
           })
           void ctx.deps.docStore.flush().catch((error: unknown) => {
             process.stderr.write(
-              `builtin:workflow: worktree 租约 ${managed.id} 落盘失败（执行期间崩溃将失去清理保护，结算写会重试）: ${
+              `builtin:worktree: worktree 租约 ${managed.id} 落盘失败（执行期间崩溃将失去清理保护，结算写会重试）: ${
                 error instanceof Error ? error.message : String(error)
               }\n`,
             )

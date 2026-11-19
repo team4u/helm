@@ -1,5 +1,5 @@
 /**
- * worktree 隔离生命周期编排门面（`builtin:workflow` 自有资产）：
+ * worktree 隔离生命周期编排门面（`builtin:worktree` 自有资产）：
  * - 单一 `WorktreeStore` 承载受管记录、durable 租约、agentId 绑定与占用判定，
  *   `WorktreeIsolation -> WorktreeAllocator -> WorktreeStore` 单向依赖、零循环回调；
  * - 节点命令执行直接透传 `ctx.host.execEnv`（无二次 Result 包装）；

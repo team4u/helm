@@ -40,6 +40,7 @@ import { type HelmxEventFrame, type PluginDefinition } from '@helmx/protocol'
 
 import { KernelRuntime } from '../../kernel/src/runtime/index.js'
 import { createWorkflowPlugin } from '../src/workflow.js'
+import { createWorktreePlugin } from '../src/worktree.js'
 import { WorkflowService, type WorkflowServiceHost, type WorkflowStateStore } from '../src/workflow/engine/service.js'
 import { makeFauxProvider } from './helpers/plugin-test-env.js'
 
@@ -295,6 +296,7 @@ test('真实恢复: SIGKILL 遗留子会话仍 paused 时 prepareRecovery 只落
     const prepareGate = new Promise<void>((resolve) => { releasePrepare = resolve })
     const probeOrder: string[] = []
     await kernel.plugins.register(createWorkflowPlugin())
+    await kernel.plugins.register(createWorktreePlugin())
     await kernel.plugins.setConfig('builtin:workflow', { autoRecoverOnRestart: false })
     await kernel.plugins.register({
       id: 'test:restart-probe',
@@ -473,6 +475,7 @@ test('同步工作流全覆盖收敛：SIGKILL 与 graceful close() 均回收遗
   const seedDir = mkdtempSync(join(tmpdir(), 'helmx-sync-seed-'))
   const seederPath = join(seedDir, 'sync-seed.mts')
   const workflowSrc = pathToFileURL(new URL('../src/workflow.ts', import.meta.url).pathname).href
+  const worktreeSrc = pathToFileURL(new URL('../src/worktree.ts', import.meta.url).pathname).href
   writeFileSync(
     seederPath,
     `import { setTimeout as delay } from 'node:timers/promises'
@@ -480,12 +483,14 @@ import { fauxAssistantMessage, fauxProvider } from ${JSON.stringify(pathToFileUR
 import { KernelRuntime } from ${JSON.stringify(KERNEL_SRC)}
 import { createPluginBuildProvider } from ${JSON.stringify(import.meta.resolve('@helmx/plugin-build'))}
 import { createWorkflowPlugin } from ${JSON.stringify(workflowSrc)}
+import { createWorktreePlugin } from ${JSON.stringify(worktreeSrc)}
 
 const dataDir = process.env.HELMX_SEED_DIR!
 const faux = fauxProvider({ tokensPerSecond: 1, tokenSize: { min: 1, max: 1 } })
 faux.setResponses([fauxAssistantMessage('这是一段慢速同步工作流输出确保在进程被强杀前子会话仍处于工作状态')])
 const kernel = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider], autoResume: false })
 await kernel.plugins.register(createWorkflowPlugin())
+await kernel.plugins.register(createWorktreePlugin())
 await kernel.start()
 const { run } = await kernel.plugins.invokeAction('builtin:workflow', 'run', {
   conversationId: 1,
@@ -574,6 +579,7 @@ process.kill(process.pid, 'SIGKILL')
       }
     })
     await kernel.plugins.register(createWorkflowPlugin())
+    await kernel.plugins.register(createWorktreePlugin())
     await kernel.plugins.setConfig('builtin:workflow', { autoRecoverOnRestart: false })
     await kernel.start()
 
@@ -680,6 +686,7 @@ test('原生 isolation:worktree SIGKILL 崩溃租约在重启 runtime.started �
   execFileSync('git', ['commit', '-m', 'init'], { cwd: repoDir })
 
   const workflowSrc = pathToFileURL(new URL('../src/workflow.ts', import.meta.url).pathname).href
+  const worktreeSrc = pathToFileURL(new URL('../src/worktree.ts', import.meta.url).pathname).href
   const seederPath = join(seedDir, 'wt-seed.mts')
   writeFileSync(
     seederPath,
@@ -688,6 +695,7 @@ import { fauxAssistantMessage, fauxProvider } from ${JSON.stringify(pathToFileUR
 import { KernelRuntime } from ${JSON.stringify(KERNEL_SRC)}
 import { createPluginBuildProvider } from ${JSON.stringify(import.meta.resolve('@helmx/plugin-build'))}
 import { createWorkflowPlugin } from ${JSON.stringify(workflowSrc)}
+import { createWorktreePlugin } from ${JSON.stringify(worktreeSrc)}
 
 const dataDir = process.env.HELMX_SEED_DIR!
 const repoDir = process.env.HELMX_REPO_DIR!
@@ -695,6 +703,7 @@ const faux = fauxProvider({ tokensPerSecond: 1, tokenSize: { min: 1, max: 1 } })
 faux.setResponses([fauxAssistantMessage('这是一段慢速工作树隔离子代理流式文本确保进程崩溃时原生租约仍在运行中')])
 const kernel = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(), dataDir, cwd: repoDir, model: 'faux/faux-1', providers: [faux.provider], autoResume: false })
 await kernel.plugins.register(createWorkflowPlugin())
+await kernel.plugins.register(createWorktreePlugin())
 await kernel.start()
 const { run } = await kernel.plugins.invokeAction('builtin:workflow', 'run', {
   conversationId: 1,
@@ -704,7 +713,7 @@ let childId = 0
 for (let i = 0; i < 400; i++) {
   await delay(10)
   const working = kernel.listConversations().find((c) => c.parentConversationId === 1 && c.status === 'working')
-  const wtState = kernel.documentStore.get('builtin:workflow:worktree-state', {})
+  const wtState = kernel.documentStore.get('builtin:worktree:worktree-state', {})
   const wtLeases = (wtState['worktree-leases'] ?? {})
   const hasLease = working && Object.values(wtLeases).some((l) => l && l.info && l.info.conversationId === working.id)
   if (working && hasLease && faux.state.callCount >= 1) {
@@ -777,7 +786,7 @@ process.kill(process.pid, 'SIGKILL')
     recoveredKernel = kernel
 
     // 在插件启动前校验真实崩溃现场已落原生 running 租约，并同时种入 1 条外部 executionId 租约做对比。
-    const preState = kernel.documentStore.get<Record<string, unknown>>('builtin:workflow:worktree-state', {})
+    const preState = kernel.documentStore.get<Record<string, unknown>>('builtin:worktree:worktree-state', {})
     const preLeases = (preState['worktree-leases'] as Record<string, { phase: string; info: { conversationId?: number; executionId?: string } }> | undefined) ?? {}
     const nativeLeaseKeys = Object.entries(preLeases)
       .filter(([, l]) => l.info.conversationId === childId && l.info.executionId === undefined)
@@ -791,24 +800,25 @@ process.kill(process.pid, 'SIGKILL')
       createdAt: 1,
     } as never
     preState['worktree-leases'] = preLeases
-    kernel.documentStore.set('builtin:workflow:worktree-state', preState)
+    kernel.documentStore.set('builtin:worktree:worktree-state', preState)
     await kernel.documentStore.flush()
 
     await kernel.plugins.register(createWorkflowPlugin())
+    await kernel.plugins.register(createWorktreePlugin())
     await kernel.plugins.setConfig('builtin:workflow', { autoRecoverOnRestart: false })
     await kernel.start()
 
     assert.equal(faux.state.callCount, 0, '工作树遗留子会话重启期零新增模型调用')
     assert.equal(kernel.getConversation(childId).status, 'idle', '子会话先于租约回收收敛 idle')
 
-    const postState = kernel.documentStore.get<Record<string, unknown>>('builtin:workflow:worktree-state', {})
+    const postState = kernel.documentStore.get<Record<string, unknown>>('builtin:worktree:worktree-state', {})
     const postLeases = (postState['worktree-leases'] as Record<string, unknown> | undefined) ?? {}
     assert.equal(postLeases[nativeLeaseKeys[0]!], undefined, '已停止原生租约必须被 runtime.started 自动回收')
     assert.ok(postLeases['ext-lease-seed'], '外部 executionId 租约必须继续保留 fail-closed')
 
     // 确认 cleanup_worktree 不再被 worktree_execution_unknown 阻塞
     try {
-      const cleaned = (await kernel.plugins.invokeAction('builtin:workflow', 'cleanup_worktree', {
+      const cleaned = (await kernel.plugins.invokeAction('builtin:worktree', 'cleanup_worktree', {
         conversationId: childId,
         deleteBranch: true,
       })) as { removed: boolean }

@@ -1,7 +1,7 @@
 /**
  * Kernel tool factory: `run_action` meta-tool.
  *
- * `subagent` / `SubagentWorkflow` / `cleanup_worktree` have moved to the `builtin:workflow` plugin
+ * `subagent` / `SubagentWorkflow` moved to the `builtin:workflow` plugin and `cleanup_worktree` to `builtin:worktree`
  * (`ctx.tool` declarations); the kernel retains only plugin-agnostic foundational meta-tools.
  */
 import type { Context } from '@earendil-works/chord/context'

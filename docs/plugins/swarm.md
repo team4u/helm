@@ -10,7 +10,7 @@ Swarm 在会话里提供一个共享看板。主控会话负责分工，成员�
 helmx swarm create-group --conversation-id 42 --title '检查导出模块' --json
 ```
 
-主控分配具体任务，协调接口和分支合入。成员可单独指定 Profile、模型、思考档位和频道。并发写代码的成员应各有独立的 Git worktree。Swarm 通过 `builtin:workflow` 分配工作树，并在协作期间持有租约，避免被清理。`readonly` 是任务约定，成员仍保有原来的工具权限。 [Git Worktree 的隔离范围](../workflows/worktree-and-gate.md)
+主控分配具体任务，协调接口和分支合入。成员可单独指定 Profile、模型、思考档位和频道。并发写代码的成员应各有独立的 Git worktree。Swarm 通过 `builtin:worktree` 分配工作树，并在协作期间持有租约，避免被清理。`readonly` 是任务约定，成员仍保有原来的工具权限。 [Git Worktree 的隔离范围](../workflows/worktree-and-gate.md)
 
 ## 看板消息
 
@@ -62,7 +62,7 @@ helmx swarm close-group --group-id "$group_id" --abort-running --keep-worktree
 
 协作组保存于 `<dataDir>/groups/<groupId>/`。`board.jsonl` 先追加并同步写盘，再以 `meta.json` 的 `headSeq` 提交。重启会截掉单条未提交尾记录，已提交记录损坏会报 `swarm_doc_corrupt`。启动时会核对会话标签、归属和遗留的工作树租约，再根据已有提交记录补送需要恢复的唤醒和汇报。建组、派工与发帖按会话和工具调用 ID 去重。
 
-停用插件时，在途任务会触发 `plugin_has_live_tasks`。仍有活跃协作组时会触发 `plugin_in_use`。持有受管 worktree 的组员同时占用 Workflow 插件的工作树资源，详情见 [工作流插件](workflow.md)。
+停用插件时，在途任务会触发 `plugin_has_live_tasks`。仍有活跃协作组时会触发 `plugin_in_use`。持有受管 worktree 的组员同时占用 [`builtin:worktree`](worktree.md) 插件的工作树资源。
 
 ## 配置与实现
 

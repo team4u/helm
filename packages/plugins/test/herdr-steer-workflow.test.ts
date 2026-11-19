@@ -26,6 +26,7 @@ import { PluginHost, type PluginHostBackend } from '../../kernel/src/plugins/ind
 import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { createHerdrPlugin } from '../src/herdr.js'
 import { createWorkflowPlugin } from '../src/workflow.js'
+import { createWorktreePlugin } from '../src/worktree.js'
 import { completeBackend } from '../../kernel/test/helpers/host-backend-stub.js'
 import {
   FsOutputFiles,
@@ -321,6 +322,9 @@ async function makeEnv(): Promise<Env> {
   hostRef.current = host
   await host.register(createHerdrPlugin(HERDR_FAST_TEST_TIMINGS), { enabled: true })
   await host.register(createWorkflowPlugin())
+  // 注册顺序与 @helmx/hub 组合根一致（workflow 先于 worktree；herdr 仅测
+  // agent_spawn 接管，与 worktree 的 around 200 优先级正交）。
+  await host.register(createWorktreePlugin())
   return {
     host,
     transport,
@@ -450,8 +454,8 @@ test('双插件联调: herdr worktree 隔离执行增强不丢 controls（命名
   const env = await makeEnv()
   try {
     // 1) 后台 herdr 子代理 run + isolation:'worktree'：herdr 经 worktree.create
-    //    自行派生隔离树，onResolved 在 workflow 命名空间同时回传 worktree 与
-    //    controls.steer。
+    //    自行派生隔离树，onResolved 在正交命名空间分别回传 worktree
+    //    （'builtin:worktree' 槽）与 controls.steer（'builtin:workflow' 槽）。
     const started = (await env.host.executeTool(
       'subagent',
       { prompt: '慢任务', background: true, agentType: 'herdr:agy', isolation: 'worktree', gate: 'true' },
@@ -465,7 +469,7 @@ test('双插件联调: herdr worktree 隔离执行增强不丢 controls（命名
     let lastSeen = ''
     let node: (WorkflowRunSummary['nodes'] extends (infer N)[] | undefined ? N : never) | undefined
     // 2) 节点收敛：worktree 被隔离层统一登记并回填稳定受管 id；controls
-    //    （steer 委托引用）与 worktree 同处 workflow 命名空间，增强合并
+    //    （steer 委托引用）在正交 workflow 命名空间，worktree 增强
     //    不得把 controls 覆盖丢（否则 steer 失去外部委托坐标）。
     await waitFor(() => {
       return env.host
@@ -487,7 +491,7 @@ test('双插件联调: herdr worktree 隔离执行增强不丢 controls（命名
     assert.deepEqual(
       node.controls?.steer,
       { pluginId: 'builtin:herdr', actionId: 'steer' },
-      'worktree 增强不得丢失同命名空间的 controls（steer 委托引用）',
+      'worktree 增强不得丢失正交命名空间的 controls（steer 委托引用）',
     )
     // 3) 经 workflow.steer 插话仍可按 controls 动态委托（合并后的坐标可用）。
     //    先等任务 prompt 到达且窗格 working（steer 仅任务执行期可投递）。

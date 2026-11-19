@@ -219,7 +219,7 @@ describe('engine external spawn metadata', () => {
         request.onResolved?.({
           executionId: 'herdr-tab-9',
           effectiveCwd: '/srv/worktree-a',
-          meta: { 'builtin:workflow': { worktree: { path: '/srv/worktree-a', branch: 'wf/topic' } } },
+          meta: { 'builtin:worktree': { worktree: { path: '/srv/worktree-a', branch: 'wf/topic' } } },
         })
         return { ok: true, text: JSON.stringify({ answer: 1 }) }
       },
@@ -473,7 +473,7 @@ describe('WorkflowService listRuns and settlement', () => {
         conversationId: 9,
         executionId: 'herdr-tab-1',
         effectiveCwd: `/tmp/wt-${SECRET}`,
-        meta: { 'builtin:workflow': { worktree: { path: `/tmp/wt-${SECRET}`, branch: 'wf/x' } } },
+        meta: { 'builtin:worktree': { worktree: { path: `/tmp/wt-${SECRET}`, branch: 'wf/x' } } },
       },
       externalGate: { ok: true, output: `checked ${SECRET}` },
     })
