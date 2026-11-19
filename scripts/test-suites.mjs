@@ -8,26 +8,33 @@
  * units. To avoid misclassification, this script only does a [conservative package-level
  * split]:
  *
- *   unit        = protocol + env-io + cli + web + plugin-client (env-io is in-process pure
- *                 scan orchestrator injection tests; web covers happy-dom/React interaction
+ *   unit        = protocol + env-io + test-kit + cli + web + plugin-client (env-io is in-process
+ *                 pure scan orchestrator injection tests; web covers happy-dom/React interaction
  *                 and SDK self-tests — none start real services);
  *   integration = plugin-build + kernel + plugins + hub + hub-launcher + node + update + payload
  *                 (real esbuild builds/subprocesses, SQLite/Git/daemon, launcher process
  *                 lifecycle, the shared update engine, and payload assembly);
  *   all         = unit ∪ integration = every test file, equivalent to the old `pnpm test`.
  *
- * Implementation: Node fs enumerates *.test.ts(x) under <root>/packages/<pkg>/test/, and the
- * test-sharding.mjs static analysis splits strictly pure in-memory tests into a bounded
- * `--test-isolation=none` shard; the rest keep process isolation and are handed to
- * scripts/run-tests.mjs under a per-worktree worker budget (default 4) in LPT order.
- * Set TEST_CONCURRENCY to override that budget for a deliberate single-worktree run.
+ * SUITES entries are either a package name (that package's top-level test/ files) or a
+ * packages/-relative path such as 'cli/test/launcher' — a tier override for a test
+ * subdirectory living inside an otherwise unit-tier package (process-level suites like the
+ * Hub launcher lifecycle). A package entry never descends into subdirectories, so a
+ * subdirectory's files enter exactly one suite via its path entry.
+ *
+ * Implementation: Node fs enumerates *.test.ts(x) under <root>/packages/<pkg>/test/ (or the
+ * entry subdirectory itself), and the test-sharding.mjs static analysis splits strictly pure
+ * in-memory tests into a bounded `--test-isolation=none` shard; the rest keep process
+ * isolation and are handed to scripts/run-tests.mjs under a per-worktree worker budget
+ * (default 4) in LPT order. Set TEST_CONCURRENCY to override that budget for a deliberate
+ * single-worktree run.
  *
  * Invariants (defensive assertions; any failure exits 2 rather than silently running the
  * wrong set):
  *   - all's file count must equal unit + integration file counts (no overlap, no gap);
  *   - the unit ∪ integration relative-path set must exactly match the actual *.test.ts(x)
- *     file set across every package's test directory (so new packages/files cannot be
- *     silently missed here).
+ *     file set across every package's test directory, subdirectories included (so new
+ *     packages, files, or nested test directories cannot be silently missed here).
  *
  * Note: do not raise the total timeout via the HELM_TEST_SUITE_TIMEOUT_MS env var —
  * packages/kernel/test/env-registry-races.test.ts asserts every host HELM_* variable is
@@ -47,8 +54,9 @@ import { explicitTestConcurrency, resolveTestConcurrency, withDefaultTestConcurr
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const packagesDir = path.join(repoRoot, 'packages');
 
-// Suite -> package names. Split principles live in the header comment; tier changes must be
-// mirrored in AGENTS.md's test tiering conventions.
+// Suite -> package names or packages/-relative paths. Split principles live in the header comment;
+// tier changes must be mirrored in AGENTS.md's test tiering conventions and PACKAGE_TIERS in
+// scripts/lib/workspace-meta.mjs.
 const SUITES = {
   unit: ['protocol', 'env-io', 'test-kit', 'cli', 'web', 'plugin-client'],
   integration: ['plugin-build', 'kernel', 'plugins', 'hub', 'hub-launcher', 'node', 'update', 'payload'],
@@ -58,8 +66,12 @@ const ALL_PACKAGES = [...SUITES.unit, ...SUITES.integration];
 const TEST_SUFFIXES = ['.test.ts', '.test.tsx'];
 const SIGNAL_EXIT_CODES = { SIGHUP: 129, SIGINT: 130, SIGQUIT: 131, SIGTERM: 143 };
 
-function testFilesOf(pkg) {
-  const dir = path.join(packagesDir, pkg, 'test');
+// A package entry ('cli') reads that package's top-level test/ files; a path entry
+// ('cli/test/launcher', packages/-relative) reads the subdirectory it names. Both return
+// repo-root-relative file paths.
+function testFilesOf(entry) {
+  const relDir = entry.includes('/') ? entry : path.join(entry, 'test');
+  const dir = path.join(packagesDir, relDir);
   let entries;
   try {
     entries = readdirSync(dir, { withFileTypes: true });
@@ -69,7 +81,7 @@ function testFilesOf(pkg) {
   }
   return entries
     .filter((e) => e.isFile() && TEST_SUFFIXES.some((s) => e.name.endsWith(s)))
-    .map((e) => path.join('packages', pkg, 'test', e.name))
+    .map((e) => path.join('packages', relDir, e.name))
     .sort();
 }
 
@@ -108,26 +120,32 @@ if (suiteName === 'all') {
 
 // Invariant 2: the unit ∪ integration relative-path set == the actual file set across all
 // repo test directories. Scan every package under packages/ with a test subdirectory (not
-// just the known ones) to catch future additions.
+// just the known ones), subdirectories included, to catch future additions.
 {
   const managed = new Set(ALL_PACKAGES.flatMap(testFilesOf));
   const actual = new Set();
+  const walkTestDir = (dir, prefix) => {
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return; // not a directory (e.g. packages/<pkg>/test missing)
+    }
+    for (const f of entries) {
+      if (f.isFile() && TEST_SUFFIXES.some((s) => f.name.endsWith(s))) {
+        actual.add(path.join(prefix, f.name));
+      } else if (f.isDirectory()) {
+        walkTestDir(path.join(dir, f.name), path.join(prefix, f.name));
+      }
+    }
+  };
   for (const entry of readdirSync(packagesDir, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
-    const testDir = path.join(packagesDir, entry.name, 'test');
-    try {
-      for (const f of readdirSync(testDir, { withFileTypes: true })) {
-        if (f.isFile() && TEST_SUFFIXES.some((s) => f.name.endsWith(s))) {
-          actual.add(path.join('packages', entry.name, 'test', f.name));
-        }
-      }
-    } catch {
-      // Skip packages without a test directory.
-    }
+    walkTestDir(path.join(packagesDir, entry.name, 'test'), path.join('packages', entry.name, 'test'));
   }
   const missing = [...actual].filter((f) => !managed.has(f));
   if (missing.length > 0) {
-    console.error(`[test-suites] found test files not covered by any suite (update the SUITES tiers): ${missing.join(', ')}`);
+    console.error(`[test-suites] found test files not covered by any suite (update the SUITES tiers; path entries like 'pkg/test/subdir' cover subdirectories): ${missing.join(', ')}`);
     process.exit(2);
   }
 }
