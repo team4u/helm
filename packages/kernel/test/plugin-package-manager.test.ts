@@ -123,7 +123,53 @@ test('parsePluginSource: resolves absolute and relative local paths', { timeout:
   assert.ok(up.kind === 'local')
   if (up.kind !== 'local') return
   assert.equal(up.path, '/wd/foo')
+
+  // Windows drive-letter and UNC forms are local paths, not URI schemes (matched with the
+  // web client's isLocalSource so UI hint and Hub parser agree). Exact resolved path is
+  // platform-dependent; only kind and raw preservation are locked here.
+  for (const win of ['C:\\Users\\me\\my-plugin', 'C:/Users/me/my-plugin', '\\\\server\\share\\my-plugin']) {
+    const parsed = parsePluginSource(win, '/wd')
+    assert.ok(parsed.kind === 'local', `Windows-style path must parse as local: ${win}`)
+    if (parsed.kind !== 'local') return
+    assert.equal(parsed.raw, win)
+    assert.ok(typeof parsed.path === 'string' && parsed.path.length > 0)
+  }
+
+  // Ambiguous forms without a separator stay rejected as unknown protocols.
+  for (const bad of ['C:', 'unknownproto:x']) {
+    assert.throws(
+      () => parsePluginSource(bad, '/wd'),
+      (err: unknown) => err instanceof HelmxError && err.status === 400,
+      `should reject: ${bad}`,
+    )
+  }
 })
+
+test('install from a Windows-style local path missing on this host fails honestly with 404 (resolved on the Hub)', { timeout: 60_000 }, async () => {
+  const env = makeEnv()
+  try {
+    await assert.rejects(
+      env.manager.install('C:\\Users\\me\\definitely-missing-plugin', {}),
+      (err: unknown) =>
+        err instanceof HelmxError
+        && err.status === 404
+        && err.code === 'plugin_package_install_failed'
+        && err.message.includes('Hub host'),
+      'drive-letter source should fail at stat with an honest Hub-host diagnostic, not a protocol rejection',
+    )
+    // No staging leftovers, no registration, and no record persisted for the failed attempt
+    const staging = join(env.dataDir, 'plugins', '.staging')
+    assert.ok(!existsSync(staging) || readdirSync(staging).length === 0, 'staging must be cleaned up')
+    assert.equal(env.registered.size, 0, 'nothing should be registered')
+    if (existsSync(join(env.dataDir, 'config.json'))) {
+      const config = JSON.parse(readFileSync(join(env.dataDir, 'config.json'), 'utf8')) as { pluginPackages?: Record<string, unknown> }
+      assert.equal(Object.keys(config.pluginPackages ?? {}).length, 0, 'no install record should persist')
+    }
+  } finally {
+    env.close()
+  }
+})
+
 
 // ---------------------------------------------------------------------------
 // Test harness: fake runner + real PluginHost (via host adapter interface)
