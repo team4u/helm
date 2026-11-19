@@ -14,6 +14,7 @@ import {
 } from './profile-center-model.js'
 import { HelmxIcon, Checkbox, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle, PluginSlot, Select, type SelectOption, Switch } from '@helmx/plugin-client'
 import { useModels, useNodes, useSkills } from '../lib/store-context.js'
+import { summarizeSingleLine } from '../lib/format.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { nodeOptionLabel } from '../modals/nodes-modal-model.js'
 import { ConfirmDialog } from '../ui/AlertDialog.js'
@@ -751,19 +752,29 @@ export function ProfileDetailDrawer({
                   {availableSkills.length === 0 ? (
                     <div className="text-subtle">{t('profiles.drawer.skills.empty')}</div>
                   ) : (
-                    availableSkills.map((s) => (
-                      <Checkbox
-                        key={s.id}
-                        checked={form.selectedSkillIds.includes(s.id)}
-                        onChange={(checked) => handleToggleSkill(s.id, checked)}
-                        label={
-                          <span className="flex-row text-muted">
-                            <span>{s.name}</span>
-                            <span className="mono text-subtle">({s.id})</span>
-                          </span>
-                        }
-                      />
-                    ))
+                    availableSkills.map((s) => {
+                      const desc = summarizeSingleLine(s.description)
+                      return (
+                        <Checkbox
+                          key={s.id}
+                          checked={form.selectedSkillIds.includes(s.id)}
+                          onChange={(checked) => handleToggleSkill(s.id, checked)}
+                          label={
+                            <span className="flex-col" style={{ gap: 1 }}>
+                              <span className="flex-row text-muted">
+                                <span>{s.name}</span>
+                                <span className="mono text-subtle">({s.id})</span>
+                              </span>
+                              {desc !== '' ? (
+                                <span className="profile-skill-desc" title={s.description}>
+                                  {desc}
+                                </span>
+                              ) : null}
+                            </span>
+                          }
+                        />
+                      )
+                    })
                   )}
                 </div>
               )}
