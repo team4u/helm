@@ -600,8 +600,21 @@ test('tasks-int5c: a live background workflow run under the task conversation pr
     })) as { conversationId?: number }
     const convId = created.conversationId!
     await kernel.waitForIdle(convId)
-    // P3-B: immediately after the main turn settles, the background run's child conversation is
-    // still live in the subtree -> the approve guard (same scope as the stalled marking) refuses.
+    // Deterministically wait until the in-flight fact is OBSERVABLE (child conversation working
+    // or the run record reporting running) before asserting the guard — under heavy load the
+    // run registration lags behind waitForIdle and an immediate probe would race (AGENTS: no timing bets).
+    await waitFor(async () => {
+      const childBusy = kernel
+        .listConversations()
+        .some((c) => c.parentConversationId === convId && (c.status === 'working' || c.status === 'blocked'))
+      if (childBusy) return true
+      const runs = (await kernel.plugins.invokeAction('builtin:workflow', 'runs', { conversationId: convId })) as {
+        runs?: Array<{ status?: string }>
+      }
+      return runs.runs?.some((r) => r.status === 'running') === true
+    })
+    // P3-B/P3-A: with the live subtree/run fact visible, the approve guard refuses (same scope
+    // as the stalled marking; unknown probe failures are conservatively refused too).
     await assert.rejects(
       () => kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'approve', { taskId: 'T-1', mergeAction: 'close_only' }),
       (err: unknown) => err instanceof HelmxError && err.code === 'task_still_running' && err.status === 409,

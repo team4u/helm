@@ -229,8 +229,11 @@ function parseCreateInput(input: CreateTaskInput): {
   const cwd = input.cwd !== undefined ? assertWorkerCwd(input.cwd) : undefined
   const createKey =
     input.idempotencyKey !== undefined && input.idempotencyKey.trim() !== ''
-      ? input.idempotencyKey.trim().slice(0, 128)
+      ? input.idempotencyKey.trim()
       : undefined
+  if (createKey !== undefined && createKey.length > 128) {
+    throw new HelmxError('validation_error', `idempotencyKey 长度 ${createKey.length} 超过 128 上限（拒绝而非截断，防前缀碰撞）`, 400, {})
+  }
   return {
     title,
     brief: input.brief.trim(),
