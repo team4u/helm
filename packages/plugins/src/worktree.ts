@@ -88,7 +88,7 @@ export function createWorktreePlugin(): PluginDefinition {
 
       // ---- agent_spawn around（continuation）：worktree 隔离完整生命周期 ----
       // priority 200：先于外部运行时接管器（如 herdr 的 100）执行 = 更外层，
-      // 外部执行同样被租约与登记包襄；不调 next 的接管器（handled）不受影响。
+      // 外部执行同样被租约与登记包裹；不调 next 的接管器（handled）不受影响。
       ctx.hook.onAgentSpawn(async (request, next) => {
         await isolation.aroundSpawn(request, next)
       }, { priority: 200 })

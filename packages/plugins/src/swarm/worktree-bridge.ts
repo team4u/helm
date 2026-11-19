@@ -8,12 +8,6 @@ import type { HelmxPluginContext } from '@helmx/protocol'
 import { WORKTREE_PLUGIN_ID, type WorktreeInspectResult } from '../contracts.js'
 import { SWARM_PLUGIN_ID, type GroupMemberState, type WorktreeHandoffSnapshot } from './contracts.js'
 
-/**
- * 过渡导出：group-store.ts（swarm-split 角色重构中）仍从此处导入
- * WORKFLOW_PLUGIN_ID 并调用 release_worktree_hold——别名指向 builtin:worktree
- * （动作现归属），待 group-store.ts 收敛到 WORKTREE_PLUGIN_ID 后删除本导出。
- */
-export const WORKFLOW_PLUGIN_ID: typeof WORKTREE_PLUGIN_ID = WORKTREE_PLUGIN_ID
 export { WORKTREE_PLUGIN_ID }
 
 export interface CheckedMemberWorktree {
