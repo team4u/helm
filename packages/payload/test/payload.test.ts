@@ -48,7 +48,7 @@
  * 9. node assembly contract: shebang single-file bundle, bin/name/version/engines (name overridable
  *    via HELMX_NODE_PACKAGE, bin single-sourced from packages/node/package.json), dependencies
  *    exactly the four external packages pinned to the repository's installed versions (never
- *    floating ranges), overrides consistent with those pins, exact files whitelist;
+ *    floating ranges), peers satisfied by those pins (no inert overrides field), exact files whitelist;
  * 10. node bundle runs for real (`helmx-node --help` on an isolated data dir; `restart --json`
  *    without a bound identity reports an honest error envelope) and installs from a real tarball
  *    via `npm install -g` into an isolated prefix (network-gated like the payload e2e: the four
@@ -602,12 +602,11 @@ test('node artifact assembly contract: dist-node is a four-external-dependency p
     );
     assert.equal(realPkgJson.version, spec, `${name} repository-installed version disagrees with the dist-node contract`);
   }
-  // overrides (peer-unification for consumer-side npm install, e.g. chord's ws peer pin) must stay
-  // consistent with the exact pins above — never introduce a version npm would reject.
-  for (const [name, spec] of Object.entries<string>(pkg.overrides ?? {})) {
-    assert.ok(EXTERNAL_DEPS.includes(name), `node overrides must only touch the four external dependencies, found ${name}`);
-    assert.equal(pkg.dependencies[name], spec, `node override for ${name} must equal its exact dependency pin`);
-  }
+  // Peer alignment is a build-time hard gate, not a shipped field: npm only honors `overrides` in
+  // the install root's manifest, never in a package being installed (0.1.1 shipped inert overrides
+  // and still warned ERESOLVE on `npm i -g`). The four exact pins must satisfy every peer in the
+  // closure and no overrides may be declared.
+  assert.equal(pkg.overrides, undefined, 'node artifact must fix peer conflicts at pin time (realign with chord peerOptional pins), not ship inert overrides');
 
   const bundle = readFileSync(path.join(nodeStagingDir, 'dist/cli.js'), 'utf-8');
   assert.ok(bundle.startsWith('#!/usr/bin/env node'), 'the bundle must keep the shebang to work as a bin target');

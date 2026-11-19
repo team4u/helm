@@ -92,10 +92,20 @@ export async function assembleNodeArtifact({ repoRoot, version, enginesNode }) {
   }
 
   // npm resolves peers strictly (ERESOLVE) while the repository's pnpm install allows wider peer
-  // ranges (e.g. chord pins peerOptional ws while the repository locks a newer patch): generate
-  // overrides unifying the whole consumer tree to the exact root pins, same mechanism as the Hub
-  // payload manifest.
+  // ranges. Overrides cannot help here: npm only honors `overrides` in the install root's manifest,
+  // never in a package being installed (`npm i -g @helmx/node` ships overrides that do nothing —
+  // proven by 0.1.1 warning despite carrying them). The only real fix is exact-version alignment
+  // with the peers of the four externals (repo pins ws at chord's peerOptional version), so make
+  // any residual conflict a hard build failure instead of shipping an inert field.
   const peerOverrides = scanPeerOverrides(EXTERNAL_DEPS.map((name) => ({ name, version: dependencies[name], fromPkgDir: nodePkgDir })));
+  if (peerOverrides.size > 0) {
+    const conflicts = [...peerOverrides.entries()].map(([name, version]) => `${name}@${version}`).sort().join(', ');
+    console.error(
+      `[payload] node external dependency peers conflict with the exact pins (${conflicts}): npm ignores overrides of a globally installed package,` +
+        ' so realign the repository pins with the peers of the four externals (e.g. ws must equal chord peerOptional pin) before publishing',
+    );
+    process.exit(1);
+  }
 
   rmSync(stagingDir, { recursive: true, force: true });
   mkdirSync(path.join(stagingDir, 'dist'), { recursive: true });
@@ -175,9 +185,6 @@ export async function assembleNodeArtifact({ repoRoot, version, enginesNode }) {
     bin: { 'helmx-node': './dist/cli.js' },
     files: ['dist/cli.js', 'LICENSE', 'THIRD_PARTY_NOTICES.md'],
     dependencies,
-    ...(peerOverrides.size > 0
-      ? { overrides: Object.fromEntries([...peerOverrides.entries()].sort(([a], [b]) => a.localeCompare(b))) }
-      : {}),
   };
   writeFileSync(path.join(stagingDir, 'package.json'), `${JSON.stringify(distPackageJson, null, 2)}\n`);
   cpSync(path.join(repoRoot, 'LICENSE'), path.join(stagingDir, 'LICENSE'));
@@ -205,9 +212,6 @@ export async function assembleNodeArtifact({ repoRoot, version, enginesNode }) {
   console.log(`[payload] node publish package: ${nodePackageName}@${version} (bin: helmx-node; overridable via HELMX_NODE_PACKAGE)`);
   console.log(`[payload] node bundle: 1 file, ${(bundleBytes / 1024).toFixed(1)} KiB; bundled inputs: ${[...bundledPkgs].sort().join(', ')}`);
   console.log(`[payload] node contract: external dependencies = ${EXTERNAL_DEPS.join(', ')} at exact installed versions; publish from dist-node via npm pack / npm publish (after cli)`);
-  if (peerOverrides.size > 0) {
-    console.log(`[payload] node peer overrides: ${JSON.stringify(Object.fromEntries([...peerOverrides.entries()].sort(([a], [b]) => a.localeCompare(b))))}`);
-  }
 
   return { bundleFile };
 }

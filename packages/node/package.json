@@ -24,7 +24,7 @@
     "@helmx/protocol": "workspace:*",
     "@helmx/env-io": "workspace:*",
     "birpc": "^2.9.0",
-    "ws": "^8.18.0"
+    "ws": "8.21.0"
   },
   "devDependencies": {
     "@helmx/test-kit": "workspace:*",
