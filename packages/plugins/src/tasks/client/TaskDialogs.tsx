@@ -43,6 +43,7 @@ import {
   TASK_ACTION_ARCHIVE_TITLE,
   TASK_ACTION_CANCEL,
   TASK_ACTION_CLOSE,
+  TASK_ACTION_CONTINUE,
   TASK_ACTION_DELETE,
   TASK_ACTION_DELETE_TITLE,
   TASK_ACTION_EDIT,
@@ -66,6 +67,9 @@ import {
   TASK_DEPS_SECTION,
   TASK_DEPS_UNKNOWN,
   TASK_DEPS_UNKNOWN_TITLE,
+  TASK_KICKOFF_UNDELIVERED,
+  TASK_KICKOFF_UNDELIVERED_TITLE,
+  TASK_ACTION_RESUME_KICKOFF_TITLE,
   TASK_KV_PLAN_APPROVAL,
   TASK_MERGE_AWAIT_REVIEW,
   TASK_PLAN_APPROVED,
@@ -592,6 +596,9 @@ export interface TaskDetailDrawerProps {
   onClose: () => void
   /** Open the rework dialog for this task (owned by the screen). */
   onRework: (taskId: string) => void
+  /** Explicit resume of a kickoff-undelivered task (resume_kickoff action; user-driven only). */
+  onResumeKickoff: (taskId: string) => void
+  busy: boolean
 }
 
 function kvRow(label: string, value: ReactNode): ReactNode {
@@ -699,6 +706,11 @@ export function TaskDetailDrawer(props: TaskDetailDrawerProps): ReactNode {
           </div>
 
           <div className="primary-drawer-body">
+            {task.kickoffUndelivered === true ? (
+              <div className="callout callout-warn" title={t(TASK_KICKOFF_UNDELIVERED_TITLE)}>
+                {t(TASK_KICKOFF_UNDELIVERED)}
+              </div>
+            ) : null}
             {live.liveSummary !== '' ? (
               <div className={`task-card-live${live.lightStatus === 'error' ? ' is-error' : live.needsAttention ? ' is-attention' : ''}`}>
                 <StatusLight status={live.lightStatus} label={taskLightLabel(live.lightStatus, locale)} />
@@ -890,6 +902,18 @@ export function TaskDetailDrawer(props: TaskDetailDrawerProps): ReactNode {
                 <button type="button" className="btn btn-sm btn-ghost" disabled={busy} onClick={props.onClose}>
                   <span>{t(TASK_ACTION_CLOSE)}</span>
                 </button>
+                {task.kickoffUndelivered === true ? (
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    disabled={props.busy}
+                    title={t(TASK_ACTION_RESUME_KICKOFF_TITLE)}
+                    onClick={() => props.onResumeKickoff(task.id)}
+                  >
+                    <HelmxIcon name="play" size={12} />
+                    <span>{t(TASK_ACTION_CONTINUE)}</span>
+                  </button>
+                ) : null}
                 {editing ? (
                   <>
                     <button type="button" className="btn btn-sm btn-ghost" disabled={busy} onClick={() => setEditing(false)}>

@@ -14,6 +14,7 @@
 import { DEFAULT_HELMX_LOCALE, type ConversationBackgroundSnapshot, type HelmxLocale } from '@helmx/plugin-client'
 import type { ConversationSummary } from '@helmx/protocol'
 import {
+  taskKickoffUndelivered,
   taskLiveConversationMissing,
   taskLiveErrorLine,
   taskLiveIdleWaiting,
@@ -77,6 +78,8 @@ export interface TaskRecord {
   reworkCount: number
   lastReworkFeedback?: string
   mergePending?: boolean
+  /** 重启恢复呈现态：开工任务书未送达，等待用户显式继续（resume_kickoff），绝不自动投递。 */
+  kickoffUndelivered?: boolean
   planApproval?: TaskPlanApproval
   /** 发起中的方案审批 Ask ID（审批在途）。 */
   pendingPlanAskId?: string
@@ -213,6 +216,7 @@ function parseTaskRecord(value: unknown): TaskRecord | undefined {
     reworkCount: parseNumber(value['reworkCount']) ?? 0,
     lastReworkFeedback: parseString(value['lastReworkFeedback']),
     mergePending: parseBoolean(value['mergePending']),
+    kickoffUndelivered: parseBoolean(value['kickoffUndelivered']),
     planApproval: parsePlanApproval(value['planApproval']),
     pendingPlanAskId: parseString(value['pendingPlanAskId']),
     silenceState: parseSilenceState(value['silenceState']),
@@ -338,6 +342,8 @@ export interface TaskLiveView {
   planApproval: 'approved' | 'rejected' | undefined
   /** A plan approval Ask is currently pending on the execution conversation. */
   planAskPending: boolean
+  /** The kickoff briefing was never delivered (restart recovery): awaits an explicit user resume_kickoff. */
+  kickoffUndelivered: boolean
   /** A subtree conversation waits on a human Ask (approval question), distinct from errors and sub-session confirmation. */
   approvalPending: boolean
   /** A background run is in flight for a subtree conversation (generic workbench badge facts, plugin-ID free). */
@@ -444,11 +450,13 @@ export function deriveTaskLiveView(
   // continuing the work must not be misreported as "settled, not submitted").
   const effectiveStalled = backgroundActive ? undefined : stalled
 
+  const kickoffUndelivered = task.kickoffUndelivered === true
   const needsAttention =
     task.column === 'in_progress' &&
     (lightStatus === 'blocked' ||
       lightStatus === 'error' ||
       effectiveStalled !== undefined ||
+      kickoffUndelivered ||
       conversationMissing ||
       task.conversationMissing === true)
 
@@ -469,6 +477,7 @@ export function deriveTaskLiveView(
         conversationMissing,
         pendingAsks,
         backgroundSummaries,
+        kickoffUndelivered,
       },
       locale,
     ),
@@ -481,6 +490,7 @@ export function deriveTaskLiveView(
     isReadyToStart: task.column === 'backlog' && !depsUnknown && blockedBy.length === 0,
     planApproval: task.planApproval?.decision,
     planAskPending: task.pendingPlanAskId !== undefined && task.planApproval === undefined,
+    kickoffUndelivered,
     approvalPending,
     backgroundActive,
     stalled: effectiveStalled !== undefined,
@@ -499,11 +509,12 @@ interface LiveSummaryInputs {
   conversationMissing: boolean
   pendingAsks: Readonly<Record<number, number>> | undefined
   backgroundSummaries: readonly string[]
+  kickoffUndelivered: boolean
 }
 
 /** Build the one-line live summary from real facts (error first, then blocked [approval vs sub-session], running, background, stalled, missing). */
 function buildLiveSummary(inputs: LiveSummaryInputs, locale: HelmxLocale): string {
-  const { task, lightStatus, errorConv, blockedConvs, approvalPending, main, activeChildren, stalled, conversationMissing, pendingAsks, backgroundSummaries } = inputs
+  const { task, lightStatus, errorConv, blockedConvs, approvalPending, main, activeChildren, stalled, conversationMissing, pendingAsks, backgroundSummaries, kickoffUndelivered } = inputs
   if (conversationMissing) return taskLiveConversationMissing(locale)
   if (lightStatus === 'error') {
     const line = errorConv?.lastError ?? task.silenceState?.lastError
@@ -516,6 +527,7 @@ function buildLiveSummary(inputs: LiveSummaryInputs, locale: HelmxLocale): strin
     // distinct facts; both differ from errors.
     return approvalPending ? taskLiveWaitingApproval(doing, locale) : taskLiveSubSessionConfirm(doing, locale)
   }
+  if (kickoffUndelivered) return taskKickoffUndelivered(locale)
   if (lightStatus === 'running') {
     const doing = main?.doing
     if (doing !== undefined && doing !== '') return doing

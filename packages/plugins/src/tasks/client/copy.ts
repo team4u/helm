@@ -363,8 +363,8 @@ export function taskMergeConfirmAria(taskId: string, locale: HelmxLocale = DEFAU
   return resolveLocalizedText({ en: `Confirm merge and close for ${taskId}`, 'zh-CN': `确认合并并结单 ${taskId}` }, locale)
 }
 export const TASK_MERGE_CONFIRM_BODY: LocalizedText = L(
-  'The executor will merge the delivery branch into the main branch, clean up the worktree, and resubmit for final approval. This touches the repository main branch.',
-  '执行会话将把交付分支合入主干、清理工作树，并再次交卷等待最终验收。此操作涉及仓库主干。',
+  'The executor will merge the delivery branch into the main branch and clean up the worktree. The task closes only when the executor submits with explicit merged confirmation (merged: true); an honest failure report returns the task for manual review.',
+  '执行会话将把交付分支合入主干并清理工作树。任务仅在执行者以明确合并证据（merged: true）交卷时自动结单；如实汇报失败将回到人工复核。',
 )
 export const TASK_MERGE_CONFIRM_TO_BRANCH: LocalizedText = L('Merge branch', '合并分支')
 export const TASK_MERGE_CONFIRM_WORKTREE: LocalizedText = L('Worktree to clean up', '待清理工作树')
@@ -372,6 +372,22 @@ export const TASK_MERGE_CONFIRM_FILES: LocalizedText = L('Changed files', '改�
 export const TASK_MERGE_CONFIRM_UNKNOWN_BRANCH: LocalizedText = L('unknown (executor decides)', '未知（由执行会话决定）')
 export const TASK_MERGE_CONFIRM_SUBMIT: LocalizedText = L('Merge & close task', '确认合并并结单')
 export const TASK_MERGE_CONFIRM_CANCEL: LocalizedText = L('Cancel', '取消')
+
+/** Kickoff undelivered (restart recovery): explicit user resume only, never automatic. */
+export const TASK_KICKOFF_UNDELIVERED: LocalizedText = L('Kickoff not delivered', '开工未送达')
+export const TASK_KICKOFF_UNDELIVERED_TITLE: LocalizedText = L(
+  'The task briefing was never delivered (restart recovery). Click Continue to re-deliver it explicitly',
+  '任务书未送达（重启恢复）。点「继续」显式重投',
+)
+export const TASK_ACTION_RESUME_KICKOFF_TITLE: LocalizedText = L(
+  'Re-deliver the kickoff briefing via the resume_kickoff action (user-driven; never automatic)',
+  '经 resume_kickoff 动作重投任务书（用户显式触发，绝不自动投递）',
+)
+
+/** Live summary line for a kickoff-undelivered task (awaiting explicit user resume). */
+export function taskKickoffUndelivered(locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  return resolveLocalizedText(TASK_KICKOFF_UNDELIVERED, locale)
+}
 
 /** Distinct affordances: the live execution conversation drawer vs the task detail drawer. */
 export const TASK_ACTION_OPEN_CONV_BTN: LocalizedText = L('Conversation', '会话')
