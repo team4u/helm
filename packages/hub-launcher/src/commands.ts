@@ -127,7 +127,7 @@ export async function cmdUpdate(ctx: CommandContext, flags: CommandFlags): Promi
   if (outcome.deferred !== undefined) {
     ctx.io.out(
       `update to ${outcome.targetVersion} deferred: hub is busy (${describeActivityCounts(outcome.deferred.counts)}); ` +
-        'nothing was stopped or changed and the current release keeps serving (pass --force to bypass)\n',
+        'the candidate is staged and the current release keeps serving (pass --force to bypass)\n',
     );
     return 0;
   }

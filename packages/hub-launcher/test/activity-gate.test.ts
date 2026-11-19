@@ -16,6 +16,7 @@ import { captureIo, cleanupPid, spawnAlienProcess } from './fixtures.js';
 function baseRecord(pid: number, startTime: number, port: number): HubPidRecord {
   return {
     pid,
+    launchId: 'test-launch',
     version: '1.0.0',
     entryPath: '/nowhere/start.mjs',
     port,
@@ -47,6 +48,7 @@ test('a fully bound idle heartbeat passes the gate', { timeout: 60_000 }, async 
   assert.ok(startTime !== null, 'test requires /proc start times (Linux)');
   await writeActivity(dir, {
     schema: 1,
+    launchId: 'test-launch',
     pid: writer,
     ppid: process.pid,
     port: 3202,
@@ -66,6 +68,7 @@ test('busy counts surface verbatim in the gate verdict', { timeout: 60_000 }, as
   assert.ok(startTime !== null);
   await writeActivity(dir, {
     schema: 1,
+    launchId: 'test-launch',
     pid: writer,
     ppid: process.pid,
     port: 3202,
@@ -93,6 +96,7 @@ test('a two-level writer binds through ppid (payload wrapper layout)', { timeout
   assert.ok(wrapperStart !== null && hubStart !== null);
   await writeActivity(dir, {
     schema: 1,
+    launchId: 'test-launch',
     pid: hub,
     ppid: wrapper,
     port: 3202,
@@ -117,6 +121,7 @@ test('every broken link in the chain is unknown, never idle or busy', { timeout:
   const io = idleIo();
   const valid = {
     schema: 1,
+    launchId: 'test-launch',
     pid: writer,
     ppid: process.pid,
     port: 3202,
@@ -196,4 +201,22 @@ test('every broken link in the chain is unknown, never idle or busy', { timeout:
   await writeActivity(dir, { ...revivedValid, startTime: null });
   const noWriterProof = await readHubActivityGate(revivedRecord, dir, io);
   assert.ok(noWriterProof.kind === 'unknown' && /no writer start-time proof/.test(noWriterProof.detail));
+});
+
+
+test('a held wrapper can prove the heartbeat launch without /proc', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helm-activity-held-');
+  const { io } = captureIo();
+  const pid = process.pid;
+  const record = { ...baseRecord(pid, 0, 3202), startTime: undefined };
+  const heartbeat = {
+    schema: 1, launchId: record.launchId, pid, ppid: process.ppid, port: record.port,
+    startTime: null, updatedAt: Date.now(), counts: idleCounts(),
+  };
+  await writeActivity(dir, heartbeat);
+  assert.equal((await readHubActivityGate(record, dir, io)).kind, 'unknown');
+  const held = { ownsWrapper: true };
+  assert.deepEqual(await readHubActivityGate(record, dir, io, held), { kind: 'idle' });
+  await writeActivity(dir, { ...heartbeat, launchId: 'previous-launch' });
+  assert.equal((await readHubActivityGate(record, dir, io, held)).kind, 'unknown');
 });

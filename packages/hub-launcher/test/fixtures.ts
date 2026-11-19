@@ -105,7 +105,7 @@ else {
     try { mkdirSync(path.dirname(activityFile), { recursive: true }); } catch {}
     if (state.mode === 'garbage') { try { writeFileSync(activityFile, '{not-json', { flag: 'w' }); } catch {} return; }
     const updatedAt = state.mode === 'stale' ? Date.now() - 3_600_000 : Date.now();
-    const record = { schema: 1, pid: process.pid, ppid: process.ppid, port, startTime: startTimeSelf, updatedAt, counts: state.counts };
+    const record = { schema: 1, launchId: process.env.HELM_HUB_ACTIVITY_LAUNCH_ID ?? null, pid: process.pid, ppid: process.ppid, port, startTime: startTimeSelf, updatedAt, counts: state.counts };
     const tmp = activityFile + '.tmp';
     try { writeFileSync(tmp, JSON.stringify(record) + '\\n', { mode: 0o600 }); renameSync(tmp, activityFile); } catch {}
   };

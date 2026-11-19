@@ -137,7 +137,7 @@ test('payload assembly: missing build artifacts are rebuilt on demand, then buil
   if (!existsSync(path.join(repoRoot, 'packages/update/dist/index.js'))) {
     runCommand('pnpm', ['--filter', '@helm/update', 'run', 'build'], repoRoot, 180_000);
   }
-  if (!existsSync(path.join(repoRoot, 'packages/hub-launcher/dist/main.js'))) {
+  if (!existsSync(path.join(repoRoot, 'packages/hub-launcher/dist/index.js'))) {
     runCommand('pnpm', ['--filter', '@helm/hub-launcher', 'run', 'build'], repoRoot, 180_000);
   }
   if (!existsSync(path.join(repoRoot, 'packages/plugin-build/dist/index.js'))) {
@@ -546,7 +546,7 @@ test('end-to-end: npm pack → isolated npm install → check → start really l
     // on SIGTERM.
     const dataDir = path.join(outsideRoot, 'data');
     mkdirSyncRecursive(dataDir);
-    const port = 33500 + (process.pid % 1500);
+    const port = await freePort();
     const child = spawn(process.execPath, [path.join(extractDir, 'start.mjs'), 'start'], {
       cwd: extractDir,
       env: { ...env, HELM_PORT: String(port), HELM_HOST: '127.0.0.1', HELM_DATA_DIR: dataDir, HELM_CWD: dataDir },
@@ -643,11 +643,11 @@ test('end-to-end: npm pack → isolated npm install → check → start really l
       }
 
       // real acceptance of the payload-bundled CLI (the exact same single-file bundle as the
-      // dist-cli artifact): run cli/dist/index.js status --json against the live Hub over real
+      // dist-cli artifact): the Hub-managed CLI shim runs status --json against the live Hub over real
       // HTTP — exercising the bundled command dispatch, credential env, and JSON output path.
       const cliStatus = spawnSync(
-        process.execPath,
-        [path.join(extractDir, 'cli', 'dist', 'index.js'), 'status', '--json'],
+        path.join(dataDir, 'bin', 'helm'),
+        ['status', '--json'],
         {
           cwd: extractDir,
           encoding: 'utf8',
@@ -819,6 +819,16 @@ test('cli golden sequence: installed helm updates from a real payload tarball, h
     assert.equal(snapshot.running.healthy, true, 'the health gate must have passed before update reported success');
     assert.ok(existsSync(path.join(installRoot, 'releases', payloadPkg.version)), 'the immutable release directory must exist');
     assert.ok(existsSync(path.join(installRoot, 'logs', 'hub.log')), 'the detached hub log must exist for diagnostics');
+
+    const pluginDir = path.join(outsideRoot, 'client-fixture');
+    mkdirSync(pluginDir);
+    writeFileSync(path.join(pluginDir, 'plugin.json'), JSON.stringify({ id: 'client-fixture', clientRoot: '.' }));
+    writeFileSync(path.join(pluginDir, 'client.tsx'), 'export function Panel() { return null }\n');
+    const compiled = spawnSync(binPath, ['plugins', 'build', pluginDir, '--module', 'client.tsx', '--json'], {
+      cwd: outsideRoot, encoding: 'utf8', timeout: 50_000, env: updateEnv,
+    });
+    assert.equal(compiled.status, 0, compiled.stderr);
+    assert.deepEqual(JSON.parse(compiled.stdout).manifest.modules['client.tsx'].exports, ['Panel']);
 
     // 5. update --stop: identity-verified shutdown, leaving no pid file behind.
     const stop = spawnSync(binPath, ['update', '--stop'], { cwd: outsideRoot, encoding: 'utf8', timeout: 120_000, env: updateEnv });

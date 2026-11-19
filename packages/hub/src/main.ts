@@ -5,6 +5,9 @@ import { createHelm } from './app.js';
 import { hubActivityFilePath, startActivityHeartbeat, startHub } from '@helm/kernel';
 import { resolveWebDistOption } from './web-dist.js';
 
+const launchId = process.env.HELM_HUB_ACTIVITY_LAUNCH_ID;
+delete process.env.HELM_HUB_ACTIVITY_LAUNCH_ID;
+
 const port = Number(process.env.HELM_PORT ?? '3202');
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('HELM_PORT must be an integer between 1 and 65535');
 // Listen address: loopback only by default (remote helm-node requires explicit HELM_HOST=0.0.0.0 or a reverse proxy).
@@ -26,6 +29,7 @@ try {
   const heartbeat = startActivityHeartbeat({
     file: hubActivityFilePath(app.kernel.dataDir),
     port,
+    ...(launchId !== undefined ? { launchId } : {}),
     snapshot: () => app.kernel.activitySnapshot(),
     subscribeBusyEntered: (listener) => app.kernel.onActivityBusyEntered(listener),
     onWriteError: (error) => {

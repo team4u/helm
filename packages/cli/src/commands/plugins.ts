@@ -20,6 +20,8 @@ import {
   type PluginSummary,
   type PluginUpdateResult,
 } from '@helm/protocol'
+import { createRequire } from 'node:module'
+import { pathToFileURL } from 'node:url'
 import { CliError } from '../errors.js'
 import { parseFlags } from '../args.js'
 import { printValue } from '../output.js'
@@ -1001,7 +1003,16 @@ async function runPluginsBuild(ctx: CommandContext): Promise<void> {
     ) => Promise<BuildPluginClientBundleDirResult>
   }
   try {
-    buildMod = (await import(pluginBuildPkg)) as typeof buildMod
+    let entry: string
+    try {
+      entry = import.meta.resolve(pluginBuildPkg)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ERR_MODULE_NOT_FOUND') throw error
+      const { readCurrentEntry, resolveInstallRoot } = await import('@helm/hub-launcher')
+      const current = await readCurrentEntry(resolveInstallRoot(ctx.env))
+      entry = pathToFileURL(createRequire(current.entryPath).resolve(pluginBuildPkg)).href
+    }
+    buildMod = (await import(entry)) as typeof buildMod
   } catch (err) {
     throw new CliError(
       `plugin client compiler unavailable (${pluginBuildPkg} failed to load: ${err instanceof Error ? err.message : String(err)})`,

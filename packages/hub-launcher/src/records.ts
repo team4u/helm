@@ -35,6 +35,7 @@ function requirePort(rec: Record<string, unknown>, key: string): number {
 
 export interface HubPidRecord {
   pid: number;
+  launchId?: string;
   version: string;
   entryPath: string;
   port: number;
@@ -44,7 +45,7 @@ export interface HubPidRecord {
   /**
    * Linux `/proc/<pid>/stat` start time (field 22, clock ticks since boot), captured at spawn.
    * Immutable for a pid's lifetime: a mismatch on stop proves pid reuse and blocks signalling.
-   * Absent on platforms without `/proc` (the health-probe identity gate applies instead).
+   * Absent on platforms without `/proc`, where cross-process stop is unavailable.
    */
   startTime?: number;
 }
@@ -64,6 +65,7 @@ function validatePidRecord(raw: unknown): HubPidRecord {
     startedAt: requireString(rec, 'startedAt'),
   };
   if (!isStrictSemver(record.version)) throw new Error(`invalid SemVer version: "${record.version}"`);
+  if (rec['launchId'] !== undefined) record.launchId = requireString(rec, 'launchId');
   if (rec['host'] !== undefined) record.host = requireString(rec, 'host');
   if (rec['dataDir'] !== undefined) record.dataDir = requireString(rec, 'dataDir');
   if (rec['startTime'] !== undefined) {

@@ -28,6 +28,7 @@
  * pre-escalation wait; the escalation path (`taskkill /F /T`) is uniform.
  */
 import { spawn, type ChildProcess } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import fsp from 'node:fs/promises';
 import process from 'node:process';
 import { killProcessTree } from '@helm/env-io';
@@ -286,9 +287,11 @@ export async function startHubLocked(root: string, io: LauncherIo, options: Star
   await fsp.mkdir(paths.logDir, { recursive: true });
   const logHandle = await fsp.open(paths.hubLogPath, 'a');
   const startOffset = (await logHandle.stat()).size;
+  const launchId = randomUUID();
   const childEnv: NodeJS.ProcessEnv = {
     ...io.env,
     HELM_PORT: String(config.port),
+    HELM_HUB_ACTIVITY_LAUNCH_ID: launchId,
     HELM_HOST: config.host,
   };
   if (config.dataDir !== undefined) childEnv.HELM_DATA_DIR = config.dataDir;
@@ -335,6 +338,7 @@ export async function startHubLocked(root: string, io: LauncherIo, options: Star
     });
     await writePidRecord(root, {
       pid,
+      launchId,
       version: current.version,
       entryPath: current.entryPath,
       port: config.port,

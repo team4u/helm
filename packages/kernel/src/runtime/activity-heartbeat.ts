@@ -7,13 +7,10 @@
  * the current Hub instance; see `@helm/hub-launcher`'s activity reader):
  * - periodic atomic rewrite (tmp + rename) every `intervalMs`, plus an immediate write at start;
  * - SYNCHRONOUS rewrite on every idle→busy transition (registered via `listenBusyEntered`): the
- *   tracker invokes the listener inside its synchronous mutation path, so a busy flip lands in
- *   the file before any concurrent reader can finish acting on the previous idle record. This
- *   bounds the launcher's confirm-idle→stop admission race to the reader's own read+decide+signal
- *   latency instead of the heartbeat interval;
+ *   tracker invokes the listener inside its synchronous mutation path. This limits the idle
+ *   observation window to the reader's read, decision and signal latency;
  * - best-effort semantics on write failures: the heartbeat never destabilizes the Hub (failures
- *   are reported through `onWriteError` and the file simply goes stale — stale reads make the
- *   launcher defer updates, the safe direction);
+ *   are reported through `onWriteError` and the outdated record is removed where possible);
  * - `stop()` removes the file (clean shutdown leaves no evidence a later launcher could mistake
  *   for a live idle Hub).
  *
@@ -24,7 +21,7 @@
 import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
-import type { HubActivityCounts, HubActivityFile } from '@helm/protocol';
+import { HUB_ACTIVITY_FILENAME, type HubActivityCounts, type HubActivityFile } from '@helm/protocol';
 
 /** Parse the start-time field (22) out of a `/proc/<pid>/stat` line (`comm` may contain spaces). */
 function parseProcStartTime(statContent: string): number | null {
@@ -51,6 +48,7 @@ export interface ActivityHeartbeatOptions {
   file: string;
   /** Port the Hub HTTP server is bound to (identity binding for readers). */
   port: number;
+  launchId?: string;
   /** Live activity counts (the kernel runtime's aggregate snapshot). */
   snapshot(): HubActivityCounts;
   /**
@@ -94,6 +92,7 @@ export function startActivityHeartbeat(options: ActivityHeartbeatOptions): Activ
     if (stopped) return;
     const record: HubActivityFile = {
       schema: 1,
+      launchId: options.launchId ?? null,
       pid,
       ppid,
       port: options.port,
@@ -108,12 +107,14 @@ export function startActivityHeartbeat(options: ActivityHeartbeatOptions): Activ
       writeFileSync(tmp, serializeRecord(record), { mode: 0o600 });
       renameSync(tmp, options.file);
     } catch (error) {
-      options.onWriteError?.(error);
-      try {
-        unlinkSync(tmp);
-      } catch {
-        // tmp cleanup is best-effort (a leftover tmp file never shadows the real record)
+      for (const file of [tmp, options.file]) {
+        try {
+          unlinkSync(file);
+        } catch {
+          // A write failure may also make the file unremovable. The reader still checks freshness.
+        }
       }
+      options.onWriteError?.(error);
     }
   };
 
@@ -140,5 +141,5 @@ export function startActivityHeartbeat(options: ActivityHeartbeatOptions): Activ
 
 /** Resolve the heartbeat file path inside a Hub data directory (writer and readers share this name). */
 export function hubActivityFilePath(dataDir: string): string {
-  return path.join(dataDir, 'hub-activity.json');
+  return path.join(dataDir, HUB_ACTIVITY_FILENAME);
 }

@@ -30,13 +30,15 @@ export interface HubActivityCounts {
 /** On-disk heartbeat record (atomic tmp+rename writes; strict schema, unknown fields rejected by readers). */
 export interface HubActivityFile {
   schema: 1;
+  /** Per-launch identity passed by the supervisor to the Hub process. */
+  launchId: string | null;
   /** Real Hub process id (the payload `start.mjs` wrapper's grandchild). */
   pid: number;
   /** Parent pid at write time: in the payload layout, the `start.mjs` wrapper the launcher recorded in `hub.pid`. */
   ppid: number;
   /** Port the Hub HTTP server is bound to. */
   port: number;
-  /** Linux `/proc/<pid>/stat` start time (field 22) of `pid`; `null` where unavailable (readers fail closed). */
+  /** Linux `/proc/<pid>/stat` start time (field 22) of `pid`; `null` where unavailable. */
   startTime: number | null;
   /** Epoch milliseconds at write time (freshness bound for readers). */
   updatedAt: number;

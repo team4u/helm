@@ -19,9 +19,8 @@
  * 5. the record is fresh: `updatedAt` within `staleAfterMs` of now (and not meaningfully in the
  *    future — clock jumps count as unknown, not idle).
  *
- * Known boundaries (documented, not hidden): on platforms without `/proc` start times the chain
- * cannot be completed, so activity is permanently `unknown` there and updates need `--force`;
- * a Hub build that predates the heartbeat writer leaves no file, which is equally `unknown`.
+ * A supervisor with the child handle can use the per-launch identity on platforms without
+ * `/proc`. A detached process still requires the full start-time proof.
  */
 import fsp from 'node:fs/promises';
 import path from 'node:path';
@@ -36,9 +35,11 @@ export type HubActivityGate =
   | { kind: 'unknown'; detail: string };
 
 export interface ReadHubActivityOptions {
+  /** The supervisor holds the live wrapper handle. */
+  ownsWrapper?: boolean;
   /** Clock seam (tests). */
   now?: () => number;
-  /** Freshness bound for `updatedAt` (default `DEFAULTS.activityStaleAfterMs`). */
+  /** Freshness bound for `updatedAt` (default 20 seconds). */
   staleAfterMs?: number;
   /** Start-time reader seam (tests; defaults to the launcher's `/proc` reader). */
   readStartTime?: (pid: number) => Promise<number | null>;
@@ -53,7 +54,8 @@ function validateActivityFile(raw: unknown): HubActivityFile | null {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null;
   const rec = raw as Record<string, unknown>;
   if (rec['schema'] !== 1) return null;
-  const { pid, ppid, port, startTime, updatedAt, counts } = rec;
+  const { pid, ppid, port, startTime, updatedAt, counts, launchId } = rec;
+  if (launchId !== null && (typeof launchId !== 'string' || launchId === '')) return null;
   if (!isCount(pid) || pid === 0) return null;
   if (!isCount(ppid)) return null;
   if (!isCount(port) || port === 0 || port > 65535) return null;
@@ -71,6 +73,7 @@ function validateActivityFile(raw: unknown): HubActivityFile | null {
   }
   return {
     schema: 1,
+    launchId,
     pid,
     ppid,
     port,
@@ -114,19 +117,14 @@ export async function readHubActivityGate(
   const file = path.join(dataDir, HUB_ACTIVITY_FILENAME);
   const unknown = (detail: string): HubActivityGate => ({ kind: 'unknown', detail });
 
-  // (1) wrapper identity: alive + start-time proof (Linux). Without the proof the pid record
-  // could belong to a reused pid and every downstream binding would be guesswork.
+  if (record.launchId === undefined) return unknown('pid record has no activity launch identity');
   if (record.startTime === undefined) {
-    return unknown(
-      `pid record for ${record.pid} carries no process start-time proof (platform without /proc, or a pre-proof record); cannot bind the activity file to this hub instance`,
-    );
-  }
-  const wrapperStart = await readStartTime(record.pid);
-  if (wrapperStart === null || wrapperStart !== record.startTime) {
-    return unknown(`recorded wrapper pid ${record.pid} fails its start-time proof (recorded ${record.startTime}, current ${wrapperStart ?? 'unavailable'})`);
+    if (!options?.ownsWrapper) return unknown(`pid record for ${record.pid} carries no process start-time proof`);
+  } else if (await readStartTime(record.pid) !== record.startTime) {
+    return unknown(`recorded wrapper pid ${record.pid} fails its start-time proof`);
   }
 
-  // (2) strict file read.
+  // Read the heartbeat only after verifying the wrapper identity.
   let raw: unknown;
   try {
     raw = JSON.parse(await fsp.readFile(file, 'utf8'));
@@ -138,7 +136,9 @@ export async function readHubActivityGate(
     return unknown(`activity file at ${file} does not satisfy the heartbeat schema`);
   }
 
-  // (3) the writer belongs to this launcher's recorded process and port: in the payload layout
+  if (activity.launchId !== record.launchId) return unknown('activity file belongs to another launch');
+
+  // The writer belongs to this launcher's recorded process and port: in the payload layout
   // the real Hub is a direct child of the recorded `start.mjs` wrapper (`ppid` match); a
   // single-level spawn (the recorded process itself serves and writes) is equally accepted.
   if (activity.port !== record.port) {
@@ -150,19 +150,15 @@ export async function readHubActivityGate(
     );
   }
 
-  // (4) writer identity: alive + start-time proof (Linux).
-  if (activity.startTime === null) {
-    return unknown('activity file carries no writer start-time proof (platform without /proc); cannot prove the writer is still alive');
-  }
-  if (!isAlive(activity.pid)) {
-    return unknown(`activity writer pid ${activity.pid} is no longer alive`);
-  }
-  const writerStart = await readStartTime(activity.pid);
-  if (writerStart === null || writerStart !== activity.startTime) {
-    return unknown(`activity writer pid ${activity.pid} fails its start-time proof (recorded ${activity.startTime}, current ${writerStart ?? 'unavailable'}); possible pid reuse`);
+  if (!isAlive(activity.pid)) return unknown(`activity writer pid ${activity.pid} is no longer alive`);
+  if (record.startTime !== undefined) {
+    if (activity.startTime === null) return unknown('activity file carries no writer start-time proof');
+    if (await readStartTime(activity.pid) !== activity.startTime) {
+      return unknown(`writer pid ${activity.pid} fails its start-time proof`);
+    }
   }
 
-  // (5) freshness (both directions: an aged record or a future-skewed clock is unknown).
+  // Stale or future-skewed clocks cannot establish whether the Hub is idle.
   const age = now() - activity.updatedAt;
   if (age > staleAfterMs) {
     return unknown(`activity file is stale (${Math.round(age)}ms old, bound ${staleAfterMs}ms); the hub may be hung or overloaded`);

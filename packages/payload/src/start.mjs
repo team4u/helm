@@ -230,6 +230,8 @@ if (command === 'check') {
   const hubEntry = path.resolve(payloadRoot, entries.hub);
   // Export static hosting dir when web/dist exists and HELM_WEB_DIST_DIR is unset (see header; never silently fall back).
   const childEnv = { ...process.env };
+  // The installed payload has no workspace tree for the managed CLI shim to resolve.
+  childEnv.HELM_CLI_ENTRY ??= path.resolve(payloadRoot, entries.cli);
   if (childEnv.HELM_WEB_DIST_DIR === undefined && existsSync(path.join(payloadRoot, 'web/dist'))) {
     childEnv.HELM_WEB_DIST_DIR = path.resolve(payloadRoot, 'web/dist');
   }

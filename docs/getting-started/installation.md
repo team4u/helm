@@ -17,38 +17,29 @@ helm 当前有两种安装方式：**npm 制品模式**（一次安装，推荐�
 
 ## npm 制品安装（一次安装）
 
-稳定 launcher（`@team4u/helm-hub-launcher`，零依赖单文件 bundle）全局安装后即可管理本机 Hub：安装/更新 Hub payload、启动、健康门控与回滚，全程不需要源码 checkout。
+全局安装 `@team4u/helm` 后，用 `helm` 管理本机 Hub，也可以连接已有 Hub 来操作会话、模型和插件。
 
 ```bash
-npm install -g @team4u/helm-hub-launcher
-
-helm-hub-launcher run                                # 一次到位：安装 latest 通道 payload 并启动，之后定时自动更新
-helm-hub-launcher run --interval-ms 3600000 --tag beta   # 自定义周期与预发布通道
-helm-hub-launcher run --port 3202 --data-dir ~/.helm --model <id>
-helm-hub-launcher status --json && helm-hub-launcher stop && helm-hub-launcher restart
-helm-hub-launcher check [--tag beta] [--json]       # 只读检查所选通道是否有更新
-helm-hub-launcher update --start                    # 一次性升级并启动（cron 场景等价路径）
-helm-hub-launcher update --tarball ./helm-hub-<ver>.tgz --version <ver> --start   # 本地 tgz 安装
-helm-hub-launcher update --version <ver> --force    # 降级 / 重装 / 绕过失败冷却
+npm install -g @team4u/helm
+helm update --watch
 ```
 
-目录与边界：
+`--watch` 在前台运行 Hub，首次启动会联网安装发行包。之后默认每 15 分钟检查 `latest`。通过 `--channel beta` 选择预发布版，通过 `--interval-ms` 调整间隔。已安装的 Hub 可以离线启动。
 
-| 目录 | 内容 | 说明 |
-| :--- | :--- | :--- |
-| `~/.helm-hub`（`HELM_HUB_INSTALL_ROOT`） | `releases/<版本>/`、`current.json`、`hub.pid`、`logs/hub.log` | 程序状态：launcher 管理的 release 与运行记录，与用户数据严格分离 |
-| `~/.helm`（`HELM_DATA_DIR`） | 会话数据库、凭据、插件数据 | 用户数据：卸载重装 launcher 不影响，与源代码模式共用同一布局 |
+| 命令 | 用途 |
+| :--- | :--- |
+| `helm update` | 安装或更新本机 Hub，在首次安装后启动 |
+| `helm update --check --json` | 查询可用更新，无需登录 Hub |
+| `helm update --status --json` | 查看已安装和运行中的版本及失败冷却状态 |
+| `helm update --stop` | 在 Linux 上验证进程身份后停止已运行的 Hub |
 
-启动配置（端口/绑定地址/数据目录/默认模型）按「CLI flags > 环境变量 > `launch.json` 粘性配置 > 默认值（`3202` / `127.0.0.1`）」解析，启动成功后写入 `~/.helm-hub/launch.json`，升级重启沿用；显式参数详见 `helm-hub-launcher --help`。候选版本健康检查失败会回滚旧版并写入 `update-blocked.json` 冷却（默认 30 分钟），诊断链含 `logs/hub.log` 尾部快照。
+新版本会下载、校验并准备在独立版本目录。发现运行中的会话、工具、上下文压缩或队列任务时，保留候选版本，等下次检查确认空闲再切换。活动无法确认时也保留当前进程。`--force` 可显式绕过活动检查。切换期间会短暂停机。若新版启动失败，按已有回滚流程恢复上一个版本。空闲检查与关停之间接入的新回合仍可能随重启恢复执行。
 
-说明：
+安装根默认 `~/.helm-hub`（`HELM_HUB_INSTALL_ROOT`），会话、凭据和插件数据默认位于 `~/.helm`（`HELM_DATA_DIR`）。这两个目录必须独立。端口默认 `3202`，绑定地址默认 `127.0.0.1`。启动配置优先使用命令行参数，其次是环境变量和上次保存的启动配置。用 `helm update --help` 查看选项。
 
-- launcher 是**稳定外部安装**，绝不被它管理的 release 覆盖；升级 launcher 本身即重新 `npm install -g @team4u/helm-hub-launcher`；
-- **定时自动更新（`run`）**：前台常驻监督——本机尚无已提交 release 时先联网安装所选通道最新版再启动（首次引导需要网络）；已安装则直接启动已提交版本，此后每周期对照 registry dist-tag 自动升级（升级走既有编排：staging → 忙时门禁 → 停止 → 提交 → 启动 → 健康门控，失败回滚旧版并继续服务，registry 故障期间已装 Hub 持续运行、下一轮重试）。周期与通道：`--interval-ms <毫秒>`（env `HELM_HUB_UPDATE_INTERVAL_MS`，默认 `900000` 即 15 分钟——忙时会自动延期，空闲后很快收敛）与 `--tag <dist-tag>`（env `HELM_HUB_UPDATE_TAG`，默认 `latest`，预发布通道传 `beta`；`check` / `update` 同用该 flag）。进程归属纪律：`run` 只监督自己启动的 Hub（持有子进程句柄），本机已有 Hub 实例在跑时显式拒绝、不收养（先 `stop` 再 `run`）；`Ctrl-C` / `SIGTERM` 等在途更新周期完成后优雅关停持有的 Hub 再退出（退出码 0；再次信号直接强退，退出码 130），受监督 Hub 意外死亡则本进程以退出码 1 结束并输出日志尾部指引（可配 systemd `Restart=always` 托管本 launcher 实现自动拉起）。`run` 不支持 `--json`；手动 `update` / `stop` / `restart` 与 `run` 经同一生命周期锁串行化，不会交错误杀；
-- **忙时门禁（busy gate）**：运行中的 Hub 在自身数据目录维护进程私有活动心跳文件 `hub-activity.json`（内核聚合：活跃回合（含审批 blocked 且回合仍在途）、compaction、排队输入、settlement 回调；空闲→忙碌跃迁同步改写，平时周期刷新，关停时删除）。`update`（含 `run` 的自动周期）先在 staging 前预检、再在生命周期锁内停机前终检：忙→本轮延期（不动 `current.json`、不写 blocked、staging 候选留缓存、Hub 保持服务，下一周期重试）；未知（文件缺失/过期/身份链不完整，如旧版 Hub 或非 Linux 无 `/proc` 证明）→ fail-closed 显式拒绝，`--force` 手动显式绕过。真实边界：终检空闲到信号送达之间仍存在毫秒级接入窗口，该窗口内新提交的回合会像任何重启一样被内核回退为 pending 并在升级后恢复，不丢数据但该回合重新生成；
-- **手动 `stop` 的身份核验（fail-closed）**：跨进程 `stop` 唯一接受的发信号证据是 Linux `/proc` 记录的进程启动时间（pid 生命周期内不可变）；记录缺失该证明即拒绝并显式报 `hub_identity_unverifiable`（疑似 pid 复用时同理），健康探针只用于只读 `status` 与防双启，**绝不作为发信号依据**——端口上有 hub 形响应证明不了记录的 pid 就是它。因此非 Linux 平台建议以 `run` 管理生命周期（持有子进程句柄、归属可证，信号关停不受此限；Windows 下关停为整树终止，不遗留孙进程）；
-- launcher 相关环境变量：`HELM_HUB_INSTALL_ROOT`（安装根，默认 `~/.helm-hub`）、`HELM_NPM_REGISTRY`、`HELM_PAYLOAD_PACKAGE`（默认 `@team4u/helm-hub`）、`HELM_HUB_UPDATE_TAG`（默认 `latest`）、`HELM_HUB_UPDATE_INTERVAL_MS`（默认 `900000`）、`HELM_UPGRADE_BLOCK_COOLDOWN_MS`（失败冷却，默认 30 分钟）；启动侧沿用 `HELM_PORT` / `HELM_HOST` / `HELM_DATA_DIR` / `HELM_MODEL` / `HELM_WEB_DIST_DIR`（CLI flags 优先）；
-- `helm`（控制 CLI）与 `helm-node`（节点守护进程）不在该制品内：控制端可继续用源代码模式或 `pnpm link:bins` 挂载；`helm-node` 双包分发属于独立机制。
+`--watch` 管理自己启动的 Hub，按 `Ctrl+C` 关闭。在 macOS 和 Windows 上使用 `--watch` 管理和更新运行中的 Hub。Windows 关停通过终止进程树完成。`helm update` 管理的是 Hub 版本。如需更新 npm 安装的 `helm` 命令本身，重新执行 `npm install -g @team4u/helm`。
+
+全局安装后的 `helm plugins build` 使用本机已安装的 Hub 发行包中的编译器。请先通过 `helm update` 安装发行包。
 
 ## 源代码模式安装
 

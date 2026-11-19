@@ -40,25 +40,6 @@ const SHEBANG = '#!/usr/bin/env node';
 export const cliPackageName = process.env.HELM_CLI_PACKAGE ?? '@team4u/helm';
 
 /**
- * Resolve a workspace package's runtime entry from its manifest: exports['.'] (string or
- * conditions object) → main → a single bin target. Follows the same precedence Node/esbuild
- * apply when resolving the package import, so the input check tracks the real bundle input.
- */
-function workspaceEntryOf(pkgJson) {
-  const rootExport = pkgJson.exports?.['.'];
-  if (typeof rootExport === 'string') return rootExport;
-  if (rootExport !== null && typeof rootExport === 'object') {
-    if (typeof rootExport.import === 'string') return rootExport.import;
-    if (typeof rootExport.default === 'string') return rootExport.default;
-  }
-  if (typeof pkgJson.main === 'string') return pkgJson.main;
-  if (typeof pkgJson.bin === 'string') return pkgJson.bin;
-  const binTargets = Object.values(pkgJson.bin ?? {});
-  if (binTargets.length === 1 && typeof binTargets[0] === 'string') return binTargets[0];
-  return null;
-}
-
-/**
  * Assembles the CLI publish package. Exits the process with a diagnostics list when any
  * artifact-side contract is broken (missing build inputs, multiple bin entries, or a bundle that
  * still references unpackaged @helm/* imports). Returns the bundle file path so the Hub payload
@@ -69,19 +50,10 @@ export async function assembleCliArtifact({ repoRoot, version, enginesNode }) {
   const launcherPkgDir = path.join(repoRoot, 'packages/hub-launcher');
   const stagingDir = path.join(repoRoot, 'packages/payload/dist-cli');
 
-  // The launcher package must expose a runtime entry (post-retirement of its legacy bin): the
-  // CLI's update command lazy-imports it via the public workspace export.
-  const launcherPkg = JSON.parse(readFileSync(path.join(launcherPkgDir, 'package.json'), 'utf-8'));
-  const launcherEntry = workspaceEntryOf(launcherPkg);
-  if (launcherEntry === null) {
-    console.error(`[payload] @helm/hub-launcher package.json declares no runtime entry (exports['.'] / main / single bin); the CLI bundle cannot resolve its update-path closure`);
-    process.exit(1);
-  }
-
   const inputs = [
     ['cli dist entry', path.join(cliPkgDir, 'dist/index.js')],
     ['cli package.json', path.join(cliPkgDir, 'package.json')],
-    ['hub-launcher dist entry', path.join(launcherPkgDir, launcherEntry)],
+    ['hub-launcher dist entry', path.join(launcherPkgDir, 'dist/index.js')],
     ['update engine dist', path.join(repoRoot, 'packages/update/dist/index.js')],
     ['env-io dist', path.join(repoRoot, 'packages/env-io/dist/index.js')],
     ['protocol dist', path.join(repoRoot, 'packages/protocol/dist/index.js')],

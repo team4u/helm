@@ -283,7 +283,7 @@ test('failed candidate readiness rolls the pointer back, restarts the old hub, a
   await waitUntilDead(restarted.pid);
 });
 
-test('an unverifiable activity signal fails closed before any staging or state change', { timeout: 60_000 }, async (t) => {
+test('an unverifiable activity signal leaves the active release and process alone', { timeout: 60_000 }, async (t) => {
   const h = await setupFlow(t, useTempDir(t, 'helm-launcher-flow-'), '1.1.0');
   await h.addPayload('1.0.0');
   await h.addPayload('1.1.0');
@@ -298,13 +298,13 @@ test('an unverifiable activity signal fails closed before any staging or state c
     startedAt: new Date().toISOString(),
   });
   // The alien pid record carries no start-time proof and no heartbeat answers for it: the busy
-  // gate refuses the update up front (fail closed) — nothing is staged, committed, or signalled.
+  // gate refuses to stop or commit after staging.
   await assert.rejects(
     performHubUpdate(baseOptions(h)),
     (error: unknown) => {
       assert.ok(error instanceof UsageError);
       assert.equal(error.code, 'hub_activity_unverifiable');
-      assert.match(error.message, /pre-staging check/);
+      assert.match(error.message, /before stopping/);
       return true;
     },
   );
@@ -604,7 +604,7 @@ async function forceActivityCounts(dataDir: string, counts: Record<string, numbe
   await writeFilePromise(file, `${JSON.stringify(record)}\n`);
 }
 
-test('busy gate defers the update without staging, stopping, or blocking', { timeout: 60_000 }, async (t) => {
+test('a busy Hub stages a candidate without stopping or committing', { timeout: 60_000 }, async (t) => {
   const h = await setupGate(t, useTempDir(t, 'helm-launcher-gate-'));
   await h.addPayload('1.0.0');
   await h.addPayload('1.1.0');
@@ -626,8 +626,8 @@ test('busy gate defers the update without staging, stopping, or blocking', { tim
   assert.equal(outcome.changed, false);
   assert.equal(outcome.restarted, false);
   assert.equal(outcome.started, false);
-  // Nothing staged (pre-staging round caught it), nothing committed, nothing blocked, hub untouched.
-  assert.equal(h.core.npmCalls.length, 0);
+  // The candidate is staged once, while the running process and current release stay put.
+  assert.equal(h.core.npmCalls.length, 1);
   assert.equal((await readCurrentRelease(h.root))?.version, '1.0.0');
   assert.equal(await readBlockedRelease(h.root), null);
   assert.deepEqual(await getJson(port, '/__version'), { version: '1.0.0' });
@@ -643,7 +643,7 @@ test('busy gate defers the update without staging, stopping, or blocking', { tim
   await waitUntilDead(ok.pid!);
 });
 
-test('busy gate round 2 (in-lock) defers after staging; the staged candidate stays cached', { timeout: 60_000 }, async (t) => {
+test('a Hub that becomes busy during staging defers the switch and reuses the candidate', { timeout: 60_000 }, async (t) => {
   const h = await setupGate(t, useTempDir(t, 'helm-launcher-gate2-'));
   await h.addPayload('1.0.0');
   await h.addPayload('1.1.0');
@@ -653,8 +653,7 @@ test('busy gate round 2 (in-lock) defers after staging; the staged candidate sta
   const started = await startHub(h.root, h.io, { flags: { port, dataDir: h.dataDir }, pollMs: 100 });
   t.after(() => cleanupPid(started.pid));
 
-  // The hub flips busy DURING staging (after the pre-staging round saw it idle): the fake npm
-  // seam rewrites the heartbeat record as a side effect, so only the in-lock round can catch it.
+  // Flip busy inside the npm install seam to exercise the final check.
   const realRunNpm = h.core.runNpm.bind(h.core);
   h.core.runNpm = async (args: readonly string[], cwd: string, timeoutMs: number) => {
     await h.setState({
@@ -675,7 +674,7 @@ test('busy gate round 2 (in-lock) defers after staging; the staged candidate sta
   assert.equal(outcome.deferred.reason, 'hub_busy');
   assert.equal(outcome.deferred.counts.settlingConversations, 1);
   assert.equal(outcome.changed, false);
-  // Staging DID run (round 1 passed, the deferral came from round 2) but nothing was committed.
+  // Staging ran to completion and the active release pointer stayed put.
   assert.ok(h.core.npmCalls.length >= 1);
   assert.equal((await readCurrentRelease(h.root))?.version, '1.0.0');
   assert.equal(await readBlockedRelease(h.root), null);

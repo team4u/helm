@@ -1,5 +1,5 @@
 /**
- * `helm-hub-launcher run` — the supervised foreground lifecycle.
+ * `helm update --watch` — the supervised foreground lifecycle.
  *
  * One long-running launcher process owns the local Hub end to end:
  *
@@ -200,6 +200,7 @@ export async function runSupervised(options: RunLauncherOptions): Promise<number
 
   const driver: HubLifecycleDriver = {
     isRunning: async () => held !== null && held.child.exitCode === null && held.child.signalCode === null,
+    ownsProcess: (pid) => held?.pid === pid && held.child.exitCode === null && held.child.signalCode === null,
     stop: stopHeldHub,
     async start() {
       // The unlocked body: inside `performHubUpdate` the lifecycle lock is already held (the
@@ -246,7 +247,7 @@ export async function runSupervised(options: RunLauncherOptions): Promise<number
         io.out(`up to date: ${check.currentVersion ?? '(none)'} (tag ${tag}, latest ${check.latestVersion})\n`);
         return;
       }
-      const outcome = await performHubUpdate({ ...updateCommon, tag });
+      const outcome = await performHubUpdate({ ...updateCommon, targetVersion: check.latestVersion });
       if (outcome.deferred !== undefined) {
         io.out(
           `update to ${outcome.targetVersion} deferred: hub is busy (${describeActivityCounts(outcome.deferred.counts)}); nothing stopped, retrying next cycle\n`,
@@ -305,7 +306,7 @@ export async function runSupervised(options: RunLauncherOptions): Promise<number
     const record = await readPidRecord(root);
     if (record !== null && isAlive(record.pid)) {
       throw new UsageError(
-        `a hub is already running (pid ${record.pid}, version ${record.version}) that this launcher did not start; stop it first (helm-hub-launcher stop) or keep managing it manually`,
+        `a hub is already running (pid ${record.pid}, version ${record.version}) that this launcher did not start; stop it first (helm update --stop) or keep managing it manually`,
         'run_refuses_existing_hub',
       );
     }
