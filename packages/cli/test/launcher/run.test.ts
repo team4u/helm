@@ -266,6 +266,11 @@ test('an external verified stop of the supervised hub ends the run with exit 1 (
   const done = runSupervised(h.options());
   await waitForVersion(h.port, '1.0.0');
   const record = await waitForPidRecord(h.root);
+  // The pid record lands *inside* the initial install's lifecycle lock (performHubUpdate only
+  // releases it after the record write), so an immediate cross-process stop can race the install
+  // tail into lifecycle_lock_busy. The "supervising:" line is printed strictly after that lock is
+  // released — and the idle ticks in this test never take it — so waiting here is deterministic.
+  await waitForCondition(async () => /supervising: update checks every/.test(h.outText()), 'supervising line printed');
 
   // Cross-process `stop` with a valid start-time identity (Linux record) legitimately stops the
   // supervised hub; the launcher must not fight over the instance and exits with diagnostics.
