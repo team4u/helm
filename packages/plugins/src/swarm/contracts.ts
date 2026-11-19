@@ -448,6 +448,18 @@ export function asConversationDeletedEvent(payload: unknown): number | undefined
   return isPosIntId(conversationId) ? conversationId : undefined
 }
 
+/** group-store / wake-dispatcher / member-healing 子模块共享的错误分类工具。 */
+export function isEnoent(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && (err as { code?: unknown }).code === 'ENOENT'
+}
+
+export function isLifecycleTeardownError(err: unknown): boolean {
+  return (
+    err instanceof HelmxError &&
+    (err.code === 'plugin_disabled' || err.code === 'plugin_context_expired' || err.code === 'plugin_host_disposed')
+  )
+}
+
 /** 成员短名强校验：小写字母开头，1..32 位小写字母/数字/连字符/下划线，且非保留字。 */
 export function assertMemberName(value: unknown): string {
   if (typeof value !== 'string') {
