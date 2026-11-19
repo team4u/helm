@@ -169,7 +169,8 @@ rootDependencies['@helmx/env-io'] = 'file:./env-io.tgz';
 rootDependencies['@helmx/hub'] = 'file:./hub.tgz';
 
 // npm resolves peers strictly by default (ERESOLVE), while the repository's pnpm install allows peer
-// versions wider than declared (e.g. chord pins peer ws@8.21.0 while the repository locks 8.22.1). Scan
+// versions wider than declared (the repo pins ws at chord's peerOptional exact version; this scan is
+// the drift guard for future upstream peer re-pins). Scan
 // the installed closure to generate overrides that unify conflicting names held at the root to the root
 // exact versions — so a bare consumer-side `npm install --omit=dev --ignore-scripts` works out of the
 // box without extra flags (.npmrc cannot ship inside a tarball; npm permanently excludes it).

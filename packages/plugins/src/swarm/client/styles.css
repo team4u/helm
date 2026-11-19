@@ -623,6 +623,7 @@
  * Timeline 1-line receipt pills (swarm:board-report / swarm:board-wakeup)
  * ------------------------------------------------------------------------- */
 
+/* 整卡即点击目标（同成员行/26px 工具轨迹的整行按钮心智模型，无尾部 chevron） */
 .sw-receipt-pill {
   display: flex;
   align-items: center;
@@ -632,7 +633,20 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--bg-subtle);
+  font: inherit;
   font-size: 12px;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sw-receipt-pill:hover {
+  background: var(--bg-hover);
+}
+
+.sw-receipt-pill:focus-visible {
+  outline: 1.5px solid var(--accent);
+  outline-offset: -1.5px;
 }
 
 .sw-receipt-seq {
@@ -651,11 +665,6 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   max-width: 480px;
-}
-
-.sw-receipt-open {
-  flex-shrink: 0;
-  padding: 1px 5px;
 }
 
 /* ---------------------------------------------------------------------------

@@ -258,13 +258,13 @@ importers:
     dependencies:
       '@earendil-works/chord':
         specifier: 1.5.2
-        version: 1.5.2(esbuild@0.28.2)(ws@8.22.1)
+        version: 1.5.2(esbuild@0.28.2)(react@19.3.1)(ws@8.21.0)
       '@earendil-works/pi-ai':
         specifier: 1.5.2
-        version: 1.5.2(@aws-sdk/credential-provider-node@3.972.93)(@smithy/signature-v4@5.7.5)(supports-color@7.2.0)(undici@7.30.2)(ws@8.22.1)
+        version: 1.5.2(@aws-sdk/credential-provider-node@3.972.93)(@smithy/signature-v4@5.7.5)(supports-color@7.2.0)(undici@7.30.2)(ws@8.21.0)
       '@earendil-works/pi-durable':
         specifier: 1.5.2
-        version: 1.5.2(@aws-sdk/credential-provider-node@3.972.93)(@smithy/signature-v4@5.7.5)(esbuild@0.28.2)(supports-color@7.2.0)(undici@7.30.2)(ws@8.22.1)
+        version: 1.5.2(@aws-sdk/credential-provider-node@3.972.93)(@smithy/signature-v4@5.7.5)(esbuild@0.28.2)(react@19.3.1)(supports-color@7.2.0)(undici@7.30.2)(ws@8.21.0)
       '@earendil-works/pi-schema':
         specifier: 1.5.2
         version: 1.5.2
@@ -284,8 +284,8 @@ importers:
         specifier: ^1.0.0
         version: 1.4.4
       ws:
-        specifier: ^8.18.0
-        version: 8.22.1
+        specifier: 8.21.0
+        version: 8.21.0
     devDependencies:
       '@helmx/node':
         specifier: workspace:*
@@ -304,10 +304,10 @@ importers:
     dependencies:
       '@earendil-works/chord':
         specifier: 1.5.2
-        version: 1.5.2(esbuild@0.28.2)(ws@8.22.1)
+        version: 1.5.2(esbuild@0.28.2)(react@19.3.1)(ws@8.21.0)
       '@earendil-works/pi-durable':
         specifier: 1.5.2
-        version: 1.5.2(@aws-sdk/credential-provider-node@3.972.93)(@smithy/signature-v4@5.7.5)(esbuild@0.28.2)(supports-color@7.2.0)(undici@7.30.2)(ws@8.22.1)
+        version: 1.5.2(@aws-sdk/credential-provider-node@3.972.93)(@smithy/signature-v4@5.7.5)(esbuild@0.28.2)(react@19.3.1)(supports-color@7.2.0)(undici@7.30.2)(ws@8.21.0)
       '@helmx/env-io':
         specifier: workspace:*
         version: link:../env-io
@@ -318,8 +318,8 @@ importers:
         specifier: ^2.9.0
         version: 2.9.0
       ws:
-        specifier: ^8.18.0
-        version: 8.22.1
+        specifier: 8.21.0
+        version: 8.21.0
     devDependencies:
       '@helmx/test-kit':
         specifier: workspace:*
@@ -435,13 +435,13 @@ importers:
     dependencies:
       '@earendil-works/chord':
         specifier: 1.5.2
-        version: 1.5.2(esbuild@0.28.2)(react@19.3.1)
+        version: 1.5.2(esbuild@0.28.2)(react@19.3.1)(ws@8.21.0)
       '@earendil-works/pi-ai':
         specifier: 1.5.2
-        version: 1.5.2(@aws-sdk/credential-provider-node@3.972.93)(@smithy/signature-v4@5.7.5)(supports-color@7.2.0)(undici@7.30.2)(ws@8.22.1)
+        version: 1.5.2(@aws-sdk/credential-provider-node@3.972.93)(@smithy/signature-v4@5.7.5)(supports-color@7.2.0)(undici@7.30.2)(ws@8.21.0)
       '@earendil-works/pi-durable':
         specifier: 1.5.2
-        version: 1.5.2(@aws-sdk/credential-provider-node@3.972.93)(@smithy/signature-v4@5.7.5)(esbuild@0.28.2)(react@19.3.1)(supports-color@7.2.0)(undici@7.30.2)
+        version: 1.5.2(@aws-sdk/credential-provider-node@3.972.93)(@smithy/signature-v4@5.7.5)(esbuild@0.28.2)(react@19.3.1)(supports-color@7.2.0)(undici@7.30.2)(ws@8.21.0)
       '@helmx/protocol':
         specifier: workspace:*
         version: link:../protocol
@@ -488,7 +488,7 @@ importers:
         version: 1.5.2(@aws-sdk/credential-provider-node@3.972.93)(@smithy/signature-v4@5.7.5)(supports-color@7.2.0)(undici@7.30.2)(ws@8.22.1)
       '@earendil-works/pi-durable':
         specifier: 1.5.2
-        version: 1.5.2(@aws-sdk/credential-provider-node@3.972.93)(@smithy/signature-v4@5.7.5)(esbuild@0.28.2)(supports-color@7.2.0)(undici@7.30.2)(ws@8.22.1)
+        version: 1.5.2(@aws-sdk/credential-provider-node@3.972.93)(@smithy/signature-v4@5.7.5)(esbuild@0.28.2)(react@19.3.1)(supports-color@7.2.0)(undici@7.30.2)(ws@8.21.0)
 
   packages/test-kit:
     devDependencies:
@@ -3092,6 +3092,18 @@ packages:
     resolution: {integrity: sha512-nt+N2dzIutVRxARx1nghPKGv1xHikU7HKdfafKkLNLindmPU/ch3U31NOCGGA/dmPcmb1VlofO0vnKAcsm0o/Q==}
     engines: {node: '>=12'}
 
+  ws@8.21.0:
+    resolution: {integrity: sha512-Vsp28b7DRcimFQvrqu2Wek3z1iYxDCWqHYB8Qsnk/S4RfaCQzPGPyBNuVjJV3cd6UiKtUtp6sNM77gWvzcCH+g==}
+    engines: {node: '>=10.0.0'}
+    peerDependencies:
+      bufferutil: ^4.0.1
+      utf-8-validate: '>=5.0.2'
+    peerDependenciesMeta:
+      bufferutil:
+        optional: true
+      utf-8-validate:
+        optional: true
+
   ws@8.22.1:
     resolution: {integrity: sha512-oyL6OPYme/CmiFvNuGzeoxCJ4nOrZE2O1FwM9MWM1AsGri6nLXB2pg+lNA8aLeXMSav0J6eIVS1j6vUPzUtK9g==}
     engines: {node: '>=10.0.0'}
@@ -3439,13 +3451,14 @@ snapshots:
 
   '@chevrotain/utils@13.2.0': {}
 
-  '@earendil-works/chord@1.5.2(esbuild@0.28.2)(react@19.3.1)':
+  '@earendil-works/chord@1.5.2(esbuild@0.28.2)(react@19.3.1)(ws@8.21.0)':
     dependencies:
       '@earendil-works/pi-schema': 1.5.2
       '@earendil-works/pi-telemetry': 1.5.2
     optionalDependencies:
       esbuild: 0.28.2
       react: 19.3.1
+      ws: 8.21.0
 
   '@earendil-works/chord@1.5.2(esbuild@0.28.2)(ws@8.22.1)':
     dependencies:
@@ -3454,6 +3467,31 @@ snapshots:
     optionalDependencies:
       esbuild: 0.28.2
       ws: 8.22.1
+
+  '@earendil-works/pi-ai@1.5.2(@aws-sdk/credential-provider-node@3.972.93)(@smithy/signature-v4@5.7.5)(supports-color@7.2.0)(undici@7.30.2)(ws@8.21.0)':
+    dependencies:
+      '@anthropic-ai/sdk': 0.129.0
+      '@aws-sdk/client-bedrock-runtime': 3.1127.0
+      '@earendil-works/pi-schema': 1.5.2
+      '@earendil-works/pi-telemetry': 1.5.2
+      '@google/genai': 2.21.0(supports-color@7.2.0)
+      '@smithy/node-http-handler': 4.12.1
+      http-proxy-agent: 9.1.0(supports-color@7.2.0)
+      https-proxy-agent: 9.1.0(supports-color@7.2.0)
+      openai: 7.19.0(@aws-sdk/credential-provider-node@3.972.93)(@smithy/signature-v4@5.7.5)(undici@7.30.2)(ws@8.21.0)
+      partial-json: 0.1.7
+    transitivePeerDependencies:
+      - '@aws-sdk/credential-provider-node'
+      - '@modelcontextprotocol/sdk'
+      - '@smithy/hash-node'
+      - '@smithy/signature-v4'
+      - bufferutil
+      - kerberos
+      - supports-color
+      - undici
+      - utf-8-validate
+      - ws
+      - zod
 
   '@earendil-works/pi-ai@1.5.2(@aws-sdk/credential-provider-node@3.972.93)(@smithy/signature-v4@5.7.5)(supports-color@7.2.0)(undici@7.30.2)(ws@8.22.1)':
     dependencies:
@@ -3484,10 +3522,10 @@ snapshots:
     dependencies:
       quickjs-wasi: 3.6.2
 
-  '@earendil-works/pi-durable@1.5.2(@aws-sdk/credential-provider-node@3.972.93)(@smithy/signature-v4@5.7.5)(esbuild@0.28.2)(react@19.3.1)(supports-color@7.2.0)(undici@7.30.2)':
+  '@earendil-works/pi-durable@1.5.2(@aws-sdk/credential-provider-node@3.972.93)(@smithy/signature-v4@5.7.5)(esbuild@0.28.2)(react@19.3.1)(supports-color@7.2.0)(undici@7.30.2)(ws@8.21.0)':
     dependencies:
-      '@earendil-works/chord': 1.5.2(esbuild@0.28.2)(react@19.3.1)
-      '@earendil-works/pi-ai': 1.5.2(@aws-sdk/credential-provider-node@3.972.93)(@smithy/signature-v4@5.7.5)(supports-color@7.2.0)(undici@7.30.2)(ws@8.22.1)
+      '@earendil-works/chord': 1.5.2(esbuild@0.28.2)(react@19.3.1)(ws@8.21.0)
+      '@earendil-works/pi-ai': 1.5.2(@aws-sdk/credential-provider-node@3.972.93)(@smithy/signature-v4@5.7.5)(supports-color@7.2.0)(undici@7.30.2)(ws@8.21.0)
       '@earendil-works/pi-codemode': 1.5.2
       '@earendil-works/pi-schema': 1.5.2
       '@earendil-works/pi-telemetry': 1.5.2
@@ -5539,6 +5577,13 @@ snapshots:
 
   node-releases@2.0.63: {}
 
+  openai@7.19.0(@aws-sdk/credential-provider-node@3.972.93)(@smithy/signature-v4@5.7.5)(undici@7.30.2)(ws@8.21.0):
+    optionalDependencies:
+      '@aws-sdk/credential-provider-node': 3.972.93
+      '@smithy/signature-v4': 5.7.5
+      undici: 7.30.2
+      ws: 8.21.0
+
   openai@7.19.0(@aws-sdk/credential-provider-node@3.972.93)(@smithy/signature-v4@5.7.5)(undici@7.30.2)(ws@8.22.1):
     optionalDependencies:
       '@aws-sdk/credential-provider-node': 3.972.93
@@ -5921,6 +5966,8 @@ snapshots:
   web-streams-polyfill@3.3.3: {}
 
   whatwg-mimetype@3.0.0: {}
+
+  ws@8.21.0: {}
 
   ws@8.22.1: {}
 

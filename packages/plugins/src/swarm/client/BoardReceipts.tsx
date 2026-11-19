@@ -1,9 +1,11 @@
 /**
  * Compact 1-line timeline receipt pills for the durable `swarm:board-report`
  * and `swarm:board-wakeup` inputs (still written by the backend group store —
- * these rows are real conversation facts, not synthetic UI entries). Clicking
- * opens the swarm workbench panel of the current conversation; the raw #seq
- * stays as auxiliary info.
+ * these rows are real conversation facts, not synthetic UI entries). The whole
+ * pill is the click target and opens the swarm workbench panel of the current
+ * conversation (same full-row-button mental model as the member rows and the
+ * 26px tool traces — no trailing chevron affordance); the raw #seq stays as
+ * auxiliary info.
  *
  * Component & type exports only (Fast Refresh compliant).
  */
@@ -31,7 +33,12 @@ export function SwarmBoardReportPill(props: TimelineRendererProps): ReactNode {
   const meta = parseBoardReportMeta(props)
   const seqLabel = seqRangeLabel(meta.fromSeq, meta.toSeq)
   return (
-    <div className="sw-receipt-pill">
+    <button
+      type="button"
+      className="sw-receipt-pill"
+      aria-label={resolveLocalizedText(SW_PILL_OPEN_WORKBENCH, locale)}
+      onClick={() => ctx.openWorkbench(SWARM_WORKBENCH_PANEL_TARGET)}
+    >
       <span className="badge badge-accent">
         <HelmxIcon name="network" size={11} />
         <span>{resolveLocalizedText(SW_BOARD_REPORT_PILL, locale)}</span>
@@ -45,15 +52,7 @@ export function SwarmBoardReportPill(props: TimelineRendererProps): ReactNode {
       {meta.headline !== undefined && meta.headline !== '' ? (
         <span className="sw-receipt-headline" title={meta.headline}>{meta.headline}</span>
       ) : null}
-      <button
-        type="button"
-        className="btn btn-xs btn-ghost sw-receipt-open"
-        title={resolveLocalizedText(SW_PILL_OPEN_WORKBENCH, locale)}
-        onClick={() => ctx.openWorkbench(SWARM_WORKBENCH_PANEL_TARGET)}
-      >
-        <HelmxIcon name="chevron-right" size={11} />
-      </button>
-    </div>
+    </button>
   )
 }
 
@@ -63,7 +62,12 @@ export function SwarmBoardWakeupPill(props: TimelineRendererProps): ReactNode {
   const meta = parseBoardWakeupMeta(props)
   const seqLabel = seqRangeLabel(meta.fromSeq, meta.toSeq)
   return (
-    <div className="sw-receipt-pill">
+    <button
+      type="button"
+      className="sw-receipt-pill"
+      aria-label={resolveLocalizedText(SW_PILL_OPEN_WORKBENCH, locale)}
+      onClick={() => ctx.openWorkbench(SWARM_WORKBENCH_PANEL_TARGET)}
+    >
       <span className="badge badge-neutral">
         <HelmxIcon name="bell" size={11} />
         <span>{resolveLocalizedText(SW_BOARD_WAKEUP_PILL, locale)}</span>
@@ -77,14 +81,6 @@ export function SwarmBoardWakeupPill(props: TimelineRendererProps): ReactNode {
       {meta.postCount !== undefined ? (
         <span className="sw-receipt-count tabular-nums">{swReceiptCountLabel(meta.postCount, locale)}</span>
       ) : null}
-      <button
-        type="button"
-        className="btn btn-xs btn-ghost sw-receipt-open"
-        title={resolveLocalizedText(SW_PILL_OPEN_WORKBENCH, locale)}
-        onClick={() => ctx.openWorkbench(SWARM_WORKBENCH_PANEL_TARGET)}
-      >
-        <HelmxIcon name="chevron-right" size={11} />
-      </button>
-    </div>
+    </button>
   )
 }

@@ -1041,10 +1041,14 @@ test('单行回执胶囊：展示计数/动态/成员，点击打开协同工作
     assert.match(text, /#4\.\.#6/)
     assert.match(text, /3 posts/)
     assert.match(text, /verifier approved #5/)
+    const pill = reportMount.host.querySelector<HTMLButtonElement>('.sw-receipt-pill')!
+    assert.ok(pill !== null, '回执卡片本体为按钮')
+    assert.ok(reportMount.host.querySelector('.sw-receipt-open') === null, '无尾部 chevron 按钮')
+    assert.match(pill.getAttribute('aria-label') ?? '', /Open swarm workbench/, '整卡可点的可访问名称')
     await act(async () => {
-      reportMount.host.querySelector<HTMLButtonElement>('.sw-receipt-open')!.click()
+      pill.click()
     })
-    assert.deepEqual(spy.workbenchCalls, ['plugin:builtin:swarm/groups'], '点击打开协同工作台面板')
+    assert.deepEqual(spy.workbenchCalls, ['plugin:builtin:swarm/groups'], '点击卡片本体打开协同工作台面板')
   } finally {
     reportMount.unmount()
   }
@@ -1072,8 +1076,10 @@ test('单行回执胶囊：展示计数/动态/成员，点击打开协同工作
   )
   try {
     assert.match(wakeupMount.host.textContent ?? '', /@author/)
+    const pill = wakeupMount.host.querySelector<HTMLButtonElement>('.sw-receipt-pill')!
+    assert.ok(wakeupMount.host.querySelector('.sw-receipt-open') === null, '唤醒卡片同样无尾部 chevron 按钮')
     await act(async () => {
-      wakeupMount.host.querySelector<HTMLButtonElement>('.sw-receipt-open')!.click()
+      pill.click()
     })
     assert.deepEqual(wakeupSpy.workbenchCalls, ['plugin:builtin:swarm/groups'])
   } finally {

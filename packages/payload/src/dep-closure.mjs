@@ -85,8 +85,9 @@ const cmp = (a, b) => (a[0] - b[0]) || (a[1] - b[1]) || ((a[2] ?? 0) - (b[2] ?? 
 
 /**
  * Scan the closure for peer declarations that conflict with root dependencies: npm enforces strict
- * peer resolution (ERESOLVE) by default, whereas pnpm permits wider peer ranges (e.g. chord pins
- * peerOptional ws@8.21.0 while the repo locks 8.22.1).
+ * peer resolution (ERESOLVE) by default, whereas pnpm permits wider peer ranges (the repo pins ws at
+ * chord's peerOptional exact version so global installs stay ERESOLVE-clean; this scan stays as the
+ * drift guard for future upstream peer re-pins).
  * Returns Map<peerName, rootVersion> for dist root package.json overrides
  * (always equal to the exact version pinned in root dependencies, per npm's rule that direct-dep overrides must match their spec).
  */
