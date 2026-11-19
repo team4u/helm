@@ -646,8 +646,10 @@ test('end-to-end: npm pack → isolated npm install → check → start really l
       // dist-cli artifact): the Hub-managed CLI shim runs status --json against the live Hub over real
       // HTTP — exercising the bundled command dispatch, credential env, and JSON output path.
       const cliStatus = spawnSync(
-        path.join(dataDir, 'bin', 'helm'),
-        ['status', '--json'],
+        process.platform === 'win32' ? process.execPath : path.join(dataDir, 'bin', 'helm'),
+        process.platform === 'win32'
+          ? [path.join(extractDir, 'cli', 'dist', 'index.js'), 'status', '--json']
+          : ['status', '--json'],
         {
           cwd: extractDir,
           encoding: 'utf8',
