@@ -13,7 +13,7 @@ import { rm, readFile, writeFile as writeFilePromise } from 'node:fs/promises';
 import path from 'node:path';
 import { test } from 'node:test';
 import { useTempDir, sanitizedHostEnv } from '@helm/test-kit/node';
-import { readBlockedRelease, readCurrentRelease, writeBlockedRelease, writeCurrentRelease } from '@helm/update';
+import { readBlockedRelease, readCurrentRelease, writeBlockedRelease, writeCurrentRelease } from '@helm/env-io';
 import { readPidRecord, readLaunchConfig, writePidRecord } from '../src/records.js';
 import { performHubUpdate, checkHubUpgrade, type PerformUpdateOptions } from '../src/update.js';
 import { stageHubRelease } from '../src/staging.js';

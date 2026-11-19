@@ -1,5 +1,6 @@
 /**
- * Node-side regressions for the `@helm/node` self-upgrade adapter over `@helm/update`.
+ * Node-side regressions for the `@helm/node` self-upgrade adapter over the shared
+ * update engine re-exported from `@helm/env-io`.
  *
  * Everything here locks Node external behavior only: own version resolution
  * (`getNodeVersion` / `resolveEffectiveNodeVersion`), the launcher-compatible flat
@@ -11,7 +12,7 @@
  * The generic engine mechanics (semver wrappers, registry allowlist, staging and
  * `.complete` cache revalidation, drain gate, cooldown, rollback ordering,
  * cross-process lock, npm process-group kill) are covered by
- * `packages/update/test/update-engine.test.ts` and deliberately not duplicated here.
+ * `packages/env-io/test/update/update-engine.test.ts` and deliberately not duplicated here.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -20,7 +21,7 @@ import rawFs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { makeTempDir as tempDir } from '@helm/test-kit/node';
-import { UpgradeRejectedError } from '@helm/update';
+import { UpgradeRejectedError } from '@helm/env-io';
 import {
   getNodeVersion,
   resolveEffectiveNodeVersion,
@@ -201,7 +202,7 @@ test('flat current.json: corrupt or incomplete records throw explicitly rather t
 });
 
 // ---------------------------------------------------------------------------
-// 3. Node adapter wiring over @helm/update
+// 3. Node adapter wiring over the shared update engine
 // ---------------------------------------------------------------------------
 
 test('checkNodeUpgrade: queries the @helm/node package latest and falls back to getNodeVersion', { timeout: 60_000 }, async () => {
@@ -320,7 +321,7 @@ test('performNodeUpgrade: commit failure restores the previous flat current.json
   await fs.rm(dir, { recursive: true, force: true });
 });
 
-test('adapter rejects with the shared @helm/update error classes (instanceof identity)', { timeout: 60_000 }, async () => {
+test('adapter rejects with the shared update-engine error classes (instanceof identity)', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-upgrade-');
   // Downgrade guard through the Node wrapper throws the shared UpgradeRejectedError
   await assert.rejects(

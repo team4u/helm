@@ -1,5 +1,6 @@
 /**
- * Tests for the @helm/update shared engine:
+ * Tests for the shared self-update engine (env-io `update/` subtree, re-exported from
+ * the `@helm/env-io` root — the import below exercises exactly that public surface):
  * semver wrappers, atomic state records, registry allowlist + latest check,
  * immutable staging (extractor + npm paths, .complete cache revalidation, layout
  * descriptor validation), the update transaction (drain gate, commit ordering,
@@ -18,7 +19,7 @@ import process from 'node:process';
 import { createHash } from 'node:crypto';
 import { sleep as delay } from '@helm/test-kit';
 import { makeTempDir as tempDir } from '@helm/test-kit/node';
-import { atomicWriteJson } from '@helm/env-io';
+import { atomicWriteJson } from '../../src/atomic-write.js';
 import {
   UpgradeRejectedError,
   UpgradeCommitUnconfirmedError,
@@ -43,7 +44,7 @@ import {
   type StagedRelease,
   type PreparedReplacement,
   type UpdateSpec,
-} from '../src/index.js';
+} from '../../src/index.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures: a Node-shaped dual-package layout (demonstrates the generic descriptor)

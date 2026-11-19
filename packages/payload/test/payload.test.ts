@@ -134,9 +134,6 @@ test('payload assembly: missing build artifacts are rebuilt on demand, then buil
   if (!existsSync(path.join(repoRoot, 'packages/env-io/dist/index.js'))) {
     runCommand('pnpm', ['--filter', '@helm/env-io', 'run', 'build'], repoRoot, 180_000);
   }
-  if (!existsSync(path.join(repoRoot, 'packages/update/dist/index.js'))) {
-    runCommand('pnpm', ['--filter', '@helm/update', 'run', 'build'], repoRoot, 180_000);
-  }
   if (!existsSync(path.join(repoRoot, 'packages/hub-launcher/dist/index.js'))) {
     runCommand('pnpm', ['--filter', '@helm/hub-launcher', 'run', 'build'], repoRoot, 180_000);
   }

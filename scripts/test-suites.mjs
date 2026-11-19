@@ -11,9 +11,10 @@
  *   unit        = protocol + env-io + test-kit + cli + web + plugin-client (env-io is in-process
  *                 pure scan orchestrator injection tests; web covers happy-dom/React interaction
  *                 and SDK self-tests — none start real services);
- *   integration = plugin-build + kernel + plugins + hub + hub-launcher + node + update + payload
- *                 (real esbuild builds/subprocesses, SQLite/Git/daemon, launcher process
- *                 lifecycle, the shared update engine, and payload assembly);
+ *   integration = plugin-build + kernel + plugins + hub + hub-launcher + node + payload plus the
+ *                 'env-io/test/update' path entry (the shared update engine: real subprocesses,
+ *                 staging directories, cross-process locks) — a tier override because those
+ *                 process-level tests live inside the unit-tier env-io package;
  *   all         = unit ∪ integration = every test file, equivalent to the old `pnpm test`.
  *
  * SUITES entries are either a package name (that package's top-level test/ files) or a
@@ -59,7 +60,7 @@ const packagesDir = path.join(repoRoot, 'packages');
 // scripts/lib/workspace-meta.mjs.
 const SUITES = {
   unit: ['protocol', 'env-io', 'test-kit', 'cli', 'web', 'plugin-client'],
-  integration: ['plugin-build', 'kernel', 'plugins', 'hub', 'hub-launcher', 'node', 'update', 'payload'],
+  integration: ['plugin-build', 'kernel', 'plugins', 'hub', 'hub-launcher', 'node', 'payload', 'env-io/test/update'],
 };
 const ALL_PACKAGES = [...SUITES.unit, ...SUITES.integration];
 

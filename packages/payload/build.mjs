@@ -210,7 +210,7 @@ for (const dir of ['hub', 'kernel', 'plugins', 'plugin-build', 'env-io', 'protoc
   cpSync(path.join(repoRoot, 'packages', dir, 'package.json'), path.join(stagingDir, dir, 'package.json'));
 }
 // The payload's CLI entry is the same single-file bundle as the dist-cli artifact: the bundle
-// self-contains the CLI's workspace closure (@helm/hub-launcher / @helm/update / tar ride along via
+// self-contains the CLI's workspace closure (@helm/hub-launcher / the env-io update engine / tar ride along via
 // the update path), so the payload root dependency set needs no additions for the CLI to run and
 // start.mjs check keeps resolving from the cli entry point. The remaining cli/dist tsc outputs stay
 // as layout/auditing helper assets; `helm plugins build`'s computed dynamic import of

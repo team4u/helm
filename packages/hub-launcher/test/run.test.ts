@@ -20,7 +20,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { useTempDir, sanitizedHostEnv } from '@helm/test-kit/node';
-import { readBlockedRelease, readCurrentRelease } from '@helm/update';
+import { readBlockedRelease, readCurrentRelease } from '@helm/env-io';
 import { readPidRecord } from '../src/records.js';
 import { startHub, stopHub } from '../src/process.js';
 import { runSupervised } from '../src/run.js';

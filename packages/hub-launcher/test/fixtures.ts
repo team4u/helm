@@ -7,7 +7,7 @@
  *   `Helm Hub: http://<host>:<port>` — which the launcher's readiness gate scans for;
  * - a port-shaped fake `UpdateCore`: the registry (`fetchLatestVersion`) and npm (`runNpm`)
  *   seams are stubbed (no network, no npm), while immutable staging delegates to the REAL
- *   `@helm/update` engine so launcher tests cannot drift from the generic semantics. The fake
+ *   `@helm/env-io` update engine so launcher tests cannot drift from the generic semantics. The fake
  *   registry download serves a REAL `package/`-rooted tarball of the fixture payload (packed
  *   in-process with the `tar` library), because the production staging unpacks it for real;
  * - a fake registry `fetch` serving real `npm pack` tarballs with correct sha512 SRI metadata,

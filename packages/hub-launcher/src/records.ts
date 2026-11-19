@@ -1,15 +1,15 @@
 /**
  * Launcher-owned state records: `hub.pid` (detached process identity) and `launch.json` (sticky
  * launch configuration). Release pointers (`current.json`) and cooldown markers
- * (`update-blocked.json`) are owned by `@helm/update` and used from there — the launcher keeps no
+ * (`update-blocked.json`) are owned by the shared update engine (`@helm/env-io`) and used from there — the launcher keeps no
  * second copy of engine state. JSON reads are strict (explicit errors on corruption, `null` only
- * on ENOENT via `@helm/update`'s `readStateJson`); writes are atomic (`0600`).
+ * on ENOENT via the engine's `readStateJson`); writes are atomic (`0600`).
  */
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { atomicWriteJson } from '@helm/env-io';
-import { readStateJson } from '@helm/update';
+import { readStateJson } from '@helm/env-io';
 import { isStrictSemver } from '@helm/protocol';
 import { pathsOf } from './layout.js';
 

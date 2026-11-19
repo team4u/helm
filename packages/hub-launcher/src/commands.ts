@@ -3,7 +3,7 @@
  * prints either human-readable text or a JSON object (`--json`) and returns a process exit code.
  * Errors carry a stable `code` (UsageError) surfaced in the JSON error envelope by the CLI layer.
  */
-import { readCurrentRelease, readBlockedRelease } from '@helm/update';
+import { readCurrentRelease, readBlockedRelease } from '@helm/env-io';
 import { assertDistTag, pathsOf, resolvePayloadPackageName, resolveRegistryUrl, resolveUpdateIntervalMs, resolveUpdateTag } from './layout.js';
 import { readLaunchConfig, resolveEffectiveLaunchConfig } from './records.js';
 import { readRunningHub, stopHub } from './process.js';

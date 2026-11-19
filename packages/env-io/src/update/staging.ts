@@ -19,7 +19,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { randomUUID } from 'node:crypto';
-import { atomicWriteJson } from '@helm/env-io';
+import { atomicWriteJson } from '../atomic-write.js';
 import { UpgradeRejectedError } from './errors.js';
 import { isStrictSemver } from '@helm/protocol';
 import { downloadVerifiedTarball, resolveRegistryUrl } from './registry.js';

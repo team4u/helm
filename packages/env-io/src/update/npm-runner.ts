@@ -7,7 +7,7 @@ import rawFs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { spawn } from 'node:child_process';
-import { killProcessTree } from '@helm/env-io';
+import { killProcessTree } from '../node-shell-config-io.js';
 
 const NPM_OUTPUT_DIAG_LINES = 40;
 const NPM_OUTPUT_CAP = 400_000;

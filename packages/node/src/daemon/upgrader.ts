@@ -1,5 +1,5 @@
 /**
- * `helm-node` self-upgrade adapter over the shared `@helm/update` engine.
+ * `helm-node` self-upgrade adapter over the shared update engine in `@helm/env-io`.
  *
  * Node-specific policy kept here:
  * - the dual-package release layout (`@helm/node` + `@helm/cli`, package names via
@@ -13,7 +13,7 @@
  *
  * All generic mechanism — registry access, SHA-512 SRI verified staging, immutable
  * `.complete` candidates, `upgrade.lock`, drain gate, strict commit-at-replacement
- * ordering, rollback plus cooldown — lives in `@helm/update`. Error classes are
+ * ordering, rollback plus cooldown — lives in `@helm/env-io`'s update engine. Error classes are
  * re-exported from the single shared module copy so `instanceof` identity holds.
  */
 import fs from 'node:fs/promises';
@@ -48,7 +48,7 @@ import {
   type StageExtractor,
   type UpdateSpec,
   type UpdateStateOps,
-} from '@helm/update';
+} from '@helm/env-io';
 
 export { UpgradeRejectedError, UpgradeCommitUnconfirmedError };
 export {

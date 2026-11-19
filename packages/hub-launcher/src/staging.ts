@@ -2,7 +2,7 @@
  * Hub payload staging strategy: how a published npm payload becomes a verified, immutable release
  * candidate. All generic machinery (immutable staging directories, `.complete` markers and cache
  * reuse, staging cleanup, registry metadata, verified download, npm runner) flows through the
- * `UpdateCore` port (`update-core.ts` binds it to the shared `@helm/update` engine; tests inject a
+ * `UpdateCore` port (`update-core.ts` binds it to the shared update engine in `@helm/env-io`; tests inject a
  * port fake whose staging delegates to the real engine); this module only defines the Hub layout
  * policy inside the staged extractor:
  *
@@ -45,7 +45,7 @@ const NODE_ENGINES_PATTERN = /^>=\s*(\d+)\.(\d+)\.(\d+)$/;
 
 export interface StageHubOptions {
   io: LauncherIo;
-  /** Port fake for tests; production uses the real `@helm/update` adapter. */
+  /** Port fake for tests; production uses the real update-engine adapter. */
   core?: UpdateCore;
   /** Launcher install root (staging happens under `<root>/releases/<version>/`). */
   root: string;

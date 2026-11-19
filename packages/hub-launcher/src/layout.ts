@@ -2,7 +2,7 @@
  * Install-root layout and product defaults for the Hub launcher.
  *
  * Program state is strictly separated from user data: releases, current/blocked pointers (via
- * `@helm/update` state ops), the pid record, and logs live under the launcher install root
+ * the env-io update-engine state ops), the pid record, and logs live under the launcher install root
  * (default `~/.helm-hub`, env `HELM_HUB_INSTALL_ROOT`), while the Hub's own `~/.helm`
  * (`HELM_DATA_DIR`) data directory and plugin state are never written by the launcher. The
  * launcher binary itself is a stable external install and is never overwritten by the releases it

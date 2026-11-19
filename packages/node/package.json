@@ -23,7 +23,6 @@
     "@earendil-works/pi-durable": "1.5.2",
     "@helm/protocol": "workspace:*",
     "@helm/env-io": "workspace:*",
-    "@helm/update": "workspace:*",
     "birpc": "^2.9.0",
     "ws": "^8.18.0"
   },

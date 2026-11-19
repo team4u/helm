@@ -11,7 +11,7 @@ import { cp } from 'node:fs/promises';
 import path from 'node:path';
 import { test } from 'node:test';
 import { useTempDir, sanitizedHostEnv } from '@helm/test-kit/node';
-import { writeCurrentRelease } from '@helm/update';
+import { writeCurrentRelease } from '@helm/env-io';
 import { readLaunchConfig, readPidRecord, writePidRecord } from '../src/records.js';
 import { readRunningHub, startHub, stopHub, withLifecycleLock } from '../src/process.js';
 import { UsageError } from '../src/io.js';

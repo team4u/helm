@@ -45,8 +45,8 @@ export const PACKAGE_TIERS = {
   hub: 'integration',
   'hub-launcher': 'integration',
   node: 'integration',
-  update: 'integration',
   payload: 'integration',
+  'env-io/test/update': 'integration',
 };
 
 export const TEST_SUFFIXES = ['.test.ts', '.test.tsx'];

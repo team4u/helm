@@ -10,7 +10,7 @@
  * plugin-action commands over the Hub HTTP API, and the local Hub lifecycle surface
  * (`helm update ...`) implemented on @helm/hub-launcher's typed API (workspace import; the
  * launcher package itself publishes no bin of its own). esbuild inlines the whole closure
- * (@helm/cli → @helm/hub-launcher → @helm/update → @helm/env-io / @helm/protocol → typebox,
+ * (@helm/cli → @helm/hub-launcher → @helm/env-io (update engine included) / @helm/protocol → typebox,
  * plus tar for payload staging), all pure JavaScript — so the Hub payload's root dependency
  * set needs no additions for this CLI to run.
  *
@@ -54,7 +54,6 @@ export async function assembleCliArtifact({ repoRoot, version, enginesNode }) {
     ['cli dist entry', path.join(cliPkgDir, 'dist/index.js')],
     ['cli package.json', path.join(cliPkgDir, 'package.json')],
     ['hub-launcher dist entry', path.join(launcherPkgDir, 'dist/index.js')],
-    ['update engine dist', path.join(repoRoot, 'packages/update/dist/index.js')],
     ['env-io dist', path.join(repoRoot, 'packages/env-io/dist/index.js')],
     ['protocol dist', path.join(repoRoot, 'packages/protocol/dist/index.js')],
   ];
@@ -77,7 +76,7 @@ export async function assembleCliArtifact({ repoRoot, version, enginesNode }) {
   mkdirSync(stagingDir, { recursive: true });
 
   // Node builtins stay external automatically for platform=node; everything else (cli + launcher
-  // + update + env-io + protocol + typebox + tar) is inlined with legal comments preserved. The
+  // + env-io incl. the update engine + protocol + typebox + tar) is inlined with legal comments preserved. The
   // plugins-build compiler is intentionally NOT part of this graph (computed dynamic import, see
   // header) — it resolves at runtime from the Hub payload's / local release's node_modules.
   const bundleResult = await esbuildBundle({

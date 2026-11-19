@@ -4,7 +4,7 @@
  *
  * Honesty rules identical to the original helm-node engine: corruption and I/O errors
  * throw explicitly; `null` is returned only on `ENOENT`. Writes are atomic (`0600`,
- * temp file + rename) via `@helm/env-io`.
+ * temp file + rename) via the package's own atomic-write helper.
  *
  * The state directory is owned by exactly one consumer (product); consumers that must
  * keep a different on-disk `current.json` shape (e.g. the already-installed helm-node
@@ -13,7 +13,7 @@
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { atomicWriteJson } from '@helm/env-io';
+import { atomicWriteJson } from '../atomic-write.js';
 
 /** Active release pointer (`current.json`). `entries` holds consumer-defined absolute entry paths. */
 export interface CurrentReleaseRecord {
