@@ -5,6 +5,7 @@ import * as React from 'react'
 import { renderToString } from 'react-dom/server'
 import type { ConversationEntry, ConversationSummary } from '@helmx/protocol'
 import { formatFullTimestamp, formatMessageTime } from '../src/lib/format.js'
+import { createServerClock } from '../src/lib/server-clock.js'
 import { buildTimelineItems } from '../src/conversation/timeline-model.js'
 import type { AssistantTurn, FoldableStep, HumanInputItem } from '../src/conversation/timeline-model.js'
 import { summarizeStepGroup } from '../src/conversation/tool-body-model.js'
@@ -720,4 +721,56 @@ test('样式契约：msg-time-meta 与 msg-ai-footer / msg-human-footer 样式�
   assert.match(stylesCss, /\.msg-time-meta\s*\{[^}]*color:\s*color-mix\(in srgb,\s*var\(--fg-muted\)\s*88%,\s*transparent\)/)
   assert.match(stylesCss, /\.msg-time-meta\s*\{[^}]*font-size:\s*11px/)
   assert.match(stylesCss, /\.msg-time-meta\s*\{[^}]*font-variant-numeric:\s*tabular-nums/)
+})
+
+// ---------------------------------------------------------------------------
+// 3. server-clock：浏览器↔Hub 时钟偏差估计（运行中秒表的服务端时钟域）
+// ---------------------------------------------------------------------------
+
+test('server-clock：offset 样本被单向网络延迟抬高，滑窗取最小值逼近真实偏差', { timeout: 60_000 }, () => {
+  let local = 10_000
+  const clock = createServerClock(() => local)
+  // 服务端真实时刻 ≈ 8000（真实偏差 +2000）；网络延迟 50/120/30ms 只会让样本比 2000 更大
+  clock.observeServerEpoch(8000 - 50) // 样本 2050
+  clock.observeServerEpoch(8000 - 120) // 样本 2120
+  clock.observeServerEpoch(8000 - 30) // 样本 2030 —— 当前最小
+  assert.equal(clock.offsetMs(), 2030)
+  assert.equal(clock.now(), 10000 - 2030)
+
+  // 更低延迟样本到达后继续收敛
+  clock.observeServerEpoch(7999) // 样本 2001
+  assert.equal(clock.offsetMs(), 2001)
+  assert.equal(clock.now(), 10000 - 2001)
+
+  // 高延迟样本（背压/重放）不会回退估计
+  clock.observeServerEpoch(7000) // 样本 3000
+  assert.equal(clock.offsetMs(), 2001)
+})
+
+test('server-clock：本地时钟中途被校正后，窗口轮换自愈到新偏差', { timeout: 60_000 }, () => {
+  let local = 10_000
+  const clock = createServerClock(() => local)
+  for (let i = 0; i < 32; i++) {
+    local = 10_000 + i
+    clock.observeServerEpoch(9000 + i) // 旧偏差 +1000
+  }
+  assert.equal(clock.offsetMs(), 1000)
+
+  // NTP 把本地时钟回拨 5s：新样本偏差 -4000；旧样本被滑窗挤出去后估计翻新
+  for (let i = 0; i < 32; i++) {
+    local = 5000 + i
+    clock.observeServerEpoch(9000 + i)
+  }
+  assert.equal(clock.offsetMs(), -4000)
+  assert.equal(clock.now(), (5000 + 31) - -4000)
+})
+
+test('server-clock：非法 epoch 忽略，无样本时偏差为 0（等价旧行为）', { timeout: 60_000 }, () => {
+  const clock = createServerClock(() => 10_000)
+  clock.observeServerEpoch(Number.NaN)
+  clock.observeServerEpoch(0)
+  clock.observeServerEpoch(Number.POSITIVE_INFINITY)
+  clock.observeServerEpoch(-5)
+  assert.equal(clock.offsetMs(), 0)
+  assert.equal(clock.now(), 10_000)
 })

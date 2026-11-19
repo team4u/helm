@@ -27,6 +27,7 @@ import {
   type LiveState,
 } from './live-state.js'
 import { evictPluginClientCache, reconcilePluginClientCache } from './plugin-client.js'
+import { observeServerEpoch } from './server-clock.js'
 import { evictSessionDocsOfConversation, evictSessionDocSubscriptions } from './session-docs.js'
 import { isConversationArchived } from '../conversation/archive-model.js'
 import { standbyFallbackTarget } from './space-navigation.js'
@@ -198,6 +199,8 @@ function handleSnapshotFrame(payload: unknown, ctx: FrameHandlerContext): void {
   })
 
   ctx.updateLive((state) => applySnapshot(state, snap))
+  // 时钟采样：归约校验通过后的服务端 updatedAt 才可信（snapshot 为连接时刻快照，偏旧样本只会被滑窗最小值淘汰）。
+  observeLiveFrameClocks(snap.conversationLives)
   ctx.sseCursorRef.current = { bootId: snap.bootId, seq: snap.seq }
   ctx.setKernelBootId(snap.bootId)
 
@@ -261,6 +264,7 @@ function handleResumedFrame(payload: unknown, ctx: FrameHandlerContext): void {
   ctx.streamState.mode = 'resumed'
   ctx.streamState.resumedHeadSeq = resumed.headSeq
   ctx.updateLive((state) => applyResumedFrame(state, resumed))
+  observeLiveFrameClocks(resumed.conversationLives)
   ctx.resetRetry()
   // 不清详情/产物/插件缓存：续传补发未丢失任何状态；只有实际追平 headSeq
   // 才宣称 live（零补发时立即 live），重放中不显示「新鲜」。
@@ -270,6 +274,19 @@ function handleResumedFrame(payload: unknown, ctx: FrameHandlerContext): void {
 function handleTransientLiveFrame(payload: unknown, ctx: FrameHandlerContext): void {
   if (ctx.streamState.mode === null) throw new Error('Live connection missing the initial snapshot')
   ctx.updateLive((state) => applyTransientLiveFrame(state, payload as HelmxTransientLiveFrame))
+  // 时钟采样：updateLive 同步归约，形状校验失败会同步抛出；能走到这里说明 live.updatedAt 可信。
+  observeLiveFrameClocks([(payload as HelmxTransientLiveFrame).live])
+}
+
+/**
+ * 帧内 ConversationLive 的 updatedAt 喂给时钟偏差估计（server-clock）。
+ * 只在对应归约函数校验通过后调用：这里不再重复形状校验，仅做数值防御。
+ */
+function observeLiveFrameClocks(lives: ReadonlyArray<{ updatedAt?: unknown }> | undefined): void {
+  if (!Array.isArray(lives)) return
+  for (const live of lives) {
+    if (typeof live?.updatedAt === 'number') observeServerEpoch(live.updatedAt)
+  }
 }
 
 function dispatchFrameSideEffects(
