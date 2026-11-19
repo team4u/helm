@@ -24,7 +24,7 @@
  * `plugin_build_unavailable` honestly otherwise.
  *
  * Output layout (dist-cli/ is the publish package root; release runs npm pack/publish inside):
- *   package.json           publish manifest (name defaults to @team4u/helm, overridable via
+ *   package.json           publish manifest (name defaults to @team4u/helm-cli, overridable via
  *                          HELM_CLI_PACKAGE; dependencies are empty by contract; bin helm)
  *   index.js               bundled CLI entry (shebang + single-file ESM; the bin target and the
  *                          exact file the Hub payload ships as cli/dist/index.js)
@@ -37,7 +37,7 @@ import path from 'node:path';
 const SHEBANG = '#!/usr/bin/env node';
 
 /** Publish CLI package name (overridable via HELM_CLI_PACKAGE, mirroring HELM_PAYLOAD_PACKAGE). */
-export const cliPackageName = process.env.HELM_CLI_PACKAGE ?? '@team4u/helm';
+export const cliPackageName = process.env.HELM_CLI_PACKAGE ?? '@team4u/helm-cli';
 
 /**
  * Assembles the CLI publish package. Exits the process with a diagnostics list when any

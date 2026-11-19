@@ -26,11 +26,15 @@
  *   web/dist/                      Vite output (start.mjs points at it explicitly via HELM_WEB_DIST_DIR)
  *   start.mjs + manifest.json      zero-dependency launch entry and the version/entry/checksum contract
  *
- * The same build also assembles the stable CLI artifact (see src/assemble-cli.mjs): dist-cli/ is a
- * second publish package — a zero-dependency, single-file bundle of the complete control CLI
- * (packages/cli/dist/index.js incl. the bundled-in launcher update-path closure) that installs
- * globally via one `npm install -g` (bin helm). The Hub payload contract above is unchanged by that
- * artifact except for the cli entry bytes; a missing CLI bundle aborts the build.
+ * The same build also assembles two sibling publish packages: the stable CLI artifact
+ * (see src/assemble-cli.mjs): dist-cli/ is a zero-dependency, single-file bundle of the complete
+ * control CLI (packages/cli/dist/index.js incl. the bundled-in launcher update-path closure) that
+ * installs globally via one `npm install -g` (bin helm); and the node daemon artifact
+ * (see src/assemble-node.mjs): dist-node/ bundles the node daemon CLI (packages/node/dist/cli.js)
+ * with @helm/node + @helm/env-io + @helm/protocol inlined and exactly four external exact-version
+ * dependencies (bin helm-node → dist/cli.js; the dual-package self-upgrade target). The Hub payload
+ * contract above is unchanged by those artifacts except for the cli entry bytes; a missing CLI or
+ * node dist input aborts the build.
  *
  * Note: `@helm/plugin-client` is a browser-only SDK already bundled into `web/dist` and virtualized by
  * `@helm/plugin-build` via `globalThis.__helm_shared_plugin_client`, so neither `@helm/plugin-client`
@@ -48,6 +52,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { scanPeerOverrides, resolveDepRealDir } from './src/dep-closure.mjs';
 import { assembleCliArtifact } from './src/assemble-cli.mjs';
+import { assembleNodeArtifact } from './src/assemble-node.mjs';
 
 const payloadPkgRoot = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(payloadPkgRoot, '../..');
@@ -200,6 +205,16 @@ mkdirSync(stagingDir, { recursive: true });
 // bundle contract aborts the build inside assemble-cli.mjs. The same bytes are shipped inside the
 // Hub payload as cli/dist/index.js below, so both artifacts run one identical CLI.
 const cliArtifact = await assembleCliArtifact({
+  repoRoot,
+  version: payloadPkg.version,
+  enginesNode: distPackageJson.engines.node,
+});
+
+// --- Node daemon artifact (third publish entry): the remote-machine install target. assembleNodeArtifact
+// bundles packages/node/dist/cli.js with the workspace closure inlined and the four external packages
+// (chord / pi-durable / birpc / ws) pinned at their exact installed versions; a broken bundle contract
+// aborts the build inside assemble-node.mjs. Publish order stays payload → cli → node.
+await assembleNodeArtifact({
   repoRoot,
   version: payloadPkg.version,
   enginesNode: distPackageJson.engines.node,
