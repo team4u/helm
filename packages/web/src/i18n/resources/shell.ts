@@ -205,6 +205,8 @@ export const shellMessages = {
     en: 'No conversations match the current filters',
     'zh-CN': '当前筛选下没有会话',
   },
+  'shell.overview.loading': { en: 'Loading conversations…', 'zh-CN': '正在加载会话…' },
+  'shell.overview.quickNavGroup': { en: 'Quick navigation', 'zh-CN': '快捷导航' },
   'shell.overview.moreDescendants': { en: '+{count} more', 'zh-CN': '还有 {count} 个' },
   'shell.overview.railTooltip': { en: 'Conversation overview', 'zh-CN': '会话总览' },
 

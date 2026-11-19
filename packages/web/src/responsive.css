@@ -157,20 +157,48 @@ button, a, input, select, textarea { touch-action: manipulation; }
   .mobile-nav-toggle:active {
     background: var(--bg-hover);
   }
-  /* 汉堡按钮右上角全局态势微标（与桌面折叠 Rail 同源 indicator）：灯色 + 紧凑计数；
-     排除正在查看的根树，无信号时不渲染。 */
-  .mobile-nav-attention {
+  /* 移动端全局快捷导航簇（根挂载，与汉堡同层）：首个 quickEntry 插件视图 +
+     会话总览一键直达；态势微标独立可按（tone 灯色 + 紧凑计数挂在总览按钮上）。
+     抽屉拉开时隐藏（抽屉内 Rail 已有同源按钮）。 */
+  .mobile-quick-nav {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    position: fixed;
+    top: calc(max(5px, env(safe-area-inset-top)) + 3px);
+    left: max(48px, calc(env(safe-area-inset-left) + 44px));
+    z-index: 70;
+  }
+  .mobile-quick-btn {
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    border: none;
+    background: transparent;
+    box-shadow: none;
+    color: var(--fg-secondary);
+    border-radius: var(--radius-sm);
+    -webkit-tap-highlight-color: transparent;
+  }
+  .mobile-quick-btn:active {
+    background: var(--bg-hover);
+  }
+  .mobile-quick-badge {
     position: absolute;
-    top: -1px;
+    top: -2px;
     right: -3px;
-    min-width: 15px;
-    height: 15px;
-    padding: 0 4px;
+    min-width: 14px;
+    height: 14px;
+    padding: 0 3px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     border-radius: 999px;
-    font-size: 9.5px;
+    font-size: 9px;
     font-weight: 600;
     line-height: 1;
     font-variant-numeric: tabular-nums;
@@ -178,11 +206,12 @@ button, a, input, select, textarea { touch-action: manipulation; }
     box-sizing: border-box;
     pointer-events: none;
   }
-  .mobile-nav-attention[data-tone='error'] { background: var(--err); }
-  .mobile-nav-attention[data-tone='blocked'] { background: var(--warn); }
-  .mobile-nav-attention[data-tone='running'] { background: var(--accent); }
-  .mobile-nav-attention[data-tone='done'] { background: var(--ok); }
-  .sidebar-open .mobile-nav-toggle { display: none; }
+  .mobile-quick-badge[data-tone='error'] { background: var(--err); }
+  .mobile-quick-badge[data-tone='blocked'] { background: var(--warn); }
+  .mobile-quick-badge[data-tone='running'] { background: var(--accent); }
+  .mobile-quick-badge[data-tone='done'] { background: var(--ok); }
+  .sidebar-open .mobile-nav-toggle,
+  .sidebar-open .mobile-quick-nav { display: none; }
   .mobile-sidebar-close {
     display: inline-flex;
     align-items: center;
@@ -208,6 +237,19 @@ button, a, input, select, textarea { touch-action: manipulation; }
   .helmx-primary-pane .helmx-pane > .pane-topbar { padding-left: max(48px, calc(env(safe-area-inset-left) + 44px)); }
   /* 一级中心（角色/模型/技能/节点/插件）顶栏同样为左上角悬浮汉堡让位 */
   .primary-center-topbar { padding-left: max(48px, calc(env(safe-area-inset-left) + 44px)); }
+  /* 快捷导航簇让位（在其后覆盖，同特异性靠源顺序决胜）：会话/中心顶栏标题
+     左缘再退一档——总览按钮常驻 + quickEntry 按钮随 shell 属性出现，标题
+     省略绝不遮按钮。 */
+  .helmx-panes > .helmx-pane > .pane-topbar,
+  .helmx-primary-pane .helmx-pane > .pane-topbar,
+  .primary-center-topbar {
+    padding-left: max(88px, calc(env(safe-area-inset-left) + 84px));
+  }
+  .helmx-shell.mq-quick-on .helmx-panes > .helmx-pane > .pane-topbar,
+  .helmx-shell.mq-quick-on .helmx-primary-pane .helmx-pane > .pane-topbar,
+  .helmx-shell.mq-quick-on .primary-center-topbar {
+    padding-left: max(122px, calc(env(safe-area-inset-left) + 118px));
+  }
   /* 移动端重连浮动胶囊避开左上角固定 .mobile-nav-toggle 并尊重顶部安全区 */
   .connection-banner {
     top: max(8px, env(safe-area-inset-top));
