@@ -11,7 +11,7 @@
  * blocked / error / pending ask / stalled / missing conversation) comes from
  * the real `useConversations()` summaries or the task record itself.
  */
-import { DEFAULT_HELMX_LOCALE, type HelmxLocale } from '@helmx/plugin-client'
+import { DEFAULT_HELMX_LOCALE, type ConversationBackgroundSnapshot, type HelmxLocale } from '@helmx/plugin-client'
 import type { ConversationSummary } from '@helmx/protocol'
 import {
   taskLiveConversationMissing,
@@ -262,11 +262,13 @@ function collectConversationSubtree(
 /** Light vocabulary for a task card: subtree error > blocked/pending ask > main working > descendants-or-background active > main done > idle. */
 export type TaskLightStatus = 'error' | 'blocked' | 'running' | 'background' | 'done' | 'idle'
 
-/** Per-conversation background in-flight fact (mirrors the SDK useConversationBackground slice; kept structural so models stay SDK-hook free). */
-export interface TaskBackgroundFact {
-  active: boolean
-  summary: string
-}
+/**
+ * Background in-flight facts parameter: the shared SDK
+ * `useConversationBackground()` snapshot shape (single source of truth in
+ * @helmx/plugin-client — host-standard workbench badge aggregation with an
+ * honest unknown gate).
+ */
+export type TaskBackgroundFacts = ConversationBackgroundSnapshot
 
 export interface TaskLiveView {
   lightStatus: TaskLightStatus
@@ -327,7 +329,7 @@ export function deriveTaskLiveView(
   pendingAsks?: Readonly<Record<number, number>>,
   tasksById?: ReadonlyMap<string, TaskRecord>,
   locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
-  background?: Readonly<Record<number, TaskBackgroundFact>>,
+  background?: TaskBackgroundFacts,
 ): TaskLiveView {
   const { main, descendants } = collectConversationSubtree(task.conversationId, conversations)
   const conversationMissing = task.conversationId !== undefined && main === undefined
@@ -343,16 +345,20 @@ export function deriveTaskLiveView(
   const activeChildren = descendants.filter((conv) => conv.status === 'working' || conv.status === 'blocked')
   const stalled = task.silenceState?.stalledAt
 
-  // Background in-flight facts from the generic workbench badge contract (undefined = not wired: no inference).
+  // Background in-flight facts from the shared SDK snapshot (host-standard workbench
+  // badge aggregation). `unknown === true` (docs still loading / host without
+  // aggregation) means facts are UNKNOWABLE: no inference either way — we never
+  // fabricate "in flight" nor claim "no background work".
   const backgroundSummaries: string[] = []
   let backgroundActive = false
-  if (background !== undefined) {
+  if (background !== undefined && background.unknown !== true) {
     for (const conv of subtree) {
-      const fact = background[conv.id]
+      const fact = background.byConversation.get(conv.id)
       if (fact?.active === true) {
         backgroundActive = true
-        if (fact.summary.trim() !== '' && !backgroundSummaries.includes(fact.summary.trim())) {
-          backgroundSummaries.push(fact.summary.trim())
+        const summary = fact.summary.trim()
+        if (summary !== '' && !backgroundSummaries.includes(summary)) {
+          backgroundSummaries.push(summary)
         }
       }
     }
@@ -503,7 +509,7 @@ export function deriveBoardItems(
   conversations: readonly ConversationSummary[],
   pendingAsks?: Readonly<Record<number, number>>,
   locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
-  background?: Readonly<Record<number, TaskBackgroundFact>>,
+  background?: TaskBackgroundFacts,
 ): TaskItem[] {
   const tasksById = new Map(tasks.map((task) => [task.id, task]))
   return tasks.map((task) => ({

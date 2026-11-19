@@ -192,39 +192,37 @@ test('usePluginDoc / useConversations / usePlugins fetch through the port; first
   void host
 })
 
-test('useConversationBackground reads the derived port slice; absence stays undefined (never fabricated)', { timeout: 60_000 }, () => {
-  let wired: unknown = 'unset'
-  let absent: unknown = 'unset'
-  function WiredProbe(): React.ReactNode {
-    wired = SDK.useConversationBackground()
-    return e('div', null, 'wired')
+test('useConversationBackground: port snapshot forwards verbatim; absent host aggregation reports unknown (never fabricates)', { timeout: 60_000 }, () => {
+  const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
+  const byConversation = new Map<number, { active: boolean; summary: string }>([
+    [7, { active: true, summary: '2 Running' }],
+  ])
+  let fromPort: { unknown: boolean; active: boolean | undefined; summary: string | undefined } | undefined
+  let fromAbsentHost: { unknown: boolean; size: number } | undefined
+  function PortProbe(): React.ReactNode {
+    const snapshot = SDK.useConversationBackground()
+    const entry = snapshot.byConversation.get(7)
+    fromPort = { unknown: snapshot.unknown, active: entry?.active, summary: entry?.summary }
+    return null
   }
   function AbsentProbe(): React.ReactNode {
-    absent = SDK.useConversationBackground()
-    return e('div', null, 'absent')
+    const snapshot = SDK.useConversationBackground()
+    fromAbsentHost = { unknown: snapshot.unknown, size: snapshot.byConversation.size }
+    return null
   }
-  const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
-  const withFacts = Object.assign(makePort(log), {
-    conversationBackground: { 7: { active: true, summary: '2 Running' } },
-  })
-  const first = mount(
-    e(SDK.PluginClientHostContext.Provider, { value: withFacts },
-      e(SDK.PluginClientContext.Provider, { value: SDK.createPluginClientContext(withFacts, 'p1', 7) },
-        e(WiredProbe))),
+  const port = makePort(log)
+  const withBackground = mount(
+    e(SDK.PluginClientHostContext.Provider, { value: { ...port, conversationBackground: { unknown: false, byConversation } } },
+      e(PortProbe)),
   )
-  assert.deepEqual(wired, { 7: { active: true, summary: '2 Running' } }, 'background facts come from the port slice verbatim')
-  act(() => { void first.root.unmount() })
-  void first.host
-
-  const plain = makePort(log)
-  const second = mount(
-    e(SDK.PluginClientHostContext.Provider, { value: plain },
-      e(SDK.PluginClientContext.Provider, { value: SDK.createPluginClientContext(plain, 'p1', 7) },
-        e(AbsentProbe))),
-  )
-  assert.equal(absent, undefined, 'an unwired host honestly yields undefined, not a fabricated index')
-  act(() => { void second.root.unmount() })
-  void second.host
+  assert.equal(fromPort!.unknown, false, 'the snapshot forwards the host aggregation as-is')
+  assert.equal(fromPort!.active, true)
+  assert.equal(fromPort!.summary, '2 Running')
+  const withoutBackground = mount(e(SDK.PluginClientHostContext.Provider, { value: port }, e(AbsentProbe)))
+  assert.equal(fromAbsentHost!.unknown, true, 'a host without the aggregation reports unknown')
+  assert.equal(fromAbsentHost!.size, 0, 'the absent-host fallback index is empty, never fabricated')
+  act(() => { void withBackground.root.unmount() })
+  act(() => { void withoutBackground.root.unmount() })
 })
 
 test('usePluginDoc auto-triggers ensurePluginDoc for a missing key (port forwarding)', { timeout: 60_000 }, () => {

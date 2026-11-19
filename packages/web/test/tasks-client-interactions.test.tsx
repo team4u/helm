@@ -173,7 +173,7 @@ const EMPTY_SESSION_DOC_STATE = Object.freeze({
 
 let stubConversations: ConversationSummary[] = []
 let stubBoard: unknown = undefined
-let stubBackground: Record<number, { active: boolean; summary: string }> | undefined = undefined
+let stubBackground: { unknown: boolean; byConversation: Map<number, { active: boolean; summary: string }> } | undefined = undefined
 
 /** Failed tests leak mounted roots (and the shared now-ticker keeps the loop alive); drain them after the run. */
 const cleanups: Array<() => void> = []
@@ -184,7 +184,7 @@ after(() => {
 function setStubState(options: {
   conversations?: ConversationSummary[]
   board?: unknown
-  background?: Record<number, { active: boolean; summary: string }>
+  background?: { unknown: boolean; byConversation: Map<number, { active: boolean; summary: string }> }
 }): void {
   if (options.conversations !== undefined) stubConversations = options.conversations
   if ('board' in options) stubBoard = options.board
@@ -479,23 +479,37 @@ test('deriveTaskLiveView：error > blocked > 主 working > 后代在途 > done >
   ])
   assert.equal(errorSite.jumpConversationId, 11)
 
-  // 通用后台徽标事实：主会话空闲但后台 run 在途 → background 灯 + 真实摘要，停滞不被误报
+  // 共享 SDK 后台快照（web-awareness 契约）：主会话空闲但后台 run 在途 →
+  // background 灯 + 真实摘要，停滞不被误报
   const withBackground = deriveTaskLiveView(
     task('T-8', { column: 'in_progress', conversationId: 10, silenceState: { nudgedAt: 1, stalledAt: 2 } }),
     [conv(10, 'main', { status: 'idle' })],
     undefined,
     byId,
     'en',
-    { 10: { active: true, summary: '2 Running' } },
+    { unknown: false, byConversation: new Map([[10, { active: true, summary: '2 Running' }]]) },
   )
   assert.equal(withBackground.lightStatus, 'background')
   assert.equal(withBackground.backgroundActive, true)
   assert.equal(withBackground.liveSummary, '2 Running')
   assert.equal(withBackground.stalled, false, '后台在途时不得误报「回合已停 · 未交卷」')
   assert.equal(withBackground.needsAttention, false)
-  // 未接线（undefined）时零推断：保持原停滞语义
-  const noFacts = deriveTaskLiveView(
+  // unknown 门（badge doc 未首载/宿主未聚合）：事实不可知 → 零推断，不伪造
+  // 在途也不宣称「无后台任务」，停滞保持后端记录的真实语义
+  const unknownFacts = deriveTaskLiveView(
     task('T-9', { column: 'in_progress', conversationId: 10, silenceState: { nudgedAt: 1, stalledAt: 2 } }),
+    [conv(10, 'main', { status: 'idle' })],
+    undefined,
+    byId,
+    'en',
+    { unknown: true, byConversation: new Map([[10, { active: true, summary: '2 Running' }]]) },
+  )
+  assert.equal(unknownFacts.backgroundActive, false, 'unknown 时不得采信条目')
+  assert.equal(unknownFacts.stalled, true)
+  assert.equal(unknownFacts.liveSummary, 'Turn settled, not submitted yet')
+  // 未接线（undefined）时同样零推断
+  const noFacts = deriveTaskLiveView(
+    task('T-10', { column: 'in_progress', conversationId: 10, silenceState: { nudgedAt: 1, stalledAt: 2 } }),
     [conv(10, 'main', { status: 'idle' })],
   )
   assert.equal(noFacts.stalled, true)
@@ -1093,7 +1107,7 @@ test('后台 run 在途：通用徽标事实驱动 background 灯与真实摘要
       tasks: [task('T-1', { column: 'in_progress', conversationId: 10, silenceState: { nudgedAt: 1, stalledAt: 2 }, createdAt: 100 })],
       updatedAt: 1,
     },
-    background: { 10: { active: true, summary: '2 Running' } },
+    background: { unknown: false, byConversation: new Map([[10, { active: true, summary: '2 Running' }]]) },
   })
   const { host, unmount } = await mountBoard(makeSpyCtx(), mutableScreenProps().props)
   t.after(unmount)
@@ -1178,7 +1192,9 @@ test('mergePending 互斥：待验收卡禁用通过/合并/返工并说明原�
   assert.ok(t3)
   assert.match(t3.textContent ?? '', /Merge in progress/)
   for (const label of ['Approve', 'Merge & close', 'Rework']) {
-    const btn = [...t3.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes(label))
+    const btn: HTMLButtonElement | undefined = [...t3.querySelectorAll<HTMLButtonElement>('button')].find(
+      (b) => b.textContent?.includes(label),
+    )
     assert.ok(btn, `${label} 按钮应存在`)
     assert.equal(btn.disabled, true, `${label} 在合并收尾中应禁用`)
     assert.match(btn.title, /Merge finishing in progress/)
