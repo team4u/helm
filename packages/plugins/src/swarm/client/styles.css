@@ -549,12 +549,57 @@
   min-width: 0;
 }
 
-.sw-panel-post-text {
+/* 看板帖子正文走共享 MarkdownText 渲染（msg-ai-body 宿主排版基座，同 json-render 的
+ * jr-markdown 复用方式），面板内做紧凑化；复合选择器保证覆盖不依赖宿主/插件样式注入顺序 */
+.sw-panel-post-text.msg-ai-body {
   margin: 0;
-  font-size: 12px;
+  font-size: 13px;
+  line-height: 1.6;
   color: var(--fg-secondary);
-  white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.sw-panel-post-text.msg-ai-body > :last-child {
+  margin-bottom: 0;
+}
+
+.sw-panel-post-text.msg-ai-body p {
+  margin: 0 0 6px;
+}
+
+.sw-panel-post-text.msg-ai-body :is(h1, h2, h3, h4) {
+  margin: 10px 0 4px;
+  font-size: 1em;
+}
+
+.sw-panel-post-text.msg-ai-body :is(ul, ol) {
+  margin: 0 0 6px;
+  padding-left: 18px;
+}
+
+.sw-panel-post-text.msg-ai-body li > p {
+  margin: 0;
+}
+
+.sw-panel-post-text.msg-ai-body blockquote {
+  margin: 6px 0;
+}
+
+.sw-panel-post-text.msg-ai-body :is(pre, hr) {
+  margin: 6px 0;
+}
+
+.sw-panel-post-text.msg-ai-body code:not(pre code) {
+  font-size: 12px;
+  padding: 1px 4px;
+}
+
+.sw-panel-post-text.msg-ai-body table:not(.helmx-table):not(.jr-table) {
+  font-size: 12px;
+}
+
+.sw-panel-post-text.msg-ai-body table:not(.helmx-table):not(.jr-table) :is(th, td) {
+  padding: 4px 8px;
 }
 
 .sw-panel-post-toggle {

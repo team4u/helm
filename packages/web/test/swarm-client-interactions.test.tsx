@@ -859,6 +859,66 @@ test('SwarmWorkbenchPanel：实时 board-view 编排卡（成员行开抽屉、�
   resetDefaultStubs()
 })
 
+test('SwarmWorkbenchPanel：看板帖子正文按 Markdown 渲染，长帖折叠预览切片同样渲染且展开显示全文', { timeout: 60_000 }, async () => {
+  const board = boardViewFixture()
+  const posts = board.posts as Array<{ body: string }>
+  // seq1 短帖：粗体 + 行内代码（不折叠，全文 Markdown）
+  posts[0]!.body = 'Implement **token refresh** in `src/auth.ts`.'
+  // seq2 长帖（>8 行触发折叠）：首行即 Markdown，尾部放折叠态不可见标记
+  posts[1]!.body = [
+    'Token refresh **implemented**, see `src/auth.ts`:',
+    '',
+    '- 刷新令牌轮转',
+    '- 过期容错与重试',
+    '- 审计日志补齐',
+    '- 并发场景回归',
+    'TAIL_MARKER_UNCOLLAPSED_ONLY',
+    '- 文档同步',
+    '- 变更摘要归档',
+    'END_OF_LONG_POST',
+  ].join('\n')
+  setStubState({
+    docs: { index: coordinatorIndexFixture(), 'board-badges': { byConversation: {} } },
+    sessionDocs: { 'builtin:swarm/board-view/50': board },
+  })
+  const spy = makeSpyCtx({ conversationId: 50 })
+  const panel = await mount(
+    spy,
+    e(components.SwarmWorkbenchPanel, { conversation: convSummary(50, '主控', { tags: ['swarm-coordinator'] }) }),
+  )
+  try {
+    const bodyHosts = [...panel.host.querySelectorAll<HTMLElement>('.sw-panel-post-text')]
+    assert.ok(bodyHosts.length === 2, '两个帖子的正文容器')
+
+    // 短帖全文渲染为 Markdown 元素，不再出现字面 ** 反引号语法
+    const shortBody = bodyHosts[0]!
+    assert.ok(shortBody.querySelector('strong') !== null, '粗体渲染为 strong 元素')
+    assert.ok(shortBody.querySelector('code') !== null, '行内代码渲染为 code 元素')
+    assert.ok((shortBody.textContent ?? '').includes('**') === false, '正文无字面 ** 语法残留')
+
+    // 长帖折叠态：预览切片同样按 Markdown 渲染，尾部内容与折叠标记不出现在正文
+    const longBody = bodyHosts[1]!
+    assert.ok(longBody.querySelector('strong') !== null, '折叠预览切片同样按 Markdown 渲染')
+    assert.ok(longBody.querySelector('code') !== null, '折叠预览切片渲染行内代码')
+    assert.ok((longBody.textContent ?? '').includes('TAIL_MARKER_UNCOLLAPSED_ONLY') === false, '折叠态不显示尾部内容')
+    assert.ok((longBody.textContent ?? '').includes('END_OF_LONG_POST') === false, '折叠态不显示末行')
+
+    // 展开后显示完整正文（含尾部标记），收展按钮语义保持
+    const toggle = panel.host.querySelector<HTMLButtonElement>('.sw-panel-post-toggle')
+    assert.ok(toggle !== null, '长帖存在收展按钮')
+    assert.ok(toggle.getAttribute('aria-expanded') === 'false', '初始折叠')
+    await act(async () => {
+      toggle.click()
+    })
+    assert.ok(toggle.getAttribute('aria-expanded') === 'true', '点击后展开')
+    assert.ok((longBody.textContent ?? '').includes('TAIL_MARKER_UNCOLLAPSED_ONLY') === true, '展开后显示尾部内容')
+    assert.ok((longBody.textContent ?? '').includes('END_OF_LONG_POST') === true, '展开后显示末行')
+  } finally {
+    panel.unmount()
+  }
+  resetDefaultStubs()
+})
+
 test('SwarmWorkbenchPanel：无实时投影时显式 board_status 回退（含错误重试与完整记录 board_read），空态只读引导', { timeout: 60_000 }, async () => {
   // closed 历史组（index 仍登记）：无 board-view 投影，走一次性 board_status
   const closedIndex = coordinatorIndexFixture()
