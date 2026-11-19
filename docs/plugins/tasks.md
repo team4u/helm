@@ -25,7 +25,7 @@
 
 ## 动作与模型工具
 
-`ctx.action` 十个动作（CLI 自动映射 `helmx tasks <cmd>`）：
+`ctx.action` 十二个动作（CLI 自动映射 `helmx tasks <cmd>`）：
 
 | 动作 | CLI | 模型工具 | 说明 |
 | :--- | :--- | :--- | :--- |
@@ -36,7 +36,7 @@
 | `start` | `helmx tasks start <id>` | `task_start` | 启动 backlog 卡（依赖未全 done 拒 `409 task_blocked_by_dependencies`；并发超限拒 `409 task_concurrency_limit`） |
 | `submit` | `helmx tasks submit` | `task_submit` | 执行者交卷（`scope: tags ['task']`——仅任务执行会话可见可调；会话内按 `conversationId` 反查绑定卡，显式 `taskId` 时校验归属防串单） |
 | `approve` | `helmx tasks approve <id>` | `task_approve` | `close_only`（默认）置 done + 会话换归档标签 + 自动解锁下游依赖；`merge_and_close` 置 `mergePending` 并向执行会话投递合并收尾指令 |
-| `rework` | `helmx tasks rework <id>` | `task_rework` | 打回返工：回 `in_progress`、`reworkCount + 1`、意见投回原会话（保留上下文与分支）；原会话被删时显式 `409 task_conversation_missing`（或 `recreateConversation: true` 重建，新会话收到任务书 + 返工意见两条输入） |
+| `rework` | `helmx tasks rework <id>` | `task_rework` | 打回返工：回 `in_progress`、`reworkCount + 1`、意见投回原会话（保留上下文与分支）；原会话被删时显式 `409 task_conversation_missing`（或 `recreateConversation: true` 重建，新会话收到**单条合成任务书**：原 brief + 返工意见） |
 | `request_plan_approval` | `helmx tasks request-plan-approval` | `task_request_plan_approval` | planFirst 方案审批（真实 AskDoc confirm 卡片，阻塞至用户作答）；批准决定持久化到 `planApproval` 后 `task_submit` 才放行 |
 | `resume_kickoff` | `helmx tasks resume-kickoff <id>` | — | 显式继续「开工未送达」的任务：向绑定会话重投任务书（requestId 幂等），清除标记；唯一重投路径，绝不自动触发 |
 | `archive` | `helmx tasks archive <id>` | — | 归档 backlog/done 卡（进行中拒 `409 task_in_progress`） |

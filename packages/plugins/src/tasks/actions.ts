@@ -1107,10 +1107,10 @@ export function registerTasksActions(ctx: HelmxPluginContext, runtime: TasksRunt
           ...(input.artifactIds !== undefined ? { artifactIds: input.artifactIds } : {}),
           submittedAt: now,
         }
-        // merge_and_close 授权闭环：mergePending 任务提交携明确合并证据（显式 merged: true 声明，
-        // 或交付了 branch）即一步结单（用户已审过并显式授权，不要求第二次人工点击）；
-        // 仅 verification 文本不构成证据（诚实汇报「合并失败」的验证文本不得自动结单），
-        // 无证据维持 in_review 待人工复核。
+        // merge_and_close 授权闭环：mergePending 任务提交仅认显式 merged: true 声明即一步结单
+        // （用户已审过并显式授权，不要求第二次人工点击）；branch 与 verification 文本均不构成
+        // 已合并的证据（普通交付 branch≠已合并、诚实汇报「合并失败」的验证描述不得自动结单），
+        // 无声明的提交维持 in_review 且 mergePending 保留待人工复核。
         if (task.mergePending === true && input.merged === true) {
           return { task, autoFinalized: true as const }
         }
