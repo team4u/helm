@@ -347,7 +347,7 @@ function standardBoard(): Record<string, unknown> {
         },
         createdAt: 300,
       }),
-      task('T-4', { dependsOn: ['T-1'], createdAt: 400 }),
+      { ...task('T-4', { dependsOn: ['T-1'], createdAt: 400 }), blockedBy: ['T-1'] },
       task('T-5', { createdAt: 500 }),
       task('T-6', { column: 'done', conversationId: 40, completedAt: 600, createdAt: 600 }),
     ],
@@ -451,15 +451,18 @@ test('deriveTaskLiveView：error > blocked > 主 working > 后代在途 > done >
   assert.equal(stalled.needsAttention, true)
   assert.equal(stalled.liveSummary, 'Turn settled, not submitted yet')
 
-  // 依赖：blockedBy 只统计已知未完成前置；看板外依赖不伪造阻塞
-  const depTask = task('T-5', { dependsOn: ['T-1', 'T-2'] })
+  // 依赖：投影 blockedBy 为权威真值（截断安全）；缺字段（旧板）= 未知不可开工
+  const depTask = task('T-5', { dependsOn: ['T-1', 'T-2'], blockedBy: ['T-2'] })
   assert.deepEqual(deriveTaskLiveView(depTask, [], undefined, byId).blockedBy, ['T-2'])
   assert.equal(deriveTaskLiveView(depTask, [], undefined, byId).isReadyToStart, false)
-  assert.equal(deriveTaskLiveView(task('T-6', { dependsOn: ['T-1'] }), [], undefined, byId).isReadyToStart, true)
-  const offBoard = deriveTaskLiveView(task('T-7', { dependsOn: ['T-1', 'T-99'] }), [], undefined, byId)
+  assert.equal(deriveTaskLiveView(task('T-6', { dependsOn: ['T-1'], blockedBy: [] }), [], undefined, byId).isReadyToStart, true)
+  const offBoard = deriveTaskLiveView(task('T-7', { dependsOn: ['T-1', 'T-99'], blockedBy: [] }), [], undefined, byId)
   assert.deepEqual(offBoard.blockedBy, [])
   assert.deepEqual(offBoard.offBoardDeps, ['T-99'])
-  assert.equal(offBoard.isReadyToStart, true, '看板外依赖（完成截断）不伪造为阻塞，后端 start 为权威门禁')
+  assert.equal(offBoard.isReadyToStart, true, '权威真值说无阻塞：看板外（完成截断）依赖不伪造阻塞')
+  const oldBoard = deriveTaskLiveView(task('T-11', { dependsOn: ['T-1'] }), [], undefined, byId)
+  assert.equal(oldBoard.depsUnknown, true, '旧板缺 blockedBy 字段 → 依赖状态未知')
+  assert.equal(oldBoard.isReadyToStart, false, '未知不得当作可开工')
 
   // 等待审批 vs 等待子会话确认：文案区分，直达 Ask 现场
   const approval = mk({ conversationId: 10 }, [conv(10, 'main', { status: 'blocked', pendingAskCount: 1, doing: 'ask: pick plan' })])
@@ -877,9 +880,11 @@ test('新建待办：表单校验、依赖解析、开关、后端错误如实�
 
   await click(submit)
   assert.equal(ctx.actionCalls.length, 1)
-  assert.deepEqual(ctx.actionCalls[0], {
-    actionId: 'create',
-    input: {
+  assert.equal(ctx.actionCalls[0]?.actionId, 'create')
+  const createInput = ctx.actionCalls[0]?.input as Record<string, unknown>
+  assert.deepEqual(
+    { ...createInput, idempotencyKey: undefined },
+    {
       title: 'Add metrics endpoint',
       brief: 'Add /metrics with auth.',
       project: 'helm',
@@ -887,8 +892,12 @@ test('新建待办：表单校验、依赖解析、开关、后端错误如实�
       planFirst: true,
       autoMerge: false,
       autoStart: true,
+      idempotencyKey: undefined,
     },
-  })
+  )
+  const emittedKey = createInput['idempotencyKey']
+  assert.equal(typeof emittedKey, 'string', '创建载荷应携带幂等键')
+  assert.ok((emittedKey as string).length > 0 && (emittedKey as string).length <= 128, '幂等键长度合规（后端 128 上限）')
   assert.ok(document.querySelector('.task-modal') === null, '创建成功后弹窗关闭')
   unmount()
 
@@ -1126,7 +1135,7 @@ test('看板外依赖：Ready 不被伪造阻塞并明示看板外计数', { tim
     board: {
       tasks: [
         task('T-1', { column: 'done', createdAt: 100 }),
-        task('T-5', { dependsOn: ['T-1', 'T-99'], createdAt: 500 }),
+        { ...task('T-5', { dependsOn: ['T-1', 'T-99'], createdAt: 500 }), blockedBy: [] },
       ],
       updatedAt: 1,
     },
@@ -1169,7 +1178,9 @@ test('停滞任务显式继续：按钮触发 submitInput 到执行会话（人�
   unmount()
 })
 
-test('mergePending 互斥：待验收卡禁用通过/合并/返工并说明原因', { timeout: 60_000 }, async (t) => {
+test('mergePending 语义：进行中=合并收尾中；待复核=合并待复核且三动作可人工重试', { timeout: 60_000 }, async (t) => {
+  // 处理失败的合并：任务回到 in_review 且 mergePending 仍置位（执行者如实
+  // 汇报合并失败、无证据）——徽标「合并待复核」，通过/重试合并/返工全部可用
   setStubState({
     conversations: [conv(30, 'T-3 exec')],
     board: {
@@ -1178,7 +1189,7 @@ test('mergePending 互斥：待验收卡禁用通过/合并/返工并说明原�
           column: 'in_review',
           conversationId: 30,
           mergePending: true,
-          submission: { summary: 'merging', branch: 'feat/x', submittedAt: 1 },
+          submission: { summary: 'merge failed on conflict', branch: 'feat/x', submittedAt: 1 },
           createdAt: 300,
         }),
       ],
@@ -1190,17 +1201,40 @@ test('mergePending 互斥：待验收卡禁用通过/合并/返工并说明原�
   t.after(unmount)
   const t3 = host.querySelector('[data-task-id="T-3"]')
   assert.ok(t3)
-  assert.match(t3.textContent ?? '', /Merge in progress/)
-  for (const label of ['Approve', 'Merge & close', 'Rework']) {
+  assert.match(t3.textContent ?? '', /Merge awaiting review/, '应呈现合并待复核徽标')
+  const retryBtn = [...t3.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('Retry merge'))
+  assert.ok(retryBtn, '合并按钮应变为「重试合并」')
+  assert.equal(retryBtn.disabled, false, '待复核状态不得僵住：重试可用')
+  for (const label of ['Approve', 'Rework']) {
     const btn: HTMLButtonElement | undefined = [...t3.querySelectorAll<HTMLButtonElement>('button')].find(
       (b) => b.textContent?.includes(label),
     )
     assert.ok(btn, `${label} 按钮应存在`)
-    assert.equal(btn.disabled, true, `${label} 在合并收尾中应禁用`)
-    assert.match(btn.title, /Merge finishing in progress/)
+    assert.equal(btn.disabled, false, `${label} 在合并待复核下应可用（人工复核路径）`)
   }
-  assert.equal(ctx.actionCalls.length, 0)
+  // 重试合并 → 仍走确认弹窗（涉及主干）→ 确认后派发 merge_and_close
+  await click(retryBtn ?? null)
+  const confirmModal = document.querySelector('.task-modal')
+  assert.ok(confirmModal, '重试合并同样先过确认弹窗')
+  await click([...confirmModal.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('Merge & close task')) ?? null)
+  assert.deepEqual(ctx.actionCalls, [{ actionId: 'approve', input: { taskId: 'T-3', mergeAction: 'merge_and_close' } }])
   unmount()
+
+  // 进行中 + mergePending：合并指令在途，徽标为「合并收尾中」，无验收动作入口
+  setStubState({
+    conversations: [conv(31, 'T-4 exec', { status: 'working' })],
+    board: {
+      tasks: [task('T-4', { column: 'in_progress', conversationId: 31, mergePending: true, createdAt: 400 })],
+      updatedAt: 1,
+    },
+  })
+  const second = await mountBoard(makeSpyCtx(), mutableScreenProps().props)
+  t.after(second.unmount)
+  const t4 = second.host.querySelector('[data-task-id="T-4"]')
+  assert.ok(t4)
+  assert.match(t4.textContent ?? '', /Merge in progress/)
+  assert.ok(![...(t4.querySelectorAll('button') ?? [])].some((b) => b.textContent?.includes('Approve')), '进行中卡无验收按钮')
+  second.unmount()
 })
 
 test('历史深链看板外任务：显式提示 + inspect 加载完整记录', { timeout: 60_000 }, async (t) => {
@@ -1338,6 +1372,148 @@ test('空看板 CTA：无任务时仍可一键发起规划对话或新建待办'
   assert.ok(newBtn, '空态应提供「新建待办」')
   await click(newBtn ?? null)
   assert.ok(document.querySelector('.task-modal'), '新建弹窗应从空态打开')
+  unmount()
+})
+
+// ---------------------------------------------------------------------------
+// 7.7 Final contract alignment: authoritative blockedBy / planApproval / stable create key
+// ---------------------------------------------------------------------------
+
+test('投影权威 blockedBy：截断后已完成依赖解锁就绪；旧板缺字段展示未知不可开工', { timeout: 60_000 }, async (t) => {
+  setStubState({
+    conversations: [],
+    board: {
+      tasks: [
+        // 新版投影：blockedBy 权威真值（T-99 已完成截断出板 → 不在 blockedBy）
+        { ...task('T-5', { dependsOn: ['T-1', 'T-99'], createdAt: 500 }), blockedBy: [] },
+        { ...task('T-6', { dependsOn: ['T-1'], createdAt: 600 }), blockedBy: ['T-1'] },
+        // 旧版投影：缺 blockedBy 字段
+        task('T-7', { dependsOn: ['T-1'], createdAt: 700 }),
+      ],
+      updatedAt: 1,
+    },
+  })
+  const { host, unmount } = await mountBoard(makeSpyCtx(), mutableScreenProps().props)
+  t.after(unmount)
+
+  const t5 = host.querySelector('[data-task-id="T-5"]')
+  assert.ok(t5)
+  assert.match(t5.textContent ?? '', /Ready/, '权威真值说无阻塞 → 就绪（截断的 T-99 不伪造阻塞）')
+  assert.ok([...(t5.querySelectorAll('button') ?? [])].some((b) => b.textContent?.includes('Start')), '就绪卡可开工')
+
+  const t6 = host.querySelector('[data-task-id="T-6"]')
+  assert.ok(t6)
+  assert.match(t6.textContent ?? '', /Waiting for T-1/)
+  assert.ok(![...(t6.querySelectorAll('button') ?? [])].some((b) => b.textContent?.includes('Start')))
+
+  const t7 = host.querySelector('[data-task-id="T-7"]')
+  assert.ok(t7)
+  assert.match(t7.textContent ?? '', /Dependency status unknown/, '旧板缺字段 → 展示未知')
+  assert.ok(![...(t7.querySelectorAll('button') ?? [])].some((b) => b.textContent?.includes('Start')), '未知不得当作可开工')
+  unmount()
+})
+
+test('planApproval 事实：等待方案审批 / 已批准 / 已拒绝徽标如实呈现', { timeout: 60_000 }, async (t) => {
+  setStubState({
+    conversations: [conv(10, 'a', { status: 'idle' }), conv(20, 'b', { status: 'idle' }), conv(30, 'c', { status: 'idle' })],
+    board: {
+      tasks: [
+        task('T-1', { column: 'in_progress', conversationId: 10, planFirst: true, pendingPlanAskId: 'ask-1', createdAt: 100 }),
+        task('T-2', {
+          column: 'in_progress',
+          conversationId: 20,
+          planFirst: true,
+          planApproval: { decision: 'approved', askedAt: 1, decidedAt: 2, askId: 'ask-2' },
+          createdAt: 200,
+        }),
+        task('T-3', {
+          column: 'in_progress',
+          conversationId: 30,
+          planFirst: true,
+          planApproval: { decision: 'rejected', askedAt: 1, decidedAt: 2, askId: 'ask-3' },
+          createdAt: 300,
+        }),
+      ],
+      updatedAt: 1,
+    },
+  })
+  const { props } = mutableScreenProps({}, { inlineDrawer: true })
+  const { host, unmount, reRender } = await mountBoard(makeSpyCtx(), props)
+  t.after(unmount)
+  assert.match(host.querySelector('[data-task-id="T-1"]')?.textContent ?? '', /Awaiting plan approval/)
+  assert.match(host.querySelector('[data-task-id="T-2"]')?.textContent ?? '', /Plan approved/)
+  assert.match(host.querySelector('[data-task-id="T-3"]')?.textContent ?? '', /Plan rejected/)
+
+  // 详情抽屉呈现方案审批决议与时间
+  const detailBtn = [...(host.querySelector('[data-task-id="T-2"]')?.querySelectorAll('button') ?? [])].find(
+    (b) => b.getAttribute('aria-label') === 'View task details',
+  )
+  await click(detailBtn ?? null)
+  await reRender()
+  const drawer = host.querySelector('.primary-drawer-content')
+  assert.ok(drawer)
+  assert.match(drawer.textContent ?? '', /Plan approval/)
+  assert.match(drawer.textContent ?? '', /Plan approved/)
+  unmount()
+})
+
+test('创建幂等键：同一意图重试复用旧 key，重新打开生成新 key', { timeout: 60_000 }, async (t) => {
+  const createPayloads: Array<Record<string, unknown>> = []
+  let failFirst = true
+  const ctx = makeSpyCtx({
+    callAction: async (actionId, input) => {
+      if (actionId !== 'create') return {}
+      createPayloads.push(input as Record<string, unknown>)
+      if (failFirst) {
+        failFirst = false
+        throw new Error('transient_error')
+      }
+      return { task: { id: 'T-9' } }
+    },
+  })
+  setStubState({ conversations: [], board: { tasks: [], updatedAt: 1 } })
+  const { host, unmount } = await mountBoard(ctx, mutableScreenProps().props)
+  t.after(unmount)
+
+  const openDialog = async () => {
+    const btn = [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('New task'))
+    await click(btn ?? null)
+    const modal = document.querySelector('.task-modal')
+    assert.ok(modal)
+    const inputs = [...modal.querySelectorAll<HTMLInputElement>('input')]
+    const titleInput = inputs.find((i) => i.getAttribute('aria-label') === 'Title')
+    assert.ok(titleInput)
+    setInputValue(titleInput, 'Stable key task')
+    const area = modal.querySelector<HTMLTextAreaElement>('textarea')
+    assert.ok(area)
+    setInputValue(area, 'brief')
+    return {
+      modal,
+      submit: [...modal.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('Create task')),
+    }
+  }
+
+  // 首次提交失败（同一意图）：错误如实展示、弹窗保持、key 已随载荷发出
+  const first = await openDialog()
+  await click(first.submit ?? null)
+  assert.match(first.modal.textContent ?? '', /transient_error/)
+  assert.equal(createPayloads.length, 1)
+  const key1 = createPayloads[0]?.['idempotencyKey']
+  assert.equal(typeof key1, 'string')
+  assert.ok((key1 as string).length > 0 && (key1 as string).length <= 128)
+
+  // 重试同一意图：复用旧 key（后端按 key 返回已建任务，双击/重试安全）
+  await click(first.submit ?? null)
+  assert.equal(createPayloads.length, 2)
+  assert.equal(createPayloads[1]?.['idempotencyKey'], key1, '重试必须复用同一意图 key')
+  assert.ok(document.querySelector('.task-modal') === null, '成功后弹窗关闭')
+
+  // 重新打开：新意图新 key
+  const second = await openDialog()
+  await click(second.submit ?? null)
+  assert.equal(createPayloads.length, 3)
+  const key3 = createPayloads[2]?.['idempotencyKey']
+  assert.notEqual(key3, key1, '新对话框会话必须生成新 key')
   unmount()
 })
 

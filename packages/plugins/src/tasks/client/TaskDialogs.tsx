@@ -48,7 +48,6 @@ import {
   TASK_ACTION_EDIT,
   TASK_ACTION_FAILED,
   TASK_ACTION_MERGE_CLOSE,
-  TASK_ACTION_MERGE_CLOSE_TITLE,
   TASK_ACTION_REWORK,
   TASK_ACTION_REWORK_TITLE,
   TASK_ACTION_SAVE,
@@ -65,7 +64,13 @@ import {
   TASK_DEP_PENDING,
   TASK_DEPS_NONE,
   TASK_DEPS_SECTION,
-  TASK_MERGE_PENDING_DISABLED_TITLE,
+  TASK_DEPS_UNKNOWN,
+  TASK_DEPS_UNKNOWN_TITLE,
+  TASK_KV_PLAN_APPROVAL,
+  TASK_MERGE_AWAIT_REVIEW,
+  TASK_PLAN_APPROVED,
+  TASK_PLAN_ASK_PENDING,
+  TASK_PLAN_REJECTED,
   TASK_FIELD_ASSIGNEE,
   TASK_FIELD_ASSIGNEE_PLACEHOLDER,
   TASK_FIELD_AUTO_MERGE,
@@ -127,6 +132,13 @@ import {
   taskReworkDialogTitle,
 } from './copy.ts'
 
+/** Random UUID for the per-intent create key (browser crypto, Node test runtime fallback). */
+function randomCreateKeySuffix(): string {
+  const c = globalThis.crypto
+  if (c !== undefined && typeof c.randomUUID === 'function') return c.randomUUID()
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+}
+
 /** Parse a comma-separated task-id list into clean unique ids. */
 function parseDependsOnInput(raw: string): string[] {
   const seen = new Set<string>()
@@ -180,6 +192,11 @@ export function TaskCreateDialog(props: TaskCreateDialogProps): ReactNode {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [touched, setTouched] = useState(false)
+  // One stable idempotency key per creation intent: generated when the dialog
+  // opens and REUSED across submit retries of the same intent (the backend
+  // returns the already-created task for a repeated key — double-submit safe);
+  // a fresh dialog session gets a fresh key.
+  const [createKey, setCreateKey] = useState('')
 
   useEffect(() => {
     if (!props.open) {
@@ -196,8 +213,11 @@ export function TaskCreateDialog(props: TaskCreateDialogProps): ReactNode {
       setSubmitting(false)
       setError(null)
       setTouched(false)
+      setCreateKey('')
+      return
     }
-  }, [props.open])
+    if (createKey === '') setCreateKey(`tcreate-${randomCreateKeySuffix()}`)
+  }, [props.open, createKey])
 
   const titleError = touched && title.trim() === '' ? t(TASK_SUBMIT_REQUIRED)
     : title.length > 120 ? t(TASK_TITLE_TOO_LONG)
@@ -213,6 +233,7 @@ export function TaskCreateDialog(props: TaskCreateDialogProps): ReactNode {
     const deps = parseDependsOnInput(dependsOn)
     void ctx
       .callAction('create', {
+        ...(createKey !== '' ? { idempotencyKey: createKey } : {}),
         title: title.trim(),
         brief,
         ...(project.trim() !== '' ? { project: project.trim() } : {}),
@@ -620,17 +641,14 @@ export function TaskDetailDrawer(props: TaskDetailDrawerProps): ReactNode {
   }
 
   const submission = task.submission
-  const depRows = useMemo(
-    () =>
-      task.dependsOn.map((depId) => {
-        const dep = props.tasksById.get(depId)
-        return {
-          depId,
-          state: dep === undefined ? ('off-board' as const) : dep.column === 'done' ? ('done' as const) : ('pending' as const),
-        }
-      }),
-    [task.dependsOn, props.tasksById],
-  )
+  const depRows = useMemo(() => {
+    const authoritative = Array.isArray(task.blockedBy) ? (task.blockedBy ?? []) : undefined
+    return task.dependsOn.map((depId) => {
+      if (authoritative === undefined) return { depId, state: 'unknown' as const }
+      if (authoritative.includes(depId)) return { depId, state: 'pending' as const }
+      return { depId, state: props.tasksById.has(depId) ? ('done' as const) : ('done-off-board' as const) }
+    })
+  }, [task.dependsOn, task.blockedBy, props.tasksById])
 
   const saveEdit = (): void => {
     if (busy) return
@@ -694,6 +712,24 @@ export function TaskDetailDrawer(props: TaskDetailDrawerProps): ReactNode {
               {task.nodeId !== undefined ? kvRow(t(TASK_KV_NODE), <span className="mono">{task.nodeId}</span>) : null}
               {task.cwd !== undefined ? kvRow(t(TASK_KV_CWD), <span className="mono" title={task.cwd}>{task.cwd}</span>) : null}
               {task.model !== undefined ? kvRow(t(TASK_KV_MODEL), <span className="mono">{task.model}</span>) : null}
+              {task.pendingPlanAskId !== undefined && task.planApproval === undefined
+                ? kvRow(t(TASK_KV_PLAN_APPROVAL), <span className="badge badge-warn">{t(TASK_PLAN_ASK_PENDING)}</span>)
+                : null}
+              {task.planApproval !== undefined
+                ? kvRow(
+                    t(TASK_KV_PLAN_APPROVAL),
+                    <span>
+                      <span className={`badge ${task.planApproval.decision === 'approved' ? 'badge-ok' : 'badge-warn'}`}>
+                        {t(task.planApproval.decision === 'approved' ? TASK_PLAN_APPROVED : TASK_PLAN_REJECTED)}
+                      </span>
+                      {task.planApproval.decidedAt > 0 ? (
+                        <span className="tabular-nums" style={{ marginLeft: 6 }}>
+                          {formatTime(task.planApproval.decidedAt)}
+                        </span>
+                      ) : null}
+                    </span>,
+                  )
+                : null}
               {task.createdAt > 0 ? kvRow(t(TASK_KV_CREATED), <span className="tabular-nums">{formatTime(task.createdAt)}</span>) : null}
               {task.startedAt !== undefined && task.startedAt > 0
                 ? kvRow(t(TASK_KV_STARTED), <span className="tabular-nums">{formatTime(task.startedAt)}</span>)
@@ -765,12 +801,16 @@ export function TaskDetailDrawer(props: TaskDetailDrawerProps): ReactNode {
                   {depRows.map((row) => (
                     <div key={row.depId} className="task-detail-dep-row">
                       <span className="mono">{row.depId}</span>
-                      {row.state === 'done' ? (
-                        <span className="badge badge-ok">{t(TASK_DEP_DONE)}</span>
-                      ) : row.state === 'off-board' ? (
-                        <span className="badge badge-neutral" title={t(TASK_DEP_OFF_BOARD_TITLE)}>
-                          {t(TASK_DEP_OFF_BOARD)}
+                      {row.state === 'unknown' ? (
+                        <span className="badge badge-warn" title={t(TASK_DEPS_UNKNOWN_TITLE)}>
+                          {t(TASK_DEPS_UNKNOWN)}
                         </span>
+                      ) : row.state === 'done-off-board' ? (
+                        <span className="badge badge-ok" title={t(TASK_DEP_OFF_BOARD_TITLE)}>
+                          {t(TASK_DEP_DONE)} · {t(TASK_DEP_OFF_BOARD)}
+                        </span>
+                      ) : row.state === 'done' ? (
+                        <span className="badge badge-ok">{t(TASK_DEP_DONE)}</span>
                       ) : (
                         <span className="badge badge-warn">{t(TASK_DEP_PENDING)}</span>
                       )}
@@ -879,8 +919,8 @@ export function TaskDetailDrawer(props: TaskDetailDrawerProps): ReactNode {
                         <button
                           type="button"
                           className="btn btn-sm btn-ghost"
-                          disabled={busy || task.mergePending === true}
-                          title={task.mergePending === true ? t(TASK_MERGE_PENDING_DISABLED_TITLE) : t(TASK_ACTION_REWORK_TITLE)}
+                          disabled={busy}
+                          title={t(TASK_ACTION_REWORK_TITLE)}
                           onClick={() => props.onRework(task.id)}
                         >
                           <HelmxIcon name="rotate-ccw" size={12} />
@@ -890,8 +930,8 @@ export function TaskDetailDrawer(props: TaskDetailDrawerProps): ReactNode {
                           <button
                             type="button"
                             className="btn btn-sm btn-ghost"
-                            disabled={busy || task.mergePending === true}
-                            title={task.mergePending === true ? t(TASK_MERGE_PENDING_DISABLED_TITLE) : t(TASK_ACTION_MERGE_CLOSE_TITLE)}
+                            disabled={busy}
+                            title={t(TASK_MERGE_AWAIT_REVIEW)}
                             onClick={() => runAction(() => ctx.callAction('approve', { taskId: task.id, mergeAction: 'merge_and_close' }))}
                           >
                             <HelmxIcon name="git-pull-request" size={12} />
@@ -901,8 +941,8 @@ export function TaskDetailDrawer(props: TaskDetailDrawerProps): ReactNode {
                         <button
                           type="button"
                           className="btn btn-sm"
-                          disabled={busy || task.mergePending === true}
-                          title={task.mergePending === true ? t(TASK_MERGE_PENDING_DISABLED_TITLE) : t(TASK_ACTION_APPROVE_TITLE)}
+                          disabled={busy}
+                          title={t(TASK_ACTION_APPROVE_TITLE)}
                           onClick={() => runAction(() => ctx.callAction('approve', { taskId: task.id, mergeAction: 'close_only' }))}
                         >
                           <HelmxIcon name="check" size={12} />

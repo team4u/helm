@@ -56,7 +56,6 @@ import {
   TASK_ACTION_APPROVE_TITLE,
   TASK_ACTION_CONTINUE,
   TASK_ACTION_CONTINUE_TITLE,
-  TASK_ACTION_DETAIL,
   TASK_ACTION_DETAIL_BTN_TITLE,
   TASK_ACTION_DETAIL_LABEL,
   TASK_ACTION_MERGE_CLOSE,
@@ -78,15 +77,20 @@ import {
   TASK_CHAT_TASK,
   TASK_CHAT_TASK_TITLE,
   TASK_DEPS_READY,
-  TASK_DEP_OFF_BOARD,
+  TASK_DEPS_UNKNOWN,
+  TASK_DEPS_UNKNOWN_TITLE,
   TASK_DEP_OFF_BOARD_TITLE,
-  TASK_MERGE_PENDING_DISABLED_TITLE,
+  TASK_MERGE_AWAIT_REVIEW,
+  TASK_ACTION_MERGE_RETRY,
+  TASK_ACTION_MERGE_RETRY_TITLE,
+  TASK_PLAN_APPROVED,
+  TASK_PLAN_ASK_PENDING,
+  TASK_PLAN_REJECTED,
   TASK_OFF_BOARD_CLOSE,
   TASK_OFF_BOARD_INSPECT,
   TASK_OFF_BOARD_INSPECTING,
   TASK_OFF_BOARD_INSPECT_FAILED,
   TASK_CONTINUE_PROMPT,
-  TASK_CONTINUE_SENDING,
   taskCardReworkLine,
   taskOffBoardDeps,
   taskOffBoardNotice,
@@ -236,7 +240,12 @@ function TaskCard(props: {
 
       {task.column === 'backlog' ? (
         <div className="task-card-deps">
-          {live.blockedBy.length > 0 ? (
+          {live.depsUnknown ? (
+            <span className="task-card-deps-waiting" title={t(TASK_DEPS_UNKNOWN_TITLE)}>
+              <HelmxIcon name="help-circle" size={11} />
+              <span>{t(TASK_DEPS_UNKNOWN)}</span>
+            </span>
+          ) : live.blockedBy.length > 0 ? (
             <span className="task-card-deps-waiting" title={taskWaitingForDeps(live.blockedBy, locale)}>
               <HelmxIcon name="clock" size={11} />
               <span>{taskWaitingForDeps(live.blockedBy, locale)}</span>
@@ -244,7 +253,7 @@ function TaskCard(props: {
           ) : (
             <span className="badge badge-ok">{t(TASK_DEPS_READY)}</span>
           )}
-          {live.offBoardDeps.length > 0 ? (
+          {!live.depsUnknown && live.offBoardDeps.length > 0 ? (
             <span className="badge badge-neutral" title={t(TASK_DEP_OFF_BOARD_TITLE)}>
               {taskOffBoardDeps(live.offBoardDeps.length, locale)}
             </span>
@@ -253,9 +262,24 @@ function TaskCard(props: {
         </div>
       ) : null}
 
+      {task.column === 'in_progress' && live.planAskPending ? (
+        <div className="task-card-flags">
+          <span className="badge badge-warn">{t(TASK_PLAN_ASK_PENDING)}</span>
+        </div>
+      ) : null}
+      {task.column === 'in_progress' && live.planApproval !== undefined ? (
+        <div className="task-card-flags">
+          <span className={`badge ${live.planApproval === 'approved' ? 'badge-ok' : 'badge-warn'}`}>
+            {t(live.planApproval === 'approved' ? TASK_PLAN_APPROVED : TASK_PLAN_REJECTED)}
+          </span>
+        </div>
+      ) : null}
+
       {task.mergePending === true && (task.column === 'in_progress' || task.column === 'in_review') ? (
         <div className="task-card-flags">
-          <span className="badge badge-accent">{t(TASK_FLAG_MERGE_PENDING)}</span>
+          <span className="badge badge-accent">
+            {t(task.column === 'in_review' ? TASK_MERGE_AWAIT_REVIEW : TASK_FLAG_MERGE_PENDING)}
+          </span>
         </div>
       ) : null}
 
@@ -355,8 +379,8 @@ function TaskCard(props: {
               <button
                 type="button"
                 className="btn btn-xs"
-                disabled={props.busy !== undefined || task.mergePending === true}
-                title={task.mergePending === true ? t(TASK_MERGE_PENDING_DISABLED_TITLE) : t(TASK_ACTION_APPROVE_TITLE)}
+                disabled={props.busy !== undefined}
+                title={t(TASK_ACTION_APPROVE_TITLE)}
                 onClick={(e) => {
                   e.stopPropagation()
                   props.onApprove(task.id, 'close_only')
@@ -369,22 +393,22 @@ function TaskCard(props: {
                 <button
                   type="button"
                   className="btn btn-xs btn-ghost"
-                  disabled={props.busy !== undefined || task.mergePending === true}
-                  title={task.mergePending === true ? t(TASK_MERGE_PENDING_DISABLED_TITLE) : t(TASK_ACTION_MERGE_CLOSE_TITLE)}
+                  disabled={props.busy !== undefined}
+                  title={t(task.mergePending === true ? TASK_ACTION_MERGE_RETRY_TITLE : TASK_ACTION_MERGE_CLOSE_TITLE)}
                   onClick={(e) => {
                     e.stopPropagation()
                     props.onApprove(task.id, 'merge_and_close')
                   }}
                 >
                   <HelmxIcon name="git-pull-request" size={11} />
-                  <span>{t(TASK_ACTION_MERGE_CLOSE)}</span>
+                  <span>{t(task.mergePending === true ? TASK_ACTION_MERGE_RETRY : TASK_ACTION_MERGE_CLOSE)}</span>
                 </button>
               ) : null}
               <button
                 type="button"
                 className="btn btn-xs btn-ghost"
-                disabled={props.busy !== undefined || task.mergePending === true}
-                title={task.mergePending === true ? t(TASK_MERGE_PENDING_DISABLED_TITLE) : t(TASK_ACTION_REWORK_TITLE)}
+                disabled={props.busy !== undefined}
+                title={t(TASK_ACTION_REWORK_TITLE)}
                 onClick={(e) => {
                   e.stopPropagation()
                   props.onRework(task.id)

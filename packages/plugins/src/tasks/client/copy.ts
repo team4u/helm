@@ -159,6 +159,27 @@ export function taskOffBoardDeps(count: number, locale: HelmxLocale = DEFAULT_HE
   )
 }
 
+/** Old board projection without authoritative blockedBy: facts unknowable, not startable. */
+export const TASK_DEPS_UNKNOWN: LocalizedText = L('Dependency status unknown', '依赖状态未知')
+export const TASK_DEPS_UNKNOWN_TITLE: LocalizedText = L(
+  'The board projection lacks authoritative dependency facts (old backend); not startable from here',
+  '看板投影缺少权威依赖真值（旧版后端）；不可据此开工',
+)
+
+/** planFirst scheme approval facts (real AskDoc decisions recorded by the backend). */
+export const TASK_PLAN_APPROVED: LocalizedText = L('Plan approved', '方案已批准')
+export const TASK_PLAN_REJECTED: LocalizedText = L('Plan rejected', '方案已拒绝')
+export const TASK_PLAN_ASK_PENDING: LocalizedText = L('Awaiting plan approval', '等待方案审批')
+export const TASK_KV_PLAN_APPROVAL: LocalizedText = L('Plan approval', '方案审批')
+
+/** Merge awaiting manual review (executor reported failure; task back in review with mergePending). */
+export const TASK_MERGE_AWAIT_REVIEW: LocalizedText = L('Merge awaiting review', '合并待复核')
+export const TASK_ACTION_MERGE_RETRY: LocalizedText = L('Retry merge', '重试合并')
+export const TASK_ACTION_MERGE_RETRY_TITLE: LocalizedText = L(
+  'Re-dispatch the merge & close instruction to the execution conversation',
+  '向执行会话重新投递合并收尾指令',
+)
+
 export const TASK_DEPS_READY: LocalizedText = L('Ready', '就绪')
 export const TASK_DEPS_SECTION: LocalizedText = L('Depends on', '前置依赖')
 export const TASK_DEPS_NONE: LocalizedText = L('No dependencies', '无前置依赖')
@@ -199,7 +220,6 @@ export const TASK_ACTION_MERGE_CLOSE_TITLE: LocalizedText = L(
 )
 export const TASK_ACTION_REWORK: LocalizedText = L('Rework', '打回返工')
 export const TASK_ACTION_REWORK_TITLE: LocalizedText = L('Send rework feedback to the execution conversation', '向执行会话发送返工意见')
-export const TASK_ACTION_DETAIL: LocalizedText = L('Details', '详情')
 export const TASK_ACTION_DETAIL_LABEL: LocalizedText = L('View task details', '查看任务详情')
 export const TASK_ACTION_SPLIT: LocalizedText = L('Split view', '右分屏')
 export const TASK_ACTION_SPLIT_LABEL: LocalizedText = L('Open the execution conversation in the right split pane', '在右侧分屏打开执行会话')
@@ -329,16 +349,10 @@ export const TASK_ACTION_CONTINUE_TITLE: LocalizedText = L(
   'Send an explicit continue message to the execution conversation',
   '向执行会话发送明确的继续消息',
 )
-export const TASK_CONTINUE_SENDING: LocalizedText = L('Sending…', '正在发送…')
 
 /** The submit prompt is model-facing execution copy (English only, per the display-metadata conventions). */
 export const TASK_CONTINUE_PROMPT =
   'The task turn has settled without a submission. Please continue the work (or report what you need) and call task_submit when done.'
-
-export const TASK_MERGE_PENDING_DISABLED_TITLE: LocalizedText = L(
-  'Merge finishing in progress: wait for the executor to resubmit before reviewing',
-  '合并收尾进行中：等待执行会话再次交卷后再验收',
-)
 
 // ---------------------------------------------------------------------------
 // Merge & close confirmation (touches the Git main branch via the executor)
