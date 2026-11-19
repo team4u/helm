@@ -84,6 +84,7 @@ flowchart TD
     Cli["@helm/cli"] --> Protocol
     Node["@helm/node"] --> Protocol
     Kernel --> EnvIo["@helm/env-io 执行侧共享实现"]
+    Cli --> EnvIo
     Node --> EnvIo
     EnvIo --> Protocol
 ```
@@ -100,12 +101,12 @@ flowchart TD
 | `@helm/plugins` | — | 官方插件、插件业务契约、客户端视图与技能资产 |
 | `@helm/plugin-client` | — | 共享 UI 原语、上下文、Hooks 与宿主接入端口 |
 | `@helm/plugin-build` | — | 插件源码构建实现，由产品组合根注入宿主 |
-| `@helm/env-io` | — | 执行侧共享 I/O 实现（路径进程占用扫描） |
+| `@helm/env-io` | — | 执行侧共享 I/O 与共享自更新引擎（路径进程占用扫描；更新引擎位于 `src/update/`，从包根导出） |
 | `@helm/hub` | `helm-hub` | 默认插件注册、构建实现接线、服务进程启动与关闭 |
 | `@helm/node` | `helm-node` | 远端执行、文件系统操作与自升级 |
-| `@helm/cli` | `helm` | 静态核心命令表 + 动作清单动态命令 |
+| `@helm/cli` | `helm` | 静态核心命令表 + 动作清单动态命令（含 `src/launcher/` 的 `helm update` 生命周期面） |
 | `@helm/web` | — | Web 应用（开发端口 3201，代理至 Hub 3202） |
-| `@helm/payload` | — | 产品资产组装与 npm Hub payload |
+| `@helm/payload` | — | npm 三制品组装器（Hub payload / CLI bundle / node 守护进程 bundle） |
 
 `helm`（控制 CLI）与 `helm-node`（节点守护进程）不得混装在同一包或同一命令中：二者的信任模型与部署位置完全不同。
 

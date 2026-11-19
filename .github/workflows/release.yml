@@ -1,12 +1,16 @@
 # Release pipeline: triggered only by v* tags, responsibility chain —
 #   verify → build (full build and tests on ubuntu) → npm-publish
-#   (both artifacts publish once, on ubuntu, after all gates pass).
+#   (all three artifacts publish once, on ubuntu, after all gates pass).
 #
 # npm publishing authority is per artifact, exactly one manifest each: the Hub payload's sole
 # authority is packages/payload/dist/package.json (a build artifact; default name @team4u/helm-hub,
-# overridable at build time via the HELM_PAYLOAD_PACKAGE env), and the stable CLI's sole authority
-# is packages/payload/dist-cli/package.json (a build artifact; default name @team4u/helm, bin helm,
-# overridable via HELM_CLI_PACKAGE). The workspace's @helm/payload is forever a private assembler:
+# overridable at build time via the HELM_PAYLOAD_PACKAGE env), the stable CLI's sole authority
+# is packages/payload/dist-cli/package.json (a build artifact; default name @team4u/helm-cli, bin
+# helm, overridable via HELM_CLI_PACKAGE), and the node daemon's sole authority is
+# packages/payload/dist-node/package.json (a build artifact; default name @team4u/helm-node, single
+# bin helm-node → dist/cli.js, overridable via HELM_NODE_PACKAGE; exactly four exact-version
+# external dependencies: @earendil-works/chord, @earendil-works/pi-durable, birpc, ws). The
+# workspace's @helm/payload is forever a private assembler:
 # publishing must run npm pack / npm publish inside the respective dist directory (the tarball root
 # is the package root, with the manifest at the root); never run pnpm pack on the workspace package —
 # that would nest everything under the dist/ path prefix, and the updater's root-layout probing
@@ -21,10 +25,17 @@
 #     break `npm install -g` for every consumer because no @helm/* package is published), and
 #     publishes only after the payload published in the same run (the CLI's default update path
 #     resolves the payload from the npm registry);
-#   - dist-tag policy (both artifacts, decided once in verify): a semver prerelease (a hyphen in
+#   - The node artifact additionally requires exactly the four exact-version external dependencies
+#     listed above (its esbuild bundle inlines @helm/node with @helm/env-io / @helm/protocol; an
+#     @helm/* dependency or a floating semver range would break registry installs and the
+#     dual-package self-upgrade), a single bin helm-node, and publishes only after the CLI
+#     published in the same run — the daemon's self-upgrade binds @team4u/helm-node +
+#     @team4u/helm-cli in lockstep, so a node shipped without its CLI counterpart would advertise
+#     a broken upgrade target;
+#   - dist-tag policy (all three artifacts, decided once in verify): a semver prerelease (a hyphen in
 #     the version core, e.g. 1.2.3-rc.1) publishes under `beta`; build metadata (e.g. 1.2.3+build-7)
 #     is not a prerelease and stays on `latest`. Pre-releases never implicitly become latest;
-#   - Both artifacts are built and published once on ubuntu only.
+#   - All three artifacts are built and published once on ubuntu only.
 
 name: Release
 
@@ -64,10 +75,11 @@ jobs:
           node-version: 24.12.0
 
       # Only validate the tag shape and assembler existence; npm publish decisions always defer to
-      # the build-artifact manifests (packages/payload/dist/package.json and
-      # packages/payload/dist-cli/package.json — see npm-publish); no repo-wide non-private
-      # scan — there is exactly one publish manifest per artifact. The CLI package is a hard
-      # release input (its absence means the tag cannot produce the CLI artifact at all).
+      # the build-artifact manifests (packages/payload/dist/package.json,
+      # packages/payload/dist-cli/package.json and packages/payload/dist-node/package.json — see
+      # npm-publish); no repo-wide non-private scan — there is exactly one publish manifest per
+      # artifact. The CLI and node packages are hard release inputs (their absence means the tag
+      # cannot produce those artifacts at all).
       - name: Verify tag and payload builder
         id: scan
         run: |
@@ -112,6 +124,14 @@ jobs:
           if (cli.private !== true) {
             warn(`CLI workspace package ${cli.name} must stay private: true (its publish form is the assembled packages/payload/dist-cli bundle, never the workspace package).`);
           }
+
+          if (!existsSync('packages/node/package.json')) {
+            fail('packages/node is a required release input (the helm-node daemon npm artifact bundles its dist entry) but is missing from this tag.');
+          }
+          const node = JSON.parse(readFileSync('packages/node/package.json', 'utf8'));
+          if (node.private !== true) {
+            warn(`node workspace package ${node.name} must stay private: true (its publish form is the assembled packages/payload/dist-node bundle, never the workspace package).`);
+          }
           EOF
 
   # ------------------------------------------------------------------
@@ -149,21 +169,22 @@ jobs:
       - name: Run all tests
         run: pnpm test:all
 
-      # Payload + CLI artifact acceptance in one gate (both artifacts come from the same
+      # npm artifact acceptance in one gate (all artifacts come from the same payload
       # build.mjs assembly): assembly contracts always run; the real-tarball/global-install,
       # payload end-to-end, and CLI golden sequence ride the PAYLOAD_NPM_SMOKE network gate.
-      - name: Verify npm payload and cli artifacts (pack, install, golden sequence)
+      - name: Verify npm artifacts (pack, install, golden sequence)
         env:
           PAYLOAD_NPM_SMOKE: '1'
         run: node scripts/run-tests.mjs packages/payload/test/payload.test.ts
 
   # ------------------------------------------------------------------
-  # Stage 3: conditional npm publish of both artifacts (payload then cli, one job —
-  # they share the checkout/install/build; sequential steps keep the cli's
-  # "payload must have published" coupling honest without a second runner).
+  # Stage 3: conditional npm publish of all three artifacts (payload, then cli, then node —
+  # one job: they share the checkout/install/build; sequential steps keep the cli's
+  # "payload must have published" and the node's "cli must have published" couplings honest
+  # without extra runners).
   # ------------------------------------------------------------------
   npm-publish:
-    name: npm publish (payload + cli, conditional)
+    name: npm publish (payload + cli + node, conditional)
     needs: [verify, build]
     permissions:
       contents: read
@@ -174,6 +195,8 @@ jobs:
       payload-status-line: ${{ steps.result.outputs.payload-status-line }}
       cli-published: ${{ steps.result.outputs.cli-published }}
       cli-status-line: ${{ steps.result.outputs.cli-status-line }}
+      node-published: ${{ steps.result.outputs.node-published }}
+      node-status-line: ${{ steps.result.outputs.node-status-line }}
     env:
       PAYLOAD_PRESENT: ${{ needs.verify.outputs.payload-present }}
       TAG_VERSION: ${{ needs.verify.outputs.version }}
@@ -200,9 +223,9 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       # The build job ran on a separate runner; rebuild the workspace artifacts here once for
-      # both publish steps: packages/payload build assembles dist/ (Hub payload) and
-      # dist-cli/ (helm CLI bundle).
-      - name: Build packages (assemble dist and dist-cli)
+      # all three publish steps: packages/payload build assembles dist/ (Hub payload),
+      # dist-cli/ (helm CLI bundle) and dist-node/ (helm-node daemon bundle).
+      - name: Build packages (assemble dist, dist-cli and dist-node)
         run: pnpm build
 
       # ---- Hub payload -------------------------------------------------------------
@@ -245,8 +268,8 @@ jobs:
           fi
 
       # Fail fast when a package is due to publish but the secret is missing: an explicit gate,
-      # never falsely claim a publish. The CLI publishes only after the payload did, so this
-      # single gate covers both artifacts' due-publish paths.
+      # never falsely claim a publish. The CLI publishes only after the payload did, and the node
+      # only after the CLI did, so this single gate covers all three artifacts' due-publish paths.
       - name: Require NPM_TOKEN secret
         if: env.PAYLOAD_PRESENT == 'true' && steps.payload.outputs.skip == 'false'
         env:
@@ -344,6 +367,91 @@ jobs:
           echo "tarball: $tgz ($(du -h "$tgz" | cut -f1))"
           npm publish "$tgz" --provenance --access public --tag "$DIST_TAG"
 
+      # ---- Node daemon -----------------------------------------------------------------
+      # The build artifact dist-node/package.json is the node daemon's sole publishing authority:
+      # missing file = the assembler contract is broken (explicit failure); private = explicitly
+      # not publishing (skip branch); publishing requires the version locked to the tag, the
+      # repository field (provenance), a single bin helm-node pointing at dist/cli.js, exactly the
+      # four exact-version external dependencies (the daemon bundle inlines @helm/node with
+      # @helm/env-io / @helm/protocol; no @helm/* package is published and floating ranges would
+      # break the dual-package self-upgrade), and the CLI having published in this run (the
+      # daemon's self-upgrade binds @team4u/helm-node + @team4u/helm-cli in lockstep — shipping a
+      # node whose upgrade target CLI is absent from the registry would be dishonest).
+      - name: Inspect node npm package
+        id: node
+        if: env.PAYLOAD_PRESENT == 'true'
+        run: |
+          set -eu
+          pkg=packages/payload/dist-node/package.json
+          if [ ! -f "$pkg" ]; then
+            echo "::error::packages/payload build did not produce $pkg (assembler contract: the node package must bundle into dist-node with a publishable package.json)."
+            exit 1
+          fi
+          name=$(jq -r '.name // empty' "$pkg")
+          version=$(jq -r '.version // empty' "$pkg")
+          if [ -z "$name" ] || [ -z "$version" ]; then
+            echo "::error::$pkg is missing the name or version field; refusing to publish."
+            exit 1
+          fi
+          echo "node npm package: ${name}@${version}"
+          if [ "$(jq -r '.private // false' "$pkg")" = "true" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "skip_reason=private" >> "$GITHUB_OUTPUT"
+            echo "::notice::node npm package ${name} is marked private: true; skipped as a placeholder (no node npm publish runs at all)."
+            exit 0
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [ "$version" != "$TAG_VERSION" ]; then
+            echo "::error::node npm package ${name}@${version} does not match tag ${TAG_VERSION}; keep versions in lockstep before tagging."
+            exit 1
+          fi
+          if [ "$(jq -r 'has("repository")' "$pkg")" != "true" ]; then
+            echo "::error::node npm package ${name} is missing the repository field (required by npm provenance, and it must point to this repository)."
+            exit 1
+          fi
+          bins=$(jq -r '.bin // {} | length' "$pkg")
+          if [ "$bins" != "1" ] || [ "$(jq -r '.bin // {} | keys[0]' "$pkg")" != "helm-node" ]; then
+            echo "::error::node npm package ${name} must declare exactly one bin entry named helm-node (single-sourced from packages/node)."
+            exit 1
+          fi
+          if [ "$(jq -r '.bin // {} | .["helm-node"] // empty' "$pkg")" != "dist/cli.js" ]; then
+            echo "::error::node npm package ${name} must point the helm-node bin at dist/cli.js (the bundled daemon entrypoint)."
+            exit 1
+          fi
+          deps=$(jq -r '(.dependencies // {}) | length' "$pkg")
+          if [ "$deps" != "4" ]; then
+            echo "::error::node npm package ${name} declares ${deps} runtime dependencies; it must declare exactly the four external ones (@earendil-works/chord, @earendil-works/pi-durable, birpc, ws) with exact versions."
+            exit 1
+          fi
+          for dep in '@earendil-works/chord' '@earendil-works/pi-durable' 'birpc' 'ws'; do
+            ver=$(jq -r --arg d "$dep" '.dependencies[$d] // empty' "$pkg")
+            if [ -z "$ver" ]; then
+              echo "::error::node npm package ${name} is missing the required external dependency ${dep}."
+              exit 1
+            fi
+            if ! printf '%s' "$ver" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'; then
+              echo "::error::node npm package ${name} dependency ${dep}@${ver} is not an exact version pin (floating ranges would break the dual-package self-upgrade binding)."
+              exit 1
+            fi
+          done
+
+      # Publish cli before node: the node daemon publishes only when the cli did (see Inspect).
+      - name: Publish node package from dist-node (provenance, public)
+        id: publish-node
+        if: steps.node.outputs.skip == 'false' && steps.publish-cli.conclusion == 'success'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -eu
+          dest="$RUNNER_TEMP/pack-node"
+          mkdir -p "$dest"
+          (cd packages/payload/dist-node && npm pack --pack-destination "$dest" >/dev/null)
+          tgz=$(ls "$dest"/*.tgz | head -n 1)
+          echo "tarball: $tgz ($(du -h "$tgz" | cut -f1))"
+          npm publish "$tgz" --provenance --access public --tag "$DIST_TAG"
+
       # Summarize the actual outcome per artifact for the release record: state facts only.
       - name: Record publish results
         id: result
@@ -358,6 +466,11 @@ jobs:
           CLI_NAME: ${{ steps.cli.outputs.name }}
           CLI_VERSION: ${{ steps.cli.outputs.version }}
           CLI_PUBLISH_CONCLUSION: ${{ steps.publish-cli.conclusion }}
+          NODE_SKIP: ${{ steps.node.outputs.skip }}
+          NODE_SKIP_REASON: ${{ steps.node.outputs.skip_reason }}
+          NODE_NAME: ${{ steps.node.outputs.name }}
+          NODE_VERSION: ${{ steps.node.outputs.version }}
+          NODE_PUBLISH_CONCLUSION: ${{ steps.publish-node.conclusion }}
         run: |
           set -eu
           if [ "$PAYLOAD_PRESENT" != "true" ]; then
@@ -388,6 +501,20 @@ jobs:
             cli_line="cli npm publish did not complete (publish step ${CLI_PUBLISH_CONCLUSION:-not executed}); this run contains no cli publish result."
           fi
 
+          if [ "$NODE_SKIP" = "true" ] && [ "$NODE_SKIP_REASON" = "private" ]; then
+            node_published=false
+            node_line='node npm package is marked private; no node npm publish was executed.'
+          elif [ "$cli_published" != "true" ]; then
+            node_published=false
+            node_line='node publish skipped: the cli artifact did not publish in this run (the daemon self-upgrade binds @team4u/helm-node + @team4u/helm-cli in lockstep, so shipping it now would advertise a broken dual-package upgrade).'
+          elif [ "$NODE_PUBLISH_CONCLUSION" = "success" ]; then
+            node_published=true
+            node_line="Published \`${NODE_NAME}@${NODE_VERSION}\` (helm-node daemon bundle, bin helm-node) to npmjs.com (with provenance, dist-tag ${DIST_TAG}); see the npm-publish job logs."
+          else
+            node_published=false
+            node_line="node npm publish did not complete (publish step ${NODE_PUBLISH_CONCLUSION:-not executed}); this run contains no node publish result."
+          fi
+
           echo "payload-published=$payload_published" >> "$GITHUB_OUTPUT"
           echo "payload-status-line<<EOF" >> "$GITHUB_OUTPUT"
           echo "$payload_line" >> "$GITHUB_OUTPUT"
@@ -396,7 +523,13 @@ jobs:
           echo "cli-status-line<<EOF" >> "$GITHUB_OUTPUT"
           echo "$cli_line" >> "$GITHUB_OUTPUT"
           echo "EOF" >> "$GITHUB_OUTPUT"
+          echo "node-published=$node_published" >> "$GITHUB_OUTPUT"
+          echo "node-status-line<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$node_line" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
           echo "payload published=$payload_published"
           echo "payload status: $payload_line"
           echo "cli published=$cli_published"
           echo "cli status: $cli_line"
+          echo "node published=$node_published"
+          echo "node status: $node_line"
