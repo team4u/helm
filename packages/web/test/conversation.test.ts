@@ -459,6 +459,80 @@ test('step-group 在产出正文前保持 active=true 默认展开，产出正�
   assert.equal(settledGroup.active, false)
 })
 
+test('live 回合中思考后派发 tool.view 卡片（swarm/subagent）：思考组不再是活动边，立即折叠', { timeout: 60_000 }, () => {
+  const toolViews = [
+    { pluginId: 'builtin:swarm', spec: { id: 'swarm-tool-trace', toolNames: ['swarm_dispatch_worker'] } },
+  ]
+  // 复现：pi.assistant 已落库（思考 + 派发调用），工具仍在跑（无 tool-result），回合 working。
+  const items = buildTimelineItems(
+    [
+      assistantEntry('1', [
+        { type: 'thinking', thinking: '规划分派三个 worker' },
+        toolCallBlock('c1', 'swarm_dispatch_worker', { name: 'impl', prompt: 'p' }),
+      ]),
+    ],
+    { toolViews, working: true },
+  )
+  const turn = items[0]
+  assert.ok(turn?.kind === 'assistant')
+  // 思考单独成组、卡片独立露出；卡片 running 是当前活动边
+  assert.deepEqual(turn.segments.map((s) => s.kind), ['step-group', 'tool'])
+  const card = turn.segments[1]
+  assert.ok(card?.kind === 'tool')
+  assert.equal(card.tool.status, 'running')
+  assert.equal(card.tool.toolView?.pluginId, 'builtin:swarm')
+  const group = turn.segments[0]
+  assert.ok(group?.kind === 'step-group')
+  // 修复点：组后已有卡片（不再是回合最后一段），live 下也折叠、思考不挂「思考中」
+  assert.equal(group.active, false)
+  const think = group.steps[0]
+  assert.ok(think?.kind === 'thinking')
+  assert.equal(think.thinking.active, false)
+
+  // 对照组：思考后是普通工具（并入同组）时组保持 active 展示在途工具，但思考行本身折叠
+  const plain = buildTimelineItems(
+    [
+      assistantEntry('1', [
+        { type: 'thinking', thinking: '先看目录' },
+        toolCallBlock('c1', 'bash', { command: 'ls' }),
+      ]),
+    ],
+    { working: true },
+  )
+  const plainTurn = plain[0]
+  assert.ok(plainTurn?.kind === 'assistant')
+  const plainGroup = plainTurn.segments[0]
+  assert.ok(plainGroup?.kind === 'step-group')
+  assert.equal(plainGroup.active, true)
+  assert.equal(plainGroup.steps[0]!.kind === 'thinking' ? plainGroup.steps[0]!.thinking.active : undefined, false)
+
+  // 不误伤：卡片完成后的新一轮流式思考是回合最后一段，保持 active 展开
+  const next = buildTimelineItems(
+    [
+      assistantEntry('1', [
+        { type: 'thinking', thinking: '规划分派' },
+        toolCallBlock('c1', 'swarm_dispatch_worker', { name: 'impl', prompt: 'p' }),
+      ]),
+      toolResultEntry('2', 'c1', 'swarm_dispatch_worker', { text: '{"ok":true}' }),
+    ],
+    {
+      toolViews,
+      live: { conversationId: 1, text: '', thinking: '汇总 worker 结果…', tools: [], updatedAt: 3 },
+    },
+  )
+  const nextTurn = next[0]
+  assert.ok(nextTurn?.kind === 'assistant')
+  const groups = nextTurn.segments.filter((s) => s.kind === 'step-group')
+  assert.equal(groups.length, 2)
+  assert.ok(groups[0]!.kind === 'step-group' && groups[0]!.active === false)
+  const liveGroup = groups[1]
+  assert.ok(liveGroup?.kind === 'step-group')
+  assert.equal(liveGroup.active, true)
+  const liveThink = liveGroup.steps.find((s) => s.kind === 'thinking')
+  assert.ok(liveThink?.kind === 'thinking')
+  assert.equal(liveThink.thinking.active, true)
+})
+
 test('多轮工具执行期间 turn.key 恒定不变，且 running 工具保留在同一 step-group 内不跳出', { timeout: 60_000 }, () => {
   const userMsg = entry('10', 'helmx.input', { data: { text: '检查目录与配置', origin: 'human' } })
 

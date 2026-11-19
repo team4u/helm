@@ -629,7 +629,8 @@ function foldableOfRaw(seg: RawSegment): FoldableStep {
 /**
  * Raw segments -> render segments: consecutive foldable steps enter a step-group from the first step, avoiding node moves when steps append.
  * Exempt items (tool.view) and text blocks stay standalone.
- * While the turn is still running (live=true) and no text segment follows the step-group yet, mark active=true (frontend expands by default).
+ * While the turn is still running (live=true) and nothing follows the step-group yet (text or exempt
+ * card), mark active=true (frontend expands by default).
  */
 export function foldTurnSegments(raw: ReadonlyArray<RawSegment>, live = false): AssistantSegment[] {
   const out: AssistantSegment[] = []
@@ -668,23 +669,22 @@ export function foldTurnSegments(raw: ReadonlyArray<RawSegment>, live = false): 
     }
   }
   flushBuffer()
-  let lastTextIndex = -1
-  for (let i = 0; i < out.length; i++) {
-    if (out[i]!.kind === 'text') lastTextIndex = i
-  }
   for (let i = 0; i < out.length; i++) {
     const seg = out[i]!
-    if (seg.kind === 'step-group') {
-      const hasRunningTool = seg.steps.some((s) => s.kind === 'tool' && s.tool.status === 'running')
-      const groupActive = live && (i > lastTextIndex || hasRunningTool)
-      seg.active = groupActive
+    if (seg.kind !== 'step-group') continue
+    const hasRunningTool = seg.steps.some((s) => s.kind === 'tool' && s.tool.status === 'running')
+    // 活动边只认「组之后没有任何渲染段」：正文与豁免卡片（tool.view 业务卡，如 swarm 派发）
+    // 都算已有后续——思考块随即折叠，不再挂着「思考中」转圈陪跑长任务；组内 running 工具
+    // 除外（正文先流的回合仍需保持展开显示在途工具）。
+    const isTrailing = i === out.length - 1
+    const groupActive = live && (isTrailing || hasRunningTool)
+    seg.active = groupActive
 
-      for (let sIdx = 0; sIdx < seg.steps.length; sIdx++) {
-        const step = seg.steps[sIdx]!
-        if (step.kind === 'thinking') {
-          const hasSubsequentTool = seg.steps.slice(sIdx + 1).some((s) => s.kind === 'tool')
-          step.thinking.active = groupActive && !hasSubsequentTool && !hasRunningTool && i > lastTextIndex
-        }
+    for (let sIdx = 0; sIdx < seg.steps.length; sIdx++) {
+      const step = seg.steps[sIdx]!
+      if (step.kind === 'thinking') {
+        const hasSubsequentTool = seg.steps.slice(sIdx + 1).some((s) => s.kind === 'tool')
+        step.thinking.active = groupActive && !hasSubsequentTool && !hasRunningTool && isTrailing
       }
     }
   }
