@@ -27,7 +27,7 @@
 
 | 动作 | CLI | 模型工具 | 说明 |
 | :--- | :--- | :--- | :--- |
-| `create` | `helmx tasks create` | `task_create` | 建卡；无阻塞且 `autoStart`（默认 true）时立即起独立执行会话并投递任务书 |
+| `create` | `helmx tasks create` | `task_create` | 建卡；无阻塞且 `autoStart`（默认 true）时经两阶段启动起独立执行会话并投递任务书 |
 | `list` | `helmx tasks list` | `task_list` | 按 `column / project / assigneeProfileId / nodeId / includeArchived` 过滤，附实时会话状态与 `blockedBy` |
 | `inspect` | `helmx tasks inspect <id>` | `task_inspect` | 单卡全量：依赖状态、会话实况、近期摘要（脱敏）、产物列表 |
 | `update` | `helmx tasks update <id>` | — | 改标题/简报/项目/依赖等；已启动任务锁死执行角色/节点/目录；依赖图必须无环 |
@@ -54,22 +54,49 @@
 
 规划动作（`create / start / approve / rework / update / archive / delete`）在 handler 内再校验：任务执行会话、子会话、自动化会话（`ownedBy !== 'human'`）调用一律 `403 task_scope_violation`——`before_turn` 过滤只挡工具列表，`run_action` 与 Workflow `action()` 路径由这层兜底。人工 CLI/UI（无 `conversationId`）不受限。
 
+## planFirst 的真实 Ask 门禁（范围如实声明）
+
+`planFirst: true` 的任务在任务书与恒定 `<active_task>` 段落中被明确要求：执行者先调研并
+产出简明方案，然后**通过会话的原生提问机制（Ask / AskDoc）向用户请求批准**，得到明确
+同意后才能写代码。这是真实门禁而非提示词摆设：
+
+- 执行者的 Ask 走内核 AskDoc：`pendingAskCount > 0`、会话进入 `blocked`，看板单灯如实显示「等待人类决策」；
+- 用户不回答，任务就诚实停在那里——不会被视为「停下未交卷」的停滞（静止标记判定明确排除待答 Ask）；
+- **门禁范围（如实声明）**：插件不硬拦截文件写入工具（bash/write 等仍可用，拦截会误伤只读探查且无法穷举写入路径）；「先方案、经 Ask 批准、后动工」的执行纪律由恒定系统段落强制约束，违规属于执行纪律问题而非机制缺口。
+
 ## 依赖链与自动接棒
 
 - `dependsOn: ['T-1']`：引用必须存在、禁止自依赖、全图禁止成环（DFS 检测，写入前校验）。
 - 被阻塞的卡停在 `backlog` 并记录 `autoStartOnUnblock`（创建时 `autoStart` 缺省 true）。
 - 前置卡 `approve close_only` 后自动扫描下游：全部前置 `done` 即解锁（返回 `unblockedTaskIds`）；`autoStartOnUnblock === true` 且未超 `maxConcurrentTasks` 时自动开工（返回 `autoStartedTaskIds`）。
 
-## 防沉默（turn_settled 纯事件驱动，零定时器）
+## 静止标记与输入投递边界（turn_settled 纯事件驱动，零定时器、零自动输入）
 
 绑定 `in_progress` 卡的执行会话回合结算时：
 
 - `outcome === 'failed'`：记录 `silenceState.lastError`（看板诚实展示报错，不伪造状态）。
-- `outcome === 'completed'` 且完全静止（无待答 Ask、整棵后代子树无 working/blocked）仍未交卷：
-  - 未轻推过 → 记 `nudgedAt` 并投递**一次**温和提醒（`origin: 'agent'`, `whenBusy: 'followUp'`，requestId 按 completionSeq 幂等）；
-  - 已轻推过仍未交卷 → 记 `stalledAt`，看板诚实标示「回合已停 · 未交卷」。
-- **绝不强杀会话、绝不伪造 in_review**。human-owned 会话的红线（严禁自动按键/中止）完整保留——轻推走普通 `submitInput`（与人工 HTTP 输入同链），followUp 语义不打断人类在途输入。
+- `outcome === 'completed'` 且完全静止仍未交卷（判定口径：无待答 Ask、整棵后代子树无
+  working/blocked、`builtin:workflow` 名下无 running run——无静态依赖，运行时按需查询，
+  查询故障时保守跳过标记宁漏报不误报）：记 `silenceState.stalledAt`，看板诚实标示
+  「回合已停 · 未交卷」。
+- **插件对 human-owned 执行会话零自动输入投递**（AGENTS Watchdog 红线：自动化提交
+  统一走 guarded 而 guarded 拒绝 human 归属，也不得用普通 submitInput 实现事件自唤醒）。
+  「停下未交卷」只呈现于看板；继续工作由用户显式打开执行会话发言（或规划者 rework 重派）。
+- 插件投递的仅限**用户显式动作的直接延伸**（`origin: 'agent'`、requestId 幂等）：
+  建卡/开工的任务书 kick off、`merge_and_close` 的合并收尾指令、rework 的返工意见——
+  全部由用户显式调用对应动作触发。
 - `conversation.deleted` 事件：受影响任务诚实标记 `conversationMissing: true`（不捏造、不自动删任务）。
+
+## 启动两阶段与重启恢复（副作用前落盘）
+
+开工（create 即启 / start / 验收后下游接棒 / rework 重建）统一走两阶段：
+
+1. 串行 mutation 把任务占位为 `in_progress`（无 conversationId）并 `flush` 落盘——占位即计入并发额度，杜绝竞态双开会话；
+2. `createConversation`（内核自身持久化）→ 串行 mutation 绑定 `conversationId` + `startedAt`（flush）→ 投递任务书（requestId 按 taskId 幂等）；
+3. 任务书投递失败显式回滚：任务回 `backlog` 记 `lastError`（可重试 start），已建会话标 `task-archived` 保留现场，错误上抛绝不静默；
+4. 两阶段之间服务重启：启动时 `recoverInterruptedStartups` 把 `in_progress` 无绑定会话的残留任务诚实回滚 `backlog` 并在 `lastError` 记录原因（绝不假装在跑）。
+
+`rework` / `merge_and_close` 的意见与指令投递采用原子模式：状态变更与投递在同一串行 mutation 内，投递成功后才落盘；失败 draft 丢弃可干净重试，requestId 分别按 `reworkCount` / `submission.submittedAt` 幂等（崩溃窗口内已投递的重试不重复投递）。`approve close_only` 则先落盘 `done` 终态（flush），衍生动作（会话换标签、下游接棒）失败容忍上报、不回滚验收事实。
 
 ## 配置
 

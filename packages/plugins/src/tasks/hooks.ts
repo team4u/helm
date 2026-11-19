@@ -1,16 +1,17 @@
 /**
- * builtin:tasks 生命周期 Hook（纯事件驱动，零定时器）：
+ * builtin:tasks 生命周期 Hook（纯事件驱动，零定时器，零自动输入投递）：
  * - before_turn：规划/执行工具动态隔离 + 任务执行会话注入 100% 字节恒定的
  *   <active_task> 系统段落（仅含任务生命周期不变事实）；
- * - turn_settled：failed 记录 lastError；completed 且静止（无待答、子树无
- *   working/blocked）未交卷时单次温和轻推，再停则诚实标记 stalledAt——
- *   绝不强杀、绝不伪造 in_review；
+ * - turn_settled：failed 记录 lastError；completed 且完全静止（无待答、子树无
+ *   working/blocked、无 Workflow 在途 run）未交卷时诚实标记 stalledAt——
+ *   **绝不向 human-owned 会话投递任何自动输入**（AGENTS Watchdog 红线），
+ *   「停下未交卷」仅呈现于看板，由用户显式打开会话继续或 rework；
  * - conversation.deleted：诚实标记 conversationMissing（不捏造、不自动删任务）。
  */
 import { HelmxError, type ConversationSummary, type HelmxPluginContext } from '@helmx/protocol'
-import { ACTIVE_TASK_SECTION_ID, TASK_ACTIVE_TAG, TASKS_PLUGIN_ID, type TaskRecord } from './contracts.js'
+import { ACTIVE_TASK_SECTION_ID, TASKS_PLUGIN_ID, type TaskRecord } from './contracts.js'
 import { findActiveTaskByConversation, type TasksRuntime } from './actions.js'
-import { activeTaskSection, buildSubmitNudgePrompt } from './prompts.js'
+import { activeTaskSection } from './prompts.js'
 
 /** 规划者专属模型工具名（任务执行会话 / 子会话 / 自动化会话隐藏）。 */
 export const PLANNER_TASK_TOOL_NAMES = ['task_create', 'task_approve', 'task_rework', 'task_start'] as const
@@ -66,17 +67,46 @@ export function subtreeHasWorkingOrBlocked(rootId: number, all: readonly Convers
   return false
 }
 
-/** 防沉默决策纯函数：skip（未静止或非目标）/ nudge（单次轻推）/ stall（轻推过仍未交卷）。 */
-export function evaluateSilenceAction(input: {
+/**
+ * 静止判定纯函数：任务仍在进行且本回合正常结束、无待答 Ask、子树与 Workflow
+ * 均无在途时返回 true（调用方据此诚实标记 stalledAt；不做任何投递）。
+ * `workflowBusy: 'unknown'`（在途查询失败且非停用类错误）时保守返回 false，宁漏报不误报。
+ */
+export function shouldMarkStalled(input: {
   task: TaskRecord
   conversation: Pick<ConversationSummary, 'id' | 'status' | 'pendingAskCount'>
   subtreeBusy: boolean
-}): 'skip' | 'nudge' | 'stall' {
-  if (input.task.column !== 'in_progress' || input.task.conversationId !== input.conversation.id) return 'skip'
-  if (input.conversation.pendingAskCount > 0) return 'skip'
-  if (input.subtreeBusy) return 'skip'
-  if (input.task.silenceState?.nudgedAt === undefined) return 'nudge'
-  return 'stall'
+  workflowBusy: boolean | 'unknown'
+}): boolean {
+  if (input.task.column !== 'in_progress' || input.task.conversationId !== input.conversation.id) return false
+  if (input.task.silenceState?.stalledAt !== undefined) return false
+  if (input.conversation.pendingAskCount > 0) return false
+  if (input.subtreeBusy) return false
+  if (input.workflowBusy !== false) return false
+  return true
+}
+
+/**
+ * 查询 builtin:workflow 在该会话名下是否有 running run（无静态依赖，运行时按需调用）。
+ * - 返回 false：确定无在途（含 workflow 停用/未注册——无后台 run 能力即无在途）；
+ * - 返回 'unknown'：查询故障（网络/内部错误），调用方保守跳过标记。
+ */
+export async function workflowHasRunningRuns(
+  ctx: HelmxPluginContext,
+  conversationId: number,
+): Promise<boolean | 'unknown'> {
+  try {
+    const res = (await ctx.host.invokeAction('builtin:workflow', 'runs', { conversationId })) as {
+      runs?: Array<{ status?: unknown }>
+    }
+    if (res === null || typeof res !== 'object' || !Array.isArray(res.runs)) return 'unknown'
+    return res.runs.some((r) => r !== null && typeof r === 'object' && (r as { status?: unknown }).status === 'running')
+  } catch (err) {
+    if (err instanceof HelmxError && (err.code === 'plugin_disabled' || err.code === 'not_found' || err.code === 'unknown_action')) {
+      return false
+    }
+    return 'unknown'
+  }
 }
 
 export function registerTasksHooks(ctx: HelmxPluginContext, runtime: TasksRuntime): void {
@@ -109,7 +139,7 @@ export function registerTasksHooks(ctx: HelmxPluginContext, runtime: TasksRuntim
   })
 
   // ------------------------------------------------------------------
-  // turn_settled：纯事件驱动防沉默（零定时器，不强杀，不伪造状态）
+  // turn_settled：纯事件驱动的诚实标记（零定时器、零投递、零强杀）
   // ------------------------------------------------------------------
   ctx.hook.onTurnSettled(async (payload) => {
     if (!isActive()) return
@@ -134,49 +164,27 @@ export function registerTasksHooks(ctx: HelmxPluginContext, runtime: TasksRuntim
     const fresh = runtime.readConversationOrUndefined(conversation.id)
     if (fresh === undefined) return
     const subtreeBusy = subtreeHasWorkingOrBlocked(conversation.id, ctx.host.listConversations())
-    const decision = evaluateSilenceAction({
-      task: runtime.store.get(boundTask.id) ?? boundTask,
-      conversation: fresh,
-      subtreeBusy,
-    })
-    if (decision === 'skip') return
-
-    if (decision === 'stall') {
-      await runtime.store.enqueueMutation((draft) => {
-        const task = draft.tasks[boundTask.id]
-        if (task === undefined || task.conversationId !== conversation.id || task.column !== 'in_progress') return
-        if (task.silenceState?.stalledAt !== undefined) return
-        task.silenceState = {
-          ...(task.silenceState ?? {}),
-          stalledAt: Date.now(),
-        }
-        task.updatedAt = Date.now()
+    const workflowBusy = await workflowHasRunningRuns(ctx, conversation.id)
+    if (
+      !shouldMarkStalled({
+        task: runtime.store.get(boundTask.id) ?? boundTask,
+        conversation: fresh,
+        subtreeBusy,
+        workflowBusy,
       })
+    ) {
       return
     }
-
-    // nudge：先落 nudgedAt 标记再投递（失败也不重复轻推——单次纪律优先，失败显式上报）
-    const requestId = `${TASKS_PLUGIN_ID}:nudge:${boundTask.id}:${conversation.completionSeq}`
-    await runtime.track('task:nudge', () =>
-      runtime.store.enqueueMutation(async (draft) => {
-        const task = draft.tasks[boundTask.id]
-        if (task === undefined || task.conversationId !== conversation.id || task.column !== 'in_progress') return
-        if (task.silenceState?.nudgedAt !== undefined) return
-        task.silenceState = { ...(task.silenceState ?? {}), nudgedAt: Date.now() }
-        task.updatedAt = Date.now()
-        try {
-          await ctx.host.submitInput(conversation.id, buildSubmitNudgePrompt(task), {
-            origin: 'agent',
-            whenBusy: 'followUp',
-            requestId,
-          })
-        } catch (err) {
-          runtime.reportError(`任务 ${task.id} 防沉默轻推投递失败`, err)
-          delete task.silenceState.nudgedAt
-          throw err
-        }
-      }),
-    )
+    await runtime.store.enqueueMutation((draft) => {
+      const task = draft.tasks[boundTask.id]
+      if (task === undefined || task.conversationId !== conversation.id || task.column !== 'in_progress') return
+      if (task.silenceState?.stalledAt !== undefined) return
+      task.silenceState = {
+        ...(task.silenceState ?? {}),
+        stalledAt: Date.now(),
+      }
+      task.updatedAt = Date.now()
+    })
   })
 }
 

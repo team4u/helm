@@ -19,7 +19,6 @@ import {
   HelmxError,
   type ConversationSummary,
   type HelmxPluginContext,
-  type InputOrigin,
   type PluginActionContext,
   type PluginToolContext,
 } from '@helmx/protocol'
@@ -42,13 +41,26 @@ export interface TasksRuntime {
   isShutdown(): boolean
   getConfig(): TasksConfig
   store: TasksStoreRuntime
+  /** 等待私有真源 doc 的排队写全部落盘（副作用执行前调用，防「未落盘就派生副作用」）。 */
+  flushRecords(): Promise<void>
   readConversationOrUndefined(id: number | undefined): ConversationSummary | undefined
   reportError(title: string, detail: unknown): void
   track<T>(label: string, task: () => Promise<T>): Promise<T>
 }
 
-function originOf(context: { conversationId?: number }): InputOrigin {
-  return context.conversationId !== undefined ? 'agent' : 'human'
+function conversationLive(runtime: TasksRuntime, conversationId: number | undefined) {
+  if (conversationId === undefined) return null
+  const conv = runtime.readConversationOrUndefined(conversationId)
+  if (conv === undefined) return null
+  return {
+    conversationId: conv.id,
+    status: conv.status,
+    doing: conv.doing ?? null,
+    pendingAskCount: conv.pendingAskCount,
+    ...(conv.lastError !== undefined ? { lastError: conv.lastError } : {}),
+    ...(conv.nodeId !== undefined ? { nodeId: conv.nodeId } : {}),
+    cwd: conv.cwd,
+  }
 }
 
 /** 按会话摘要查绑定的活跃任务（in_progress / in_review）。 */
@@ -128,21 +140,6 @@ function requireTaskInDraft(draftTasks: Record<string, TaskRecord>, rawTaskId: u
     throw new HelmxError('not_found', `任务 '${id}' 不存在`, 404, { pluginId: TASKS_PLUGIN_ID, taskId: id })
   }
   return task
-}
-
-function conversationLive(runtime: TasksRuntime, conversationId: number | undefined) {
-  if (conversationId === undefined) return null
-  const conv = runtime.readConversationOrUndefined(conversationId)
-  if (conv === undefined) return null
-  return {
-    conversationId: conv.id,
-    status: conv.status,
-    doing: conv.doing ?? null,
-    pendingAskCount: conv.pendingAskCount,
-    ...(conv.lastError !== undefined ? { lastError: conv.lastError } : {}),
-    ...(conv.nodeId !== undefined ? { nodeId: conv.nodeId } : {}),
-    cwd: conv.cwd,
-  }
 }
 
 function taskLiveBlock(runtime: TasksRuntime, task: TaskRecord) {
@@ -322,12 +319,24 @@ function resolveCoordinates(input: {
   return { nodeId, ...(cwd !== undefined ? { cwd } : {}) }
 }
 
-async function startTaskInDraft(
+/**
+ * 两阶段启动（副作用前落盘 + 可重试）：
+ * 1. 调用方已在串行 mutation 中把任务占位为 `in_progress`（无 conversationId）且已 write+flush；
+ * 2. `createConversation`（内核自身持久化）；
+ * 3. 串行 mutation 绑定 conversationId + startedAt（write+flush，先于任务书投递）；
+ * 4. `submitInput` 任务书（origin 'agent'、requestId 按 taskId 幂等）；失败显式回滚
+ *    （会话标 task-archived 保留现场、任务回 backlog 记 lastError 可重试），绝不静默。
+ * 崩溃窗口：步骤 2/3 之间重启 → service.start 的 recoverInterruptedStartups 诚实回滚。
+ */
+async function launchTaskExecution(
   ctx: HelmxPluginContext,
   runtime: TasksRuntime,
-  task: TaskRecord,
-  origin: InputOrigin,
+  taskId: string,
 ): Promise<number> {
+  const task = runtime.store.get(taskId)
+  if (task === undefined) {
+    throw new HelmxError('not_found', `任务 '${taskId}' 不存在`, 404, { pluginId: TASKS_PLUGIN_ID, taskId })
+  }
   const profile = await ctx.host.profiles.get(task.assigneeProfileId)
   const coordinates = resolveCoordinates({
     explicitNodeId: task.nodeId,
@@ -352,20 +361,44 @@ async function startTaskInDraft(
     if (task.thinkingLevel !== undefined && task.thinkingLevel !== '') {
       await ctx.host.updateConversation(created.id, { thinkingLevel: task.thinkingLevel })
     }
+    await runtime.store.enqueueMutation((draft) => {
+      const target = draft.tasks[taskId]
+      if (target === undefined || target.conversationId !== undefined) return
+      target.conversationId = created.id
+      target.startedAt = Date.now()
+      target.updatedAt = target.startedAt
+      delete target.conversationMissing
+    })
+    await runtime.flushRecords()
     await ctx.host.submitInput(created.id, buildTaskKickoffPrompt(task), {
-      origin,
+      origin: 'agent',
       whenBusy: 'steer',
-      requestId: `${TASKS_PLUGIN_ID}:kickoff:${task.id}`,
+      requestId: `${TASKS_PLUGIN_ID}:kickoff:${taskId}`,
     })
   } catch (err) {
-    // 干净回滚：会话保留（标 task-archived 诚实可见），任务留待办可重试 start；显式抛错绝不静默
-    runtime.reportError(`任务 ${task.id} 启动投递失败，执行回滚（会话 #${created.id} 已归档标记）`, err)
+    // 干净回滚：任务回待办记 lastError（flush 后可重试 start），会话保留标 task-archived；显式抛错
+    runtime.reportError(`任务 ${taskId} 启动投递失败，执行回滚（会话 #${created.id} 已归档标记）`, err)
+    await runtime.store
+      .enqueueMutation((draft) => {
+        const target = draft.tasks[taskId]
+        if (target === undefined || target.conversationId !== created.id) return
+        target.column = 'backlog'
+        delete target.conversationId
+        delete target.startedAt
+        target.silenceState = {
+          ...(target.silenceState ?? {}),
+          lastError: err instanceof Error ? err.message : String(err),
+        }
+        target.updatedAt = Date.now()
+      })
+      .catch(() => undefined)
+    await runtime.flushRecords().catch(() => undefined)
     await swapConversationTag(ctx, runtime, created.id, TASK_ARCHIVED_TAG).catch(() => {})
     throw err instanceof HelmxError
       ? err
-      : new HelmxError('task_start_failed', `任务 ${task.id} 启动失败：${err instanceof Error ? err.message : String(err)}`, 500, {
+      : new HelmxError('task_start_failed', `任务 ${taskId} 启动失败：${err instanceof Error ? err.message : String(err)}`, 500, {
           pluginId: TASKS_PLUGIN_ID,
-          taskId: task.id,
+          taskId,
           conversationId: created.id,
         })
   }
@@ -390,8 +423,8 @@ export function registerTasksActions(ctx: HelmxPluginContext, runtime: TasksRunt
   }> => {
     assertPlannerAuthority(runtime, context, 'create')
     const parsed = parseCreateInput(input)
-    return runtime.track('task:create', async () =>
-      runtime.store.enqueueMutation(async (draft) => {
+    return runtime.track('task:create', async () => {
+      const decision = await runtime.store.enqueueMutation(async (draft) => {
         const taskId = `T-${draft.nextSeq}`
         draft.nextSeq += 1
         const assignee = await resolveAssigneeProfile(ctx, runtime, parsed.assigneeProfileId, context.conversationId)
@@ -421,24 +454,32 @@ export function registerTasksActions(ctx: HelmxPluginContext, runtime: TasksRunt
         const blockedBy = blockedDependenciesOf(task, draft.tasks)
         if (blockedBy.length > 0) {
           task.autoStartOnUnblock = parsed.autoStart
-          return { task, started: false, blockedBy, notStartedReason: 'dependencies_blocked' }
+          return { taskId, launch: false as const, blockedBy, notStartedReason: 'dependencies_blocked' as const }
         }
         if (parsed.autoStart === false) {
-          return { task, started: false, blockedBy, notStartedReason: 'auto_start_disabled' }
+          return { taskId, launch: false as const, blockedBy, notStartedReason: 'auto_start_disabled' as const }
         }
         const { maxConcurrentTasks } = runtime.getConfig()
         const inProgress = Object.values(draft.tasks).filter((t) => t.column === 'in_progress').length
         if (maxConcurrentTasks > 0 && inProgress >= maxConcurrentTasks) {
-          return { task, started: false, blockedBy, notStartedReason: 'concurrency_limit' }
+          return { taskId, launch: false as const, blockedBy, notStartedReason: 'concurrency_limit' as const }
         }
-        const conversationId = await startTaskInDraft(ctx, runtime, task, originOf(context))
+        // 两阶段启动占位：in_progress 无 conversationId 先落盘（串行队列内原子占并发额度，杜绝双开）
         task.column = 'in_progress'
-        task.conversationId = conversationId
         task.startedAt = Date.now()
         task.updatedAt = task.startedAt
-        return { task, started: true, conversationId, blockedBy: [] }
-      }),
-    )
+        return { taskId, launch: true as const, blockedBy: [] as string[] }
+      })
+      // 占位事实已 write；flush 确保落盘后才执行创建会话副作用
+      await runtime.flushRecords()
+      if (!decision.launch) {
+        const task = runtime.store.get(decision.taskId)!
+        return { task, started: false, blockedBy: decision.blockedBy, notStartedReason: decision.notStartedReason }
+      }
+      const conversationId = await launchTaskExecution(ctx, runtime, decision.taskId)
+      const task = runtime.store.get(decision.taskId)!
+      return { task, started: true, conversationId, blockedBy: [] }
+    })
   }
 
   // ---------------- list ----------------
@@ -620,13 +661,22 @@ export function registerTasksActions(ctx: HelmxPluginContext, runtime: TasksRunt
     context: PluginActionContext,
   ): Promise<{ task: TaskRecord; conversationId: number }> => {
     assertPlannerAuthority(runtime, context, 'start')
-    return runtime.track('task:start', () =>
-      runtime.store.enqueueMutation(async (draft) => {
+    return runtime.track('task:start', async () => {
+      const decision = await runtime.store.enqueueMutation((draft) => {
         const task = requireTaskInDraft(draft.tasks, input.taskId)
-        if (task.conversationId !== undefined || task.column !== 'backlog') {
+        if (task.conversationId !== undefined || (task.column !== 'backlog' && task.column !== 'in_progress')) {
           throw new HelmxError(
             'task_already_started',
             `任务 ${task.id} 已启动（column=${task.column}，会话 #${task.conversationId ?? '?'}）`,
+            409,
+            { pluginId: TASKS_PLUGIN_ID, taskId: task.id },
+          )
+        }
+        if (task.column === 'in_progress') {
+          // 启动中断恢复残留（conversationId 未绑定）由 service.start 回滚；此处显式拒绝并发重入
+          throw new HelmxError(
+            'task_already_started',
+            `任务 ${task.id} 处于启动中断残留态（in_progress 无绑定会话），等待服务重启恢复或稍后重试`,
             409,
             { pluginId: TASKS_PLUGIN_ID, taskId: task.id },
           )
@@ -650,15 +700,18 @@ export function registerTasksActions(ctx: HelmxPluginContext, runtime: TasksRunt
             { pluginId: TASKS_PLUGIN_ID, taskId: task.id, maxConcurrentTasks },
           )
         }
-        const conversationId = await startTaskInDraft(ctx, runtime, task, originOf(context))
+        // 两阶段启动占位（先落盘再创建会话）
         task.column = 'in_progress'
-        task.conversationId = conversationId
         task.startedAt = Date.now()
         task.updatedAt = task.startedAt
         delete task.silenceState
-        return { task, conversationId }
-      }),
-    )
+        return { taskId: task.id }
+      })
+      await runtime.flushRecords()
+      const conversationId = await launchTaskExecution(ctx, runtime, decision.taskId)
+      const task = runtime.store.get(decision.taskId)!
+      return { task, conversationId }
+    })
   }
 
   // ---------------- submit ----------------
@@ -777,19 +830,20 @@ export function registerTasksActions(ctx: HelmxPluginContext, runtime: TasksRunt
       throw new HelmxError('validation_error', `mergeAction 非法（收到：${String(input.mergeAction)}）`, 400, {})
     }
     const mergeAction = input.mergeAction ?? 'close_only'
-    return runtime.track('task:approve', () =>
-      runtime.store.enqueueMutation(async (draft) => {
-        const task = requireTaskInDraft(draft.tasks, input.taskId)
-        if (task.column !== 'in_review' && task.column !== 'in_progress') {
-          throw new HelmxError(
-            'task_invalid_column',
-            `任务 ${task.id} 当前位于 ${task.column} 列，仅待验收（或确认中的进行中）任务可验收通过`,
-            409,
-            { pluginId: TASKS_PLUGIN_ID, taskId: task.id, column: task.column },
-          )
-        }
-
-        if (mergeAction === 'merge_and_close') {
+    return runtime.track('task:approve', async () => {
+      if (mergeAction === 'merge_and_close') {
+        // 投递原子模式：状态变更与指令投递在同一串行 mutation 内，submitInput 成功后才 write；
+        // 失败 draft 丢弃（状态回滚可干净重试）；requestId 按 submission 时间戳幂等（重试不重复投递）。
+        const task = await runtime.store.enqueueMutation(async (draft) => {
+          const task = requireTaskInDraft(draft.tasks, input.taskId)
+          if (task.column !== 'in_review' && task.column !== 'in_progress') {
+            throw new HelmxError(
+              'task_invalid_column',
+              `任务 ${task.id} 当前位于 ${task.column} 列，仅待验收（或确认中的进行中）任务可验收通过`,
+              409,
+              { pluginId: TASKS_PLUGIN_ID, taskId: task.id, column: task.column },
+            )
+          }
           const conversationMissing =
             task.conversationId === undefined || conversationLive(runtime, task.conversationId) === null
           if (conversationMissing) {
@@ -805,49 +859,90 @@ export function registerTasksActions(ctx: HelmxPluginContext, runtime: TasksRunt
           delete task.silenceState
           task.updatedAt = Date.now()
           const conversationId = task.conversationId!
-          await swapConversationTag(ctx, runtime, conversationId, TASK_ACTIVE_TAG)
           await ctx.host.submitInput(conversationId, buildMergeClosingPrompt(task, input.note), {
-            origin: originOf(context),
+            origin: 'agent',
             whenBusy: 'followUp',
             requestId: `${TASKS_PLUGIN_ID}:merge:${task.id}:${task.submission?.submittedAt ?? Date.now()}`,
           })
-          return { task, unblockedTaskIds: [], autoStartedTaskIds: [] }
-        }
+          await swapConversationTag(ctx, runtime, conversationId, TASK_ACTIVE_TAG)
+          return task
+        })
+        return { task, unblockedTaskIds: [], autoStartedTaskIds: [] }
+      }
 
-        // close_only
+      // close_only：核心事实（done 终转）先落盘 flush，衍生动作（会话换标签、下游接棒）失败容忍上报不回滚
+      const { task, conversationId, downstream } = await runtime.store.enqueueMutation((draft) => {
+        const task = requireTaskInDraft(draft.tasks, input.taskId)
+        if (task.column !== 'in_review' && task.column !== 'in_progress') {
+          throw new HelmxError(
+            'task_invalid_column',
+            `任务 ${task.id} 当前位于 ${task.column} 列，仅待验收（或确认中的进行中）任务可验收通过`,
+            409,
+            { pluginId: TASKS_PLUGIN_ID, taskId: task.id, column: task.column },
+          )
+        }
         const now = Date.now()
         task.column = 'done'
         task.completedAt = now
         delete task.mergePending
         delete task.silenceState
         task.updatedAt = now
-        if (task.conversationId !== undefined) {
-          await swapConversationTag(ctx, runtime, task.conversationId, TASK_ARCHIVED_TAG)
-        }
 
-        // 下游依赖解锁扫描：backlog 中依赖本任务的任务，全部前置 done 即解锁
-        const { maxConcurrentTasks } = runtime.getConfig()
-        const unblockedTaskIds: string[] = []
-        const autoStartedTaskIds: string[] = []
+        // 下游依赖解锁扫描：backlog 中依赖本任务的任务，全部前置 done 即解锁（启动在落盘后逐个执行）
+        const downstream: Array<{ id: string; autoStartOnUnblock: boolean }> = []
         for (const candidate of Object.values(draft.tasks)) {
           if (candidate.column !== 'backlog' || !candidate.dependsOn.includes(task.id)) continue
-          const blockedBy = blockedDependenciesOf(candidate, draft.tasks)
-          if (blockedBy.length > 0) continue
-          unblockedTaskIds.push(candidate.id)
-          if (candidate.autoStartOnUnblock !== true) continue
-          const inProgress = Object.values(draft.tasks).filter((t) => t.column === 'in_progress').length
-          if (maxConcurrentTasks > 0 && inProgress >= maxConcurrentTasks) continue
-          const conversationId = await startTaskInDraft(ctx, runtime, candidate, 'agent')
-          candidate.column = 'in_progress'
-          candidate.conversationId = conversationId
-          candidate.startedAt = Date.now()
-          candidate.updatedAt = candidate.startedAt
-          delete candidate.silenceState
-          autoStartedTaskIds.push(candidate.id)
+          if (blockedDependenciesOf(candidate, draft.tasks).length > 0) continue
+          downstream.push({ id: candidate.id, autoStartOnUnblock: candidate.autoStartOnUnblock === true })
         }
-        return { task, unblockedTaskIds, autoStartedTaskIds }
-      }),
-    )
+        return { task, conversationId: task.conversationId, downstream }
+      })
+      await runtime.flushRecords()
+
+      // 衍生 1：会话换归档标签（失败仅影响侧栏分组展示，容忍上报）
+      if (conversationId !== undefined) {
+        await swapConversationTag(ctx, runtime, conversationId, TASK_ARCHIVED_TAG).catch((err) => {
+          runtime.reportError(`任务 ${task.id} 结单后会话 #${conversationId} 换标签失败（不影响验收结果）`, err)
+        })
+      }
+
+      // 衍生 2：下游接棒逐个两阶段启动（单个失败上报继续，不阻断其余与验收事实）
+      const unblockedTaskIds = downstream.map((d) => d.id)
+      const autoStartedTaskIds: string[] = []
+      for (const candidate of downstream) {
+        if (!candidate.autoStartOnUnblock) continue
+        try {
+          const occupied = await runtime.store.enqueueMutation((draft) => {
+            const target = draft.tasks[candidate.id]
+            if (target === undefined || target.column !== 'backlog') return false
+            const { maxConcurrentTasks } = runtime.getConfig()
+            const inProgress = Object.values(draft.tasks).filter((t) => t.column === 'in_progress').length
+            if (maxConcurrentTasks > 0 && inProgress >= maxConcurrentTasks) return false
+            target.column = 'in_progress'
+            target.startedAt = Date.now()
+            target.updatedAt = target.startedAt
+            delete target.silenceState
+            return true
+          })
+          if (!occupied) continue
+          await runtime.flushRecords()
+          await launchTaskExecution(ctx, runtime, candidate.id)
+          autoStartedTaskIds.push(candidate.id)
+        } catch (err) {
+          runtime.reportError(`任务 ${task.id} 验收后下游任务 ${candidate.id} 自动接棒启动失败（任务保留待办可手动 start）`, err)
+          await runtime.store
+            .enqueueMutation((draft) => {
+              const target = draft.tasks[candidate.id]
+              if (target === undefined || target.conversationId !== undefined || target.column !== 'in_progress') return
+              target.column = 'backlog'
+              delete target.startedAt
+              target.updatedAt = Date.now()
+            })
+            .catch(() => undefined)
+        }
+      }
+      return { task, unblockedTaskIds, autoStartedTaskIds }
+    })
   }
 
   // ---------------- rework ----------------
@@ -859,8 +954,13 @@ export function registerTasksActions(ctx: HelmxPluginContext, runtime: TasksRunt
     if (typeof input.feedback !== 'string' || input.feedback.trim() === '') {
       throw new HelmxError('validation_error', 'feedback 必须是非空返工意见', 400, {})
     }
-    return runtime.track('task:rework', () =>
-      runtime.store.enqueueMutation(async (draft) => {
+    return runtime.track('task:rework', async () => {
+      // 投递原子模式：状态变更 + 意见投递同一串行 mutation，submitInput 成功后才 write（失败 draft 丢弃可干净重试）；
+      // requestId 按 reworkCount 幂等——崩溃窗口内已投递的重试不会重复投递意见。
+      const outcome = await runtime.store.enqueueMutation(
+        async (
+          draft,
+        ): Promise<{ kind: 'delivered'; task: TaskRecord; conversationId: number } | { kind: 'recreate'; task: TaskRecord }> => {
         const task = requireTaskInDraft(draft.tasks, input.taskId)
         const conversationMissing =
           task.conversationId === undefined || conversationLive(runtime, task.conversationId) === null
@@ -878,44 +978,57 @@ export function registerTasksActions(ctx: HelmxPluginContext, runtime: TasksRunt
             { pluginId: TASKS_PLUGIN_ID, taskId: task.id, column: task.column },
           )
         }
-        const now = Date.now()
+        // 拒绝路径先于任何状态变更抛出（fn 抛错则 draft 丢弃，绝不半途落盘）
+        if (conversationMissing && input.recreateConversation !== true) {
+          throw new HelmxError(
+            'task_conversation_missing',
+            `任务 ${task.id} 的原执行会话已不存在，无法投递返工意见（传 recreateConversation: true 重建执行会话，或先删除该任务）`,
+            409,
+            { pluginId: TASKS_PLUGIN_ID, taskId: task.id },
+          )
+        }
         task.column = 'in_progress'
         task.reworkCount += 1
         task.lastReworkFeedback = input.feedback.trim()
         delete task.mergePending
         delete task.silenceState
-        task.updatedAt = now
+        task.updatedAt = Date.now()
 
         if (!conversationMissing) {
           const conversationId = task.conversationId!
-          await swapConversationTag(ctx, runtime, conversationId, TASK_ACTIVE_TAG)
           await ctx.host.submitInput(conversationId, buildReworkDeliveryPrompt(task, input.feedback), {
-            origin: originOf(context),
+            origin: 'agent',
             whenBusy: 'steer',
-            requestId: `${TASKS_PLUGIN_ID}:rework:${task.id}:${now}`,
+            requestId: `${TASKS_PLUGIN_ID}:rework:${task.id}:${task.reworkCount}`,
           })
-          return { task, conversationId }
+          await swapConversationTag(ctx, runtime, conversationId, TASK_ACTIVE_TAG)
+          return { kind: 'delivered', task, conversationId }
         }
-        if (input.recreateConversation === true) {
-          const conversationId = await startTaskInDraft(ctx, runtime, task, 'agent')
-          await ctx.host.submitInput(
-            conversationId,
-            buildReworkDeliveryPrompt(task, input.feedback, { recreated: true }),
-            { origin: 'agent', whenBusy: 'steer' },
-          )
-          task.conversationId = conversationId
-          delete task.conversationMissing
-          task.updatedAt = Date.now()
-          return { task, conversationId, recreatedConversation: true }
-        }
-        throw new HelmxError(
-          'task_conversation_missing',
-          `任务 ${task.id} 的原执行会话已不存在，无法投递返工意见（传 recreateConversation: true 重建执行会话，或先删除该任务）`,
-          409,
-          { pluginId: TASKS_PLUGIN_ID, taskId: task.id },
-        )
-      }),
-    )
+        // recreate 分支：清掉失效绑定与缺失标记，回到两阶段启动占位态（in_progress 无 conversationId）
+        delete task.conversationId
+        delete task.conversationMissing
+        return { kind: 'recreate', task }
+      })
+
+      if (outcome.kind === 'delivered') {
+        return { task: outcome.task, conversationId: outcome.conversationId }
+      }
+
+      // recreate：状态已落盘（flush 后）再重建会话并投递「任务书 + 返工意见」
+      await runtime.flushRecords()
+      const conversationId = await launchTaskExecution(ctx, runtime, outcome.task.id)
+      await ctx.host.submitInput(
+        conversationId,
+        buildReworkDeliveryPrompt(outcome.task, input.feedback, { recreated: true }),
+        {
+          origin: 'agent',
+          whenBusy: 'followUp',
+          requestId: `${TASKS_PLUGIN_ID}:rework-recreate:${outcome.task.id}:${outcome.task.reworkCount}`,
+        },
+      )
+      const task = runtime.store.get(outcome.task.id)!
+      return { task, conversationId, recreatedConversation: true }
+    })
   }
 
   // ---------------- archive ----------------
