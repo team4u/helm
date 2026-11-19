@@ -391,6 +391,23 @@ test('an unexpected supervised-hub death ends the launcher with exit 1 and the l
   assert.match(h.errText(), /logs[/\\]hub\.log/);
 });
 
+test('a hub dying right after readiness (inside the install tail) still ends the run with exit 1', { timeout: 60_000 }, async (t) => {
+  const h = await setupRun(t, useTempDir(t, 'helmx-launcher-rundietail-'));
+  await h.addPayload('1.0.0', 'die-after-banner');
+  // Stretch the post-readiness install tail (health probe -> pid record -> transition end) past
+  // the payload's death so the exit arrives while the transition is still open: the launcher
+  // must surface it once the transition closes, never keep supervising the dead child.
+  const slowProbe = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> =>
+    new Promise((resolve, reject) => {
+      setTimeout(() => fetch(input, init).then(resolve, reject), 250);
+    });
+
+  const done = runSupervised({ ...h.options(), fetchFn: slowProbe });
+  assert.equal(await done, 1);
+  assert.match(h.errText(), /the supervised hub process exited unexpectedly/);
+  assert.match(h.errText(), /code=9/);
+});
+
 /**
  * Real-process E2E: the actual CLI supervises a real hub against a local HTTP registry serving
  * nested `file:./dep.tgz` payloads (real npm staging both times), a real mid-run version switch,
