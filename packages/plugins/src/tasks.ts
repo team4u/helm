@@ -7,7 +7,8 @@
  *   Swarm 自主编排决策权；
  * - 无静态 dependencies：空闲时不阻塞 builtin:workflow / builtin:swarm 停用；
  * - 单真源私有持久 doc `records` 派生公开瞬态投影 `board`（防 2 MiB 写放大）；
- * - 纯事件驱动防沉默（turn_settled 单次轻推 + 停滞标记，零定时器、零强杀）；
+ * - 纯事件驱动诚实标记（turn_settled 静止未交卷仅标 stalledAt 供看板呈现，
+ *   零投递零定时器零强杀——human-owned 会话红线：绝不自动轻推，由用户显式继续）；
  * - 受管技能 `tasks` 随启停自举/消失，赋予任意 Profile 需求拆解与派单能力。
  */
 import {
@@ -28,7 +29,7 @@ import {
   type TaskStoreDoc,
   type TasksConfig,
 } from './tasks/contracts.js'
-import { createTasksStore } from './tasks/store.js'
+import { createTasksStore, recoverInterruptedStartups } from './tasks/store.js'
 import { registerTasksActions, type TasksRuntime } from './tasks/actions.js'
 import { onTasksConversationDeleted, registerTasksHooks } from './tasks/hooks.js'
 import { registerTasksUi } from './tasks/ui.js'
@@ -119,6 +120,7 @@ export function createTasksPlugin(): PluginDefinition {
         isShutdown: () => shutdown,
         getConfig,
         store,
+        flushRecords: () => docs.records.flush(),
         readConversationOrUndefined,
         reportError,
         track,
@@ -181,6 +183,17 @@ export function createTasksPlugin(): PluginDefinition {
           getConfig()
           store.read()
           await ctx.host.skills.ensureSkill(readTasksSkillAsset())
+          // 启动中断恢复：两阶段启动（占位落盘 -> 绑定会话）之间重启的 in_progress 无会话任务，
+          // 诚实回滚 backlog 并在任务 lastError 记录原因（绝不假装在跑；诊断日志留痕）。
+          const interruptedIds = await runtime.store.enqueueMutation((draft) =>
+            recoverInterruptedStartups(draft),
+          )
+          if (interruptedIds.length > 0) {
+            await runtime.flushRecords()
+            console.error(
+              `[tasks] 启动恢复：${interruptedIds.length} 个启动中断任务已回滚待办（${interruptedIds.join(', ')}），可手动重新开工`,
+            )
+          }
           deletedUnsubscribe = ctx.host.onEvent('conversation.deleted', (payload) => {
             if (!active || shutdown) return
             const deletedId = asConversationDeletedEvent(payload)
@@ -229,4 +242,9 @@ export {
   type TaskSilenceState,
 } from './tasks/contracts.js'
 export { activeTaskSection, buildTaskKickoffPrompt } from './tasks/prompts.js'
-export { filterTaskToolsForTurn, subtreeHasWorkingOrBlocked, evaluateSilenceAction } from './tasks/hooks.js'
+export {
+  filterTaskToolsForTurn,
+  subtreeHasWorkingOrBlocked,
+  shouldMarkStalled,
+  workflowHasRunningRuns,
+} from './tasks/hooks.js'

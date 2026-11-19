@@ -6,7 +6,8 @@
  * 3) 完整闭环 create → submit → rework → submit → approve(close_only)（tag 换 task-archived、下游依赖自动接棒）；
  * 4) merge_and_close（mergePending + 合并指令投递 + 再次 submit 收口）；
  * 5) 依赖阻塞 / 环拒绝 / 并发上限；
- * 6) 防沉默单次轻推与停滞标记（turn_settled 纯事件驱动）、conversation.deleted 诚实标记；
+ * 6) 静止未交卷零投递诚实标记 stalled（turn_settled 纯事件驱动，无自动轻推）、
+ *    Workflow 在途不误标、conversation.deleted 诚实标记与 rework 重建；
  * 7) 停用后工具 / UI / 受管技能即时消失且已有执行会话完整保留。
  */
 import { test } from 'node:test'
@@ -466,17 +467,13 @@ test('tasks-int4: merge_and_close loop, dependency cycle rejection, blocked star
   }
 })
 
-test('tasks-int5: silence nudge once then stalled, failed turn records lastError, conversation.deleted marks missing', { timeout: 60_000 }, async (t) => {
+test('tasks-int5: quiescent turn without submission marks stalled with ZERO auto-input; failed records lastError; conversation.deleted marks missing', { timeout: 60_000 }, async (t) => {
   const env = await openTasksEnv(useTempDir(t, 'helmx-tasks-int5-'))
   try {
     const { kernel } = env.app
     setRoutedResponses(env.faux, {
-      assignee: [
-        fauxAssistantMessage('I did some work but will not submit yet.'),
-        fauxAssistantMessage('Still not submitting.'),
-        fauxAssistantMessage('Still not submitting (2).'),
-      ],
-      planner: [fauxAssistantMessage('idle')],
+      assignee: [fauxAssistantMessage('I did some work but will not submit yet.')],
+      planner: [fauxAssistantMessage('planner idle')],
       child: [fauxAssistantMessage('ok')],
     })
     const created = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'create', {
@@ -485,13 +482,7 @@ test('tasks-int5: silence nudge once then stalled, failed turn records lastError
     })) as { conversationId?: number }
     const convId = created.conversationId!
 
-    // Turn completes without submission -> single nudge (followUp input) is delivered
-    await kernel.waitForIdle(convId)
-    await waitFor(async () => {
-      const task = await taskFromAction(env, 'T-1')
-      return task.silenceState?.nudgedAt !== undefined
-    })
-    // The nudge turn settles and the card honestly reports stalled (never killed, never faked)
+    // Turn completes without submission -> honestly marked stalled on the board...
     await kernel.waitForIdle(convId)
     await waitFor(async () => {
       const task = await taskFromAction(env, 'T-1')
@@ -499,9 +490,17 @@ test('tasks-int5: silence nudge once then stalled, failed turn records lastError
     })
     const stalled = await taskFromAction(env, 'T-1')
     assert.equal(stalled.column, 'in_progress')
-    assert.equal(stalled.silenceState!.nudgedAt !== undefined, true)
+    assert.equal(stalled.silenceState!.nudgedAt, undefined, 'no nudge marker must ever be written')
 
-    // Board projection reflects the silence state for the frontend
+    // ...and NO automatic input was delivered to the human-owned conversation (AGENTS red line)
+    await new Promise((r) => setTimeout(r, 600))
+    const detail = await kernel.getConversationDetail(convId, { limit: 50 })
+    const inputEntries = detail.entries.filter((e) => e.kind === 'helmx.input')
+    assert.equal(inputEntries.length, 1, 'exactly the kickoff input, zero auto-nudge deliveries')
+    const convNow = kernel.listConversations().find((c) => c.id === convId)
+    assert.equal(convNow!.status !== 'working', true)
+
+    // Board projection reflects the stalled state for the frontend
     assert.equal(boardDoc(env).tasks.some((task) => task.silenceState?.stalledAt !== undefined), true)
 
     // Deleting the bound conversation honestly marks conversationMissing
@@ -517,6 +516,17 @@ test('tasks-int5: silence nudge once then stalled, failed turn records lastError
       () => kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'rework', { taskId: 'T-1', feedback: 'again' }),
       (err: unknown) => err instanceof HelmxError && err.code === 'task_conversation_missing' && err.status === 409,
     )
+    // Rework with recreateConversation rebuilds a fresh execution conversation and delivers brief + feedback
+    const recreated = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'rework', {
+      taskId: 'T-1',
+      feedback: 'restart from scratch',
+      recreateConversation: true,
+    })) as { conversationId?: number; recreatedConversation?: boolean }
+    assert.equal(recreated.recreatedConversation, true)
+    assert.ok(recreated.conversationId !== undefined && recreated.conversationId !== convId)
+    const afterRecreate = await taskFromAction(env, 'T-1')
+    assert.equal(afterRecreate.reworkCount, 1)
+    assert.equal(afterRecreate.conversationMissing, undefined)
   } finally {
     await env.close()
   }
@@ -543,6 +553,46 @@ test('tasks-int5b: a failed assignee turn records silenceState.lastError honestl
     })
     const task = await taskFromAction(env, 'T-1')
     assert.equal(task.column, 'in_progress', 'failed turn must not fake any column change')
+  } finally {
+    await env.close()
+  }
+})
+
+test('tasks-int5c: a live background workflow run under the task conversation prevents the stalled mark', { timeout: 60_000 }, async (t) => {
+  const env = await openTasksEnv(useTempDir(t, 'helmx-tasks-int5c-'))
+  try {
+    const { kernel } = env.app
+    setRoutedResponses(env.faux, {
+      assignee: [
+        (ctx) => {
+          // Kick off a background workflow run, then end the turn with plain text (no submission)
+          return fauxAssistantMessage(
+            [
+              fauxToolCall('SubagentWorkflow', {
+                script: 'export default async function* () { yield { agentType: "assistant", prompt: "probe child" }; }',
+                background: true,
+                label: 'bg-probe',
+              }),
+            ],
+            { stopReason: 'toolUse' },
+          )
+        },
+        fauxAssistantMessage('Background work delegated; not submitting yet.'),
+      ],
+      planner: [fauxAssistantMessage('planner idle')],
+      child: [fauxAssistantMessage('child probe done')],
+    })
+    const created = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'create', {
+      title: 'Delegating task',
+      brief: 'Delegate background work. Acceptance: done.',
+    })) as { conversationId?: number }
+    const convId = created.conversationId!
+    await kernel.waitForIdle(convId)
+    // The main turn settled, but the background run's child conversation is still part of the tree /
+    // the workflow run is still in flight -> no stalled mark (never misreport live work as silent)
+    await new Promise((r) => setTimeout(r, 800))
+    const task = await taskFromAction(env, 'T-1')
+    assert.equal(task.silenceState?.stalledAt, undefined, 'must not mark stalled while workflow work is live')
   } finally {
     await env.close()
   }

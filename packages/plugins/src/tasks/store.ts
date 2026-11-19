@@ -125,3 +125,24 @@ export function assertDependenciesValid(
     throw new HelmxError('validation_error', `dependsOn 构成依赖环：${cycle.join(' -> ')}（拒绝写入）`, 400, { cycle })
   }
 }
+
+/**
+ * 重启恢复：启动中断任务回滚（in_progress 但执行会话尚未绑定——服务在两阶段启动的
+ * 占位落盘与绑定之间重启）。诚实回滚 backlog 并记录原因，绝不假装在跑；返回受影响
+ * 任务 ID 供诊断上报。
+ */
+export function recoverInterruptedStartups(draft: TaskStoreDoc): string[] {
+  const interrupted: string[] = []
+  for (const task of Object.values(draft.tasks)) {
+    if (task.column !== 'in_progress' || task.conversationId !== undefined) continue
+    task.column = 'backlog'
+    delete task.startedAt
+    task.silenceState = {
+      ...(task.silenceState ?? {}),
+      lastError: 'startup interrupted: the service restarted before the execution conversation was bound',
+    }
+    task.updatedAt = Date.now()
+    interrupted.push(task.id)
+  }
+  return interrupted
+}

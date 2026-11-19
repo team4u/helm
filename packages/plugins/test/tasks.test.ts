@@ -4,9 +4,10 @@
  * - 配置边界（maxConcurrentTasks 0..50）与 doc / record / id 强校验；
  * - 依赖环 DFS 检测与 assertDependenciesValid 全拒绝面；
  * - board 投影截断（未归档全量 + 最近 50 条历史）；
- * - <active_task> 段落 100% 字节恒定与 kickoff 任务书内容；
+ * - <active_task> 段落 100% 字节恒定与 kickoff 任务书内容（planFirst 走真实 Ask 指令）；
  * - before_turn 工具过滤纯函数（规划/执行隔离、子会话与自动化会话）；
- * - 子树忙碌检查与防沉默决策纯函数。
+ * - 子树忙碌检查与停滞判定纯函数（含 Workflow 在途 'unknown' 保守分支）；
+ * - 重启恢复：两阶段启动中断任务诚实回滚待办。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -30,9 +31,9 @@ import {
   resolveTasksConfig,
   type TaskRecord,
 } from '../src/tasks.js'
-import { assertDependenciesValid } from '../src/tasks/store.js'
+import { assertDependenciesValid, recoverInterruptedStartups } from '../src/tasks/store.js'
 import { activeTaskSection, buildTaskKickoffPrompt } from '../src/tasks/prompts.js'
-import { evaluateSilenceAction, filterTaskToolsForTurn, subtreeHasWorkingOrBlocked } from '../src/tasks/hooks.js'
+import { filterTaskToolsForTurn, shouldMarkStalled, subtreeHasWorkingOrBlocked } from '../src/tasks/hooks.js'
 
 function makeTask(over: Partial<TaskRecord> = {}): TaskRecord {
   return {
@@ -178,13 +179,16 @@ test('tasks-unit5: <active_task> section is byte-constant and kickoff prompt car
 
   const planFirst = activeTaskSection(makeTask({ planFirst: true, autoMerge: true }))
   assert.match(planFirst, /plan-first="true" auto-merge="true"/)
-  assert.match(planFirst, /post a concise plan/)
+  assert.match(planFirst, /send an explicit Ask/)
+  assert.match(planFirst, /before writing any code/)
   assert.match(planFirst, /merge your isolated branch/)
 
   const kickoff = buildTaskKickoffPrompt(task)
   assert.match(kickoff, /<task_kickoff id="T-1">/)
   assert.match(kickoff, /Fix the login redirect loop/)
   assert.match(kickoff, /NEVER merge into the main line yourself/)
+  const planKickoff = buildTaskKickoffPrompt(makeTask({ planFirst: true }))
+  assert.match(planKickoff, /send an explicit Ask requesting the user to approve the plan/)
 })
 
 test('tasks-unit6: tool filtering isolates planner vs assignee vs child/automated sessions', { timeout: 60_000 }, () => {
@@ -218,7 +222,7 @@ test('tasks-unit6: tool filtering isolates planner vs assignee vs child/automate
   assert.equal(filterTaskToolsForTurn(hostOnly, makeConversation(), undefined), undefined)
 })
 
-test('tasks-unit7: subtree busy check with cycle defense and silence decision table', { timeout: 60_000 }, () => {
+test('tasks-unit7: subtree busy check with cycle defense and stalled decision table', { timeout: 60_000 }, () => {
   const conv = (id: number, over: Record<string, unknown> = {}) => ({
     id,
     title: `c${id}`,
@@ -251,13 +255,44 @@ test('tasks-unit7: subtree busy check with cycle defense and silence decision ta
   assert.equal(subtreeHasWorkingOrBlocked(5, cyclic), false)
 
   const task = makeTask({ column: 'in_progress', conversationId: 7 })
-  const base = { task, conversation: { id: 7, status: 'done' as const, pendingAskCount: 0 }, subtreeBusy: false }
-  assert.equal(evaluateSilenceAction(base), 'nudge')
-  assert.equal(evaluateSilenceAction({ ...base, task: { ...task, silenceState: { nudgedAt: 5 } } }), 'stall')
-  assert.equal(evaluateSilenceAction({ ...base, conversation: { ...base.conversation, pendingAskCount: 1 } }), 'skip')
-  assert.equal(evaluateSilenceAction({ ...base, subtreeBusy: true }), 'skip')
-  assert.equal(evaluateSilenceAction({ ...base, task: { ...task, column: 'in_review' } }), 'skip')
-  assert.equal(evaluateSilenceAction({ ...base, task: { ...task, conversationId: 8 } }), 'skip')
+  const base = {
+    task,
+    conversation: { id: 7, status: 'done' as const, pendingAskCount: 0 },
+    subtreeBusy: false,
+    workflowBusy: false as boolean | 'unknown',
+  }
+  // Fully quiescent, still in progress, not yet marked -> mark stalled (no delivery ever)
+  assert.equal(shouldMarkStalled(base), true)
+  // Already marked -> no double marking
+  assert.equal(shouldMarkStalled({ ...base, task: { ...task, silenceState: { stalledAt: 5 } } }), false)
+  assert.equal(shouldMarkStalled({ ...base, conversation: { ...base.conversation, pendingAskCount: 1 } }), false)
+  assert.equal(shouldMarkStalled({ ...base, subtreeBusy: true }), false)
+  // Workflow in-flight (or unknown probe) -> conservatively do not mark (avoid false "stalled")
+  assert.equal(shouldMarkStalled({ ...base, workflowBusy: true }), false)
+  assert.equal(shouldMarkStalled({ ...base, workflowBusy: 'unknown' }), false)
+  assert.equal(shouldMarkStalled({ ...base, task: { ...task, column: 'in_review' } }), false)
+  assert.equal(shouldMarkStalled({ ...base, task: { ...task, conversationId: 8 } }), false)
+})
+
+test('tasks-unit7b: restart recovery rolls back interrupted two-phase startups honestly', { timeout: 60_000 }, () => {
+  const draft = {
+    nextSeq: 5,
+    tasks: {
+      'T-1': makeTask({ id: 'T-1', column: 'in_progress', conversationId: 11 }),
+      // interrupted startup placeholder: in_progress without a bound conversation
+      'T-2': makeTask({ id: 'T-2', column: 'in_progress', startedAt: 9 }),
+      'T-3': makeTask({ id: 'T-3', column: 'backlog' }),
+    },
+  }
+  const rolled = recoverInterruptedStartups(draft)
+  assert.deepEqual(rolled, ['T-2'])
+  assert.equal(draft.tasks['T-2']!.column, 'backlog')
+  assert.equal(draft.tasks['T-2']!.startedAt, undefined)
+  assert.match(draft.tasks['T-2']!.silenceState!.lastError!, /startup interrupted/)
+  // Bound or non-running tasks untouched
+  assert.equal(draft.tasks['T-1']!.column, 'in_progress')
+  assert.equal(draft.tasks['T-3']!.column, 'backlog')
+  assert.equal(draft.tasks['T-3']!.silenceState, undefined)
 })
 
 test('tasks-unit8: HelmxError contract sanity for store validators', { timeout: 60_000 }, () => {

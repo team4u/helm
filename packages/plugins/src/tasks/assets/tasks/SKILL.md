@@ -33,7 +33,7 @@ Use `builtin:tasks` when work should run in **independent execution conversation
 
 - `assigneeProfileId`: pick the profile that matches the work (default falls back to plugin config `defaultAssigneeProfile`, then this conversation's profile, then `assistant`). Verify the profile exists and is selectable.
 - `nodeId` / `cwd`: default to the executor profile's binding, then the current conversation's coordinates. **Remote nodes require an explicit cwd** — never assume a remote node's default directory.
-- `planFirst: true` when the approach is risky or contested: the assignee must post a plan and ask for confirmation before coding.
+- `planFirst: true` when the approach is risky or contested: the assignee must post a plan and ask for user approval through a real Ask (the conversation question mechanism) before coding; while the Ask is pending the board shows the task as blocked on a human decision.
 - `autoMerge: false` (default) keeps the assignee on an isolated branch; only you merge after review. Set `true` only for trusted routine work.
 
 ## 4. Splitting into Dependency Chains
@@ -49,7 +49,7 @@ Use `builtin:tasks` when work should run in **independent execution conversation
   - `task_approve` (default `close_only`): marks done, archives the execution conversation, unblocks/downstream auto-start.
   - `task_approve` with `mergeAction: 'merge_and_close'`: asks the assignee to merge its branch, clean the worktree, and submit again.
   - `task_rework` with concrete `feedback`: returns the card to in_progress and delivers the feedback to the execution conversation.
-- Be honest: never approve work you have not checked; never fabricate progress. If a card shows "stalled" or a missing conversation, surface it to the user instead of papering over it.
+- Be honest: never approve work you have not checked; never fabricate progress. If a card shows "stalled" (turn settled without submission) or a missing conversation, surface it to the user instead of papering over it — the plugin never auto-nudges a human-owned execution conversation; ask the user to open the conversation and continue explicitly, or send it back with `task_rework`.
 
 ## 6. Tool & CLI Reference
 

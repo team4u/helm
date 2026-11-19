@@ -4,6 +4,10 @@
  * activeTaskSection 是注入任务执行会话的系统提示词段：仅含任务生命周期内
  * 恒定不变的事实（id / title / planFirst / autoMerge），零可变状态，保证
  * 字节恒定（与 swarm 的 <active_swarm_group> 同一纪律）。
+ *
+ * 诚实边界：插件对 human-owned 执行会话零自动输入投递（AGENTS Watchdog 红线）；
+ * planFirst 的方案审批走执行者发起的真实 Ask（内核 AskDoc：pendingAskCount > 0、
+ * 看板如实显示 blocked），门禁范围见 docs/plugins/tasks.md。
  */
 import { escapeXml } from '@helmx/protocol'
 import type { TaskRecord } from './contracts.js'
@@ -14,7 +18,9 @@ export function activeTaskSection(task: TaskRecord): string {
     `<active_task id="${escapeXml(task.id)}" title="${escapeXml(task.title)}" plan-first="${task.planFirst === true}" auto-merge="${task.autoMerge === true}">`,
     '1. You are the assignee of this board task. Deliver exactly the scope defined in the task brief you received at kickoff; do not silently expand or shrink it.',
     ...(task.planFirst === true
-      ? ['2. planFirst is ON: investigate first, post a concise plan, and ask the user for confirmation before writing code.']
+      ? [
+          '2. planFirst is ON: investigate first and post a concise plan, then send an explicit Ask (the conversation question mechanism) requesting the user to approve the plan, and wait for the answer before writing any code. While the Ask is pending the board honestly shows this task as blocked on a human decision.',
+        ]
       : ['2. planFirst is OFF: you may start working directly, but still think before large changes.']),
     ...(task.autoMerge === true
       ? ['3. autoMerge is ON: after verification passes you may merge your isolated branch following the project merge rules, then submit.']
@@ -37,7 +43,9 @@ export function buildTaskKickoffPrompt(task: TaskRecord): string {
     '',
     '## Execution rules',
     ...(task.planFirst === true
-      ? ['- planFirst is ON: investigate, post a concise plan, and ask the user for confirmation before writing code.']
+      ? [
+          '- planFirst is ON: investigate, post a concise plan, then send an explicit Ask requesting the user to approve the plan; do not write code before the answer arrives (the board shows the task as blocked while the Ask is pending).',
+        ]
       : ['- planFirst is OFF: you may start working directly.']),
     ...(task.autoMerge === true
       ? ['- autoMerge is ON: after verification passes you may merge your isolated branch following the project merge rules, then submit.']
@@ -81,16 +89,5 @@ export function buildReworkDeliveryPrompt(task: TaskRecord, feedback: string, op
     '',
     'Fix the issues on your existing branch (keep prior work and context), verify, then call task_submit again.',
     '</task_rework>',
-  ].join('\n')
-}
-
-/** 防沉默单次轻推（turn_settled completed 且无在途/待答时的温和提醒）。 */
-export function buildSubmitNudgePrompt(task: TaskRecord): string {
-  return [
-    `<task_nudge id="${task.id}">`,
-    `Your turn for task ${task.id} has settled but the task is still in progress and nothing was submitted.`,
-    'If the work is done, call task_submit with a summary now.',
-    'If you need a human decision, ask a clear question instead of staying silent.',
-    '</task_nudge>',
   ].join('\n')
 }
