@@ -35,10 +35,11 @@ import type {
   ConversationLive,
   ConversationStatus,
   ConversationSummary,
+  HubActivityCounts,
   TurnOutcome,
   TurnSettledPayload,
 } from '@helm/protocol'
-import { HelmError } from '@helm/protocol'
+import { HelmError, isHubActivityBusy } from '@helm/protocol'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { Harness, ConversationView, Observation, Observer } from '@earendil-works/pi-durable'
 import type { Models } from '@earendil-works/pi-ai'
@@ -117,6 +118,10 @@ export class ConversationTracker {
   /** Already-settled runs (prevents done+failure+abort double reporting). Keyed globally with conversation prefix (`${id}:${taskId}`)
    * outside mirror so it persists cleanly and is swept by prefix on stopObserving. */
   private readonly settledRuns = new Set<string>()
+  /** Idle→busy transition listeners (activity heartbeat; see `onActivityBusyEntered`). */
+  private readonly activityBusyListeners = new Set<() => void>()
+  /** Last computed aggregate busy predicate (drives idle→busy transition detection). */
+  private activityBusyAggregate = false
   /** conversation -> taskId of last notified compaction failure (prevents duplicate notifications across snapshots;
    * intentionally survives stopObserving so re-observing within the same runtime never re-notifies the same failure). */
   private readonly notifiedCompactionFailures = new Map<number, number>()
@@ -300,6 +305,8 @@ export class ConversationTracker {
     // Active recovered runs already appear in snapshot summaries (listConversations): seed the semantic dedupe key
     // so subsequent adopts only emit on actual status/doing transitions instead of pushing redundant working frames.
     if (this.store.getConv(id)) mirror.lastSummaryKey = summaryKeyOf(this.summaryOf(id))
+    // Recovered active runs/queues make the runtime busy from the very first mirror write.
+    this.noteActivityMutation()
   }
 
   /** Back-read result: helm.input entries + authoritative (submissionId, requestId) pairs. */
@@ -502,12 +509,14 @@ export class ConversationTracker {
     const mirror = this.mirrorOf(conversationId)
     if (mirror.settledInflight === 0) mirror.settledError = undefined
     mirror.settledInflight += 1
+    this.noteActivityMutation()
   }
 
   private endSettled(conversationId: number): void {
     const mirror = this.mirrors.get(conversationId)
     if (mirror === undefined || mirror.settledInflight === 0) return
     mirror.settledInflight -= 1
+    this.noteActivityMutation()
     if (mirror.settledInflight > 0) return
     const waiters = mirror.settledWaiters
     mirror.settledWaiters = []
@@ -522,6 +531,72 @@ export class ConversationTracker {
   /** Whether the conversation has an active context compaction task (separate from hasLiveWork so compaction never fabricates turn_settled). */
   isCompacting(conversationId: number): boolean {
     return (this.mirrors.get(conversationId)?.live?.compactions?.length ?? 0) > 0
+  }
+
+  /**
+   * Aggregate activity counts over live mirrors for the runtime's activity snapshot (the Hub's
+   * process-private heartbeat file backing the launcher's update busy-gate):
+   * - `activeConversations`: conversations with an active run (`live.run` — generating, tool
+   *   rounds, and approval-blocked runs whose tool call is still in flight; `summaryOf` labels
+   *   those `blocked`, the run itself stays live);
+   * - `activeCompactions`: in-flight context-compaction tasks;
+   * - `queuedConversations`: conversations with queued (not yet admitted) inbox input;
+   * - `settlingConversations`: conversations whose `turn_settled` callbacks are still running.
+   * Every conversation gets a mirror (startup recovery observes all), so mirror iteration is the
+   * complete live view — idle conversations simply contribute zero. A pending approval whose run
+   * already ended is durable state (AskDoc + CAS watermarks survive restart) and does not count.
+   */
+  activitySnapshot(): HubActivityCounts {
+    let activeConversations = 0
+    let activeCompactions = 0
+    let queuedConversations = 0
+    let settlingConversations = 0
+    for (const mirror of this.mirrors.values()) {
+      if (mirror.live?.run !== undefined) activeConversations += 1
+      activeCompactions += mirror.live?.compactions?.length ?? 0
+      if ((mirror.inbox?.length ?? 0) > 0) queuedConversations += 1
+      if (mirror.settledInflight > 0) settlingConversations += 1
+    }
+    return { activeConversations, activeCompactions, queuedConversations, settlingConversations }
+  }
+
+  /**
+   * Register a synchronous idle→busy transition listener (the activity heartbeat rewrites its
+   * file immediately so no reader can act on a stale idle record). Returns an unsubscribe
+   * function. Listeners run inside the tracker's synchronous mutation paths — they must not
+   * throw (failures are contained and reported as diagnostics).
+   */
+  onActivityBusyEntered(listener: () => void): () => void {
+    this.activityBusyListeners.add(listener)
+    return () => {
+      this.activityBusyListeners.delete(listener)
+    }
+  }
+
+  /**
+   * Recompute the aggregate busy predicate after a mirror mutation and notify listeners on an
+   * idle→busy flip. Called only from synchronous mutation chokepoints (snapshot adoption,
+   * settle begin/end, explicit abort settlement); busy→idle flips need no immediate write — a
+   * slightly stale busy record only delays an update by the reader's freshness bound (the safe
+   * direction), which the heartbeat's periodic refresh closes anyway.
+   */
+  private noteActivityMutation(): void {
+    const busy = isHubActivityBusy(this.activitySnapshot())
+    if (busy === this.activityBusyAggregate) return
+    this.activityBusyAggregate = busy
+    if (!busy) return
+    for (const listener of this.activityBusyListeners) {
+      try {
+        listener()
+      } catch (error) {
+        this.reportDiagnostic({
+          level: 'warn',
+          source: 'tracker.activity',
+          message: 'activity busy-transition listener failed (heartbeat may lag until its next periodic write)',
+          error,
+        })
+      }
+    }
   }
 
   /** Live views for SSE snapshot: only conversations with an active run, streaming generation, or non-empty queue.
@@ -560,6 +635,9 @@ export class ConversationTracker {
     const all = this.takeCurrentRunInputs(conversationId)
     this.resetRunState(conversationId)
     this.emitSettled(conversationId, 'aborted', all, undefined)
+    // Explicit abort settles outside the snapshot path: recompute the busy aggregate here too
+    // (busy→idle needs no sync write, but a replacement run in the same tick must not be missed).
+    this.noteActivityMutation()
   }
 
   /** Clear leftover queued tracking records after an explicit abort while idle (conversation.abort() already withdrew
@@ -798,6 +876,9 @@ export class ConversationTracker {
       this.mirrorOf(id).lastSummaryKey = summaryKeyOf(summary)
       this.events.onSummaryChanged(summary)
     }
+    // Every snapshot application is a potential run/compaction/queue mutation: recompute the busy
+    // aggregate so an idle→busy flip rewrites the activity heartbeat synchronously (see adopt header).
+    this.noteActivityMutation()
   }
 
   /** Newly persisted entries: advance watermark by ascending ID, emitting each exactly once. */

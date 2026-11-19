@@ -34,8 +34,9 @@ export const DEFAULTS = {
   payloadCheckTimeoutMs: 120_000,
   /** Short probe used to verify hub identity before signalling a pid. */
   identityProbeTimeoutMs: 2_000,
-  /** Supervised `run` update-check interval (env `HELM_HUB_UPDATE_INTERVAL_MS`). */
-  updateIntervalMs: 6 * 60 * 60 * 1000,
+  /** Supervised `run` update-check interval (env `HELM_HUB_UPDATE_INTERVAL_MS`). Short by design:
+   * a busy hub defers each cycle (activity gate), so frequent checks converge quickly once idle. */
+  updateIntervalMs: 15 * 60 * 1000,
 } as const;
 
 export interface LauncherPaths {

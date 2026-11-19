@@ -1,4 +1,10 @@
 export { KernelRuntime } from './runtime/index.js';
+export {
+  startActivityHeartbeat,
+  hubActivityFilePath,
+  type ActivityHeartbeat,
+  type ActivityHeartbeatOptions,
+} from './runtime/activity-heartbeat.js';
 export { createHubHandler, startHub } from './http/index.js';
 export {
   createEnvFabric,

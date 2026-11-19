@@ -149,13 +149,15 @@ test('end-to-end CLI: tarball install, start, status, update, stop', { timeout: 
   const tarballPath = await fixtureTarballPacker()(path.join(root, 'payload-1.0.0'));
   await writeFakePayload({ dir: path.join(root, 'payload-1.1.0'), pkgName: PKG, version: '1.1.0' });
   payloads.set('1.1.0', path.join(root, 'payload-1.1.0'));
+  // An isolated data dir keeps the fixture heartbeat (activity gate evidence) inside the test tree.
+  const dataDir = path.join(path.dirname(root), `${path.basename(root)}-user-data`);
 
   const install = ioWith(root);
   assert.equal(await runLauncherCli(['update', '--tarball', tarballPath, '--version', '1.0.0'], install.io, { core }), 0);
   assert.match(install.outText(), /updated: \(none\) -> 1\.0\.0/);
 
   const start = ioWith(root);
-  assert.equal(await runLauncherCli(['start', '--port', String(port)], start.io, { core }), 0);
+  assert.equal(await runLauncherCli(['start', '--port', String(port), '--data-dir', dataDir], start.io, { core }), 0);
   assert.match(start.outText(), /hub 1\.0\.0 running: pid \d+/);
   const pidRecord = await readPidRecord(root);
   assert.ok(pidRecord !== null);

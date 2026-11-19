@@ -9,13 +9,13 @@
  */
 import assert from 'node:assert/strict';
 import { existsSync, openSync, closeSync, unlinkSync } from 'node:fs';
-import { rm } from 'node:fs/promises';
+import { rm, readFile, writeFile as writeFilePromise } from 'node:fs/promises';
 import path from 'node:path';
 import { test } from 'node:test';
 import { useTempDir, sanitizedHostEnv } from '@helm/test-kit/node';
 import { readBlockedRelease, readCurrentRelease, writeBlockedRelease, writeCurrentRelease } from '@helm/update';
 import { readPidRecord, readLaunchConfig, writePidRecord } from '../src/records.js';
-import { performHubUpdate, checkHubUpgrade } from '../src/update.js';
+import { performHubUpdate, checkHubUpgrade, type PerformUpdateOptions } from '../src/update.js';
 import { stageHubRelease } from '../src/staging.js';
 import { startHub, stopHub } from '../src/process.js';
 import { UsageError } from '../src/io.js';
@@ -224,13 +224,14 @@ test('running update: old hub stops, new hub serves, pid/launch records follow',
   await h.addPayload('1.0.0');
   await h.addPayload('1.1.0');
   const port = await freePort();
-  await performHubUpdate({ ...baseOptions(h), targetVersion: '1.0.0', launchFlags: { port } });
+  const { dataDir } = baseOptions(h);
+  await performHubUpdate({ ...baseOptions(h), targetVersion: '1.0.0', launchFlags: { port, dataDir } });
   // Start the old release through the lifecycle path, then update across it.
-  const started = await startHub(h.root, h.io, { flags: { port }, pollMs: 100 });
+  const started = await startHub(h.root, h.io, { flags: { port, dataDir }, pollMs: 100 });
   t.after(() => cleanupPid(started.pid));
   assert.deepEqual(await getJson(port, '/__version'), { version: '1.0.0' });
 
-  const outcome = await performHubUpdate({ ...baseOptions(h), healthTimeoutMs: 10_000 });
+  const outcome = await performHubUpdate({ ...baseOptions(h), healthTimeoutMs: 10_000, launchFlags: { port, dataDir } });
   assert.equal(outcome.changed, true);
   assert.equal(outcome.restarted, true);
   assert.ok(outcome.pid !== undefined);
@@ -239,7 +240,7 @@ test('running update: old hub stops, new hub serves, pid/launch records follow',
   assert.deepEqual(await getJson(port, '/__version'), { version: '1.1.0' }); // same port, new version
   const pidRecord = await readPidRecord(h.root);
   assert.equal(pidRecord?.version, '1.1.0');
-  assert.deepEqual(await readLaunchConfig(h.root), { port, host: '127.0.0.1' });
+  assert.deepEqual(await readLaunchConfig(h.root), { port, host: '127.0.0.1', dataDir });
   await stopHub(h.root, h.io);
   await waitUntilDead(outcome.pid!);
 });
@@ -249,8 +250,9 @@ test('failed candidate readiness rolls the pointer back, restarts the old hub, a
   await h.addPayload('1.0.0');
   await h.addPayload('1.1.0', 'never-ready');
   const port = await freePort();
-  await performHubUpdate({ ...baseOptions(h), targetVersion: '1.0.0', launchFlags: { port } });
-  const old = await startHub(h.root, h.io, { flags: { port }, pollMs: 100 });
+  const { dataDir } = baseOptions(h);
+  await performHubUpdate({ ...baseOptions(h), targetVersion: '1.0.0', launchFlags: { port, dataDir } });
+  const old = await startHub(h.root, h.io, { flags: { port, dataDir }, pollMs: 100 });
   t.after(() => cleanupPid(old.pid));
 
   await assert.rejects(
@@ -281,7 +283,7 @@ test('failed candidate readiness rolls the pointer back, restarts the old hub, a
   await waitUntilDead(restarted.pid);
 });
 
-test('a stop failure (unverifiable identity) aborts before any state change', { timeout: 60_000 }, async (t) => {
+test('an unverifiable activity signal fails closed before any staging or state change', { timeout: 60_000 }, async (t) => {
   const h = await setupFlow(t, useTempDir(t, 'helm-launcher-flow-'), '1.1.0');
   await h.addPayload('1.0.0');
   await h.addPayload('1.1.0');
@@ -295,11 +297,14 @@ test('a stop failure (unverifiable identity) aborts before any state change', { 
     port: 3999,
     startedAt: new Date().toISOString(),
   });
+  // The alien pid record carries no start-time proof and no heartbeat answers for it: the busy
+  // gate refuses the update up front (fail closed) — nothing is staged, committed, or signalled.
   await assert.rejects(
     performHubUpdate(baseOptions(h)),
     (error: unknown) => {
       assert.ok(error instanceof UsageError);
-      assert.equal(error.code, 'hub_identity_unverifiable');
+      assert.equal(error.code, 'hub_activity_unverifiable');
+      assert.match(error.message, /pre-staging check/);
       return true;
     },
   );
@@ -503,4 +508,264 @@ test('golden path: local --tarball of a real npm pack artifact installs and self
   assert.deepEqual(await getJson(port, '/__version'), { version: '3.0.0' });
   await stopHub(root, io);
   await waitUntilDead(started.pid);
+});
+
+// ---------------------------------------------------------------------------
+// busy gate: the running hub's activity heartbeat defers or refuses updates
+// ---------------------------------------------------------------------------
+
+interface GateHarness {
+  root: string;
+  io: ReturnType<typeof captureIo>['io'];
+  core: FakeUpdateCore;
+  payloads: Map<string, string>;
+  dataDir: string;
+  statePath: string;
+  setState(state: Record<string, unknown>): Promise<void>;
+  addPayload(version: string): Promise<void>;
+  options(extra?: Partial<PerformUpdateOptions>): PerformUpdateOptions;
+}
+
+/** Update-flow harness with the fixture activity heartbeat wired to a flippable state file. */
+async function setupGate(t: import('node:test').TestContext, root: string, latest = '1.1.0'): Promise<GateHarness> {
+  const payloads = new Map<string, string>();
+  const core = createFakeCore({ pkgName: PKG, latest, payloads });
+  const statePath = path.join(root, 'activity-state.json');
+  const dataDir = path.join(path.dirname(root), `${path.basename(root)}-user-data`);
+  const { io } = captureIo(sanitizedHostEnv({ HELM_PAYLOAD_PACKAGE: PKG, HELM_FIXTURE_ACTIVITY_STATE: statePath }));
+  return {
+    root,
+    io,
+    core,
+    payloads,
+    dataDir,
+    statePath,
+    setState: (state) => writeFilePromise(statePath, `${JSON.stringify(state)}\n`),
+    addPayload: async (version) => {
+      const dir = await writeFakePayload({ dir: path.join(root, `payload-${version}`), pkgName: PKG, version });
+      payloads.set(version, dir);
+    },
+    options: (extra: Partial<PerformUpdateOptions> = {}) => ({
+      io,
+      core,
+      root,
+      pkgName: PKG,
+      registryUrl: 'https://registry.example.com',
+      pollMs: 100,
+      launchFlags: { dataDir },
+      ...extra,
+    }),
+  };
+}
+
+/** Poll the fixture heartbeat until it reports idle counts (the fixture re-reads its state every 300ms). */
+async function waitForActivityIdle(dataDir: string, timeoutMs = 10_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    try {
+      const record = JSON.parse(await readFile(path.join(dataDir, 'hub-activity.json'), 'utf8')) as {
+        counts?: Record<string, number>;
+      };
+      const counts = Object.values(record.counts ?? {});
+      if (counts.length > 0 && counts.every((value) => value === 0)) return;
+    } catch {
+      // not written yet
+    }
+    if (Date.now() >= deadline) throw new Error(`activity heartbeat did not report idle within ${timeoutMs}ms`);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+}
+
+/** Poll until the heartbeat file is gone (the fixture unlinks it on the next tick in `missing` mode). */
+async function waitForActivityMissing(dataDir: string, timeoutMs = 10_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    try {
+      await readFile(path.join(dataDir, 'hub-activity.json'), 'utf8');
+    } catch {
+      return;
+    }
+    if (Date.now() >= deadline) throw new Error(`activity heartbeat did not disappear within ${timeoutMs}ms`);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+}
+
+/**
+ * Deterministically rewrite the heartbeat to busy counts NOW (preserving the fixture's identity
+ * fields): the fixture only re-reads its control state every 300ms, which is too coarse to hit
+ * the in-lock gate window, so mid-update transitions are injected directly into the record the
+ * gate is about to read (the control state keeps it busy on subsequent ticks).
+ */
+async function forceActivityCounts(dataDir: string, counts: Record<string, number>): Promise<void> {
+  const file = path.join(dataDir, 'hub-activity.json');
+  const record = JSON.parse(await readFile(file, 'utf8')) as Record<string, unknown>;
+  record['counts'] = counts;
+  record['updatedAt'] = Date.now();
+  await writeFilePromise(file, `${JSON.stringify(record)}\n`);
+}
+
+test('busy gate defers the update without staging, stopping, or blocking', { timeout: 60_000 }, async (t) => {
+  const h = await setupGate(t, useTempDir(t, 'helm-launcher-gate-'));
+  await h.addPayload('1.0.0');
+  await h.addPayload('1.1.0');
+  const port = await freePort();
+  await performHubUpdate({ ...h.options(), targetVersion: '1.0.0', launchFlags: { port, dataDir: h.dataDir } });
+  await h.setState({
+    mode: 'busy',
+    counts: { activeConversations: 2, activeCompactions: 1, queuedConversations: 3, settlingConversations: 0 },
+  });
+  const started = await startHub(h.root, h.io, { flags: { port, dataDir: h.dataDir }, pollMs: 100 });
+  t.after(() => cleanupPid(started.pid));
+
+  h.core.npmCalls.length = 0;
+  const outcome = await performHubUpdate({ ...h.options(), launchFlags: { port, dataDir: h.dataDir } });
+  assert.deepEqual(outcome.deferred, {
+    reason: 'hub_busy',
+    counts: { activeConversations: 2, activeCompactions: 1, queuedConversations: 3, settlingConversations: 0 },
+  });
+  assert.equal(outcome.changed, false);
+  assert.equal(outcome.restarted, false);
+  assert.equal(outcome.started, false);
+  // Nothing staged (pre-staging round caught it), nothing committed, nothing blocked, hub untouched.
+  assert.equal(h.core.npmCalls.length, 0);
+  assert.equal((await readCurrentRelease(h.root))?.version, '1.0.0');
+  assert.equal(await readBlockedRelease(h.root), null);
+  assert.deepEqual(await getJson(port, '/__version'), { version: '1.0.0' });
+
+  // Once idle, the next cycle proceeds normally.
+  await h.setState({ mode: 'idle' });
+  await waitForActivityIdle(h.dataDir);
+  const ok = await performHubUpdate({ ...h.options(), healthTimeoutMs: 10_000, launchFlags: { port, dataDir: h.dataDir } });
+  assert.equal(ok.changed, true);
+  assert.equal(ok.restarted, true);
+  t.after(() => cleanupPid(ok.pid!));
+  await stopHub(h.root, h.io);
+  await waitUntilDead(ok.pid!);
+});
+
+test('busy gate round 2 (in-lock) defers after staging; the staged candidate stays cached', { timeout: 60_000 }, async (t) => {
+  const h = await setupGate(t, useTempDir(t, 'helm-launcher-gate2-'));
+  await h.addPayload('1.0.0');
+  await h.addPayload('1.1.0');
+  const port = await freePort();
+  await performHubUpdate({ ...h.options(), targetVersion: '1.0.0', launchFlags: { port, dataDir: h.dataDir } });
+  await h.setState({ mode: 'idle' });
+  const started = await startHub(h.root, h.io, { flags: { port, dataDir: h.dataDir }, pollMs: 100 });
+  t.after(() => cleanupPid(started.pid));
+
+  // The hub flips busy DURING staging (after the pre-staging round saw it idle): the fake npm
+  // seam rewrites the heartbeat record as a side effect, so only the in-lock round can catch it.
+  const realRunNpm = h.core.runNpm.bind(h.core);
+  h.core.runNpm = async (args: readonly string[], cwd: string, timeoutMs: number) => {
+    await h.setState({
+      mode: 'busy',
+      counts: { activeConversations: 1, activeCompactions: 0, queuedConversations: 0, settlingConversations: 1 },
+    });
+    await forceActivityCounts(h.dataDir, {
+      activeConversations: 1,
+      activeCompactions: 0,
+      queuedConversations: 0,
+      settlingConversations: 1,
+    });
+    return realRunNpm(args, cwd, timeoutMs);
+  };
+
+  const outcome = await performHubUpdate({ ...h.options(), launchFlags: { port, dataDir: h.dataDir } });
+  assert.ok(outcome.deferred !== undefined);
+  assert.equal(outcome.deferred.reason, 'hub_busy');
+  assert.equal(outcome.deferred.counts.settlingConversations, 1);
+  assert.equal(outcome.changed, false);
+  // Staging DID run (round 1 passed, the deferral came from round 2) but nothing was committed.
+  assert.ok(h.core.npmCalls.length >= 1);
+  assert.equal((await readCurrentRelease(h.root))?.version, '1.0.0');
+  assert.equal(await readBlockedRelease(h.root), null);
+  assert.deepEqual(await getJson(port, '/__version'), { version: '1.0.0' });
+
+  // Idle again: the update reuses the cached candidate (no second npm install) and completes.
+  await h.setState({ mode: 'idle' });
+  await waitForActivityIdle(h.dataDir);
+  const npmCallsAfterStage = h.core.npmCalls.length;
+  const ok = await performHubUpdate({ ...h.options(), healthTimeoutMs: 10_000, launchFlags: { port, dataDir: h.dataDir } });
+  assert.equal(ok.changed, true);
+  assert.equal(h.core.npmCalls.length, npmCallsAfterStage); // cache hit, not a restage
+  t.after(() => cleanupPid(ok.pid!));
+  await stopHub(h.root, h.io);
+  await waitUntilDead(ok.pid!);
+});
+
+test('a stale or missing heartbeat fails closed (unknown) and keeps the hub serving', { timeout: 60_000 }, async (t) => {
+  const h = await setupGate(t, useTempDir(t, 'helm-launcher-gate3-'));
+  await h.addPayload('1.0.0');
+  await h.addPayload('1.1.0');
+  const port = await freePort();
+  await performHubUpdate({ ...h.options(), targetVersion: '1.0.0', launchFlags: { port, dataDir: h.dataDir } });
+  await h.setState({ mode: 'stale' });
+  const started = await startHub(h.root, h.io, { flags: { port, dataDir: h.dataDir }, pollMs: 100 });
+  t.after(() => cleanupPid(started.pid));
+
+  await assert.rejects(
+    performHubUpdate({ ...h.options(), launchFlags: { port, dataDir: h.dataDir } }),
+    (error: unknown) => {
+      assert.ok(error instanceof UsageError);
+      assert.equal(error.code, 'hub_activity_unverifiable');
+      assert.match(error.message, /stale/);
+      return true;
+    },
+  );
+  assert.equal((await readCurrentRelease(h.root))?.version, '1.0.0');
+  assert.equal(await readBlockedRelease(h.root), null);
+  assert.deepEqual(await getJson(port, '/__version'), { version: '1.0.0' });
+
+  // A missing heartbeat (e.g. a hub build predating the writer) is equally unknown, never idle.
+  await h.setState({ mode: 'missing' });
+  await waitForActivityMissing(h.dataDir);
+  await assert.rejects(
+    performHubUpdate({ ...h.options(), launchFlags: { port, dataDir: h.dataDir } }),
+    (error: unknown) => {
+      assert.ok(error instanceof UsageError);
+      assert.equal(error.code, 'hub_activity_unverifiable');
+      assert.match(error.message, /missing or unreadable/);
+      return true;
+    },
+  );
+  assert.deepEqual(await getJson(port, '/__version'), { version: '1.0.0' });
+
+  // --force is the explicit bypass: the update proceeds despite the unverifiable signal.
+  const forced = await performHubUpdate({
+    ...h.options(),
+    force: true,
+    healthTimeoutMs: 10_000,
+    launchFlags: { port, dataDir: h.dataDir },
+  });
+  assert.equal(forced.changed, true);
+  assert.equal(forced.restarted, true);
+  t.after(() => cleanupPid(forced.pid!));
+  await stopHub(h.root, h.io);
+  await waitUntilDead(forced.pid!);
+});
+
+test('--force bypasses a busy hub explicitly', { timeout: 60_000 }, async (t) => {
+  const h = await setupGate(t, useTempDir(t, 'helm-launcher-gate4-'));
+  await h.addPayload('1.0.0');
+  await h.addPayload('1.1.0');
+  const port = await freePort();
+  await performHubUpdate({ ...h.options(), targetVersion: '1.0.0', launchFlags: { port, dataDir: h.dataDir } });
+  await h.setState({ mode: 'busy', counts: { activeConversations: 5 } });
+  const started = await startHub(h.root, h.io, { flags: { port, dataDir: h.dataDir }, pollMs: 100 });
+  t.after(() => cleanupPid(started.pid));
+
+  const forced = await performHubUpdate({
+    ...h.options(),
+    force: true,
+    healthTimeoutMs: 10_000,
+    launchFlags: { port, dataDir: h.dataDir },
+  });
+  assert.equal(forced.changed, true);
+  assert.equal(forced.restarted, true);
+  assert.equal(forced.deferred, undefined);
+  t.after(() => cleanupPid(forced.pid!));
+  await waitUntilDead(started.pid);
+  assert.deepEqual(await getJson(port, '/__version'), { version: '1.1.0' });
+  await stopHub(h.root, h.io);
+  await waitUntilDead(forced.pid!);
 });
