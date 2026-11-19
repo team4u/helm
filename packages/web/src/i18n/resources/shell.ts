@@ -189,6 +189,25 @@ export const shellMessages = {
   'shell.attention.runningCount': { en: '{count} running', 'zh-CN': '{count} 项运行中' },
   'shell.attention.unreadCount': { en: '{count} unread completed', 'zh-CN': '{count} 个未读完成' },
 
+  // Conversation overview (read-only host stage, #/overview)
+  'shell.overview.title': { en: 'Conversation overview', 'zh-CN': '会话总览' },
+  'shell.overview.stats': { en: '{count} trees', 'zh-CN': '{count} 棵会话树' },
+  'shell.overview.filterAll': { en: 'All', 'zh-CN': '全部' },
+  'shell.overview.filterNeeds': { en: 'Needs attention', 'zh-CN': '需处理' },
+  'shell.overview.filterRunning': { en: 'Running', 'zh-CN': '进行中' },
+  'shell.overview.filterUnread': { en: 'Unread', 'zh-CN': '未读' },
+  'shell.overview.profileFilter': { en: 'All agents', 'zh-CN': '全部角色' },
+  'shell.overview.profileFilterLabel': { en: 'Filter by agent', 'zh-CN': '按角色筛选' },
+  'shell.overview.nodeFilter': { en: 'All nodes', 'zh-CN': '全部节点' },
+  'shell.overview.nodeFilterLabel': { en: 'Filter by node', 'zh-CN': '按节点筛选' },
+  'shell.overview.localNode': { en: 'Local', 'zh-CN': '本机' },
+  'shell.overview.empty': {
+    en: 'No conversations match the current filters',
+    'zh-CN': '当前筛选下没有会话',
+  },
+  'shell.overview.moreDescendants': { en: '+{count} more', 'zh-CN': '还有 {count} 个' },
+  'shell.overview.railTooltip': { en: 'Conversation overview', 'zh-CN': '会话总览' },
+
   // Batch archive/restore notices (verb interpolated: Archive/Restore, 归档/恢复)
   'shell.archive.verbArchive': { en: 'Archive', 'zh-CN': '归档' },
   'shell.archive.verbRestore': { en: 'Restore', 'zh-CN': '恢复' },

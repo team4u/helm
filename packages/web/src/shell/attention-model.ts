@@ -95,30 +95,47 @@ const BUCKET_ORDER: Record<AttentionBucket, number> = {
   unread_done: 2,
 }
 
+/** 根树聚合中间产物：态势平铺条目与会话总览共用的单树事实（含未落入三桶的安静树）。 */
+export interface AttentionTreeAggregate {
+  /** 根会话（树的锚点）。 */
+  root: ConversationSummary
+  /** 整棵子树成员（含根；输入顺序）。 */
+  members: ConversationSummary[]
+  hasError: boolean
+  hasWaiting: boolean
+  hasMachineActive: boolean
+  /** 三桶归属；无任何信号（安静树）为 null。 */
+  bucket: AttentionBucket | null
+  /** 树内最高优先级状态代表（error > blocked > working > done > idle）。 */
+  representative: ConversationSummary
+  /** 树内任一会话后台在途（badge accent / 上下文精简）。 */
+  backgroundActive: boolean
+  /** 树内后台摘要（去重后以「 · 」连接，可为空串）。 */
+  backgroundSummary: string
+  /** 子树中除根外正在 working/blocked 或后台在途的后代会话数。 */
+  activeDescendantCount: number
+  /** 点击直达目标：树内有等待人类的会话时指向最新一条（直达审批现场），否则根会话。 */
+  targetConversationId: number
+}
+
 /**
- * 构建全局态势平铺条目：
- * - 按根会话树聚合整棵子树（根 + 全部派生后代，走 resolveNotificationRootId）；
- * - 排除已归档根会话树、根会话 Profile 被已停用插件托管的树；
- * - 仅收录落入三桶之一的树：需关注（任一会话 error，或 blocked/待答 Ask）>
- *   运行中（任一会话 working 或后台在途）> 根 done 且未读；
- * - 桶内按 root.createdAt 倒序（同刻 id 倒序），不用 updatedAt 防流式跳位。
+ * 按根会话树聚合全量事实（态势与总览共享的唯一聚合口径）：
+ * - 沿 resolveNotificationRootId 上溯归树；根按 createdAt 倒序（同刻 id 倒序）；
+ * - 暴露边界：已归档根树、根会话 Profile 被已停用插件托管的树不产出；
+ *   sidebarSection 接管的会话照常纳入；
+ * - 安静树（bucket === null）也产出——总览「全部」筛选需要。
  */
-export function buildAttentionItems(input: {
+export function aggregateAttentionTrees(input: {
   conversations: ReadonlyArray<ConversationSummary>
   background: ConversationBackgroundIndex
   profiles: ReadonlyArray<Profile>
   plugins: ReadonlyArray<{ id: string; enabled: boolean }>
-  /** Locale translator（后代运行计数文案）；缺省英文桥接。 */
-  t?: WebMessageTranslator
-}): AttentionTreeItem[] {
-  const t = input.t ?? englishWebTranslator
+}): AttentionTreeAggregate[] {
   const byId = new Map<number, ConversationSummary>(
     input.conversations.map((conversation) => [conversation.id, conversation] as const),
   )
   const enabledPluginIds = collectEnabledPluginIds(input.plugins)
-  const profileNames = new Map(input.profiles.map((profile) => [profile.id, profile.name] as const))
 
-  // 根树归集：根按 createdAt 倒序（同刻 id 倒序）决定后续输出序。
   const trees = new Map<number, ConversationSummary[]>()
   for (const conversation of input.conversations) {
     const rootId = resolveNotificationRootId(byId, conversation.id)
@@ -132,13 +149,11 @@ export function buildAttentionItems(input: {
     return rootB.createdAt - rootA.createdAt || rootB.id - rootA.id
   })
 
-  const items: AttentionTreeItem[] = []
+  const aggregates: AttentionTreeAggregate[] = []
   for (const rootId of rootIds) {
     const root = byId.get(rootId)
     const members = trees.get(rootId)
     if (root === undefined || members === undefined) continue
-    // 暴露边界：已归档根树不进态势；根会话 Profile 被停用插件托管时不进
-    // （sidebarSection 接管的会话不受此影响，仍然纳入）。
     if (isConversationArchived(root)) continue
     const rootProfile = input.profiles.find((profile) => profile.id === root.profileId)
     if (rootProfile !== undefined && !isProfileVisible(rootProfile, enabledPluginIds)) continue
@@ -162,13 +177,11 @@ export function buildAttentionItems(input: {
         : root.status === 'done' && root.unread === true
           ? 'unread_done'
           : null
-    if (bucket === null) continue
 
     // 代表位与后台聚合：成员按 updatedAt 倒序传入，平手保留最近更新者（确定性）。
     const membersByRecency = [...members].sort((a, b) => b.updatedAt - a.updatedAt || b.id - a.id)
     const standing = resolveStandingStatusIndicator(membersByRecency, input.background)
     if (standing === null) continue
-    const representative = standing.representative
 
     // 直达目标：树内有等待人类的会话时指向最新一条（updatedAt 倒序，同刻 id 倒序）。
     let targetConversationId = root.id
@@ -185,57 +198,179 @@ export function buildAttentionItems(input: {
       }
     }
 
-    // 诚实摘要：只呈现真实事实，优先级 error 诊断 > working 动作 > 后台摘要 > 后代计数。
-    let summaryText = ''
-    if (representative.status === 'error' && representative.lastError?.trim()) {
-      summaryText = representative.lastError.trim()
-    } else if (representative.status === 'working' && representative.doing?.trim()) {
-      summaryText = representative.doing.trim()
-    } else if (standing.backgroundActive && standing.backgroundSummary.trim()) {
-      summaryText = standing.backgroundSummary.trim()
-    } else if (activeDescendantCount > 0) {
-      summaryText = t('shell.attention.descendantsActive', { count: activeDescendantCount })
+    aggregates.push({
+      root,
+      members,
+      hasError,
+      hasWaiting,
+      hasMachineActive,
+      bucket,
+      representative: standing.representative,
+      backgroundActive: standing.backgroundActive,
+      backgroundSummary: standing.backgroundSummary,
+      activeDescendantCount,
+      targetConversationId,
+    })
+  }
+  return aggregates
+}
+
+/**
+ * 构建全局态势模型（条目 + 微标一次成对推导）：
+ * - 聚合口径见 aggregateAttentionTrees（树成员、代表位、直达目标、后台聚合）；
+ * - items（平铺区渲染）收录落入三桶之一的树：需关注 > 运行中 > 根 done 且
+ *   未读；桶内按 root.createdAt 倒序（同刻 id 倒序），不用 updatedAt 防流式跳位；
+ * - indicator（汉堡/Rail 微标）按「成员级排除」重算：只剔除当前主屏/分屏正在
+ *   查看的那一个会话的信号——同根其他后代的 Ask / 运行事实绝不被正在查看的
+ *   面板抹掉；整棵树的信号都落在被查看会话上时该树才退出计数。
+ */
+export function buildAttentionModel(input: {
+  conversations: ReadonlyArray<ConversationSummary>
+  background: ConversationBackgroundIndex
+  profiles: ReadonlyArray<Profile>
+  plugins: ReadonlyArray<{ id: string; enabled: boolean }>
+  /** 当前主屏/分屏正在查看的会话 ID（成员级排除；缺省不排除任何信号）。 */
+  viewedConversationIds?: ReadonlySet<number>
+  /** Locale translator（后代运行计数文案）；缺省英文桥接。 */
+  t?: WebMessageTranslator
+}): AttentionModelResult {
+  const t = input.t ?? englishWebTranslator
+  const viewed = input.viewedConversationIds ?? EMPTY_VIEWED
+  const profileNames = new Map(input.profiles.map((profile) => [profile.id, profile.name] as const))
+
+  const items: AttentionTreeItem[] = []
+  let needsAttentionCount = 0
+  let runningCount = 0
+  let unreadDoneCount = 0
+  let totalCount = 0
+  let toneRank = 0
+  let tone: GlobalAttentionTone = null
+  for (const aggregate of aggregateAttentionTrees(input)) {
+    const { root, members, bucket, representative } = aggregate
+
+    // 微标成员级排除：剔除正在查看的会话信号后重算桶（同根其他后代的
+    // Ask/运行事实保留；整树信号都在被查看会话上才退出计数）。
+    let viewedHasError = false
+    let viewedHasWaiting = false
+    let viewedHasMachineActive = false
+    for (const member of members) {
+      if (viewed.has(member.id)) continue
+      if (member.status === 'error') viewedHasError = true
+      if (isWaitingForHuman(member)) viewedHasWaiting = true
+      if (isMachineActive(member, input.background)) viewedHasMachineActive = true
     }
+    const indicatorBucket: AttentionBucket | null = viewedHasError || viewedHasWaiting
+      ? 'needs_attention'
+      : viewedHasMachineActive
+        ? 'running'
+        : !viewed.has(root.id) && root.status === 'done' && root.unread === true
+          ? 'unread_done'
+          : null
+
+    if (indicatorBucket !== null) {
+      totalCount += 1
+      if (indicatorBucket === 'needs_attention') needsAttentionCount += 1
+      else if (indicatorBucket === 'running') runningCount += 1
+      else unreadDoneCount += 1
+      const indicatorTone: Exclude<GlobalAttentionTone, null> =
+        indicatorBucket === 'needs_attention' ? (viewedHasError ? 'error' : 'blocked') : indicatorBucket === 'running' ? 'running' : 'done'
+      if (TONE_RANK[indicatorTone] > toneRank) {
+        toneRank = TONE_RANK[indicatorTone]
+        tone = indicatorTone
+      }
+    }
+
+    if (bucket === null) continue
+
+    const summaryText = composeHonestTreeSummary({
+      representative,
+      backgroundActive: aggregate.backgroundActive,
+      backgroundSummary: aggregate.backgroundSummary,
+      activeDescendantCount: aggregate.activeDescendantCount,
+      t,
+    })
 
     items.push({
       root,
       bucket,
       representative,
-      backgroundActive: standing.backgroundActive,
-      backgroundSummary: standing.backgroundSummary,
-      activeDescendantCount,
-      targetConversationId,
+      backgroundActive: aggregate.backgroundActive,
+      backgroundSummary: aggregate.backgroundSummary,
+      activeDescendantCount: aggregate.activeDescendantCount,
+      targetConversationId: aggregate.targetConversationId,
       profileLabel: profileNames.get(root.profileId) ?? root.profileId,
       summaryText,
-      tone: bucket === 'needs_attention' ? (hasError ? 'error' : 'blocked') : bucket === 'running' ? 'running' : 'done',
+      tone: bucket === 'needs_attention' ? (aggregate.hasError ? 'error' : 'blocked') : bucket === 'running' ? 'running' : 'done',
     })
   }
 
-  return items.sort(
-    (a, b) =>
-      BUCKET_ORDER[a.bucket] - BUCKET_ORDER[b.bucket] ||
-      b.root.createdAt - a.root.createdAt ||
-      b.root.id - a.root.id,
-  )
+  return {
+    items: items.sort(
+      (a, b) =>
+        BUCKET_ORDER[a.bucket] - BUCKET_ORDER[b.bucket] ||
+        b.root.createdAt - a.root.createdAt ||
+        b.root.id - a.root.id,
+    ),
+    indicator: { needsAttentionCount, runningCount, unreadDoneCount, totalCount, tone },
+  }
 }
 
 /**
- * 收集当前主屏/分屏正在查看的根会话树 ID（indicator 据此排除，避免用户
- * 盯着看的树反过来提醒自己）。
+ * 诚实树摘要（态势行与总览卡片共用）：只呈现真实事实，优先级
+ * error 诊断 > working 动作 > 后台摘要 > 后代运行计数；绝不编造进度。
  */
-export function collectViewedAttentionRootIds(input: {
+export function composeHonestTreeSummary(input: {
+  representative: ConversationSummary
+  backgroundActive: boolean
+  backgroundSummary: string
+  activeDescendantCount: number
+  t?: WebMessageTranslator
+}): string {
+  const t = input.t ?? englishWebTranslator
+  const representative = input.representative
+  if (representative.status === 'error' && representative.lastError?.trim()) {
+    return representative.lastError.trim()
+  }
+  if (representative.status === 'working' && representative.doing?.trim()) {
+    return representative.doing.trim()
+  }
+  if (input.backgroundActive && input.backgroundSummary.trim()) {
+    return input.backgroundSummary.trim()
+  }
+  if (input.activeDescendantCount > 0) {
+    return t('shell.attention.descendantsActive', { count: input.activeDescendantCount })
+  }
+  return ''
+}
+
+/** buildAttentionModel 的条目捷径（仅取平铺条目，不参与微标排除）。 */
+export function buildAttentionItems(input: {
   conversations: ReadonlyArray<ConversationSummary>
+  background: ConversationBackgroundIndex
+  profiles: ReadonlyArray<Profile>
+  plugins: ReadonlyArray<{ id: string; enabled: boolean }>
+  t?: WebMessageTranslator
+}): AttentionTreeItem[] {
+  return buildAttentionModel(input).items
+}
+
+/** 态势模型成对输出：平铺条目（全量事实）+ 微标聚合（成员级排除正在查看的会话）。 */
+export interface AttentionModelResult {
+  items: AttentionTreeItem[]
+  indicator: GlobalAttentionIndicator
+}
+
+/**
+ * 收集当前主屏/分屏正在查看的会话 ID（微标成员级排除的输入——精确到会话，
+ * 不上卷整棵根树：同根其他后代的 Ask / 运行事实不允许被正在查看的面板抹掉）。
+ */
+export function collectViewedConversationIds(input: {
   primaryTarget: ResolvedTarget | null
   splitTarget: ResolvedTarget | null
 }): Set<number> {
-  const byId = new Map<number, ConversationSummary>(
-    input.conversations.map((conversation) => [conversation.id, conversation] as const),
-  )
   const viewed = new Set<number>()
   for (const target of [input.primaryTarget, input.splitTarget]) {
-    if (target?.kind !== 'conversation') continue
-    if (viewed.has(target.conversationId)) continue
-    viewed.add(resolveNotificationRootId(byId, target.conversationId))
+    if (target?.kind === 'conversation') viewed.add(target.conversationId)
   }
   return viewed
 }
@@ -247,13 +382,15 @@ const TONE_RANK: Record<Exclude<GlobalAttentionTone, null>, number> = {
   done: 1,
 }
 
+const EMPTY_VIEWED: ReadonlySet<number> = new Set()
+
 /**
- * 汇总全局态势微标：排除正在查看的根树后按桶计数，tone 取剩余树中最高
- * 优先级（error > blocked > running > done）；无任何信号时 tone 为 null。
+ * 全量聚合微标（不做任何排除）：按桶计数，tone 取最高优先级
+ * （error > blocked > running > done）；无任何信号时 tone 为 null。
+ * 供无「正在查看」概念的调用方使用；带排除语义的微标走 buildAttentionModel。
  */
 export function resolveGlobalAttentionIndicator(
   items: ReadonlyArray<AttentionTreeItem>,
-  viewedRootIds?: ReadonlySet<number>,
 ): GlobalAttentionIndicator {
   let needsAttentionCount = 0
   let runningCount = 0
@@ -262,7 +399,6 @@ export function resolveGlobalAttentionIndicator(
   let toneRank = 0
   let tone: GlobalAttentionTone = null
   for (const item of items) {
-    if (viewedRootIds?.has(item.root.id)) continue
     totalCount += 1
     if (item.bucket === 'needs_attention') needsAttentionCount += 1
     else if (item.bucket === 'running') runningCount += 1

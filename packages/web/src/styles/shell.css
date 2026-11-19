@@ -122,6 +122,20 @@
 .rail-attention-badge[data-tone='running'] { background: var(--accent); }
 .rail-attention-badge[data-tone='done'] { background: var(--ok); }
 
+/* 插件全局快捷入口（sidebar.item quickEntry）：紧随空间按钮，细分隔线隔离；
+ * 按钮复用 rail-btn 形态（含激活态），插件停用后贡献消失即零残留。 */
+.activity-rail-quick {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding-top: 6px;
+  margin-top: 2px;
+  width: 100%;
+  border-top: 1px solid var(--border);
+  box-sizing: border-box;
+}
+
 .activity-rail-footer {
   display: flex;
   flex-direction: column;
@@ -519,3 +533,24 @@
   50% { opacity: 0.9; }
 }
 
+
+/* 宿主「会话总览」直达按钮（#/overview）：与态势微标同源 tone 灯点，
+ * 桌面折叠 Rail / 移动抽屉一键直达只读总览。 */
+.rail-overview-btn {
+  position: relative;
+}
+
+.rail-overview-dot {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  pointer-events: none;
+}
+
+.rail-overview-dot[data-tone='error'] { background: var(--err); }
+.rail-overview-dot[data-tone='blocked'] { background: var(--warn); }
+.rail-overview-dot[data-tone='running'] { background: var(--accent); }
+.rail-overview-dot[data-tone='done'] { background: var(--ok); }
