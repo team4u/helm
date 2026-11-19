@@ -55,7 +55,7 @@ export type HookName =
 `agent_spawn` 额外提供受控 continuation（第二参数 `next`），是编排类插件包裹资源生命周期的关键机制：
 
 - 不调用 `next` 而返回 `handled` = 完全接管（`builtin:herdr` 用此路径把派生请求改道到远端 Herdr 窗格）；
-- `await next(finalRequest)` = around 包裹：宿主恰好一次执行后续管道与默认原生执行行，插件可在 `next` 前分配资源、在 `next` 后按成败收敛（finally 语义）。`builtin:workflow` 以 priority 200 注册（先于 herdr 的 100 执行 = 更外层），在 `next` 前分配 Worktree、在 `next` 后按结果决定保留或清理；
+- `await next(finalRequest)` = around 包裹：宿主恰好一次执行后续管道与默认原生执行行，插件可在 `next` 前分配资源、在 `next` 后按成败收敛（finally 语义）。`builtin:worktree` 以 priority 200 注册（先于 herdr 的 100 执行 = 更外层，后于 `builtin:workflow` 深度守卫的 300 = 更内层），在 `next` 前分配 Worktree、在 `next` 后按结果决定保留或清理；
 - `next` 仅可调用一次，重复调用或与 `handled/transform` 混用显式拒绝；包裹期间抛错如实上抛，宿主不吞。
 
 `AgentSpawnRequest.isolation`（如 `'worktree'`）是插件层策略 metadata，内核不解释该值：由具备对应能力的插件经 continuation 改写最终请求的 cwd/元数据兑现；无插件兑现而原样到达原生执行行时显式返回 `unsupported_runtime`，绝不静默忽略。同理，非空 `secretNames`（外部运行时的机密授予）未被钩子接管而到达原生执行行时显式拒绝 `unsupported_secret_grant`，绝不假装子代理已取得机密。

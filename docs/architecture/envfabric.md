@@ -86,7 +86,7 @@ sequenceDiagram
 
 `ctx.host.inspectNodePathUsage({ nodeId, path, signal? })` 查询绝对路径是否被进程 cwd 或打开的文件句柄引用。local 在 Hub 进程内执行，远端经节点 `envPathUsage` RPC 执行；两侧共用 `@helmx/env-io` 的扫描实现。结果提供 PID、进程名、引用来源和路径，以及扫描完整性（`complete`）、真实命中进程数（`matchedTotal`）、权限盲区计数（`unobservable`）与报告截断标记。
 
-完整性语义：可观测集合内的非权限类读取异常（如 EIO）或扫描上限触发时 `complete: false`，消费方不能把不完整结果当作零占用；持久的权限拒绝（跨 uid 或 non-dumpable 进程，如 `systemd --user`——属主自己也读不了）计入 `unobservable` 并在诊断中如实呈现，不影响完整性判定——与 Hub 同 uid 的普通可转储进程（helmx 派生的子代理/git/shell）永远可观测。旧版守护进程无此方法时显式失败，绝不静默回退本机扫描。当前只支持 Linux 的可见 `/proc` 视图，不读取命令行和环境变量，不自动终止进程；扫描是一次性快照，不是跨进程互斥。`builtin:workflow` 在删除 worktree 前使用该端口，详见[Worktree 清理规则](../workflows/worktree-and-gate.md)。
+完整性语义：可观测集合内的非权限类读取异常（如 EIO）或扫描上限触发时 `complete: false`，消费方不能把不完整结果当作零占用；持久的权限拒绝（跨 uid 或 non-dumpable 进程，如 `systemd --user`——属主自己也读不了）计入 `unobservable` 并在诊断中如实呈现，不影响完整性判定——与 Hub 同 uid 的普通可转储进程（helmx 派生的子代理/git/shell）永远可观测。旧版守护进程无此方法时显式失败，绝不静默回退本机扫描。当前只支持 Linux 的可见 `/proc` 视图，不读取命令行和环境变量，不自动终止进程；扫描是一次性快照，不是跨进程互斥。`builtin:worktree` 在删除 worktree 前使用该端口，详见[Worktree 清理规则](../workflows/worktree-and-gate.md)。
 
 ### 节点文件互斥
 

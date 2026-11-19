@@ -4,7 +4,7 @@
 
 ## 在项目里开始
 
-打开一个你直接使用的顶层会话，把工作目录设为 Git 仓库。先提交希望成员看到的基线。新 worktree 从提交创建，当前目录里的未提交改动不会带过去。写代码的成员需要 `builtin:workflow` 提供受管 worktree，Swarm 和 Workflow 均默认启用。 [Worktree 的创建和清理](../workflows/worktree-and-gate.md)
+打开一个你直接使用的顶层会话，把工作目录设为 Git 仓库。先提交希望成员看到的基线。新 worktree 从提交创建，当前目录里的未提交改动不会带过去。写代码的成员需要 `builtin:worktree` 提供受管 worktree。Swarm、Workflow 和 Worktree 均默认启用。 [Worktree 的创建和清理](../workflows/worktree-and-gate.md)
 
 把下面的任务发给会话。把其中的功能换成你仓库里实际存在的模块。
 

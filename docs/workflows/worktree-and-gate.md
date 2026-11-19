@@ -1,10 +1,10 @@
 # Git Worktree 与代码门禁
 
-本文面向使用 `isolation: 'worktree'` 与 `gate` 选项的编排开发者，以及负责回收工作树的维护者：介绍 `builtin:workflow` 插件的代码沙箱机制——`WorktreeIsolation` 如何经 `agent_spawn` 钩子包裹每一次派生、Gate 如何做到恰好一次验收、清理链如何在不丢代码的前提下安全回收工作树。机制全部位于插件内（`packages/plugins/src/workflow/` 的 `isolation.ts` / `worktree*.ts`），内核不参与。DSL 侧的选项语义见 [DSL 手册](dsl-guide.md)。
+本文面向使用 `isolation: 'worktree'` 与 `gate` 选项的编排开发者，以及负责回收工作树的维护者：介绍 `builtin:worktree` 插件的受管工作树机制——`WorktreeIsolation` 如何经 `agent_spawn` 钩子包裹每一次派生、Gate 如何做到恰好一次验收、清理链如何在不丢代码的前提下安全回收工作树。机制全部位于插件内（`packages/plugins/src/worktree/`），内核不参与。DSL 侧的选项语义见 [DSL 手册](dsl-guide.md)。
 
 ## WorktreeIsolation：经 agent_spawn 包裹的隔离生命周期
 
-插件在 `agent_spawn` 管道上挂载一个 priority 200 的 around（continuation）钩子。priority 数值越大越外层：它先于外部运行时接管器（如 `builtin:herdr` 的 priority 100）执行，因此无论是原生派生还是外部运行时的执行，都同样被租约与登记包裹。钩子只对两类派生介入，其余零开销透传：
+插件在 `agent_spawn` 管道上挂载一个 priority 200 的 around（continuation）钩子。priority 数值越大越外层：它位于 `builtin:workflow` 深度守卫（priority 300）之内、先于外部运行时接管器（如 `builtin:herdr` 的 priority 100）执行，因此无论是原生派生还是外部运行时的执行，都同样被租约与登记包裹。钩子只对两类派生介入，其余零开销透传：
 
 ```mermaid
 flowchart TD
@@ -28,7 +28,7 @@ flowchart TD
 - 源状态：如实记录源工作区是否脏（`dirtySource`）。源仓库脏时明确告知：隔离树基于 HEAD 创建，不包含源工作区未提交的改动。
 - 上下文注入：每次启动（新建与 `resume`）都向子代理提示词末尾注入 `<worktree_context>`，内容含 `worktreeId`、`path`、`branch`、`baseCommit`、`baseBranch`（若有）与 `dirtySource` 提示，并提醒子代理在结束回合前运行 `git add` 与 `git commit` 保持工作区干净。
 
-所有 Git 命令经 EnvFabric 节点通道以 argv 数组直跑（无 shell 拼接），路径含空格或特殊字符在 Linux、macOS 与 Windows 上同样安全。分配成功后元数据持久化在插件私有文档：
+所有 Git 命令经 EnvFabric 节点通道以 argv 数组直跑（无 shell 拼接），路径含空格或特殊字符在 Linux、macOS 与 Windows 上同样安全。分配成功后元数据持久化在插件私有文档（完整键 `builtin:worktree:worktree-state`）：
 
 | 字段 | 说明 |
 | :--- | :--- |
@@ -150,7 +150,7 @@ pnpm helmx worktrees inspect --conversation-id 42 --diff   # 只读检视 + 有�
 
 ## 边界与约束
 
-- 插件停用期间工作树登记与租约不清除，重新启用后 cleanup 仍可定位（不丢元数据）；停用插件时在途运行经 `liveTasks` 阻止（`409 plugin_has_live_tasks`）。在途工作树占用不经宿主声明端口：cleanup 链直接以宿主在途 spawn 执行坐标（`ctx.host.listActiveSpawnExecutions`）与本插件 durable 租约判定。
+- 插件停用期间工作树登记与租约不清除，重新启用后 cleanup 仍可定位（不丢元数据）；停用时有活跃 `ManagedWorktreeHold`（如 Swarm 协作期持有的租约）会以 `409 plugin_in_use` 拒绝；停用后新的 `isolation: 'worktree'` 请求在内核边界显式失败（`unsupported_runtime`），非隔离派生不受影响。在途工作树占用不经宿主声明端口：cleanup 链直接以宿主在途 spawn 执行坐标（`ctx.host.listActiveSpawnExecutions`）与本插件 durable 租约判定。
 - 内核 EnvFabric 另提供按 `nodeId + canonicalPath` 的文件互斥，但只约束经过 EnvFabric 的受管操作：同步 shell 命令与外部编辑器直接写文件不受它保证（详见 [EnvFabric](../architecture/envfabric.md)）。
 - 非常规仓库布局（裸仓库、`--separate-git-dir`）显式拒绝（`worktree_unsupported_layout` / `not_a_git_repo`），不猜测主仓路径。
 - 多级派生：源目录本身是受管 Worktree 时，新隔离树仍从权威主仓定位的同级目录创建，记录 `parentWorktreeId` 标识父子关系；父树未清理不影响子树清理（各记录独立判定）。
