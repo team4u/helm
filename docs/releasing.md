@@ -104,7 +104,7 @@ python3 -c "import yaml; yaml.safe_load(open('.github/workflows/release.yml'))"
 | 内容 | 位置 |
 | :--- | :--- |
 | 两条工作流 | `.github/workflows/ci.yml`、`release.yml` |
-| payload 组装器 | `packages/payload/build.mjs`（CLI 制品组装在 `packages/payload/src/assemble-cli.mjs`，node 制品组装同在 `packages/payload/src/`） |
+| payload 组装器 | `packages/payload/build.mjs`（CLI 制品组装在 `packages/payload/src/assemble-cli.mjs`，node 制品组装在 `packages/payload/src/assemble-node.mjs`） |
 | 测试 | `packages/payload/test/payload.test.ts`（payload 契约与 CLI 制品验收、黄金序列网络验收，单文件共享一次组装） |
 
 ## 相关文档
