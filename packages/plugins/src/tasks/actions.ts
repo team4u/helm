@@ -356,6 +356,7 @@ async function launchTaskExecution(
   ctx: HelmxPluginContext,
   runtime: TasksRuntime,
   taskId: string,
+  options?: { prompt?: string; requestId?: string; delivery?: 'reject' | 'followUp' },
 ): Promise<number> {
   const task = runtime.store.get(taskId)
   if (task === undefined) {
@@ -394,10 +395,12 @@ async function launchTaskExecution(
       delete target.conversationMissing
     })
     await runtime.flushRecords()
-    await ctx.host.submitInput(created.id, buildTaskKickoffPrompt(task), {
+    // 初始投递用 reject：新会话必 idle，若创建与投递之间被人类抢先输入（接管窗口），
+    // 显式拒绝绝不串入；返工重建的合成任务书同用 reject。
+    await ctx.host.submitInput(created.id, options?.prompt ?? buildTaskKickoffPrompt(task), {
       origin: 'agent',
-      whenBusy: 'followUp',
-      requestId: `${TASKS_PLUGIN_ID}:kickoff:${taskId}`,
+      whenBusy: options?.delivery ?? 'reject',
+      requestId: options?.requestId ?? `${TASKS_PLUGIN_ID}:kickoff:${taskId}`,
     })
   } catch (err) {
     // 干净回滚：任务回待办记 lastError（flush 后可重试 start），会话保留标 task-archived；显式抛错
@@ -512,6 +515,59 @@ async function requestPlanApproval(
   return { taskId: task.id, decision: outcome, askId }
 }
 
+/**
+ * 查询 builtin:workflow 在该会话名下是否有 running run（无静态依赖，运行时按需调用）。
+ * - 返回 false：确定无在途（含 workflow 停用/未注册——无后台 run 能力即无在途）；
+ * - 返回 'unknown'：查询故障（网络/内部错误），调用方保守处理。
+ */
+export async function workflowHasRunningRuns(
+  ctx: HelmxPluginContext,
+  conversationId: number,
+): Promise<boolean | 'unknown'> {
+  try {
+    const res = (await ctx.host.invokeAction('builtin:workflow', 'runs', { conversationId })) as {
+      runs?: Array<{ status?: unknown }>
+    }
+    if (res === null || typeof res !== 'object' || !Array.isArray(res.runs)) return 'unknown'
+    return res.runs.some((r) => r !== null && typeof r === 'object' && (r as { status?: unknown }).status === 'running')
+  } catch (err) {
+    if (err instanceof HelmxError && (err.code === 'plugin_disabled' || err.code === 'not_found' || err.code === 'unknown_action')) {
+      return false
+    }
+    return 'unknown'
+  }
+}
+
+/** 验收在途守卫：会话 working/blocked 或 Workflow run 在途即拒绝（附实时状态与处置指引）。 */
+async function assertApprovalQuiescent(
+  ctx: HelmxPluginContext,
+  runtime: TasksRuntime,
+  task: TaskRecord,
+): Promise<void> {
+  const conv =
+    task.conversationId !== undefined ? runtime.readConversationOrUndefined(task.conversationId) : undefined
+  const convBusy = conv !== undefined && (conv.status === 'working' || conv.status === 'blocked')
+  let workflowBusy: boolean | 'unknown' = false
+  if (task.conversationId !== undefined) {
+    workflowBusy = await workflowHasRunningRuns(ctx, task.conversationId)
+  }
+  if (convBusy || workflowBusy === true) {
+    throw new HelmxError(
+      'task_still_running',
+      `任务 ${task.id} 的执行会话仍在途（${
+        convBusy ? `会话状态 ${conv!.status}` : 'Workflow run running'
+      }），验收前先等待其完成或人工中止会话（helmx abort / 会话界面中止）后再操作`,
+      409,
+      {
+        pluginId: TASKS_PLUGIN_ID,
+        taskId: task.id,
+        conversationStatus: conv?.status,
+        workflowBusy,
+      },
+    )
+  }
+}
+
 // ---------------------------------------------------------------------------
 // 注册入口
 // ---------------------------------------------------------------------------
@@ -587,7 +643,14 @@ export function registerTasksActions(ctx: HelmxPluginContext, runtime: TasksRunt
         return { task, started: false, blockedBy: decision.blockedBy, notStartedReason: decision.notStartedReason }
       }
       const conversationId = await launchTaskExecution(ctx, runtime, decision.taskId)
-      const task = runtime.store.get(decision.taskId)!
+      const task = runtime.store.get(decision.taskId)
+      if (task === undefined) {
+        throw new HelmxError('not_found', `任务 '${decision.taskId}' 在启动后被并发删除`, 404, {
+          pluginId: TASKS_PLUGIN_ID,
+          taskId: decision.taskId,
+          conversationId,
+        })
+      }
       return { task, started: true, conversationId, blockedBy: [] }
     })
   }
@@ -822,7 +885,14 @@ export function registerTasksActions(ctx: HelmxPluginContext, runtime: TasksRunt
       })
       await runtime.flushRecords()
       const conversationId = await launchTaskExecution(ctx, runtime, decision.taskId)
-      const task = runtime.store.get(decision.taskId)!
+      const task = runtime.store.get(decision.taskId)
+      if (task === undefined) {
+        throw new HelmxError('not_found', `任务 '${decision.taskId}' 在启动后被并发删除`, 404, {
+          pluginId: TASKS_PLUGIN_ID,
+          taskId: decision.taskId,
+          conversationId,
+        })
+      }
       return { task, conversationId }
     })
   }
@@ -1038,7 +1108,7 @@ export function registerTasksActions(ctx: HelmxPluginContext, runtime: TasksRunt
 
   // ---------------- approve ----------------
   const approveTask = async (
-    input: { taskId: string; mergeAction?: 'close_only' | 'merge_and_close'; note?: string },
+    input: { taskId: string; mergeAction?: 'close_only' | 'merge_and_close'; note?: string; confirmStopped?: boolean },
     context: PluginActionContext,
   ): Promise<{
     task: TaskRecord
@@ -1087,7 +1157,7 @@ export function registerTasksActions(ctx: HelmxPluginContext, runtime: TasksRunt
           await ctx.host.submitInput(conversationId, buildMergeClosingPrompt(task, note), {
             origin: 'agent',
             whenBusy: 'followUp',
-            requestId: `${TASKS_PLUGIN_ID}:merge:${task.id}:${task.submission?.submittedAt ?? Date.now()}`,
+            requestId: `${TASKS_PLUGIN_ID}:merge:${task.id}:${task.submission?.submittedAt ?? task.reworkCount}`,
           })
           await swapConversationTag(ctx, runtime, conversationId, TASK_ACTIVE_TAG)
           return task
@@ -1095,7 +1165,29 @@ export function registerTasksActions(ctx: HelmxPluginContext, runtime: TasksRunt
         return { task, unblockedTaskIds: [], autoStartedTaskIds: [] }
       }
 
-      // close_only：复用共享终转（done 先落盘 flush，衍生容忍）
+      // close_only：在途收紧——待验收且无在途放行；在途一律 409（先等待或人工中止）；
+      // 进行中任务仅经明示 confirmStopped 且无在途放行（人工确认停止后的手动收尾动作）。
+      {
+        const task = getTaskOrThrow(runtime, input.taskId)
+        if (task.column !== 'in_review' && task.column !== 'in_progress' && task.column !== 'done') {
+          throw new HelmxError(
+            'task_invalid_column',
+            `任务 ${task.id} 当前位于 ${task.column} 列，仅待验收 / 已完成任务可验收通过`,
+            409,
+            { pluginId: TASKS_PLUGIN_ID, taskId: task.id, column: task.column },
+          )
+        }
+        await assertApprovalQuiescent(ctx, runtime, task)
+        if (task.column === 'in_progress' && input.confirmStopped !== true) {
+          throw new HelmxError(
+            'task_invalid_column',
+            `任务 ${task.id} 仍在进行中：请先让执行者 task_submit 交卷（或 rework 重派）；确需人工收尾请确认会话已停止后传 confirmStopped: true`,
+            409,
+            { pluginId: TASKS_PLUGIN_ID, taskId: task.id, column: task.column },
+          )
+        }
+      }
+      // 复用共享终转（done 先落盘 flush，衍生容忍）
       return finalizeTaskDone(input.taskId)
     })
   }
@@ -1173,19 +1265,22 @@ export function registerTasksActions(ctx: HelmxPluginContext, runtime: TasksRunt
         return { task: outcome.task, conversationId: outcome.conversationId }
       }
 
-      // recreate：状态已落盘（flush 后）再重建会话并投递「任务书 + 返工意见」
+      // recreate：状态已落盘（flush 后）重建会话，投递**单条合成任务书**（原 brief + 返工意见，
+      // #20/#36：不做 kickoff + 意见两条投递）；requestId 按 reworkCount 幂等。
       await runtime.flushRecords()
-      const conversationId = await launchTaskExecution(ctx, runtime, outcome.task.id)
-      await ctx.host.submitInput(
-        conversationId,
-        buildReworkDeliveryPrompt(outcome.task, input.feedback, { recreated: true }),
-        {
-          origin: 'agent',
-          whenBusy: 'followUp',
-          requestId: `${TASKS_PLUGIN_ID}:rework-recreate:${outcome.task.id}:${outcome.task.reworkCount}`,
-        },
-      )
-      const task = runtime.store.get(outcome.task.id)!
+      const conversationId = await launchTaskExecution(ctx, runtime, outcome.task.id, {
+        prompt: buildReworkDeliveryPrompt(outcome.task, feedback, { recreated: true }),
+        requestId: `${TASKS_PLUGIN_ID}:rework-recreate:${outcome.task.id}:${outcome.task.reworkCount}`,
+        delivery: 'reject',
+      })
+      const task = runtime.store.get(outcome.task.id)
+      if (task === undefined) {
+        throw new HelmxError('not_found', `任务 '${outcome.task.id}' 在重建后消失（并发删除？）`, 404, {
+          pluginId: TASKS_PLUGIN_ID,
+          taskId: outcome.task.id,
+          conversationId,
+        })
+      }
       return { task, conversationId, recreatedConversation: true }
     })
   }
@@ -1415,6 +1510,7 @@ export function registerTasksActions(ctx: HelmxPluginContext, runtime: TasksRunt
         taskId: taskIdSchema,
         mergeAction: { type: 'string', enum: ['close_only', 'merge_and_close'] },
         note: { type: 'string', description: 'Optional reviewer note delivered with the merge instruction' },
+        confirmStopped: { type: 'boolean', description: 'Explicit manual close of an in_progress task after confirming its conversation has stopped' },
       },
       required: ['taskId'],
       additionalProperties: false,

@@ -107,9 +107,10 @@
 1. 串行 mutation 把任务占位为 `in_progress`（无 conversationId）并 `flush` 落盘——占位即计入并发额度，杜绝竞态双开会话；
 2. `createConversation`（内核自身持久化）→ 串行 mutation 绑定 `conversationId` + `startedAt`（flush）→ 投递任务书（requestId 按 taskId 幂等）；
 3. 任务书投递失败显式回滚：任务回 `backlog` 记 `lastError`（可重试 start），已建会话标 `task-archived` 保留现场，错误上抛绝不静默；
-4. 两阶段之间服务重启：启动时 `recoverInterruptedStartups` 把 `in_progress` 无绑定会话的残留任务诚实回滚 `backlog` 并在 `lastError` 记录原因（绝不假装在跑）。
+4. 两阶段之间服务重启：启动时 `recoverInterruptedStartups` 把 `in_progress` 无绑定会话的残留任务诚实回滚 `backlog` 并在 `lastError` 记录原因（绝不假装在跑）；「绑定成功但任务书未被接纳」的窗口（绑定 flush 后、投递前崩溃）由启动恢复**补投任务书**兜底——requestId 按会话幂等，重复补投被内核去重，安全。
+5. 初始任务书投递 `whenBusy: 'reject'`：新会话必 idle；若创建与投递之间被人类抢先输入（接管窗口），显式拒绝绝不串入。返工 / 合并指令为已存会话的授权投递，用 `followUp` 排队不打断在途输入，绝不用 steer。
 
-`rework` / `merge_and_close` 的意见与指令投递采用原子模式：状态变更与投递在同一串行 mutation 内，投递成功后才落盘；失败 draft 丢弃可干净重试，requestId 分别按 `reworkCount` / `submission.submittedAt` 幂等（崩溃窗口内已投递的重试不重复投递）。`approve close_only` 与合并授权下的证据交付 `submit` 共用同一条终转链：`done` 核心事实先落盘（flush），衍生动作（会话换标签、下游接棒）失败容忍上报、不回滚验收事实。
+`rework` / `merge_and_close` 的意见与指令投递采用原子模式：状态变更与投递在同一串行 mutation 内，投递成功后才落盘；失败 draft 丢弃可干净重试，requestId 分别按 `reworkCount` / `submission.submittedAt`（无交付时 `reworkCount`）幂等（崩溃窗口内已投递的重试不重复投递）。rework 重建（`recreateConversation: true`）向新会话投递**单条合成任务书**（原 brief + 返工意见），不做 kickoff + 意见两条投递。`approve close_only` 与合并授权下的证据交付 `submit` 共用同一条终转链：`done` 核心事实先落盘（flush），衍生动作（会话换标签、下游接棒）失败容忍上报、不回滚验收事实。
 
 ### merge_and_close 的一步结单语义
 

@@ -10,7 +10,7 @@
  */
 import { HelmxError, type ConversationSummary, type HelmxPluginContext } from '@helmx/protocol'
 import { ACTIVE_TASK_SECTION_ID, TASKS_PLUGIN_ID, type TaskRecord } from './contracts.js'
-import { findActiveTaskByConversation, type TasksRuntime } from './actions.js'
+import { findActiveTaskByConversation, workflowHasRunningRuns, type TasksRuntime } from './actions.js'
 import { activeTaskSection } from './prompts.js'
 
 /** 规划者专属模型工具名（任务执行会话 / 子会话 / 自动化会话隐藏）。 */
@@ -86,28 +86,7 @@ export function shouldMarkStalled(input: {
   return true
 }
 
-/**
- * 查询 builtin:workflow 在该会话名下是否有 running run（无静态依赖，运行时按需调用）。
- * - 返回 false：确定无在途（含 workflow 停用/未注册——无后台 run 能力即无在途）；
- * - 返回 'unknown'：查询故障（网络/内部错误），调用方保守跳过标记。
- */
-export async function workflowHasRunningRuns(
-  ctx: HelmxPluginContext,
-  conversationId: number,
-): Promise<boolean | 'unknown'> {
-  try {
-    const res = (await ctx.host.invokeAction('builtin:workflow', 'runs', { conversationId })) as {
-      runs?: Array<{ status?: unknown }>
-    }
-    if (res === null || typeof res !== 'object' || !Array.isArray(res.runs)) return 'unknown'
-    return res.runs.some((r) => r !== null && typeof r === 'object' && (r as { status?: unknown }).status === 'running')
-  } catch (err) {
-    if (err instanceof HelmxError && (err.code === 'plugin_disabled' || err.code === 'not_found' || err.code === 'unknown_action')) {
-      return false
-    }
-    return 'unknown'
-  }
-}
+export { workflowHasRunningRuns }
 
 export function registerTasksHooks(ctx: HelmxPluginContext, runtime: TasksRuntime): void {
   const { isActive } = runtime

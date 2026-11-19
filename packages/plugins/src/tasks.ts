@@ -32,6 +32,7 @@ import {
 import { createTasksStore, recoverInterruptedStartups } from './tasks/store.js'
 import { registerTasksActions, type TasksRuntime } from './tasks/actions.js'
 import { onTasksConversationDeleted, registerTasksHooks } from './tasks/hooks.js'
+import { buildTaskKickoffPrompt } from './tasks/prompts.js'
 import { registerTasksUi } from './tasks/ui.js'
 import { asConversationDeletedEvent } from './tasks/contracts.js'
 
@@ -183,8 +184,10 @@ export function createTasksPlugin(): PluginDefinition {
           getConfig()
           store.read()
           await ctx.host.skills.ensureSkill(readTasksSkillAsset())
-          // 启动中断恢复：两阶段启动（占位落盘 -> 绑定会话）之间重启的 in_progress 无会话任务，
-          // 诚实回滚 backlog 并在任务 lastError 记录原因（绝不假装在跑；诊断日志留痕）。
+          // 启动中断恢复（两阶段窗口）：
+          // a) 占位后、绑定前重启 -> in_progress 无会话：诚实回滚 backlog 并记 lastError（绝不假装在跑）；
+          // b) 绑定后、任务书接纳前重启 -> 已绑会话但零 helmx.input：补投任务书
+          //    （requestId 按会话幂等，重复补投被内核 dedup，安全）。
           const interruptedIds = await runtime.store.enqueueMutation((draft) =>
             recoverInterruptedStartups(draft),
           )
@@ -193,6 +196,26 @@ export function createTasksPlugin(): PluginDefinition {
             console.error(
               `[tasks] 启动恢复：${interruptedIds.length} 个启动中断任务已回滚待办（${interruptedIds.join(', ')}），可手动重新开工`,
             )
+          }
+          const reseededIds: string[] = []
+          for (const task of runtime.store.list()) {
+            if (task.column !== 'in_progress' || task.conversationId === undefined) continue
+            try {
+              const detail = await ctx.host.getConversationDetail(task.conversationId, { limit: 50 })
+              if (detail.entries.some((e) => e.kind === 'helmx.input')) continue
+              await ctx.host.submitInput(task.conversationId, buildTaskKickoffPrompt(task), {
+                origin: 'agent',
+                whenBusy: 'reject',
+                requestId: `${TASKS_PLUGIN_ID}:kickoff:${task.id}`,
+              })
+              reseededIds.push(task.id)
+            } catch (err) {
+              if (err instanceof HelmxError && err.code === 'not_found') continue
+              reportError(`任务 ${task.id} 恢复补投任务书失败（会话 #${task.conversationId}）`, err)
+            }
+          }
+          if (reseededIds.length > 0) {
+            console.error(`[tasks] 启动恢复：已向绑定会话补投任务书（${reseededIds.join(', ')}）`)
           }
           deletedUnsubscribe = ctx.host.onEvent('conversation.deleted', (payload) => {
             if (!active || shutdown) return

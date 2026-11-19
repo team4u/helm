@@ -779,7 +779,7 @@ test('tasks-int7b: rejected plan keeps the submit gate closed; the ask stays vis
   }
 })
 
-test('tasks-int8: dependency-referenced delete guard, force-disable drops the active_task section, recreate delivers kickoff + feedback', { timeout: 60_000 }, async (t) => {
+test('tasks-int8: dependency-referenced delete guard, force-disable drops the active_task section, recreate delivers ONE composed briefing', { timeout: 60_000 }, async (t) => {
   const env = await openTasksEnv(useTempDir(t, 'helmx-tasks-int8-'))
   try {
     const { kernel } = env.app
@@ -838,10 +838,75 @@ test('tasks-int8: dependency-referenced delete guard, force-disable drops the ac
     await kernel.waitForIdle(recreated.conversationId!)
     const detail = await kernel.getConversationDetail(recreated.conversationId!, { limit: 20 })
     const inputs = detail.entries.filter((e) => e.kind === 'helmx.input')
-    const joined = inputs.map((e) => JSON.stringify(e.model ?? e.data ?? '')).join('\n')
-    assert.match(joined, /<task_kickoff id=/)
+    // #36: recreate delivers exactly ONE composed briefing (brief + feedback), not kickoff + a second delivery
+    assert.equal(inputs.length, 1, 'recreate must deliver a single composed briefing')
+    const joined = JSON.stringify(inputs[0]?.model ?? inputs[0]?.data ?? '')
     assert.match(joined, /Original brief body\./)
     assert.match(joined, /please redo it carefully/)
+  } finally {
+    await env.close()
+  }
+})
+
+test('tasks-int9: approve quiescence guard (still-running refused, explicit confirmStopped path) and restart reseed of an un-delivered kickoff', { timeout: 60_000 }, async (t) => {
+  const env = await openTasksEnv(useTempDir(t, 'helmx-tasks-int9-'))
+  try {
+    const { kernel } = env.app
+    // Keep the assignee turn busy long enough to assert the in-flight guard deterministically
+    setRoutedResponses(env.faux, {
+      assignee: [
+        async () => {
+          await new Promise((r) => setTimeout(r, 1500))
+          return fauxAssistantMessage('slow work done')
+        },
+        fauxAssistantMessage([fauxToolCall('task_submit', { summary: 'submitted' })], { stopReason: 'toolUse' }),
+        fauxAssistantMessage('handed in'),
+        fauxAssistantMessage('standing by'),
+      ],
+      planner: [fauxAssistantMessage('planner idle')],
+      child: [fauxAssistantMessage('ok')],
+    })
+    const created = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'create', {
+      title: 'Guarded task',
+      brief: 'Acceptance: guard behavior verified.',
+    })) as { conversationId?: number }
+    const convId = created.conversationId!
+
+    // While the conversation is still working, close_only must be refused (409 task_still_running)
+    await waitFor(async () => {
+      const conv = kernel.listConversations().find((c) => c.id === convId)
+      return conv?.status === 'working'
+    })
+    await assert.rejects(
+      () => kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'approve', { taskId: 'T-1', mergeAction: 'close_only' }),
+      (err: unknown) => err instanceof HelmxError && err.code === 'task_still_running' && err.status === 409,
+    )
+
+    // After the turn settles without submission: in_progress still refuses a bare close (no confirmStopped)
+    await kernel.waitForIdle(convId)
+    await assert.rejects(
+      () => kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'approve', { taskId: 'T-1', mergeAction: 'close_only' }),
+      (err: unknown) => err instanceof HelmxError && err.code === 'task_invalid_column' && err.status === 409,
+    )
+
+    // Restart reseed: simulate the crash window (bound conversation, zero delivered inputs) via reset,
+    // then a plugin disable/enable cycle must re-deliver exactly one kickoff (requestId idempotent)
+    await kernel.resetConversation(convId)
+    await kernel.plugins.disable(TASKS_PLUGIN_ID, { force: true })
+    await kernel.plugins.enable(TASKS_PLUGIN_ID)
+    await kernel.waitForIdle(convId).catch(() => undefined)
+    const reseeded = await kernel.getConversationDetail(convId, { limit: 20 })
+    const reseedInputs = reseeded.entries.filter((e) => e.kind === 'helmx.input')
+    assert.equal(reseedInputs.length, 1, 'reseed delivers exactly one kickoff after restart')
+    assert.match(JSON.stringify(reseedInputs[0]?.model ?? reseedInputs[0]?.data ?? ''), /task_kickoff id=..T-1/)
+
+    // Explicit manual close of an in_progress (quiescent) task via confirmStamped proceeds to done
+    const closed = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'approve', {
+      taskId: 'T-1',
+      mergeAction: 'close_only',
+      confirmStopped: true,
+    })) as { task: TaskRecord }
+    assert.equal(closed.task.column, 'done')
   } finally {
     await env.close()
   }
