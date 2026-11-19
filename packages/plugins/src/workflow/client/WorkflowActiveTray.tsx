@@ -14,10 +14,12 @@
  *   body (conversationId opens the ConversationDrawer, else runId focuses
  *   the run in the workbench); detach / abort are sibling buttons in the
  *   trailing action group — no stopPropagation acrobatics needed;
- * - the row body is a two-line layout: the headline keeps title / #id /
+ * - the row body is a two-row layout: the headline keeps title / #id /
  *   progress / elapsed, while the current execution content (live tool
  *   semantics / output / thinking / approval title, falling back to the
- *   model-provided doing digest) lives on its own second line so the title
+ *   model-provided doing digest) lives on its own second line (single-line
+ *   ellipsis, same as the bar frontline — constant row height so live text
+ *   length changes never make the tray or composer jump) so the title
  *   never crowds it out;
  * - live facts come from the host snapshot through useConversation with
  *   includeDetail:false (never an eager detail fetch) shared with the

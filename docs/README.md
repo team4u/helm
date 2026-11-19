@@ -33,6 +33,7 @@
 | [JSON 卡片](plugins/json-render.md) | 在聊天里展示表格、表单和操作按钮 |
 | [Mermaid](plugins/mermaid.md) | 在聊天里渲染图表 |
 | [Token 速率](plugins/token-speed.md) | 查看生成速度和首字延迟估算 |
+| [任务看板](plugins/tasks.md) | 派发独立执行会话并跟踪验收闭环 |
 
 ## 开发 Helmx 和插件
 
