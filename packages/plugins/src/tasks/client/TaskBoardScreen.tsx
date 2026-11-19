@@ -80,6 +80,9 @@ import {
   TASK_DEPS_UNKNOWN,
   TASK_DEPS_UNKNOWN_TITLE,
   TASK_DEP_OFF_BOARD_TITLE,
+  TASK_KICKOFF_UNDELIVERED,
+  TASK_KICKOFF_UNDELIVERED_TITLE,
+  TASK_ACTION_RESUME_KICKOFF_TITLE,
   TASK_MERGE_AWAIT_REVIEW,
   TASK_ACTION_MERGE_RETRY,
   TASK_ACTION_MERGE_RETRY_TITLE,
@@ -289,6 +292,13 @@ function TaskCard(props: {
         </div>
       ) : null}
 
+      {task.column === 'in_progress' && live.kickoffUndelivered ? (
+        <div className="task-card-rework task-card-deps-waiting" title={t(TASK_KICKOFF_UNDELIVERED_TITLE)}>
+          <HelmxIcon name="alert-triangle" size={11} />
+          <span className="task-card-rework-text">{t(TASK_KICKOFF_UNDELIVERED)}</span>
+        </div>
+      ) : null}
+
       {task.column === 'in_progress' &&
       task.reworkCount > 0 &&
       task.lastReworkFeedback !== undefined &&
@@ -329,12 +339,20 @@ function TaskCard(props: {
       <div className="task-card-footer">
         <div className="task-card-footer-actions">
           {task.column === 'in_progress' &&
-          (live.stalled || (task.reworkCount > 0 && (live.lightStatus === 'idle' || live.lightStatus === 'done'))) ? (
+          (live.kickoffUndelivered ||
+            live.stalled ||
+            (task.reworkCount > 0 && (live.lightStatus === 'idle' || live.lightStatus === 'done'))) ? (
             <button
               type="button"
               className="btn btn-xs"
               disabled={props.busy !== undefined}
-              title={live.stalled ? t(TASK_ACTION_CONTINUE_TITLE) : t(TASK_ACTION_CONTINUE_REWORK_TITLE)}
+              title={
+                live.kickoffUndelivered
+                  ? t(TASK_ACTION_RESUME_KICKOFF_TITLE)
+                  : live.stalled
+                    ? t(TASK_ACTION_CONTINUE_TITLE)
+                    : t(TASK_ACTION_CONTINUE_REWORK_TITLE)
+              }
               onClick={(e) => {
                 e.stopPropagation()
                 props.onContinue(item)
@@ -624,13 +642,19 @@ export function TaskBoardScreen(props: TaskBoardScreenProps): ReactNode {
     },
     onRework: (taskId: string) => setReworkTaskId(taskId),
     onContinue: (item: TaskItem) => {
-      const conversationId = item.task.conversationId
-      if (conversationId === undefined) return
       if (busyTaskId !== undefined) return
       setBusyTaskId(`continue:${item.task.id}`)
       setActionError(null)
-      void ctx
-        .submitInput(TASK_CONTINUE_PROMPT, { conversationId })
+      // Kickoff-undelivered tasks resume through the explicit resume_kickoff action
+      // (idempotent via the original requestId); the plain continue message is only
+      // for stalled / reworked tasks. Never dispatched automatically either way.
+      const action =
+        item.task.kickoffUndelivered === true
+          ? ctx.callAction('resume_kickoff', { taskId: item.task.id })
+          : item.task.conversationId !== undefined
+            ? ctx.submitInput(TASK_CONTINUE_PROMPT, { conversationId: item.task.conversationId })
+            : Promise.resolve()
+      void action
         .catch((err: unknown) => {
           const message = err instanceof Error ? err.message : String(err)
           setActionError(message)
@@ -905,6 +929,10 @@ export function TaskBoardScreen(props: TaskBoardScreenProps): ReactNode {
           inline={props.inlineDrawer}
           onClose={() => props.setParams({ task: undefined })}
           onRework={(taskId) => setReworkTaskId(taskId)}
+          onResumeKickoff={(taskId) =>
+            runTaskAction(taskId, () => ctx.callAction('resume_kickoff', { taskId }))
+          }
+          busy={busyTaskId !== undefined}
         />
       ) : null}
     </div>

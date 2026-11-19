@@ -1518,6 +1518,98 @@ test('创建幂等键：同一意图重试复用旧 key，重新打开生成新 
 })
 
 // ---------------------------------------------------------------------------
+// 7.8 Kickoff undelivered resume + merged-only evidence copy
+// ---------------------------------------------------------------------------
+
+test('开工未送达：卡与抽屉呈现事实，继续按钮走 resume_kickoff 显式动作', { timeout: 60_000 }, async (t) => {
+  const submitCalls: Array<{ text: string; conversationId?: number }> = []
+  const ctx = makeSpyCtx({
+    submitInput: async (text, options) => {
+      submitCalls.push({ text, conversationId: options?.conversationId })
+    },
+  })
+  setStubState({
+    conversations: [conv(10, 'kickoff exec', { status: 'idle' })],
+    board: {
+      tasks: [
+        task('T-1', { column: 'in_progress', conversationId: 10, kickoffUndelivered: true, createdAt: 100 }),
+      ],
+      updatedAt: 1,
+    },
+  })
+  const { props } = mutableScreenProps({}, { inlineDrawer: true })
+  const { host, unmount, reRender } = await mountBoard(ctx, props)
+  t.after(unmount)
+
+  const card = host.querySelector('[data-task-id="T-1"]')
+  assert.ok(card)
+  assert.match(card.textContent ?? '', /Kickoff not delivered/, '卡上呈现开工未送达事实')
+  assert.ok(card.classList.contains('is-attention'), '开工未送达计入需处理')
+  const continueBtn = [...(card.querySelectorAll('button') ?? [])].find((b) => b.textContent?.includes('Continue'))
+  assert.ok(continueBtn, '应直出继续按钮')
+  assert.match(continueBtn.title, /resume_kickoff/)
+  await click(continueBtn ?? null)
+  assert.deepEqual(ctx.actionCalls, [{ actionId: 'resume_kickoff', input: { taskId: 'T-1' } }], '继续走 resume_kickoff 动作')
+  assert.equal(submitCalls.length, 0, '开工未送达不得走普通 submitInput 自动投递')
+
+  // 详情抽屉同样呈现事实并提供显式继续
+  const detailBtn = [...(card.querySelectorAll('button') ?? [])].find((b) => b.getAttribute('aria-label') === 'View task details')
+  await click(detailBtn ?? null)
+  await reRender()
+  const drawer = host.querySelector('.primary-drawer-content')
+  assert.ok(drawer)
+  assert.match(drawer.textContent ?? '', /Kickoff not delivered/)
+  const drawerContinue = [...(drawer.querySelectorAll('button') ?? [])].find((b) => b.textContent?.includes('Continue'))
+  assert.ok(drawerContinue, '抽屉底部应提供显式继续')
+  await click(drawerContinue ?? null)
+  assert.deepEqual(ctx.actionCalls, [
+    { actionId: 'resume_kickoff', input: { taskId: 'T-1' } },
+    { actionId: 'resume_kickoff', input: { taskId: 'T-1' } },
+  ])
+  unmount()
+})
+
+test('开工未送达失败如实呈现：resume_kickoff 拒绝时错误上浮不静默', { timeout: 60_000 }, async (t) => {
+  const ctx = makeSpyCtx({
+    callAction: async () => {
+      throw new Error('task_conversation_missing')
+    },
+  })
+  setStubState({
+    conversations: [conv(10, 'kickoff exec', { status: 'idle' })],
+    board: {
+      tasks: [task('T-1', { column: 'in_progress', conversationId: 10, kickoffUndelivered: true, createdAt: 100 })],
+      updatedAt: 1,
+    },
+  })
+  const { host, unmount } = await mountBoard(ctx, mutableScreenProps().props)
+  t.after(unmount)
+  const card = host.querySelector('[data-task-id="T-1"]')
+  assert.ok(card)
+  const continueBtn = [...(card.querySelectorAll('button') ?? [])].find((b) => b.textContent?.includes('Continue'))
+  await click(continueBtn ?? null)
+  assert.match(host.textContent ?? '', /task_conversation_missing/, '失败错误如实上浮')
+  assert.ok(ctx.notifyCalls.some((n) => n.message.includes('task_conversation_missing')))
+  unmount()
+})
+
+test('合并确认文案对齐 merged 证据语义：仅明确 merged 确认可结单', { timeout: 60_000 }, async (t) => {
+  setStubState({ conversations: standardConversations(), board: standardBoard() })
+  const ctx = makeSpyCtx()
+  const { host, unmount } = await mountBoard(ctx, mutableScreenProps().props)
+  t.after(unmount)
+  const t3 = host.querySelector('[data-task-id="T-3"]')
+  assert.ok(t3)
+  const mergeBtn = [...t3.querySelectorAll('button')].find((b) => b.textContent?.includes('Merge & close'))
+  await click(mergeBtn ?? null)
+  const modal = document.querySelector('.task-modal')
+  assert.ok(modal)
+  assert.match(modal.textContent ?? '', /merged: true/, '确认文案应言明仅 merged: true 明确证据结单')
+  assert.match(modal.textContent ?? '', /manual review/, '失败路径应言明回到人工复核')
+  unmount()
+})
+
+// ---------------------------------------------------------------------------
 // 8. Actual-output rules (DOM assertions, not source regex scans)
 // ---------------------------------------------------------------------------
 
