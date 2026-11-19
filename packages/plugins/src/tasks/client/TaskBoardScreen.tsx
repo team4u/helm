@@ -57,11 +57,15 @@ import {
   TASK_ACTION_CONTINUE,
   TASK_ACTION_CONTINUE_TITLE,
   TASK_ACTION_DETAIL,
+  TASK_ACTION_DETAIL_BTN_TITLE,
   TASK_ACTION_DETAIL_LABEL,
   TASK_ACTION_MERGE_CLOSE,
   TASK_ACTION_MERGE_CLOSE_TITLE,
   TASK_ACTION_REWORK,
   TASK_ACTION_REWORK_TITLE,
+  TASK_ACTION_OPEN_CONV_BTN,
+  TASK_ACTION_OPEN_CONV_BTN_TITLE,
+  TASK_ACTION_CONTINUE_REWORK_TITLE,
   TASK_ACTION_SPLIT,
   TASK_ACTION_SPLIT_LABEL,
   TASK_ACTION_START,
@@ -83,6 +87,7 @@ import {
   TASK_OFF_BOARD_INSPECT_FAILED,
   TASK_CONTINUE_PROMPT,
   TASK_CONTINUE_SENDING,
+  taskCardReworkLine,
   taskOffBoardDeps,
   taskOffBoardNotice,
   TASK_EMPTY_HINT,
@@ -113,7 +118,7 @@ import {
   taskReworkedTimes,
   taskWaitingForDeps,
 } from './copy.ts'
-import { TaskCreateDialog, TaskDetailDrawer, TaskReworkDialog } from './TaskDialogs.tsx'
+import { TaskCreateDialog, TaskDetailDrawer, TaskMergeConfirmDialog, TaskReworkDialog } from './TaskDialogs.tsx'
 
 /** Light word for the shared StatusLight (tone normalization lives in the SDK). */
 function lightWord(status: TaskLightStatus): string {
@@ -192,7 +197,7 @@ function TaskCard(props: {
           <button
             type="button"
             className="btn btn-xs btn-icon-xs"
-            title={t(TASK_ACTION_DETAIL)}
+            title={t(TASK_ACTION_DETAIL_BTN_TITLE)}
             aria-label={t(TASK_ACTION_DETAIL_LABEL)}
             onClick={(e) => {
               e.stopPropagation()
@@ -260,6 +265,16 @@ function TaskCard(props: {
         </div>
       ) : null}
 
+      {task.column === 'in_progress' &&
+      task.reworkCount > 0 &&
+      task.lastReworkFeedback !== undefined &&
+      task.lastReworkFeedback !== '' ? (
+        <div className="task-card-rework" title={taskCardReworkLine(task.lastReworkFeedback, locale)}>
+          <HelmxIcon name="rotate-ccw" size={11} />
+          <span className="task-card-rework-text">{taskCardReworkLine(task.lastReworkFeedback, locale)}</span>
+        </div>
+      ) : null}
+
       {submission !== undefined && (task.column === 'in_review' || task.column === 'done') ? (
         <div className="task-card-submission">
           <div className="task-card-submission-title">
@@ -289,12 +304,13 @@ function TaskCard(props: {
 
       <div className="task-card-footer">
         <div className="task-card-footer-actions">
-          {task.column === 'in_progress' && live.stalled ? (
+          {task.column === 'in_progress' &&
+          (live.stalled || (task.reworkCount > 0 && (live.lightStatus === 'idle' || live.lightStatus === 'done'))) ? (
             <button
               type="button"
               className="btn btn-xs"
               disabled={props.busy !== undefined}
-              title={t(TASK_ACTION_CONTINUE_TITLE)}
+              title={live.stalled ? t(TASK_ACTION_CONTINUE_TITLE) : t(TASK_ACTION_CONTINUE_REWORK_TITLE)}
               onClick={(e) => {
                 e.stopPropagation()
                 props.onContinue(item)
@@ -302,6 +318,21 @@ function TaskCard(props: {
             >
               <HelmxIcon name="play" size={11} />
               <span>{t(TASK_ACTION_CONTINUE)}</span>
+            </button>
+          ) : null}
+          {hasConversation && task.column !== 'backlog' ? (
+            <button
+              type="button"
+              className="btn btn-xs btn-ghost"
+              disabled={props.busy !== undefined}
+              title={t(TASK_ACTION_OPEN_CONV_BTN_TITLE)}
+              onClick={(e) => {
+                e.stopPropagation()
+                props.onOpenConversation(item)
+              }}
+            >
+              <HelmxIcon name="message-square" size={11} />
+              <span>{t(TASK_ACTION_OPEN_CONV_BTN)}</span>
             </button>
           ) : null}
           {task.column === 'backlog' && live.isReadyToStart ? (
@@ -477,6 +508,7 @@ export function TaskBoardScreen(props: TaskBoardScreenProps): ReactNode {
   const [queryDraft, setQueryDraft] = useState(params.filter.query)
   const [createOpen, setCreateOpen] = useState(false)
   const [reworkTaskId, setReworkTaskId] = useState<string | undefined>(undefined)
+  const [mergeConfirmId, setMergeConfirmId] = useState<string | undefined>(undefined)
   const [busyTaskId, setBusyTaskId] = useState<string | undefined>(undefined)
   const [actionError, setActionError] = useState<string | null>(null)
 
@@ -557,8 +589,15 @@ export function TaskBoardScreen(props: TaskBoardScreenProps): ReactNode {
       }
     },
     onStart: (taskId: string) => runTaskAction(taskId, () => ctx.callAction('start', { taskId })),
-    onApprove: (taskId: string, mergeAction: 'close_only' | 'merge_and_close') =>
-      runTaskAction(taskId, () => ctx.callAction('approve', { taskId, mergeAction })),
+    onApprove: (taskId: string, mergeAction: 'close_only' | 'merge_and_close') => {
+      // Merging touches the repository main branch through the executor: explicit
+      // confirmation with the branch/cleanup facts first, never a one-tap dispatch.
+      if (mergeAction === 'merge_and_close') {
+        setMergeConfirmId(taskId)
+        return
+      }
+      runTaskAction(taskId, () => ctx.callAction('approve', { taskId, mergeAction }))
+    },
     onRework: (taskId: string) => setReworkTaskId(taskId),
     onContinue: (item: TaskItem) => {
       const conversationId = item.task.conversationId
@@ -707,6 +746,26 @@ export function TaskBoardScreen(props: TaskBoardScreenProps): ReactNode {
           <HelmxIcon name="check-square" size={26} />
           <div className="task-board-empty-title">{t(TASK_EMPTY_NO_TASKS)}</div>
           <div className="task-board-empty-hint text-subtle">{t(TASK_EMPTY_HINT)}</div>
+          <div className="task-board-actions" style={{ justifyContent: 'center' }}>
+            <button
+              type="button"
+              className="btn btn-sm btn-ghost"
+              title={t(TASK_CHAT_TASK_TITLE)}
+              onClick={() => ctx.openScreen(`agent:${config.defaultPlannerProfile || 'assistant'}`)}
+            >
+              <HelmxIcon name="message-square" size={12} />
+              <span>{t(TASK_CHAT_TASK)}</span>
+            </button>
+            <button
+              type="button"
+              className="btn btn-sm"
+              title={t(TASK_NEW_TASK_TITLE)}
+              onClick={() => setCreateOpen(true)}
+            >
+              <HelmxIcon name="plus" size={12} />
+              <span>{t(TASK_NEW_TASK)}</span>
+            </button>
+          </div>
         </div>
       ) : (
         <>
@@ -788,6 +847,21 @@ export function TaskBoardScreen(props: TaskBoardScreenProps): ReactNode {
           open={createOpen}
           onClose={() => setCreateOpen(false)}
           dependencyOptions={(board?.tasks ?? []).filter((task) => task.column !== 'done').map((task) => task.id)}
+        />
+      ) : null}
+
+      {mergeConfirmId !== undefined ? (
+        <TaskMergeConfirmDialog
+          taskId={mergeConfirmId}
+          title={tasksById.get(mergeConfirmId)?.title ?? mergeConfirmId}
+          submission={tasksById.get(mergeConfirmId)?.submission}
+          open={mergeConfirmId !== undefined}
+          busy={busyTaskId !== undefined}
+          onClose={() => setMergeConfirmId(undefined)}
+          onConfirm={(taskId) => {
+            setMergeConfirmId(undefined)
+            runTaskAction(taskId, () => ctx.callAction('approve', { taskId, mergeAction: 'merge_and_close' }))
+          }}
         />
       ) : null}
 

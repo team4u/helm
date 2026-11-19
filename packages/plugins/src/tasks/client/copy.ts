@@ -341,6 +341,42 @@ export const TASK_MERGE_PENDING_DISABLED_TITLE: LocalizedText = L(
 )
 
 // ---------------------------------------------------------------------------
+// Merge & close confirmation (touches the Git main branch via the executor)
+// ---------------------------------------------------------------------------
+
+export const TASK_MERGE_CONFIRM_TITLE: LocalizedText = L('Merge & close', '合并并结单')
+export function taskMergeConfirmAria(taskId: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  return resolveLocalizedText({ en: `Confirm merge and close for ${taskId}`, 'zh-CN': `确认合并并结单 ${taskId}` }, locale)
+}
+export const TASK_MERGE_CONFIRM_BODY: LocalizedText = L(
+  'The executor will merge the delivery branch into the main branch, clean up the worktree, and resubmit for final approval. This touches the repository main branch.',
+  '执行会话将把交付分支合入主干、清理工作树，并再次交卷等待最终验收。此操作涉及仓库主干。',
+)
+export const TASK_MERGE_CONFIRM_TO_BRANCH: LocalizedText = L('Merge branch', '合并分支')
+export const TASK_MERGE_CONFIRM_WORKTREE: LocalizedText = L('Worktree to clean up', '待清理工作树')
+export const TASK_MERGE_CONFIRM_FILES: LocalizedText = L('Changed files', '改动文件')
+export const TASK_MERGE_CONFIRM_UNKNOWN_BRANCH: LocalizedText = L('unknown (executor decides)', '未知（由执行会话决定）')
+export const TASK_MERGE_CONFIRM_SUBMIT: LocalizedText = L('Merge & close task', '确认合并并结单')
+export const TASK_MERGE_CONFIRM_CANCEL: LocalizedText = L('Cancel', '取消')
+
+/** Distinct affordances: the live execution conversation drawer vs the task detail drawer. */
+export const TASK_ACTION_OPEN_CONV_BTN: LocalizedText = L('Conversation', '会话')
+export const TASK_ACTION_OPEN_CONV_BTN_TITLE: LocalizedText = L(
+  'Open the live execution conversation (not the task details)',
+  '打开实时执行会话（非任务详情）',
+)
+export const TASK_ACTION_DETAIL_BTN_TITLE: LocalizedText = L('Open the task details (brief, deps, submission)', '打开任务详情（简报、依赖、交付）')
+
+/** Current rework context on reworked in-progress cards. */
+export function taskCardReworkLine(feedback: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  return resolveLocalizedText({ en: `Rework: ${feedback}`, 'zh-CN': `返工：${feedback}` }, locale)
+}
+export const TASK_ACTION_CONTINUE_REWORK_TITLE: LocalizedText = L(
+  'Send an explicit continue message resuming from the current rework revision',
+  '发送明确的继续消息，从当前返工修订状态继续',
+)
+
+// ---------------------------------------------------------------------------
 // Off-board task deep link (inspect affordance)
 // ---------------------------------------------------------------------------
 

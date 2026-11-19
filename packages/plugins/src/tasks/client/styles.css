@@ -9,6 +9,9 @@
   flex-direction: column;
   gap: 14px;
   min-width: 0;
+  /* Container queries make the column grid adapt to the REAL pane width (split
+     view / narrow windows), which viewport media queries cannot see. */
+  container-type: inline-size;
 }
 
 /* ---- Top bar & toolbar ---- */
@@ -85,6 +88,21 @@
 @media (max-width: 1080px) {
   .task-board-columns {
     grid-template-columns: repeat(2, minmax(220px, 1fr));
+  }
+}
+
+/* Narrow containers (split panes, half-width windows): same degradation driven by
+   the actual board width; one column below the mobile breakpoint so cards never
+   overflow horizontally. */
+@container (max-width: 1080px) {
+  .task-board-columns {
+    grid-template-columns: repeat(2, minmax(180px, 1fr));
+  }
+}
+
+@container (max-width: 720px) {
+  .task-board-columns {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -324,6 +342,23 @@
   color: var(--warn);
 }
 
+/* Current rework context line (reworked in-progress cards). */
+.task-card-rework {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--fg-muted);
+  min-width: 0;
+}
+
+.task-card-rework-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Card footer actions */
 
 .task-card-footer {
@@ -355,6 +390,31 @@
 .task-board-mobile-tabs {
   display: flex;
   width: 100%;
+  min-width: 0;
+}
+
+/* Five label+count capsules must fit narrow viewports (~375px): equal flex
+   shrink, compact padding, single-line ellipsized labels and shrunken badges. */
+@media (max-width: 680px) {
+  .task-board-mobile-tabs .segmented-control-btn {
+    flex: 1 1 0;
+    min-width: 0;
+    padding: 0 6px;
+    gap: 4px;
+  }
+
+  .task-board-mobile-tabs .segmented-control-btn > span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .task-board-mobile-tabs .segmented-control-btn .badge {
+    flex-shrink: 0;
+    padding: 0 4px;
+    font-size: 10px;
+  }
 }
 
 .task-board-mobile-list {
@@ -387,6 +447,27 @@
 
   .task-board-actions .btn {
     flex: 1;
+  }
+
+  /* Necessary card actions stay thumb-reachable: full-width wrapped rows. */
+  .task-card-footer-actions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .task-card-footer-actions .btn {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  /* Detail drawer footer actions reach full width on phones. */
+  .task-detail-drawer .primary-drawer-footer {
+    flex-wrap: wrap;
+  }
+
+  .task-detail-drawer .primary-drawer-footer .btn {
+    flex: 1 1 auto;
+    min-width: 0;
   }
 }
 

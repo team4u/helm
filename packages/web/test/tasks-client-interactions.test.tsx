@@ -19,14 +19,11 @@
  *     （停滞不误报）、看板外依赖不伪造阻塞、停滞任务显式继续（submitInput 人工触发）、
  *     mergePending 待验收互斥禁用、历史深链看板外任务显式提示 + inspect 加载完整记录、
  *     哈希派生工具名动词族解析；
- * 8. tasks/client 全目录静态铁律：零 Emoji、零原生 select、零 history.*、
- *    客户端导出仅含 PascalCase 组件。
+ * 8. 实际输出铁律：渲染 DOM 无原生 select/无 Emoji（非源码 regex 扫描）、
+ *    编译模块导出仅含 PascalCase 组件。
  */
 import assert from 'node:assert/strict'
-import { readdirSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { after, before, test } from 'node:test'
-import { fileURLToPath } from 'node:url'
 import * as React from 'react'
 import { act } from 'react'
 import type {
@@ -385,6 +382,7 @@ test('parseTaskBoardDoc：非法载荷显式无效（undefined），合法字段
     ],
     updatedAt: 42,
   })
+  assert.ok(parsed, '合法载荷应解析成功')
   assert.equal(parsed.tasks.length, 1)
   assert.equal(parsed.tasks[0]?.id, 'T-1')
   assert.deepEqual(parsed.tasks[0]?.dependsOn, ['T-9'])
@@ -757,7 +755,7 @@ test('卡片交互：主体点击开抽屉（blocked 子会话优先直达）、
 // 5. Actions: start / approve / merge & close / rework / create / chat
 // ---------------------------------------------------------------------------
 
-test('看板动作：开工/通过/合并结单调用正确 callAction 载荷', { timeout: 60_000 }, async (t) => {
+test('看板动作：开工/通过直发；合并结单先确认（分支与清理事实）再派发', { timeout: 60_000 }, async (t) => {
   setStubState({ conversations: standardConversations(), board: standardBoard() })
   const ctx = makeSpyCtx()
   const { host, unmount } = await mountBoard(ctx, mutableScreenProps().props)
@@ -770,7 +768,25 @@ test('看板动作：开工/通过/合并结单调用正确 callAction 载荷', 
 
   await click(buttonByText(card('T-5') ?? host, 'Start'))
   await click(buttonByText(card('T-3') ?? host, 'Approve'))
+
+  // 合并结单涉及 Git 主干：必须先弹确认（展示分支/清理），未确认前不派发
   await click(buttonByText(card('T-3') ?? host, 'Merge & close'))
+  assert.deepEqual(ctx.actionCalls.map(({ actionId }) => actionId), ['start', 'approve'], '确认前不得派发 merge_and_close')
+  const confirmModal = document.querySelector('.task-modal')
+  assert.ok(confirmModal, '合并确认弹窗应挂载')
+  assert.match(confirmModal.textContent ?? '', /feat\/auth/, '确认弹窗应展示交付分支')
+  assert.match(confirmModal.textContent ?? '', /2 changed files/, '确认弹窗应展示改动文件数')
+  assert.match(confirmModal.textContent ?? '', /main branch/, '确认弹窗应说明涉及主干')
+
+  // 取消 → 不派发；再次发起并确认 → 派发 merge_and_close
+  await click([...confirmModal.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('Cancel')) ?? null)
+  assert.ok(document.querySelector('.task-modal') === null)
+  assert.deepEqual(ctx.actionCalls.map(({ actionId }) => actionId), ['start', 'approve'])
+  await click(buttonByText(card('T-3') ?? host, 'Merge & close'))
+  const modal2 = document.querySelector('.task-modal')
+  assert.ok(modal2)
+  await click([...modal2.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('Merge & close task')) ?? null)
+
   assert.deepEqual(
     ctx.actionCalls.map(({ actionId, input }) => ({ actionId, input })),
     [
@@ -1162,7 +1178,7 @@ test('mergePending 互斥：待验收卡禁用通过/合并/返工并说明原�
   assert.ok(t3)
   assert.match(t3.textContent ?? '', /Merge in progress/)
   for (const label of ['Approve', 'Merge & close', 'Rework']) {
-    const btn = [...(t3.querySelectorAll<HTMLButtonElement>('button') ?? [])].find((b) => b.textContent?.includes(label))
+    const btn = [...t3.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes(label))
     assert.ok(btn, `${label} 按钮应存在`)
     assert.equal(btn.disabled, true, `${label} 在合并收尾中应禁用`)
     assert.match(btn.title, /Merge finishing in progress/)
@@ -1208,29 +1224,125 @@ test('历史深链看板外任务：显式提示 + inspect 加载完整记录', 
 })
 
 // ---------------------------------------------------------------------------
-// 8. Static rules over the client directory
+// 7.6 Second review round: reworked cards / drawer distinction / empty-state CTAs
 // ---------------------------------------------------------------------------
 
-test('静态铁律：零 Emoji、零原生 select、零 history.*、客户端导出仅 PascalCase 组件', { timeout: 60_000 }, () => {
-  const clientRoot = fileURLToPath(new URL('../../plugins/src/tasks/client', import.meta.url))
-  const files: string[] = []
-  const walk = (dir: string): void => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const full = join(dir, entry.name)
-      if (entry.isDirectory()) walk(full)
-      else if (/\.(ts|tsx|css)$/.test(entry.name)) files.push(full)
-    }
-  }
-  walk(clientRoot)
-  assert.ok(files.length >= 5, 'client 目录应包含完整实现文件')
-  for (const file of files) {
-    const text = readFileSync(file, 'utf8')
-    assert.equal(EMOJI_RE.test(text), false, `${file} 含 Emoji`)
-    if (file.endsWith('.tsx') || file.endsWith('.ts')) {
-      assert.equal(/<select[\s>]/.test(text), false, `${file} 使用原生 select`)
-      assert.equal(/history\.(push|replace|back|forward)/.test(text), false, `${file} 直接操作 history`)
-    }
-  }
+test('被打回卡：隐藏旧交卷、呈现返工修订上下文并可从当前修订继续', { timeout: 60_000 }, async (t) => {
+  const submitCalls: Array<{ text: string; conversationId?: number }> = []
+  const ctx = makeSpyCtx({
+    submitInput: async (text, options) => {
+      submitCalls.push({ text, conversationId: options?.conversationId })
+    },
+  })
+  setStubState({
+    conversations: [conv(60, 'reworked exec', { status: 'idle' })],
+    board: {
+      tasks: [
+        task('T-8', {
+          column: 'in_progress',
+          conversationId: 60,
+          reworkCount: 1,
+          lastReworkFeedback: 'fix the flaky login test',
+          submission: { summary: 'stale old submission', branch: 'feat/old', submittedAt: 1 },
+          createdAt: 800,
+        }),
+      ],
+      updatedAt: 1,
+    },
+  })
+  const { props } = mutableScreenProps({}, { inlineDrawer: true })
+  const { host, unmount, reRender } = await mountBoard(ctx, props)
+  t.after(unmount)
+  const card = host.querySelector('[data-task-id="T-8"]')
+  assert.ok(card)
+  assert.doesNotMatch(card.textContent ?? '', /stale old submission/, '被打回回进行中的卡不得展示旧交卷')
+  assert.match(card.textContent ?? '', /Rework: fix the flaky login test/, '应呈现当前返工修订上下文')
+  const continueBtn = [...(card.querySelectorAll('button') ?? [])].find((b) => b.textContent?.includes('Continue'))
+  assert.ok(continueBtn, '返工停滞卡应可从当前修订继续')
+  await click(continueBtn ?? null)
+  assert.equal(submitCalls.length, 1)
+  assert.equal(submitCalls[0]?.conversationId, 60)
+  assert.match(submitCalls[0]?.text ?? '', /task_submit/)
+
+  // 详情抽屉同样隐藏被返工取代的旧交卷，但保留返工意见专区
+  const detailBtn = [...(card.querySelectorAll('button') ?? [])].find((b) => b.getAttribute('aria-label') === 'View task details')
+  await click(detailBtn ?? null)
+  await reRender()
+  const drawer = host.querySelector('.primary-drawer-content')
+  assert.ok(drawer)
+  assert.doesNotMatch(drawer.textContent ?? '', /stale old submission/)
+  assert.match(drawer.textContent ?? '', /fix the flaky login test/)
+  unmount()
+})
+
+test('抽屉区分：卡角「会话」按钮开执行会话抽屉，「详情」按钮开任务详情抽屉', { timeout: 60_000 }, async (t) => {
+  setStubState({
+    conversations: [conv(10, 'T-1 exec', { status: 'working', doing: 'bash: pnpm test' })],
+    board: {
+      tasks: [task('T-1', { column: 'in_progress', conversationId: 10, createdAt: 100 })],
+      updatedAt: 1,
+    },
+  })
+  const ctx = makeSpyCtx()
+  const { props } = mutableScreenProps({}, { inlineDrawer: true })
+  const { host, unmount, reRender } = await mountBoard(ctx, props)
+  t.after(unmount)
+  const card = host.querySelector('[data-task-id="T-1"]')
+  assert.ok(card)
+
+  // 底部显式「会话」按钮 → 执行会话抽屉（openConversationDrawer），标题明示非任务详情
+  const convBtn = [...(card.querySelectorAll('button') ?? [])].find((b) => b.textContent?.includes('Conversation'))
+  assert.ok(convBtn, '进行中卡底部应直出「会话」按钮')
+  assert.match(convBtn.title, /not the task details/)
+  await click(convBtn ?? null)
+  assert.deepEqual(ctx.drawerCalls, [10])
+
+  // 「详情」按钮 → 任务详情抽屉（setParams 深链），与执行会话抽屉不同入口
+  const detailBtn = [...(card.querySelectorAll('button') ?? [])].find((b) => b.getAttribute('aria-label') === 'View task details')
+  assert.match(detailBtn?.title ?? '', /brief, deps, submission/)
+  await click(detailBtn ?? null)
+  assert.equal(props.params['task'], 'T-1')
+  await reRender()
+  assert.ok(host.querySelector('.primary-drawer-content'), '任务详情抽屉应渲染')
+  unmount()
+})
+
+test('空看板 CTA：无任务时仍可一键发起规划对话或新建待办', { timeout: 60_000 }, async (t) => {
+  setStubState({ conversations: [], board: { tasks: [], updatedAt: 1 } })
+  const ctx = makeSpyCtx()
+  const { host, unmount } = await mountBoard(ctx, mutableScreenProps().props)
+  t.after(unmount)
+  const empty = host.querySelector('.task-board-empty')
+  assert.ok(empty)
+  const planBtn = [...empty.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('Plan a task'))
+  assert.ok(planBtn, '空态应提供「聊一个新任务」')
+  await click(planBtn ?? null)
+  assert.deepEqual(ctx.screenCalls, ['agent:planner'])
+  const newBtn = [...empty.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('New task'))
+  assert.ok(newBtn, '空态应提供「新建待办」')
+  await click(newBtn ?? null)
+  assert.ok(document.querySelector('.task-modal'), '新建弹窗应从空态打开')
+  unmount()
+})
+
+// ---------------------------------------------------------------------------
+// 8. Actual-output rules (DOM assertions, not source regex scans)
+// ---------------------------------------------------------------------------
+
+test('实际输出铁律：渲染 DOM 无原生 select/无 Emoji、导出仅 PascalCase 组件', { timeout: 60_000 }, async (t) => {
+  // 断言实际渲染产物而非源码 regex 扫描（AGENTS §5 三禁）：
+  // - 真实挂载的看板 DOM 不得出现原生 <select>（筛选一律 SDK Select）；
+  // - 渲染文本不得含 Emoji；
+  // - 导航仅经 setParams / ctx.open* 宿主动作（行为测试已锁定）；
+  // - 编译模块导出仅为 PascalCase 组件函数（Fast Refresh 契约）。
+  setStubState({ conversations: standardConversations(), board: standardBoard() })
+  const { host, unmount } = await mountBoard(makeSpyCtx(), mutableScreenProps().props)
+  t.after(unmount)
+  assert.ok(host.querySelectorAll('.task-card').length > 0, '看板应有任务卡渲染')
+  assert.ok(host.querySelectorAll('select').length === 0, '渲染 DOM 不得出现原生 select')
+  assert.equal(EMOJI_RE.test(host.textContent ?? ''), false, '渲染文本不得含 Emoji')
+  unmount()
+
   for (const [name, value] of Object.entries(rawModule)) {
     if (name === 'default' || name.startsWith('__')) continue
     assert.ok(/^[A-Z][A-Za-z0-9]*$/.test(name), `客户端应仅导出 PascalCase 组件，发现：${name}`)

@@ -34,6 +34,7 @@ import {
   usePluginLocale,
   usePluginTranslator,
 } from '@helmx/plugin-client'
+import type { TaskSubmission } from './models.ts'
 import type { TaskItem, TaskRecord } from './models.ts'
 import {
   TASK_ACTION_APPROVE,
@@ -106,12 +107,21 @@ import {
   TASK_SECTION_SUBMISSION,
   TASK_SUBMIT_REQUIRED,
   TASK_TITLE_TOO_LONG,
+  TASK_MERGE_CONFIRM_BODY,
+  TASK_MERGE_CONFIRM_CANCEL,
+  TASK_MERGE_CONFIRM_FILES,
+  TASK_MERGE_CONFIRM_SUBMIT,
+  TASK_MERGE_CONFIRM_TITLE,
+  TASK_MERGE_CONFIRM_TO_BRANCH,
+  TASK_MERGE_CONFIRM_UNKNOWN_BRANCH,
+  TASK_MERGE_CONFIRM_WORKTREE,
   taskChangedFiles,
   taskColumnLabel,
   taskConversationJumpTitle,
   taskCreateDialogAria,
   taskDetailDialogLabel,
   taskLightLabel,
+  taskMergeConfirmAria,
   taskOriginJumpTitle,
   taskReworkDialogAria,
   taskReworkDialogTitle,
@@ -464,6 +474,93 @@ export function TaskReworkDialog(props: TaskReworkDialogProps): ReactNode {
 }
 
 // ---------------------------------------------------------------------------
+// Merge & close confirmation
+// ---------------------------------------------------------------------------
+
+export interface TaskMergeConfirmDialogProps {
+  taskId: string
+  title: string
+  submission: TaskSubmission | undefined
+  open: boolean
+  onClose: () => void
+  onConfirm: (taskId: string) => void
+  busy: boolean
+}
+
+/**
+ * Explicit confirmation before `approve { mergeAction: 'merge_and_close' }`:
+ * the action touches the repository main branch through the executor, so the
+ * dialog shows the exact branch, the worktree that will be cleaned up and the
+ * changed-file count before dispatching. No auto-merge without this consent.
+ */
+export function TaskMergeConfirmDialog(props: TaskMergeConfirmDialogProps): ReactNode {
+  const locale = usePluginLocale()
+  const t = usePluginTranslator()
+  const submission = props.submission
+  return (
+    <Dialog open={props.open} onOpenChange={(open) => { if (!open && !props.busy) props.onClose() }}>
+      <DialogPortal>
+        <DialogOverlay />
+        <DialogContent className="modal task-modal" aria-label={taskMergeConfirmAria(props.taskId, locale)}>
+          <div className="modal-header">
+            <div className="task-modal-title-row">
+              <HelmxIcon name="git-pull-request" size={15} />
+              <DialogTitle className="modal-title">{t(TASK_MERGE_CONFIRM_TITLE)}</DialogTitle>
+              <span className="badge badge-neutral mono">{props.taskId}</span>
+            </div>
+            <DialogClose asChild>
+              <button type="button" className="btn btn-ghost btn-sm" aria-label={t(TASK_ACTION_CLOSE)} title={t(TASK_ACTION_CLOSE)}>
+                <HelmxIcon name="x" size={14} />
+              </button>
+            </DialogClose>
+          </div>
+          <div className="modal-body task-modal-body">
+            <DialogDescription className="text-secondary" style={{ fontSize: '13px', lineHeight: 1.5 }}>
+              {props.title}
+            </DialogDescription>
+            <div className="callout callout-warn">{t(TASK_MERGE_CONFIRM_BODY)}</div>
+            <div className="form-grid">
+              <div className="form-grid-row">
+                <span className="form-grid-label"><span>{t(TASK_MERGE_CONFIRM_TO_BRANCH)}</span></span>
+                <span className="form-grid-value mono">
+                  {submission?.branch ?? t(TASK_MERGE_CONFIRM_UNKNOWN_BRANCH)}
+                </span>
+              </div>
+              {submission?.worktreePath !== undefined ? (
+                <div className="form-grid-row">
+                  <span className="form-grid-label"><span>{t(TASK_MERGE_CONFIRM_WORKTREE)}</span></span>
+                  <span className="form-grid-value mono" title={submission.worktreePath}>{submission.worktreePath}</span>
+                </div>
+              ) : null}
+              {submission?.changedFiles !== undefined && submission.changedFiles.length > 0 ? (
+                <div className="form-grid-row">
+                  <span className="form-grid-label"><span>{t(TASK_MERGE_CONFIRM_FILES)}</span></span>
+                  <span className="form-grid-value">{taskChangedFiles(submission.changedFiles.length, locale)}</span>
+                </div>
+              ) : null}
+            </div>
+          </div>
+          <div className="task-modal-footer">
+            <button type="button" className="btn btn-sm btn-ghost" disabled={props.busy} onClick={props.onClose}>
+              <span>{t(TASK_MERGE_CONFIRM_CANCEL)}</span>
+            </button>
+            <button
+              type="button"
+              className="btn btn-sm"
+              disabled={props.busy}
+              onClick={() => props.onConfirm(props.taskId)}
+            >
+              <HelmxIcon name="git-pull-request" size={12} />
+              <span>{t(TASK_MERGE_CONFIRM_SUBMIT)}</span>
+            </button>
+          </div>
+        </DialogContent>
+      </DialogPortal>
+    </Dialog>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Detail drawer
 // ---------------------------------------------------------------------------
 
@@ -683,7 +780,7 @@ export function TaskDetailDrawer(props: TaskDetailDrawerProps): ReactNode {
               )}
             </div>
 
-            {submission !== undefined ? (
+            {submission !== undefined && task.column !== 'in_progress' ? (
               <div className="task-detail-section">
                 <h4 className="task-detail-section-title">
                   <HelmxIcon name="git-branch" size={13} />
