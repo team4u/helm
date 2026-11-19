@@ -16,6 +16,7 @@ import {
 import { summarizeStepGroup, toolRowStats } from './tool-body-model.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { formatDurationMs } from '../lib/format.js'
+import { serverNow } from '../lib/server-clock.js'
 import { Tooltip } from '../ui/Tooltip.js'
 
 // ---------------------------------------------------------------------------
@@ -26,11 +27,12 @@ import { Tooltip } from '../ui/Tooltip.js'
  * 运行中工具的实时已耗时秒表：起点为派发该调用的响应结束时刻（消息 timestamp+durationMs，
  * 见 timeline-model appendEntry），本地每秒跳字，工具落定随行卸载（无孤儿定时器）。
  * tabular-nums 防止秒位跳动抖宽。
+ * now 取服务端时钟域（server-clock 偏差校正）：两端时钟差几秒不再整体偏移秒表、落定跳变。
  */
 function RunningElapsed({ startedAt }: { startedAt: number }): ReactNode {
-  const [now, setNow] = useState(() => Date.now())
+  const [now, setNow] = useState(() => serverNow())
   useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 1000)
+    const timer = setInterval(() => setNow(serverNow()), 1000)
     return () => clearInterval(timer)
   }, [])
   return <span className="tabular-nums">{formatDurationMs(Math.max(0, now - startedAt))}</span>
