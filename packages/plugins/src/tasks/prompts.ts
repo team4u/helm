@@ -64,7 +64,7 @@ export function buildMergeClosingPrompt(task: TaskRecord, note?: string): string
     `Task ${task.id} passed review and the reviewer explicitly authorized merging it now (this overrides the task's autoMerge=false isolation default for this closure).`,
     '- Merge your isolated branch into the main line following the project merge rules (run the required checks first).',
     '- Clean up any temporary worktree you created.',
-    `- Then call task_submit with the merge result (branch plus verification evidence such as the merge commit and checks status); this submission completes task ${task.id} directly — no second manual approval is needed.`,
+    `- Then call task_submit with the merge result, setting merged: true explicitly (plus the branch and verification evidence such as the merge commit and checks status); only that explicit declaration completes task ${task.id} — no second manual approval is needed. A submission without merged: true stays in review.`,
     ...(note !== undefined && note.trim() !== '' ? ['', `Reviewer note: ${note.trim()}`] : []),
     '</task_merge_closing>',
   ].join('\n')

@@ -191,6 +191,7 @@ test('tasks-unit5: <active_task> section is byte-constant and kickoff prompt car
   assert.match(planKickoff, /task_request_plan_approval with your concise plan/)
   const mergeClosing = buildMergeClosingPrompt(makeTask({ id: 'T-9' }), 'do it')
   assert.match(mergeClosing, /explicitly authorized merging it now/)
+  assert.match(mergeClosing, /merged: true explicitly/)
   assert.match(mergeClosing, /no second manual approval is needed/)
 })
 

@@ -118,7 +118,7 @@
 `approve mergeAction: 'merge_and_close'` 表示**用户已验收并显式授权本次合并**（显式授权
 覆盖任务 `autoMerge: false` 的默认隔离，合并指令文案如实注明）。插件向执行会话投递合并
 收尾指令后任务回 `in_progress` 并标记 `mergePending`；执行者完成合并清理后调用
-`task_submit` **携带明确合并证据（显式 `merged: true` 声明，或交付 branch）即一步终转 done**（会话归档、下游
+`task_submit` **显式声明 `merged: true` 即一步终转 done**（会话归档、下游
 依赖解锁）——不要求用户第二次人工点击。无证据的提交维持 `in_review` 待人工复核
 （「不能证明合入，维持待复核」）。
 

@@ -47,7 +47,7 @@ Use `builtin:tasks` when work should run in **independent execution conversation
 - Check status: `task_list` (filters: column / project / assignee / node), `task_inspect` for one task with live conversation state, recent entries, artifacts, and dependency status.
 - Review: when a card reaches `in_review`, read its `submission` (summary, verification, branch, changed files). Then:
   - `task_approve` (default `close_only`): marks done, archives the execution conversation, unblocks/downstream auto-start.
-  - `task_approve` with `mergeAction: 'merge_and_close'`: explicitly authorizes the merge now (overriding autoMerge=false for this closure); the assignee merges, cleans up, and its evidence-bearing `task_submit` (branch or verification) completes the task in one step.
+  - `task_approve` with `mergeAction: 'merge_and_close'`: explicitly authorizes the merge now (overriding autoMerge=false for this closure); the assignee merges, cleans up, and its `task_submit` with the explicit `merged: true` declaration completes the task in one step; a plain branch or verification text alone keeps the task in review.
   - `task_rework` with concrete `feedback`: returns the card to in_progress and delivers the feedback to the execution conversation.
 - Be honest: never approve work you have not checked; never fabricate progress. If a card shows "stalled" (turn settled without submission) or a missing conversation, surface it to the user instead of papering over it — the plugin never auto-nudges a human-owned execution conversation; ask the user to open the conversation and continue explicitly, or send it back with `task_rework`.
 
