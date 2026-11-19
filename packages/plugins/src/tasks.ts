@@ -186,6 +186,9 @@ export function createTasksPlugin(): PluginDefinition {
           getConfig()
           store.read()
           await ctx.host.skills.ensureSkill(readTasksSkillAsset())
+          // 先置活再执行恢复三块（回滚 / 孤儿收口 / 任务书补投）：补投触发的首回合
+          // 必须命中 before_turn 的 isActive() 门，携带 <active_task> 段落与正确的工具隔离。
+          active = true
           // 启动中断恢复（两阶段窗口）：
           // a) 占位后、绑定前重启 -> in_progress 无会话：诚实回滚 backlog 并记 lastError（绝不假装在跑）；
           // b) 绑定后、任务书接纳前重启 -> 已绑会话但零 helmx.input：补投任务书
@@ -247,7 +250,6 @@ export function createTasksPlugin(): PluginDefinition {
             if (deletedId === undefined) return
             return onTasksConversationDeleted(runtime, deletedId)
           })
-          active = true
           store.refreshBoard()
         },
         async stop() {

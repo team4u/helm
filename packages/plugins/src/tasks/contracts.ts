@@ -4,7 +4,7 @@
  * Slice 2（后端）与 Slice 3（前端）唯一对齐事实源——字段、语义与默认值
  * 严格锁定 #1 板书共享契约；新增字段必须双方同步。
  */
-import { HelmxError } from '@helmx/protocol'
+import { HelmxError, type ConversationSummary } from '@helmx/protocol'
 
 export const TASKS_PLUGIN_ID = 'builtin:tasks'
 export const TASKS_SKILL_ID = 'tasks'
@@ -124,6 +124,28 @@ export const TASK_ID_RE = /^[A-Za-z0-9_-]{1,64}$/
 // ---------------------------------------------------------------------------
 // 边界守卫与纯校验函数
 // ---------------------------------------------------------------------------
+
+/** 会话整棵后代子树是否存在 working / blocked（沿 parentConversationId 遍历，带环防御）。 */
+export function subtreeHasWorkingOrBlocked(rootId: number, all: readonly ConversationSummary[]): boolean {
+  const childrenOf = new Map<number, number[]>()
+  for (const conv of all) {
+    if (conv.parentConversationId === undefined) continue
+    const list = childrenOf.get(conv.parentConversationId) ?? []
+    list.push(conv.id)
+    childrenOf.set(conv.parentConversationId, list)
+  }
+  const seen = new Set<number>()
+  const queue = [rootId]
+  while (queue.length > 0) {
+    const id = queue.shift()!
+    if (seen.has(id)) continue
+    seen.add(id)
+    const conv = all.find((c) => c.id === id)
+    if (conv !== undefined && (conv.status === 'working' || conv.status === 'blocked')) return true
+    for (const child of childrenOf.get(id) ?? []) queue.push(child)
+  }
+  return false
+}
 
 function isJsonObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)

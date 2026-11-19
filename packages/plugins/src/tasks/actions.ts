@@ -30,6 +30,7 @@ import {
   TASKS_PLUGIN_ID,
   assertTaskId,
   blockedDependenciesOf,
+  subtreeHasWorkingOrBlocked,
   type TaskRecord,
   type TasksConfig,
 } from './contracts.js'
@@ -578,7 +579,9 @@ export async function workflowHasRunningRuns(
   }
 }
 
-/** 验收在途守卫：会话 working/blocked 或 Workflow run 在途即拒绝（附实时状态与处置指引）。 */
+/** 验收在途守卫（与停滞判定同口径）：根会话或整棵后代子树 working/blocked、Workflow
+ * run 在途、或在途查询故障（unknown）均拒绝——done 是不可逆终转且触发下游自动接棒，
+ * 查询故障时的保守方向是拒绝（宁可不结单也不误结）。 */
 async function assertApprovalQuiescent(
   ctx: HelmxPluginContext,
   runtime: TasksRuntime,
@@ -587,21 +590,32 @@ async function assertApprovalQuiescent(
   const conv =
     task.conversationId !== undefined ? runtime.readConversationOrUndefined(task.conversationId) : undefined
   const convBusy = conv !== undefined && (conv.status === 'working' || conv.status === 'blocked')
+  const subtreeBusy =
+    !convBusy && task.conversationId !== undefined
+      ? subtreeHasWorkingOrBlocked(task.conversationId, ctx.host.listConversations())
+      : false
   let workflowBusy: boolean | 'unknown' = false
   if (task.conversationId !== undefined) {
     workflowBusy = await workflowHasRunningRuns(ctx, task.conversationId)
   }
-  if (convBusy || workflowBusy === true) {
+  if (convBusy || subtreeBusy || workflowBusy !== false) {
     throw new HelmxError(
       'task_still_running',
-      `任务 ${task.id} 的执行会话仍在途（${
-        convBusy ? `会话状态 ${conv!.status}` : 'Workflow run running'
+      `任务 ${task.id} 的执行仍在途（${
+        convBusy
+          ? `会话状态 ${conv!.status}`
+          : subtreeBusy
+            ? '后代子会话仍在运行'
+            : workflowBusy === 'unknown'
+              ? 'Workflow 在途查询故障（保守拒绝）'
+              : 'Workflow run running'
       }），验收前先等待其完成或人工中止会话（helmx abort / 会话界面中止）后再操作`,
       409,
       {
         pluginId: TASKS_PLUGIN_ID,
         taskId: task.id,
         conversationStatus: conv?.status,
+        subtreeBusy,
         workflowBusy,
       },
     )

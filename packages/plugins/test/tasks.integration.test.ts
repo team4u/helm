@@ -568,11 +568,13 @@ test('tasks-int5c: a live background workflow run under the task conversation pr
     setRoutedResponses(env.faux, {
       assignee: [
         (ctx) => {
-          // Kick off a background workflow run, then end the turn with plain text (no submission)
+          // Kick off a background workflow run (valid DSL: pure-literal meta + top-level statements),
+          // then end the turn with plain text (no submission)
           return fauxAssistantMessage(
             [
               fauxToolCall('SubagentWorkflow', {
-                script: 'export default async function* () { yield { agentType: "assistant", prompt: "probe child" }; }',
+                script:
+                  'export const meta = { name: "bg-probe", description: "t" }\nconst a = await agent("probe child"); return { done: a }',
                 background: true,
                 label: 'bg-probe',
               }),
@@ -583,7 +585,14 @@ test('tasks-int5c: a live background workflow run under the task conversation pr
         fauxAssistantMessage('Background work delegated; not submitting yet.'),
       ],
       planner: [fauxAssistantMessage('planner idle')],
-      child: [fauxAssistantMessage('child probe done')],
+      // Slow child answer keeps the background run (and its subtree entry) live long enough
+      // for the guard assertions to hit the in-flight window deterministically.
+      child: [
+        async () => {
+          await new Promise((r) => setTimeout(r, 1200))
+          return fauxAssistantMessage('child probe done')
+        },
+      ],
     })
     const created = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'create', {
       title: 'Delegating task',
@@ -591,8 +600,14 @@ test('tasks-int5c: a live background workflow run under the task conversation pr
     })) as { conversationId?: number }
     const convId = created.conversationId!
     await kernel.waitForIdle(convId)
-    // The main turn settled, but the background run's child conversation is still part of the tree /
-    // the workflow run is still in flight -> no stalled mark (never misreport live work as silent)
+    // P3-B: immediately after the main turn settles, the background run's child conversation is
+    // still live in the subtree -> the approve guard (same scope as the stalled marking) refuses.
+    await assert.rejects(
+      () => kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'approve', { taskId: 'T-1', mergeAction: 'close_only' }),
+      (err: unknown) => err instanceof HelmxError && err.code === 'task_still_running' && err.status === 409,
+    )
+    // After the background work fully settles, no stalled mark was ever written
+    // (live work is never misreported as silent) and the guard no longer blocks.
     await new Promise((r) => setTimeout(r, 800))
     const task = await taskFromAction(env, 'T-1')
     assert.equal(task.silenceState?.stalledAt, undefined, 'must not mark stalled while workflow work is live')
