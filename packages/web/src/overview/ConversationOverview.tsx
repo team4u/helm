@@ -17,6 +17,7 @@ import { useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { HelmxIcon, SegmentedControl, Select } from '@helmx/plugin-client'
 import {
+  useAuthConnection,
   useConversations,
   useLocationTargets,
   usePlugins,
@@ -119,6 +120,8 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
   const plugins = usePlugins()
   const { profiles } = useProfilesSlice()
   const { splitTarget } = useLocationTargets()
+  const { sseConnected } = useAuthConnection()
+  const { assetsLoaded } = useProfilesSlice()
   const [bucketFilter, setBucketFilter] = useState<BucketFilterValue>('all')
   const [profileFilter, setProfileFilter] = useState('')
   const [nodeFilter, setNodeFilter] = useState('')
@@ -131,6 +134,7 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
     () => filterOverviewCards(cards, { bucket: bucketFilter, profileId: profileFilter, nodeId: nodeFilter }),
     [cards, bucketFilter, profileFilter, nodeFilter],
   )
+  const dataReady = conversations.length > 0 || (assetsLoaded && sseConnected)
   const profileOptions = useMemo(() => overviewProfileOptions(cards), [cards])
   const nodeOptions = useMemo(() => overviewNodeOptions(cards), [cards])
 
@@ -145,6 +149,10 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
   const openConversationDrawer = (conversationId: number): void => {
     setActiveModal({ kind: 'conversation-drawer', conversationId })
   }
+
+  // 数据就绪门：会话快照未到（且资产未齐/SSE 未连）时如实展示加载态，
+  // 绝不把「还没加载」伪报成「没有会话」；一旦有任何会话或资产+SSE 双就绪，
+  // 空列表才是真实的空（此后瞬时断连保留既有快照，不闪加载）。
 
   return (
     <div className={`primary-center conversation-overview${isSplit ? ' is-split' : ''}`} data-view="conversation-overview">
@@ -215,7 +223,9 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
       </div>
 
       <div className="overview-grid">
-        {visibleCards.length === 0 ? (
+        {dataReady === false ? (
+          <div className="overview-empty overview-loading" role="status">{t('shell.overview.loading')}</div>
+        ) : visibleCards.length === 0 ? (
           <div className="overview-empty">{t('shell.overview.empty')}</div>
         ) : (
           visibleCards.map((card) => (

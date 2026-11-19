@@ -331,3 +331,181 @@ test('Sidebar rail: the overview button opens #/overview and carries the same-so
     container.remove()
   }
 })
+
+// ---------------------------------------------------------------------------
+// #58 修订：移动端免开汉堡一键直达（根挂载快捷导航簇）与总览数据就绪门
+// ---------------------------------------------------------------------------
+
+const { MobileQuickNav } = await import('../src/shell/MobileQuickNav.js')
+
+function stubMatchMedia(matches: boolean): () => void {
+  const original = window.matchMedia
+  window.matchMedia = ((query: string) => ({
+    matches,
+    media: query,
+    onchange: null,
+    addEventListener() {},
+    removeEventListener() {},
+    addListener() {},
+    removeListener() {},
+    dispatchEvent() {
+      return false
+    },
+  })) as typeof window.matchMedia
+  return () => {
+    window.matchMedia = original
+  }
+}
+
+test('MobileQuickNav: quick entry + overview one-tap direct navigation with the independent attention badge', { timeout: 60_000 }, async () => {
+  const restoreMobile = stubMatchMedia(true)
+  const store = overviewStore({
+    conversations: [
+      conv({ id: 2, title: '在跑的调研', profileId: 'coder', status: 'working', createdAt: 8000, updatedAt: 8000 }),
+    ],
+    primaryTarget: { kind: 'conversation', conversationId: 2 },
+  })
+  const quickEntry = {
+    key: 'builtin:tasks/task-board',
+    pluginId: 'builtin:tasks',
+    label: 'Task Board',
+    icon: 'check-square',
+    order: 5,
+    target: { kind: 'screen', pluginId: 'builtin:tasks', screenId: 'board' } as const,
+  }
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  let root: Root | undefined
+  try {
+    await act(async () => {
+      root = createRoot(container)
+      root.render(
+        e(
+          HelmxExternalStoreContext.Provider,
+          { value: store },
+          e(MobileQuickNav, {
+            indicator: { needsAttentionCount: 0, runningCount: 1, unreadDoneCount: 0, totalCount: 1, tone: 'running' },
+            quickEntry,
+          }),
+        ),
+      )
+    })
+    const buttons = container.querySelectorAll('.mobile-quick-btn')
+    assert.equal(buttons.length, 2, 'quick entry + overview render side by side without opening the drawer')
+    assert.ok(buttons[0]!.getAttribute('aria-label') === 'Task Board', 'the quick entry keeps the plugin-provided label')
+    const overviewBtn = container.querySelector<HTMLButtonElement>('.mobile-quick-overview-btn')
+    assert.ok(overviewBtn !== null)
+    assert.ok(
+      overviewBtn.getAttribute('aria-label')?.includes('Conversation overview'),
+      'the overview button aria states the destination',
+    )
+    assert.ok(
+      overviewBtn.getAttribute('aria-label')?.includes('1 running'),
+      'the attention summary rides the independently pressable badge button',
+    )
+    assert.ok(overviewBtn.querySelector('.mobile-quick-badge[data-tone="running"]') !== null, 'tone dot + count badge render')
+
+    const quickBtn = buttons[0] as HTMLElement
+    await act(async () => {
+      quickBtn.click()
+    })
+    let primary = store.getPrimaryTarget()
+    assert.ok(primary.kind === 'screen' && primary.screenId === 'board', 'one tap enters the first quickEntry view')
+
+    await act(async () => {
+      overviewBtn.click()
+    })
+    primary = store.getPrimaryTarget()
+    assert.ok(primary.kind === 'overview', 'one tap on the badge button opens the conversation overview')
+
+    // 无 quickEntry 时只渲染总览按钮；无信号时徽标不渲染（诚实）。
+    const quiet = overviewStore({
+      conversations: [conv({ id: 50, title: '安静', profileId: 'coder' })],
+      primaryTarget: { kind: 'conversation', conversationId: 50 },
+    })
+    await act(async () => {
+      root!.render(
+        e(
+          HelmxExternalStoreContext.Provider,
+          { value: quiet },
+          e(MobileQuickNav, {
+            indicator: { needsAttentionCount: 0, runningCount: 0, unreadDoneCount: 0, totalCount: 0, tone: null },
+            quickEntry: null,
+          }),
+        ),
+      )
+    })
+    assert.equal(container.querySelectorAll('.mobile-quick-btn').length, 1, 'overview-only cluster without any quickEntry')
+    assert.ok(container.querySelector('.mobile-quick-badge') === null, 'no badge without any signal')
+  } finally {
+    await act(async () => {
+      root?.unmount()
+    })
+    container.remove()
+    restoreMobile()
+  }
+})
+
+test('MobileQuickNav renders nothing on desktop viewports (the collapsed rail carries the same entries)', { timeout: 60_000 }, () => {
+  const restoreDesktop = stubMatchMedia(false)
+  try {
+    const html = renderToString(
+      e(
+        HelmxExternalStoreContext.Provider,
+        { value: overviewStore() },
+        e(MobileQuickNav, {
+          indicator: { needsAttentionCount: 1, runningCount: 0, unreadDoneCount: 0, totalCount: 1, tone: 'blocked' },
+          quickEntry: null,
+        }),
+      ),
+    )
+    assert.ok(!html.includes('mobile-quick-nav'), 'desktop keeps the root chrome clean')
+  } finally {
+    restoreDesktop()
+  }
+})
+
+test('ConversationOverview data-ready gate: loading state before the first snapshot, honest empty only when truly synced', { timeout: 60_000 }, async () => {
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  let root: Root | undefined
+  try {
+    // 快照未到（0 会话）且资产/SSE 未就绪：加载态，绝不伪报空。
+    const loading = overviewStore({
+      conversations: [],
+      profilesLoaded: false,
+      assetsLoaded: false,
+      sseConnected: false,
+      primaryTarget: { kind: 'overview' },
+    })
+    await act(async () => {
+      root = createRoot(container)
+      root.render(e(HelmxExternalStoreContext.Provider, { value: loading }, e(ConversationOverview)))
+    })
+    assert.ok(container.textContent?.includes('Loading conversations'), 'pre-snapshot renders the loading state')
+    assert.ok(!container.textContent?.includes('No conversations match'), 'never misreports unloaded as empty')
+
+    // 资产 + SSE 双就绪且真实无会话：如实空态（不永久挂加载）。
+    const empty = overviewStore({
+      conversations: [],
+      primaryTarget: { kind: 'overview' },
+    })
+    await act(async () => {
+      root!.render(e(HelmxExternalStoreContext.Provider, { value: empty }, e(ConversationOverview)))
+    })
+    assert.ok(container.textContent?.includes('No conversations match'), 'a genuinely empty synced workspace shows the honest empty state')
+    assert.ok(!container.textContent?.includes('Loading conversations'), 'loading never sticks once data is ready')
+
+    // 有会话即卡片（即使 SSE 瞬时断连也保留快照，不闪加载）。
+    const stale = overviewScenarioStore()
+    await act(async () => {
+      root!.render(e(HelmxExternalStoreContext.Provider, { value: stale }, e(ConversationOverview)))
+    })
+    assert.ok(container.querySelectorAll('.overview-card').length > 0, 'cards render from the kept snapshot')
+  } finally {
+    await act(async () => {
+      root?.unmount()
+    })
+    container.remove()
+  }
+})
