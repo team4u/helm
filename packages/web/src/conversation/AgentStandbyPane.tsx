@@ -41,8 +41,6 @@ import { autoGrowTextarea, useComposerPopovers, useElementWidthResize } from './
 import {
   COMPOSER_SHORTCUTS,
   isComposerSubmitEnterEvent,
-  isShiftTabEvent,
-  nextThinkingLevel,
 } from './keybindings-model.js'
 import {
   admitStandbyFiles,
@@ -504,7 +502,6 @@ function StandbyComposer({
   onResetEnvToDefault,
   onCatalogRefreshed,
 }: StandbyComposerProps) {
-  const models = useModels()
   const groupedUi = useGroupedUi()
   const { openTarget } = useStoreActions()
   const { locale, t } = useWebLocale()
@@ -517,23 +514,6 @@ function StandbyComposer({
   // Once anchored, every creation-affecting configuration locks: retries skip
   // create, new settings never apply; controls may stay visible but inert.
   const configLocked = busy || anchored
-
-  const effectiveModel = resolveStandbyEffectiveModel(
-    draft.model,
-    profile.model,
-    defaultModelInfo?.defaultModel,
-  )
-  const currentModel = effectiveModel !== undefined
-    ? models.find((model) => model.id === effectiveModel)
-    : undefined
-  const currentLevels = currentModel?.thinkingLevels ?? ['off']
-  const effectiveThinkingLevel = resolveStandbyThinkingLevel(
-    currentLevels,
-    draft.thinkingLevel,
-    effectiveModel !== undefined ? defaultModelInfo?.modelThinkingLevels?.[effectiveModel] : undefined,
-    profile.thinkingLevel,
-    defaultModelInfo?.defaultThinkingLevel,
-  )
 
   useLayoutEffect(() => {
     autoGrowTextarea(textareaRef.current)
@@ -581,15 +561,6 @@ function StandbyComposer({
       return
     }
     if (shouldDeferKeyToPopover(e)) {
-      return
-    }
-    if (isShiftTabEvent(e) && !e.nativeEvent.isComposing) {
-      e.preventDefault()
-      if (configLocked) return
-      const next = nextThinkingLevel(currentLevels, effectiveThinkingLevel)
-      if (next !== null) {
-        updateStandbyDraft(draftKey, { thinkingLevel: next })
-      }
       return
     }
     if (isComposerSubmitEnterEvent(e) && !e.nativeEvent.isComposing) {

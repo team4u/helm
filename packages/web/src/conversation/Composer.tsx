@@ -9,7 +9,6 @@ import {
   useConversationDetail,
   useGroupedUi,
   useHelmxExternalStore,
-  useModels,
   usePlugins,
   useProfilesSlice,
   useSkills,
@@ -39,10 +38,7 @@ import {
   canRecallOnArrowUp,
   isComposerSubmitEnterEvent,
   isPlainArrowUpEvent,
-  isShiftTabEvent,
   latestHumanQueuedInput,
-  nextThinkingLevel,
-  resolveEffectiveThinkingLevel,
 } from './keybindings-model.js'
 import { lastEditableHumanInput } from './timeline-model.js'
 import { contextUsageLabel } from './context-usage-model.js'
@@ -87,15 +83,12 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
   const plugins = usePlugins()
   const { profiles } = useProfilesSlice()
   const skills = useSkills()
-  const models = useModels()
   const { locale, t } = useWebLocale()
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const composerBoxRef = useRef<HTMLDivElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const extrasRef = useRef<HTMLDetailsElement | null>(null)
   const dragDepthRef = useRef(0)
-  const thinkingPendingRef = useRef(false)
-  const optimisticThinkingRef = useRef<{ forModel: string; fromProp: string; value: string } | null>(null)
   const [dragging, setDragging] = useState(false)
   const [widgetsExpanded, setWidgetsExpanded] = useState(false)
   const [slashMenuItems, setSlashMenuItems] = useState<Array<{ id: string; label: string; hint?: string; apply?: string; run?: () => void }>>([])
@@ -159,9 +152,6 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
     autoGrowTextarea(textareaRef.current)
   }, [text, isMobile])
   useElementWidthResize(textareaRef, () => autoGrowTextarea(textareaRef.current))
-  useEffect(() => {
-    optimisticThinkingRef.current = null
-  }, [conversation.id, conversation.model, conversation.thinkingLevel])
 
   useEffect(() => {
     const extras = extrasRef.current
@@ -274,35 +264,6 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
     if (files.length > 0) void uploadFiles(files)
   }
 
-  const cycleThinking = async (): Promise<void> => {
-    if (thinkingPendingRef.current) return
-    const currentModel = models.find((m) => m.id === conversation.model)
-    const levels = currentModel?.thinkingLevels ?? ['off']
-    const baseLevel =
-      optimisticThinkingRef.current !== null &&
-      optimisticThinkingRef.current.forModel === conversation.model &&
-      optimisticThinkingRef.current.fromProp === conversation.thinkingLevel
-        ? optimisticThinkingRef.current.value
-        : conversation.thinkingLevel
-    const effective = resolveEffectiveThinkingLevel(levels, baseLevel)
-    const next = nextThinkingLevel(levels, effective)
-    if (next === null) return
-    thinkingPendingRef.current = true
-    optimisticThinkingRef.current = {
-      forModel: conversation.model,
-      fromProp: conversation.thinkingLevel,
-      value: next,
-    }
-    try {
-      await conversationsApi.patch(conversation.id, { thinkingLevel: next })
-    } catch (err) {
-      optimisticThinkingRef.current = null
-      notifyError(t('composer.model.thinkingSwitchFailed'), err)
-    } finally {
-      thinkingPendingRef.current = false
-    }
-  }
-
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
     // 浮层已消费或已被 defaultPrevented 的按键绝不再向下传递触发发送
     if (e.defaultPrevented || e.nativeEvent.defaultPrevented) {
@@ -310,11 +271,6 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
     }
     if (shouldDeferKeyToPopover(e)) {
       return // Handled by the global overlay capture (not intercepted during IME composing; left to the input method)
-    }
-    if (isShiftTabEvent(e) && !e.nativeEvent.isComposing) {
-      e.preventDefault()
-      void cycleThinking()
-      return
     }
     if (e.key === 'Escape' && !slashOpen && !completionOpen && editingEntryId !== null) {
       e.preventDefault()

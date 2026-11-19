@@ -3,11 +3,11 @@
  * Ctrl+L wiring, COMPOSER_DOCK_SLOT and the mobile dual buttons.
  *
  * Strictly one function per shortcut, single-key muscle memory; coverage:
- * 1. keybindings-model pure logic (Shift+Tab / ↑ / Enter / Mod+Enter / panel matching / index cycling,
+ * 1. keybindings-model pure logic (↑ / Enter / Mod+Enter / panel matching / index cycling,
  *    no multi-key aliases);
  * 2. Ctrl+L (helmx:shortcut) precise split routing + search autoFocus + ↑↓Enter picking + Esc focus
  *    return + no bubbling blocked;
- * 3. Shift+Tab preventDefault() immediately and cycles thinkingLevel (never answers the Ctrl+T alias);
+ * 3. Shift+Tab leaves reverse focus navigation to the browser;
  * 4. ↑ (empty draft on the first line) prefers withdrawing the newest human queued input from
  *    live.queuedInputs and prefilling (no history warning); only without human queued input does it
  *    fall back to history editing; the Alt+Up alias is rejected;
@@ -17,7 +17,7 @@
  *    into the mobile more menu);
  * 7. Mobile (<=680px) busy state explicitly renders [steer] + [queue] buttons; desktop badges carry
  *    .kbd-hint uniformly;
- * 8. Standby pane global-default model inheritance, Shift+Tab, Ctrl+L and static '/' skill completion;
+ * 8. Standby pane global-default model inheritance, native Shift+Tab, Ctrl+L and static '/' skill completion;
  * 9. Zero-emoji and Fast Refresh checks.
  */
 import assert from 'node:assert/strict'
@@ -42,10 +42,8 @@ import {
   isCaretAtFirstLine,
   isComposerSubmitEnterEvent,
   isPlainArrowUpEvent,
-  isShiftTabEvent,
   isShortcutPanelMatch,
   latestHumanQueuedInput,
-  nextThinkingLevel,
   resolveEffectiveThinkingLevel,
   resolveElementPanel,
   stepActiveIndex,
@@ -72,13 +70,8 @@ const e = React.createElement
 // 1. Pure-logic tests: keybindings-model
 // ---------------------------------------------------------------------------
 
-test('keybindings-model: strict one-shortcut-per-function matching; Alt+Up / Alt+Enter / Ctrl+T aliases forbidden', { timeout: 60_000 }, () => {
+test('keybindings-model: strict one-shortcut-per-function matching for Up and Enter', { timeout: 60_000 }, () => {
   const base = { key: '', shiftKey: false, ctrlKey: false, metaKey: false, altKey: false }
-
-  assert.equal(isShiftTabEvent({ ...base, key: 'Tab', shiftKey: true }), true)
-  assert.equal(isShiftTabEvent({ ...base, key: 'Tab' }), false)
-  assert.equal(isShiftTabEvent({ ...base, key: 't', ctrlKey: true }), false, 'Ctrl+T alias forbidden')
-  assert.equal(isShiftTabEvent({ ...base, key: 'Tab', shiftKey: true, ctrlKey: true }), false)
 
   assert.equal(isPlainArrowUpEvent({ ...base, key: 'ArrowUp' }), true)
   assert.equal(isPlainArrowUpEvent({ ...base, key: 'ArrowUp', altKey: true }), false, 'Alt+Up alias forbidden')
@@ -125,14 +118,7 @@ test('keybindings-model: latestHumanQueuedInput ignores agent/trigger and takes 
   assert.equal(tiePicked?.id, 'h2')
 })
 
-test('keybindings-model: nextThinkingLevel cyclic stepping with the no-thinking guard', { timeout: 60_000 }, () => {
-  const levels = ['off', 'low', 'medium', 'high']
-  assert.equal(nextThinkingLevel(levels, 'off'), 'low')
-  assert.equal(nextThinkingLevel(levels, 'low'), 'medium')
-  assert.equal(nextThinkingLevel(levels, 'high'), 'off', 'wraps back to the first item at the end')
-  assert.equal(nextThinkingLevel(levels, 'unknown'), 'off')
-  assert.equal(nextThinkingLevel(['off'], 'off'), null)
-  assert.equal(nextThinkingLevel([], 'off'), null)
+test('keybindings-model: effective thinking level falls back to a supported level', { timeout: 60_000 }, () => {
   assert.equal(resolveEffectiveThinkingLevel(['minimal', 'high'], 'max'), 'minimal')
 })
 
@@ -397,10 +383,10 @@ test('Ctrl+L: precisely toggles the ModelPicker per data-helmx-panel in split vi
 })
 
 // ---------------------------------------------------------------------------
-// 3. Shift+Tab thinking-level cycling (including the strict no-Ctrl+T alias)
+// 3. Native reverse focus navigation
 // ---------------------------------------------------------------------------
 
-test('Shift+Tab: preventDefault() immediately and cycles thinkingLevel; Ctrl+T does nothing', { timeout: 60_000 }, async () => {
+test('Shift+Tab leaves the browser default available in the conversation composer', { timeout: 60_000 }, async () => {
   const patched: Array<Record<string, unknown>> = []
   conversationsApi.patch = (async (_id, body) => {
     patched.push(body as Record<string, unknown>)
@@ -412,23 +398,12 @@ test('Shift+Tab: preventDefault() immediately and cycles thinkingLevel; Ctrl+T d
   const host = mountTree(e(HostStoreProviders, { value: store }, e(Composer, { conversation: conv, prefill: null })))
   const ta = host.querySelector<HTMLTextAreaElement>('textarea.composer-textarea')!
 
-  // Ctrl+T must not trigger a thinking-level switch
+  const event = new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true })
   await act(async () => {
-    const ev = new KeyboardEvent('keydown', { key: 't', ctrlKey: true, bubbles: true, cancelable: true })
-    ta.dispatchEvent(ev)
-    assert.equal(ev.defaultPrevented, false)
+    ta.dispatchEvent(event)
   })
+  assert.equal(event.defaultPrevented, false)
   assert.equal(patched.length, 0)
-
-  // Shift+Tab preventDefaults immediately and cycles in order off -> low -> medium -> high -> off
-  for (const expected of ['low', 'medium', 'high', 'off']) {
-    await act(async () => {
-      const ev = new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true })
-      ta.dispatchEvent(ev)
-      assert.equal(ev.defaultPrevented, true, 'Shift+Tab must preventDefault immediately')
-    })
-    assert.equal(patched.at(-1)?.thinkingLevel, expected)
-  }
 })
 
 // ---------------------------------------------------------------------------
@@ -710,10 +685,10 @@ test('ComposerSendControls: mobile busy with input explicitly renders independen
 })
 
 // ---------------------------------------------------------------------------
-// 8. Standby pane: default model inheritance, Shift+Tab, Ctrl+L and static '/' skill completion
+// 8. Standby pane: default model inheritance, native Shift+Tab, Ctrl+L and static '/' skill completion
 // ---------------------------------------------------------------------------
 
-test('Standby pane: inherits the global default model glm-5.3·max; supports Shift+Tab / Ctrl+L and static /skill completion', { timeout: 60_000 }, async () => {
+test('Standby pane: inherits the global default model glm-5.3·max; leaves Shift+Tab to the browser and supports Ctrl+L and static /skill completion', { timeout: 60_000 }, async () => {
   // Pure-function checks
   assert.equal(resolveStandbyEffectiveModel(undefined, undefined, 'magpie/auto/glm-5.3'), 'magpie/auto/glm-5.3')
   assert.equal(resolveStandbyEffectiveModel(undefined, 'p/m1', 'magpie/auto/glm-5.3'), 'p/m1')
@@ -774,18 +749,13 @@ test('Standby pane: inherits the global default model glm-5.3·max; supports Shi
   assert.match(modelBtn.textContent ?? '', /glm-5\.3/, 'first paint inherits the global default model short name')
   assert.match(modelBtn.textContent ?? '', /· max/, 'first paint inherits the global default thinking level')
 
-  // Shift+Tab cycles the thinking level on the standby pane (max -> off)
   const ta = host.querySelector<HTMLTextAreaElement>('textarea.composer-textarea')!
+  const reverseTab = new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true })
   await act(async () => {
-    const ev = new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true })
-    ta.dispatchEvent(ev)
-    assert.equal(ev.defaultPrevented, true)
+    ta.dispatchEvent(reverseTab)
   })
-  assert.ok(host.querySelector('.composer-model-level') === null, 'the level after max is off, so the badge hides')
-  await act(async () => {
-    ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true }))
-  })
-  assert.equal(host.querySelector('.composer-model-level')?.textContent, '· low', 'another Shift+Tab switches to low')
+  assert.equal(reverseTab.defaultPrevented, false)
+  assert.equal(host.querySelector('.composer-model-level')?.textContent, '· max')
 
   // Ctrl+L targets the split panel only, opening the StandbyModelPicker and auto-focusing the search
   await act(async () => {
@@ -820,7 +790,7 @@ test('Standby pane: inherits the global default model glm-5.3·max; supports Shi
   })
   assert.equal(ta.value, '/skill:review ', 'picking a skill writes back only the trigger word; no conversation created')
 
-  // The generic '@' completion popover also works on the standby pane (coexists with '/' skill completion, Ctrl+L, Shift+Tab without conflicts)
+  // The generic '@' completion popover also works on the standby pane (coexists with '/' skill completion and Ctrl+L)
   await act(async () => {
     typeInto(ta, '/skill:review @mem')
   })
