@@ -7,17 +7,24 @@
  *    the directory/manifest/checksum contract holds;
  * 2. publish package contract: the dist root package.json (@team4u/helm-hub default name, overridable
  *    via HELM_PAYLOAD_PACKAGE) is a standalone package fit for npm pack/publish: an explicit files
- *    whitelist + exact external dependency versions + @helm/protocol file:./protocol.tgz;
+ *    whitelist (six @helm archives + cli bundle + web dist + contract files, NO unpacked component
+ *    directories) + exact external dependency versions + the six @helm/* file:./<pkg>.tgz entries;
  *    manifest.name shares its source;
- * 3. layout: kernel/protocol/cli/web dist mirrors, built-in plugin assets in place, the web sibling
- *    probe hits, no node_modules carried;
- * 4. negative paths: missing dependencies exit with code 3; a tampered checksum exits with 1; a
- *    manifest path escape exits with 1; start refuses to launch the hub when dependencies are missing;
+ * 3. layout: the six @helm runtime packages exist as tgz-only archives whose members mirror the
+ *    repository dist trees (plus the built-in plugin runtime assets packed inside plugins.tgz), the
+ *    cli bundle and web dist mirror directly at the payload root, no unpacked component directories,
+ *    no node_modules carried; manifest node_modules/ entries are checksummed against the exact bytes
+ *    packed inside the archives;
+ * 4. negative paths: an uninstalled payload exits with code 3 before checksum verification (with the
+ *    npm install completion instruction); a tampered checksum exits with 1 once the archives are
+ *    materialized under node_modules; a manifest path escape exits with 1; start refuses to launch
+ *    the hub when dependencies are missing;
  * 5. positive path (real end-to-end, in an isolated directory outside the repository): npm pack dist →
  *    safe unpack (verify every member sits under the package/ prefix and the manifest is at the package
- *    root, not a dist/ subdirectory) → npm install --omit=dev --ignore-scripts → start.mjs check
- *    (dependency resolution + node:sqlite + a real esbuild exercise) → start.mjs start really launches
- *    the Hub and HTTP-probes /api/auth/status → clean SIGTERM exit. Never fixture-only.
+ *    root, not a dist/ subdirectory) → npm install --omit=dev --ignore-scripts (materializes the six
+ *    archives under node_modules verbatim) → start.mjs check (dependency resolution + node:sqlite + a
+ *    real esbuild exercise) → start.mjs start really launches the Hub and HTTP-probes
+ *    /api/auth/status → clean SIGTERM exit. Never fixture-only.
  *
  * The same assembly also produces the stable CLI artifact (dist-cli/, a zero-dependency
  * single-file bundle of the complete control CLI: packages/cli/dist/index.js with the
@@ -93,6 +100,23 @@ function runCommand(command: string, args: string[], cwd: string, timeoutMs: num
 }
 
 const sha256Of = (file: string) => createHash('sha256').update(readFileSync(file)).digest('hex');
+const sha256OfBuffer = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
+
+/** Member list of a tar archive (POSIX paths, directories included). */
+function tgzMembers(tgz: string): string[] {
+  return runCommand('tar', ['-tzf', tgz], path.dirname(tgz), 30_000).stdout.split('\n').filter(Boolean);
+}
+
+/** Raw bytes of a single archive member (checksum-grade: never text-decoded). */
+function tarMemberBytes(tgz: string, member: string): Buffer {
+  const res = spawnSync('tar', ['-xOf', tgz, member], { cwd: path.dirname(tgz), timeout: 30_000 });
+  assert.equal(
+    res.status,
+    0,
+    `tar -xOf failed for ${tgz}#${member}: ${res.stderr ? Buffer.from(res.stderr).toString('utf8') : 'no stderr'}`,
+  );
+  return Buffer.from(res.stdout);
+}
 
 /** Claims an ephemeral free port (brief inherent race acceptable in local tests). */
 async function freePort(): Promise<number> {
@@ -181,23 +205,27 @@ test('payload publish package contract: the dist root package.json is a standalo
   assert.equal(distPkg.private, undefined, 'the publish package must not be marked private');
   assert.equal(distPkg.repository.url, 'git+https://github.com/team4u/helm.git');
   assert.equal(distPkg.license, 'MIT');
-  // files explicit whitelist: the root gitignore dist/ rule must not let npm pack strip kernel/dist etc.
+  // files explicit whitelist: the root gitignore dist/ rule must not let npm pack strip the archives
+  // or the cli/web trees; the six @helm runtime packages ride as archives only — no unpacked
+  // component directories ship.
   assert.deepEqual(
     (distPkg.files as string[]).slice().sort(),
-    ['LICENSE', 'THIRD_PARTY_NOTICES.md', 'cli', 'env-io', 'env-io.tgz', 'hub', 'kernel', 'kernel.tgz', 'manifest.json', 'plugin-build', 'plugin-build.tgz', 'plugins', 'plugins.tgz', 'protocol', 'protocol.tgz', 'start.mjs', 'web'].sort(),
+    ['LICENSE', 'THIRD_PARTY_NOTICES.md', 'cli', 'env-io.tgz', 'hub.tgz', 'kernel.tgz', 'manifest.json', 'plugin-build.tgz', 'plugins.tgz', 'protocol.tgz', 'start.mjs', 'web'].sort(),
   );
-  // @helm runtime packages install from archives; direct external dependencies use exact versions
-  // (no ^/~/>= floating).
+  // @helm runtime packages install from archives (all six, hub included); direct external
+  // dependencies use exact versions (no ^/~/>= floating).
   assert.equal(distPkg.dependencies['@helm/protocol'], 'file:./protocol.tgz');
   assert.equal(distPkg.dependencies['@helm/kernel'], 'file:./kernel.tgz');
   assert.equal(distPkg.dependencies['@helm/plugins'], 'file:./plugins.tgz');
   assert.equal(distPkg.dependencies['@helm/plugin-build'], 'file:./plugin-build.tgz');
   assert.equal(distPkg.dependencies['@helm/env-io'], 'file:./env-io.tgz');
+  assert.equal(distPkg.dependencies['@helm/hub'], 'file:./hub.tgz');
   // Browser-only SDK and UI/AJV/mermaid trees must never leak into the server payload production closure.
   for (const excluded of ['@helm/plugin-client', 'lucide-react', 'react', 'react-dom', 'react-markdown', 'remark-gfm', 'ajv', 'mermaid']) {
     assert.equal(distPkg.dependencies[excluded], undefined, `server payload must not pull ${excluded} into production dependencies`);
   }
-  const pluginsStagedPkg = JSON.parse(readFileSync(path.join(stagingDir, 'plugins/package.json'), 'utf-8'));
+  // The staged (archive-internal) plugins package.json must not declare browser-tree runtime deps.
+  const pluginsStagedPkg = JSON.parse(tarMemberBytes(path.join(stagingDir, 'plugins.tgz'), 'package/package.json').toString('utf-8'));
   assert.equal(pluginsStagedPkg.dependencies?.['mermaid'], undefined, 'staged plugins/package.json must not declare mermaid runtime dependency');
   assert.equal(pluginsStagedPkg.dependencies?.['@helm/plugin-client'], undefined, 'staged plugins/package.json must not declare @helm/plugin-client runtime dependency');
   assert.ok(
@@ -240,56 +268,95 @@ test('payload manifest contract: formatVersion/version/entries/checksums all hol
   const keys = Object.keys(manifest.entries).sort();
   assert.deepEqual(Object.keys(manifest.entryChecksums).sort(), keys, 'entryChecksums keys must match entries keys');
   for (const [key, rel] of Object.entries(manifest.entries)) {
-    const abs = path.join(stagingDir, rel);
-    assert.ok(existsSync(abs), `the file pointed to by entries.${key} does not exist: ${rel}`);
-    assert.equal(sha256Of(abs), manifest.entryChecksums[key], `entries.${key} checksum mismatch`);
+    if (rel.startsWith('node_modules/@helm/')) {
+      // The six runtime entries point at the consumer-side npm install layout; their checksums pin
+      // the exact bytes packed inside the corresponding archive (npm materializes file: tarballs
+      // verbatim, so post-install checkLayout verifies the installed tree against these bytes).
+      const rest = rel.replace(/^node_modules\/@helm\//, '');
+      const slash = rest.indexOf('/');
+      const dir = rest.slice(0, slash);
+      const member = `package/${rest.slice(slash + 1)}`;
+      const bytes = tarMemberBytes(path.join(stagingDir, `${dir}.tgz`), member);
+      assert.equal(sha256OfBuffer(bytes), manifest.entryChecksums[key], `entries.${key} must checksum the bytes packed in ${dir}.tgz#${member}`);
+    } else {
+      const abs = path.join(stagingDir, rel);
+      assert.ok(existsSync(abs), `the file pointed to by entries.${key} does not exist: ${rel}`);
+      assert.equal(sha256Of(abs), manifest.entryChecksums[key], `entries.${key} checksum mismatch`);
+    }
   }
   assert.deepEqual(
     keys,
     [
-      'cli', 'cliPackageJson', 'envIo', 'envIoArchive', 'envIoPackageJson', 'hub', 'hubPackageJson', 'kernel', 'kernelArchive', 'kernelPackageJson',
-      'launcher', 'pluginBuild', 'pluginBuildArchive', 'pluginBuildPackageJson',
+      'cli', 'cliPackageJson', 'envIo', 'envIoArchive', 'envIoPackageJson', 'hub', 'hubArchive', 'hubPackageJson',
+      'kernel', 'kernelArchive', 'kernelPackageJson', 'launcher',
+      'pluginBuild', 'pluginBuildArchive', 'pluginBuildPackageJson',
       'plugins', 'pluginsArchive', 'pluginsPackageJson', 'protocol',
       'protocolArchive', 'protocolPackageJson', 'rootPackageJson', 'webIndex',
     ].sort(),
   );
 });
 
-test('payload layout: hub/kernel/plugins/protocol/cli/web dist mirrors, assets in place, no stale artifacts, no node_modules', { timeout: 60_000 }, () => {
-  assertMirrored(path.join(repoRoot, 'packages/hub/dist'), path.join(stagingDir, 'hub/dist'));
-  assertMirrored(path.join(repoRoot, 'packages/kernel/dist'), path.join(stagingDir, 'kernel/dist'));
-  assertMirrored(path.join(repoRoot, 'packages/plugins/dist'), path.join(stagingDir, 'plugins/dist'));
-  assertMirrored(path.join(repoRoot, 'packages/protocol/dist'), path.join(stagingDir, 'protocol/dist'));
-  assertMirrored(path.join(repoRoot, 'packages/cli/dist'), path.join(stagingDir, 'cli/dist'));
-  assertMirrored(path.join(repoRoot, 'packages/web/dist'), path.join(stagingDir, 'web/dist'));
-  assertMirrored(path.join(repoRoot, 'packages/plugin-build/dist'), path.join(stagingDir, 'plugin-build/dist'));
-  assertMirrored(path.join(repoRoot, 'packages/env-io/dist'), path.join(stagingDir, 'env-io/dist'));
+test('payload layout: six tgz-only archives mirror the repo dist trees, assets packed, cli/web at root, no node_modules', { timeout: 60_000 }, () => {
+  // tgz-only contract: the payload root carries each @helm runtime package exactly once, as an
+  // archive; the pre-change unpacked duplicate directories must not exist.
+  const ARCHIVED_PKGS = ['hub', 'kernel', 'plugins', 'plugin-build', 'env-io', 'protocol'];
+  for (const dir of ARCHIVED_PKGS) {
+    assert.ok(existsSync(path.join(stagingDir, `${dir}.tgz`)), `the payload root must ship ${dir}.tgz`);
+    assert.ok(!existsSync(path.join(stagingDir, dir)), `the payload root must NOT carry the unpacked ${dir}/ directory (tgz-only layout)`);
+  }
   assert.equal(existsSync(path.join(stagingDir, 'plugin-client')), false, 'plugin-client source must not be shipped in server payload');
   assert.equal(existsSync(path.join(stagingDir, 'plugin-client.tgz')), false, 'plugin-client.tgz must not be shipped in server payload');
 
+  // Every archive is a complete package: manifest at the package root plus every repository dist
+  // file mirrored as a package/dist member (subset check, no byte-count coincidence assertions).
+  for (const dir of ARCHIVED_PKGS) {
+    const members = new Set(tgzMembers(path.join(stagingDir, `${dir}.tgz`)));
+    assert.ok(members.has('package/package.json'), `${dir}.tgz must carry package/package.json`);
+    for (const rel of walkFiles(path.join(repoRoot, 'packages', dir, 'dist'))) {
+      assert.ok(members.has(`package/dist/${rel}`), `${dir}.tgz is missing dist file: ${rel}`);
+    }
+  }
+  assert.ok(
+    tgzMembers(path.join(stagingDir, 'hub.tgz')).includes('package/dist/main.js'),
+    'hub.tgz must carry the hub composition-root entry dist/main.js',
+  );
+  assert.ok(
+    tgzMembers(path.join(stagingDir, 'kernel.tgz')).includes('package/dist/http/hub.js'),
+    'kernel.tgz must carry the kernel dist HTTP layer dist/http/hub.js',
+  );
+
+  // Built-in plugin runtime assets live inside plugins.tgz (the first probe location of every
+  // plugin resolver after npm materializes the archive under node_modules).
+  const pluginsMembers = new Set(tgzMembers(path.join(stagingDir, 'plugins.tgz')));
   for (const rel of expectedAssetDirs()) {
     assert.ok(
-      existsSync(path.join(stagingDir, 'plugins/dist', rel)),
-      `built-in plugin assets not in place: ${rel}`,
+      existsSync(path.join(repoRoot, 'packages/plugins/src', rel)),
+      `unexpected asset source missing: ${rel}`,
     );
+    // Member presence of the directory prefix: walk the actual src files and require each one packed.
+    for (const file of walkFiles(path.join(repoRoot, 'packages/plugins/src', rel))) {
+      assert.ok(pluginsMembers.has(`package/dist/${rel}/${file}`), `plugins.tgz must pack built-in plugin asset: ${rel}/${file}`);
+    }
   }
   const clients = expectedAssetDirs().filter((rel) => rel.endsWith('/client'));
   assert.ok(clients.length >= 9, `unexpected built-in plugin client directory count: ${clients.length}`);
   for (const rel of clients) {
     const pluginName = rel.split('/')[0]!;
     assert.ok(
-      existsSync(path.join(stagingDir, 'plugins/dist', pluginName, 'dist-client/manifest.json')),
-      `built-in plugin prebuilt dist-client manifest missing for ${pluginName}`,
+      pluginsMembers.has(`package/dist/${pluginName}/dist-client/manifest.json`),
+      `plugins.tgz must pack the prebuilt dist-client manifest for ${pluginName}`,
     );
   }
 
-  assert.ok(existsSync(path.join(stagingDir, 'hub/dist/main.js')), 'hub dist is missing the main.js entry');
-  assert.ok(existsSync(path.join(stagingDir, 'kernel/dist/http/hub.js')), 'kernel dist is missing http/hub.js');
+  // cli (self-contained bundle + tsc audit outputs) and web dist mirror directly at the payload root.
+  assertMirrored(path.join(repoRoot, 'packages/cli/dist'), path.join(stagingDir, 'cli/dist'));
+  assertMirrored(path.join(repoRoot, 'packages/web/dist'), path.join(stagingDir, 'web/dist'));
   assert.ok(existsSync(path.join(stagingDir, 'web/dist/index.html')), 'web dist is missing index.html');
-  // stale-layout guard: after the package split, kernel dist must never again carry product
-  // composition-root or built-in-plugin remnants.
-  for (const stale of ['kernel/dist/main.js', 'kernel/dist/app.js', 'kernel/dist/builtin-plugins']) {
-    assert.ok(!existsSync(path.join(stagingDir, stale)), `stale artifact detected: ${stale} (kernel build was not cleaned)`);
+
+  // stale-layout guard (mirrors build.mjs): after the package split, the kernel archive must never
+  // carry product composition-root or built-in-plugin remnants.
+  for (const stale of ['package/dist/main.js', 'package/dist/app.js', 'package/dist/builtin-plugins']) {
+    assert.ok(!tgzMembers(path.join(stagingDir, 'kernel.tgz')).includes(stale), `stale artifact detected in kernel.tgz: ${stale} (kernel build was not cleaned)`);
   }
 
   // honesty: the assembly directory never carries node_modules (the dependency-completion contract is
@@ -301,10 +368,11 @@ test('payload layout: hub/kernel/plugins/protocol/cli/web dist mirrors, assets i
   );
 });
 
-test('start.mjs check: missing dependencies exit explicitly with code 3 and list what is missing', { timeout: 60_000 }, () => {
-  // beside the payload dist inside the repository workspace there are no kernel dependencies (pnpm
-  // doesn't hoist into the root node_modules), so check must honestly exit 3; strip NODE_PATH so the
-  // verdict is immune to the host environment.
+test('start.mjs check: uninstalled payload exits with code 3 before checksum verification, listing the completion step', { timeout: 60_000 }, () => {
+  // beside the payload dist inside the repository workspace node_modules/@helm/* does not exist
+  // (the archives install only consumer-side), so check must honestly exit 3 from the install-state
+  // gate — BEFORE any checksum verification (an uninstalled payload is not a corrupt payload);
+  // strip NODE_PATH so the verdict is immune to the host environment.
   const env = { ...process.env };
   delete env.NODE_PATH;
   const res = spawnSync(process.execPath, [path.join(stagingDir, 'start.mjs'), 'check'], {
@@ -313,16 +381,23 @@ test('start.mjs check: missing dependencies exit explicitly with code 3 and list
     encoding: 'utf8',
     timeout: 50_000,
   });
-  assert.equal(res.status, 3, `expected exit code 3 (missing dependencies), got ${res.status}\nstdout: ${res.stdout}\nstderr: ${res.stderr}`);
-  assert.match(res.stderr, /missing runtime dependencies/, 'must explicitly report missing dependencies');
+  assert.equal(res.status, 3, `expected exit code 3 (dependencies not installed), got ${res.status}\nstdout: ${res.stdout}\nstderr: ${res.stderr}`);
+  assert.match(res.stderr, /runtime packages not installed yet/, 'must explicitly report the uninstalled state');
   assert.match(res.stderr, /npm install/, 'must point to npm install to complete dependencies');
-  assert.match(res.stdout, /layout validated/, 'the layout check itself should pass first');
+  assert.doesNotMatch(res.stdout, /layout validated/, 'checksum verification must not run before the install-state gate');
 });
 
 test('start.mjs check: tampered checksum or manifest path escape exits explicitly with code 1', { timeout: 60_000 }, () => {
   const broken = mkdtempSync(path.join(path.dirname(repoRoot), 'helm-payload-broken-'));
   cpSync(stagingDir, broken, { recursive: true });
   try {
+    // Materialize the archives under node_modules exactly like a consumer-side npm install (the
+    // checksum verification only runs past the install-state gate).
+    for (const dir of ['hub', 'kernel', 'plugins', 'plugin-build', 'env-io', 'protocol']) {
+      const dest = path.join(broken, 'node_modules', '@helm', dir);
+      mkdirSync(dest, { recursive: true });
+      runCommand('tar', ['-xzf', path.join(broken, `${dir}.tgz`), '-C', dest, '--strip-components=1'], broken, 30_000);
+    }
     const env = { ...process.env };
     delete env.NODE_PATH;
     const manifestPath = path.join(broken, 'manifest.json');
@@ -669,14 +744,14 @@ test('end-to-end: npm pack → isolated npm install → check → start really l
       assert.ok(member.startsWith('package/'), `tarball member escapes the package/ prefix: ${member}`);
       assert.ok(!member.split('/').includes('..'), `tarball member contains ..: ${member}`);
     }
-    for (const must of ['package/manifest.json', 'package/start.mjs', 'package/package.json', 'package/hub/dist/main.js', 'package/kernel/dist/index.js', 'package/plugins/dist/index.js', 'package/plugin-build/dist/index.js', 'package/env-io/dist/index.js', 'package/protocol/dist/index.js', 'package/cli/dist/index.js', 'package/web/dist/index.html']) {
+    for (const must of ['package/manifest.json', 'package/start.mjs', 'package/package.json', 'package/hub.tgz', 'package/kernel.tgz', 'package/plugins.tgz', 'package/plugin-build.tgz', 'package/env-io.tgz', 'package/protocol.tgz', 'package/cli/dist/index.js', 'package/web/dist/index.html']) {
       assert.ok(list.includes(must), `tarball is missing ${must} (manifest/start must sit at the package root, not a dist/ subdirectory)`);
     }
     runCommand('tar', ['-xzf', tgz, '-C', extractDir, '--strip-components=1'], outsideRoot, 60_000);
 
     // 3. local file: dependencies are copy-installed; after the promotion rename it must still launch.
     runCommand('npm', ['install', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'], extractDir, 300_000);
-    for (const helmPkg of ['protocol', 'kernel', 'plugins', 'plugin-build', 'env-io']) {
+    for (const helmPkg of ['protocol', 'kernel', 'plugins', 'plugin-build', 'env-io', 'hub']) {
       assert.equal(lstatSync(path.join(extractDir, 'node_modules', '@helm', helmPkg)).isSymbolicLink(), false, `@helm/${helmPkg} must be a real archive-installed directory`);
     }
     const promoted = path.join(outsideRoot, 'release');
@@ -687,6 +762,7 @@ test('end-to-end: npm pack → isolated npm install → check → start really l
     assert.ok(existsSync(path.join(extractDir, 'node_modules', '@helm', 'plugins', 'dist', 'index.js')), 'plugins dependency broke after promotion');
     assert.ok(existsSync(path.join(extractDir, 'node_modules', '@helm', 'plugin-build', 'dist', 'index.js')), 'plugin-build dependency broke after promotion');
     assert.ok(existsSync(path.join(extractDir, 'node_modules', '@helm', 'env-io', 'dist', 'index.js')), 'env-io dependency broke after promotion');
+    assert.ok(existsSync(path.join(extractDir, 'node_modules', '@helm', 'hub', 'dist', 'main.js')), 'hub dependency broke after promotion');
 
     // 4. check: the seven entry-point dependencies resolve + node:sqlite + a real esbuild exercise,
     // exit code 0.

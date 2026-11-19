@@ -3,25 +3,35 @@
  * Zero-dependency Hub payload launcher (ships inside the payload directory; Node >= 24, no npm deps).
  *
  * Commands:
- *   node start.mjs check   Validate manifest/entries/checksums (strictly relative paths), resolve
- *                          all dependencies from dist/package.json across the 7 runtime entry points
- *                          (hub/kernel/plugins/plugin-build/env-io/protocol/cli) via
+ *   node start.mjs check   Validate the install state first (every node_modules/@helm/* manifest
+ *                          entry must exist — otherwise exit 3 with the npm install completion
+ *                          instruction), then validate manifest/entries/checksums (strictly relative
+ *                          paths), resolve all dependencies from dist/package.json across the 7
+ *                          runtime entry points (hub/kernel/plugins/plugin-build/env-io/protocol
+ *                          under node_modules + the cli bundle at the payload root) via
  *                          createRequire — matching Hub runtime Node resolution (import.meta.resolve's
  *                          parent parameter is ignored by default in current Node, so it cannot be
  *                          used here) — then exercise runtime capabilities: import node:sqlite and
  *                          load esbuild to transform a JS snippet (covering plugin client compilation).
  *                          check never starts the Hub.
- *   node start.mjs start   Verify dependencies, then spawn the hub entry (hub/dist/main.js), passing
- *                          through environment variables and signals; sets HELM_WEB_DIST_DIR when
- *                          web/dist exists and is not explicitly configured (once @helm/kernel is
- *                          installed under node_modules, its default probe no longer hits the payload
- *                          layout; start declares it explicitly rather than silently disabling static
- *                          hosting).
+ *   node start.mjs start   Verify dependencies, then spawn the hub entry
+ *                          (node_modules/@helm/hub/dist/main.js), passing through environment
+ *                          variables and signals; sets HELM_WEB_DIST_DIR when web/dist exists and is
+ *                          not explicitly configured (under the node_modules install layout the hub
+ *                          package's sibling probe cannot find the payload web/dist, so start
+ *                          declares it explicitly rather than silently disabling static hosting).
+ *
+ * Layout contract (tgz-only): the six @helm runtime packages ship as file:./<pkg>.tgz archives and
+ * exist unpacked only under consumer-side node_modules after `npm install --omit=dev
+ * --ignore-scripts`; the payload root carries the archives, the cli bundle, web/dist and the contract
+ * files. Manifest entries pointing under node_modules/ are checksummed against the exact bytes packed
+ * into the archives (npm materializes file: tarballs verbatim).
  *
  * Exit codes (never falls back silently):
  *   0  Validation, dependency resolution, and runtime capability checks passed (or child exited 0)
  *   1  Invalid usage or corrupt payload layout / checksums / manifest contract
- *   3  Valid layout, but missing dependencies or failed runtime capability check (e.g. missing esbuild native binary)
+ *   3  Valid payload, but dependencies not installed yet, missing, or failed runtime capability check
+ *      (e.g. missing esbuild native binary)
  */
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
@@ -83,6 +93,21 @@ function loadManifest() {
   return { manifest, entries, checksums };
 }
 
+/**
+ * Install-state gate: entries under node_modules/ exist only after the consumer-side npm install
+ * unpacked the archives. Run BEFORE checksum verification — an uninstalled payload is not a corrupt
+ * payload — and exit 3 with the explicit completion instruction.
+ */
+function assertRuntimeInstalled(entries) {
+  const missing = Object.entries(entries)
+    .filter(([, rel]) => rel.split('/').includes('node_modules'))
+    .filter(([, rel]) => !existsSync(path.resolve(payloadRoot, rel)));
+  if (missing.length === 0) return;
+  console.error(`[payload] runtime packages not installed yet (${missing.length} manifest entries missing under node_modules/, first: ${missing[0][1]})`);
+  console.error('[payload] this directory does not bundle node_modules; run `npm install --omit=dev --ignore-scripts` in the payload root and retry.');
+  process.exit(EXIT_DEPS_MISSING);
+}
+
 /** Verify each entry exists and matches its sha256 checksum; list all failures before exiting 1. */
 function checkLayout(entries, checksums, version) {
   const problems = [];
@@ -106,9 +131,10 @@ function checkLayout(entries, checksums, version) {
 
 /**
  * Dependency resolution: resolve every dependency in dist/package.json from all 7 runtime entry
- * points (hub / kernel / plugins / plugin-build / env-io / protocol / cli) using
- * createRequire(entry).resolve, matching Hub runtime Node resolution (import.meta.resolve ignores
- * its second parent argument in current Node, which previously caused false positives).
+ * points (hub / kernel / plugins / plugin-build / env-io / protocol under node_modules + the cli
+ * bundle at the payload root) using createRequire(entry).resolve, matching Hub runtime Node
+ * resolution (import.meta.resolve ignores its second parent argument in current Node, which
+ * previously caused false positives).
  */
 function resolveProdDeps(entries) {
   let deps = {};
@@ -119,12 +145,12 @@ function resolveProdDeps(entries) {
     process.exit(EXIT_ERROR);
   }
   const bases = {
-    hub: path.resolve(payloadRoot, entries.hub ?? 'hub/dist/main.js'),
-    kernel: path.resolve(payloadRoot, entries.kernel ?? 'kernel/dist/index.js'),
-    plugins: path.resolve(payloadRoot, entries.plugins ?? 'plugins/dist/index.js'),
-    pluginBuild: path.resolve(payloadRoot, entries.pluginBuild ?? 'plugin-build/dist/index.js'),
-    envIo: path.resolve(payloadRoot, entries.envIo ?? 'env-io/dist/index.js'),
-    protocol: path.resolve(payloadRoot, entries.protocol ?? 'protocol/dist/index.js'),
+    hub: path.resolve(payloadRoot, entries.hub ?? 'node_modules/@helm/hub/dist/main.js'),
+    kernel: path.resolve(payloadRoot, entries.kernel ?? 'node_modules/@helm/kernel/dist/index.js'),
+    plugins: path.resolve(payloadRoot, entries.plugins ?? 'node_modules/@helm/plugins/dist/index.js'),
+    pluginBuild: path.resolve(payloadRoot, entries.pluginBuild ?? 'node_modules/@helm/plugin-build/dist/index.js'),
+    envIo: path.resolve(payloadRoot, entries.envIo ?? 'node_modules/@helm/env-io/dist/index.js'),
+    protocol: path.resolve(payloadRoot, entries.protocol ?? 'node_modules/@helm/protocol/dist/index.js'),
     cli: path.resolve(payloadRoot, entries.cli ?? 'cli/dist/index.js'),
   };
   const requires = Object.fromEntries(
@@ -190,7 +216,7 @@ async function probeRuntimeCapabilities(entries) {
 
 function reportDeps(result) {
   if (result.missing.length === 0) {
-    console.log(`[payload] all production dependencies resolved (${result.total}/${result.total} across 7 entry points: hub/kernel/plugins/plugin-build/env-io/protocol/cli)`);
+    console.log(`[payload] all production dependencies resolved (${result.total}/${result.total} across 7 entry points: hub/kernel/plugins/plugin-build/env-io/protocol from node_modules + the cli bundle)`);
     return;
   }
   console.error(`[payload] missing runtime dependencies (${result.missing.length}): ${result.missing.join(', ')}`);
@@ -200,6 +226,7 @@ function reportDeps(result) {
 const command = process.argv[2];
 if (command === 'check') {
   const { manifest, entries, checksums } = loadManifest();
+  assertRuntimeInstalled(entries);
   checkLayout(entries, checksums, manifest.version);
   const result = resolveProdDeps(entries);
   if (result.missing.length > 0) {
@@ -216,6 +243,7 @@ if (command === 'check') {
   process.exit(0);
 } else if (command === 'start') {
   const { manifest, entries, checksums } = loadManifest();
+  assertRuntimeInstalled(entries);
   checkLayout(entries, checksums, manifest.version);
   const result = resolveProdDeps(entries);
   if (result.missing.length > 0) {
