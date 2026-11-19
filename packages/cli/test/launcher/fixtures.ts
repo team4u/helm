@@ -36,7 +36,8 @@ export type FakePayloadMode =
   | 'ignore-signal' // healthy server that ignores SIGTERM (escalation path)
   | 'wrong-port-banner' // prints a banner naming a different port (port-filter path)
   | 'check-fail' // `start.mjs check` exits 1
-  | 'check-hang'; // `start.mjs check` never exits (staging timeout path)
+  | 'check-hang' // `start.mjs check` never exits (staging timeout path)
+  | 'die-after-banner'; // prints the banner, then exits: readiness-tail death window
 
 const START_MJS = `#!/usr/bin/env node
 import { createServer } from 'node:http';
@@ -131,6 +132,11 @@ else {
     writeActivity(); // write before the banner: readiness implies a bound heartbeat record
     console.log(\`Helmx Hub: http://\${displayHost}:\${bannerPort}\`);
   });
+  if (mode === 'die-after-banner') {
+    // Readiness-tail death: the banner is already scannable when the process dies, so a slow
+    // post-readiness gate (health probe) walks the launcher into recording an already-dead hub.
+    setTimeout(() => process.exit(9), 150);
+  }
   if (activityFile !== null && mode !== 'ignore-signal') setInterval(writeActivity, 300).unref?.();
   if (mode !== 'ignore-signal') {
     const shutdown = () => { if (activityFile !== null) { try { unlinkSync(activityFile); } catch {} } process.exit(0); };

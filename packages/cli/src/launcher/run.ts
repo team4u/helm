@@ -136,18 +136,36 @@ export async function runSupervised(options: RunLauncherOptions): Promise<number
     shutdown.resolve();
   };
 
+  const unexpectedExitMessage = (exitCode: number | null, signalCode: NodeJS.Signals | null): string =>
+    `the supervised hub process exited unexpectedly (code=${exitCode ?? 'null'} signal=${signalCode ?? 'null'}); inspect ${paths.hubLogPath}`;
+
   const captureChild = (child: ChildProcess): void => {
     if (child.pid === undefined) return;
     held = { child, pid: child.pid };
     child.once('exit', (code, signal) => {
       if (held === null || held.child !== child) return; // superseded by stop/start/rollback
-      if (shuttingDown || transitioning) return; // expected during a mediated transition
+      if (shuttingDown) return; // teardown already in progress
+      if (transitioning) return; // parked: endTransition re-checks liveness when the transition ends
       held = null;
-      requestShutdown(
-        1,
-        `the supervised hub process exited unexpectedly (code=${code ?? 'null'} signal=${signal ?? 'null'}); inspect ${paths.hubLogPath}`,
-      );
+      requestShutdown(1, unexpectedExitMessage(code, signal));
     });
+  };
+
+  /**
+   * Close out a mediated transition. Exits observed while `transitioning` was set were parked
+   * (they may be the mediated stop itself), so re-check the held child once the transition ends:
+   * one that is already dead was never mediated away — a hub can die after its readiness gate
+   * but before the transition completes (install/update tail), and supervising that corpse
+   * forever would break the unexpected-exit contract. Surface it instead.
+   */
+  const endTransition = (): void => {
+    transitioning = false;
+    const hub = held;
+    if (hub === null || shuttingDown) return;
+    const { exitCode, signalCode } = hub.child;
+    if (exitCode === null && signalCode === null) return;
+    held = null;
+    requestShutdown(1, unexpectedExitMessage(exitCode, signalCode));
   };
 
   /**
@@ -188,7 +206,7 @@ export async function runSupervised(options: RunLauncherOptions): Promise<number
       // The held child is always released, on success and on failure alike: nothing this
       // launcher spawned may outlive the run loop untracked.
       held = null;
-      transitioning = false;
+      endTransition();
     }
   };
 
@@ -219,7 +237,7 @@ export async function runSupervised(options: RunLauncherOptions): Promise<number
         held = null; // never became a supervised hub; its own failure path already killed it
         throw error;
       } finally {
-        transitioning = false;
+        endTransition();
       }
     },
   };
