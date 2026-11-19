@@ -24,6 +24,7 @@ import {
   Select,
   StatusLight,
   formatDurationMs,
+  useConversationBackground,
   useConversations,
   usePluginConfig,
   usePluginContext,
@@ -39,6 +40,7 @@ import {
   deriveBoardItems,
   filterTaskItems,
   parseTaskBoardDoc,
+  parseTaskRecordLenient,
   parseTaskScreenParams,
   TASK_COLUMNS,
   TASK_MOBILE_TABS,
@@ -47,10 +49,13 @@ import {
   type TaskItem,
   type TaskLightStatus,
   type TaskMobileTab,
+  type TaskRecord,
 } from './models.ts'
 import {
   TASK_ACTION_APPROVE,
   TASK_ACTION_APPROVE_TITLE,
+  TASK_ACTION_CONTINUE,
+  TASK_ACTION_CONTINUE_TITLE,
   TASK_ACTION_DETAIL,
   TASK_ACTION_DETAIL_LABEL,
   TASK_ACTION_MERGE_CLOSE,
@@ -61,10 +66,25 @@ import {
   TASK_ACTION_SPLIT_LABEL,
   TASK_ACTION_START,
   TASK_ACTION_START_TITLE,
+  TASK_BOARD_INVALID,
+  TASK_BOARD_INVALID_HINT,
+  TASK_BOARD_RELOADING,
+  TASK_BOARD_RETRY,
   TASK_BOARD_TITLE,
   TASK_CHAT_TASK,
   TASK_CHAT_TASK_TITLE,
   TASK_DEPS_READY,
+  TASK_DEP_OFF_BOARD,
+  TASK_DEP_OFF_BOARD_TITLE,
+  TASK_MERGE_PENDING_DISABLED_TITLE,
+  TASK_OFF_BOARD_CLOSE,
+  TASK_OFF_BOARD_INSPECT,
+  TASK_OFF_BOARD_INSPECTING,
+  TASK_OFF_BOARD_INSPECT_FAILED,
+  TASK_CONTINUE_PROMPT,
+  TASK_CONTINUE_SENDING,
+  taskOffBoardDeps,
+  taskOffBoardNotice,
   TASK_EMPTY_HINT,
   TASK_EMPTY_HINT_NO_MATCH,
   TASK_EMPTY_LOADING,
@@ -85,6 +105,7 @@ import {
   TASK_SEARCH_LABEL,
   TASK_SEARCH_PLACEHOLDER,
   taskBoardStats,
+  taskCardLightLabel,
   taskChangedFiles,
   taskColumnLabel,
   taskLightLabel,
@@ -114,6 +135,7 @@ function TaskCard(props: {
   onStart: (taskId: string) => void
   onApprove: (taskId: string, mergeAction: 'close_only' | 'merge_and_close') => void
   onRework: (taskId: string) => void
+  onContinue: (item: TaskItem) => void
 }): ReactNode {
   const locale = usePluginLocale()
   const t = usePluginTranslator()
@@ -154,7 +176,7 @@ function TaskCard(props: {
       }}
     >
       <div className="task-card-header">
-        <StatusLight status={lightWord(live.lightStatus)} label={taskLightLabel(live.lightStatus, locale)} />
+        <StatusLight status={lightWord(live.lightStatus)} label={taskCardLightLabel(live.lightStatus, live.approvalPending, locale)} />
         <div className="task-card-main">
           <div className="task-card-title-row">
             <span className="task-card-title" title={task.title}>{task.title}</span>
@@ -217,11 +239,16 @@ function TaskCard(props: {
           ) : (
             <span className="badge badge-ok">{t(TASK_DEPS_READY)}</span>
           )}
+          {live.offBoardDeps.length > 0 ? (
+            <span className="badge badge-neutral" title={t(TASK_DEP_OFF_BOARD_TITLE)}>
+              {taskOffBoardDeps(live.offBoardDeps.length, locale)}
+            </span>
+          ) : null}
           {task.planFirst === true ? <span className="badge badge-neutral">{t(TASK_FLAG_PLAN_FIRST)}</span> : null}
         </div>
       ) : null}
 
-      {task.column === 'in_progress' && task.mergePending === true ? (
+      {task.mergePending === true && (task.column === 'in_progress' || task.column === 'in_review') ? (
         <div className="task-card-flags">
           <span className="badge badge-accent">{t(TASK_FLAG_MERGE_PENDING)}</span>
         </div>
@@ -262,6 +289,21 @@ function TaskCard(props: {
 
       <div className="task-card-footer">
         <div className="task-card-footer-actions">
+          {task.column === 'in_progress' && live.stalled ? (
+            <button
+              type="button"
+              className="btn btn-xs"
+              disabled={props.busy !== undefined}
+              title={t(TASK_ACTION_CONTINUE_TITLE)}
+              onClick={(e) => {
+                e.stopPropagation()
+                props.onContinue(item)
+              }}
+            >
+              <HelmxIcon name="play" size={11} />
+              <span>{t(TASK_ACTION_CONTINUE)}</span>
+            </button>
+          ) : null}
           {task.column === 'backlog' && live.isReadyToStart ? (
             <button
               type="button"
@@ -282,8 +324,8 @@ function TaskCard(props: {
               <button
                 type="button"
                 className="btn btn-xs"
-                disabled={props.busy !== undefined}
-                title={t(TASK_ACTION_APPROVE_TITLE)}
+                disabled={props.busy !== undefined || task.mergePending === true}
+                title={task.mergePending === true ? t(TASK_MERGE_PENDING_DISABLED_TITLE) : t(TASK_ACTION_APPROVE_TITLE)}
                 onClick={(e) => {
                   e.stopPropagation()
                   props.onApprove(task.id, 'close_only')
@@ -296,8 +338,8 @@ function TaskCard(props: {
                 <button
                   type="button"
                   className="btn btn-xs btn-ghost"
-                  disabled={props.busy !== undefined}
-                  title={t(TASK_ACTION_MERGE_CLOSE_TITLE)}
+                  disabled={props.busy !== undefined || task.mergePending === true}
+                  title={task.mergePending === true ? t(TASK_MERGE_PENDING_DISABLED_TITLE) : t(TASK_ACTION_MERGE_CLOSE_TITLE)}
                   onClick={(e) => {
                     e.stopPropagation()
                     props.onApprove(task.id, 'merge_and_close')
@@ -310,8 +352,8 @@ function TaskCard(props: {
               <button
                 type="button"
                 className="btn btn-xs btn-ghost"
-                disabled={props.busy !== undefined}
-                title={t(TASK_ACTION_REWORK_TITLE)}
+                disabled={props.busy !== undefined || task.mergePending === true}
+                title={task.mergePending === true ? t(TASK_MERGE_PENDING_DISABLED_TITLE) : t(TASK_ACTION_REWORK_TITLE)}
                 onClick={(e) => {
                   e.stopPropagation()
                   props.onRework(task.id)
@@ -331,6 +373,86 @@ function TaskCard(props: {
   )
 }
 
+/**
+ * Explicit notice for a deep-linked task absent from the current board
+ * projection (archived / done-truncated / deleted): never silently blank —
+ * offers the read-only `inspect` action to load the full record on demand.
+ */
+function TaskOffBoardNotice(props: { taskId: string; onClose: () => void }): ReactNode {
+  const ctx = usePluginContext()
+  const locale = usePluginLocale()
+  const t = usePluginTranslator()
+  const [record, setRecord] = useState<TaskRecord | undefined>(undefined)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const load = (): void => {
+    if (loading) return
+    setLoading(true)
+    setError(null)
+    void ctx
+      .callAction('inspect', { taskId: props.taskId })
+      .then((raw) => {
+        const container = typeof raw === 'object' && raw !== null && 'task' in (raw as Record<string, unknown>)
+          ? (raw as Record<string, unknown>)['task']
+          : raw
+        const parsed = parseTaskRecordLenient(container)
+        if (parsed === undefined) {
+          setError(t(TASK_OFF_BOARD_INSPECT_FAILED))
+          return
+        }
+        setRecord(parsed)
+      })
+      .catch((err: unknown) => {
+        setError(`${t(TASK_OFF_BOARD_INSPECT_FAILED)}: ${err instanceof Error ? err.message : String(err)}`)
+      })
+      .finally(() => {
+        setLoading(false)
+      })
+  }
+
+  return (
+    <div className="task-board-empty" data-off-board-task={props.taskId}>
+      <HelmxIcon name="archive" size={22} />
+      <div className="task-board-empty-title">{taskOffBoardNotice(props.taskId, locale)}</div>
+      {record === undefined ? (
+        <>
+          {error !== null ? <div className="task-modal-error">{error}</div> : null}
+          <div className="task-board-actions">
+            <button type="button" className="btn btn-sm" disabled={loading} onClick={load}>
+              <HelmxIcon name="search" size={11} />
+              <span>{loading ? t(TASK_OFF_BOARD_INSPECTING) : t(TASK_OFF_BOARD_INSPECT)}</span>
+            </button>
+            <button type="button" className="btn btn-sm btn-ghost" onClick={props.onClose}>
+              <span>{t(TASK_OFF_BOARD_CLOSE)}</span>
+            </button>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="task-card-submission" style={{ maxWidth: 560, textAlign: 'left' }}>
+            <div className="task-card-submission-title">
+              <span className="badge badge-neutral mono">{record.id}</span>
+              <span>{record.title}</span>
+              <span className="badge badge-neutral">{taskColumnLabel(record.column, locale)}</span>
+            </div>
+            {record.brief !== '' ? <div className="task-card-submission-summary">{record.brief}</div> : null}
+            {record.submission !== undefined ? (
+              <div className="task-card-submission-facts">
+                <span>{record.submission.summary}</span>
+                {record.submission.branch !== undefined ? <span className="mono">{record.submission.branch}</span> : null}
+              </div>
+            ) : null}
+          </div>
+          <button type="button" className="btn btn-sm btn-ghost" onClick={props.onClose}>
+            <span>{t(TASK_OFF_BOARD_CLOSE)}</span>
+          </button>
+        </>
+      )}
+    </div>
+  )
+}
+
 interface TaskBoardScreenProps extends ScreenProps {
   inlineDrawer?: boolean
 }
@@ -341,9 +463,12 @@ export function TaskBoardScreen(props: TaskBoardScreenProps): ReactNode {
   const t = usePluginTranslator()
 
   const rawBoard = usePluginDoc<unknown>('board')
-  const boardLoaded = rawBoard !== undefined
   const board = useMemo(() => parseTaskBoardDoc(rawBoard), [rawBoard])
+  const boardInvalid = rawBoard !== undefined && board === undefined
+  const boardLoaded = rawBoard !== undefined && board !== undefined
+  const [reloading, setReloading] = useState(false)
   const conversations = useConversations()
+  const background = useConversationBackground()
   const config = usePluginConfig<{ defaultPlannerProfile?: string }>()
 
   const params = parseTaskScreenParams(props.params)
@@ -355,10 +480,10 @@ export function TaskBoardScreen(props: TaskBoardScreenProps): ReactNode {
   const [busyTaskId, setBusyTaskId] = useState<string | undefined>(undefined)
   const [actionError, setActionError] = useState<string | null>(null)
 
-  const tasksById = useMemo(() => new Map(board.tasks.map((task) => [task.id, task])), [board])
+  const tasksById = useMemo(() => new Map((board?.tasks ?? []).map((task) => [task.id, task])), [board])
   const items = useMemo(
-    () => deriveBoardItems(board.tasks, conversations, undefined, locale),
-    [board, conversations, locale],
+    () => (board === undefined ? [] : deriveBoardItems(board.tasks, conversations, undefined, locale, background)),
+    [board, conversations, locale, background],
   )
   const options = useMemo(() => collectFilterOptions(items), [items])
   const filtered = useMemo(() => filterTaskItems(items, filter, locale), [items, filter, locale])
@@ -435,6 +560,23 @@ export function TaskBoardScreen(props: TaskBoardScreenProps): ReactNode {
     onApprove: (taskId: string, mergeAction: 'close_only' | 'merge_and_close') =>
       runTaskAction(taskId, () => ctx.callAction('approve', { taskId, mergeAction })),
     onRework: (taskId: string) => setReworkTaskId(taskId),
+    onContinue: (item: TaskItem) => {
+      const conversationId = item.task.conversationId
+      if (conversationId === undefined) return
+      if (busyTaskId !== undefined) return
+      setBusyTaskId(`continue:${item.task.id}`)
+      setActionError(null)
+      void ctx
+        .submitInput(TASK_CONTINUE_PROMPT, { conversationId })
+        .catch((err: unknown) => {
+          const message = err instanceof Error ? err.message : String(err)
+          setActionError(message)
+          ctx.notify(message, 'error')
+        })
+        .finally(() => {
+          setBusyTaskId(undefined)
+        })
+    },
   }
 
   const inFlightCount = columns.in_progress.length
@@ -460,7 +602,7 @@ export function TaskBoardScreen(props: TaskBoardScreenProps): ReactNode {
             <span>{t(TASK_BOARD_TITLE)}</span>
           </div>
           <span className="task-board-subtitle text-subtle">
-            {boardLoaded
+            {boardLoaded && board !== undefined
               ? taskBoardStats(board.tasks.length, inFlightCount, columns.in_review.length, locale)
               : t(TASK_EMPTY_LOADING)}
           </span>
@@ -531,7 +673,31 @@ export function TaskBoardScreen(props: TaskBoardScreenProps): ReactNode {
 
       {actionError !== null ? <div className="task-modal-error">{actionError}</div> : null}
 
-      {!boardLoaded ? (
+      {boardInvalid ? (
+        <div className="task-board-empty">
+          <HelmxIcon name="alert-triangle" size={26} />
+          <div className="task-board-empty-title">{t(TASK_BOARD_INVALID)}</div>
+          <div className="task-board-empty-hint text-subtle">{t(TASK_BOARD_INVALID_HINT)}</div>
+          <button
+            type="button"
+            className="btn btn-sm"
+            disabled={reloading}
+            onClick={() => {
+              if (reloading) return
+              setReloading(true)
+              void ctx
+                .getPluginDoc('board')
+                .catch(() => {
+                  /* honest empty catch: the reload failure keeps the invalid panel; nothing fabricated */
+                })
+                .finally(() => setReloading(false))
+            }}
+          >
+            <HelmxIcon name="refresh-cw" size={11} />
+            <span>{reloading ? t(TASK_BOARD_RELOADING) : t(TASK_BOARD_RETRY)}</span>
+          </button>
+        </div>
+      ) : !boardLoaded ? (
         <div className="task-board-empty">
           <HelmxIcon name="loader" size={26} />
           <div className="task-board-empty-title">{t(TASK_EMPTY_LOADING)}</div>
@@ -613,11 +779,15 @@ export function TaskBoardScreen(props: TaskBoardScreenProps): ReactNode {
         </>
       )}
 
+      {selectedTaskId !== undefined && selectedItem === undefined && boardLoaded ? (
+        <TaskOffBoardNotice taskId={selectedTaskId} onClose={() => props.setParams({ task: undefined })} />
+      ) : null}
+
       {createOpen ? (
         <TaskCreateDialog
           open={createOpen}
           onClose={() => setCreateOpen(false)}
-          dependencyOptions={board.tasks.filter((task) => task.column !== 'done').map((task) => task.id)}
+          dependencyOptions={(board?.tasks ?? []).filter((task) => task.column !== 'done').map((task) => task.id)}
         />
       ) : null}
 

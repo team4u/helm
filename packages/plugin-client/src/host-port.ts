@@ -69,6 +69,14 @@ export interface CodeBlockViewProps {
   language: string
 }
 
+/** One conversation's background in-flight fact (generic workbench badge derivation, plugin-ID-free). */
+export interface PluginClientBackgroundFact {
+  /** A background task is in flight for this conversation (e.g. a background workflow run). */
+  active: boolean
+  /** Honest summary copy joined by the host (may be empty). */
+  summary: string
+}
+
 /**
  * The complete capability port injected by the host. Data slices are reactive
  * snapshots (reference changes drive re-renders, at the same cadence as the
@@ -103,6 +111,15 @@ export interface PluginClientHostPort {
   plugins: PluginSummary[]
   /** Screen contributions registered by enabled plugins (disabled plugin contributions are removed immediately). */
   screens: Array<{ pluginId: string; spec: ScreenSpec }>
+  /**
+   * Derived per-conversation background in-flight facts (key: conversationId),
+   * aggregated by the host from the generic workbench.panel badge contract
+   * (tone = 'accent' entries + context compaction) — zero plugin IDs baked in.
+   * Optional and additive: absent until the host wires it; consumers must
+   * treat absence honestly as "no background facts available" (never
+   * fabricate in-flight states).
+   */
+  conversationBackground?: Readonly<Record<number, PluginClientBackgroundFact>>
 
   // ---- Plugin docs ----
   /** key: `${pluginId}/${docName}`. */

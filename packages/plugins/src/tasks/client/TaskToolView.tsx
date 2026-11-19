@@ -29,6 +29,7 @@ import {
   deriveTaskLiveView,
   parseTaskBoardDoc,
   parseTaskToolFacts,
+  parseTaskToolVerb,
   type TaskLightStatus,
 } from './models.ts'
 import {
@@ -66,7 +67,7 @@ export function TaskToolView(props: ToolViewProps): ReactNode {
     [props.input, props.structuredOutput, props.result],
   )
 
-  const tasksById = useMemo(() => new Map(board.tasks.map((task) => [task.id, task])), [board])
+  const tasksById = useMemo(() => new Map((board?.tasks ?? []).map((task) => [task.id, task])), [board])
   const task = facts.taskId !== undefined ? tasksById.get(facts.taskId) : undefined
   const live = useMemo(
     () => (task !== undefined ? deriveTaskLiveView(task, conversations, undefined, tasksById, locale) : undefined),
@@ -79,7 +80,7 @@ export function TaskToolView(props: ToolViewProps): ReactNode {
 
   const conversationId = task?.conversationId ?? facts.conversationId
 
-  const title = taskToolTitle(props.toolName, locale)
+  const title = taskToolTitle(parseTaskToolVerb(props.toolName), locale)
   const summaryParts: string[] = []
   if (facts.taskId !== undefined) summaryParts.push(facts.taskId)
   const displayTitle = task?.title ?? facts.title

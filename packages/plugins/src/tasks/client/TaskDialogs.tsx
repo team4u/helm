@@ -59,9 +59,12 @@ import {
   TASK_DELETE_CONFIRM,
   TASK_DELETING,
   TASK_DEP_DONE,
+  TASK_DEP_OFF_BOARD,
+  TASK_DEP_OFF_BOARD_TITLE,
   TASK_DEP_PENDING,
   TASK_DEPS_NONE,
   TASK_DEPS_SECTION,
+  TASK_MERGE_PENDING_DISABLED_TITLE,
   TASK_FIELD_ASSIGNEE,
   TASK_FIELD_ASSIGNEE_PLACEHOLDER,
   TASK_FIELD_AUTO_MERGE,
@@ -522,10 +525,13 @@ export function TaskDetailDrawer(props: TaskDetailDrawerProps): ReactNode {
   const submission = task.submission
   const depRows = useMemo(
     () =>
-      task.dependsOn.map((depId) => ({
-        depId,
-        done: props.tasksById.get(depId)?.column === 'done',
-      })),
+      task.dependsOn.map((depId) => {
+        const dep = props.tasksById.get(depId)
+        return {
+          depId,
+          state: dep === undefined ? ('off-board' as const) : dep.column === 'done' ? ('done' as const) : ('pending' as const),
+        }
+      }),
     [task.dependsOn, props.tasksById],
   )
 
@@ -662,9 +668,15 @@ export function TaskDetailDrawer(props: TaskDetailDrawerProps): ReactNode {
                   {depRows.map((row) => (
                     <div key={row.depId} className="task-detail-dep-row">
                       <span className="mono">{row.depId}</span>
-                      <span className={`badge ${row.done ? 'badge-ok' : 'badge-warn'}`}>
-                        {row.done ? t(TASK_DEP_DONE) : t(TASK_DEP_PENDING)}
-                      </span>
+                      {row.state === 'done' ? (
+                        <span className="badge badge-ok">{t(TASK_DEP_DONE)}</span>
+                      ) : row.state === 'off-board' ? (
+                        <span className="badge badge-neutral" title={t(TASK_DEP_OFF_BOARD_TITLE)}>
+                          {t(TASK_DEP_OFF_BOARD)}
+                        </span>
+                      ) : (
+                        <span className="badge badge-warn">{t(TASK_DEP_PENDING)}</span>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -770,8 +782,8 @@ export function TaskDetailDrawer(props: TaskDetailDrawerProps): ReactNode {
                         <button
                           type="button"
                           className="btn btn-sm btn-ghost"
-                          disabled={busy}
-                          title={t(TASK_ACTION_REWORK_TITLE)}
+                          disabled={busy || task.mergePending === true}
+                          title={task.mergePending === true ? t(TASK_MERGE_PENDING_DISABLED_TITLE) : t(TASK_ACTION_REWORK_TITLE)}
                           onClick={() => props.onRework(task.id)}
                         >
                           <HelmxIcon name="rotate-ccw" size={12} />
@@ -781,8 +793,8 @@ export function TaskDetailDrawer(props: TaskDetailDrawerProps): ReactNode {
                           <button
                             type="button"
                             className="btn btn-sm btn-ghost"
-                            disabled={busy}
-                            title={t(TASK_ACTION_MERGE_CLOSE_TITLE)}
+                            disabled={busy || task.mergePending === true}
+                            title={task.mergePending === true ? t(TASK_MERGE_PENDING_DISABLED_TITLE) : t(TASK_ACTION_MERGE_CLOSE_TITLE)}
                             onClick={() => runAction(() => ctx.callAction('approve', { taskId: task.id, mergeAction: 'merge_and_close' }))}
                           >
                             <HelmxIcon name="git-pull-request" size={12} />
@@ -792,8 +804,8 @@ export function TaskDetailDrawer(props: TaskDetailDrawerProps): ReactNode {
                         <button
                           type="button"
                           className="btn btn-sm"
-                          disabled={busy}
-                          title={t(TASK_ACTION_APPROVE_TITLE)}
+                          disabled={busy || task.mergePending === true}
+                          title={task.mergePending === true ? t(TASK_MERGE_PENDING_DISABLED_TITLE) : t(TASK_ACTION_APPROVE_TITLE)}
                           onClick={() => runAction(() => ctx.callAction('approve', { taskId: task.id, mergeAction: 'close_only' }))}
                         >
                           <HelmxIcon name="check" size={12} />
