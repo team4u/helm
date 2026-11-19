@@ -455,13 +455,16 @@ test('tasks-int4: merge_and_close loop, dependency cycle rejection, blocked star
     )
     assert.equal(mergeDelivered, true, 'merge closing instruction must be delivered')
     await kernel.waitForIdle(convId)
+    // Evidence-bearing submit under merge authorization completes the task in one step (no second manual click)
     await waitFor(async () => {
       const task = await taskFromAction(env, 'T-1')
-      return task.column === 'in_review' && task.mergePending === undefined
+      return task.column === 'done' && task.mergePending === undefined
     })
-    // Final close
-    await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'approve', { taskId: 'T-1' })
-    assert.equal((await taskFromAction(env, 'T-1')).column, 'done')
+    const merged = await taskFromAction(env, 'T-1')
+    assert.equal(merged.column, 'done')
+    assert.match(merged.submission?.branch ?? '', /feat\/t-1/)
+    const mergedConv = kernel.listConversations().find((c) => c.id === convId)
+    assert.equal(mergedConv!.tags.includes(TASK_ARCHIVED_TAG), true, 'one-step merge closure archives the conversation')
   } finally {
     await env.close()
   }
@@ -565,11 +568,13 @@ test('tasks-int5c: a live background workflow run under the task conversation pr
     setRoutedResponses(env.faux, {
       assignee: [
         (ctx) => {
-          // Kick off a background workflow run, then end the turn with plain text (no submission)
+          // Kick off a background workflow run (valid DSL: pure-literal meta + top-level statements),
+          // then end the turn with plain text (no submission)
           return fauxAssistantMessage(
             [
               fauxToolCall('SubagentWorkflow', {
-                script: 'export default async function* () { yield { agentType: "assistant", prompt: "probe child" }; }',
+                script:
+                  'export const meta = { name: "bg-probe", description: "t" }\nconst a = await agent("probe child"); return { done: a }',
                 background: true,
                 label: 'bg-probe',
               }),
@@ -580,7 +585,14 @@ test('tasks-int5c: a live background workflow run under the task conversation pr
         fauxAssistantMessage('Background work delegated; not submitting yet.'),
       ],
       planner: [fauxAssistantMessage('planner idle')],
-      child: [fauxAssistantMessage('child probe done')],
+      // Slow child answer keeps the background run (and its subtree entry) live long enough
+      // for the guard assertions to hit the in-flight window deterministically.
+      child: [
+        async () => {
+          await new Promise((r) => setTimeout(r, 1200))
+          return fauxAssistantMessage('child probe done')
+        },
+      ],
     })
     const created = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'create', {
       title: 'Delegating task',
@@ -588,8 +600,27 @@ test('tasks-int5c: a live background workflow run under the task conversation pr
     })) as { conversationId?: number }
     const convId = created.conversationId!
     await kernel.waitForIdle(convId)
-    // The main turn settled, but the background run's child conversation is still part of the tree /
-    // the workflow run is still in flight -> no stalled mark (never misreport live work as silent)
+    // Deterministically wait until the in-flight fact is OBSERVABLE (child conversation working
+    // or the run record reporting running) before asserting the guard — under heavy load the
+    // run registration lags behind waitForIdle and an immediate probe would race (AGENTS: no timing bets).
+    await waitFor(async () => {
+      const childBusy = kernel
+        .listConversations()
+        .some((c) => c.parentConversationId === convId && (c.status === 'working' || c.status === 'blocked'))
+      if (childBusy) return true
+      const runs = (await kernel.plugins.invokeAction('builtin:workflow', 'runs', { conversationId: convId })) as {
+        runs?: Array<{ status?: string }>
+      }
+      return runs.runs?.some((r) => r.status === 'running') === true
+    })
+    // P3-B/P3-A: with the live subtree/run fact visible, the approve guard refuses (same scope
+    // as the stalled marking; unknown probe failures are conservatively refused too).
+    await assert.rejects(
+      () => kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'approve', { taskId: 'T-1', mergeAction: 'close_only' }),
+      (err: unknown) => err instanceof HelmxError && err.code === 'task_still_running' && err.status === 409,
+    )
+    // After the background work fully settles, no stalled mark was ever written
+    // (live work is never misreported as silent) and the guard no longer blocks.
     await new Promise((r) => setTimeout(r, 800))
     const task = await taskFromAction(env, 'T-1')
     assert.equal(task.silenceState?.stalledAt, undefined, 'must not mark stalled while workflow work is live')
@@ -656,6 +687,330 @@ test('tasks-int6: disable hides tools/UI/skill immediately while execution conve
     const task = await taskFromAction(env, 'T-1')
     assert.equal(task.column, 'done')
     assert.equal(boardDoc(env).tasks.some((entry) => entry.id === 'T-1'), true)
+  } finally {
+    await env.close()
+  }
+})
+
+test('tasks-int7: planFirst real AskDoc approval gate (request tool blocks until answered; submit refused until approved)', { timeout: 60_000 }, async (t) => {
+  const env = await openTasksEnv(useTempDir(t, 'helmx-tasks-int7-'))
+  try {
+    const { kernel } = env.app
+    setRoutedResponses(env.faux, {
+      assignee: [
+        (ctx) => {
+          const meta = captureRequestMeta(ctx.messages as unknown as Record<string, unknown>[])
+          assert.ok(
+            meta.toolNames.includes('task_request_plan_approval'),
+            'assignee must see task_request_plan_approval on a planFirst task',
+          )
+          assert.match(meta.sectionsById[ACTIVE_TASK_SECTION_ID]!, /task_request_plan_approval/)
+          return fauxAssistantMessage(
+            [fauxToolCall('task_request_plan_approval', { plan: '1) probe repo 2) implement fix 3) run tests' })],
+            { stopReason: 'toolUse' },
+          )
+        },
+        (ctx) => {
+          const meta = captureRequestMeta(ctx.messages as unknown as Record<string, unknown>[])
+          assert.match(meta.sectionsById[ACTIVE_TASK_SECTION_ID]!, /task_request_plan_approval/)
+          return fauxAssistantMessage(
+            [fauxToolCall('task_submit', { summary: 'implemented per approved plan', verification: 'tests green' })],
+            { stopReason: 'toolUse' },
+          )
+        },
+        fauxAssistantMessage('Handed in.'),
+      ],
+      planner: [fauxAssistantMessage('planner idle')],
+      child: [fauxAssistantMessage('ok')],
+    })
+    const created = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'create', {
+      title: 'Risky refactor',
+      brief: 'Refactor the auth path. Acceptance: tests pass.',
+      planFirst: true,
+    })) as { conversationId?: number }
+    const convId = created.conversationId!
+
+    // Gate proof before any approval: a direct submit is refused (same handler the model tool hits)
+    await assert.rejects(
+      () => kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'submit', { taskId: 'T-1', summary: 'premature' }),
+      (err: unknown) => err instanceof HelmxError && err.code === 'task_plan_not_approved' && err.status === 409,
+    )
+
+    // The approval tool call blocks the turn on a real pending Ask; answer it from the test side (same chain as HTTP)
+    let askId: string | undefined
+    await waitFor(async () => {
+      const pending = kernel.listAsks('pending').find((a) => a.conversationId === convId)
+      if (pending === undefined) return false
+      askId = pending.id
+      return true
+    })
+    assert.match(askId!, /^builtin:tasks:plan:T-1:/)
+    const pendingAsk = kernel.listAsks('pending').find((a) => a.id === askId)!
+    assert.equal(pendingAsk.fields[0]!.type, 'confirm')
+    await kernel.answerAsk(askId!, { approve: 'true' })
+
+    await kernel.waitForIdle(convId)
+    await waitFor(async () => (await taskFromAction(env, 'T-1')).column === 'in_review')
+    const task = await taskFromAction(env, 'T-1')
+    assert.equal(task.planApproval?.decision, 'approved')
+    assert.equal(task.planApproval?.askId, askId)
+    assert.equal(task.pendingPlanAskId, undefined, 'in-flight ask marker cleared after the ask settled')
+    assert.equal(task.submission?.summary, 'implemented per approved plan')
+  } finally {
+    await env.close()
+  }
+})
+
+test('tasks-int7b: rejected plan keeps the submit gate closed; the ask stays visible until answered', { timeout: 60_000 }, async (t) => {
+  const env = await openTasksEnv(useTempDir(t, 'helmx-tasks-int7b-'))
+  try {
+    const { kernel } = env.app
+    setRoutedResponses(env.faux, {
+      assignee: [
+        fauxAssistantMessage(
+          [fauxToolCall('task_request_plan_approval', { plan: 'rewrite everything from scratch' })],
+          { stopReason: 'toolUse' },
+        ),
+        fauxAssistantMessage('User rejected; I will revise the plan and stay put.'),
+      ],
+      planner: [fauxAssistantMessage('planner idle')],
+      child: [fauxAssistantMessage('ok')],
+    })
+    const created = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'create', {
+      title: 'Contested change',
+      brief: 'Change the storage layer. Acceptance: migration passes.',
+      planFirst: true,
+    })) as { conversationId?: number }
+    const convId = created.conversationId!
+    let askId: string | undefined
+    await waitFor(async () => {
+      const pending = kernel.listAsks('pending').find((a) => a.conversationId === convId)
+      if (pending === undefined) return false
+      askId = pending.id
+      return true
+    })
+    await kernel.answerAsk(askId!, { approve: 'false' })
+    await kernel.waitForIdle(convId)
+    const task = await taskFromAction(env, 'T-1')
+    assert.equal(task.planApproval?.decision, 'rejected')
+    assert.equal(task.column, 'in_progress', 'rejection must not fake progress')
+    // Direct submit attempt still refused after rejection
+    await assert.rejects(
+      () =>
+        kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'submit', {
+          taskId: 'T-1',
+          summary: 'went ahead anyway',
+        }),
+      (err: unknown) => err instanceof HelmxError && err.code === 'task_plan_not_approved' && err.status === 409,
+    )
+  } finally {
+    await env.close()
+  }
+})
+
+test('tasks-int8: dependency-referenced delete guard, force-disable drops the active_task section, recreate delivers ONE composed briefing', { timeout: 60_000 }, async (t) => {
+  const env = await openTasksEnv(useTempDir(t, 'helmx-tasks-int8-'))
+  try {
+    const { kernel } = env.app
+    // --- delete guard: T-1 still referenced by T-2 ---
+    await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'create', { title: 'A', brief: 'a', autoStart: false })
+    await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'create', {
+      title: 'B',
+      brief: 'b',
+      autoStart: false,
+      dependsOn: ['T-1'],
+    })
+    await assert.rejects(
+      () => kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'delete', { taskId: 'T-1' }),
+      (err: unknown) =>
+        err instanceof HelmxError && err.code === 'task_dependency_referenced' && err.status === 409,
+    )
+    // Removing the reference unblocks deletion
+    await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'update', { taskId: 'T-2', dependsOn: [] })
+    await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'delete', { taskId: 'T-1' })
+
+    // --- force-disable while a task is running: the injected section disappears on the next turn ---
+    const sections: Array<Record<string, string>> = []
+    env.faux.setResponses(
+      Array.from({ length: 8 }, () => async (ctx) => {
+        const meta = captureRequestMeta(ctx.messages as unknown as Record<string, unknown>[])
+        sections.push(meta.sectionsById)
+        return fauxAssistantMessage('ok')
+      }),
+    )
+    const created = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'create', {
+      title: 'Section probe',
+      brief: 'Acceptance: n/a.',
+    })) as { conversationId?: number }
+    const convId = created.conversationId!
+    await kernel.waitForIdle(convId)
+    assert.ok(sections[0]![ACTIVE_TASK_SECTION_ID] !== undefined, 'section injected while enabled')
+    await kernel.plugins.disable(TASKS_PLUGIN_ID, { force: true })
+    assert.equal(kernel.plugins.list().find((p) => p.id === TASKS_PLUGIN_ID)?.enabled, false)
+    await kernel.submitInput(convId, 'still there?')
+    await kernel.waitForIdle(convId)
+    assert.equal(sections[sections.length - 1]![ACTIVE_TASK_SECTION_ID], undefined, 'no phantom section after disable')
+    await kernel.plugins.enable(TASKS_PLUGIN_ID)
+
+    // --- recreate delivers both the fresh kickoff brief and the rework feedback ---
+    const repro = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'create', {
+      title: 'Recreate probe',
+      brief: 'Original brief body.',
+    })) as { task: TaskRecord; conversationId?: number }
+    await kernel.deleteConversation(repro.conversationId!)
+    await waitFor(async () => (await taskFromAction(env, repro.task.id)).conversationMissing === true)
+    const recreated = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'rework', {
+      taskId: repro.task.id,
+      feedback: 'please redo it carefully',
+      recreateConversation: true,
+    })) as { conversationId?: number }
+    await kernel.waitForIdle(recreated.conversationId!)
+    const detail = await kernel.getConversationDetail(recreated.conversationId!, { limit: 20 })
+    const inputs = detail.entries.filter((e) => e.kind === 'helmx.input')
+    // #36: recreate delivers exactly ONE composed briefing (brief + feedback), not kickoff + a second delivery
+    assert.equal(inputs.length, 1, 'recreate must deliver a single composed briefing')
+    const joined = JSON.stringify(inputs[0]?.model ?? inputs[0]?.data ?? '')
+    assert.match(joined, /Original brief body\./)
+    assert.match(joined, /please redo it carefully/)
+  } finally {
+    await env.close()
+  }
+})
+
+test('tasks-int9: approve quiescence guard (still-running refused, explicit confirmStopped path) and restart reseed of an un-delivered kickoff', { timeout: 60_000 }, async (t) => {
+  const env = await openTasksEnv(useTempDir(t, 'helmx-tasks-int9-'))
+  try {
+    const { kernel } = env.app
+    // Keep the assignee turn busy long enough to assert the in-flight guard deterministically
+    setRoutedResponses(env.faux, {
+      assignee: [
+        async () => {
+          await new Promise((r) => setTimeout(r, 1500))
+          return fauxAssistantMessage('slow work done')
+        },
+        fauxAssistantMessage([fauxToolCall('task_submit', { summary: 'submitted' })], { stopReason: 'toolUse' }),
+        fauxAssistantMessage('handed in'),
+        fauxAssistantMessage('standing by'),
+      ],
+      planner: [fauxAssistantMessage('planner idle')],
+      child: [fauxAssistantMessage('ok')],
+    })
+    const created = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'create', {
+      title: 'Guarded task',
+      brief: 'Acceptance: guard behavior verified.',
+    })) as { conversationId?: number }
+    const convId = created.conversationId!
+
+    // While the conversation is still working, close_only must be refused (409 task_still_running)
+    await waitFor(async () => {
+      const conv = kernel.listConversations().find((c) => c.id === convId)
+      return conv?.status === 'working'
+    })
+    await assert.rejects(
+      () => kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'approve', { taskId: 'T-1', mergeAction: 'close_only' }),
+      (err: unknown) => err instanceof HelmxError && err.code === 'task_still_running' && err.status === 409,
+    )
+
+    // After the turn settles without submission: in_progress still refuses a bare close (no confirmStopped)
+    await kernel.waitForIdle(convId)
+    await assert.rejects(
+      () => kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'approve', { taskId: 'T-1', mergeAction: 'close_only' }),
+      (err: unknown) => err instanceof HelmxError && err.code === 'task_invalid_column' && err.status === 409,
+    )
+
+    // Restart reseed: simulate the crash window (bound conversation, zero delivered inputs) via reset,
+    // then a plugin disable/enable cycle must re-deliver exactly one kickoff (requestId idempotent)
+    await kernel.resetConversation(convId)
+    await kernel.plugins.disable(TASKS_PLUGIN_ID, { force: true })
+    await kernel.plugins.enable(TASKS_PLUGIN_ID)
+    await kernel.waitForIdle(convId).catch(() => undefined)
+    const reseeded = await kernel.getConversationDetail(convId, { limit: 20 })
+    const reseedInputs = reseeded.entries.filter((e) => e.kind === 'helmx.input')
+    assert.equal(reseedInputs.length, 1, 'reseed delivers exactly one kickoff after restart')
+    assert.match(JSON.stringify(reseedInputs[0]?.model ?? reseedInputs[0]?.data ?? ''), /task_kickoff id=..T-1/)
+
+    // Explicit manual close of an in_progress (quiescent) task via confirmStamped proceeds to done
+    const closed = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'approve', {
+      taskId: 'T-1',
+      mergeAction: 'close_only',
+      confirmStopped: true,
+    })) as { task: TaskRecord }
+    assert.equal(closed.task.column, 'done')
+  } finally {
+    await env.close()
+  }
+})
+
+test('tasks-int10: create idempotency key, explicit merged declaration for merge closure, orphan conversation recovery', { timeout: 60_000 }, async (t) => {
+  const env = await openTasksEnv(useTempDir(t, 'helmx-tasks-int10-'))
+  try {
+    const { kernel } = env.app
+    setRoutedResponses(env.faux, {
+      assignee: [
+        fauxAssistantMessage([fauxToolCall('task_submit', { summary: 'initial delivery' })], { stopReason: 'toolUse' }),
+        fauxAssistantMessage('initial handed in'),
+        fauxAssistantMessage(
+          [fauxToolCall('task_submit', { summary: 'honest failure', verification: 'merge FAILED: conflicts remain' })],
+          { stopReason: 'toolUse' },
+        ),
+        fauxAssistantMessage('honest failure reported'),
+        fauxAssistantMessage([fauxToolCall('task_submit', { summary: 'merged cleanly', merged: true })], { stopReason: 'toolUse' }),
+        fauxAssistantMessage('merged and closed'),
+        fauxAssistantMessage('standing by'),
+      ],
+      planner: [fauxAssistantMessage('planner idle')],
+      child: [fauxAssistantMessage('ok')],
+    })
+
+    // --- create idempotency: same key double-click returns the same task, no duplicate card/conversation ---
+    const first = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'create', {
+      title: 'Idempotent',
+      brief: 'Acceptance: one card only.',
+      idempotencyKey: 'dial-press-1',
+    })) as { task: TaskRecord; started: boolean; conversationId?: number }
+    const replay = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'create', {
+      title: 'Idempotent',
+      brief: 'Acceptance: one card only.',
+      idempotencyKey: 'dial-press-1',
+    })) as { task: TaskRecord; started: boolean; conversationId?: number }
+    assert.equal(replay.task.id, first.task.id, 'idempotent replay returns the same task id')
+    assert.equal(replay.task.conversationId, first.task.conversationId)
+    const listed = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'list', {})) as { total: number }
+    assert.equal(listed.total, 1, 'exactly one card exists after a double-click')
+
+    // --- merge closure requires explicit evidence: honest failure text stays in_review ---
+    const convId = first.conversationId!
+    const taskId = first.task.id
+    await kernel.waitForIdle(convId)
+    await waitFor(async () => (await taskFromAction(env, taskId)).column === 'in_review')
+    // Authorize merge -> the assignee honestly reports a merge FAILURE (verification-only, no branch, no merged)
+    await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'approve', { taskId, mergeAction: 'merge_and_close' })
+    await kernel.waitForIdle(convId)
+    await waitFor(async () => {
+      const task = await taskFromAction(env, taskId)
+      return task.submission?.summary === 'honest failure' && task.column === 'in_review'
+    })
+    const afterFailure = await taskFromAction(env, taskId)
+    assert.equal(afterFailure.column, 'in_review', 'honest merge-failure verification must not auto-close the task')
+    assert.equal(afterFailure.mergePending, true, 'merge authorization stays pending until real evidence arrives')
+    // Reviewer re-issues the merge instruction; the assignee now declares merged: true -> one-step done
+    await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'approve', { taskId, mergeAction: 'merge_and_close' })
+    await kernel.waitForIdle(convId)
+    await waitFor(async () => (await taskFromAction(env, taskId)).column === 'done')
+    const done = await taskFromAction(env, taskId)
+    assert.equal(done.column, 'done')
+
+    // --- orphan conversation recovery: an unbound, zero-input, task-tagged conversation gets archived on restart ---
+    const orphan = await kernel.createConversation({ title: 'Orphan', profileId: 'assistant', tags: ['task'] })
+    await kernel.plugins.disable(TASKS_PLUGIN_ID, { force: true })
+    await kernel.plugins.enable(TASKS_PLUGIN_ID)
+    await waitFor(async () => {
+      const conv = kernel.listConversations().find((c) => c.id === orphan.id)
+      return conv?.tags.includes('task-archived') === true
+    })
+    const survivor = kernel.listConversations().find((c) => c.id === convId)
+    assert.ok(survivor, 'bound execution conversation untouched by orphan recovery')
+    assert.equal(survivor!.tags.includes('task-archived'), true, 'bound done conversation keeps its archived tag')
   } finally {
     await env.close()
   }

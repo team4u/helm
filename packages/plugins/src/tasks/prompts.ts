@@ -19,7 +19,7 @@ export function activeTaskSection(task: TaskRecord): string {
     '1. You are the assignee of this board task. Deliver exactly the scope defined in the task brief you received at kickoff; do not silently expand or shrink it.',
     ...(task.planFirst === true
       ? [
-          '2. planFirst is ON: investigate first and post a concise plan, then send an explicit Ask (the conversation question mechanism) requesting the user to approve the plan, and wait for the answer before writing any code. While the Ask is pending the board honestly shows this task as blocked on a human decision.',
+          '2. planFirst is ON: investigate first, then call task_request_plan_approval with your concise plan and wait for the explicit user decision (a real Ask card). Do not write code before the plan is approved; if rejected, revise the plan and ask again. While the approval is pending the board honestly shows this task as blocked on a human decision, and task_submit is refused.',
         ]
       : ['2. planFirst is OFF: you may start working directly, but still think before large changes.']),
     ...(task.autoMerge === true
@@ -44,7 +44,7 @@ export function buildTaskKickoffPrompt(task: TaskRecord): string {
     '## Execution rules',
     ...(task.planFirst === true
       ? [
-          '- planFirst is ON: investigate, post a concise plan, then send an explicit Ask requesting the user to approve the plan; do not write code before the answer arrives (the board shows the task as blocked while the Ask is pending).',
+          '- planFirst is ON: investigate, then call task_request_plan_approval with your concise plan and wait for the explicit user decision; do not write code before approval (task_submit is refused until the plan is approved).',
         ]
       : ['- planFirst is OFF: you may start working directly.']),
     ...(task.autoMerge === true
@@ -57,14 +57,14 @@ export function buildTaskKickoffPrompt(task: TaskRecord): string {
   ].join('\n')
 }
 
-/** merge_and_close 验收指令：要求执行者按项目规范合并清理后再 task_submit 确认。 */
+/** merge_and_close 验收指令：用户已显式授权本次合并（覆盖 autoMerge=false 的默认隔离），合并回执一步结单。 */
 export function buildMergeClosingPrompt(task: TaskRecord, note?: string): string {
   return [
     `<task_merge_closing id="${task.id}">`,
-    `Task ${task.id} passed review. Close it out by merging:`,
+    `Task ${task.id} passed review and the reviewer explicitly authorized merging it now (this overrides the task's autoMerge=false isolation default for this closure).`,
     '- Merge your isolated branch into the main line following the project merge rules (run the required checks first).',
     '- Clean up any temporary worktree you created.',
-    `- Then call task_submit again with the merge result (merge commit, checks status) to confirm completion of task ${task.id}.`,
+    `- Then call task_submit with the merge result (branch plus verification evidence such as the merge commit and checks status); this submission completes task ${task.id} directly — no second manual approval is needed.`,
     ...(note !== undefined && note.trim() !== '' ? ['', `Reviewer note: ${note.trim()}`] : []),
     '</task_merge_closing>',
   ].join('\n')

@@ -4,7 +4,7 @@
  * Slice 2（后端）与 Slice 3（前端）唯一对齐事实源——字段、语义与默认值
  * 严格锁定 #1 板书共享契约；新增字段必须双方同步。
  */
-import { HelmxError } from '@helmx/protocol'
+import { HelmxError, type ConversationSummary } from '@helmx/protocol'
 
 export const TASKS_PLUGIN_ID = 'builtin:tasks'
 export const TASKS_SKILL_ID = 'tasks'
@@ -45,6 +45,17 @@ export interface TaskSilenceState {
   lastError?: string
 }
 
+/**
+ * planFirst 任务的真实方案审批记录（经 task_request_plan_approval -> ctx.host.createAsk
+ * 的 confirm Ask 由用户明确批准/拒绝；task_submit 前置门禁校验 approved）。
+ */
+export interface TaskPlanApproval {
+  decision: 'approved' | 'rejected'
+  askedAt: number
+  decidedAt: number
+  askId: string
+}
+
 export interface TaskRecord {
   id: string
   title: string
@@ -67,6 +78,11 @@ export interface TaskRecord {
   reworkCount: number
   lastReworkFeedback?: string
   mergePending?: boolean
+  planApproval?: TaskPlanApproval
+  /** 发起中的方案审批 Ask ID（新一轮发起前先 cancelAsk 旧的，防重试遗留 pending 卡）。 */
+  pendingPlanAskId?: string
+  /** 建单幂等键（同 key 的重复 create 返回已建任务，防双击双开）。 */
+  createKey?: string
   silenceState?: TaskSilenceState
   archived?: boolean
   createdAt: number
@@ -81,9 +97,12 @@ export interface TaskStoreDoc {
   tasks: Record<string, TaskRecord>
 }
 
+/** 公开看板投影的单张卡片：任务记录 + 依赖真值（板书截断后 UI 无需自算 blockedBy）。 */
+export type TaskBoardEntry = TaskRecord & { blockedBy: string[] }
+
 /** 公开看板投影 doc 形状。 */
 export interface TaskBoardDoc {
-  tasks: TaskRecord[]
+  tasks: TaskBoardEntry[]
   updatedAt: number
 }
 
@@ -105,6 +124,28 @@ export const TASK_ID_RE = /^[A-Za-z0-9_-]{1,64}$/
 // ---------------------------------------------------------------------------
 // 边界守卫与纯校验函数
 // ---------------------------------------------------------------------------
+
+/** 会话整棵后代子树是否存在 working / blocked（沿 parentConversationId 遍历，带环防御）。 */
+export function subtreeHasWorkingOrBlocked(rootId: number, all: readonly ConversationSummary[]): boolean {
+  const childrenOf = new Map<number, number[]>()
+  for (const conv of all) {
+    if (conv.parentConversationId === undefined) continue
+    const list = childrenOf.get(conv.parentConversationId) ?? []
+    list.push(conv.id)
+    childrenOf.set(conv.parentConversationId, list)
+  }
+  const seen = new Set<number>()
+  const queue = [rootId]
+  while (queue.length > 0) {
+    const id = queue.shift()!
+    if (seen.has(id)) continue
+    seen.add(id)
+    const conv = all.find((c) => c.id === id)
+    if (conv !== undefined && (conv.status === 'working' || conv.status === 'blocked')) return true
+    for (const child of childrenOf.get(id) ?? []) queue.push(child)
+  }
+  return false
+}
 
 function isJsonObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -253,7 +294,7 @@ export function assertTaskRecord(value: unknown): TaskRecord {
       pluginId: TASKS_PLUGIN_ID,
     })
   }
-  for (const key of ['project', 'nodeId', 'cwd', 'model', 'thinkingLevel', 'lastReworkFeedback'] as const) {
+  for (const key of ['project', 'nodeId', 'cwd', 'model', 'thinkingLevel', 'lastReworkFeedback', 'pendingPlanAskId', 'createKey'] as const) {
     const v = value[key]
     if (v !== undefined && typeof v !== 'string') {
       throw new HelmxError('tasks_doc_corrupt', `${where}.${key} 必须是字符串`, 500, { pluginId: TASKS_PLUGIN_ID })
@@ -279,6 +320,19 @@ export function assertTaskRecord(value: unknown): TaskRecord {
   }
   if (value.submission !== undefined) assertTaskSubmission(value.submission, where)
   if (value.silenceState !== undefined) assertTaskSilenceState(value.silenceState, where)
+  const planApproval = value.planApproval
+  if (planApproval !== undefined) {
+    if (
+      !isJsonObject(planApproval) ||
+      (planApproval.decision !== 'approved' && planApproval.decision !== 'rejected') ||
+      typeof planApproval.askId !== 'string' ||
+      planApproval.askId.trim() === '' ||
+      !isFiniteTime(planApproval.askedAt) ||
+      !isFiniteTime(planApproval.decidedAt)
+    ) {
+      throw new HelmxError('tasks_doc_corrupt', `${where}.planApproval 结构非法`, 500, { pluginId: TASKS_PLUGIN_ID })
+    }
+  }
   return value as unknown as TaskRecord
 }
 
@@ -355,7 +409,9 @@ export function blockedDependenciesOf(task: Pick<TaskRecord, 'dependsOn'>, tasks
   return task.dependsOn.filter((dep) => tasks[dep]?.column !== 'done')
 }
 
-/** 公开看板投影：全部未归档任务 + 最近 N 条已归档 / 已完成历史（updatedAt 降序）。 */
+/** 公开看板投影：全部未归档任务 + 最近 N 条已归档 / 已完成历史（updatedAt 降序）。
+ * 每卡附依赖真值 blockedBy（未 done 的前置 ID）：板书截断后前端无法看到被截掉的
+ * 依赖卡状态，必须由投影携带真值，杜绝 UI 误判「未知依赖」为已完成。 */
 export function projectBoardDoc(store: TaskStoreDoc): TaskBoardDoc {
   const active: TaskRecord[] = []
   const doneHistory: TaskRecord[] = []
@@ -364,7 +420,11 @@ export function projectBoardDoc(store: TaskStoreDoc): TaskBoardDoc {
     else active.push(record)
   }
   doneHistory.sort((a, b) => b.updatedAt - a.updatedAt || (a.id < b.id ? 1 : -1))
-  const tasks = [...active, ...doneHistory.slice(0, TASK_BOARD_DONE_HISTORY_LIMIT)]
-  tasks.sort((a, b) => b.createdAt - a.createdAt || (a.id < b.id ? 1 : -1))
+  const selected = [...active, ...doneHistory.slice(0, TASK_BOARD_DONE_HISTORY_LIMIT)]
+  selected.sort((a, b) => b.createdAt - a.createdAt || (a.id < b.id ? 1 : -1))
+  const tasks = selected.map((record) => ({
+    ...record,
+    blockedBy: record.dependsOn.filter((dep) => store.tasks[dep]?.column !== 'done'),
+  }))
   return { tasks, updatedAt: Date.now() }
 }

@@ -45,7 +45,9 @@ export {
   type TaskRecord,
   type TaskSubmission,
   type TaskSilenceState,
+  type TaskPlanApproval,
   type TaskBoardDoc,
+  type TaskBoardEntry,
   type TasksConfig,
 } from './tasks.js';
 export { resolveTasksConfig, detectDependencyCycle, projectBoardDoc } from './tasks/contracts.js';

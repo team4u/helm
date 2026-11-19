@@ -9,8 +9,8 @@
  * - conversation.deleted：诚实标记 conversationMissing（不捏造、不自动删任务）。
  */
 import { HelmxError, type ConversationSummary, type HelmxPluginContext } from '@helmx/protocol'
-import { ACTIVE_TASK_SECTION_ID, TASKS_PLUGIN_ID, type TaskRecord } from './contracts.js'
-import { findActiveTaskByConversation, type TasksRuntime } from './actions.js'
+import { ACTIVE_TASK_SECTION_ID, subtreeHasWorkingOrBlocked, type TaskRecord } from './contracts.js'
+import { findActiveTaskByConversation, workflowHasRunningRuns, type TasksRuntime } from './actions.js'
 import { activeTaskSection } from './prompts.js'
 
 /** 规划者专属模型工具名（任务执行会话 / 子会话 / 自动化会话隐藏）。 */
@@ -45,28 +45,6 @@ export function filterTaskToolsForTurn<T extends { name: string }>(
   return next
 }
 
-/** 会话整棵后代子树是否存在 working / blocked（沿 parentConversationId 遍历，带环防御）。 */
-export function subtreeHasWorkingOrBlocked(rootId: number, all: readonly ConversationSummary[]): boolean {
-  const childrenOf = new Map<number, number[]>()
-  for (const conv of all) {
-    if (conv.parentConversationId === undefined) continue
-    const list = childrenOf.get(conv.parentConversationId) ?? []
-    list.push(conv.id)
-    childrenOf.set(conv.parentConversationId, list)
-  }
-  const seen = new Set<number>()
-  const queue = [rootId]
-  while (queue.length > 0) {
-    const id = queue.shift()!
-    if (seen.has(id)) continue
-    seen.add(id)
-    const conv = all.find((c) => c.id === id)
-    if (conv !== undefined && (conv.status === 'working' || conv.status === 'blocked')) return true
-    for (const child of childrenOf.get(id) ?? []) queue.push(child)
-  }
-  return false
-}
-
 /**
  * 静止判定纯函数：任务仍在进行且本回合正常结束、无待答 Ask、子树与 Workflow
  * 均无在途时返回 true（调用方据此诚实标记 stalledAt；不做任何投递）。
@@ -86,28 +64,9 @@ export function shouldMarkStalled(input: {
   return true
 }
 
-/**
- * 查询 builtin:workflow 在该会话名下是否有 running run（无静态依赖，运行时按需调用）。
- * - 返回 false：确定无在途（含 workflow 停用/未注册——无后台 run 能力即无在途）；
- * - 返回 'unknown'：查询故障（网络/内部错误），调用方保守跳过标记。
- */
-export async function workflowHasRunningRuns(
-  ctx: HelmxPluginContext,
-  conversationId: number,
-): Promise<boolean | 'unknown'> {
-  try {
-    const res = (await ctx.host.invokeAction('builtin:workflow', 'runs', { conversationId })) as {
-      runs?: Array<{ status?: unknown }>
-    }
-    if (res === null || typeof res !== 'object' || !Array.isArray(res.runs)) return 'unknown'
-    return res.runs.some((r) => r !== null && typeof r === 'object' && (r as { status?: unknown }).status === 'running')
-  } catch (err) {
-    if (err instanceof HelmxError && (err.code === 'plugin_disabled' || err.code === 'not_found' || err.code === 'unknown_action')) {
-      return false
-    }
-    return 'unknown'
-  }
-}
+export { workflowHasRunningRuns }
+
+export { subtreeHasWorkingOrBlocked }
 
 export function registerTasksHooks(ctx: HelmxPluginContext, runtime: TasksRuntime): void {
   const { isActive } = runtime

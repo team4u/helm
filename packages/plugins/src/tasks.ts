@@ -20,6 +20,8 @@ import {
 import { resolvePluginClientAssets } from './asset-paths.js'
 import { readTasksSkillAsset } from './tasks/assets.js'
 import {
+  TASK_ACTIVE_TAG,
+  TASK_ARCHIVED_TAG,
   TASK_BOARD_DOC,
   TASK_RECORDS_DOC,
   TASKS_PLUGIN_ID,
@@ -32,6 +34,7 @@ import {
 import { createTasksStore, recoverInterruptedStartups } from './tasks/store.js'
 import { registerTasksActions, type TasksRuntime } from './tasks/actions.js'
 import { onTasksConversationDeleted, registerTasksHooks } from './tasks/hooks.js'
+import { buildTaskKickoffPrompt } from './tasks/prompts.js'
 import { registerTasksUi } from './tasks/ui.js'
 import { asConversationDeletedEvent } from './tasks/contracts.js'
 
@@ -183,8 +186,13 @@ export function createTasksPlugin(): PluginDefinition {
           getConfig()
           store.read()
           await ctx.host.skills.ensureSkill(readTasksSkillAsset())
-          // 启动中断恢复：两阶段启动（占位落盘 -> 绑定会话）之间重启的 in_progress 无会话任务，
-          // 诚实回滚 backlog 并在任务 lastError 记录原因（绝不假装在跑；诊断日志留痕）。
+          // 先置活再执行恢复三块（回滚 / 孤儿收口 / 任务书补投）：补投触发的首回合
+          // 必须命中 before_turn 的 isActive() 门，携带 <active_task> 段落与正确的工具隔离。
+          active = true
+          // 启动中断恢复（两阶段窗口）：
+          // a) 占位后、绑定前重启 -> in_progress 无会话：诚实回滚 backlog 并记 lastError（绝不假装在跑）；
+          // b) 绑定后、任务书接纳前重启 -> 已绑会话但零 helmx.input：补投任务书
+          //    （requestId 按会话幂等，重复补投被内核 dedup，安全）。
           const interruptedIds = await runtime.store.enqueueMutation((draft) =>
             recoverInterruptedStartups(draft),
           )
@@ -194,13 +202,54 @@ export function createTasksPlugin(): PluginDefinition {
               `[tasks] 启动恢复：${interruptedIds.length} 个启动中断任务已回滚待办（${interruptedIds.join(', ')}），可手动重新开工`,
             )
           }
+          // Q1 孤儿会话恢复：绑定前崩溃遗留的「task 标签 + 零输入 + 不绑任何任务」会话——
+          // 诚实贴 task-archived（保留现场，仅收口侧栏分组）并上报，绝不删除会话。
+          const boundConversationIds = new Set(
+            Object.values(runtime.store.read().tasks)
+              .map((t) => t.conversationId)
+              .filter((id): id is number => id !== undefined),
+          )
+          for (const conv of ctx.host.listConversations({ topLevelOnly: true })) {
+            if (!conv.tags.includes(TASK_ACTIVE_TAG) || boundConversationIds.has(conv.id)) continue
+            try {
+              const detail = await ctx.host.getConversationDetail(conv.id, { limit: 50 })
+              if (detail.entries.some((e) => e.kind === 'helmx.input')) continue
+              const nextTags = [...conv.tags.filter((tg) => tg !== TASK_ACTIVE_TAG), TASK_ARCHIVED_TAG]
+              await ctx.host.updateConversation(conv.id, { tags: nextTags })
+              console.error(
+                `[tasks] 启动恢复：检测到绑定前崩溃遗留的孤儿执行会话 #${conv.id}（已贴归档标签保留现场）`,
+              )
+            } catch (err) {
+              if (err instanceof HelmxError && err.code === 'not_found') continue
+              reportError(`孤儿执行会话 #${conv.id} 恢复检查失败`, err)
+            }
+          }
+          const reseededIds: string[] = []
+          for (const task of runtime.store.list()) {
+            if (task.column !== 'in_progress' || task.conversationId === undefined) continue
+            try {
+              const detail = await ctx.host.getConversationDetail(task.conversationId, { limit: 50 })
+              if (detail.entries.some((e) => e.kind === 'helmx.input')) continue
+              await ctx.host.submitInput(task.conversationId, buildTaskKickoffPrompt(task), {
+                origin: 'agent',
+                whenBusy: 'reject',
+                requestId: `${TASKS_PLUGIN_ID}:kickoff:${task.id}`,
+              })
+              reseededIds.push(task.id)
+            } catch (err) {
+              if (err instanceof HelmxError && err.code === 'not_found') continue
+              reportError(`任务 ${task.id} 恢复补投任务书失败（会话 #${task.conversationId}）`, err)
+            }
+          }
+          if (reseededIds.length > 0) {
+            console.error(`[tasks] 启动恢复：已向绑定会话补投任务书（${reseededIds.join(', ')}）`)
+          }
           deletedUnsubscribe = ctx.host.onEvent('conversation.deleted', (payload) => {
             if (!active || shutdown) return
             const deletedId = asConversationDeletedEvent(payload)
             if (deletedId === undefined) return
             return onTasksConversationDeleted(runtime, deletedId)
           })
-          active = true
           store.refreshBoard()
         },
         async stop() {
@@ -240,6 +289,8 @@ export {
   type TaskRecord,
   type TaskSubmission,
   type TaskSilenceState,
+  type TaskPlanApproval,
+  type TaskBoardEntry,
 } from './tasks/contracts.js'
 export { activeTaskSection, buildTaskKickoffPrompt } from './tasks/prompts.js'
 export {
