@@ -79,7 +79,9 @@
 
 **`helmx conversations fork [id] [--current] --entry-id <n> [--title <str>]`** — 从指定条目分叉（`--entry-id` 必填正整数）。
 
-**`helmx conversations watch [id] [--current] [--timeout <ms>] [--quiet]`** — 阻塞观察一个会话直到当前回合 settle（订阅全局 SSE 并按 id 过滤），类似 `gh run watch`。实时打印 `doing` 动作行与状态迁移行；`done/idle` settle 退出码 `0`，`error` settle 退出码 `1`（两种模式都仍输出最终结果），`--timeout <ms>` 超时退出码 `124`（`watch_timeout`）。观察中会话被删除显式报错 `conversation_deleted`；流在 snapshot 前中断或未 settle 即断开报 `stream_closed`，绝不静默猜测状态。`blocked`（等待人类审批）不算 settle，继续等待。`--quiet` 只输出最终一行；`--json` 输出 NDJSON 进度帧（`watch`/`status`/`doing`）加最终 `result` 对象（`--quiet` 时仅 `result`）；Ctrl-C 干净退出。适合脚本串联：`helmx conversations watch 42 --quiet && next-step`。
+**`helmx conversations watch <id> [--timeout <ms>] [--quiet]`** — 阻塞观察一个会话直到当前回合 settle（订阅全局 SSE 并按 id 过滤），类似 `gh run watch`。实时打印 `doing` 动作行与状态迁移行；`done/idle` settle 退出码 `0`，`error` settle 退出码 `1`（两种模式都仍输出最终结果），`--timeout <ms>` 超时退出码 `124`（`watch_timeout`）。观察中会话被删除显式报错 `conversation_deleted`；流在 snapshot 前中断或未 settle 即断开报 `stream_closed`，绝不静默猜测状态。`blocked`（等待人类审批）不算 settle，继续等待。`--quiet` 只输出最终一行；`--json` 输出 NDJSON 进度帧（`watch`/`status`/`doing`）加最终 `result` 对象（`--quiet` 时仅 `result`）；Ctrl-C 干净退出。适合脚本串联：`helmx conversations watch 42 --quiet && next-step`。
+
+  **自指保护**：`<id>` 必填、无 `--current`——观察「正在执行本命令的会话」是循环等待死锁（回合 settle 要等本工具调用返回）。托管执行环境（`HELMX_ENV=1`）内 watch 自己的会话 id 会被立即拒绝（`self_watch_forbidden`，含人类终端误仿场景的 `unset HELMX_ENV` 逃生提示）；agent 应以显式 id 观察子会话或其他会话。普通终端手动 `export HELMX_CONVERSATION_ID` 不受影响（无 `HELMX_ENV` 锚，不做门禁）。
 
 **`helmx conversations withdraw [id] [--current] --submission-id <n>`** — 撤回排队中的输入。
 

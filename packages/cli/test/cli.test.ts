@@ -718,7 +718,7 @@ test('conversations watch: settles via SSE upserts; --json NDJSON frames; --quie
   assert.match(quiet.out, /settled: done/)
 })
 
-test('conversations watch: error settle exits 1, not-found, stream_closed, and --timeout exits 124', { timeout: 60_000 }, async (t) => {
+test('conversations watch: error settle exits 1, not-found, stream_closed, --timeout exits 124, and the self-watch guard', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helmx-cli-test-')
   const conv = makeConversationSummary({ id: 9, title: 'boom', status: 'working' })
   const snapshot = `event: snapshot\ndata: ${JSON.stringify({ bootId: 'b1', seq: 5, conversations: [conv], pendingAsks: [], plugins: [] })}\n\n`
@@ -792,6 +792,35 @@ test('conversations watch: error settle exits 1, not-found, stream_closed, and -
   const badTimeout = await runCliCaptured(['conversations', 'watch', '9', '--timeout', '0', '--json'], env)
   assert.equal(badTimeout.code, 1)
   assert.equal(parseCliError(badTimeout).code, 'invalid_flag_value')
+
+  // --current is intentionally not offered (watching the executing conversation is a circular wait).
+  const withCurrent = await runCliCaptured(['conversations', 'watch', '9', '--current', '--json'], env)
+  assert.equal(withCurrent.code, 1)
+  assert.equal(parseCliError(withCurrent).code, 'unknown_flag')
+
+  // Missing id: explicit target error.
+  const noId = await runCliCaptured(['conversations', 'watch', '--json'], env)
+  assert.equal(noId.code, 1)
+  assert.equal(parseCliError(noId).code, 'missing_conversation_target')
+
+  // Self-watch inside a managed turn (HELMX_ENV=1 + matching HELMX_CONVERSATION_ID): fail fast
+  // instead of deadlocking on a turn that can never settle while this tool call is blocked.
+  const selfEnv = makeCliEnv(hub.url, dir, { HELMX_ENV: '1', HELMX_CONVERSATION_ID: '9' })
+  const self = await runCliCaptured(['conversations', 'watch', '9', '--json'], selfEnv)
+  assert.equal(self.code, 1)
+  assert.equal(parseCliError(self).code, 'self_watch_forbidden')
+
+  // Managed env but a different conversation id: no false positive (agent watching a subagent run).
+  const otherEnv = makeCliEnv(hub.url, dir, { HELMX_ENV: '1', HELMX_CONVERSATION_ID: '8' })
+  const other = await runCliCaptured(['conversations', 'watch', '9'], otherEnv)
+  assert.equal(other.code, 1)
+  assert.match(other.out, /settled: error/)
+
+  // Human terminal (no HELMX_ENV anchor) with a manually exported id: guard does not apply.
+  const humanEnv = makeCliEnv(hub.url, dir, { HELMX_CONVERSATION_ID: '9' })
+  const human = await runCliCaptured(['conversations', 'watch', '9'], humanEnv)
+  assert.equal(human.code, 1)
+  assert.match(human.out, /settled: error/)
 })
 
 test('hub unreachable and 401 suggest login', { timeout: 60_000 }, async (t) => {

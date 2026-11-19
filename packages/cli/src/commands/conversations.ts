@@ -560,30 +560,46 @@ export function conversationsCommands(): CommandSpec[] {
   })
 
   // ---- conversations watch (block until the current turn settles) ----
+  // No --current by design: watching the conversation whose turn executes this command is a
+  // circular wait (the turn cannot settle while this tool call is blocked), so the id is a
+  // required positional and the managed-env guard below fails fast on self-watch.
   cmds.push({
     path: ['conversations', 'watch'],
     description:
-      'Watch a conversation until its current turn settles (global SSE filtered by id; exit 0 on done/idle, 1 on error, 124 on --timeout)',
+      'Watch a conversation by id until its current turn settles (global SSE; exit 0 on done/idle, 1 on error, 124 on --timeout; self-watch is rejected)',
     flags: [
-      ...convFlags,
       { name: 'timeout', type: 'number', help: 'give up after this many milliseconds and exit 124' },
       { name: 'quiet', type: 'boolean', help: 'print only the final result line (scripting)' },
     ],
-    positional: '[id]',
+    positional: '<id>',
     async run(ctx: CommandContext) {
       const parsed = parseFlags(
         [
-          { name: 'current', type: 'boolean' },
           { name: 'timeout', type: 'number' },
           { name: 'quiet', type: 'boolean' },
         ],
         ctx.args,
       )
-      const id = resolveConversationTarget(parsed.flags, parsed.positionals[0], ctx.env)
+      const id = parsePositiveInt(
+        requirePositional(parsed.positionals, 0, 'id', 'missing_conversation_target'),
+        'conversation ID',
+      )
       assertNoExtraPositionals(parsed.positionals, 1)
       const timeoutMs = flagValue<number>(parsed.flags, 'timeout')
       if (timeoutMs !== undefined && (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0)) {
         throw new CliError(`--timeout must be a positive integer (milliseconds), got "${timeoutMs}"`, 'invalid_flag_value')
+      }
+      // Self-watch guard: HELMX_ENV is a fail-closed managed binding absent from human terminals,
+      // so HELMX_ENV=1 + matching HELMX_CONVERSATION_ID reliably means "this process is a tool exec
+      // of the very conversation being watched" — a guaranteed deadlock, rejected up front.
+      if (ctx.env['HELMX_ENV'] === '1') {
+        const selfId = Number(ctx.env['HELMX_CONVERSATION_ID'])
+        if (Number.isSafeInteger(selfId) && selfId > 0 && selfId === id) {
+          throw new CliError(
+            `refusing to watch conversation #${id}: it is the conversation executing this command (circular wait — the turn cannot settle while this tool call is blocked); watch a different conversation, or unset HELMX_ENV if this really is an interactive terminal`,
+            'self_watch_forbidden',
+          )
+        }
       }
       const quiet = parsed.flags.get('quiet') === true
       const hub = await ctx.hub()
