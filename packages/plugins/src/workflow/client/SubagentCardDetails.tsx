@@ -9,7 +9,7 @@
  */
 import { useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { StatusLight, resolveLocalizedText, usePluginContext, usePluginLocale, usePluginTranslator } from '@helm/plugin-client'
+import { StatusLight, resolveLocalizedText, usePluginContext, usePluginLocale, usePluginTranslator } from '@helmx/plugin-client'
 import type { WorkflowRunSummary } from '../../contracts.js'
 import { Icon } from './WorkflowIcon.tsx'
 import { buildWorktreeSelector } from './model-worktree.ts'

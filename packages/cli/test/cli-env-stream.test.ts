@@ -7,7 +7,7 @@ async function consume(frames: unknown[], options: { raw?: string; mime?: string
   let err = ''
   const response = options.raw ?? frames.map((frame) => JSON.stringify(frame)).join('\n') + '\n'
   const code = await runCli(['env', 'exec', '--stream', '--json', '--', 'build'], {
-    env: { HELM_HUB_URL: 'http://127.0.0.1:3202', HELM_TOKEN: 'test-http-client-token' },
+    env: { HELMX_HUB_URL: 'http://127.0.0.1:3202', HELMX_TOKEN: 'test-http-client-token' },
     stdout: (text) => { out += text },
     stderr: (text) => { err += text },
     fetch: async () => new Response(response, { headers: { 'content-type': options.mime ?? 'application/x-ndjson' } }),
@@ -36,7 +36,7 @@ test('NDJSON consumes first output chunk immediately without waiting for termina
   })
   let consumed = false
   const code = await runCli(['env', 'exec', '--stream', '--json', '--', 'build'], {
-    env: { HELM_HUB_URL: 'http://127.0.0.1:3202', HELM_TOKEN: 'stream-test-token' },
+    env: { HELMX_HUB_URL: 'http://127.0.0.1:3202', HELMX_TOKEN: 'stream-test-token' },
     fetch: async () => new Response(stream, { headers: { 'content-type': 'application/x-ndjson' } }),
     stderr: (text) => assert.fail(text),
     stdout: (text) => {

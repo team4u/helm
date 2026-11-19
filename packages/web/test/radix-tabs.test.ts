@@ -6,7 +6,7 @@ import { ensureHappyDom } from './helpers/dom-harness.js'
 
 ensureHappyDom()
 const { createRoot } = await import('react-dom/client')
-const { Tabs, TabsList, TabsTrigger, TabsContent, SegmentedControl } = await import('@helm/plugin-client')
+const { Tabs, TabsList, TabsTrigger, TabsContent, SegmentedControl } = await import('@helmx/plugin-client')
 
 // ---------------------------------------------------------------------------
 // 1. SSR 渲染与数据属性（data-state="active"）契约测试

@@ -1,12 +1,12 @@
 /**
- * Data directory resolution and layout: defaults to `~/.helm`, can be overridden by `HELM_DATA_DIR`,
+ * Data directory resolution and layout: defaults to `~/.helmx`, can be overridden by `HELMX_DATA_DIR`,
  * and is completely isolated from legacy systems (~/.botx / ~/.botd).
  */
 import { mkdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 
-const HELM_DATA_DIR_ENV = 'HELM_DATA_DIR'
+const HELMX_DATA_DIR_ENV = 'HELMX_DATA_DIR'
 
 export function resolveDataDir(override?: string): string {
   if (override !== undefined) {
@@ -18,9 +18,9 @@ export function resolveDataDir(override?: string): string {
     }
     return override
   }
-  const fromEnv = process.env[HELM_DATA_DIR_ENV]
+  const fromEnv = process.env[HELMX_DATA_DIR_ENV]
   if (fromEnv !== undefined && fromEnv !== '') return fromEnv
-  return join(homedir(), '.helm')
+  return join(homedir(), '.helmx')
 }
 
 /** Data directory subdirectory layout defined by the design specification. */

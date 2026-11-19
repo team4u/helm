@@ -25,7 +25,7 @@ const DOCTOR_REPORT = {
 }
 
 test('plugins doctor: POST /api/plugins/doctor accepts --path/positional/id', { timeout: 60_000 }, async (t) => {
-  const dataDir = useTempDir(t, 'helm-cli-dx-')
+  const dataDir = useTempDir(t, 'helmx-cli-dx-')
   const hub = await startMockHub(
     {
       'POST /api/plugins/doctor': (body) => {
@@ -77,7 +77,7 @@ test('plugins doctor: POST /api/plugins/doctor accepts --path/positional/id', { 
 })
 
 test('plugins doctor: human mode prints check results and exits non-zero on failure', { timeout: 60_000 }, async (t) => {
-  const dataDir = useTempDir(t, 'helm-cli-dx-')
+  const dataDir = useTempDir(t, 'helmx-cli-dx-')
   const failing = {
     dir: '/abs/bad',
     pluginId: 'bad',
@@ -101,7 +101,7 @@ test('plugins doctor: human mode prints check results and exits non-zero on fail
 })
 
 test('plugins reload: POST /api/plugins/:id/reload (with URI encoding)', { timeout: 60_000 }, async (t) => {
-  const dataDir = useTempDir(t, 'helm-cli-dx-')
+  const dataDir = useTempDir(t, 'helmx-cli-dx-')
   const hub = await startMockHub(
     {
       'POST /api/plugins/my%3Apl/reload': () => ({
@@ -125,7 +125,7 @@ test('plugins reload: POST /api/plugins/:id/reload (with URI encoding)', { timeo
 })
 
 test('plugins rescan:POST /api/plugins/rescan', { timeout: 60_000 }, async (t) => {
-  const dataDir = useTempDir(t, 'helm-cli-dx-')
+  const dataDir = useTempDir(t, 'helmx-cli-dx-')
   const hub = await startMockHub(
     {
       'POST /api/plugins/rescan': () => ({
@@ -146,22 +146,22 @@ test('plugins rescan:POST /api/plugins/rescan', { timeout: 60_000 }, async (t) =
 })
 
 test('plugins install: passes source, sets enable in --enable body, checks human output, rejects empty source', { timeout: 60_000 }, async (t) => {
-  const dataDir = useTempDir(t, 'helm-cli-dx-')
-  const npmSource = 'npm:helm-plugin-foo@^1.2.0'
+  const dataDir = useTempDir(t, 'helmx-cli-dx-')
+  const npmSource = 'npm:helmx-plugin-foo@^1.2.0'
   const installBody = {
     record: {
       id: 'inst-1',
-      pluginId: 'helm-plugin-foo',
-      source: { kind: 'npm', raw: npmSource, spec: 'helm-plugin-foo@^1.2.0' },
-      installPath: '/data/plugins/helm-plugin-foo',
+      pluginId: 'helmx-plugin-foo',
+      source: { kind: 'npm', raw: npmSource, spec: 'helmx-plugin-foo@^1.2.0' },
+      installPath: '/data/plugins/helmx-plugin-foo',
       version: '1.2.0',
       installedAt: 1_700_000_000_000,
       updatedAt: 1_700_000_000_000,
     },
     summary: makePluginSummary({
-      id: 'helm-plugin-foo',
+      id: 'helmx-plugin-foo',
       enabled: false,
-      managed: { installId: 'inst-1', installedVersion: '1.2.0', installedAt: 1_700_000_000_000, source: { kind: 'npm', raw: npmSource, spec: 'helm-plugin-foo@^1.2.0' } },
+      managed: { installId: 'inst-1', installedVersion: '1.2.0', installedAt: 1_700_000_000_000, source: { kind: 'npm', raw: npmSource, spec: 'helmx-plugin-foo@^1.2.0' } },
     }),
   }
   const hub = await startMockHub(
@@ -179,7 +179,7 @@ test('plugins install: passes source, sets enable in --enable body, checks human
   const r1 = await runCliCaptured(['plugins', 'install', npmSource, '--enable'], env)
   assert.equal(r1.code, 0, r1.err)
   assert.deepEqual(hub.hits[0]!.body, { source: npmSource, enable: true })
-  assert.ok(r1.out.includes('helm-plugin-foo 1.2.0'))
+  assert.ok(r1.out.includes('helmx-plugin-foo 1.2.0'))
   assert.ok(r1.out.includes('enabled'))
 
   // Default: request body contains only source, prints disabled status and enable hint
@@ -198,7 +198,7 @@ test('plugins install: passes source, sets enable in --enable body, checks human
 })
 
 test('plugins update: POST /api/plugins/:id/update (with URI encoding) and human output', { timeout: 60_000 }, async (t) => {
-  const dataDir = useTempDir(t, 'helm-cli-dx-')
+  const dataDir = useTempDir(t, 'helmx-cli-dx-')
   const hub = await startMockHub(
     {
       'POST /api/plugins/my%3Apl/update': () => ({
@@ -230,7 +230,7 @@ test('plugins update: POST /api/plugins/:id/update (with URI encoding) and human
 })
 
 test('plugins remove: --json non-interactive, --yes bypass, and non-interactive without --yes confirmation check', { timeout: 60_000 }, async (t) => {
-  const dataDir = useTempDir(t, 'helm-cli-dx-')
+  const dataDir = useTempDir(t, 'helmx-cli-dx-')
   const hub = await startMockHub(
     {
       'POST /api/plugins/my%3Apl/remove': () => ({
@@ -279,12 +279,12 @@ test('plugins remove: --json non-interactive, --yes bypass, and non-interactive 
 })
 
 test('plugins install/update/remove: forwards all 4 source kinds and Hub error envelopes', { timeout: 60_000 }, async (t) => {
-  const dataDir = useTempDir(t, 'helm-cli-dx-')
+  const dataDir = useTempDir(t, 'helmx-cli-dx-')
   const sources = [
-    'npm:helm-plugin-foo@^1.2.0',
-    'git:https://github.com/user/helm-plugin-foo.git@v1.2.0',
-    'https://github.com/user/helm-plugin-foo.git#v1.2.0',
-    '/srv/helm-plugins/foo',
+    'npm:helmx-plugin-foo@^1.2.0',
+    'git:https://github.com/user/helmx-plugin-foo.git@v1.2.0',
+    'https://github.com/user/helmx-plugin-foo.git#v1.2.0',
+    '/srv/helmx-plugins/foo',
     './relative-plugin',
   ]
   const seen: string[] = []
@@ -315,7 +315,7 @@ test('plugins install/update/remove: forwards all 4 source kinds and Hub error e
 })
 
 test('plugins init: generates local skeleton (default full template: plugin.json + index.ts + tsconfig.json + client/index.tsx)', { timeout: 60_000 }, async (t) => {
-  const dataDir = useTempDir(t, 'helm-cli-dx-')
+  const dataDir = useTempDir(t, 'helmx-cli-dx-')
   const env = makeCliEnv('http://127.0.0.1:1', dataDir)
   // Runs without Hub (local command): unreachable Hub URL proves no network calls are made
   const r = await runCliCaptured(['plugins', 'init', 'my-plugin', '--json'], env)
@@ -346,7 +346,7 @@ test('plugins init: generates local skeleton (default full template: plugin.json
   assert.ok(tsconfig.compilerOptions)
   const client = await fsp.readFile(path.join(body.dir, 'client', 'index.tsx'), 'utf8')
   assert.ok(client.includes('export function SamplePanel'))
-  assert.ok(client.includes('@helm/plugin-client'), 'standard template imports host shared frontend package')
+  assert.ok(client.includes('@helmx/plugin-client'), 'standard template imports host shared frontend package')
   assert.ok(client.includes('usePluginDoc'), 'standard template uses shared hook')
   // Standard template uses shared layout primitives without pseudo-Tailwind class names
   for (const primitive of ['ScreenSection', 'DataTable', 'KvGrid']) {
@@ -359,11 +359,11 @@ test('plugins init: generates local skeleton (default full template: plugin.json
   const r2 = await runCliCaptured(['plugins', 'init', 'another-one'], env)
   assert.equal(r2.code, 0, r2.err)
   assert.ok(r2.out.includes('Next steps'))
-  assert.ok(r2.out.includes('helm plugins enable another-one'))
+  assert.ok(r2.out.includes('helmx plugins enable another-one'))
 })
 
 test('plugins init --template minimal: backend ping action only, no client directory', { timeout: 60_000 }, async (t) => {
-  const dataDir = useTempDir(t, 'helm-cli-dx-')
+  const dataDir = useTempDir(t, 'helmx-cli-dx-')
   const env = makeCliEnv('http://127.0.0.1:1', dataDir)
   const r = await runCliCaptured(['plugins', 'init', 'mini-pl', '--template', 'minimal', '--json'], env)
   assert.equal(r.code, 0, r.err)
@@ -387,7 +387,7 @@ test('plugins init --template minimal: backend ping action only, no client direc
 })
 
 test('plugins init: rejects invalid names and non-empty directory unless --force is passed', { timeout: 60_000 }, async (t) => {
-  const dataDir = useTempDir(t, 'helm-cli-dx-')
+  const dataDir = useTempDir(t, 'helmx-cli-dx-')
   const env = makeCliEnv('http://127.0.0.1:1', dataDir)
   const bad = await runCliCaptured(['plugins', 'init', 'builtin:x'], env)
   assert.notEqual(bad.code, 0)
@@ -412,7 +412,7 @@ test('plugins init: rejects invalid names and non-empty directory unless --force
 })
 
 test('plugins build: local prebuilt bundle compilation (--json, --out, --module, clientDependencies, and error guards)', { timeout: 60_000 }, async (t) => {
-  const dataDir = useTempDir(t, 'helm-cli-build-')
+  const dataDir = useTempDir(t, 'helmx-cli-build-')
   const env = makeCliEnv('http://127.0.0.1:1', dataDir)
 
   // 1. Scaffold via `plugins init`, then prebuild locally with `plugins build` (no Hub calls).
@@ -474,7 +474,7 @@ test('plugins build: local prebuilt bundle compilation (--json, --out, --module,
 })
 
 test('plugins build: works when plugin directory traverses a symlinked/alias parent path and still rejects symlink escapes', { timeout: 60_000 }, async (t) => {
-  const dataDir = useTempDir(t, 'helm-cli-build-alias-')
+  const dataDir = useTempDir(t, 'helmx-cli-build-alias-')
   const env = makeCliEnv('http://127.0.0.1:1', dataDir)
   const realParent = path.join(dataDir, 'real-parent')
   const aliasParent = path.join(dataDir, 'alias-parent')

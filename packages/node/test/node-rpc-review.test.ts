@@ -8,8 +8,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import net from 'node:net';
 import { exec as execCb } from 'node:child_process';
-import { sleep as delay } from '@helm/test-kit';
-import { makeTempDir as tempDir, waitFor as kitWaitFor } from '@helm/test-kit/node';
+import { sleep as delay } from '@helmx/test-kit';
+import { makeTempDir as tempDir, waitFor as kitWaitFor } from '@helmx/test-kit/node';
 import {
   createNodeEnvRpcServer,
   MAX_IPC_FRAME_BYTES,
@@ -146,15 +146,15 @@ test('boundary wrapper turns null inputs and unknown readers into structured err
 });
 
 // ---------------------------------------------------------------------------
-// 2. envExec strips host HELM_TOKEN without mutating global process.env (verified via real subprocess)
+// 2. envExec strips host HELMX_TOKEN without mutating global process.env (verified via real subprocess)
 // ---------------------------------------------------------------------------
 
-test('envExec never leaks host HELM_TOKEN into children while honoring managed input.env injections', { timeout: 60_000 }, async (t) => {
-  // Simulate a daemon host carrying HELM_TOKEN by swapping process.env (restored via t.after).
+test('envExec never leaks host HELMX_TOKEN into children while honoring managed input.env injections', { timeout: 60_000 }, async (t) => {
+  // Simulate a daemon host carrying HELMX_TOKEN by swapping process.env (restored via t.after).
   // Upstream NodeExecutionEnv inherits process.env by default, so this proves stripping works
-  // genuinely when HELM_TOKEN is present rather than passing only by deleting global env vars.
+  // genuinely when HELMX_TOKEN is present rather than passing only by deleting global env vars.
   const base = process.env;
-  process.env = { ...base, HELM_TOKEN: 'host-secret-token-do-not-leak' } as NodeJS.ProcessEnv;
+  process.env = { ...base, HELMX_TOKEN: 'host-secret-token-do-not-leak' } as NodeJS.ProcessEnv;
   t.after(() => {
     process.env = base;
   });
@@ -162,7 +162,7 @@ test('envExec never leaks host HELM_TOKEN into children while honoring managed i
   const dir = await tempDir('token-iso-');
   const server = createNodeEnvRpcServer({
     defaultCwd: dir,
-    shellEnv: { HELM_HUB_URL: 'http://hub:3202', HELM_DATA_DIR: dir },
+    shellEnv: { HELMX_HUB_URL: 'http://hub:3202', HELMX_DATA_DIR: dir },
   });
   t.after(async () => {
     await server.dispose();
@@ -173,7 +173,7 @@ test('envExec never leaks host HELM_TOKEN into children while honoring managed i
   await server.envExec({
     execId: 't1-dump',
     command:
-      'node -e \'require("fs").writeFileSync("env-dump.json", JSON.stringify({token:process.env.HELM_TOKEN??null,hub:process.env.HELM_HUB_URL??null,hasPath:!!process.env.PATH,hasHome:!!process.env.HOME,data:process.env.HELM_DATA_DIR??null}))\'',
+      'node -e \'require("fs").writeFileSync("env-dump.json", JSON.stringify({token:process.env.HELMX_TOKEN??null,hub:process.env.HELMX_HUB_URL??null,hasPath:!!process.env.PATH,hasHome:!!process.env.HOME,data:process.env.HELMX_DATA_DIR??null}))\'',
     timeout: 30,
   });
   const dump1 = JSON.parse(await fs.readFile(path.join(dir, 'env-dump.json'), 'utf8')) as {
@@ -183,17 +183,17 @@ test('envExec never leaks host HELM_TOKEN into children while honoring managed i
     hasHome: boolean;
     data: string | null;
   };
-  assert.equal(dump1.token, null, 'host HELM_TOKEN must not leak (SDK inheritEnv:true merges process.env by default)');
+  assert.equal(dump1.token, null, 'host HELMX_TOKEN must not leak (SDK inheritEnv:true merges process.env by default)');
   assert.equal(dump1.hub, 'http://hub:3202');
   assert.equal(dump1.data, dir);
   assert.equal(dump1.hasPath, true, 'base PATH inherited');
   assert.equal(dump1.hasHome, true, 'base HOME inherited');
 
-  // 2) Explicit input.env HELM_TOKEN (Hub-managed per-call injection): must pass through
+  // 2) Explicit input.env HELMX_TOKEN (Hub-managed per-call injection): must pass through
   await server.envExec({
     execId: 't2',
-    command: 'node -e \'require("fs").writeFileSync("env-dump2.json", JSON.stringify({token:process.env.HELM_TOKEN??null}))\'',
-    env: { HELM_TOKEN: 'managed-token-xyz' },
+    command: 'node -e \'require("fs").writeFileSync("env-dump2.json", JSON.stringify({token:process.env.HELMX_TOKEN??null}))\'',
+    env: { HELMX_TOKEN: 'managed-token-xyz' },
     timeout: 30,
   });
   const dump2 = JSON.parse(await fs.readFile(path.join(dir, 'env-dump2.json'), 'utf8')) as { token: string | null };
@@ -202,7 +202,7 @@ test('envExec never leaks host HELM_TOKEN into children while honoring managed i
   // 3) inheritEnv:false: passes only shellEnv + input.env without host baseline
   await server.envExec({
     execId: 't3',
-    command: 'node -e \'require("fs").writeFileSync("env-dump3.json", JSON.stringify({hasPath:!!process.env.PATH,hub:process.env.HELM_HUB_URL??null,custom:process.env.MY_VAR??null}))\'',
+    command: 'node -e \'require("fs").writeFileSync("env-dump3.json", JSON.stringify({hasPath:!!process.env.PATH,hub:process.env.HELMX_HUB_URL??null,custom:process.env.MY_VAR??null}))\'',
     env: { MY_VAR: 'yes' },
     inheritEnv: false,
     timeout: 30,

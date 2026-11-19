@@ -448,13 +448,13 @@ test('bash：命令可复制；输出默认尾 8 行、标注折叠前 N 行、�
       bodyUi(
         trace({
           toolName: 'bash',
-          input: { command: 'pnpm test --filter @helm/web' },
+          input: { command: 'pnpm test --filter @helmx/web' },
           resultText: output,
           structuredOutput: { ok: false, exitCode: 2, output, timedOut: false },
         }),
       ),
     )
-    assert.match(m.host.querySelector('.trace-cmd-head code')?.textContent ?? '', /pnpm test --filter @helm\/web/)
+    assert.match(m.host.querySelector('.trace-cmd-head code')?.textContent ?? '', /pnpm test --filter @helmx\/web/)
     assert.match(m.host.textContent ?? '', /Exit code 2\(non-zero\)/, '非零退出码如实展示')
     const pres = [...m.host.querySelectorAll('pre')].filter((p) => p.closest('.trace-cmd-head') === null)
     const outPre = pres.find((p) => p.textContent?.includes('out 20'))
@@ -471,7 +471,7 @@ test('bash：命令可复制；输出默认尾 8 行、标注折叠前 N 行、�
     await act(async () => {
       copy.click()
     })
-    assert.equal(clipboardText, 'pnpm test --filter @helm/web', '复制完整命令')
+    assert.equal(clipboardText, 'pnpm test --filter @helmx/web', '复制完整命令')
   } finally {
     m.unmount()
   }

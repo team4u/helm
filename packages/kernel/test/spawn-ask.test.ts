@@ -17,14 +17,14 @@ import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import { Harness, createRegistry } from '@earendil-works/pi-durable'
 import { MemoryStorage } from '@earendil-works/pi-durable/storage/memory'
-import { HelmError } from '@helm/protocol'
+import { HelmxError } from '@helmx/protocol'
 import { after, before, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { join } from 'node:path'
 import { AskService } from '../src/runtime/asks.js'
 import { runNativeSpawn, type NativeSpawnDeps } from '../src/runtime/spawn.js'
-import { HelmStore } from '../src/runtime/store.js'
-import { openHelmDatabase } from '../src/runtime/sqlite.js'
+import { HelmxStore } from '../src/runtime/store.js'
+import { openHelmxDatabase } from '../src/runtime/sqlite.js'
 import { ArtifactService, SecretStash } from '../src/services/index.js'
 import { cleanupDir, makeFauxModels, makeTempDir } from './helpers.js'
 
@@ -57,19 +57,19 @@ async function openSpawnHarness(options: { profiles?: Record<string, { model?: s
   const profiles = new Map<string, { model?: string; cwd?: string; runtime?: { kind: string; agent: string } }>(
     Object.entries(options.profiles ?? { assistant: {} }),
   )
-  // Child conversation mirror (minimal replica of HelmStore production semantics: profileId/cwd/model).
+  // Child conversation mirror (minimal replica of HelmxStore production semantics: profileId/cwd/model).
   const mirrors = new Map<
     number,
     { profileId: string; cwd: string; model: string; modelOverride?: string; title: string; tags: string[]; createdAt: number }
   >()
 
   const deps: NativeSpawnDeps = {
-    dataDir: '/tmp/helm-spawn-test',
+    dataDir: '/tmp/helmx-spawn-test',
     defaultCwd: process.cwd(),
     hubUrl: 'http://127.0.0.1:3200',
     stashEnvFor: (id) => stash.envFor(id),
     redact: (t) => stash.redact(t),
-    artifacts: new ArtifactService('/tmp/helm-spawn-test', { get: () => undefined, list: () => [], put: () => {}, deleteByConversation: () => {} } as never),
+    artifacts: new ArtifactService('/tmp/helmx-spawn-test', { get: () => undefined, list: () => [], put: () => {}, deleteByConversation: () => {} } as never),
     harness,
     getLastAssistantText: (id) => lastTexts.get(id),
     resolveModel: () => ({ provider: 'faux', modelId: 'faux-1' }),
@@ -140,7 +140,7 @@ async function openSpawnHarness(options: { profiles?: Record<string, { model?: s
     },
     updateConversation: async (childId, patch) => {
       const m = mirrors.get(childId)
-      if (!m) throw new HelmError('not_found', `conversation not found: ${childId}`, 404)
+      if (!m) throw new HelmxError('not_found', `conversation not found: ${childId}`, 404)
       if (patch.cwd !== undefined) m.cwd = patch.cwd
       if (patch.profileId !== undefined) m.profileId = patch.profileId
       if (patch.model !== undefined) m.modelOverride = patch.model
@@ -152,7 +152,7 @@ async function openSpawnHarness(options: { profiles?: Record<string, { model?: s
       }
       // Same ordering as production: configure real SDK first, then update mirror.
       const conv = await harness.conversation(childId as never, BACKGROUND_CONTEXT)
-      if (!conv) throw new HelmError('not_found', `child conversation not found: ${childId}`, 404)
+      if (!conv) throw new HelmxError('not_found', `child conversation not found: ${childId}`, 404)
       const slash = m.model.indexOf('/')
       await conv.configure(
         {
@@ -185,7 +185,7 @@ async function openSpawnHarness(options: { profiles?: Record<string, { model?: s
 let rootDir: string
 
 before(async () => {
-  rootDir = await makeTempDir('helm-spawn-ask-')
+  rootDir = await makeTempDir('helmx-spawn-ask-')
 })
 
 after(async () => {
@@ -217,7 +217,7 @@ describe('spawn schema: full AJV validation', { timeout: 60_000 }, () => {
         },
       } as never).then(
         () => assert.fail('enum violation must fail'),
-        (err: unknown) => err as HelmError,
+        (err: unknown) => err as HelmxError,
       )
       assert.equal(bad.code, 'schema_validation_failed')
     } finally {
@@ -279,7 +279,7 @@ describe('spawn schema: full AJV validation', { timeout: 60_000 }, () => {
             prompt: 'x',
             schema: { $async: true, type: 'object' },
           } as never),
-        (err: unknown) => err instanceof HelmError && err.code === 'invalid_plugin_schema',
+        (err: unknown) => err instanceof HelmxError && err.code === 'invalid_plugin_schema',
       )
     } finally {
       await th.close()
@@ -372,7 +372,7 @@ describe('spawn schema: full AJV validation', { timeout: 60_000 }, () => {
         schema: { type: 'object', properties: { a: { type: 'number' } }, required: ['a'] },
       } as never).then(
         () => assert.fail('must fail'),
-        (e: unknown) => e as HelmError,
+        (e: unknown) => e as HelmxError,
       )
       assert.equal(err.code, 'schema_validation_failed')
       assert.ok((err.details as { conversationId?: number }).conversationId !== undefined)
@@ -400,7 +400,7 @@ describe('spawn abort: signal wired to SDK', { timeout: 60_000 }, () => {
             prompt: 'x',
             signal: controller.signal,
           } as never),
-        (err: unknown) => err instanceof HelmError && err.code === 'aborted',
+        (err: unknown) => err instanceof HelmxError && err.code === 'aborted',
       )
       assert.equal((th.deps.agentSessions as Map<string, number>).size, before)
     } finally {
@@ -432,7 +432,7 @@ describe('spawn abort: signal wired to SDK', { timeout: 60_000 }, () => {
       release()
       const err = await promise.then(
         () => assert.fail('must not succeed after abort'),
-        (e: unknown) => e as HelmError,
+        (e: unknown) => e as HelmxError,
       )
       assert.equal(err.code, 'aborted')
       // Zero leftover live tasks (conversation idle).
@@ -465,7 +465,7 @@ describe('spawn resume: never creates new conversation on false resume', { timeo
             prompt: 'x',
             resume: 'no-such-agent',
           } as never),
-        (err: unknown) => err instanceof HelmError && err.code === 'not_found',
+        (err: unknown) => err instanceof HelmxError && err.code === 'not_found',
       )
       // Mixed strings like '12abc' also reject (no lenient parseInt tolerance).
       await assert.rejects(
@@ -475,7 +475,7 @@ describe('spawn resume: never creates new conversation on false resume', { timeo
             prompt: 'x',
             resume: '12abc',
           } as never),
-        (err: unknown) => err instanceof HelmError && err.code === 'not_found',
+        (err: unknown) => err instanceof HelmxError && err.code === 'not_found',
       )
       assert.equal((th.deps.agentSessions as Map<string, number>).size, 0)
     } finally {
@@ -530,7 +530,7 @@ describe('spawn resume: never creates new conversation on false resume', { timeo
             prompt: 'hijack',
             resume: 'agent-p',
           } as never),
-        (err: unknown) => err instanceof HelmError && err.code === 'not_found',
+        (err: unknown) => err instanceof HelmxError && err.code === 'not_found',
       )
     } finally {
       await th.close()
@@ -587,7 +587,7 @@ describe('spawn profile and runtime declaration', { timeout: 60_000 }, () => {
             prompt: 'x',
             agentType: 'ghost-profile',
           } as never),
-        (err: unknown) => err instanceof HelmError && err.code === 'not_found',
+        (err: unknown) => err instanceof HelmxError && err.code === 'not_found',
       )
     } finally {
       await th.close()
@@ -609,7 +609,7 @@ describe('spawn profile and runtime declaration', { timeout: 60_000 }, () => {
             prompt: 'x',
             agentType: 'cli-agent',
           } as never),
-        (err: unknown) => err instanceof HelmError && err.code === 'unsupported_runtime',
+        (err: unknown) => err instanceof HelmxError && err.code === 'unsupported_runtime',
       )
       await assert.rejects(
         () =>
@@ -618,7 +618,7 @@ describe('spawn profile and runtime declaration', { timeout: 60_000 }, () => {
             prompt: 'x',
             agentType: 'herdr:agy',
           } as never),
-        (err: unknown) => err instanceof HelmError && err.code === 'unsupported_runtime',
+        (err: unknown) => err instanceof HelmxError && err.code === 'unsupported_runtime',
       )
     } finally {
       await th.close()
@@ -635,7 +635,7 @@ describe('spawn profile and runtime declaration', { timeout: 60_000 }, () => {
             prompt: 'x',
             effort: 'ultra',
           } as never),
-        (err: unknown) => err instanceof HelmError && err.code === 'validation_error',
+        (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',
       )
       th.faux.setResponses([fauxAssistantMessage('answer with effort')])
       const result = await runNativeSpawn(th.deps, {
@@ -659,7 +659,7 @@ describe('spawn profile and runtime declaration', { timeout: 60_000 }, () => {
             prompt: 'x',
             isolation: 'worktree',
           } as never),
-        (err: unknown) => err instanceof HelmError && err.code === 'unsupported_runtime',
+        (err: unknown) => err instanceof HelmxError && err.code === 'unsupported_runtime',
       )
     } finally {
       await th.close()
@@ -680,7 +680,7 @@ describe('spawn profile and runtime declaration', { timeout: 60_000 }, () => {
               agentType,
             } as never),
           (err: unknown) =>
-            err instanceof HelmError && err.code === 'unsupported_runtime' && err.message.includes(agentType),
+            err instanceof HelmxError && err.code === 'unsupported_runtime' && err.message.includes(agentType),
         )
       }
     } finally {
@@ -699,7 +699,7 @@ describe('spawn profile and runtime declaration', { timeout: 60_000 }, () => {
             prompt: 'x',
             agentType: 'no-such-profile',
           } as never),
-        (err: unknown) => err instanceof HelmError && err.code === 'not_found',
+        (err: unknown) => err instanceof HelmxError && err.code === 'not_found',
       )
     } finally {
       await th.close()
@@ -730,7 +730,7 @@ describe('spawn profile and runtime declaration', { timeout: 60_000 }, () => {
         gate: 'echo boom-diagnostic >&2; exit 7',
       } as never).then(
         () => assert.fail('failed gate must throw'),
-        (e: unknown) => e as HelmError,
+        (e: unknown) => e as HelmxError,
       )
       assert.equal(err.code, 'gate_failed')
       assert.ok(String(err.message).includes('boom-diagnostic'), 'gate diagnostics must not be discarded')
@@ -746,14 +746,14 @@ describe('spawn profile and runtime declaration', { timeout: 60_000 }, () => {
 
 describe('Ask CAS and honest settlement', { timeout: 60_000 }, () => {
   let service: AskService
-  let store: HelmStore
+  let store: HelmxStore
   let stash: SecretStash
   let events: Array<{ type: string; payload: unknown }>
   let pendingChanged: number[]
 
   async function openAskService(options: { validateConversation?: (id: number) => boolean } = {}): Promise<void> {
-    const db = await openHelmDatabase(join(rootDir, `ask-${Math.random().toString(36).slice(2)}`))
-    store = new HelmStore(db)
+    const db = await openHelmxDatabase(join(rootDir, `ask-${Math.random().toString(36).slice(2)}`))
+    store = new HelmxStore(db)
     await store.load()
     stash = new SecretStash()
     events = []
@@ -779,7 +779,7 @@ describe('Ask CAS and honest settlement', { timeout: 60_000 }, () => {
     const ask = service.listAsks('pending')[0]!
     await assert.rejects(
       () => service.answerAsk(ask.id, { confirm: 'true' }, 9),
-      (err: unknown) => err instanceof HelmError && err.code === 'ask_state_conflict',
+      (err: unknown) => err instanceof HelmxError && err.code === 'ask_state_conflict',
     )
     await service.cancelAsk(ask.id)
     await store.close()
@@ -797,7 +797,7 @@ describe('Ask CAS and honest settlement', { timeout: 60_000 }, () => {
     const ask = service.listAsks('pending')[0]!
     await assert.rejects(
       () => service.answerAsk(ask.id, { x: 'v' }),
-      (err: unknown) => err instanceof HelmError && err.code === 'ask_state_unavailable',
+      (err: unknown) => err instanceof HelmxError && err.code === 'ask_state_unavailable',
     )
     await service.cancelAsk(ask.id)
     await store.close()
@@ -875,7 +875,7 @@ describe('Ask CAS and honest settlement', { timeout: 60_000 }, () => {
     void askPromise.catch(() => {})
     const ask = service.listAsks('pending')[0]!
     const expectValidation = (promise: Promise<unknown>) =>
-      assert.rejects(promise, (err: unknown) => err instanceof HelmError && err.code === 'validation_error')
+      assert.rejects(promise, (err: unknown) => err instanceof HelmxError && err.code === 'validation_error')
     await expectValidation(service.answerAsk(ask.id, { agree: 'true', rogue: 'x' } as never))
     await expectValidation(service.answerAsk(ask.id, { agree: 1 } as never))
     await expectValidation(service.answerAsk(ask.id, { agree: 'true', color: 'green' }))
@@ -897,7 +897,7 @@ describe('Ask CAS and honest settlement', { timeout: 60_000 }, () => {
           title: 'broken name',
           fields: [{ name: 'api-key', label: 'K', type: 'text', secret: true }],
         }),
-      (err: unknown) => err instanceof HelmError && err.code === 'validation_error',
+      (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',
     )
     // 'api_key' and 'API_KEY' are distinct field names: preserved side-by-side without silent overwriting.
     const askPromise = service.createAsk({
@@ -933,7 +933,7 @@ describe('Ask CAS and honest settlement', { timeout: 60_000 }, () => {
   it('createAsk boundaries: duplicate name / invalid type / missing conversation / missing title', { timeout: 60_000 }, async () => {
     await openAskService({ validateConversation: (id) => id === 1 })
     const expectValidation = (promise: Promise<unknown>) =>
-      assert.rejects(promise, (err: unknown) => err instanceof HelmError && err.code === 'validation_error')
+      assert.rejects(promise, (err: unknown) => err instanceof HelmxError && err.code === 'validation_error')
     await expectValidation(
       service.createAsk({
         conversationId: 1,
@@ -959,7 +959,7 @@ describe('Ask CAS and honest settlement', { timeout: 60_000 }, () => {
           title: 'missing conversation',
           fields: [{ name: 'x', label: 'X', type: 'text' }],
         }),
-      (err: unknown) => err instanceof HelmError && err.code === 'not_found',
+      (err: unknown) => err instanceof HelmxError && err.code === 'not_found',
     )
     await store.close()
   })

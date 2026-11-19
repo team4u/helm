@@ -14,19 +14,19 @@
  * 5. 技能资产接入：code-hang-loop.md 进入 WATCHDOG_PLAYBOOK_SKILL_ASSET
  *    且 SKILL.md 索引含该手册。
  */
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  HelmError,
+  HelmxError,
   type ConversationSummary,
   type MaybePromise,
   type NodePathUsage,
   type PluginDefinition,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 import {
   PluginHost,
   type PluginHostBackend,
@@ -49,7 +49,7 @@ import {
 const PLUGIN_ID = 'builtin:superagent'
 
 const makeConversationSummary = (id: number, over: Partial<ConversationSummary> = {}): ConversationSummary =>
-  baseConversationSummary({ id, cwd: '/tmp/helm-workdir', model: 'faux/faux-1', status: 'working', stateChangeSeq: 10, ...over })
+  baseConversationSummary({ id, cwd: '/tmp/helmx-workdir', model: 'faux/faux-1', status: 'working', stateChangeSeq: 10, ...over })
 
 interface InspectHarnessOptions {
   summary: ConversationSummary
@@ -67,7 +67,7 @@ async function makeInspectHarness(opts: InspectHarnessOptions) {
     redact: opts.redact ?? ((text: string) => text),
     getConversation: (id: number) => {
       if (opts.summary.id !== id) {
-        throw new HelmError('not_found', `会话不存在：${id}`, 404, { conversationId: id })
+        throw new HelmxError('not_found', `会话不存在：${id}`, 404, { conversationId: id })
       }
       return opts.summary
     },
@@ -78,14 +78,14 @@ async function makeInspectHarness(opts: InspectHarnessOptions) {
         { id: 'e1', kind: 'message', createdAt: 1, model: [{ role: 'assistant', content: 'hello' }] },
       ],
     }),
-    getConversationOwnership: () => 'helm',
+    getConversationOwnership: () => 'helmx',
     inspectNodePathUsage: (input: { nodeId: string; path: string }) => {
       pathUsageCalls.push({ nodeId: input.nodeId, path: input.path })
       return Promise.resolve(opts.pathUsage(input))
     },
   }
 
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-superagent-watchdog-inspect-'))
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-superagent-watchdog-inspect-'))
   const host = new PluginHost({
     buildProvider: createPluginBuildProvider(),
     dataDir,
@@ -192,7 +192,7 @@ test('activeProcesses：探测失败（节点离线）→ 字段缺省，主消�
   const h = await makeInspectHarness({
     summary: makeConversationSummary(57, { nodeId: 'offline-node', cwd: '/srv/gone' }),
     pathUsage: () => {
-      throw new HelmError('node_offline', '节点 offline-node 离线', 409, { nodeId: 'offline-node' })
+      throw new HelmxError('node_offline', '节点 offline-node 离线', 409, { nodeId: 'offline-node' })
     },
   })
   const out = await h.inspect(57)
@@ -207,7 +207,7 @@ test('activeProcesses：cwd 为空 → 不发起探测，字段缺省', { timeou
   const h = await makeInspectHarness({
     summary: makeConversationSummary(58, { cwd: '' }),
     pathUsage: () => {
-      throw new HelmError('unexpected', 'cwd 为空不得调用 inspectNodePathUsage', 500)
+      throw new HelmxError('unexpected', 'cwd 为空不得调用 inspectNodePathUsage', 500)
     },
   })
   const out = await h.inspect(58)

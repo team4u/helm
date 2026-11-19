@@ -1,31 +1,31 @@
 /**
  * Stable CLI artifact assembly: produces `packages/payload/dist-cli/` — a standalone,
- * zero-dependency npm package that installs the complete `helm` CLI globally via one
- * `npm install -g` (bin `helm`, single-sourced from packages/cli/package.json).
+ * zero-dependency npm package that installs the complete `helmx` CLI globally via one
+ * `npm install -g` (bin `helmx`, single-sourced from packages/cli/package.json).
  *
  * Why a single-file bundle instead of the Hub payload's `file:./<pkg>.tgz` dependency pattern:
  * a globally installed CLI must work in one step, with no consumer-side dependency completion and
  * no dependency on unpublished private workspace packages. The bundle input is
  * packages/cli/dist/index.js — the full control CLI: the core static command table, dynamic
  * plugin-action commands over the Hub HTTP API, and the local Hub lifecycle surface
- * (`helm update ...`) implemented on the bundled-in launcher's typed API (packages/cli/src/
+ * (`helmx update ...`) implemented on the bundled-in launcher's typed API (packages/cli/src/
  * launcher, same-package relative imports; it publishes no bin of its own). esbuild inlines
- * the whole closure (@helm/cli → its launcher subtree → @helm/env-io (update engine included) /
- * @helm/protocol → typebox, plus tar for payload staging), all pure JavaScript — so the Hub
+ * the whole closure (@helmx/cli → its launcher subtree → @helmx/env-io (update engine included) /
+ * @helmx/protocol → typebox, plus tar for payload staging), all pure JavaScript — so the Hub
  * payload's root dependency set needs no additions for this CLI to run.
  *
- * One deliberate runtime-resolved capability: `helm plugins build` loads the plugin client
- * compiler (@helm/plugin-build) through a computed dynamic import (a specifier esbuild cannot
+ * One deliberate runtime-resolved capability: `helmx plugins build` loads the plugin client
+ * compiler (@helmx/plugin-build) through a computed dynamic import (a specifier esbuild cannot
  * statically follow — and must not: inlining it would fake availability while its platform-native
  * esbuild binary only exists where an npm install actually ran). Node resolves it from the
- * running location: inside the Hub payload the sibling node_modules carries @helm/plugin-build
- * (installed from the payload root dependency set); the global artifact relies on a Helm-managed
+ * running location: inside the Hub payload the sibling node_modules carries @helmx/plugin-build
+ * (installed from the payload root dependency set); the global artifact relies on a Helmx-managed
  * local payload release providing the compiler in its release directory and reports
  * `plugin_build_unavailable` honestly otherwise.
  *
  * Output layout (dist-cli/ is the publish package root; release runs npm pack/publish inside):
- *   package.json           publish manifest (name defaults to @team4u/helm-cli, overridable via
- *                          HELM_CLI_PACKAGE; dependencies are empty by contract; bin helm)
+ *   package.json           publish manifest (name defaults to @helmx/cli, overridable via
+ *                          HELMX_CLI_PACKAGE; dependencies are empty by contract; bin helmx)
  *   index.js               bundled CLI entry (shebang + single-file ESM; the bin target and the
  *                          exact file the Hub payload ships as cli/dist/index.js)
  *   LICENSE, THIRD_PARTY_NOTICES.md
@@ -36,13 +36,13 @@ import path from 'node:path';
 
 const SHEBANG = '#!/usr/bin/env node';
 
-/** Publish CLI package name (overridable via HELM_CLI_PACKAGE, mirroring HELM_PAYLOAD_PACKAGE). */
-export const cliPackageName = process.env.HELM_CLI_PACKAGE ?? '@team4u/helm-cli';
+/** Publish CLI package name (overridable via HELMX_CLI_PACKAGE, mirroring HELMX_PAYLOAD_PACKAGE). */
+export const cliPackageName = process.env.HELMX_CLI_PACKAGE ?? '@helmx/cli';
 
 /**
  * Assembles the CLI publish package. Exits the process with a diagnostics list when any
  * artifact-side contract is broken (missing build inputs, multiple bin entries, or a bundle that
- * still references unpackaged @helm/* imports). Returns the bundle file path so the Hub payload
+ * still references unpackaged @helmx/* imports). Returns the bundle file path so the Hub payload
  * assembly can ship the exact same bytes as cli/dist/index.js.
  */
 export async function assembleCliArtifact({ repoRoot, version, enginesNode }) {
@@ -61,11 +61,11 @@ export async function assembleCliArtifact({ repoRoot, version, enginesNode }) {
     process.exit(1);
   }
 
-  // The bin name stays single-sourced from the CLI package (exactly one bin entry: `helm`).
+  // The bin name stays single-sourced from the CLI package (exactly one bin entry: `helmx`).
   const cliPkg = JSON.parse(readFileSync(path.join(cliPkgDir, 'package.json'), 'utf-8'));
   const binNames = Object.keys(cliPkg.bin ?? {});
   if (binNames.length !== 1) {
-    console.error(`[payload] expected exactly one bin entry in @helm/cli package.json, found: ${JSON.stringify(binNames)}`);
+    console.error(`[payload] expected exactly one bin entry in @helmx/cli package.json, found: ${JSON.stringify(binNames)}`);
     process.exit(1);
   }
   const binName = binNames[0];
@@ -96,8 +96,8 @@ export async function assembleCliArtifact({ repoRoot, version, enginesNode }) {
 
   // Zero-dependency contract, checked mechanically on esbuild's own metafile: every external
   // module reference the bundle declares is listed there (node builtins included). An external
-  // @helm/* import means the closure did not resolve and `npm install -g` would break for every
-  // consumer (no @helm/* workspace package is published from this repository; workspace:/file:
+  // @helmx/* import means the closure did not resolve and `npm install -g` would break for every
+  // consumer (no @helmx/* workspace package is published from this repository; workspace:/file:
   // specifiers would fail outright). The metafile is the authority — regex-scanning the bundle
   // text would false-positive on scaffold-template sample code embedded in string literals, and
   // would miss nothing the metafile catches: the plugins-build computed dynamic import is
@@ -105,7 +105,7 @@ export async function assembleCliArtifact({ repoRoot, version, enginesNode }) {
   const unresolved = new Set();
   for (const output of Object.values(bundleResult.metafile.outputs)) {
     for (const imported of output.imports ?? []) {
-      if (imported.external === true && imported.path.startsWith('@helm/')) unresolved.add(imported.path);
+      if (imported.external === true && imported.path.startsWith('@helmx/')) unresolved.add(imported.path);
     }
   }
   if (unresolved.size > 0) {
@@ -119,7 +119,7 @@ export async function assembleCliArtifact({ repoRoot, version, enginesNode }) {
     name: cliPackageName,
     version,
     type: 'module',
-    description: 'helm control CLI: full command surface over the Hub HTTP API plus local Hub payload lifecycle management (update / watch / status / stop)',
+    description: 'helmx control CLI: full command surface over the Hub HTTP API plus local Hub payload lifecycle management (update / watch / status / stop)',
     license: 'MIT',
     repository: { type: 'git', url: 'git+https://github.com/team4u/helm.git', directory: 'packages/payload' },
     publishConfig: { access: 'public' },
@@ -141,7 +141,7 @@ export async function assembleCliArtifact({ repoRoot, version, enginesNode }) {
     const rel = path.relative(repoRoot, path.resolve(process.cwd(), input)).replace(/\\/g, '/');
     if (rel.startsWith('../')) continue;
     if (/^packages\/[^/]+\//.test(rel)) {
-      bundledPkgs.add(`@helm/${/^packages\/([^/]+)\//.exec(rel)[1]}`);
+      bundledPkgs.add(`@helmx/${/^packages\/([^/]+)\//.exec(rel)[1]}`);
       continue;
     }
     const idx = rel.lastIndexOf('node_modules/');
@@ -153,7 +153,7 @@ export async function assembleCliArtifact({ repoRoot, version, enginesNode }) {
   }
   const bundleBytes = Object.values(bundleResult.metafile.outputs).reduce((sum, out) => sum + out.bytes, 0);
   console.log(`[payload] cli artifact assembled: ${stagingDir}`);
-  console.log(`[payload] cli publish package: ${cliPackageName}@${version} (bin: ${binName}; overridable via HELM_CLI_PACKAGE)`);
+  console.log(`[payload] cli publish package: ${cliPackageName}@${version} (bin: ${binName}; overridable via HELMX_CLI_PACKAGE)`);
   console.log(`[payload] cli bundle: 1 file, ${(bundleBytes / 1024).toFixed(1)} KiB; bundled inputs: ${[...bundledPkgs].sort().join(', ')}`);
   console.log('[payload] cli contract: zero runtime dependencies (single-file bundle); publish from dist-cli via npm pack / npm publish');
 

@@ -1,7 +1,7 @@
 /**
  * `local-env` contract tests locking key behavioral invariants inherited from
  * `@earendil-works/pi-durable` (`NodeExecutionEnv`, `StreamDecoder`, `LineScanner`)
- * and `@helm/env-io` shell probing — asserting observable outputs and exit semantics:
+ * and `@helmx/env-io` shell probing — asserting observable outputs and exit semantics:
  *
  * - `StreamDecoder`: arbitrary chunk boundaries decode identically byte-for-byte to a single
  *   chunk, and leading UTF-8 BOM is stripped once even when split across chunks;
@@ -22,9 +22,9 @@ import { existsSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { useTempDir } from '@helm/test-kit/node';
+import { useTempDir } from '@helmx/test-kit/node';
 
-import { getBashShellConfig, isLegacyWslBashPath, type ShellProbeIo } from '@helm/env-io';
+import { getBashShellConfig, isLegacyWslBashPath, type ShellProbeIo } from '@helmx/env-io';
 import { LineScanner, LocalExecutionEnv, StreamDecoder, getShellConfig, getShellEnv } from '../src/daemon/local-env.js';
 
 const BOM = Buffer.from([0xef, 0xbb, 0xbf]);
@@ -131,7 +131,7 @@ test('LineScanner throws RangeError on invalid line ranges', { timeout: 60_000 }
 });
 
 // ---------------------------------------------------------------------------
-// Shell probing (delegated to @helm/env-io)
+// Shell probing (delegated to @helmx/env-io)
 // ---------------------------------------------------------------------------
 
 const withSystemRoot = (value: string | undefined, fn: () => void): void => {
@@ -187,7 +187,7 @@ test('shell probe: falls back to conventional regex when SystemRoot is unset', {
 });
 
 test('shell probe: missing custom shell explicitly returns shell_unavailable; existing one uses argv', { timeout: 60_000 }, async () => {
-  const missing = '/nonexistent/helm-contract/bash';
+  const missing = '/nonexistent/helmx-contract/bash';
   const rejected = await getShellConfig(missing);
   assert.equal(rejected.ok, false);
   if (!rejected.ok) {
@@ -262,7 +262,7 @@ test('exec exit semantics: timeout error message matches timeout:<seconds> and p
 // ---------------------------------------------------------------------------
 
 test('spill: oversized output is preserved in full via spillPath while small output produces no spill file', { timeout: 60_000 }, async (t) => {
-  const workdir = useTempDir(t, 'helm-spill-');
+  const workdir = useTempDir(t, 'helmx-spill-');
   const env = new LocalExecutionEnv({ cwd: workdir });
   const big = await env.exec("node -e \"process.stdout.write('a'.repeat(200000))\"", {
     spill: { afterBytes: 4096, afterLines: 10 },
@@ -282,7 +282,7 @@ test('spill: oversized output is preserved in full via spillPath while small out
 });
 
 test('spill: timed-out commands still preserve full output in spillPath', { timeout: 60_000 }, async (t) => {
-  const workdir = useTempDir(t, 'helm-spill-timeout-');
+  const workdir = useTempDir(t, 'helmx-spill-timeout-');
   const env = new LocalExecutionEnv({ cwd: workdir });
   const result = await env.exec("node -e \"process.stdout.write('x'.repeat(200000))\"; sleep 5", {
     timeout: 1,
@@ -354,7 +354,7 @@ test('getShellEnv(win32): overriding baseEnv/extraEnv never creates duplicate Pa
     delete process.env['PATH'];
     process.env['Path'] = 'C:\\Windows\\System32';
     const fromBase = getShellEnv(
-      { PATH: 'C:\\helm\\bin;C:\\Windows\\System32' },
+      { PATH: 'C:\\helmx\\bin;C:\\Windows\\System32' },
       undefined,
       true,
       'win32',
@@ -363,11 +363,11 @@ test('getShellEnv(win32): overriding baseEnv/extraEnv never creates duplicate Pa
       Object.keys(fromBase).filter((k) => k.toUpperCase() === 'PATH'),
       ['PATH'],
     );
-    assert.equal(fromBase['PATH'], 'C:\\helm\\bin;C:\\Windows\\System32');
+    assert.equal(fromBase['PATH'], 'C:\\helmx\\bin;C:\\Windows\\System32');
 
     const merged = getShellEnv(
-      { PATH: 'C:\\helm\\bin;C:\\Windows\\System32' },
-      { Path: 'C:\\custom;C:\\helm\\bin;C:\\Windows\\System32' },
+      { PATH: 'C:\\helmx\\bin;C:\\Windows\\System32' },
+      { Path: 'C:\\custom;C:\\helmx\\bin;C:\\Windows\\System32' },
       true,
       'win32',
     );
@@ -375,7 +375,7 @@ test('getShellEnv(win32): overriding baseEnv/extraEnv never creates duplicate Pa
       Object.keys(merged).filter((k) => k.toUpperCase() === 'PATH'),
       ['Path'],
     );
-    assert.equal(merged['Path'], 'C:\\custom;C:\\helm\\bin;C:\\Windows\\System32');
+    assert.equal(merged['Path'], 'C:\\custom;C:\\helmx\\bin;C:\\Windows\\System32');
   } finally {
     if (hasUpper && savedUpper !== undefined) process.env['PATH'] = savedUpper;
     else delete process.env['PATH'];

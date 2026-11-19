@@ -5,7 +5,7 @@
  * 浏览器内所有活跃的 `(pluginId, docName, conversationId)` 订阅经过短防抖
  * （默认 50ms，可通过 `sessionDocTimings.subscribeDebounceMs` 注入）聚合成
  * 单条共享 SSE 连接 `GET /api/session-docs/events?sub=...&sub=...`（使用
- * `@helm/protocol/browser` 的 `encodeSessionDocSubParam`）：
+ * `@helmx/protocol/browser` 的 `encodeSessionDocSubParam`）：
  * - ref-count：首个订阅者触发建流（初始值由首帧 `action: 'snapshot'` 下发），
  *   订阅集合不变时不重建流，活跃集合归零时立即关闭流并清缓存；
  * - 鉴权：所有出站请求统一携带 `Authorization: Bearer`（token 经 api.ts
@@ -16,7 +16,7 @@
  *   水位与状态；`snapshot` 重置该 tuple 的 `lastSeq` 基线，`updated` / `deleted`
  *   按 `seq` 单调递增（迟到旧帧丢弃），`deleted` 携带初始值（reset 语义）；
  * - 空闲看门狗：`readSseChunkWithDeadline(..., 30_000)` 对齐内核 15s keepalive，
- *   防止半开僵尸流；断流按有界指数退避重连，401 发 `helm:unauthorized`，
+ *   防止半开僵尸流；断流按有界指数退避重连，401 发 `helmx:unauthorized`，
  *   非重试 4xx 置错停止自动重试（可经 `retrySessionDoc` 显式重试）；
  * - evict（插件停用/会话删除）：向仍挂载订阅者显式报错，保留错误至退订。
  */
@@ -24,7 +24,7 @@ import {
   encodeSessionDocSubParam,
   type PublicPluginSessionDoc,
   type SessionDocMultiplexFrame,
-} from '@helm/protocol/browser'
+} from '@helmx/protocol/browser'
 import { getStoredToken } from './api.js'
 import { readSseChunkWithDeadline, SseParser } from './live-state.js'
 
@@ -300,7 +300,7 @@ function connectMultiplexStream(items: SubscribedEntryItem[], signature: string,
             notify(item.entry)
           }
         }
-        if (typeof window !== 'undefined') window.dispatchEvent(new Event('helm:unauthorized'))
+        if (typeof window !== 'undefined') window.dispatchEvent(new Event('helmx:unauthorized'))
         return
       }
       if (res.status >= 400 && res.status < 500 && res.status !== 429) {

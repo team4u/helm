@@ -24,7 +24,7 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync, unlinkSync } from 'node
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { HelmError, type ConversationSummary } from '@helm/protocol'
+import { HelmxError, type ConversationSummary } from '@helmx/protocol'
 import type { DiagnosticsCollection, WatchdogProbe } from '../src/diagnostics.js'
 import { PluginHost, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
 import { hostBackendStub } from '../../kernel/test/helpers/host-backend-stub.js'
@@ -34,7 +34,7 @@ import { createProfileFileHost } from '../../kernel/test/helpers/profile-file-ho
 import { createPluginHostBackendFixture } from '../../kernel/test/helpers/plugin-host-backend.js'
 import { createSuperAgentPlugin } from '../src/superagent.js'
 import { ProfileService } from '../../kernel/src/services/index.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { MemoryDocStore, makeConversationSummary } from './helpers/plugin-test-env.js'
 
 // ---------------------------------------------------------------------------
@@ -61,7 +61,7 @@ function makeControlledBackend(dataDir: string): ControlledBackend & PluginHostB
   const submits: Array<{ conversationId: number; origin?: string }> = []
   // 真实 ProfileService/SkillService（临时目录）：自举资产走真实文件路径。
   // profiles/skills 子端口复用 createProfileFileHost 的公共适配（含
-  // FileNotFoundError -> HelmError not_found 的边界转换，插件侧据此判定
+  // FileNotFoundError -> HelmxError not_found 的边界转换，插件侧据此判定
   // 资产缺失；superagent 等插件经 ctx.host.profiles/skills 消费）。
   const fileHost = createProfileFileHost(dataDir)
   const rawBackend: ControlledBackend & Partial<PluginHostBackend> = {
@@ -98,12 +98,12 @@ function makeControlledBackend(dataDir: string): ControlledBackend & PluginHostB
     listConversations() { return [...conversations.values()] },
     getConversation(id) {
       const found = conversations.get(id)
-      if (!found) throw new HelmError('not_found', `会话不存在：${id}`, 404, { conversationId: id })
+      if (!found) throw new HelmxError('not_found', `会话不存在：${id}`, 404, { conversationId: id })
       return found
     },
     async updateConversation(id, patch) {
       const found = conversations.get(id)
-      if (!found) throw new HelmError('not_found', `会话不存在：${id}`, 404)
+      if (!found) throw new HelmxError('not_found', `会话不存在：${id}`, 404)
       const next = { ...found, ...patch }
       conversations.set(id, next)
       return next
@@ -111,10 +111,10 @@ function makeControlledBackend(dataDir: string): ControlledBackend & PluginHostB
     manageConversation() { return () => {} },
     markConversationOwnership(id) {
       if (this.failMarkOwnershipFor.has(id)) {
-        throw new HelmError('document_store_failed', '测试注入：归属标记写入失败', 500)
+        throw new HelmxError('document_store_failed', '测试注入：归属标记写入失败', 500)
       }
     },
-    async createAsk() { throw new HelmError('unsupported', 'test', 400) },
+    async createAsk() { throw new HelmxError('unsupported', 'test', 400) },
     async cancelAsk() {},
     registerAskSeqResolver() { return () => {} },
     onEvent() { return () => {} },
@@ -122,7 +122,7 @@ function makeControlledBackend(dataDir: string): ControlledBackend & PluginHostB
     abortConversation: async () => {},
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
-    execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
+    execEnv: async () => { throw new HelmxError('unsupported', '本 fixture 不执行节点命令', 501) },
     emitEvent(type, payload) {
       if (type === 'notification') notifications.push(payload as { title: string; body: string; level: string })
     },
@@ -135,7 +135,7 @@ function makeControlledBackend(dataDir: string): ControlledBackend & PluginHostB
 // ---------------------------------------------------------------------------
 
 test('memory：并发 append（跨实例、锁内合并检查）最终不超上限且超限方显式拒绝', { timeout: 60_000 }, async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-mem-limit-'))
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-mem-limit-'))
   try {
     // 预置接近上限：剩余空间只够一次追加。
     const base = new MemoryStore(createProfileFileHost(dataDir))
@@ -151,7 +151,7 @@ test('memory：并发 append（跨实例、锁内合并检查）最终不超上�
     // 4 笔 × 800 = 3200 > 1000 余量：至少一笔被锁内拒绝；全部成功即防线失效。
     assert.ok(rejected.length >= 1, `至少一笔 append 应被锁内拒绝（实际 ${rejected.length} 笔被拒）`)
     for (const r of rejected) {
-      assert.ok(r.reason instanceof HelmError, '拒绝应是 HelmError')
+      assert.ok(r.reason instanceof HelmxError, '拒绝应是 HelmxError')
       assert.equal(r.reason.code, 'memory_limit_exceeded')
       assert.equal(r.reason.status, 400)
       assert.ok(/replace/.test(r.reason.message), '错误信息应提示 replace 整理')
@@ -165,7 +165,7 @@ test('memory：并发 append（跨实例、锁内合并检查）最终不超上�
 })
 
 test('memory：set 动作超限在写盘前拒绝（MEMORY.md 不半截写入）', { timeout: 60_000 }, async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-mem-save-'))
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-mem-save-'))
   try {
     const profiles = new ProfileService(dataDir)
     await profiles.ensureDefault()
@@ -174,7 +174,7 @@ test('memory：set 动作超限在写盘前拒绝（MEMORY.md 不半截写入）
     await host.register(createMemoryPlugin(), { enabled: true })
     await assert.rejects(
       () => host.invokeAction('builtin:memory', 'set', { profileId: 'assistant', text: 'M'.repeat(MEM_MAX + 1) }),
-      (err: unknown) => err instanceof HelmError && err.code === 'memory_limit_exceeded' && err.status === 400,
+      (err: unknown) => err instanceof HelmxError && err.code === 'memory_limit_exceeded' && err.status === 400,
     )
     // MEMORY.md 未被创建（超限拒绝不留半截）。
     const memoryExists = existsSync(join(dataDir, 'profiles', 'assistant', 'MEMORY.md'))
@@ -188,14 +188,14 @@ test('memory：set 动作超限在写盘前拒绝（MEMORY.md 不半截写入）
 })
 
 test('memory：写入路径无绕过上限参数（任何调用均强制 64k）', { timeout: 60_000 }, async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-mem-nolimit-'))
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-mem-nolimit-'))
   try {
     const store = new MemoryStore(createProfileFileHost(dataDir))
     await store.ensureMemory('assistant')
     // MemoryStore 公开 API 无 maxChars 参数：超限即拒绝，无「不设限」路径。
     await assert.rejects(
       () => store.updateMemory('assistant', 'x'.repeat(MEM_MAX + 100), 'replace'),
-      (err: unknown) => err instanceof HelmError && err.code === 'memory_limit_exceeded',
+      (err: unknown) => err instanceof HelmxError && err.code === 'memory_limit_exceeded',
     )
   } finally {
     rmSync(dataDir, { recursive: true, force: true })
@@ -207,7 +207,7 @@ test('memory：写入路径无绕过上限参数（任何调用均强制 64k）'
 // ---------------------------------------------------------------------------
 
 test('memory：同 Profile 双会话并发 update_memory append 最终不超上限', { timeout: 60_000 }, async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-memory-conc-'))
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-memory-conc-'))
   try {
     const profiles = new ProfileService(dataDir)
     await profiles.ensureDefault()
@@ -226,7 +226,7 @@ test('memory：同 Profile 双会话并发 update_memory append 最终不超上�
     const rejected = outcomes.filter((o) => o.status === 'rejected')
     assert.ok(rejected.length >= 1, '并发 append 必有超限方被锁内拒绝')
     for (const r of rejected) {
-      assert.ok(r.reason instanceof HelmError && r.reason.code === 'memory_limit_exceeded')
+      assert.ok(r.reason instanceof HelmxError && r.reason.code === 'memory_limit_exceeded')
     }
     const final = await new MemoryStore(createProfileFileHost(dataDir)).getMemory('assistant')
     assert.ok(final.length <= MEM_MAX, `最终 ${final.length} ≤ 上限`)
@@ -236,7 +236,7 @@ test('memory：同 Profile 双会话并发 update_memory append 最终不超上�
 })
 
 test('profile/memory：SYSTEM 与已初始化 MEMORY 缺失时注入显式 assets-missing 节（不沉默换人格）', { timeout: 60_000 }, async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-pm-missing-'))
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-pm-missing-'))
   try {
     const profiles = new ProfileService(dataDir)
     await profiles.ensureDefault()
@@ -312,7 +312,7 @@ test('profile/memory：SYSTEM 与已初始化 MEMORY 缺失时注入显式 asset
 })
 
 test('memory：权限/IO 错误不被吞（仅 FileNotFoundError 走缺失路径）', { timeout: 60_000 }, async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-memory-ioerr-'))
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-memory-ioerr-'))
   try {
     const profiles = new ProfileService(dataDir)
     await profiles.ensureDefault()
@@ -337,7 +337,7 @@ test('memory：权限/IO 错误不被吞（仅 FileNotFoundError 走缺失路径
       () => host.runHook('before_turn', turn as never),
       (err: unknown) => {
         // 绝不被吞成「空记忆 + 缺失告警」：真实 IO 错误上抛（宿主包一层
-        // HelmError 但保留 cause 与原始 EISDIR 信息），不足缺失路径。
+        // HelmxError 但保留 cause 与原始 EISDIR 信息），不足缺失路径。
         const message = err instanceof Error ? err.message : String(err)
         assert.ok(message.includes('EISDIR'), `应携带真实 EISDIR 错误（实际 ${message}）`)
         return true
@@ -362,7 +362,7 @@ interface SuperAgentEnv {
 }
 
 async function makeSuperAgentEnv(): Promise<SuperAgentEnv> {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-superagent-roll-'))
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-superagent-roll-'))
   const backend = makeControlledBackend(dataDir)
   const docs = new MemoryDocStore()
   await new ProfileService(dataDir).ensureDefault()
@@ -395,14 +395,14 @@ test('superagent：markOwnership 失败（首个副作用）也完整回滚：�
     ;(env.backend as unknown as { markConversationOwnership: typeof originalMark }).markConversationOwnership = (id, owner) => {
       const summary = env.backend.conversations.get(id)
       if (summary?.tags.includes('worker')) {
-        throw new HelmError('document_store_failed', '测试注入：归属标记写入失败', 500)
+        throw new HelmxError('document_store_failed', '测试注入：归属标记写入失败', 500)
       }
       originalMark(id, owner)
     }
 
     await assert.rejects(
       () => env.host.invokeAction('builtin:superagent', 'dispatch_worker', { prompt: '任务', threadKey: 'tk-1' }, undefined),
-      (err: unknown) => err instanceof HelmError && err.code === 'document_store_failed',
+      (err: unknown) => err instanceof HelmxError && err.code === 'document_store_failed',
     )
 
     // 回滚 1：index 无 worker 残留。
@@ -449,7 +449,7 @@ test('superagent：submitInput 失败（既有第一批场景回归）不误删�
       if (conversationId === ok.workerConversationId) return undefined // 活跃 Worker 不受影响
       const summary = env.backend.conversations.get(conversationId)
       if (summary?.tags.includes('worker')) {
-        return new HelmError('conversation_not_accepting', '测试注入：提交被拒绝', 409)
+        return new HelmxError('conversation_not_accepting', '测试注入：提交被拒绝', 409)
       }
       return undefined
     }
@@ -479,7 +479,7 @@ interface WatchdogRecorded {
 }
 
 async function makeWatchdogHarness(opts: {
-  ownership?: (id: number) => 'helm' | 'bot' | 'human'
+  ownership?: (id: number) => 'helmx' | 'bot' | 'human'
 } = {}) {
   const recorded: WatchdogRecorded = { notifications: [], aborts: [], abortErrors: [], submits: [] }
   /** 测试可变注入：true 时 abortConversation 拒绝（模拟调用失败；插件消费 ctx.host.abortConversation）。 */
@@ -507,7 +507,7 @@ async function makeWatchdogHarness(opts: {
     listConversations: () => [...conversations.values()],
     getConversation: (id) => {
       const found = conversations.get(id)
-      if (!found) throw new HelmError('not_found', `会话不存在：${id}`, 404, { conversationId: id })
+      if (!found) throw new HelmxError('not_found', `会话不存在：${id}`, 404, { conversationId: id })
       return found
     },
     updateConversation: async (id) => conversations.get(id) ?? makeConversation(id),
@@ -526,34 +526,34 @@ async function makeWatchdogHarness(opts: {
         if (idx >= 0) cur.splice(idx, 1)
       }
     },
-    getConversationOwnership: (id) => opts.ownership?.(id) ?? (id === 1 ? 'human' : 'helm'),
+    getConversationOwnership: (id) => opts.ownership?.(id) ?? (id === 1 ? 'human' : 'helmx'),
     abortConversation: async (id) => {
       if (abortShouldFail) {
         recorded.abortErrors.push(id)
-        throw new HelmError('abort_failed', '测试注入：abort 调用失败', 500)
+        throw new HelmxError('abort_failed', '测试注入：abort 调用失败', 500)
       }
       recorded.aborts.push(id)
     },
     abortConversationGuarded: async (id, guard) => {
       // 内核同构复核（存在性 + 归属 + 水位）后与普通 abort 同一注入通道。
       const conv = conversations.get(id)
-      if (!conv) throw new HelmError('not_found', `会话不存在：${id}`, 404, { conversationId: id })
-      const ownedBy = opts.ownership?.(id) ?? (id === 1 ? 'human' : 'helm')
+      if (!conv) throw new HelmxError('not_found', `会话不存在：${id}`, 404, { conversationId: id })
+      const ownedBy = opts.ownership?.(id) ?? (id === 1 ? 'human' : 'helmx')
       if (ownedBy === 'human' || (guard?.expectedOwnership !== undefined && ownedBy !== guard.expectedOwnership)) {
-        throw new HelmError('ownership_conflict', `会话 ${id} 当前归属 ${ownedBy}`, 409, { conversationId: id })
+        throw new HelmxError('ownership_conflict', `会话 ${id} 当前归属 ${ownedBy}`, 409, { conversationId: id })
       }
       if (guard?.expectedStateSeq !== undefined && conv.stateChangeSeq !== guard.expectedStateSeq) {
-        throw new HelmError('state_seq_conflict', `会话 ${id} 水位不一致`, 409, { conversationId: id })
+        throw new HelmxError('state_seq_conflict', `会话 ${id} 水位不一致`, 409, { conversationId: id })
       }
       if (abortShouldFail) {
         recorded.abortErrors.push(id)
-        throw new HelmError('abort_failed', '测试注入：abort 调用失败', 500)
+        throw new HelmxError('abort_failed', '测试注入：abort 调用失败', 500)
       }
       recorded.aborts.push(id)
     },
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
-    execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
+    execEnv: async () => { throw new HelmxError('unsupported', '本 fixture 不执行节点命令', 501) },
     emitEvent: async (type, payload) => {
       if (type === 'notification') {
         const p = payload as { level?: string; title?: string; body?: string }
@@ -567,7 +567,7 @@ async function makeWatchdogHarness(opts: {
     },
   }
   const host = new PluginHost({ buildProvider: createPluginBuildProvider(),
-    dataDir: mkdtempSync(join(tmpdir(), 'helm-wd-evict-')),
+    dataDir: mkdtempSync(join(tmpdir(), 'helmx-wd-evict-')),
     host: backend,
     docs,
   })
@@ -625,7 +625,7 @@ function externalProbe(nodeId: string, paneId: string, over: Partial<WatchdogPro
     targetId: paneId,
     targetKind: 'external',
     nodeId,
-    ownedBy: 'helm',
+    ownedBy: 'helmx',
     stateChangeSeq: 10,
     status: 'working',
     facts: { kind: 'herdr', parentConversationId: 300, pendingAskCount: 0 },
@@ -703,7 +703,7 @@ test('watchdog：abort 调用失败撤销去重标记——下一 tick 同水位
         targetId: '55',
         targetKind: 'conversation',
         conversationId: 55,
-        ownedBy: 'helm',
+        ownedBy: 'helmx',
         status: 'working',
         stateChangeSeq: 10,
         stalledMs: 700_000,
@@ -724,7 +724,7 @@ test('watchdog：abort 调用失败撤销去重标记——下一 tick 同水位
         targetId: '55',
         targetKind: 'conversation',
         conversationId: 55,
-        ownedBy: 'helm',
+        ownedBy: 'helmx',
         status: 'working',
         stateChangeSeq: 10,
         stalledMs: 800_000,
@@ -740,7 +740,7 @@ test('watchdog：abort 调用失败撤销去重标记——下一 tick 同水位
 })
 
 test('profile：restrictToCwd 开启时注入 workspace_boundary 边界声明（关闭时不注入）', { timeout: 60_000 }, async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-pm-restrict-'))
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-pm-restrict-'))
   try {
     const profiles = new ProfileService(dataDir)
     await profiles.ensureDefault()
@@ -749,7 +749,7 @@ test('profile：restrictToCwd 开启时注入 workspace_boundary 边界声明（
     await host.register(createProfilePlugin(), { enabled: true })
 
     const turn = {
-      conversation: makeConversation(1, { cwd: '/tmp/helm/repo' }),
+      conversation: makeConversation(1, { cwd: '/tmp/helmx/repo' }),
       sections: [],
       tools: [],
       inputs: [],
@@ -768,7 +768,7 @@ test('profile：restrictToCwd 开启时注入 workspace_boundary 边界声明（
     const onSections = (on as { value: { sections: Array<{ id: string; text: string }> } }).value.sections
     const boundary = onSections.find((s) => s.id === 'profile.workspace-boundary')
     assert.ok(boundary !== undefined, '开启 restrictToCwd 必须注入边界节')
-    assert.ok(boundary.text.includes('/tmp/helm/repo'), '点名会话 cwd')
+    assert.ok(boundary.text.includes('/tmp/helmx/repo'), '点名会话 cwd')
     assert.ok(boundary.text.includes('path_outside_workspace'), '点名拒绝错误码')
   } finally {
     rmSync(dataDir, { recursive: true, force: true })

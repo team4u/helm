@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { SegmentedControl } from '@helm/plugin-client'
+import { SegmentedControl } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { conversationsApi } from '../lib/api.js'
 import { useStoreActions } from '../lib/store-context.js'

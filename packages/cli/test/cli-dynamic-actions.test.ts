@@ -60,7 +60,7 @@ function action(cli: unknown, properties: Record<string, unknown> = {}, required
 }
 
 test('manifest validation: positional field must exist in inputSchema.properties', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-dyn-')
+  const dir = useTempDir(t, 'helmx-cli-dyn-')
   const hub = await startActionsHub([action({ command: ['gadget', 'deploy'], positional: [{ field: 'ghost' }] })], {}, t)
   const r = await runCliCaptured(['gadget', 'deploy', 'x', '--json'], makeCliEnv(hub.url, dir))
   assert.equal(r.code, 1)
@@ -70,7 +70,7 @@ test('manifest validation: positional field must exist in inputSchema.properties
 })
 
 test('manifest validation: readFileInto target must exist and be type: string; duplicate fields/targets rejected', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-dyn-')
+  const dir = useTempDir(t, 'helmx-cli-dyn-')
   const cases: Array<{ cli: unknown; properties: Record<string, unknown>; match: RegExp }> = [
     {
       // Missing target field
@@ -124,7 +124,7 @@ test('manifest validation: readFileInto target must exist and be type: string; d
 })
 
 test('manifest validation: required positional cannot follow an optional positional; timeoutMs validation', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-dyn-')
+  const dir = useTempDir(t, 'helmx-cli-dyn-')
   const cases: Array<{ cli: unknown; match: RegExp }> = [
     {
       cli: { command: ['gadget', 'deploy'], positional: [{ field: 'opt' }, { field: 'req', required: true }] },
@@ -160,7 +160,7 @@ test('manifest validation: required positional cannot follow an optional positio
 })
 
 test('manifest validation: positional field colliding with reserved flag name (input/current) is rejected', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-dyn-')
+  const dir = useTempDir(t, 'helmx-cli-dyn-')
   const hub = await startActionsHub(
     [action({ command: ['gadget', 'deploy'], positional: [{ field: 'current' }] }, { current: { type: 'string' } })],
     {},
@@ -174,7 +174,7 @@ test('manifest validation: positional field colliding with reserved flag name (i
 })
 
 test('manifest validation: rejects unknown keys and prototype-polluting names; checks Object.hasOwn instead of prototype chain', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-dyn-')
+  const dir = useTempDir(t, 'helmx-cli-dyn-')
   // Field name `toString`: `in` checks pass via prototype chain, whereas Object.hasOwn rejects
   const hubToString = await startActionsHub(
     [action({ command: ['gadget', 'deploy'], positional: [{ field: 'toString' }] }, {})],
@@ -229,7 +229,7 @@ test('manifest validation: rejects unknown keys and prototype-polluting names; c
 })
 
 test('positional type coercion: strict true/false booleans, JSON parsing by schema type, raw strings', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-dyn-')
+  const dir = useTempDir(t, 'helmx-cli-dyn-')
   const manifest = {
     pluginId: 'builtin:gadget',
     id: 'deploy',
@@ -312,7 +312,7 @@ const READ_FILE_MANIFEST = {
 }
 
 test('readFileInto: reads files into target field; coerces plain values per schema type', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-dyn-')
+  const dir = useTempDir(t, 'helmx-cli-dyn-')
   const hub = await startActionsHub([READ_FILE_MANIFEST], {}, t)
   const env = makeCliEnv(hub.url, dir)
   const scriptPath = path.join(dir, 'site.workflow.js')
@@ -375,7 +375,7 @@ test('readFileInto: reads files into target field; coerces plain values per sche
 })
 
 test('readFileInto: rejects directories as non-regular files and surfaces permission errors explicitly', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-dyn-')
+  const dir = useTempDir(t, 'helmx-cli-dyn-')
   const hub = await startActionsHub([READ_FILE_MANIFEST], {}, t)
   const env = makeCliEnv(hub.url, dir)
 
@@ -396,7 +396,7 @@ test('readFileInto: rejects directories as non-regular files and surfaces permis
   // ./ directory that actually exists relative to cwd: also rejected as not a regular file.
   // Created under process.cwd() because on cross-volume Windows CI (repo on D:, tmp on C:), path.relative
   // returns an absolute path and `./<abs>` is not a valid relative path; using cwd guarantees the same drive.
-  const relName = `.helm-cli-dyn-rel-${process.pid}-${Date.now()}`
+  const relName = `.helmx-cli-dyn-rel-${process.pid}-${Date.now()}`
   const relDir = path.join(process.cwd(), relName)
   await fsp.mkdir(relDir)
   try {
@@ -429,7 +429,7 @@ test('readFileInto: rejects directories as non-regular files and surfaces permis
 // ---------------------------------------------------------------------------
 
 test('positional conflicts with matching flag explicitly (no silent override); --input stays raw', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-dyn-')
+  const dir = useTempDir(t, 'helmx-cli-dyn-')
   const hub = await startActionsHub([READ_FILE_MANIFEST], {}, t)
   const env = makeCliEnv(hub.url, dir)
   const scriptPath = path.join(dir, 'a.js')
@@ -462,7 +462,7 @@ test('positional conflicts with matching flag explicitly (no silent override); -
 // ---------------------------------------------------------------------------
 
 test('generic virtual plugin dynamic command: end-to-end positional + file + timeoutMs (--current injects context only)', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-dyn-')
+  const dir = useTempDir(t, 'helmx-cli-dyn-')
   // Unrelated to workflows (report table export): verifies generic extension points without hardcoding
   const manifest = {
     pluginId: 'builtin:reporter',
@@ -491,7 +491,7 @@ test('generic virtual plugin dynamic command: end-to-end positional + file + tim
   const hub = await startActionsHub([manifest], {}, t)
   const tpl = path.join(dir, 'tpl.md')
   await fsp.writeFile(tpl, '# title\nbody text\n', 'utf8')
-  const envWithConv = makeCliEnv(hub.url, dir, { HELM_CONVERSATION_ID: '5' })
+  const envWithConv = makeCliEnv(hub.url, dir, { HELMX_CONVERSATION_ID: '5' })
   const envPlain = makeCliEnv(hub.url, dir)
 
   // File positional + string flag + numeric positional; --current injects body.conversationId only
@@ -532,7 +532,7 @@ test('generic virtual plugin dynamic command: end-to-end positional + file + tim
 // ---------------------------------------------------------------------------
 
 test('--wait terminal failure: propagates server workflow_failed envelope with non-zero exit; --json preserves details', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-dyn-')
+  const dir = useTempDir(t, 'helmx-cli-dyn-')
   // Reuses read-file manifest while having server return a failure envelope: verifies CLI does not turn HTTP errors into success
   const hub = await startActionsHub(
     [READ_FILE_MANIFEST],
@@ -556,7 +556,7 @@ test('--wait terminal failure: propagates server workflow_failed envelope with n
 // ---------------------------------------------------------------------------
 
 test('cli.timeoutMs override takes effect: 300ms slow response times out with actual ms in message', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-dyn-')
+  const dir = useTempDir(t, 'helmx-cli-dyn-')
   const manifest = {
     pluginId: 'builtin:gadget',
     id: 'deploy',
@@ -592,7 +592,7 @@ test('cli.timeoutMs override takes effect: 300ms slow response times out with ac
 })
 
 test('cli.timeoutMs=0: does not apply request timeout to slow responses (supports long --wait)', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-dyn-')
+  const dir = useTempDir(t, 'helmx-cli-dyn-')
   const manifest = {
     pluginId: 'builtin:gadget',
     id: 'deploy',
@@ -623,7 +623,7 @@ test('cli.timeoutMs=0: does not apply request timeout to slow responses (support
 // ---------------------------------------------------------------------------
 
 test('action output: human rendering resolves nested LocalizedText display copy; --json keeps raw shape', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-dyn-')
+  const dir = useTempDir(t, 'helmx-cli-dyn-')
   // apps-list-shaped payload: display metadata nested three levels deep
   const payload = {
     apps: [

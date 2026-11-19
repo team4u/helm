@@ -13,7 +13,7 @@
  */
 import test, { beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
-import { HelmError, type PluginDocHandle, type PluginSessionDocHandle } from '@helm/protocol'
+import { HelmxError, type PluginDocHandle, type PluginSessionDocHandle } from '@helmx/protocol'
 import {
   PluginHost,
   PLUGIN_DOC_MAX_JSON_BYTES,
@@ -22,7 +22,7 @@ import {
 } from '../src/plugins/index.js'
 import { PluginDocRegistry } from '../src/plugins/doc-registry.js'
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { MemoryDocStore, assertRejectsCode, cleanupDir, makeTempDir } from './helpers.js'
 
 // ---------------------------------------------------------------------------
@@ -63,7 +63,7 @@ function makeBackend(): PluginHostBackend {
   return {
     ...createPluginHostBackendFixture(),
     getConversation: () => {
-      throw new HelmError('not_found', 'unused', 404)
+      throw new HelmxError('not_found', 'unused', 404)
     },
     emitEvent: (type, payload) => {
       events.push({ type, payload })
@@ -75,21 +75,21 @@ function makeHost(): PluginHost {
   return new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: makeBackend(), docs, sessionDocs })
 }
 
-function throwsCode(fn: () => unknown, code: string, status?: number): HelmError {
+function throwsCode(fn: () => unknown, code: string, status?: number): HelmxError {
   let caught: unknown
   try {
     fn()
   } catch (err) {
     caught = err
   }
-  assert.ok(caught instanceof HelmError, `expected HelmError, got ${String(caught)}`)
+  assert.ok(caught instanceof HelmxError, `expected HelmxError, got ${String(caught)}`)
   assert.equal(caught.code, code)
   if (status !== undefined) assert.equal(caught.status, status)
   return caught
 }
 
 beforeEach(async () => {
-  dataDir = await makeTempDir('helm-doc-limits-')
+  dataDir = await makeTempDir('helmx-doc-limits-')
   docs = new MemoryDocStore()
   sessionDocs = new MemorySessionDocStore()
   events = []
@@ -116,7 +116,7 @@ test('doc initial exceeds limit: register rejects with plugin_doc_too_large and 
       }),
     'plugin_doc_too_large',
     413,
-  )) as HelmError
+  )) as HelmxError
   assert.deepEqual(
     { ...(err.details as Record<string, unknown>) },
     { pluginId: 'p:big', name: 'big', kind: 'doc', bytes: PLUGIN_DOC_MAX_JSON_BYTES + 2, maxBytes: PLUGIN_DOC_MAX_JSON_BYTES },
@@ -211,7 +211,7 @@ test('sessionDoc set/update exceeds limit: rejects leaving prior value intact, s
     host: {
       ...makeBackend(),
       getConversation: (id: number) => {
-        if (id !== 7) throw new HelmError('not_found', `conversation not found: ${id}`, 404)
+        if (id !== 7) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
         return { id } as never
       },
     },

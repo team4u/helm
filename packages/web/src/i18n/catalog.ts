@@ -6,7 +6,7 @@
  * Cross-table key uniqueness is enforced by the web i18n unit tests (a spread
  * merge would otherwise let a later table silently shadow an earlier one).
  */
-import type { HelmLocale } from '@helm/protocol/browser'
+import type { HelmxLocale } from '@helmx/protocol/browser'
 import { createMessageTranslator, type MessageTranslator } from './messages.js'
 import { commonMessages } from './resources/common.js'
 import { composerMessages } from './resources/composer.js'
@@ -43,10 +43,10 @@ export type WebMessageTranslator = MessageTranslator<typeof webMessages>
 
 // Translators per locale are pure values: memoize so every consumer sharing a
 // locale also shares one stable function identity (React deps friendly).
-const translatorCache = new Map<HelmLocale, WebMessageTranslator>()
+const translatorCache = new Map<HelmxLocale, WebMessageTranslator>()
 
 /** Full-catalog translator bound to a locale (memoized; pure). */
-export function createWebTranslator(locale: HelmLocale): WebMessageTranslator {
+export function createWebTranslator(locale: HelmxLocale): WebMessageTranslator {
   const cached = translatorCache.get(locale)
   if (cached !== undefined) return cached
   const created = createMessageTranslator(locale, webMessages)

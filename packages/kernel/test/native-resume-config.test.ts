@@ -23,7 +23,7 @@
 
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { AssistantMessage } from '@earendil-works/pi-ai'
-import { HelmError } from '@helm/protocol'
+import { HelmxError } from '@helmx/protocol'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { after, before, describe, it } from 'node:test'
@@ -91,7 +91,7 @@ function pwdToolCall() {
 let rootDir: string
 
 before(async () => {
-  rootDir = await makeTempDir('helm-native-resume-')
+  rootDir = await makeTempDir('helmx-native-resume-')
 })
 
 after(async () => {
@@ -345,7 +345,7 @@ describe('cross-parent guard', { timeout: 60_000 }, () => {
             cwd: '/tmp/hijack',
             model: 'faux/faux-2',
           }),
-        (err: unknown) => err instanceof HelmError && err.code === 'not_found',
+        (err: unknown) => err instanceof HelmxError && err.code === 'not_found',
       )
       const after = env.kernel.getConversation(childId)
       assert.equal(after.cwd, childDir, 'rejected path must not overwrite cwd')

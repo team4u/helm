@@ -4,7 +4,7 @@
  * via structuredOutput + parentToolCallId + resume (zero regex/footer scraping,
  * zero React/DOM dependencies).
  */
-import type { ConversationSummary, ToolViewProps } from '@helm/protocol'
+import type { ConversationSummary, ToolViewProps } from '@helmx/protocol'
 import type { WorkflowRunSummary } from '../../contracts.js'
 import { inputString } from './model-format.ts'
 

@@ -1,12 +1,12 @@
 /**
- * Runtime tool installer: registers and hot-swaps foundational kernel tools (`helm-core`) and plugin-derived
- * tools (`helm-plugins`).
+ * Runtime tool installer: registers and hot-swaps foundational kernel tools (`helmx-core`) and plugin-derived
+ * tools (`helmx-plugins`).
  *
  * Responsibilities:
  * 1. `installKernelTools`: constructs `bash`/`read`/`write`/`edit`/`read_artifact`/`register_artifact` and the
  *    `run_action` meta-tool, wrapped uniformly via `wrapToolExecute` to honor `tool_call` `handled` takeovers;
  * 2. `installPluginTools`: converts `DerivedToolSpec` entries from `PluginHost.listTools()` into SDK tool
- *    extensions and installs them into the registry (replacing stale `helm-plugins` tools in place), with
+ *    extensions and installs them into the registry (replacing stale `helmx-plugins` tools in place), with
  *    outbound results redacted and formatted via `pluginToolResult`;
  * 3. Shares the `handledToolCalls` Map with `HookBridge` for tool-level interception short-circuiting without
  *    circular dependencies.
@@ -22,13 +22,13 @@ import {
   type ToolExecutionResult,
   type ToolRegistration,
 } from '@earendil-works/pi-durable'
-import { HelmError, matchesConversationScope } from '@helm/protocol'
-import type { ConversationSummary } from '@helm/protocol'
+import { HelmxError, matchesConversationScope } from '@helmx/protocol'
+import type { ConversationSummary } from '@helmx/protocol'
 import type { DerivedToolSpec, PluginHost } from '../plugins/index.js'
 import type { HandledToolCallEntry } from './hook-bridge.js'
 import { createRunActionTool, type KernelToolHost } from './kernel-tools.js'
 import { pluginToolResult } from './runtime-helpers.js'
-import { throwIfToolAborted, type HelmToolDeps } from './tool-deps.js'
+import { throwIfToolAborted, type HelmxToolDeps } from './tool-deps.js'
 import {
   createBashTool,
   createEditTool,
@@ -42,7 +42,7 @@ export type PluginHostToolTarget = Pick<PluginHost, 'invokeAction' | 'executeToo
 
 interface RuntimeToolRegistryOptions {
   readonly registry: { install(extension: Extension): void }
-  readonly toolDeps: HelmToolDeps
+  readonly toolDeps: HelmxToolDeps
   readonly getPluginHost: () => PluginHostToolTarget | undefined
   readonly isArtifactAuthorized: (conversationId: number, artifactConversationId: number) => boolean
   readonly redact: (text: string) => string
@@ -101,7 +101,7 @@ export class RuntimeToolRegistry {
 
   /**
    * Install foundational kernel tools (`bash`/`read`/`write`/`edit`/`read_artifact`/`register_artifact` +
-   * `run_action` meta-tool) under `helm-core` (sharing the same registry and `wrapToolExecute` takeover path as
+   * `run_action` meta-tool) under `helmx-core` (sharing the same registry and `wrapToolExecute` takeover path as
    * plugins). `subagent` / `SubagentWorkflow` / `cleanup_worktree` are provided by `builtin:workflow`.
    */
   installKernelTools(): void {
@@ -114,7 +114,7 @@ export class RuntimeToolRegistry {
         context: { conversationId: number; signal?: AbortSignal },
       ) => {
         const host = getPluginHost()
-        if (!host) throw new HelmError('runtime_not_initialized', 'plugin host not initialized', 503)
+        if (!host) throw new HelmxError('runtime_not_initialized', 'plugin host not initialized', 503)
         return host.invokeAction(pluginId, actionId, input, context)
       },
       describePluginAction: async (
@@ -123,14 +123,14 @@ export class RuntimeToolRegistry {
         context: { conversationId: number },
       ) => {
         const host = getPluginHost()
-        if (!host) throw new HelmError('runtime_not_initialized', 'plugin host not initialized', 503)
+        if (!host) throw new HelmxError('runtime_not_initialized', 'plugin host not initialized', 503)
         // Read-only manifest query: never calls `invokeAction` (never executes handler, validates input, or
         // creates a `liveTask`); enablement filtering already comes from `listActions(activeEnabledPluginIds)`.
         const manifest = host
           .listActions()
           .find((item) => item.pluginId === pluginId && item.id === actionId)
         if (manifest === undefined) {
-          throw new HelmError(
+          throw new HelmxError(
             'unknown_action',
             `Plugin '${pluginId}' does not declare action '${actionId}' (or is disabled)`,
             404,
@@ -139,7 +139,7 @@ export class RuntimeToolRegistry {
         }
         // Do not leak schemas to out-of-scope conversations: reject with the exact same code as execution.
         if (!matchesConversationScope(manifest.scope, getConversation(context.conversationId))) {
-          throw new HelmError(
+          throw new HelmxError(
             'conversation_scope_violation',
             `Action '${pluginId}.${actionId}' cannot be queried in conversation ${context.conversationId} (outside allowed scope)`,
             403,
@@ -164,11 +164,11 @@ export class RuntimeToolRegistry {
       wrapToolRegistration(handledToolCalls, createRegisterArtifactTool(toolDeps)),
       wrapToolRegistration(handledToolCalls, createRunActionTool(toolHost)),
     ]
-    registry.install(defineExtension({ name: 'helm-core', tools: kernelTools }))
+    registry.install(defineExtension({ name: 'helmx-core', tools: kernelTools }))
   }
 
   /**
-   * Build and install the `helm-plugins` extension from plugin `DerivedToolSpec` declarations.
+   * Build and install the `helmx-plugins` extension from plugin `DerivedToolSpec` declarations.
    * Re-installing under the same extension name replaces tools in place; an empty array clears stale tools.
    * Partial `onUpdate` payloads stream to live tool cards via native `api.output`; text is redacted uniformly,
    * and post-settlement calls are silently ignored per SDK contract.
@@ -224,7 +224,7 @@ export class RuntimeToolRegistry {
       })
       return wrapToolRegistration(handledToolCalls, raw)
     })
-    registry.install(defineExtension({ name: 'helm-plugins', tools }))
+    registry.install(defineExtension({ name: 'helmx-plugins', tools }))
   }
 
   /** Hot-update plugin tool set after plugins enable/disable (called from app assembly and lifecycle handlers). */

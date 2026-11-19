@@ -5,14 +5,14 @@
  * meta.renderer 精确匹配折叠卡；工作流库是跨会话可复用资产的独立视图
  * 空间（定义管理不属会话 workbench）。
  */
-import { COMPOSER_DOCK_SLOT, type HelmPluginContext } from '@helm/protocol'
+import { COMPOSER_DOCK_SLOT, type HelmxPluginContext } from '@helmx/protocol'
 import { WORKFLOW_PLUGIN_ID, WORKFLOW_RUN_BADGES_DOC } from '../contracts.js'
 import { BACKGROUND_REPORT_RENDERER } from './background.js'
 
-export function registerWorkflowUi(ctx: HelmPluginContext): void {
+export function registerWorkflowUi(ctx: HelmxPluginContext): void {
   ctx.ui.timelineRenderer({
     id: 'background-report',
-    kinds: ['helm.input'],
+    kinds: ['helmx.input'],
     matchMeta: { renderer: BACKGROUND_REPORT_RENDERER },
     client: { module: 'index.tsx', export: 'BackgroundReportCard' },
   })

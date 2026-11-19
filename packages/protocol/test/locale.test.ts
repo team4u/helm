@@ -1,5 +1,5 @@
 /**
- * Shared locale contract tests (@helm/protocol/src/locale.ts):
+ * Shared locale contract tests (@helmx/protocol/src/locale.ts):
  * - supported locale set and default fallback;
  * - normalizeLocaleTag: zh-* -> zh-CN, everything else (incl. invalid input) -> en;
  * - parseLocalizedText boundary validation (display copy);
@@ -10,20 +10,20 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
-  DEFAULT_HELM_LOCALE,
-  HELM_LOCALES,
+  DEFAULT_HELMX_LOCALE,
+  HELMX_LOCALES,
   LOCALIZED_TEXT_JSON_SCHEMA,
   createLocaleTranslator,
-  isHelmLocale,
+  isHelmxLocale,
   normalizeLocaleTag,
   parseLocalizedText,
   parseNonEmptyLocalizedText,
   resolveLocalizedText,
 } from '../src/index.js'
 
-test('HELM_LOCALES: supported set and default fallback are stable', { timeout: 60_000 }, () => {
-  assert.deepEqual(HELM_LOCALES, ['en', 'zh-CN'])
-  assert.equal(DEFAULT_HELM_LOCALE, 'en')
+test('HELMX_LOCALES: supported set and default fallback are stable', { timeout: 60_000 }, () => {
+  assert.deepEqual(HELMX_LOCALES, ['en', 'zh-CN'])
+  assert.equal(DEFAULT_HELMX_LOCALE, 'en')
 })
 
 test('normalizeLocaleTag: zh-* normalizes to zh-CN and all other values fall back to en', { timeout: 60_000 }, () => {
@@ -42,11 +42,11 @@ test('normalizeLocaleTag: zh-* normalizes to zh-CN and all other values fall bac
   assert.equal(normalizeLocaleTag(42 as unknown as string), 'en', 'non-string input falls back to en')
 })
 
-test('isHelmLocale: only exact supported locale values match', { timeout: 60_000 }, () => {
-  assert.equal(isHelmLocale('en'), true)
-  assert.equal(isHelmLocale('zh-CN'), true)
+test('isHelmxLocale: only exact supported locale values match', { timeout: 60_000 }, () => {
+  assert.equal(isHelmxLocale('en'), true)
+  assert.equal(isHelmxLocale('zh-CN'), true)
   for (const value of ['zh-cn', 'ZH-CN', 'EN', 'fr', '', 42, null, undefined, { en: 'x' }]) {
-    assert.equal(isHelmLocale(value), false, `expected false for ${JSON.stringify(value)}`)
+    assert.equal(isHelmxLocale(value), false, `expected false for ${JSON.stringify(value)}`)
   }
 })
 
@@ -115,7 +115,7 @@ test('resolveLocalizedText: uses requested, default, then declaration-order fall
   assert.equal(resolveLocalizedText(both, 'en'), 'Hi')
   // missing requested locale falls back to the default locale
   assert.equal(resolveLocalizedText({ en: 'Hi' }, 'zh-CN'), 'Hi')
-  // missing default falls back to the first declared entry in HELM_LOCALES order
+  // missing default falls back to the first declared entry in HELMX_LOCALES order
   assert.equal(resolveLocalizedText({ 'zh-CN': '你好' }, 'en'), '你好')
 })
 

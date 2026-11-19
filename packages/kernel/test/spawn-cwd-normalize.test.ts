@@ -19,7 +19,7 @@ import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import { Harness, createRegistry } from '@earendil-works/pi-durable'
 import { MemoryStorage } from '@earendil-works/pi-durable/storage/memory'
-import { HelmError } from '@helm/protocol'
+import { HelmxError } from '@helmx/protocol'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { runNativeSpawn, type NativeSpawnDeps } from '../src/runtime/spawn.js'
@@ -70,11 +70,11 @@ async function openSpawnEnv(options: {
   const updates: Array<{ id: number; patch: Record<string, unknown> }> = []
   const lastTexts = new Map<number, string>()
   const observers = new Map<number, () => void>()
-  const dataDir = await makeTempDir('helm-spawn-cwd-')
+  const dataDir = await makeTempDir('helmx-spawn-cwd-')
 
   const deps: NativeSpawnDeps = {
     dataDir,
-    defaultCwd: '/tmp/helm-spawn-default',
+    defaultCwd: '/tmp/helmx-spawn-default',
     hubUrl: 'http://127.0.0.1:3200',
     stashEnvFor: (id) => stash.envFor(id),
     redact: (t) => stash.redact(t),
@@ -145,11 +145,11 @@ async function openSpawnEnv(options: {
     updateConversation: async (childId, patch) => {
       updates.push({ id: childId, patch: patch as Record<string, unknown> })
       const m = mirrors.get(childId)
-      if (!m) throw new HelmError('not_found', `conversation not found: ${childId}`, 404)
+      if (!m) throw new HelmxError('not_found', `conversation not found: ${childId}`, 404)
       if (patch.cwd !== undefined) m.cwd = patch.cwd
       if (patch.profileId !== undefined) m.profileId = patch.profileId
       const conv = await harness.conversation(childId as never, BACKGROUND_CONTEXT)
-      if (!conv) throw new HelmError('not_found', `child conversation not found: ${childId}`, 404)
+      if (!conv) throw new HelmxError('not_found', `child conversation not found: ${childId}`, 404)
       if (patch.cwd !== undefined) await conv.configure({ cwd: patch.cwd } as never, BACKGROUND_CONTEXT)
       return deps.getConversation(childId)!
     },
@@ -180,14 +180,14 @@ test('fresh spawn: cwd is normalized identically across SDK create, mirror, and 
     await runNativeSpawn(env.deps, {
       parentConversationId: 1,
       prompt: 'dry',
-      cwd: '/tmp/helm/wt/a/./b/../c',
+      cwd: '/tmp/helmx/wt/a/./b/../c',
       onResolved: (info: unknown) => {
         resolved = info as { effectiveCwd?: string }
       },
     } as never)
-    assert.equal(resolved?.effectiveCwd, '/tmp/helm/wt/a/c', 'onResolved returns canonical cwd once POSIX Hub platform is injected')
+    assert.equal(resolved?.effectiveCwd, '/tmp/helmx/wt/a/c', 'onResolved returns canonical cwd once POSIX Hub platform is injected')
     const mirror = [...env.mirrors.values()].at(-1)!
-    assert.equal(mirror.cwd, '/tmp/helm/wt/a/c', 'child conversation mirror stores canonical cwd')
+    assert.equal(mirror.cwd, '/tmp/helmx/wt/a/c', 'child conversation mirror stores canonical cwd')
   } finally {
     await env.close()
   }
@@ -201,15 +201,15 @@ test('fresh spawn: remote win32 node (registered platform injected) -- determini
     await runNativeSpawn(env.deps, {
       parentConversationId: 1,
       prompt: 'dry',
-      cwd: '/mnt/c/repo/helm',
+      cwd: '/mnt/c/repo/helmx',
       onResolved: (info: unknown) => {
         resolved = info as { nodeId?: string; effectiveCwd?: string }
       },
     } as never)
     assert.equal(resolved?.nodeId, 'win-build')
-    assert.equal(resolved?.effectiveCwd, 'C:\\repo\\helm')
+    assert.equal(resolved?.effectiveCwd, 'C:\\repo\\helmx')
     const mirror = [...env.mirrors.values()].at(-1)!
-    assert.equal(mirror.cwd, 'C:\\repo\\helm', 'mirror stores Windows canonical path')
+    assert.equal(mirror.cwd, 'C:\\repo\\helmx', 'mirror stores Windows canonical path')
     assert.equal(mirror.nodeId, 'win-build')
   } finally {
     await env.close()
@@ -221,7 +221,7 @@ test('fresh spawn: unmappable POSIX cwd on remote win32 node fails explicitly wi
   try {
     await assert.rejects(
       runNativeSpawn(env.deps, { parentConversationId: 1, prompt: 'dry', cwd: '/home/build' } as never),
-      (e: unknown) => e instanceof HelmError && e.code === 'unmappable_posix_root',
+      (e: unknown) => e instanceof HelmxError && e.code === 'unmappable_posix_root',
     )
     assert.equal(env.mirrors.size, 0, 'unmappable POSIX cwd does not create child conversation mirror')
   } finally {
@@ -247,7 +247,7 @@ test('fresh spawn: relative cwd rejects (preserves existing absolute path contra
     for (const bad of ['relative/ws', 'C:relative']) {
       await assert.rejects(
         runNativeSpawn(env.deps, { parentConversationId: 1, prompt: 'dry', cwd: bad } as never),
-        (e: unknown) => e instanceof HelmError && e.code === 'validation_error',
+        (e: unknown) => e instanceof HelmxError && e.code === 'validation_error',
         `'${bad}' must reject`,
       )
     }
@@ -270,7 +270,7 @@ test('resume: preserves original conversation cwd by default (no recompute, no u
     const second = await runNativeSpawn(env.deps, { parentConversationId: 1, prompt: 'resume', resume: String(childId) } as never)
     assert.equal(second, 'second')
     assert.equal(env.updates.length, 0, 'default resume triggers no config update (cwd semantics unchanged)')
-    assert.equal(env.mirrors.get(childId)!.cwd, '/tmp/helm-spawn-default', 'default keeps original conversation cwd')
+    assert.equal(env.mirrors.get(childId)!.cwd, '/tmp/helmx-spawn-default', 'default keeps original conversation cwd')
   } finally {
     await env.close()
   }
@@ -286,12 +286,12 @@ test('resume: explicit cwd is passed through updateConversation port (normalized
       parentConversationId: 1,
       prompt: 'resume',
       resume: String(childId),
-      cwd: '/tmp/helm/moved/dir',
+      cwd: '/tmp/helmx/moved/dir',
     } as never)
     assert.equal(second, 'second')
     const update = env.updates.at(-1)!
-    assert.equal(update.patch['cwd'], '/tmp/helm/moved/dir', 'explicit cwd flows through updateConversation port (service-layer normalization)')
-    assert.equal(env.mirrors.get(childId)!.cwd, '/tmp/helm/moved/dir')
+    assert.equal(update.patch['cwd'], '/tmp/helmx/moved/dir', 'explicit cwd flows through updateConversation port (service-layer normalization)')
+    assert.equal(env.mirrors.get(childId)!.cwd, '/tmp/helmx/moved/dir')
   } finally {
     await env.close()
   }
@@ -313,7 +313,7 @@ function spawnTargetResolver(options: {
   }
   const spawn = new RuntimeAgentSpawn({
     store: { getConv: () => options.parent } as never,
-    toolDeps: { defaultCwd: '/tmp/helm-fallback' } as never,
+    toolDeps: { defaultCwd: '/tmp/helmx-fallback' } as never,
     harness: {} as never,
     registry: {} as never,
     tracker: {} as never,
@@ -336,8 +336,8 @@ test('resolveSpawnTarget: normalizes sourceCwd per resolved node platform (win32
   // Remote win32: explicit requestCwd and profile/parent fallbacks all normalize per target platform.
   const resolve = spawnTargetResolver({ platforms: { 'win-build': 'win32' }, parent: { cwd: '/mnt/c/parent', nodeId: 'win-build' } })
   assert.deepEqual(
-    await resolve({ parentConversationId: 1, requestCwd: '/mnt/c/req/helm' }),
-    { nodeId: 'win-build', sourceCwd: 'C:\\req\\helm', parentCwd: '/mnt/c/parent' },
+    await resolve({ parentConversationId: 1, requestCwd: '/mnt/c/req/helmx' }),
+    { nodeId: 'win-build', sourceCwd: 'C:\\req\\helmx', parentCwd: '/mnt/c/parent' },
   )
   assert.equal((await resolve({ parentConversationId: 1 })).sourceCwd, 'C:\\parent', 'parent cwd fallback normalizes too')
 
@@ -354,7 +354,7 @@ test('resolveSpawnTarget: unmappable POSIX sourceCwd on remote win32 target reje
   const resolve = spawnTargetResolver({ platforms: { 'win-build': 'win32' }, parent: { nodeId: 'win-build' } })
   await assert.rejects(
     resolve({ parentConversationId: 1, requestCwd: '/home/build' }),
-    (e: unknown) => e instanceof HelmError && e.code === 'unmappable_posix_root',
+    (e: unknown) => e instanceof HelmxError && e.code === 'unmappable_posix_root',
   )
 })
 
@@ -366,7 +366,7 @@ test('resolveSpawnTarget: unmappable POSIX sourceCwd on remote win32 target reje
 function spawnEntryGuard(options: { restricted: boolean; parentCwd: string }) {
   const spawn = new RuntimeAgentSpawn({
     store: { getConv: () => ({ id: 1, cwd: options.parentCwd, profileId: 'worker' }) } as never,
-    toolDeps: { defaultCwd: '/tmp/helm-fallback', restrictToCwdOf: async () => options.restricted } as never,
+    toolDeps: { defaultCwd: '/tmp/helmx-fallback', restrictToCwdOf: async () => options.restricted } as never,
     harness: {} as never,
     registry: {} as never,
     tracker: {} as never,
@@ -389,11 +389,11 @@ function spawnEntryGuard(options: { restricted: boolean; parentCwd: string }) {
 }
 
 test('spawnAgent guard: restricted parent rejects explicit cwd outside the parent cwd with path_outside_workspace', { timeout: 60_000 }, async () => {
-  const spawn = spawnEntryGuard({ restricted: true, parentCwd: '/tmp/helm/repo' })
+  const spawn = spawnEntryGuard({ restricted: true, parentCwd: '/tmp/helmx/repo' })
   await assert.rejects(
     spawn({ parentConversationId: 1, prompt: 'x', cwd: '/etc' }),
     (error: unknown) => {
-      assert.ok(error instanceof HelmError)
+      assert.ok(error instanceof HelmxError)
       assert.equal(error.code, 'path_outside_workspace')
       assert.equal(error.status, 403)
       assert.ok(error.message.includes('/etc'))
@@ -403,7 +403,7 @@ test('spawnAgent guard: restricted parent rejects explicit cwd outside the paren
   await assert.rejects(
     spawn({ parentConversationId: 1, prompt: 'x', cwd: '../outside' }),
     (error: unknown) => {
-      assert.ok(error instanceof HelmError)
+      assert.ok(error instanceof HelmxError)
       assert.equal(error.code, 'path_outside_workspace')
       return true
     },
@@ -411,10 +411,10 @@ test('spawnAgent guard: restricted parent rejects explicit cwd outside the paren
 })
 
 test('spawnAgent guard: inside cwd / unrestricted parent / absent cwd all pass the guard', { timeout: 60_000 }, async () => {
-  const restricted = spawnEntryGuard({ restricted: true, parentCwd: '/tmp/helm/repo' })
+  const restricted = spawnEntryGuard({ restricted: true, parentCwd: '/tmp/helmx/repo' })
   // Inside subdir and the cwd itself pass; execution proceeds until the hook sentinel.
-  await assert.rejects(restricted({ parentConversationId: 1, prompt: 'x', cwd: '/tmp/helm/repo/sub' }), /past-guard/)
-  const unrestricted = spawnEntryGuard({ restricted: false, parentCwd: '/tmp/helm/repo' })
+  await assert.rejects(restricted({ parentConversationId: 1, prompt: 'x', cwd: '/tmp/helmx/repo/sub' }), /past-guard/)
+  const unrestricted = spawnEntryGuard({ restricted: false, parentCwd: '/tmp/helmx/repo' })
   await assert.rejects(unrestricted({ parentConversationId: 1, prompt: 'x', cwd: '/etc' }), /past-guard/)
   await assert.rejects(restricted({ parentConversationId: 1, prompt: 'x' }), /past-guard/)
 })

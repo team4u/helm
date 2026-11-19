@@ -1,5 +1,5 @@
 /**
- * register_artifact 工具与执行上下文可观测性（HELM_EXECUTION_SCOPE / 真实
+ * register_artifact 工具与执行上下文可观测性（HELMX_EXECUTION_SCOPE / 真实
  * target 回显）回归测试。
  *
  * 覆盖：
@@ -11,8 +11,8 @@
  *    超限拒绝（不读字节）、读后字节数超限拒绝；
  * 3. read/write/edit/bash 结构化输出与成功消息回显真实 target 绝对路径、
  *    nodeId、规范化 cwd（win32 /mnt/c 与 /c 视图绝不回显原始入参）；
- * 4. HELM_EXECUTION_SCOPE：稳定短 hash（同会话同靶点恒定）、跨会话/节点/
- *    cwd/Helm 实例隔离、受管固定覆盖（逐调用注入与宿主继承的大小写变体均
+ * 4. HELMX_EXECUTION_SCOPE：稳定短 hash（同会话同靶点恒定）、跨会话/节点/
+ *    cwd/Helmx 实例隔离、受管固定覆盖（逐调用注入与宿主继承的大小写变体均
  *    不可覆盖）、Herdr 窗格受管键锁定。
  */
 
@@ -41,7 +41,7 @@ import {
   runShell,
   type ArtifactReadHandle,
 } from '../../kernel/src/runtime/tools.js'
-import type { HelmToolDeps } from '../../kernel/src/runtime/tool-deps.js'
+import type { HelmxToolDeps } from '../../kernel/src/runtime/tool-deps.js'
 import {
   ArtifactService,
   InMemoryArtifactRepository,
@@ -52,14 +52,14 @@ import {
 let rootDir: string
 
 before(async () => {
-  rootDir = mkdtempSync(join(tmpdir(), 'helm-artifact-scope-'))
+  rootDir = mkdtempSync(join(tmpdir(), 'helmx-artifact-scope-'))
 })
 
 after(async () => {
   rmSync(rootDir, { recursive: true, force: true })
 })
 
-async function makeDeps(dir: string, extra: Partial<HelmToolDeps> = {}): Promise<HelmToolDeps> {
+async function makeDeps(dir: string, extra: Partial<HelmxToolDeps> = {}): Promise<HelmxToolDeps> {
   await ensureDataDir(dir)
   const stash = new SecretStash()
   const artifacts = new ArtifactService(dir, new InMemoryArtifactRepository(), stash)
@@ -290,7 +290,7 @@ describe('register_artifact：local 真实字节登记', { timeout: 60_000 }, ()
     const secretValue = '{{SECRET_ra_local_3}}'
     stash.put(1, 'TOK', secretValue)
     const artifacts = new ArtifactService(dir, new InMemoryArtifactRepository(), stash)
-    const deps: HelmToolDeps = {
+    const deps: HelmxToolDeps = {
       ...(await makeDeps(dir)),
       redact: (t) => stash.redact(t),
       artifacts,
@@ -754,15 +754,15 @@ describe('read/write/edit/bash：真实 target 路径与 nodeId 回显', { timeo
   })
 })
 
-describe('HELM_EXECUTION_SCOPE：稳定锚点与受管覆盖锁定', { timeout: 60_000 }, () => {
-  it('executionScopeHash：格式 helm-<24hex>；同输入恒定；跨会话/节点/cwd/实例隔离', { timeout: 60_000 }, () => {
+describe('HELMX_EXECUTION_SCOPE：稳定锚点与受管覆盖锁定', { timeout: 60_000 }, () => {
+  it('executionScopeHash：格式 helmx-<24hex>；同输入恒定；跨会话/节点/cwd/实例隔离', { timeout: 60_000 }, () => {
     const a = executionScopeHash('/data', 7, 'local', '/work')
-    assert.match(a, /^helm-[0-9a-f]{24}$/)
+    assert.match(a, /^helmx-[0-9a-f]{24}$/)
     assert.equal(a, executionScopeHash('/data', 7, 'local', '/work'), '同输入必须恒定（多命令相同）')
     assert.notEqual(a, executionScopeHash('/data', 8, 'local', '/work'), '跨会话不同')
     assert.notEqual(a, executionScopeHash('/data', 7, 'n1', '/work'), '跨节点不同')
     assert.notEqual(a, executionScopeHash('/data', 7, 'local', '/work-2'), '跨 cwd/worktree 不同')
-    assert.notEqual(a, executionScopeHash('/data-2', 7, 'local', '/work'), '跨 Helm 实例不同')
+    assert.notEqual(a, executionScopeHash('/data-2', 7, 'local', '/work'), '跨 Helmx 实例不同')
     // 输入序列化无分隔符歧义：组件拼接不产生碰撞。
     assert.notEqual(
       executionScopeHash('/data', 7, 'local', '/a'),
@@ -773,13 +773,13 @@ describe('HELM_EXECUTION_SCOPE：稳定锚点与受管覆盖锁定', { timeout: 
   it('buildManagedEnv 注入 scope；buildToolEnv 受管固定覆盖逐调用注入', { timeout: 60_000 }, async () => {
     const deps = await makeDeps(join(rootDir, 'scope-1'))
     const managed = buildManagedEnv(deps, '/work', 9, 'local')
-    assert.equal(managed['HELM_EXECUTION_SCOPE'], executionScopeHash(deps.dataDir, 9, 'local', '/work'))
+    assert.equal(managed['HELMX_EXECUTION_SCOPE'], executionScopeHash(deps.dataDir, 9, 'local', '/work'))
     const composed = composeExecutionEnv(
       'local',
       buildManagedEnv(deps, '/work', 9, 'local'),
-      { HELM_EXECUTION_SCOPE: 'spoofed-scope', OTHER: 'kept' },
+      { HELMX_EXECUTION_SCOPE: 'spoofed-scope', OTHER: 'kept' },
     )
-    assert.ok(composed['HELM_EXECUTION_SCOPE']!.startsWith('helm-'), '逐调用注入不得覆盖受管 scope')
+    assert.ok(composed['HELMX_EXECUTION_SCOPE']!.startsWith('helmx-'), '逐调用注入不得覆盖受管 scope')
     assert.equal(composed['OTHER'], 'kept', '非受管键正常透传')
   })
 
@@ -787,7 +787,7 @@ describe('HELM_EXECUTION_SCOPE：稳定锚点与受管覆盖锁定', { timeout: 
     const deps = await makeDeps(join(rootDir, 'scope-2'))
     mkdirSync(join(rootDir, 'scope-2', 'sub'), { recursive: true })
     const readScope = async (conversationId: number, cwd?: string) => {
-      const result = await runShell(deps, 'printf %s "$HELM_EXECUTION_SCOPE"', {
+      const result = await runShell(deps, 'printf %s "$HELMX_EXECUTION_SCOPE"', {
         conversationId,
         ...(cwd !== undefined ? { cwd } : {}),
       })
@@ -796,13 +796,13 @@ describe('HELM_EXECUTION_SCOPE：稳定锚点与受管覆盖锁定', { timeout: 
     }
     const s1a = await readScope(1)
     const s1b = await readScope(1)
-    assert.match(s1a, /^helm-[0-9a-f]{24}$/)
+    assert.match(s1a, /^helmx-[0-9a-f]{24}$/)
     assert.equal(s1a, s1b, '同会话同靶点多命令 scope 恒定')
     const s2 = await readScope(2)
     assert.notEqual(s1a, s2, '跨会话 scope 隔离')
     const s1other = await readScope(1, join(rootDir, 'scope-2', 'sub'))
     assert.notEqual(s1a, s1other, '同会话不同 cwd（如另一 worktree）scope 隔离')
-    assert.match(s1other!, /^helm-[0-9a-f]{24}$/)
+    assert.match(s1other!, /^helmx-[0-9a-f]{24}$/)
     // 与 buildManagedEnv 合成值一致（同 dataDir/会话/节点/cwd）。
     assert.equal(s1a, executionScopeHash(deps.dataDir, 1, 'local', deps.defaultCwd))
   })
@@ -810,18 +810,18 @@ describe('HELM_EXECUTION_SCOPE：稳定锚点与受管覆盖锁定', { timeout: 
   it('宿主继承的 scope（含大小写变体）被剥除；受管值固定覆盖', { timeout: 60_000 }, () => {
     const saved: Record<string, string | undefined> = {}
     const injected: Array<[string, string]> = [
-      ['HELM_EXECUTION_SCOPE', 'host-scope'],
-      ['helm_execution_scope', 'host-scope-variant'],
+      ['HELMX_EXECUTION_SCOPE', 'host-scope'],
+      ['helmx_execution_scope', 'host-scope-variant'],
     ]
     for (const [key, value] of injected) {
       saved[key] = process.env[key]
       process.env[key] = value
     }
     try {
-      const composed = composeExecutionEnv('local', { HELM_EXECUTION_SCOPE: 'managed-scope' })
-      assert.equal(composed['HELM_EXECUTION_SCOPE'], 'managed-scope')
-      assert.equal(composed['helm_execution_scope'], undefined, '大小写变体一并剥除')
-      assert.equal(composed['HELM_EXECUTION_SCOPE'] !== 'host-scope' as string, true)
+      const composed = composeExecutionEnv('local', { HELMX_EXECUTION_SCOPE: 'managed-scope' })
+      assert.equal(composed['HELMX_EXECUTION_SCOPE'], 'managed-scope')
+      assert.equal(composed['helmx_execution_scope'], undefined, '大小写变体一并剥除')
+      assert.equal(composed['HELMX_EXECUTION_SCOPE'] !== 'host-scope' as string, true)
     } finally {
       for (const [key] of injected) {
         const prev = saved[key]
@@ -831,31 +831,31 @@ describe('HELM_EXECUTION_SCOPE：稳定锚点与受管覆盖锁定', { timeout: 
     }
   })
 
-  it('Herdr 窗格：Profile 注入的 HELM_EXECUTION_SCOPE 被受管值固定覆盖', { timeout: 60_000 }, async () => {
+  it('Herdr 窗格：Profile 注入的 HELMX_EXECUTION_SCOPE 被受管值固定覆盖', { timeout: 60_000 }, async () => {
     const deps = await makeDeps(join(rootDir, 'scope-3'))
     const managed = buildManagedEnv(deps, '/wt/pane', 12, 'local')
     const { env } = buildSpawnPaneEnv(
       managed,
-      { HELM_EXECUTION_SCOPE: 'evil-scope', CUSTOM: 'ok' },
+      { HELMX_EXECUTION_SCOPE: 'evil-scope', CUSTOM: 'ok' },
       { remote: false },
     )
-    assert.equal(env['HELM_EXECUTION_SCOPE'], managed['HELM_EXECUTION_SCOPE'], '受管 scope 权威')
+    assert.equal(env['HELMX_EXECUTION_SCOPE'], managed['HELMX_EXECUTION_SCOPE'], '受管 scope 权威')
     assert.equal(env['CUSTOM'], 'ok', '非受管 Profile env 正常保留')
   })
 
   it('scope 别名劫持防护：stash / profileEnv / 授予值的大小写变体一律剥除', { timeout: 60_000 }, async () => {
-    // 1) stash 别名：secret 命中 helm_execution_scope / Helm_Cwd 等变体时，
+    // 1) stash 别名：secret 命中 helmx_execution_scope / Helmx_Cwd 等变体时，
     //    buildManagedEnv 直接剥除（Windows env 名大小写不敏感，别名可劫持）。
     const stash = new SecretStash()
     const evilScope = '{{SECRET_evil_scope}}'
     const evilCwd = '{{SECRET_evil_cwd}}'
-    stash.put(1, 'helm_execution_scope', evilScope)
-    stash.put(1, 'Helm_Cwd', evilCwd)
+    stash.put(1, 'helmx_execution_scope', evilScope)
+    stash.put(1, 'Helmx_Cwd', evilCwd)
     stash.put(1, 'LEGIT', 'kept')
     const dir = join(rootDir, 'scope-alias-1')
     await ensureDataDir(dir)
     const artifacts = new ArtifactService(dir, new InMemoryArtifactRepository(), stash)
-    const deps: HelmToolDeps = {
+    const deps: HelmxToolDeps = {
       dataDir: dir,
       defaultCwd: dir,
       hubUrl: 'http://127.0.0.1:3202',
@@ -864,35 +864,35 @@ describe('HELM_EXECUTION_SCOPE：稳定锚点与受管覆盖锁定', { timeout: 
       artifacts,
     }
     const env = buildManagedEnv(deps, '/work', 1, 'local')
-    assert.equal('helm_execution_scope' in env, false, 'stash lowercase 别名必须剥除')
-    assert.equal('Helm_Cwd' in env, false, 'stash 混合大小写别名必须剥除')
-    assert.ok(env['HELM_EXECUTION_SCOPE']!.startsWith('helm-'), 'canonical scope 权威存在')
-    assert.equal(env['HELM_CWD'], '/work', 'canonical HELM_CWD 权威')
+    assert.equal('helmx_execution_scope' in env, false, 'stash lowercase 别名必须剥除')
+    assert.equal('Helmx_Cwd' in env, false, 'stash 混合大小写别名必须剥除')
+    assert.ok(env['HELMX_EXECUTION_SCOPE']!.startsWith('helmx-'), 'canonical scope 权威存在')
+    assert.equal(env['HELMX_CWD'], '/work', 'canonical HELMX_CWD 权威')
     assert.equal(env['LEGIT'], 'kept', '非受管 secret 正常注入')
     // 子进程实测：任何大小写形式都只解析出受管 scope（Windows 语义等价验证）。
-    const probe = await runShell(deps, 'printf %s "$HELM_EXECUTION_SCOPE"', { conversationId: 1 })
+    const probe = await runShell(deps, 'printf %s "$HELMX_EXECUTION_SCOPE"', { conversationId: 1 })
     assert.equal(probe.ok, true)
-    assert.ok(probe.output.startsWith('helm-'), '子进程读到的是受管 scope 而非别名')
+    assert.ok(probe.output.startsWith('helmx-'), '子进程读到的是受管 scope 而非别名')
 
     // 2) Profile env 别名：buildSpawnPaneEnv 大小写不敏感剥除受管键。
     const managed = buildManagedEnv(deps, '/wt', 1, 'local')
     const pane = buildSpawnPaneEnv(
       managed,
-      { helm_execution_scope: 'evil', Helm_Execution_Scope: 'evil2', OK_VALUE: 'ok' },
+      { helmx_execution_scope: 'evil', Helmx_Execution_Scope: 'evil2', OK_VALUE: 'ok' },
       { remote: false },
     )
-    assert.equal('helm_execution_scope' in pane.env, false)
-    assert.equal('Helm_Execution_Scope' in pane.env, false)
-    assert.equal(pane.env['HELM_EXECUTION_SCOPE'], managed['HELM_EXECUTION_SCOPE'])
+    assert.equal('helmx_execution_scope' in pane.env, false)
+    assert.equal('Helmx_Execution_Scope' in pane.env, false)
+    assert.equal(pane.env['HELMX_EXECUTION_SCOPE'], managed['HELMX_EXECUTION_SCOPE'])
     assert.equal(pane.env['OK_VALUE'], 'ok')
 
     // 3) 授予值别名：mergeGrantedEnvWithManagedLocks 剥除变体并重申基线。
     const merged = mergeGrantedEnvWithManagedLocks(
-      { HELM_EXECUTION_SCOPE: managed['HELM_EXECUTION_SCOPE']!, HELM_CWD: '/base' },
-      { helm_execution_scope: 'evil-granted', GRANTED_KEY: 'ok' },
+      { HELMX_EXECUTION_SCOPE: managed['HELMX_EXECUTION_SCOPE']!, HELMX_CWD: '/base' },
+      { helmx_execution_scope: 'evil-granted', GRANTED_KEY: 'ok' },
     )
-    assert.equal('helm_execution_scope' in merged, false, '授予名命中变体不得劫持基线 scope')
-    assert.equal(merged['HELM_EXECUTION_SCOPE'], managed['HELM_EXECUTION_SCOPE'])
+    assert.equal('helmx_execution_scope' in merged, false, '授予名命中变体不得劫持基线 scope')
+    assert.equal(merged['HELMX_EXECUTION_SCOPE'], managed['HELMX_EXECUTION_SCOPE'])
     assert.equal(merged['GRANTED_KEY'], 'ok', '非受管授予值正常保留')
   })
 })

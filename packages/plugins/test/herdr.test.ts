@@ -32,9 +32,9 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
-import { HelmError, type AgentExecutionInfo } from '@helm/protocol'
+import { HelmxError, type AgentExecutionInfo } from '@helmx/protocol'
 import { PluginHost } from '../../kernel/src/plugins/index.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { createHerdrPlugin } from '../src/herdr.js'
 import { extractWorkflowExecutionMeta } from '../src/contracts.js'
 import { EMPTY_MANAGED_DOC } from '../src/herdr/panes.js'
@@ -78,7 +78,7 @@ test('gateTimeoutMs: Herdr spawn/已登记 resume 显式拒绝；原生 passthro
     // Herdr 运行时新建：进入建窗前显式拒绝。
     await assert.rejects(
       spawnDirect(env, { agentType: 'herdr:agy', gate: 'true', gateTimeoutMs: 1_000 }),
-      (error: unknown) => error instanceof HelmError && error.code === 'unsupported_runtime',
+      (error: unknown) => error instanceof HelmxError && error.code === 'unsupported_runtime',
     )
     assert.equal(env.transport.calls.some((call) => call.method === 'agent.start'), false)
 
@@ -88,7 +88,7 @@ test('gateTimeoutMs: Herdr spawn/已登记 resume 显式拒绝；原生 passthro
     const promptsBefore = env.transport.calls.filter((c) => c.method === 'agent.prompt').length
     await assert.rejects(
       spawnDirect(env, { agentType: 'herdr:agy', resume: 'wf_gt:node-a', gate: 'true', gateTimeoutMs: 1_000 }),
-      (error: unknown) => error instanceof HelmError && error.code === 'unsupported_runtime',
+      (error: unknown) => error instanceof HelmxError && error.code === 'unsupported_runtime',
     )
     assert.equal(env.transport.calls.filter((c) => c.method === 'agent.prompt').length, promptsBefore, '拒绝时不发续接 prompt')
   } finally {
@@ -103,7 +103,7 @@ test('文件交接A: 成功路径——两步建窗、交接读取、文件清�
     let resolved: Record<string, unknown> | undefined
     const result = await spawnDirect(env, {
       agentType: 'herdr:agy',
-      cwd: '/tmp/helm-cwd-a',
+      cwd: '/tmp/helmx-cwd-a',
       schema: { type: 'object', properties: { answer: { type: 'number' } }, required: ['answer'], additionalProperties: false },
       onResolved: (info: Record<string, unknown>) => { resolved = info },
     })
@@ -111,15 +111,15 @@ test('文件交接A: 成功路径——两步建窗、交接读取、文件清�
     const outputPrompt = env.transport.calls.find((c) => c.method === 'agent.prompt')!
     const outputFileName = fileNameOf(outputPrompt.params['text'] as string)
     assert.ok(outputFileName !== '', 'prompt 必须包含交接文件名')
-    assert.equal(existsSync(`${[...env.transport.panes.values()][0]!.cwd}/.helm/${outputFileName}`), false, '交接文件读取后清理')
+    assert.equal(existsSync(`${[...env.transport.panes.values()][0]!.cwd}/.helmx/${outputFileName}`), false, '交接文件读取后清理')
     // 两步建窗：tab.create 先于 agent.start。
     const tabAt = env.transport.calls.findIndex((c) => c.method === 'tab.create')
     const startAt = env.transport.calls.findIndex((c) => c.method === 'agent.start')
     assert.ok(tabAt >= 0 && startAt > tabAt)
     const tabCreate = env.transport.calls[tabAt]!
-    assert.equal(tabCreate.params['cwd'], '/tmp/helm-cwd-a')
+    assert.equal(tabCreate.params['cwd'], '/tmp/helmx-cwd-a')
     assert.equal(tabCreate.params['focus'], false)
-    assert.ok((tabCreate.params['label'] as string).startsWith('helm-wf-'), 'label 为 helm-wf- 前缀')
+    assert.ok((tabCreate.params['label'] as string).startsWith('helmx-wf-'), 'label 为 helmx-wf- 前缀')
     assert.ok(((tabCreate.params['label'] as string).length <= 32), 'agent 名称 <= 32')
     const start = env.transport.calls[startAt]!
     assert.equal(start.params['kind'], 'agy')
@@ -127,10 +127,10 @@ test('文件交接A: 成功路径——两步建窗、交接读取、文件清�
     // prompt --wait 契约。
     const prompt = env.transport.calls.find((c) => c.method === 'agent.prompt')!
     assert.deepEqual((prompt.params['wait'] as { until: string[] }).until, ['done', 'idle', 'blocked'])
-    assert.ok((prompt.params['text'] as string).includes('.helm/wf-out-'), '提示词强制落盘')
+    assert.ok((prompt.params['text'] as string).includes('.helmx/wf-out-'), '提示词强制落盘')
     // onResolved 回传 executionId/effectiveCwd。
     assert.ok(resolved && typeof resolved['executionId'] === 'string' && resolved['executionId'] !== '')
-    assert.equal(resolved!['effectiveCwd'], '/tmp/helm-cwd-a')
+    assert.equal(resolved!['effectiveCwd'], '/tmp/helmx-cwd-a')
     // 保活登记。
     const list = (await env.host.invokeAction('builtin:herdr', 'list', {})) as { panes: Array<{ outcome: string }> }
     assert.equal(list.panes[0]!.outcome, 'keepalive')
@@ -148,7 +148,7 @@ test('文件交接B: 首次缺文件自愈一次后成功', { timeout: 60_000 },
       promptCount += 1
       if (promptCount >= 2) {
         // 自愈 prompt 时写入文件。
-        env.transport.outputFiles.set(`${pane.cwd}/.helm/${fileNameOf(text)}`, '# 结果\n完成。')
+        env.transport.outputFiles.set(`${pane.cwd}/.helmx/${fileNameOf(text)}`, '# 结果\n完成。')
       }
     }
     const result = await spawnDirect(env, { agentType: 'herdr:agy' })
@@ -171,7 +171,7 @@ test('文件交接C: 两次失败 herdr_output_contract_violation + 脱敏快照
         schema: { type: 'object', properties: { a: { type: 'number' } }, required: ['a'], additionalProperties: false },
       }),
       (error: unknown) => {
-        assert.ok(error instanceof HelmError)
+        assert.ok(error instanceof HelmxError)
         assert.equal(error.code, 'herdr_output_contract_violation')
         assert.ok(error.message.includes('[REDACTED]'), '快照脱敏')
         return true
@@ -191,7 +191,7 @@ test('坏 JSON / Schema 不合格同样走自愈；两次后同样显式违约',
   try {
     env.transport.promptStatus = ['done', 'done']
     env.transport.onPrompt = (pane, text) => {
-      env.transport.outputFiles.set(`${pane.cwd}/.helm/${fileNameOf(text)}`, '{"broken": ')
+      env.transport.outputFiles.set(`${pane.cwd}/.helmx/${fileNameOf(text)}`, '{"broken": ')
     }
     await assert.rejects(
       spawnDirect(env, {
@@ -199,7 +199,7 @@ test('坏 JSON / Schema 不合格同样走自愈；两次后同样显式违约',
         schema: { type: 'object', properties: { a: { type: 'number' } }, required: ['a'], additionalProperties: false },
       }),
       (error: unknown) => {
-        assert.ok(error instanceof HelmError)
+        assert.ok(error instanceof HelmxError)
         assert.equal(error.code, 'herdr_output_contract_violation')
         return true
       },
@@ -215,12 +215,12 @@ test('交接路径非普通文件时不自愈，如实抛诊断', { timeout: 60_
     env.transport.promptStatus = 'done'
     env.transport.onPrompt = (pane, text) => {
       // 零参生产 transport 真实读取文件；目录作为输出路径稳定模拟非缺失 I/O 违约。
-      mkdirSync(join(pane.cwd, '.helm', fileNameOf(text)), { recursive: true })
+      mkdirSync(join(pane.cwd, '.helmx', fileNameOf(text)), { recursive: true })
     }
     await assert.rejects(
       spawnDirect(env, { agentType: 'herdr:agy' }),
       (error: unknown) => {
-        assert.ok(error instanceof HelmError)
+        assert.ok(error instanceof HelmxError)
         assert.equal(error.code, 'herdr_output_not_file')
         return true
       },
@@ -240,7 +240,7 @@ test('Profile.runtime 入口: 继承 args/workspace/env；非 herdr Profile 放�
   try {
     env.profiles.set('coder', {
       id: 'coder',
-      runtime: { kind: 'herdr', agent: 'claude', args: ['--flag-a'], workspace: '/tmp/helm-profile-ws', env: { TOOL: 'x' } },
+      runtime: { kind: 'herdr', agent: 'claude', args: ['--flag-a'], workspace: '/tmp/helmx-profile-ws', env: { TOOL: 'x' } },
     })
     env.profiles.set('writer', { id: 'writer' })
     scriptSuccess(env, 'profile-ok')
@@ -248,10 +248,10 @@ test('Profile.runtime 入口: 继承 args/workspace/env；非 herdr Profile 放�
     const start = env.transport.calls.find((c) => c.method === 'agent.start')!
     assert.deepEqual(start.params['args'], ['--flag-a'])
     const tabCreate = env.transport.calls.find((c) => c.method === 'tab.create')!
-    assert.equal(tabCreate.params['cwd'], '/tmp/helm-profile-ws')
+    assert.equal(tabCreate.params['cwd'], '/tmp/helmx-profile-ws')
     const envSent = tabCreate.params['env'] as Record<string, string>
     assert.equal(envSent['TOOL'], 'x')
-    assert.equal(envSent['HELM_TOKEN'], 'SECRET-TOKEN')
+    assert.equal(envSent['HELMX_TOKEN'], 'SECRET-TOKEN')
     // cwd 解析链：request.cwd 优先。
     const before = env.transport.calls.length
     const outcome = await env.host.runHook('agent_spawn', { parentConversationId: 1, prompt: 'x', agentType: 'writer' } as never)
@@ -277,12 +277,12 @@ test('cwd 解析链: request.cwd > profile.workspace > 父会话 cwd > defaultCw
 test('非法输入拒绝: 相对 cwd / 非法 kind / nodeId 注入 / 显式 model / effort', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
-    await assert.rejects(spawnDirect(env, { agentType: 'herdr:agy', cwd: 'relative/path' }), (e: unknown) => (e as HelmError).code === 'validation_error')
-    await assert.rejects(spawnDirect(env, { agentType: 'herdr:BAD KIND' }), (e: unknown) => (e as HelmError).code === 'validation_error')
-    await assert.rejects(spawnDirect(env, { agentType: 'herdr:agy:remote' }), (e: unknown) => (e as HelmError).code === 'validation_error')
-    await assert.rejects(spawnDirect(env, { agentType: 'herdr:agy@remote --evil' }), (e: unknown) => (e as HelmError).code === 'validation_error')
-    await assert.rejects(spawnDirect(env, { agentType: 'herdr:agy', model: 'faux/big' }), (e: unknown) => (e as HelmError).code === 'unsupported_runtime')
-    await assert.rejects(spawnDirect(env, { agentType: 'herdr:agy', effort: 'high' }), (e: unknown) => (e as HelmError).code === 'unsupported_runtime')
+    await assert.rejects(spawnDirect(env, { agentType: 'herdr:agy', cwd: 'relative/path' }), (e: unknown) => (e as HelmxError).code === 'validation_error')
+    await assert.rejects(spawnDirect(env, { agentType: 'herdr:BAD KIND' }), (e: unknown) => (e as HelmxError).code === 'validation_error')
+    await assert.rejects(spawnDirect(env, { agentType: 'herdr:agy:remote' }), (e: unknown) => (e as HelmxError).code === 'validation_error')
+    await assert.rejects(spawnDirect(env, { agentType: 'herdr:agy@remote --evil' }), (e: unknown) => (e as HelmxError).code === 'validation_error')
+    await assert.rejects(spawnDirect(env, { agentType: 'herdr:agy', model: 'faux/big' }), (e: unknown) => (e as HelmxError).code === 'unsupported_runtime')
+    await assert.rejects(spawnDirect(env, { agentType: 'herdr:agy', effort: 'high' }), (e: unknown) => (e as HelmxError).code === 'unsupported_runtime')
   } finally {
     await env.close()
   }
@@ -320,7 +320,7 @@ test('审批桥: 双路径单飞——只建一次 Ask、只发一次键、CAS �
     assert.equal(env.backend.createdAsks.length, 1)
     // 终端真实进展（延迟推进）-> done -> 文件交接成功。
     const fileName = fileNameOf(env.transport.calls.find((c) => c.method === 'agent.prompt')!.params['text'] as string)
-    env.transport.outputFiles.set(`${pane.cwd}/.helm/${fileName}`, 'approved')
+    env.transport.outputFiles.set(`${pane.cwd}/.helmx/${fileName}`, 'approved')
     env.transport.consumeKeys(pane.paneId, 'done')
     assert.equal(await resultPromise, 'approved')
   } finally {
@@ -341,7 +341,7 @@ test('审批桥: 终端先处理（seq 推进）pending Ask superseded 且不发
     assert.equal(env.backend.cancelledAsks[0]!.reason, 'superseded')
     // 主循环继续等待真实进展 -> done -> 交接。
     const fileName = fileNameOf(env.transport.calls.find((c) => c.method === 'agent.prompt')!.params['text'] as string)
-    env.transport.outputFiles.set(`${pane.cwd}/.helm/${fileName}`, 'terminal-first')
+    env.transport.outputFiles.set(`${pane.cwd}/.helmx/${fileName}`, 'terminal-first')
     env.transport.advancePane(pane.paneId, 'done')
     assert.equal(await resultPromise, 'terminal-first')
     assert.equal(env.transport.sendKeysLog.length, 0, '终端先处理时不发送键')
@@ -358,7 +358,7 @@ test('审批桥: 人类取消时不批准、关闭自有 pane 并中止', { time
     await waitFor(() => env.backend.createdAsks.length === 1)
     const askId = env.backend.createdAsks[0]!['id'] as string
     env.backend.answerAsk(askId, { id: askId, status: 'cancelled', answers: {} })
-    await assert.rejects(resultPromise, (e: unknown) => (e as HelmError).code === 'aborted')
+    await assert.rejects(resultPromise, (e: unknown) => (e as HelmxError).code === 'aborted')
     const pane = [...env.transport.panes.values()][0]!
     assert.equal(env.transport.tabs.get(pane.tabId)!.closed, true, '取消后关闭自有 pane')
     assert.equal(env.transport.sendKeysLog.length, 0, '取消绝不批准')
@@ -378,7 +378,7 @@ test('审批桥: 回答后终端 seq 已推进时不发键，直接续等', { ti
     // 人类回答的同时终端已处理（seq 推进为 done）。
     env.transport.advancePane(pane.paneId, 'done')
     const fileName = fileNameOf(env.transport.calls.find((c) => c.method === 'agent.prompt')!.params['text'] as string)
-    env.transport.outputFiles.set(`${pane.cwd}/.helm/${fileName}`, 'race-resolved')
+    env.transport.outputFiles.set(`${pane.cwd}/.helmx/${fileName}`, 'race-resolved')
     env.backend.answerAsk(askId, { id: askId, status: 'answered', answers: { decision: 'allow-y' } })
     assert.equal(await resultPromise, 'race-resolved')
     assert.equal(env.transport.sendKeysLog.length, 0, 'seq 已推进时不发键（CAS 复核）')
@@ -399,8 +399,8 @@ test('Gate 恰好一次 + env 注入（本机 runLocalGate 携带 spawn env）',
     assert.equal(env.gateLog.length, 1, 'gate 恰好一次')
     assert.equal(env.gateLog[0]!.command, 'exit 0')
     assert.equal(env.gateLog[0]!.cwd, env.backend.conversations.get(1)!.cwd, 'gate 在实际 cwd 执行')
-    assert.equal(env.gateLog[0]!.env?.['HELM_ENV'], '1')
-    assert.equal(env.gateLog[0]!.env?.['HELM_CWD'], env.backend.conversations.get(1)!.cwd)
+    assert.equal(env.gateLog[0]!.env?.['HELMX_ENV'], '1')
+    assert.equal(env.gateLog[0]!.env?.['HELMX_CWD'], env.backend.conversations.get(1)!.cwd)
   } finally {
     await env.close()
   }
@@ -417,8 +417,8 @@ test('远端节点: 全部调用走 nodeId target、剥除 loopback HUB_URL/TOKE
       assert.deepEqual(call.target, { nodeId: 'remote-node' }, `调用 ${call.method} 走 nodeId target`)
     }
     const envSent = env.transport.calls.find((c) => c.method === 'tab.create')!.params['env'] as Record<string, string>
-    assert.equal('HELM_HUB_URL' in envSent, false)
-    assert.equal('HELM_TOKEN' in envSent, false)
+    assert.equal('HELMX_HUB_URL' in envSent, false)
+    assert.equal('HELMX_TOKEN' in envSent, false)
     // 远端 gate 不走本机 runLocalGate：生产 transport.runGate 经 nodeChannel
     // .envFor（= backend.executionEnv 真实 NodeExecutionEnv）在实际 cwd 执行
     // exit 0 成功；FakeTransport.runGate 不再是承载点。
@@ -431,18 +431,18 @@ test('远端节点: 全部调用走 nodeId target、剥除 loopback HUB_URL/TOKE
   }
 })
 
-test('远端 Profile 显式配置可达 HELM_HUB_URL 时保留回连变量', { timeout: 60_000 }, async () => {
+test('远端 Profile 显式配置可达 HELMX_HUB_URL 时保留回连变量', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     env.profiles.set('far', {
       id: 'far',
-      runtime: { kind: 'herdr', agent: 'agy', nodeId: 'remote-node', env: { HELM_HUB_URL: 'http://10.0.0.5:3202' } },
+      runtime: { kind: 'herdr', agent: 'agy', nodeId: 'remote-node', env: { HELMX_HUB_URL: 'http://10.0.0.5:3202' } },
     })
     scriptSuccess(env, 'far-ok')
     await spawnDirect(env, { agentType: 'far' })
     const envSent = env.transport.calls.find((c) => c.method === 'tab.create')!.params['env'] as Record<string, string>
-    assert.equal(envSent['HELM_HUB_URL'], 'http://10.0.0.5:3202', '显式远端可达 URL 保留')
-    assert.equal(envSent['HELM_TOKEN'], 'SECRET-TOKEN', 'token 随可达 URL 保留')
+    assert.equal(envSent['HELMX_HUB_URL'], 'http://10.0.0.5:3202', '显式远端可达 URL 保留')
+    assert.equal(envSent['HELMX_TOKEN'], 'SECRET-TOKEN', 'token 随可达 URL 保留')
   } finally {
     await env.close()
   }
@@ -465,7 +465,7 @@ test('Worktree 隔离: 两步建窗注入 env、关初始 tab、workspace.close 
     const worktreeCreate = env.transport.calls.find((c) => c.method === 'worktree.create')!
     assert.equal(worktreeCreate.params['trust_repository'], true)
     assert.equal(worktreeCreate.params['focus'], false)
-    assert.match(worktreeCreate.params['branch'] as string, /^helm\/wf-/)
+    assert.match(worktreeCreate.params['branch'] as string, /^helmx\/wf-/)
     // env 非空 -> workspace 内补建 tab + 关初始 tab。
     const tabCreates = env.transport.calls.filter((c) => c.method === 'tab.create')
     assert.equal(tabCreates.length, 1, '补建一个带 env 的 tab')
@@ -540,14 +540,14 @@ test('resume: 同父复用 pane 不新建；跨父拒绝；未知拒绝；并发
       resume: 'wf_1:node-a',
     } as never)
     await assert.rejects(crossParent, (e: unknown) => {
-      assert.equal((e as HelmError).code, 'cross_parent_resume_rejected')
+      assert.equal((e as HelmxError).code, 'cross_parent_resume_rejected')
       return true
     })
 
     // 未知 ref 拒绝。
     await assert.rejects(
       spawnDirect(env, { agentType: 'herdr:agy', resume: 'no-such-ref' }),
-      (e: unknown) => (e as HelmError).code === 'not_found',
+      (e: unknown) => (e as HelmxError).code === 'not_found',
     )
     void pane
   } finally {
@@ -567,7 +567,7 @@ test('abort: 立即取消 Ask 并关闭自有 PTY（清理不受 aborted 阻碍�
     const resultPromise = spawnDirect(env, { agentType: 'herdr:agy', signal: controller.signal })
     await waitFor(() => env.backend.createdAsks.length === 1)
     controller.abort()
-    await assert.rejects(resultPromise, (e: unknown) => (e as HelmError).code === 'aborted')
+    await assert.rejects(resultPromise, (e: unknown) => (e as HelmxError).code === 'aborted')
     const pane = [...env.transport.panes.values()][0]!
     await waitFor(() => env.transport.tabs.get(pane.tabId)?.closed === true)
     // abort 同时销单。
@@ -592,9 +592,9 @@ test('超时（TimeoutError）保留 pane：working 时 resume 显式拒绝不�
     let timedOut: unknown = undefined
     await assert.rejects(spawned, (e: unknown) => {
       timedOut = e
-      return e instanceof HelmError && e.code === 'agent_timeout'
+      return e instanceof HelmxError && e.code === 'agent_timeout'
     })
-    assert.ok(timedOut instanceof HelmError)
+    assert.ok(timedOut instanceof HelmxError)
     const details = timedOut.details as { snapshot?: unknown } | undefined
     const snapshotOfTimeout = String(details?.snapshot ?? '')
     assert.ok(snapshotOfTimeout.length > 0, '超时错误附终端诊断快照')
@@ -609,7 +609,7 @@ test('超时（TimeoutError）保留 pane：working 时 resume 显式拒绝不�
     // 底层仍 working：resume 在任何 prompt 发送前显式拒绝（不新建、不发键）。
     await assert.rejects(
       spawnDirect(env, { agentType: 'herdr:agy', resume: 'wf_to:a' }),
-      (e: unknown) => e instanceof HelmError && e.code === 'resume_agent_busy',
+      (e: unknown) => e instanceof HelmxError && e.code === 'resume_agent_busy',
     )
     assert.equal(env.transport.calls.filter((c) => c.method === 'agent.prompt').length, 1, '拒绝续接时不追加 prompt')
     assert.equal(env.transport.sendKeysLog.length, 0)
@@ -649,8 +649,8 @@ test('启停: 默认停用注册不连接；启用连接；保活期间 disable 
 
     // 成功保活 pane 期间无活跃 spawn hook 仍 409（空隙保护）。
     await assert.rejects(env.host.disable('builtin:herdr'), (e: unknown) => {
-      assert.equal((e as HelmError).code, 'plugin_has_live_tasks')
-      assert.ok((e as HelmError).message.includes('herdr-keepalive'))
+      assert.equal((e as HelmxError).code, 'plugin_has_live_tasks')
+      assert.ok((e as HelmxError).message.includes('herdr-keepalive'))
       return true
     })
 
@@ -666,16 +666,16 @@ test('启停: 默认停用注册不连接；启用连接；保活期间 disable 
 
 test('服务启动半途失败: snapshot 失败时自行清理订阅，注册整体失败', { timeout: 60_000 }, async () => {
   const transport = new FakeTransport()
-  transport.errors.set('session.snapshot', () => new HelmError('herdr_socket', 'snapshot failed', 502))
+  transport.errors.set('session.snapshot', () => new HelmxError('herdr_socket', 'snapshot failed', 502))
   const backend = new FakeBackend()
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-herdr-halfway-'))
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-herdr-halfway-'))
   const socketPath = join(dataDir, 'herdr.sock')
   const served = await serveTransport(transport, socketPath)
   const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: backend, docs: new MemoryDocStore(), config: new MemoryConfigStore({ socketPath }) })
   try {
     await assert.rejects(
       host.register(createHerdrPlugin(HERDR_FAST_TEST_TIMINGS)),
-      (e: unknown) => ['plugin_registration_failed', 'plugin_service_start_failed', 'herdr_socket'].includes((e as HelmError).code),
+      (e: unknown) => ['plugin_registration_failed', 'plugin_service_start_failed', 'herdr_socket'].includes((e as HelmxError).code),
     )
     // 订阅已清理（listener 集空）。wire stop() 只 destroy 客户端 socket；
     // fixture server 侧的 close 释放是异步到达，等其收敛。
@@ -693,7 +693,7 @@ test('服务启动半途失败: snapshot 失败时自行清理订阅，注册整
 // ---------------------------------------------------------------------------
 
 test('启动对账: 孤儿回收；failed 保留；同 ID 换 human agent 不误关；keepalive 不当孤儿', { timeout: 60_000 }, async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-herdr-recon-'))
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-herdr-recon-'))
   const docs = new MemoryDocStore()
   const orphanPaneId = 'ws-default:p1'
   const failedPaneId = 'ws-default:p2'
@@ -702,18 +702,18 @@ test('启动对账: 孤儿回收；failed 保留；同 ID 换 human agent 不误
   docs.set('builtin:herdr:managed', {
     version: 1,
     panes: [
-      { target: {}, routing: { kind: 'agy' }, paneId: orphanPaneId, tabId: 'ws-default:t1', effectiveCwd: '/tmp/a', agentName: 'helm-wf-abc', parentConversationId: 1, outcome: 'running', createdAt: 1 },
-      { target: {}, routing: { kind: 'agy' }, paneId: failedPaneId, tabId: 'ws-default:t2', effectiveCwd: '/tmp/b', agentName: 'helm-wf-def', parentConversationId: 1, outcome: 'failed', createdAt: 1, failureNote: 'x' },
+      { target: {}, routing: { kind: 'agy' }, paneId: orphanPaneId, tabId: 'ws-default:t1', effectiveCwd: '/tmp/a', agentName: 'helmx-wf-abc', parentConversationId: 1, outcome: 'running', createdAt: 1 },
+      { target: {}, routing: { kind: 'agy' }, paneId: failedPaneId, tabId: 'ws-default:t2', effectiveCwd: '/tmp/b', agentName: 'helmx-wf-def', parentConversationId: 1, outcome: 'failed', createdAt: 1, failureNote: 'x' },
       { target: {}, routing: { kind: 'agy' }, paneId: humanPaneId, tabId: 'ws-default:t3', effectiveCwd: '/tmp/c', agentName: 'human-agent', parentConversationId: 1, outcome: 'running', createdAt: 1 },
-      { target: {}, routing: { kind: 'agy' }, paneId: keepalivePaneId, tabId: 'ws-default:t4', effectiveCwd: '/tmp/d', agentName: 'helm-wf-ghi', parentConversationId: 1, outcome: 'keepalive', createdAt: 1 },
+      { target: {}, routing: { kind: 'agy' }, paneId: keepalivePaneId, tabId: 'ws-default:t4', effectiveCwd: '/tmp/d', agentName: 'helmx-wf-ghi', parentConversationId: 1, outcome: 'keepalive', createdAt: 1 },
     ],
   })
   const backend = new FakeBackend()
   const transport = new FakeTransport()
-  transport.panes.set(orphanPaneId, { paneId: orphanPaneId, tabId: 'ws-default:t1', workspaceId: 'ws-default', agentStatus: 'done', seq: 3, name: 'helm-wf-abc', cwd: '/tmp/a' })
-  transport.panes.set(failedPaneId, { paneId: failedPaneId, tabId: 'ws-default:t2', workspaceId: 'ws-default', agentStatus: 'idle', seq: 3, name: 'helm-wf-def', cwd: '/tmp/b' })
+  transport.panes.set(orphanPaneId, { paneId: orphanPaneId, tabId: 'ws-default:t1', workspaceId: 'ws-default', agentStatus: 'done', seq: 3, name: 'helmx-wf-abc', cwd: '/tmp/a' })
+  transport.panes.set(failedPaneId, { paneId: failedPaneId, tabId: 'ws-default:t2', workspaceId: 'ws-default', agentStatus: 'idle', seq: 3, name: 'helmx-wf-def', cwd: '/tmp/b' })
   transport.panes.set(humanPaneId, { paneId: humanPaneId, tabId: 'ws-default:t3', workspaceId: 'ws-default', agentStatus: 'working', seq: 3, name: 'human-agent', cwd: '/tmp/c' })
-  transport.panes.set(keepalivePaneId, { paneId: keepalivePaneId, tabId: 'ws-default:t4', workspaceId: 'ws-default', agentStatus: 'done', seq: 3, name: 'helm-wf-ghi', cwd: '/tmp/d' })
+  transport.panes.set(keepalivePaneId, { paneId: keepalivePaneId, tabId: 'ws-default:t4', workspaceId: 'ws-default', agentStatus: 'done', seq: 3, name: 'helmx-wf-ghi', cwd: '/tmp/d' })
   for (const t of ['ws-default:t1', 'ws-default:t2', 'ws-default:t3', 'ws-default:t4']) {
     transport.tabs.set(t, { closed: false })
   }
@@ -791,7 +791,7 @@ test('actions: list/read/focus（read 40 行脱敏；未知 pane 404）', { time
     assert.ok(env.transport.calls.some((c) => c.method === 'agent.focus'))
     await assert.rejects(
       env.host.invokeAction('builtin:herdr', 'read', { paneId: 'nope:p1' }),
-      (e: unknown) => (e as HelmError).status === 404,
+      (e: unknown) => (e as HelmxError).status === 404,
     )
   } finally {
     await env.close()
@@ -803,10 +803,10 @@ test('新窗格 shell 尚未就绪：仅对零启动的 agent_pane_busy 等待�
   try {
     env.transport.errors.set('agent.start', () => {
       env.transport.errors.delete('agent.start')
-      return new HelmError('agent_pane_busy', 'shell 尚未就绪，未启动 Agent', 409)
+      return new HelmxError('agent_pane_busy', 'shell 尚未就绪，未启动 Agent', 409)
     })
     env.transport.onPrompt = (pane, text) => {
-      env.transport.outputFiles.set(`${pane.cwd}/.helm/${fileNameOf(text)}`, 'ready-result')
+      env.transport.outputFiles.set(`${pane.cwd}/.helmx/${fileNameOf(text)}`, 'ready-result')
     }
     assert.equal(await spawnDirect(env, { agentType: 'herdr:pi' }), 'ready-result')
     assert.equal(env.transport.calls.filter((call) => call.method === 'agent.start').length, 2)
@@ -820,8 +820,8 @@ test('新窗格 shell 尚未就绪：仅对零启动的 agent_pane_busy 等待�
 test('新窗格启动结果不确定时不重试 agent.start', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
-    env.transport.errors.set('agent.start', () => new HelmError('herdr_timeout', '启动响应超时，可能已启动', 504))
-    await assert.rejects(spawnDirect(env, { agentType: 'herdr:pi' }), (error: unknown) => (error as HelmError).code === 'herdr_timeout')
+    env.transport.errors.set('agent.start', () => new HelmxError('herdr_timeout', '启动响应超时，可能已启动', 504))
+    await assert.rejects(spawnDirect(env, { agentType: 'herdr:pi' }), (error: unknown) => (error as HelmxError).code === 'herdr_timeout')
     assert.equal(env.transport.calls.filter((call) => call.method === 'agent.start').length, 1)
     assert.equal(env.transport.calls.filter((call) => call.method === 'agent.prompt').length, 0)
   } finally {
@@ -833,10 +833,10 @@ test('启动期超时后 resume：agent.start 完成与否未定时权威确认�
   const env = await makeEnv()
   try {
     // 启动期超时：agent.start 响应不确定，窗格登记 failed 且无受管 Agent 身份。
-    env.transport.errors.set('agent.start', () => new HelmError('herdr_timeout', '启动响应超时，可能已启动', 504))
+    env.transport.errors.set('agent.start', () => new HelmxError('herdr_timeout', '启动响应超时，可能已启动', 504))
     await assert.rejects(
       spawnDirect(env, { agentType: 'herdr:agy', agentId: 'wf_su:a' }),
-      (error: unknown) => (error as HelmError).code === 'herdr_timeout',
+      (error: unknown) => (error as HelmxError).code === 'herdr_timeout',
     )
     const starts = env.transport.calls.filter((c) => c.method === 'agent.start').length
     assert.equal(starts, 1)
@@ -845,7 +845,7 @@ test('启动期超时后 resume：agent.start 完成与否未定时权威确认�
     // 显式拒绝；不重发 agent.start、不新建、不发 prompt。
     await assert.rejects(
       spawnDirect(env, { agentType: 'herdr:agy', resume: 'wf_su:a' }),
-      (e: unknown) => e instanceof HelmError && e.code === 'herdr_ownership_lost',
+      (e: unknown) => e instanceof HelmxError && e.code === 'herdr_ownership_lost',
     )
     assert.equal(env.transport.calls.filter((c) => c.method === 'agent.start').length, starts, 'resume 不盲目重发 agent.start')
     assert.equal(env.transport.calls.some((c) => c.method === 'agent.prompt'), false, '拒绝续接时不发 prompt')
@@ -857,17 +857,17 @@ test('启动期超时后 resume：agent.start 完成与否未定时权威确认�
 test('agent_not_ready 桥接: 权威 blocked 时复用既有 agent，不启动第二个', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
-    env.transport.errors.set('agent.start', () => new HelmError('agent_not_ready', 'agent not ready', 409))
+    env.transport.errors.set('agent.start', () => new HelmxError('agent_not_ready', 'agent not ready', 409))
     // pane 上已有 blocked agent（tab.create 后由 fake 设定——prompt 前的 start 阶段）。
     env.transport.promptStatus = 'blocked'
-    // 在 tab.create 后立刻把 pane 置为 blocked（有 name 的 helm-wf agent）。
+    // 在 tab.create 后立刻把 pane 置为 blocked（有 name 的 helmx-wf agent）。
     const originalCall = env.transport.call.bind(env.transport)
     ;(env.transport as { call: unknown }).call = async (target: HerdrTarget, method: string, params: Record<string, unknown>) => {
       const result = await originalCall(target, method, params)
       if (method === 'tab.create') {
         const paneId = (result as { root_pane: { pane_id: string } }).root_pane.pane_id
         const pane = env.transport.panes.get(paneId)!
-        pane.name = 'helm-wf-existing'
+        pane.name = 'helmx-wf-existing'
         pane.agentStatus = 'blocked'
       }
       return result
@@ -890,7 +890,7 @@ test('agent_not_ready 桥接: 权威 blocked 时复用既有 agent，不启动�
 
 /** Agy 信任目录弹窗快照（游标列表选择式对话框）。 */
 const AGY_TRUST_SNAPSHOT = [
-  '/root/.herdr/worktrees/helm/helm-wf-cocmre',
+  '/root/.herdr/worktrees/helmx/helmx-wf-cocmre',
   '',
   'Do you trust the contents of this project?',
   '',
@@ -947,7 +947,7 @@ test('单测A: 快照游标菜单提取与按键映射——allow-enter/menu-1/c
     // 终端消化后收尾。
     const pane = [...env.transport.panes.values()][0]!
     const fileName = fileNameOf(env.transport.calls.find((c) => c.method === 'agent.prompt')!.params['text'] as string)
-    env.transport.outputFiles.set(`${pane.cwd}/.helm/${fileName}`, 'trusted')
+    env.transport.outputFiles.set(`${pane.cwd}/.helmx/${fileName}`, 'trusted')
     env.transport.consumeKeys(pane.paneId, 'done')
     assert.equal(await resultPromise, 'trusted')
   } finally {
@@ -969,7 +969,7 @@ test('单测A-续: menu-1 与 custom 多键序列经完整审批桥发送', { ti
       assert.deepEqual(env.transport.sendKeysLog[0]!.keys, ['down', 'enter'])
       const pane = [...env.transport.panes.values()][0]!
       const fileName = fileNameOf(env.transport.calls.find((c) => c.method === 'agent.prompt')!.params['text'] as string)
-      env.transport.outputFiles.set(`${pane.cwd}/.helm/${fileName}`, 'picked')
+      env.transport.outputFiles.set(`${pane.cwd}/.helmx/${fileName}`, 'picked')
       env.transport.consumeKeys(pane.paneId, 'done')
       assert.equal(await resultPromise, 'picked')
     } finally {
@@ -1006,7 +1006,7 @@ test('单测B: 按键未生效时闭环复核——自动重开 AskDoc 且带未
     await waitFor(() => env.transport.sendKeysLog.length === 2)
     assert.deepEqual(env.transport.sendKeysLog[1]!.keys, ['enter'])
     const fileName = fileNameOf(env.transport.calls.find((c) => c.method === 'agent.prompt')!.params['text'] as string)
-    env.transport.outputFiles.set(`${pane.cwd}/.helm/${fileName}`, 'recovered')
+    env.transport.outputFiles.set(`${pane.cwd}/.helmx/${fileName}`, 'recovered')
     env.transport.consumeKeys(pane.paneId, 'done')
     assert.equal(await resultPromise, 'recovered')
     assert.equal(env.backend.createdAsks.length, 2, '整个闭环恰好两次 AskDoc')
@@ -1085,7 +1085,7 @@ test('单测D-1: 正则命中标准菜单时不调 AI（0ms 快路径优先）',
     env.backend.answerAsk(askId, { id: askId, status: 'answered', answers: { decision: 'allow-enter' } })
     await waitFor(() => env.transport.sendKeysLog.length === 1)
     const fileName = fileNameOf(env.transport.calls.find((c) => c.method === 'agent.prompt')!.params['text'] as string)
-    env.transport.outputFiles.set(`${pane.cwd}/.helm/${fileName}`, 'fast-path')
+    env.transport.outputFiles.set(`${pane.cwd}/.helmx/${fileName}`, 'fast-path')
     env.transport.consumeKeys(pane.paneId, 'done')
     assert.equal(await resultPromise, 'fast-path')
     assert.equal(aiCalls, 0, '全程零 AI 调用')
@@ -1129,7 +1129,7 @@ test('单测D-2: 非标快照时调 AI 生成选项并正确发键', { timeout: 
     await waitFor(() => env.transport.sendKeysLog.length === 1)
     assert.deepEqual(env.transport.sendKeysLog[0]!.keys, ['a'], 'ai-1 准确发送 [a]')
     const fileName = fileNameOf(env.transport.calls.find((c) => c.method === 'agent.prompt')!.params['text'] as string)
-    env.transport.outputFiles.set(`${pane.cwd}/.helm/${fileName}`, 'ai-allowed')
+    env.transport.outputFiles.set(`${pane.cwd}/.helmx/${fileName}`, 'ai-allowed')
     env.transport.consumeKeys(pane.paneId, 'done')
     assert.equal(await resultPromise, 'ai-allowed')
   } finally {
@@ -1166,7 +1166,7 @@ test('单测D-3: AI 抛错或返回 undefined 时无感回退通用选项', { ti
       await waitFor(() => env.transport.sendKeysLog.length === 1)
       assert.deepEqual(env.transport.sendKeysLog[0]!.keys, ['n'])
       const fileName = fileNameOf(env.transport.calls.find((c) => c.method === 'agent.prompt')!.params['text'] as string)
-      env.transport.outputFiles.set(`${pane.cwd}/.helm/${fileName}`, 'fallback')
+      env.transport.outputFiles.set(`${pane.cwd}/.helmx/${fileName}`, 'fallback')
       env.transport.consumeKeys(pane.paneId, 'done')
       assert.equal(await resultPromise, 'fallback')
     } finally {
@@ -1232,7 +1232,7 @@ test('单测E-3: 标准菜单 fixture 仍命中快路径且不调 AI（AGY / Cod
     env.backend.answerAsk(askId, { id: askId, status: 'answered', answers: { decision: 'allow-enter' } })
     await waitFor(() => env.transport.sendKeysLog.length === 1)
     const fileName = fileNameOf(env.transport.calls.find((c) => c.method === 'agent.prompt')!.params['text'] as string)
-    env.transport.outputFiles.set(`${pane.cwd}/.helm/${fileName}`, 'codex-fast')
+    env.transport.outputFiles.set(`${pane.cwd}/.helmx/${fileName}`, 'codex-fast')
     env.transport.consumeKeys(pane.paneId, 'done')
     assert.equal(await resultPromise, 'codex-fast')
   } finally {
@@ -1303,7 +1303,7 @@ test('单测E-5: AI labels 与 summary 在最终 AskSpec 边界统一脱敏', { 
     env.backend.answerAsk(askId, { id: askId, status: 'answered', answers: { decision: 'allow-y' } })
     await waitFor(() => env.transport.sendKeysLog.length === 1)
     const fileName = fileNameOf(env.transport.calls.find((c) => c.method === 'agent.prompt')!.params['text'] as string)
-    env.transport.outputFiles.set(`${pane.cwd}/.helm/${fileName}`, 'redacted')
+    env.transport.outputFiles.set(`${pane.cwd}/.helmx/${fileName}`, 'redacted')
     env.transport.consumeKeys(pane.paneId, 'done')
     assert.equal(await resultPromise, 'redacted')
   } finally {
@@ -1335,7 +1335,7 @@ test('单测E-6: AI 解析失败通知与 description 尾部快照', { timeout: 
     env.backend.answerAsk(askId, { id: askId, status: 'answered', answers: { decision: 'deny-n' } })
     await waitFor(() => env.transport.sendKeysLog.length === 1)
     const fileName = fileNameOf(env.transport.calls.find((c) => c.method === 'agent.prompt')!.params['text'] as string)
-    env.transport.outputFiles.set(`${pane.cwd}/.helm/${fileName}`, 'notified')
+    env.transport.outputFiles.set(`${pane.cwd}/.helmx/${fileName}`, 'notified')
     env.transport.consumeKeys(pane.paneId, 'done')
     assert.equal(await resultPromise, 'notified')
   } finally {
@@ -1359,7 +1359,7 @@ test('单测E-7: AI 等待期间 seq 推进不挂旧 AskDoc（synthetic supersed
     await waitFor(() => env.transport.calls.some((c) => c.method === 'agent.read'), 5_000)
     const pane = [...env.transport.panes.values()][0]!
     const fileName = fileNameOf(env.transport.calls.find((c) => c.method === 'agent.prompt')!.params['text'] as string)
-    env.transport.outputFiles.set(`${pane.cwd}/.helm/${fileName}`, 'self-resolved')
+    env.transport.outputFiles.set(`${pane.cwd}/.helmx/${fileName}`, 'self-resolved')
     env.transport.consumeKeys(pane.paneId, 'done')
     releaseAi?.()
     // seq 已推进：旧 Ask 不落地，spawn 正常收尾。
@@ -1390,7 +1390,7 @@ test('单测E-8: 无 AI 选项（端口未注入）时自动补 allow-enter 并�
     await waitFor(() => env.transport.sendKeysLog.length === 1)
     assert.deepEqual(env.transport.sendKeysLog[0]!.keys, ['enter'], 'human choosing allow-enter automatically sends enter')
     const fileName = fileNameOf(env.transport.calls.find((c) => c.method === 'agent.prompt')!.params['text'] as string)
-    env.transport.outputFiles.set(`${pane.cwd}/.helm/${fileName}`, 'auto-enter')
+    env.transport.outputFiles.set(`${pane.cwd}/.helmx/${fileName}`, 'auto-enter')
     env.transport.consumeKeys(pane.paneId, 'done')
     assert.equal(await resultPromise, 'auto-enter')
   } finally {
@@ -1438,7 +1438,7 @@ class ProbeTransport implements HerdrTransport {
     if (method === 'agent.get') {
       if (this.agentGetDelayMs > 0) await delay(this.agentGetDelayMs)
       const pane = this.panes.get(String(params['target']))
-      if (!pane) throw new HelmError('agent_not_found', 'no pane', 404)
+      if (!pane) throw new HelmxError('agent_not_found', 'no pane', 404)
       return { type: 'agent_info', agent: this.agentInfoOf(pane) }
     }
     if (method === 'session.snapshot') {
@@ -1457,7 +1457,7 @@ class ProbeTransport implements HerdrTransport {
     }
     return { type: 'ok' }
   }
-  async readOutput(): Promise<string> { throw new HelmError('unsupported', 'test', 400) }
+  async readOutput(): Promise<string> { throw new HelmxError('unsupported', 'test', 400) }
   async removeOutput(): Promise<void> {}
   async runGate() { return { ok: true, output: '' } }
   async subscribe(
@@ -1489,7 +1489,7 @@ const HERDR_REMOTE_NODE = 'n1'
 async function makeHerdrProbeEnv(
   panes: Array<{ paneId: string; agentName: string; cwd: string; status?: string; seq?: number }>,
 ): Promise<HerdrProbeEnv> {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-herdr-probe-'))
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-herdr-probe-'))
   const backend = new FakeBackend()
   const docs = new MemoryDocStore()
   docs.set('builtin:herdr:managed', {
@@ -1531,7 +1531,7 @@ async function makeHerdrProbeEnv(
       ipcCalls.push({ method, timeoutMs: input.timeoutMs })
       return ipcLineCall(socketPath, input.line, input.timeoutMs, signal)
     },
-    subscribe: async () => { throw new HelmError('unsupported', '本 fixture 不承载 IPC 订阅', 501) },
+    subscribe: async () => { throw new HelmxError('unsupported', '本 fixture 不承载 IPC 订阅', 501) },
   }
   const host = new PluginHost({ buildProvider: createPluginBuildProvider(),
     dataDir,
@@ -1568,7 +1568,7 @@ async function runHerdrTick(env: HerdrProbeEnv): Promise<DiagnosticsCollection> 
 
 test('herdr tick：agent.get / session.snapshot 全部带 5s 短超时', { timeout: 60_000 }, async () => {
   const env = await makeHerdrProbeEnv([
-    { paneId: 'w:p1', agentName: 'helm-wf-a', cwd: '/tmp/a', status: 'working', seq: 5 },
+    { paneId: 'w:p1', agentName: 'helmx-wf-a', cwd: '/tmp/a', status: 'working', seq: 5 },
   ])
   try {
     await runHerdrTick(env)
@@ -1585,7 +1585,7 @@ test('herdr tick：agent.get / session.snapshot 全部带 5s 短超时', { timeo
 test('herdr tick：5 个 100ms 探针并发采集（串行 500ms 应压到 350ms 内）', { timeout: 60_000 }, async () => {
   const panes = Array.from({ length: 5 }, (_, i) => ({
     paneId: `w:p${i + 1}`,
-    agentName: `helm-wf-${i + 1}`,
+    agentName: `helmx-wf-${i + 1}`,
     cwd: `/tmp/${i + 1}`,
     status: 'working',
     seq: 1,
@@ -1605,7 +1605,7 @@ test('herdr tick：5 个 100ms 探针并发采集（串行 500ms 应压到 350ms
 
 test('herdr 订阅断线：onError 后自动退避重连（watchdogEnabled 无关）', { timeout: 60_000 }, async () => {
   const env = await makeHerdrProbeEnv([
-    { paneId: 'w:p1', agentName: 'helm-wf-a', cwd: '/tmp/a', status: 'working', seq: 1 },
+    { paneId: 'w:p1', agentName: 'helmx-wf-a', cwd: '/tmp/a', status: 'working', seq: 1 },
   ])
   try {
     const before = env.transport.subscribeCount
@@ -1645,7 +1645,7 @@ test('herdr 订阅重连后的流再次断线仍继续退避重试', { timeout: 
 
 test('herdr tick：归属变化窗格结算移除后不再产出 probe', { timeout: 60_000 }, async () => {
   const env = await makeHerdrProbeEnv([
-    { paneId: 'w:p1', agentName: 'helm-wf-a', cwd: '/tmp/a', status: 'working', seq: 1 },
+    { paneId: 'w:p1', agentName: 'helmx-wf-a', cwd: '/tmp/a', status: 'working', seq: 1 },
   ])
   try {
     const first = await runHerdrTick(env)
@@ -1653,7 +1653,7 @@ test('herdr tick：归属变化窗格结算移除后不再产出 probe', { timeo
     env.transport.panes.get('w:p1')!.name = 'human-agent'
     const second = await runHerdrTick(env)
     assert.equal(second.probes.length, 0, '归属变化窗格应结算移除，不再产出 probe')
-    env.transport.panes.get('w:p1')!.name = 'helm-wf-a'
+    env.transport.panes.get('w:p1')!.name = 'helmx-wf-a'
     const third = await runHerdrTick(env)
     assert.equal(third.probes.length, 0)
   } finally {
@@ -1729,7 +1729,7 @@ test('resume 真实形状与全维度拒绝：standalone/workflow 无 agentType 
     // 2) workflow 无 agentType 续接、跨 workflow 轨道拒绝、settled 拒绝、cwd/kind 冲突拒绝。
     scriptSuccess(env, 'wf-first')
     await spawnDirect(env, { agentType: 'herdr:agy', agentId: 'run1:node-a', meta: { 'builtin:workflow': { runId: 'run1' } } })
-    await assert.rejects(spawnDirect(env, { resume: 'run1:node-a' }), (e: unknown) => (e as HelmError).code === 'resume_workflow_mismatch')
+    await assert.rejects(spawnDirect(env, { resume: 'run1:node-a' }), (e: unknown) => (e as HelmxError).code === 'resume_workflow_mismatch')
     scriptSuccess(env, 'wf-second')
     assert.equal(
       await spawnDirect(env, { resume: 'run1:node-a', agentId: 'run1:node-a', meta: { 'builtin:workflow': { runId: 'run1' } }, prompt: 'continue' }),
@@ -1737,18 +1737,18 @@ test('resume 真实形状与全维度拒绝：standalone/workflow 无 agentType 
     )
     await assert.rejects(
       spawnDirect(env, { resume: 'run1:node-a', meta: { 'builtin:workflow': { runId: 'run1' } }, cwd: '/tmp/other-cwd' }),
-      (e: unknown) => (e as HelmError).code === 'resume_cwd_conflict',
+      (e: unknown) => (e as HelmxError).code === 'resume_cwd_conflict',
     )
     await assert.rejects(
       spawnDirect(env, { resume: 'run1:node-a', meta: { 'builtin:workflow': { runId: 'run1' } }, agentType: 'herdr:claude' }),
-      (e: unknown) => (e as HelmError).code === 'resume_kind_conflict',
+      (e: unknown) => (e as HelmxError).code === 'resume_kind_conflict',
     )
     for (const listener of env.backend.workflowListeners) {
       await listener({ id: 'run1', name: 'n', conversationId: 1, status: 'completed', createdAt: 1, updatedAt: 2 })
     }
     await assert.rejects(
       spawnDirect(env, { resume: 'run1:node-a', meta: { 'builtin:workflow': { runId: 'run1' } } }),
-      (e: unknown) => (e as HelmError).code === 'pane_settled',
+      (e: unknown) => (e as HelmxError).code === 'pane_settled',
     )
 
     // 3) 非 herdr 类型未知 resume 放行内核。
@@ -1764,21 +1764,21 @@ test('resume 真实形状与全维度拒绝：standalone/workflow 无 agentType 
   }
 })
 
-test('启动对账精确归属（helm-wf-abc 不认领 helm-wf-abcde）、在途 working 报告与订阅 ack 失败释放监听器', { timeout: 60_000 }, async () => {
+test('启动对账精确归属（helmx-wf-abc 不认领 helmx-wf-abcde）、在途 working 报告与订阅 ack 失败释放监听器', { timeout: 60_000 }, async () => {
   // 1) 前缀相似非精确同名放弃所有权（settled），真正 working 保留并发送通知。
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-herdr-exact-'))
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-herdr-exact-'))
   const socketPath = join(dataDir, 'herdr.sock')
   const docs = new MemoryDocStore()
   docs.set('builtin:herdr:managed', {
     version: 1,
     panes: [
-      { target: { socketPath }, routing: { kind: 'agy' }, paneId: 'w:p1', tabId: 'w:t1', effectiveCwd: '/tmp/a', agentName: 'helm-wf-abc', parentConversationId: 1, outcome: 'running', createdAt: 1 },
-      { target: { socketPath }, routing: { kind: 'agy' }, paneId: 'w:p2', tabId: 'w:t2', effectiveCwd: '/tmp/b', agentName: 'helm-wf-busy', parentConversationId: 1, outcome: 'running', createdAt: 1 },
+      { target: { socketPath }, routing: { kind: 'agy' }, paneId: 'w:p1', tabId: 'w:t1', effectiveCwd: '/tmp/a', agentName: 'helmx-wf-abc', parentConversationId: 1, outcome: 'running', createdAt: 1 },
+      { target: { socketPath }, routing: { kind: 'agy' }, paneId: 'w:p2', tabId: 'w:t2', effectiveCwd: '/tmp/b', agentName: 'helmx-wf-busy', parentConversationId: 1, outcome: 'running', createdAt: 1 },
     ],
   })
   const transport = new FakeTransport()
-  transport.panes.set('w:p1', { paneId: 'w:p1', tabId: 'w:t1', workspaceId: 'w', agentStatus: 'done', seq: 3, name: 'helm-wf-abcde', cwd: '/tmp/a' })
-  transport.panes.set('w:p2', { paneId: 'w:p2', tabId: 'w:t2', workspaceId: 'w', agentStatus: 'working', seq: 3, name: 'helm-wf-busy', cwd: '/tmp/b' })
+  transport.panes.set('w:p1', { paneId: 'w:p1', tabId: 'w:t1', workspaceId: 'w', agentStatus: 'done', seq: 3, name: 'helmx-wf-abcde', cwd: '/tmp/a' })
+  transport.panes.set('w:p2', { paneId: 'w:p2', tabId: 'w:t2', workspaceId: 'w', agentStatus: 'working', seq: 3, name: 'helmx-wf-busy', cwd: '/tmp/b' })
   transport.tabs.set('w:t1', { closed: false })
   transport.tabs.set('w:t2', { closed: false })
   const env = await makeEnv({ dataDir, socketPath, docs, transport })
@@ -1838,7 +1838,7 @@ test('交接与错误边界：结构化脱敏、md 非原子写自愈、I/O 故�
     }
     env2.transport.onPrompt = (pane, text) => {
       prompts += 1
-      const key = `${pane.cwd}/.helm/${fileNameOf(text)}`
+      const key = `${pane.cwd}/.helmx/${fileNameOf(text)}`
       if (prompts === 1) {
         env2.transport.outputFiles.set(key, 'partial-first-half')
         activeKey = key
@@ -1858,11 +1858,11 @@ test('交接与错误边界：结构化脱敏、md 非原子写自愈、I/O 故�
     try {
       scriptSuccess(env3, 'ok')
       if (failure === 'agent.start') {
-        env3.transport.errors.set('agent.start', () => new HelmError('herdr_io', 'I/O broken', 502))
+        env3.transport.errors.set('agent.start', () => new HelmxError('herdr_io', 'I/O broken', 502))
       } else {
         env3.transport.onPrompt = (pane) => {
-          rmSync(join(pane.cwd, '.helm'), { recursive: true, force: true })
-          writeFileSync(join(pane.cwd, '.helm'), 'not-a-directory')
+          rmSync(join(pane.cwd, '.helmx'), { recursive: true, force: true })
+          writeFileSync(join(pane.cwd, '.helmx'), 'not-a-directory')
         }
       }
       await assert.rejects(
@@ -1883,12 +1883,12 @@ test('交接与错误边界：结构化脱敏、md 非原子写自愈、I/O 故�
   try {
     env4.transport.promptStatus = 'done'
     env4.transport.onPrompt = (pane, text) => {
-      env4.transport.outputFiles.set(`${pane.cwd}/.helm/${fileNameOf(text)}`, 'gate-content')
+      env4.transport.outputFiles.set(`${pane.cwd}/.helmx/${fileNameOf(text)}`, 'gate-content')
       setTimeout(() => env4.transport.emit({ type: 'pane.closed', paneId: pane.paneId }), 15)
     }
     await assert.rejects(
       spawnDirect(env4, { agentType: 'herdr:pi', gate: 'echo ok' }),
-      (e: unknown) => (e as HelmError).code === 'herdr_context_unavailable',
+      (e: unknown) => (e as HelmxError).code === 'herdr_context_unavailable',
     )
     assert.equal(env4.gateLog.length, 0)
   } finally {
@@ -1915,7 +1915,7 @@ test('清理纪律：settled 幂等、abort+settle 单飞、身份变化与人�
     const closeBefore = env1.transport.calls.filter((c) => c.method === 'tab.close').length
     controller.abort()
     await env1.host.runHook('turn_settled', turnSettledOf(1))
-    await assert.rejects(pending, (e: unknown) => (e as HelmError).code === 'aborted')
+    await assert.rejects(pending, (e: unknown) => (e as HelmxError).code === 'aborted')
     await waitFor(() => env1.transport.tabs.get(activePane.tabId)?.closed === true)
     assert.equal(env1.transport.calls.filter((c) => c.method === 'tab.close').length - closeBefore, 1)
   } finally {
@@ -1953,7 +1953,7 @@ test('清理纪律：settled 幂等、abort+settle 单飞、身份变化与人�
   try {
     scriptSuccess(env3, 'remote-ok')
     await spawnDirect(env3, { agentType: 'herdr:agy@remote-node' })
-    await assert.rejects(env3.host.disable('builtin:herdr'), (e: unknown) => (e as HelmError).code === 'plugin_has_live_tasks')
+    await assert.rejects(env3.host.disable('builtin:herdr'), (e: unknown) => (e as HelmxError).code === 'plugin_has_live_tasks')
     await env3.host.dispose()
     assert.ok(env3.transport.calls.some((c) => c.method === 'tab.close' && c.target.nodeId === 'remote-node'))
   } finally {
@@ -1975,7 +1975,7 @@ test('清理纪律：settled 幂等、abort+settle 单飞、身份变化与人�
     env4.backend.createAsk = async () => {
       askEntered = true
       await askGate
-      throw new HelmError('ask_backend_broken', 'ask store down', 500)
+      throw new HelmxError('ask_backend_broken', 'ask store down', 500)
     }
     env4.transport.promptStatus = 'blocked'
     const p3run = spawnDirect(env4, { agentType: 'herdr:pi', meta: { 'builtin:workflow': { runId: 'wf_bulk' } } }).catch((e: unknown) => e)
@@ -1991,7 +1991,7 @@ test('清理纪律：settled 幂等、abort+settle 单飞、身份变化与人�
         await p1GetGate
       }
       if (method === 'tab.close' && params['tab_id'] === p1.tabId) {
-        throw new HelmError('tab_close_failed', 'boom', 500)
+        throw new HelmxError('tab_close_failed', 'boom', 500)
       }
       return orig(target, method, params)
     }
@@ -2002,7 +2002,7 @@ test('清理纪律：settled 幂等、abort+settle 单飞、身份变化与人�
     })()
     await waitFor(() => slowGetEntered)
     releaseAsk?.()
-    assert.equal(((await p3run) as HelmError).code, 'ask_backend_broken')
+    assert.equal(((await p3run) as HelmxError).code, 'ask_backend_broken')
     await waitFor(() => docs.get('builtin:herdr:managed', EMPTY_MANAGED_DOC).panes.some((p) => p.paneId === p3.paneId && p.outcome === 'failed'))
     releaseP1Get?.()
     await settled

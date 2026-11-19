@@ -16,9 +16,9 @@
  * option — the locale flows in through the render context.
  */
 import { useEffect, useId, useState, type ReactNode } from 'react'
-import { HelmIcon, Select, Checkbox, Tabs, TabsList, TabsTrigger, PluginSlot, MarkdownText } from '@helm/plugin-client'
-import type { HelmLocale, LocalizedText } from '@helm/plugin-client'
-import { resolveLocalizedText } from '@helm/plugin-client'
+import { HelmxIcon, Select, Checkbox, Tabs, TabsList, TabsTrigger, PluginSlot, MarkdownText } from '@helmx/plugin-client'
+import type { HelmxLocale, LocalizedText } from '@helmx/plugin-client'
+import { resolveLocalizedText } from '@helmx/plugin-client'
 import { evaluateSpecValue, type EvalScope } from './evaluator.ts'
 import {
   JSON_RENDER_ACTION_LABEL_FALLBACK,
@@ -42,7 +42,7 @@ export interface SpecRenderContext {
   /** Property evaluation scope ($docs / $sessionDocs / $data / $row / $value). */
   scope: EvalScope
   /** Active host UI locale for plugin chrome copy (fallback labels, state hints); spec-declared text passes through untranslated. */
-  locale: HelmLocale
+  locale: HelmxLocale
   /** Current conversation context (the Slot primitive passes it to sub-slot contributions for scope filtering; undefined when there is no conversation slot). */
   conversationId?: number
   /** Owning plugin of the current render view (the Slot primitive resolves its short name into the fully-qualified slot name). */
@@ -170,7 +170,7 @@ function BadgeImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCon
   const validTone = ['neutral', 'accent', 'ok', 'warn', 'err'].includes(tone) ? tone : 'neutral'
   return (
     <span className={`badge badge-${validTone}`}>
-      {icon !== '' && <HelmIcon name={icon} size={11} />}
+      {icon !== '' && <HelmxIcon name={icon} size={11} />}
       {formatSpecText(rawText)}
     </span>
   )
@@ -266,7 +266,7 @@ function CalloutImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderC
     tone === 'warn' ? 'alert-triangle' : tone === 'err' ? 'alert-circle' : tone === 'ok' ? 'check-circle' : 'alert-circle'
   return (
     <div className={cls}>
-      <HelmIcon name={iconName} size={13} style={{ flexShrink: 0, marginTop: 2 }} />
+      <HelmxIcon name={iconName} size={13} style={{ flexShrink: 0, marginTop: 2 }} />
       <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
         {title !== '' && <div style={{ fontWeight: 600 }}>{title}</div>}
         {text !== '' && <div>{text}</div>}
@@ -300,7 +300,7 @@ function StepsImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCon
           <div key={i} className="row">
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
               <span className={`badge ${meta.cls}`}>
-                <HelmIcon name={meta.icon} size={10} className={item.status === 'running' ? 'spin-slow' : undefined} />
+                <HelmxIcon name={meta.icon} size={10} className={item.status === 'running' ? 'spin-slow' : undefined} />
               </span>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
                 <span style={{ fontSize: 12.5 }}>{item.title}</span>
@@ -386,8 +386,8 @@ function TableImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCon
   const colSpan = Math.max(1, columnKeys.length + (rowActions.length > 0 ? 1 : 0))
 
   return (
-    <div className="helm-table-wrap">
-      <table className="helm-table jr-table-selectable">
+    <div className="helmx-table-wrap">
+      <table className="helmx-table jr-table-selectable">
         {headerLabels.length > 0 && (
           <thead>
             <tr>
@@ -470,7 +470,7 @@ function RowActionButton({
   const icon = actionIconState(pending, succeeded, '')
   return (
     <button type="button" className={cls} disabled={pending} aria-busy={pending} onClick={onClick}>
-      {icon.name !== null && <HelmIcon name={icon.name} size={11} className={icon.className} />}
+      {icon.name !== null && <HelmxIcon name={icon.name} size={11} className={icon.className} />}
       {label}
     </button>
   )
@@ -499,7 +499,7 @@ function AccordionImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRende
           color: 'var(--fg)',
         }}
       >
-        <HelmIcon name={open ? 'chevron-down' : 'chevron-right'} size={13} />
+        <HelmxIcon name={open ? 'chevron-down' : 'chevron-right'} size={13} />
         {title}
       </button>
       {open && <div style={{ padding: '2px 12px 12px 31px' }}>{ctx.renderChildren(node.children)}</div>}
@@ -550,9 +550,9 @@ function TextInputImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRende
             onClick={() => ctx.runAction(node.props['action'], { ...ctx.scope, $value: text }, pendingKey)}
           >
             {pending ? (
-              <HelmIcon name="loader" size={12} className="spin-slow" />
+              <HelmxIcon name="loader" size={12} className="spin-slow" />
             ) : succeeded ? (
-              <HelmIcon name="check" size={12} />
+              <HelmxIcon name="check" size={12} />
             ) : null}
             {pending
               ? tr(ctx, JSON_RENDER_INPUT_SUBMITTING)
@@ -653,7 +653,7 @@ function SwitchImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCo
           }}
         />
       </span>
-      {pending && <HelmIcon name="loader" size={12} />}
+      {pending && <HelmxIcon name="loader" size={12} />}
       {label}
     </button>
   )
@@ -698,7 +698,7 @@ function CheckboxGroupImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecR
       </div>
       {pending && (
         <span style={{ fontSize: 11, color: 'var(--fg-muted)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-          <HelmIcon name="loader" size={11} />
+          <HelmxIcon name="loader" size={11} />
           {tr(ctx, JSON_RENDER_SUBMITTING_HINT)}
         </span>
       )}
@@ -730,7 +730,7 @@ function ButtonImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCo
       aria-busy={pending}
       onClick={() => ctx.runAction(node.props['action'], ctx.scope, pendingKey)}
     >
-      {iconState.name !== null && <HelmIcon name={iconState.name} size={12} className={iconState.className} />}
+      {iconState.name !== null && <HelmxIcon name={iconState.name} size={12} className={iconState.className} />}
       {label}
     </button>
   )
@@ -762,7 +762,7 @@ function ActionBarImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRende
               aria-busy={pending}
               onClick={() => ctx.runAction(a['action'], ctx.scope, pendingKey)}
             >
-              {iconState.name !== null && <HelmIcon name={iconState.name} size={12} className={iconState.className} />}
+              {iconState.name !== null && <HelmxIcon name={iconState.name} size={12} className={iconState.className} />}
               {label}
             </button>
           )
@@ -828,7 +828,7 @@ function SlotImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCont
   if (name === '') {
     return (
       <div className="callout callout--warning">
-        <HelmIcon name="alert-triangle" size={13} />
+        <HelmxIcon name="alert-triangle" size={13} />
         <span>{tr(ctx, JSON_RENDER_SLOT_MISSING_NAME)}</span>
       </div>
     )
@@ -836,7 +836,7 @@ function SlotImpl({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRenderCont
   if (ctx.pluginId === undefined) {
     return (
       <div className="callout callout--warning">
-        <HelmIcon name="alert-triangle" size={13} />
+        <HelmxIcon name="alert-triangle" size={13} />
         <span>{tr(ctx, JSON_RENDER_SLOT_NO_HOST)}</span>
       </div>
     )
@@ -897,7 +897,7 @@ function SpecNodeView({ node, ctx }: { node: NormalizedSpecNode; ctx: SpecRender
   if (impl === undefined) {
     return (
       <div className="callout callout--warning">
-        <HelmIcon name="alert-triangle" size={13} />
+        <HelmxIcon name="alert-triangle" size={13} />
         <span>{jsonRenderUnknownComponent(node.component, ctx.locale)}</span>
       </div>
     )

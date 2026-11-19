@@ -20,7 +20,7 @@ import {
 // ---------------------------------------------------------------------------
 
 test('artifacts put: binary stream upload (octet-stream + encoded filename + byte fidelity)', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-attach-')
+  const dir = useTempDir(t, 'helmx-cli-attach-')
   const file = path.join(dir, 'data report.md')
   const content = Buffer.from('# title\ncontent line', 'utf8')
   await fsp.writeFile(file, content)
@@ -47,7 +47,7 @@ test('artifacts put: binary stream upload (octet-stream + encoded filename + byt
 })
 
 test('artifacts put: human output includes [Artifact] id=<id> name=<name> matching timeline detection', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-attach-')
+  const dir = useTempDir(t, 'helmx-cli-attach-')
   const file = path.join(dir, 'output.png')
   await fsp.writeFile(file, 'image-binary')
   const hub = await startMockHub(
@@ -65,7 +65,7 @@ test('artifacts put: human output includes [Artifact] id=<id> name=<name> matchi
 })
 
 test('artifacts put: --name and --mime-type overrides; --current target conversation', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-attach-')
+  const dir = useTempDir(t, 'helmx-cli-attach-')
   const file = path.join(dir, 'plain.txt')
   await fsp.writeFile(file, 'abc')
   const hub = await startMockHub(
@@ -79,7 +79,7 @@ test('artifacts put: --name and --mime-type overrides; --current target conversa
   )
   const r = await runCliCaptured(
     ['artifacts', 'put', file, '--current', '--name', 'renamed.bin', '--mime-type', 'application/x-thing', '--json'],
-    makeCliEnv(hub.url, dir, { HELM_CONVERSATION_ID: '7' }),
+    makeCliEnv(hub.url, dir, { HELMX_CONVERSATION_ID: '7' }),
   )
   assert.equal(r.code, 0, r.err)
   const hit = hub.recorded.hits.at(-1)!
@@ -89,7 +89,7 @@ test('artifacts put: --name and --mime-type overrides; --current target conversa
 })
 
 test('artifacts put: missing file read_failed; directory read_failed; extra positional args error', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-attach-')
+  const dir = useTempDir(t, 'helmx-cli-attach-')
   const hub = await startMockHub({}, { autoRegisterCleanup: t })
   const env = makeCliEnv(hub.url, dir)
 
@@ -107,7 +107,7 @@ test('artifacts put: missing file read_failed; directory read_failed; extra posi
 })
 
 test('artifacts put: Hub 413 artifact_too_large envelope exits non-zero', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-attach-')
+  const dir = useTempDir(t, 'helmx-cli-attach-')
   const file = path.join(dir, 'big.bin')
   await fsp.writeFile(file, Buffer.alloc(1024))
   const hub = await startMockHub(
@@ -129,7 +129,7 @@ test('artifacts put: Hub 413 artifact_too_large envelope exits non-zero', { time
 // ---------------------------------------------------------------------------
 
 test('send --attach: comma-separated artifact IDs into body.attachments; empty entries ignored', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-attach-')
+  const dir = useTempDir(t, 'helmx-cli-attach-')
   const hub = await startMockHub(
     {
       'POST /api/conversations/5/input': () => ({ status: 202, body: { submissionId: 's-1' } }),
@@ -154,7 +154,7 @@ test('send --attach: comma-separated artifact IDs into body.attachments; empty e
 // ---------------------------------------------------------------------------
 
 test('send --replace-from: sends positive integer in body.replaceFromEntryId; rejects invalid values; omitted by default', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-attach-')
+  const dir = useTempDir(t, 'helmx-cli-attach-')
   const hub = await startMockHub(
     {
       'POST /api/conversations/5/input': () => ({ status: 202, body: { submissionId: 's-1' } }),
@@ -181,7 +181,7 @@ test('send --replace-from: sends positive integer in body.replaceFromEntryId; re
 })
 
 test('conversations withdraw: requires --submission-id in body; supports --current; rejects invalid values', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-attach-')
+  const dir = useTempDir(t, 'helmx-cli-attach-')
   const hub = await startMockHub(
     {
       'POST /api/conversations/6/withdraw': () => ({ body: { status: 'withdrawn' } }),
@@ -200,7 +200,7 @@ test('conversations withdraw: requires --submission-id in body; supports --curre
   // --current targets the conversation.
   const r2 = await runCliCaptured(
     ['conversations', 'withdraw', '--current', '--submission-id', '8', '--json'],
-    makeCliEnv(hub.url, dir, { HELM_CONVERSATION_ID: '6' }),
+    makeCliEnv(hub.url, dir, { HELMX_CONVERSATION_ID: '6' }),
   )
   assert.equal(r2.code, 0, r2.err)
   assert.equal(hub.recorded.hits.at(-1)!.path, '/api/conversations/6/withdraw')
@@ -224,7 +224,7 @@ test('conversations withdraw: requires --submission-id in body; supports --curre
 // ---------------------------------------------------------------------------
 
 test('conversations reset: sends handoff in body; supports --current; empty body allowed', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-attach-')
+  const dir = useTempDir(t, 'helmx-cli-attach-')
   const hub = await startMockHub(
     {
       'POST /api/conversations/9/reset': () => ({ body: { id: 9, status: 'idle' } }),
@@ -237,7 +237,7 @@ test('conversations reset: sends handoff in body; supports --current; empty body
 
   const r2 = await runCliCaptured(
     ['conversations', 'reset', '--current', '--json'],
-    makeCliEnv(hub.url, dir, { HELM_CONVERSATION_ID: '9' }),
+    makeCliEnv(hub.url, dir, { HELMX_CONVERSATION_ID: '9' }),
   )
   assert.equal(r2.code, 0, r2.err)
   assert.equal(hub.recorded.hits.at(-1)!.path, '/api/conversations/9/reset')
@@ -246,7 +246,7 @@ test('conversations reset: sends handoff in body; supports --current; empty body
 })
 
 test('conversations compact: sends instructions in body; supports --current', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-attach-')
+  const dir = useTempDir(t, 'helmx-cli-attach-')
   const hub = await startMockHub(
     {
       'POST /api/conversations/12/compact': () => ({ status: 202, body: { taskId: 77, conversation: { id: 12 } } }),
@@ -263,14 +263,14 @@ test('conversations compact: sends instructions in body; supports --current', { 
 
   const r2 = await runCliCaptured(
     ['conversations', 'compact', '--current', '--json'],
-    makeCliEnv(hub.url, dir, { HELM_CONVERSATION_ID: '12' }),
+    makeCliEnv(hub.url, dir, { HELMX_CONVERSATION_ID: '12' }),
   )
   assert.equal(r2.code, 0, r2.err)
   assert.deepEqual(hub.recorded.hits.at(-1)!.body, {})
 })
 
 test('conversations fork: --entry-id and --title optional; omits entryId when unset; supports --current; rejects invalid --entry-id', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-attach-')
+  const dir = useTempDir(t, 'helmx-cli-attach-')
   const hub = await startMockHub(
     {
       'POST /api/conversations/4/fork': () => ({ status: 201, body: { id: 44, title: 't (fork)' } }),
@@ -284,7 +284,7 @@ test('conversations fork: --entry-id and --title optional; omits entryId when un
 
   const r2 = await runCliCaptured(
     ['conversations', 'fork', '--current', '--entry-id', '8', '--json'],
-    makeCliEnv(hub.url, dir, { HELM_CONVERSATION_ID: '4' }),
+    makeCliEnv(hub.url, dir, { HELMX_CONVERSATION_ID: '4' }),
   )
   assert.equal(r2.code, 0, r2.err)
   assert.deepEqual(hub.recorded.hits.at(-1)!.body, { entryId: 8 })
@@ -292,7 +292,7 @@ test('conversations fork: --entry-id and --title optional; omits entryId when un
   // Omitting --entry-id sends {} (clean anchor resolved by server).
   const r3 = await runCliCaptured(
     ['conversations', 'fork', '--current', '--json'],
-    makeCliEnv(hub.url, dir, { HELM_CONVERSATION_ID: '4' }),
+    makeCliEnv(hub.url, dir, { HELMX_CONVERSATION_ID: '4' }),
   )
   assert.equal(r3.code, 0, r3.err)
   assert.deepEqual(hub.recorded.hits.at(-1)!.body, {})

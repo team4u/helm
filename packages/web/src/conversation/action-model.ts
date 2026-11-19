@@ -15,7 +15,7 @@ import type {
   ConversationEntry,
   ConversationSummary,
   UiActionSpec,
-} from '@helm/protocol/browser'
+} from '@helmx/protocol/browser'
 import { matchesUiScope, type QualifiedUiSpec, type QualifiedUiActionSpec } from '../lib/types.js'
 
 /** action-only check for a UI action: no client declared, executes via actionId alone. */
@@ -56,7 +56,7 @@ export function splitConversationHeaderActions(
 
 /** Entry matching context for timeline:entry. */
 export interface TimelineEntryActionContext {
-  /** Entry kind (e.g. 'pi.user', 'pi.assistant', 'helm.input'). */
+  /** Entry kind (e.g. 'pi.user', 'pi.assistant', 'helmx.input'). */
   kind: string
   /** Text message role: 'user' | 'assistant'; undefined for non-text entries. */
   role?: 'user' | 'assistant'
@@ -64,12 +64,12 @@ export interface TimelineEntryActionContext {
 
 /**
  * Real ConversationEntry -> timeline:entry matching context: kind comes verbatim
- * from the real entry; text message entries carry a role (pi.user / helm.input ->
+ * from the real entry; text message entries carry a role (pi.user / helmx.input ->
  * user, pi.assistant -> assistant); other entries (custom kinds, pi.tool-result,
  * etc.) have no role, so actions declaring roles never match them.
  */
 export function timelineEntryActionContextOf(entry: ConversationEntry): TimelineEntryActionContext {
-  if (entry.kind === 'pi.user' || entry.kind === 'helm.input') return { kind: entry.kind, role: 'user' }
+  if (entry.kind === 'pi.user' || entry.kind === 'helmx.input') return { kind: entry.kind, role: 'user' }
   if (entry.kind === 'pi.assistant') return { kind: entry.kind, role: 'assistant' }
   return { kind: entry.kind }
 }

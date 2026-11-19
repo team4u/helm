@@ -1,7 +1,7 @@
 /**
  * Regression tests for `artifacts put/get` local path semantics (in-process only, zero HTTP listeners):
- * - relative paths resolve strictly against the CLI caller's cwd (never silently switching to HELM_CWD
- *   when HELM_ENV=1 or searching parent dirs; directory differences are valid cd usage and noted in diagnostics);
+ * - relative paths resolve strictly against the CLI caller's cwd (never silently switching to HELMX_CWD
+ *   when HELMX_ENV=1 or searching parent dirs; directory differences are valid cd usage and noted in diagnostics);
  * - `put` read failures report structured requestedPath / resolvedPath / cliCwd (+ sessionCwd) diagnostics
  *   before connecting (zero fetch calls to Hub);
  * - `get --output` resolves against caller cwd, writes to disk, counts actual bytes written (reliable even when
@@ -75,7 +75,7 @@ function uploadRoute(conversationId: number, name: string): RouteHandler {
   }
 }
 
-/** Placeholder HELM_HUB_URL base: fetch is stubbed, so no real sockets are dialed. */
+/** Placeholder HELMX_HUB_URL base: fetch is stubbed, so no real sockets are dialed. */
 function makeStubEnv(dataDir: string, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return makeCliEnv('http://127.0.0.1:9', dataDir, extra)
 }
@@ -84,15 +84,15 @@ function makeStubEnv(dataDir: string, extra: NodeJS.ProcessEnv = {}): NodeJS.Pro
 // put: relative paths resolve against caller cwd
 // ---------------------------------------------------------------------------
 
-test('put: relative path resolves against CLI cwd even when HELM_ENV=1 and HELM_CWD differ', { timeout: 60_000 }, async (t) => {
-  const callerDir = useTempDir(t, 'helm-cli-art-caller-')
-  const sessionDir = useTempDir(t, 'helm-cli-art-session-') // conversation cwd without the file
+test('put: relative path resolves against CLI cwd even when HELMX_ENV=1 and HELMX_CWD differ', { timeout: 60_000 }, async (t) => {
+  const callerDir = useTempDir(t, 'helmx-cli-art-caller-')
+  const sessionDir = useTempDir(t, 'helmx-cli-art-session-') // conversation cwd without the file
   const content = Buffer.from([0x00, 0x01, 0x02, 0xff, 0xfe, 0x89])
   await fsp.writeFile(path.join(callerDir, 'report.bin'), content)
   const hub = makeHubStub({ 'POST /api/conversations/3/artifacts': uploadRoute(3, 'report.bin') })
   const r = await runCliCaptured(
     ['artifacts', 'put', 'report.bin', '3', '--json'],
-    makeStubEnv(callerDir, { HELM_ENV: '1', HELM_CWD: sessionDir }),
+    makeStubEnv(callerDir, { HELMX_ENV: '1', HELMX_CWD: sessionDir }),
     { cwd: callerDir, fetch: hub.fetchImpl },
   )
   assert.equal(r.code, 0, r.err)
@@ -107,13 +107,13 @@ test('put: relative path resolves against CLI cwd even when HELM_ENV=1 and HELM_
 })
 
 test('put: relative path existing only in session cwd fails with ENOENT (never switches cwd or searches broadly)', { timeout: 60_000 }, async (t) => {
-  const callerDir = useTempDir(t, 'helm-cli-art-caller-')
-  const sessionDir = useTempDir(t, 'helm-cli-art-session-')
+  const callerDir = useTempDir(t, 'helmx-cli-art-caller-')
+  const sessionDir = useTempDir(t, 'helmx-cli-art-session-')
   await fsp.writeFile(path.join(sessionDir, 'only-in-session.bin'), 'x') // only in session directory
   const hub = makeHubStub({ 'POST /api/conversations/3/artifacts': uploadRoute(3, 'only-in-session.bin') })
   const r = await runCliCaptured(
     ['artifacts', 'put', 'only-in-session.bin', '3'],
-    makeStubEnv(callerDir, { HELM_ENV: '1', HELM_CWD: sessionDir }),
+    makeStubEnv(callerDir, { HELMX_ENV: '1', HELMX_CWD: sessionDir }),
     { cwd: callerDir, fetch: hub.fetchImpl },
   )
   assert.equal(r.code, 1)
@@ -128,12 +128,12 @@ test('put: relative path existing only in session cwd fails with ENOENT (never s
 // ---------------------------------------------------------------------------
 
 test('put: ENOENT diagnostics include requestedPath/resolvedPath/cliCwd/sessionCwd (--json details)', { timeout: 60_000 }, async (t) => {
-  const callerDir = useTempDir(t, 'helm-cli-art-caller-')
-  const sessionDir = useTempDir(t, 'helm-cli-art-session-')
+  const callerDir = useTempDir(t, 'helmx-cli-art-caller-')
+  const sessionDir = useTempDir(t, 'helmx-cli-art-session-')
   const hub = makeHubStub({ 'POST /api/conversations/3/artifacts': uploadRoute(3, 'missing.bin') })
   const r = await runCliCaptured(
     ['artifacts', 'put', 'missing.bin', '3', '--json'],
-    makeStubEnv(callerDir, { HELM_ENV: '1', HELM_CWD: sessionDir }),
+    makeStubEnv(callerDir, { HELMX_ENV: '1', HELMX_CWD: sessionDir }),
     { cwd: callerDir, fetch: hub.fetchImpl },
   )
   assert.equal(r.code, 1)
@@ -147,8 +147,8 @@ test('put: ENOENT diagnostics include requestedPath/resolvedPath/cliCwd/sessionC
   assert.equal(hub.calls.length, 0, 'read failure must not contact Hub (zero fetch calls)')
 })
 
-test('put: omits sessionCwd note when HELM_ENV is unset or HELM_CWD equals cwd', { timeout: 60_000 }, async (t) => {
-  const callerDir = useTempDir(t, 'helm-cli-art-caller-')
+test('put: omits sessionCwd note when HELMX_ENV is unset or HELMX_CWD equals cwd', { timeout: 60_000 }, async (t) => {
+  const callerDir = useTempDir(t, 'helmx-cli-art-caller-')
   const hub = makeHubStub({ 'POST /api/conversations/3/artifacts': uploadRoute(3, 'missing.bin') })
   const noEnv = await runCliCaptured(
     ['artifacts', 'put', 'missing.bin', '3', '--json'],
@@ -161,7 +161,7 @@ test('put: omits sessionCwd note when HELM_ENV is unset or HELM_CWD equals cwd',
 
   const sameCwd = await runCliCaptured(
     ['artifacts', 'put', 'missing.bin', '3', '--json'],
-    makeStubEnv(callerDir, { HELM_ENV: '1', HELM_CWD: callerDir }),
+    makeStubEnv(callerDir, { HELMX_ENV: '1', HELMX_CWD: callerDir }),
     { cwd: callerDir, fetch: hub.fetchImpl },
   )
   assert.equal(sameCwd.code, 1)
@@ -170,8 +170,8 @@ test('put: omits sessionCwd note when HELM_ENV is unset or HELM_CWD equals cwd',
 })
 
 test('put: read failure makes zero fetch calls even for missing absolute path', { timeout: 60_000 }, async (t) => {
-  const callerDir = useTempDir(t, 'helm-cli-art-caller-')
-  const otherDir = useTempDir(t, 'helm-cli-art-other-')
+  const callerDir = useTempDir(t, 'helmx-cli-art-caller-')
+  const otherDir = useTempDir(t, 'helmx-cli-art-other-')
   const hub = makeHubStub({ 'POST /api/conversations/3/artifacts': uploadRoute(3, 'abs-missing.bin') })
   const r = await runCliCaptured(
     ['artifacts', 'put', path.join(callerDir, 'abs-missing.bin'), '3', '--json'],
@@ -187,16 +187,16 @@ test('put: read failure makes zero fetch calls even for missing absolute path', 
 // ---------------------------------------------------------------------------
 
 test('get --output: resolves relative path against CLI cwd, reports resolvedPath and actual bytes even without Content-Length', { timeout: 60_000 }, async (t) => {
-  const callerDir = useTempDir(t, 'helm-cli-art-get-')
+  const callerDir = useTempDir(t, 'helmx-cli-art-get-')
   await fsp.mkdir(path.join(callerDir, 'out'))
   const content = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a]), Buffer.from('artifact content-binary')])
-  const sessionDir = useTempDir(t, 'helm-cli-art-session-')
+  const sessionDir = useTempDir(t, 'helmx-cli-art-session-')
   const hub = makeHubStub({
     'GET /api/artifacts/art-9/content': () =>
       // Synthetic Response omits Content-Length: bytes must come from actual bytes written.
       new Response(content, { headers: { 'content-type': 'application/octet-stream' } }),
   })
-  const env = makeStubEnv(callerDir, { HELM_ENV: '1', HELM_CWD: sessionDir })
+  const env = makeStubEnv(callerDir, { HELMX_ENV: '1', HELMX_CWD: sessionDir })
   const r = await runCliCaptured(
     ['artifacts', 'get', 'art-9', '--output', 'out/bin.dat', '--json'],
     env,
@@ -225,7 +225,7 @@ test('get --output: resolves relative path against CLI cwd, reports resolvedPath
 })
 
 test('get --output: download failure prints diagnostic and keeps existing file intact', { timeout: 60_000 }, async (t) => {
-  const callerDir = useTempDir(t, 'helm-cli-art-get-')
+  const callerDir = useTempDir(t, 'helmx-cli-art-get-')
   const output = path.join(callerDir, 'existing.bin')
   await fsp.writeFile(output, 'existing-deliverable')
   const hub = makeHubStub({
@@ -250,7 +250,7 @@ test('get --output: download failure prints diagnostic and keeps existing file i
 })
 
 test('get --output: write failure diagnostic includes resolved path and structured details', { timeout: 60_000 }, async (t) => {
-  const callerDir = useTempDir(t, 'helm-cli-art-get-')
+  const callerDir = useTempDir(t, 'helmx-cli-art-get-')
   const hub = makeHubStub({
     'GET /api/artifacts/art-9/content': () =>
       new Response(Buffer.from('data'), { headers: { 'content-type': 'application/octet-stream' } }),
@@ -276,8 +276,8 @@ test('get --output: write failure diagnostic includes resolved path and structur
 // ---------------------------------------------------------------------------
 
 test('conversations file: reads text (--plain / --json / --current), rejects binary without --output, and writes --output to caller cwd', { timeout: 60_000 }, async (t) => {
-  const callerDir = useTempDir(t, 'helm-cli-wsfile-caller-')
-  const sessionDir = useTempDir(t, 'helm-cli-wsfile-session-')
+  const callerDir = useTempDir(t, 'helmx-cli-wsfile-caller-')
+  const sessionDir = useTempDir(t, 'helmx-cli-wsfile-session-')
   const pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0xff])
   const requestedUrls: string[] = []
   const fetchImpl = (async (input: unknown) => {
@@ -302,7 +302,7 @@ test('conversations file: reads text (--plain / --json / --current), rejects bin
     return errorResponse(404, 'file_not_found', `missing ${filePath}`)
   }) as unknown as typeof fetch
 
-  const env = makeStubEnv(callerDir, { HELM_ENV: '1', HELM_CWD: sessionDir, HELM_CONVERSATION_ID: '9' })
+  const env = makeStubEnv(callerDir, { HELMX_ENV: '1', HELMX_CWD: sessionDir, HELMX_CONVERSATION_ID: '9' })
 
   // Plain text output
   const plain = await runCliCaptured(['conversations', 'file', '7', 'src/app.ts'], env, { cwd: callerDir, fetch: fetchImpl })
@@ -325,7 +325,7 @@ test('conversations file: reads text (--plain / --json / --current), rejects bin
   assert.equal(binErr.code, 1)
   assert.equal(parseCliError(binErr).code, 'binary_content_requires_output')
 
-  // Binary with --output -> writes relative to CLI caller cwd (not HELM_CWD)
+  // Binary with --output -> writes relative to CLI caller cwd (not HELMX_CWD)
   await fsp.mkdir(path.join(callerDir, 'downloads'))
   const binOut = await runCliCaptured(
     ['conversations', 'file', '7', 'img/logo.png', '--output', 'downloads/logo.png', '--json'],

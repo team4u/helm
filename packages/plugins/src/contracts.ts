@@ -3,7 +3,7 @@
  *
  * 本模块是编排业务形状的唯一权威定义，消费方为 builtin:workflow（引擎 /
  * 隔离层 / steer / 客户端投影）与外部执行插件（builtin:herdr 的执行元数据
- * 产出与 steer 动作实现）。内核 envelope（@helm/protocol）只保留通用字段与
+ * 产出与 steer 动作实现）。内核 envelope（@helmx/protocol）只保留通用字段与
  * 命名空间 meta（JSON-safe），不理解以下任何业务结构：
  * - workflow 运行 / 节点 / 进度 / 保存定义与文档形状（迁自 protocol workflow.ts）；
  * - 受管 worktree 清理契约（迁自 protocol worktree.ts）；
@@ -12,15 +12,15 @@
  * - AgentSpawnRequest.meta / AgentExecutionInfo.meta 的 'builtin:workflow'
  *   命名空间业务形状（runId / 派生深度上限 / worktree 描述）及其边界校验。
  *
- * 纪律：本模块只做形状定义与边界校验（复用 @helm/protocol 的 AJV 基础设施），
+ * 纪律：本模块只做形状定义与边界校验（复用 @helmx/protocol 的 AJV 基础设施），
  * 不携带运行时服务；业务值在消费方边界用这里的 schema 显式验证，非法输入
  * 显式拒绝、诊断不退化。protocol 不再出口这些类型。
  */
-import { HelmError, sanitizeAgentNamespacedMeta, validateOrThrow, type AgentExecutionInfo, type AgentGateResult, type AgentNamespacedMeta, type JsonSafeObject, type JsonSafeValue, type JsonSchema } from '@helm/protocol'
-import { isAbsoluteAgentPath } from '@helm/protocol'
+import { HelmxError, sanitizeAgentNamespacedMeta, validateOrThrow, type AgentExecutionInfo, type AgentGateResult, type AgentNamespacedMeta, type JsonSafeObject, type JsonSafeValue, type JsonSchema } from '@helmx/protocol'
+import { isAbsoluteAgentPath } from '@helmx/protocol'
 
 // ---------------------------------------------------------------------------
-// workflow 运行 / 定义 / 投影契约（迁自 @helm/protocol workflow.ts）
+// workflow 运行 / 定义 / 投影契约（迁自 @helmx/protocol workflow.ts）
 // ---------------------------------------------------------------------------
 
 /** builtin:workflow/list 动作返回的已保存工作流摘要。 */
@@ -235,7 +235,7 @@ export interface WorkflowRunBadgesDocState {
 }
 
 // ---------------------------------------------------------------------------
-// 受管 worktree 清理契约（迁自 @helm/protocol worktree.ts）
+// 受管 worktree 清理契约（迁自 @helmx/protocol worktree.ts）
 // ---------------------------------------------------------------------------
 
 /** 受管工作树清理：路径必须与节点一起定位，或使用宿主分配的稳定 ID。 */
@@ -251,7 +251,7 @@ export interface WorktreeCleanupRequest {
 }
 
 // ---------------------------------------------------------------------------
-// 外部执行 steer 委托契约（迁自 @helm/protocol plugin.ts）
+// 外部执行 steer 委托契约（迁自 @helmx/protocol plugin.ts）
 // ---------------------------------------------------------------------------
 
 /**
@@ -301,8 +301,8 @@ export interface ExternalSteerResult {
   nodeId: string
   /** 预检或提交点复核时观测的权威水位，具体语义由 guardLevel 区分。 */
   stateChangeSeq: number
-  /** 外部受管执行一律 helm 归属（human/bot 归属不适用外部窗格）。 */
-  ownership: 'helm'
+  /** 外部受管执行一律 helmx 归属（human/bot 归属不适用外部窗格）。 */
+  ownership: 'helmx'
   /** preflight：发送前预检；cas：服务端在提交点原子复核。 */
   guardLevel: 'preflight' | 'cas'
 }
@@ -335,7 +335,7 @@ export type WorktreeExecutionDescriptor = {
   /** worktree 绝对路径。 */
   path: string
   branch: string
-  /** Helm 受管登记 ID；供 cleanup_worktree 精确定位。 */
+  /** Helmx 受管登记 ID；供 cleanup_worktree 精确定位。 */
   id?: string
   repoRoot?: string
   baseCommit?: string
@@ -412,8 +412,8 @@ function requireTrimmedString(value: unknown): string | undefined {
   return trimmed === '' ? undefined : trimmed
 }
 
-function workflowMetaError(reason: string): HelmError {
-  return new HelmError(
+function workflowMetaError(reason: string): HelmxError {
+  return new HelmxError(
     'meta_invalid',
     `execution meta['${WORKFLOW_META_NAMESPACE}'] 业务值非法：${reason}`,
     502,

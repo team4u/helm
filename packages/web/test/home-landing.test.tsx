@@ -1,5 +1,5 @@
 /**
- * 空 Hash 首页落地（对话空间缺省目标）——真实 HelmStoreProvider + happy-dom + 真实 history。
+ * 空 Hash 首页落地（对话空间缺省目标）——真实 HelmxStoreProvider + happy-dom + 真实 history。
  *
  * 契约（docs/conventions/web-navigation.md §2.0 首页落地）：
  * - 空 Hash（无显式主屏目标且无弹窗）进入不是导航意图：认证、会话快照与静态资产
@@ -14,8 +14,8 @@ import * as React from 'react'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
-import { HelmStoreProvider } from '../src/lib/HelmStoreProvider.js'
-import { useHelmStore } from '../src/lib/store-context.js'
+import { HelmxStoreProvider } from '../src/lib/HelmxStoreProvider.js'
+import { useHelmxStore } from '../src/lib/store-context.js'
 import { hangingEventStream } from './helpers/sse-stream.js'
 import type { ResolvedTarget } from '../src/lib/types.js'
 
@@ -150,7 +150,7 @@ function mountApp(): Mount {
   let openTargetFn: ((target: ResolvedTarget) => void) | undefined
 
   function App(): React.ReactNode {
-    const store = useHelmStore()
+    const store = useHelmxStore()
     observed = {
       target: describeTarget(store.primaryTarget),
       authenticated: store.authenticated,
@@ -168,7 +168,7 @@ function mountApp(): Mount {
   let root: Root | undefined
   act(() => {
     root = createRoot(host)
-    root.render(e(HelmStoreProvider, null, e(App)))
+    root.render(e(HelmxStoreProvider, null, e(App)))
   })
   return {
     probe: () => observed,

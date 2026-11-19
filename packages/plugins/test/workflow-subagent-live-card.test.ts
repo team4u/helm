@@ -1,6 +1,6 @@
 /**
  * SubagentLiveCard / SubagentToolView / ExternalRunSummary / ExecutionChildrenRows
- * 行为与纯模型测试（零 @helm/web 依赖）：
+ * 行为与纯模型测试（零 @helmx/web 依赖）：
  * - 纯逻辑（models.ts 编译产物）：状态优先 summary.status、工具输出截断与预览、
  *   elapsed 计算边界、语义工具标题、headerSnippet 全分支；
  * - SSR & DOM（真实插件编译产物 + 宿主共享 SDK 端口）：
@@ -11,7 +11,7 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import type { AskSpec, ConversationEntry, ConversationSummary } from '@helm/protocol'
+import type { AskSpec, ConversationEntry, ConversationSummary } from '@helmx/protocol'
 import type { WorkflowRunSummary } from '../src/contracts.js'
 import type { ExecutionNode, SubagentParentToolSummary, SubagentRunView } from '../src/workflow/client/models.ts'
 import {
@@ -49,7 +49,7 @@ function summary(id: number, status: ConversationSummary['status']): Conversatio
 
 function entriesWithToolResult(resultText: string): ConversationEntry[] {
   return [
-    { id: '1', kind: 'helm.input', data: { text: '跑构建', origin: 'agent' } },
+    { id: '1', kind: 'helmx.input', data: { text: '跑构建', origin: 'agent' } },
     {
       id: '2',
       kind: 'pi.assistant',
@@ -278,7 +278,7 @@ test('短工具输出：buildSubagentStreamLines 完整首行预览且无截断�
 
 test('thinking/text 行：buildSubagentStreamLines 正确解析思考与正文', { timeout: 60_000 }, () => {
   const entries: ConversationEntry[] = [
-    { id: '1', kind: 'helm.input', data: { text: '继续任务', origin: 'agent' } },
+    { id: '1', kind: 'helmx.input', data: { text: '继续任务', origin: 'agent' } },
     {
       id: '2',
       kind: 'pi.assistant',
@@ -301,17 +301,17 @@ test('worktree 存在：头部渲染分支徽章（git-branch 图标 + 分支名
   const html = renderCard('done', {
     conversations: [summary(11, 'idle')],
     conversationDetails: { 11: { ...summary(11, 'idle'), entries: [] } },
-    worktree: { path: '/root/code/helm/.worktrees/wt-668', branch: 'helm/spawn-123' },
+    worktree: { path: '/root/code/helm/.worktrees/wt-668', branch: 'helmx/spawn-123' },
   })
   assert.ok(html.includes('subagent-worktree-badge'), '应渲染 worktree 徽章类')
-  assert.ok(html.includes('helm/spawn-123'), '应显示分支名')
+  assert.ok(html.includes('helmx/spawn-123'), '应显示分支名')
   assert.ok(html.includes('Isolated worktree: /root/code/helm/.worktrees/wt-668'), 'title 提示完整工作树路径')
 })
 
 test('backgroundRun 节点携带 worktree：无显式入参时回退展示 run 节点徽章', { timeout: 60_000 }, () => {
   const run = bgRun({
     status: 'running',
-    nodes: [{ id: 'a1', kind: 'agent', status: 'running', worktree: { path: '/wt/abc', branch: 'helm/bg-9' } }],
+    nodes: [{ id: 'a1', kind: 'agent', status: 'running', worktree: { path: '/wt/abc', branch: 'helmx/bg-9' } }],
   })
   const html = renderCard('done', {
     conversations: [summary(11, 'idle')],
@@ -319,7 +319,7 @@ test('backgroundRun 节点携带 worktree：无显式入参时回退展示 run �
     backgroundRun: run,
   })
   assert.ok(html.includes('subagent-worktree-badge'), '应从 run 节点回退渲染徽章')
-  assert.ok(html.includes('helm/bg-9'))
+  assert.ok(html.includes('helmx/bg-9'))
   assert.ok(html.includes('Running in background'), '后台 run running 时不得假完成')
   assert.ok(!html.includes('Done'), '不得出现已完成徽章')
 })
@@ -358,7 +358,7 @@ test('前台同步 run：查看会话即发起会话且 human 归属显示「转
     }).includes('Move to background'),
     'human 查看方应显示转入后台按钮',
   )
-  for (const ownedBy of ['helm', 'bot']) {
+  for (const ownedBy of ['helmx', 'bot']) {
     assert.ok(
       !renderCard('running', {
         ...baseOpts,
@@ -426,7 +426,7 @@ test('同步外部子代理无原生子会话：完成后停止显示执行中�
     execution: {
       nodeId: 'local',
       executionId: 'pane-9',
-      worktree: { path: '/tmp/wt-9', branch: 'helm/wf-9' },
+      worktree: { path: '/tmp/wt-9', branch: 'helmx/wf-9' },
     },
   }
   const h = createWorkflowHostHarness({ conversationId: 1, conversations: [conversation] })
@@ -453,7 +453,7 @@ test('同步外部子代理无原生子会话：完成后停止显示执行中�
       toolStatus: 'done',
       executionId: 'pane-9',
       nodeId: 'local',
-      worktree: { path: '/tmp/wt-9', branch: 'helm/wf-9' },
+      worktree: { path: '/tmp/wt-9', branch: 'helmx/wf-9' },
     }),
   )
   assert.ok(extHtml.includes('subagent-external-card'))
@@ -503,7 +503,7 @@ test('resume 正在运行时：历史失败调用保留异常状态，只有最�
   assert.equal(historicalRow.includes('spin-slow'), false, '历史失败行不能随后续 resume 转圈')
   const activeRows = html.match(/<button[^>]*class="trace-row workflow-trace-row-btn"[\s\S]*?<\/button>/g) ?? []
   assert.equal(activeRows.length, 1, '最新调用单行不应标错')
-  assert.match(activeRows[0]!, /helm-status-light-working[\s\S]*?status-dot-working[\s\S]*?Running/)
+  assert.match(activeRows[0]!, /helmx-status-light-working[\s\S]*?status-dot-working[\s\S]*?Running/)
   assert.equal(activeRows[0]!.includes('spin-slow'), false, '主状态不再用 spinner')
   assert.equal(activeRows[0]!.includes('Resumed below'), false)
 })
@@ -930,11 +930,11 @@ test('resolveSubagentHeaderSnippet：working 后台 Gate 验收期与兜底启�
   const gateRun = bgRun({
     status: 'running',
     createdAt: 1_700_000_000_000,
-    nodes: [{ id: 'n1', kind: 'agent', status: 'done', gateCommand: 'pnpm test --filter @helm/web' }],
+    nodes: [{ id: 'n1', kind: 'agent', status: 'done', gateCommand: 'pnpm test --filter @helmx/web' }],
   })
   assert.deepEqual(
     resolveSubagentHeaderSnippet({ badgeStatus: 'working', summary: summary(11, 'idle'), backgroundRun: gateRun }),
-    { kind: 'doing', tag: 'Gate check', text: 'pnpm test --filter @helm/web' },
+    { kind: 'doing', tag: 'Gate check', text: 'pnpm test --filter @helmx/web' },
   )
   assert.deepEqual(
     resolveSubagentHeaderSnippet({ badgeStatus: 'working', summary: { ...summary(11, 'working'), doing: '正在重构模块' } }),

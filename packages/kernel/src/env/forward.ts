@@ -17,11 +17,11 @@
 import net from 'node:net'
 import { EventEmitter } from 'node:events'
 import { randomUUID as cryptoRandomUUID } from 'node:crypto'
-import { HelmError, type NodeForwardEvent, type NodeForwardInput, type NodeForwardSession } from '@helm/protocol'
+import { HelmxError, type NodeForwardEvent, type NodeForwardInput, type NodeForwardSession } from '@helmx/protocol'
 import type { Duplex } from 'node:stream'
 import type { EnvFabric } from './fabric.js'
 
-export type { NodeForwardEvent, NodeForwardInput, NodeForwardSession } from '@helm/protocol'
+export type { NodeForwardEvent, NodeForwardInput, NodeForwardSession } from '@helmx/protocol'
 
 /** Default foreground lease deadline: stops automatically if no event stream attaches after creation (CLI makes a single stream request). */
 const NODE_FORWARD_LEASE_TIMEOUT_MS = 15_000
@@ -35,12 +35,12 @@ function validateHost(raw: unknown, what: string): string {
     raw.trim() !== raw ||
     /\s/.test(raw)
   ) {
-    throw new HelmError('validation_error', `${what} must be a non-empty string without whitespace (<= 255 characters)`, 400, { value: raw })
+    throw new HelmxError('validation_error', `${what} must be a non-empty string without whitespace (<= 255 characters)`, 400, { value: raw })
   }
   for (const ch of raw) {
     const code = ch.charCodeAt(0)
     if (code < 0x20 || code === 0x7f) {
-      throw new HelmError('validation_error', `${what} must not contain control characters`, 400, { value: raw })
+      throw new HelmxError('validation_error', `${what} must not contain control characters`, 400, { value: raw })
     }
   }
   return raw
@@ -48,7 +48,7 @@ function validateHost(raw: unknown, what: string): string {
 
 function validatePort(raw: unknown, what: string): number {
   if (typeof raw !== 'number' || !Number.isSafeInteger(raw) || raw < 1 || raw > 65535) {
-    throw new HelmError('validation_error', `${what} must be a valid integer port in 1..65535`, 400, { value: raw })
+    throw new HelmxError('validation_error', `${what} must be a valid integer port in 1..65535`, 400, { value: raw })
   }
   return raw
 }
@@ -86,7 +86,7 @@ export class NodeForwardService {
 
   /** Start forwarding (foreground command lifecycle): fails explicitly if listen fails; returns session on success. */
   async start(nodeId: string, input: NodeForwardInput): Promise<NodeForwardSession> {
-    if (this.#closed) throw new HelmError('node_offline', 'forwarding service is closed', 409)
+    if (this.#closed) throw new HelmxError('node_offline', 'forwarding service is closed', 409)
     const forwardId = `fwd-${cryptoRandomUUID()}`
     const targetHost = input.targetHost ?? '127.0.0.1'
     const session: NodeForwardSession = {
@@ -171,7 +171,7 @@ export class NodeForwardService {
 
     await new Promise<void>((resolve, reject) => {
       const onError = (error: Error): void => {
-        reject(new HelmError(
+        reject(new HelmxError(
           'node_forward_listen_failed',
           `failed to listen on ${input.listenHost}:${input.listenPort}: ${error.message}`,
           409,
@@ -193,7 +193,7 @@ export class NodeForwardService {
     // Race between listen completing and service closing: never publish a new session once closed.
     if (this.#closed) {
       await new Promise<void>((resolve) => server.close(() => resolve()))
-      throw new HelmError('node_offline', 'forwarding service is closed', 409)
+      throw new HelmxError('node_offline', 'forwarding service is closed', 409)
     }
 
     // Self-referential closures (`stopped`/`stop`/`lease`): only invoked after full object construction and assignment (no TDZ risk).
@@ -248,7 +248,7 @@ export class NodeForwardService {
   /** Subscribe to events (used by monitor streams); returns an unsubscribe function. */
   onEvent(forwardId: string, listener: (event: NodeForwardEvent) => void): () => void {
     const forward = this.#forwards.get(forwardId)
-    if (forward === undefined) throw new HelmError('not_found', `forwarding session ${forwardId} not found`, 404, { forwardId })
+    if (forward === undefined) throw new HelmxError('not_found', `forwarding session ${forwardId} not found`, 404, { forwardId })
     forward.events.on('event', listener)
     return () => forward.events.removeListener('event', listener)
   }
@@ -261,7 +261,7 @@ export class NodeForwardService {
    */
   acquireLease(forwardId: string): () => void {
     const forward = this.#forwards.get(forwardId)
-    if (forward === undefined) throw new HelmError('not_found', `forwarding session ${forwardId} not found`, 404, { forwardId })
+    if (forward === undefined) throw new HelmxError('not_found', `forwarding session ${forwardId} not found`, 404, { forwardId })
     if (forward.stopped()) return () => undefined
     if (forward.leaseTimer !== undefined) {
       clearTimeout(forward.leaseTimer)
@@ -306,7 +306,7 @@ export class NodeForwardService {
   /** Stop forwarding (idempotent: shares the same close Promise). */
   async stop(forwardId: string): Promise<void> {
     const forward = this.#forwards.get(forwardId)
-    if (forward === undefined) throw new HelmError('not_found', `forwarding session ${forwardId} not found`, 404, { forwardId })
+    if (forward === undefined) throw new HelmxError('not_found', `forwarding session ${forwardId} not found`, 404, { forwardId })
     await forward.stop('explicit')
   }
 

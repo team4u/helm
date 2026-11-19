@@ -17,7 +17,7 @@
  *    unconfirmed timeout 502;
  * 5. HTTP body boundary validation: rejects unknown fields / non-http(s) registryUrl / non-boolean force /
  *    user-supplied attemptId;
- * 6. Auto-upgrade is disabled by default; triggered when HELM_AUTO_UPGRADE_NODES=1 and the node has a
+ * 6. Auto-upgrade is disabled by default; triggered when HELMX_AUTO_UPGRADE_NODES=1 and the node has a
  *    strictly older SemVer than Hub.
  */
 import { test } from 'node:test'
@@ -38,9 +38,9 @@ import type {
   NodeUpgradeResult,
   NodeUpgradeRpcInput,
   RpcResult,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 import type { HubConnectionLocal } from '../src/env/registry.js'
-import { NodeRegistry, HelmUpgradeBusyError, HelmUpgradeTimeoutError } from '../src/env/index.js'
+import { NodeRegistry, HelmxUpgradeBusyError, HelmxUpgradeTimeoutError } from '../src/env/index.js'
 import { KernelRuntime } from '../src/runtime/runtime.js'
 import { hubVersion, normalizeExplicitVersion, compareStrictSemVer } from '../src/runtime/semver.js'
 import { startHub } from '../src/http/index.js'
@@ -55,7 +55,7 @@ void mkdtemp
 let rootDir: string
 
 test('setup: create temporary directory', { timeout: 60_000 }, () => {
-  rootDir = mkdtempSync(join(tmpdir(), 'helm-node-upgrade-'))
+  rootDir = mkdtempSync(join(tmpdir(), 'helmx-node-upgrade-'))
 })
 
 // ---------------------------------------------------------------------------
@@ -311,7 +311,7 @@ test('registry: reject concurrent beginUpgrade on same node; original socket dis
     registry.beginUpgrade('n1', { attemptId: 'a1', targetVersion: '1.1.0', previousVersion: '1.0.0', timeoutMs: 5_000 })
     assert.throws(
       () => registry.beginUpgrade('n1', { attemptId: 'a2', targetVersion: '1.2.0', previousVersion: '1.0.0', timeoutMs: 1_000 }),
-      HelmUpgradeBusyError,
+      HelmxUpgradeBusyError,
     )
     // Old socket disconnects (expected during upgrade): waiter stays alive waiting for candidate commit.
     socket.close()
@@ -355,7 +355,7 @@ test('registry: original RPC disconnect followed by candidate commit still succe
       previousVersion: '1.0.0',
       timeoutMs: 200,
     })
-    await assert.rejects(handle.result, HelmUpgradeTimeoutError)
+    await assert.rejects(handle.result, HelmxUpgradeTimeoutError)
     assert.equal(registry2.hasUpgradeWaiter('n1'), false)
   } finally {
     await registry2.close()
@@ -936,7 +936,7 @@ test('upgrade: node disconnects mid-RPC -- never falsely succeeds (unconfirmed 5
 })
 
 // ---------------------------------------------------------------------------
-// Auto-upgrade (HELM_AUTO_UPGRADE_NODES)
+// Auto-upgrade (HELMX_AUTO_UPGRADE_NODES)
 // ---------------------------------------------------------------------------
 
 test('auto-upgrade disabled by default: older node connecting does not trigger nodeUpgrade', { timeout: 60_000 }, async () => {
@@ -953,9 +953,9 @@ test('auto-upgrade disabled by default: older node connecting does not trigger n
   }
 })
 
-test('HELM_AUTO_UPGRADE_NODES=1: strictly older node auto-upgrades async to Hub version', { timeout: 60_000 }, async () => {
+test('HELMX_AUTO_UPGRADE_NODES=1: strictly older node auto-upgrades async to Hub version', { timeout: 60_000 }, async () => {
   const dir = await mkdtemp(join(rootDir, 'auto-on-'))
-  process.env['HELM_AUTO_UPGRADE_NODES'] = '1'
+  process.env['HELMX_AUTO_UPGRADE_NODES'] = '1'
   let app: Awaited<ReturnType<typeof openHubApp>> | undefined
   try {
     app = await openHubApp(dir)
@@ -972,14 +972,14 @@ test('HELM_AUTO_UPGRADE_NODES=1: strictly older node auto-upgrades async to Hub 
     assert.equal(node.upgradeCalls[0]!.targetVersion, hubVersion(), 'auto-upgrade target must be Hub version')
     node.close()
   } finally {
-    delete process.env['HELM_AUTO_UPGRADE_NODES']
+    delete process.env['HELMX_AUTO_UPGRADE_NODES']
     await app?.close().catch(() => undefined)
   }
 })
 
 test('auto-upgrade deduplication: same failed node is not retried endlessly (invoked once)', { timeout: 60_000 }, async () => {
   const dir = await mkdtemp(join(rootDir, 'auto-dedupe-'))
-  process.env['HELM_AUTO_UPGRADE_NODES'] = '1'
+  process.env['HELMX_AUTO_UPGRADE_NODES'] = '1'
   let app: Awaited<ReturnType<typeof openHubApp>> | undefined
   try {
     app = await openHubApp(dir)
@@ -996,7 +996,7 @@ test('auto-upgrade deduplication: same failed node is not retried endlessly (inv
     assert.equal(node.upgradeCalls.length, 1, 'auto-upgrade attempts only once per node')
     node.close()
   } finally {
-    delete process.env['HELM_AUTO_UPGRADE_NODES']
+    delete process.env['HELMX_AUTO_UPGRADE_NODES']
     await app?.close().catch(() => undefined)
   }
 })

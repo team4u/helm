@@ -1,6 +1,6 @@
 /**
  * ProfileService: manages `profiles/<id>/` (profile.json + SYSTEM.md).
- * Profile schema conforms to @helm/protocol (id required; name/model/runtime/tags optional).
+ * Profile schema conforms to @helmx/protocol (id required; name/model/runtime/tags optional).
  * An empty or omitted model means unconfigured—runtime reports an explicit error rather than fabricating a default model in the service layer.
  * Long-term MEMORY.md is autonomously managed by the builtin:memory plugin and does not belong here.
  */
@@ -8,7 +8,7 @@ import { lstat, mkdir, readdir, readFile, realpath, rmdir, rm } from 'node:fs/pr
 import { homedir } from 'node:os'
 import { dirname, join, relative, sep } from 'node:path'
 import {
-  HelmError,
+  HelmxError,
   assertProfileId,
   isJsonObject,
   isValidEnvName,
@@ -16,12 +16,12 @@ import {
   type Profile,
   type ProfileStarterPrompt,
   type SkillSummary,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 import {
   PROFILE_STARTERS_MAX_ITEMS,
   PROFILE_STARTER_LABEL_MAX_LENGTH,
   PROFILE_STARTER_PROMPT_MAX_LENGTH,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 
 export type { Profile, SkillSummary }
 import {
@@ -39,19 +39,19 @@ const DEFAULT_PROFILE_NAME = 'person assist'
 const THINKING_LEVELS = new Set(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
 
 /**
- * Layer 0 resident system prompt (top of the three-tier progressive disclosure): declares only identity and managed helm
+ * Layer 0 resident system prompt (top of the three-tier progressive disclosure): declares only identity and managed helmx
  * CLI awareness; command tables, generative UI component references, and other working details live in Layer 1/2
- * (skills/helm-cli) instead of remaining permanently resident (skill catalog descriptions still carry minimal cost).
+ * (skills/helmx-cli) instead of remaining permanently resident (skill catalog descriptions still carry minimal cost).
  * update_memory instructions are dynamically injected by the builtin:memory plugin based on the Profile toggle.
  */
 export const SYSTEM_DEFAULT = [
   '# System Prompt',
   '',
-  'You are a personal assistant running on the Helm microkernel.',
+  'You are a personal assistant running on the Helmx microkernel.',
   '',
-  '1. Managed bash provides the `helm` CLI and conversation identity `HELM_CONVERSATION_ID`; invoke commands with `--current` and `--json`.',
-  '2. When `helm-cli` is in the currently available skills directory, call `load_skill({ skillId: "helm-cli" })` and read its references on demand before operating Helm or answering host capability questions, verifying capabilities through command help and live state; skip this step if the skill is not in the currently available directory.',
-  '3. Use Markdown for normal replies; extended output formats such as interactive cards or reusable micro-apps follow the currently available skill directory for this turn: when a skill description declares such a capability, call `load_skill` first to load its guide before outputting, and fall back to normal Markdown without referencing nonexistent guides if missing from the directory. When generating files for users to view on Web, register artifacts via `write(..., artifact: true)`, `register_artifact({ path })`, or `helm artifacts put <path> --current`, and render them directly in your reply using `[filename](artifact:<id>)` or `![image](artifact:<id>)`. When an external command produces files, use an absolute output path on the target node and verify the expected file exists and is registered before delivering or cleaning up the source worktree.',
+  '1. Managed bash provides the `helmx` CLI and conversation identity `HELMX_CONVERSATION_ID`; invoke commands with `--current` and `--json`.',
+  '2. When `helmx-cli` is in the currently available skills directory, call `load_skill({ skillId: "helmx-cli" })` and read its references on demand before operating Helmx or answering host capability questions, verifying capabilities through command help and live state; skip this step if the skill is not in the currently available directory.',
+  '3. Use Markdown for normal replies; extended output formats such as interactive cards or reusable micro-apps follow the currently available skill directory for this turn: when a skill description declares such a capability, call `load_skill` first to load its guide before outputting, and fall back to normal Markdown without referencing nonexistent guides if missing from the directory. When generating files for users to view on Web, register artifacts via `write(..., artifact: true)`, `register_artifact({ path })`, or `helmx artifacts put <path> --current`, and render them directly in your reply using `[filename](artifact:<id>)` or `![image](artifact:<id>)`. When an external command produces files, use an absolute output path on the target node and verify the expected file exists and is registered before delivering or cleaning up the source worktree.',
   '',
 ].join('\n')
 
@@ -342,7 +342,7 @@ export class ProfileService {
       throw new Error(`default profile '${DEFAULT_PROFILE_ID}' cannot be deleted`)
     }
     if (deps !== undefined && (await deps.isProfileInUse(id))) {
-      throw new HelmError('profile_in_use', `profile ${id} is still bound by conversations; unbind before deleting`, 409, {
+      throw new HelmxError('profile_in_use', `profile ${id} is still bound by conversations; unbind before deleting`, 409, {
         profileId: id,
       })
     }
@@ -443,7 +443,7 @@ async function collectFiles(root: string, rel = ''): Promise<string[]> {
  * Machine-level shared skills root (pi ecosystem skill library, `~/.agents/skills`): SkillService scans and loads
  * it read-only as an external source and never writes to it via writeFile/ensureSkill.
  * This is not a filesystem permission or tool sandbox; bash/read/write/edit still follow OS permissions.
- * Independent of HELM_DATA_DIR; injected by production kernel assembly, excluded from SkillService by default.
+ * Independent of HELMX_DATA_DIR; injected by production kernel assembly, excluded from SkillService by default.
  */
 export function defaultExternalSkillRoots(): string[] {
   return [join(homedir(), '.agents', 'skills')]
@@ -483,7 +483,7 @@ export class SkillService {
 
   /** All skill summaries (merged from dataDir root + external shared roots, injected into load_skill catalog).
    * dataDir root keeps strict semantics: invalid IDs are skipped, broken frontmatter throws. Missing external root
-   * ENOENT is treated as empty; malformed external entries (third-party content Helm does not own) are skipped rather than
+   * ENOENT is treated as empty; malformed external entries (third-party content Helmx does not own) are skipped rather than
    * breaking the entire catalog. Deduplicated by id: dataDir always wins (managed skills can never be shadowed by external ones,
    * while placing a same-named skill in dataDir creates a local override); otherwise first declared root wins. Sorted stably by id. */
   async list(): Promise<SkillSummary[]> {
@@ -706,7 +706,7 @@ export class SkillService {
    * (user-created skills do not go through ensureSkill and are unaffected). */
   private assertSkillMutable(skillId: string): void {
     if (this.managedSkillIds.has(skillId)) {
-      throw new HelmError(
+      throw new HelmxError(
         'managed_skill_readonly',
         `skill '${skillId}' is a managed built-in plugin system asset and cannot be written or deleted via normal APIs (synced from source at plugin startup)`,
         403,
@@ -722,7 +722,7 @@ export class SkillService {
     try {
       assertSkillId(id)
     } catch (err) {
-      throw new HelmError(
+      throw new HelmxError(
         'validation_error',
         `Invalid skill id: ${err instanceof Error ? err.message : String(err)}`,
         400,

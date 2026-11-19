@@ -4,43 +4,43 @@
  * `npm pack` / `npm publish`.
  *
  * Output layout (dist/ is the publish package root; the release agent runs npm pack/publish inside dist):
- *   package.json     publish manifest (name defaults to @team4u/helm-hub, overridable via the build env
- *                    HELM_PAYLOAD_PACKAGE; manifest.name shares the same source). dependencies
+ *   package.json     publish manifest (name defaults to @helmx/hub, overridable via the build env
+ *                    HELMX_PAYLOAD_PACKAGE; manifest.name shares the same source). dependencies
  *                    = the root set of the hub/kernel/plugins/plugin-build/env-io/protocol production
  *                    dependency closure: external dependencies are pinned to the exact versions actually
- *                    installed by pnpm in the repository, @helm/* packages are materialized as
+ *                    installed by pnpm in the repository, @helmx/* packages are materialized as
  *                    file:./<pkg>.tgz (each carrying its own dist/ and package.json). The consumer
  *                    runs `npm install --omit=dev --ignore-scripts` and npm unpacks the archives into
  *                    node_modules verbatim (file: tarballs install byte-for-byte; exercised end-to-end
  *                    by the PAYLOAD_NPM_SMOKE e2e), completing the dependencies (esbuild platform
  *                    packages install automatically per target platform via optionalDependencies).
  *   hub.tgz kernel.tgz plugins.tgz plugin-build.tgz env-io.tgz protocol.tgz
- *                    the six @helm runtime packages as npm archives ONLY — the payload root never
+ *                    the six @helmx runtime packages as npm archives ONLY — the payload root never
  *                    carries their unpacked directories. Runtime Node resolution, built-in plugin asset
- *                    probing (node_modules/@helm/plugins/dist/<name>) and the launch entry all operate
+ *                    probing (node_modules/@helmx/plugins/dist/<name>) and the launch entry all operate
  *                    on the consumer-side node_modules layout, so a second unpacked copy would be pure
  *                    duplication (~6 MiB compressed); the unpacked staging directories below are
  *                    transient packing inputs, removed once the archives exist.
  *   cli/{package.json, dist/}      CLI output (package.json kept for locating/auditing; dist/index.js is
  *                                  the same zero-dependency single-file bundle as the dist-cli artifact,
- *                                  so the payload-side `helm` and the globally installed `helm` are one CLI;
+ *                                  so the payload-side `helmx` and the globally installed `helmx` are one CLI;
  *                                  the bundle self-contains the CLI workspace closure, so it stays at the
  *                                  payload root instead of riding an archive)
- *   web/dist/                      Vite output (start.mjs points at it explicitly via HELM_WEB_DIST_DIR)
+ *   web/dist/                      Vite output (start.mjs points at it explicitly via HELMX_WEB_DIST_DIR)
  *   start.mjs + manifest.json      zero-dependency launch entry and the version/entry/checksum contract
  *
  * The same build also assembles two sibling publish packages: the stable CLI artifact
  * (see src/assemble-cli.mjs): dist-cli/ is a zero-dependency, single-file bundle of the complete
  * control CLI (packages/cli/dist/index.js incl. the bundled-in launcher update-path closure) that
- * installs globally via one `npm install -g` (bin helm); and the node daemon artifact
+ * installs globally via one `npm install -g` (bin helmx); and the node daemon artifact
  * (see src/assemble-node.mjs): dist-node/ bundles the node daemon CLI (packages/node/dist/cli.js)
- * with @helm/node + @helm/env-io + @helm/protocol inlined and exactly four external exact-version
- * dependencies (bin helm-node → dist/cli.js; the dual-package self-upgrade target). The Hub payload
+ * with @helmx/node + @helmx/env-io + @helmx/protocol inlined and exactly four external exact-version
+ * dependencies (bin helmx-node → dist/cli.js; the dual-package self-upgrade target). The Hub payload
  * contract above is unchanged by those artifacts except for the cli entry bytes; a missing CLI or
  * node dist input aborts the build.
  *
- * Note: `@helm/plugin-client` is a browser-only SDK already bundled into `web/dist` and virtualized by
- * `@helm/plugin-build` via `globalThis.__helm_shared_plugin_client`, so neither `@helm/plugin-client`
+ * Note: `@helmx/plugin-client` is a browser-only SDK already bundled into `web/dist` and virtualized by
+ * `@helmx/plugin-build` via `globalThis.__helmx_shared_plugin_client`, so neither `@helmx/plugin-client`
  * nor its browser UI dependency tree (`react`, `lucide-react`, `@radix-ui/*`, markdown) enters the Hub
  * server payload.
  *
@@ -61,8 +61,8 @@ const payloadPkgRoot = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(payloadPkgRoot, '../..');
 const stagingDir = path.join(payloadPkgRoot, 'dist');
 
-/** Publish payload package name (overridable via HELM_PAYLOAD_PACKAGE). */
-const payloadPackageName = process.env.HELM_PAYLOAD_PACKAGE ?? '@team4u/helm-hub';
+/** Publish payload package name (overridable via HELMX_PAYLOAD_PACKAGE). */
+const payloadPackageName = process.env.HELMX_PAYLOAD_PACKAGE ?? '@helmx/hub';
 
 /** Built-in plugin runtime asset subdirectories: every plugin resolver probes the same-named dist-side directory first. */
 const RUNTIME_ASSET_SUBDIRS = ['client', 'skill', 'assets'];
@@ -114,7 +114,7 @@ function walkStats(dir) {
   return { files, bytes };
 }
 
-// --- Root dependency set: production dependencies of hub ∪ kernel ∪ plugins ∪ plugin-build ∪ env-io ∪ protocol; @helm/* installs from archives ------
+// --- Root dependency set: production dependencies of hub ∪ kernel ∪ plugins ∪ plugin-build ∪ env-io ∪ protocol; @helmx/* installs from archives ------
 // External dependency versions come from the exact package.json version of the repository's installed
 // pnpm resolution (the real package the node_modules symlink points at) — never carry ^/~ floating
 // ranges into the publish contract (reproducible installs).
@@ -147,7 +147,7 @@ function resolveInstalledExactVersion(pkgDir, name) {
 }
 
 const externalDeps = [...new Set(RUNTIME_PKGS.flatMap((dir) => Object.keys(pkgJsonOf[dir].dependencies ?? {})))]
-  .filter((name) => !name.startsWith('@helm/'))
+  .filter((name) => !name.startsWith('@helmx/'))
   .sort();
 const rootDependencies = Object.fromEntries(
   externalDeps.map((name) => [name, resolveInstalledExactVersion(owningPkgDirOf(name), name)]),
@@ -156,17 +156,17 @@ const rootDependencies = Object.fromEntries(
 // npm auto-installs peers for file: archives, and floating peer resolution would break the
 // reproducible-install contract — pin everything to the repository's installed versions.
 const externalPeers = [...new Set(RUNTIME_PKGS.flatMap((dir) => Object.keys(pkgJsonOf[dir].peerDependencies ?? {})))]
-  .filter((name) => !name.startsWith('@helm/') && !(name in rootDependencies))
+  .filter((name) => !name.startsWith('@helmx/') && !(name in rootDependencies))
   .sort();
 for (const name of externalPeers) {
   rootDependencies[name] = resolveInstalledExactVersion(owningPkgDirOf(name, 'peerDependencies'), name);
 }
-rootDependencies['@helm/protocol'] = 'file:./protocol.tgz';
-rootDependencies['@helm/kernel'] = 'file:./kernel.tgz';
-rootDependencies['@helm/plugins'] = 'file:./plugins.tgz';
-rootDependencies['@helm/plugin-build'] = 'file:./plugin-build.tgz';
-rootDependencies['@helm/env-io'] = 'file:./env-io.tgz';
-rootDependencies['@helm/hub'] = 'file:./hub.tgz';
+rootDependencies['@helmx/protocol'] = 'file:./protocol.tgz';
+rootDependencies['@helmx/kernel'] = 'file:./kernel.tgz';
+rootDependencies['@helmx/plugins'] = 'file:./plugins.tgz';
+rootDependencies['@helmx/plugin-build'] = 'file:./plugin-build.tgz';
+rootDependencies['@helmx/env-io'] = 'file:./env-io.tgz';
+rootDependencies['@helmx/hub'] = 'file:./hub.tgz';
 
 // npm resolves peers strictly by default (ERESOLVE), while the repository's pnpm install allows peer
 // versions wider than declared (e.g. chord pins peer ws@8.21.0 while the repository locks 8.22.1). Scan
@@ -187,7 +187,7 @@ const distPackageJson = {
   name: payloadPackageName,
   version: payloadPkg.version,
   type: 'module',
-  description: 'helm Hub runtime payload (six @helm runtime archives + cli bundle + web dist and a zero-dependency launch entry)',
+  description: 'helmx Hub runtime payload (six @helmx runtime archives + cli bundle + web dist and a zero-dependency launch entry)',
   license: 'MIT',
   repository: { type: 'git', url: 'git+https://github.com/team4u/helm.git', directory: 'packages/payload' },
   publishConfig: { access: 'public' },
@@ -232,15 +232,15 @@ for (const dir of ['hub', 'kernel', 'plugins', 'plugin-build', 'env-io', 'protoc
 // self-contains the CLI's workspace closure (the bundled-in launcher / the env-io update engine / tar ride along via
 // the update path), so the payload root dependency set needs no additions for the CLI to run and
 // start.mjs check keeps resolving from the cli entry point. The remaining cli/dist tsc outputs stay
-// as layout/auditing helper assets; `helm plugins build`'s computed dynamic import of
-// @helm/plugin-build resolves at runtime from the payload root node_modules (plugin-build.tgz).
+// as layout/auditing helper assets; `helmx plugins build`'s computed dynamic import of
+// @helmx/plugin-build resolves at runtime from the payload root node_modules (plugin-build.tgz).
 copyFileSync(cliArtifact.bundleFile, path.join(stagingDir, 'cli', 'dist', 'index.js'));
 cpSync(path.join(repoRoot, 'packages/web/dist'), path.join(stagingDir, 'web/dist'), { recursive: true });
 cpSync(path.join(payloadPkgRoot, 'src/start.mjs'), path.join(stagingDir, 'start.mjs'));
 cpSync(path.join(repoRoot, 'LICENSE'), path.join(stagingDir, 'LICENSE'));
 cpSync(path.join(repoRoot, 'THIRD_PARTY_NOTICES.md'), path.join(stagingDir, 'THIRD_PARTY_NOTICES.md'));
 // Report the payload publish version at runtime so Hub / CLI don't keep reporting the old workspace
-// version; also strip @helm/* workspace dependencies: the root package.json installs every @helm/*
+// version; also strip @helmx/* workspace dependencies: the root package.json installs every @helmx/*
 // archive uniformly, and leftover workspace:* protocols inside sub-packages would make consumer-side
 // npm install fail outright (npm doesn't support the workspace: protocol); at runtime Node's
 // level-by-level upward resolution hits the same instances in the root node_modules.
@@ -248,10 +248,10 @@ for (const component of ['hub', 'kernel', 'plugins', 'plugin-build', 'env-io', '
   const manifestPath = path.join(stagingDir, component, 'package.json');
   const componentPackage = JSON.parse(readFileSync(manifestPath, 'utf8'));
   const deps = Object.fromEntries(
-    Object.entries(componentPackage.dependencies ?? {}).filter(([name]) => !name.startsWith('@helm/')),
+    Object.entries(componentPackage.dependencies ?? {}).filter(([name]) => !name.startsWith('@helmx/')),
   );
   const staged = { ...componentPackage, version: payloadPkg.version, dependencies: deps };
-  // Hub only: drop the workspace `helm-hub` bin. Inside the payload the archive is a file:
+  // Hub only: drop the workspace `helmx-hub` bin. Inside the payload the archive is a file:
   // dependency launched through start.mjs (which owns the env contract); an installed bin link
   // would advertise a second entry point that bypasses it.
   if (component === 'hub') delete staged.bin;
@@ -286,7 +286,7 @@ for (const ent of readdirSync(builtinSrc, { withFileTypes: true }).sort((a, b) =
   }
 }
 if (missingPrebuilt.length > 0) {
-  console.error(`[payload] built-in plugin prebuilt dist-client missing (rebuild @helm/plugins first):\n${missingPrebuilt.map((m) => `- ${m}`).join('\n')}`);
+  console.error(`[payload] built-in plugin prebuilt dist-client missing (rebuild @helmx/plugins first):\n${missingPrebuilt.map((m) => `- ${m}`).join('\n')}`);
   process.exit(1);
 }
 
@@ -301,9 +301,9 @@ writeFileSync(path.join(stagingDir, 'package.json'), `${JSON.stringify(distPacka
 // copying the whole directory here would quietly ship stale product. Fail on detection — never publish
 // with suspicious artifacts.
 const staleArtifacts = [
-  ['kernel/dist/main.js', 'kernel composition-root entry (moved to @helm/hub)'],
-  ['kernel/dist/app.js', 'kernel composition root (moved to @helm/hub)'],
-  ['kernel/dist/builtin-plugins', 'kernel built-in plugins (moved to @helm/plugins)'],
+  ['kernel/dist/main.js', 'kernel composition-root entry (moved to @helmx/hub)'],
+  ['kernel/dist/app.js', 'kernel composition root (moved to @helmx/hub)'],
+  ['kernel/dist/builtin-plugins', 'kernel built-in plugins (moved to @helmx/plugins)'],
 ];
 const stale = staleArtifacts.filter(([rel]) => existsSync(path.join(stagingDir, rel)));
 if (stale.length > 0) {
@@ -312,8 +312,8 @@ if (stale.length > 0) {
 }
 
 // --- manifest (version / entry / checksum contract; paths relative to the payload root, POSIX separators) ----
-// The six @helm runtime entries point at the consumer-side npm install layout
-// (node_modules/@helm/<pkg>/...): that is where Node resolution, plugin asset probing and the launch
+// The six @helmx runtime entries point at the consumer-side npm install layout
+// (node_modules/@helmx/<pkg>/...): that is where Node resolution, plugin asset probing and the launch
 // entry actually operate. Their checksums pin the exact bytes packed into the archives — npm
 // materializes file: tarballs verbatim (verified end-to-end by the PAYLOAD_NPM_SMOKE e2e), so
 // post-install checkLayout proves the installed tree matches what was shipped. The *Archive entries
@@ -323,23 +323,23 @@ if (stale.length > 0) {
 const entries = {
   launcher: 'start.mjs',
   rootPackageJson: 'package.json',
-  hub: 'node_modules/@helm/hub/dist/main.js',
-  hubPackageJson: 'node_modules/@helm/hub/package.json',
+  hub: 'node_modules/@helmx/hub/dist/main.js',
+  hubPackageJson: 'node_modules/@helmx/hub/package.json',
   hubArchive: 'hub.tgz',
-  kernel: 'node_modules/@helm/kernel/dist/index.js',
-  kernelPackageJson: 'node_modules/@helm/kernel/package.json',
+  kernel: 'node_modules/@helmx/kernel/dist/index.js',
+  kernelPackageJson: 'node_modules/@helmx/kernel/package.json',
   kernelArchive: 'kernel.tgz',
-  plugins: 'node_modules/@helm/plugins/dist/index.js',
-  pluginsPackageJson: 'node_modules/@helm/plugins/package.json',
+  plugins: 'node_modules/@helmx/plugins/dist/index.js',
+  pluginsPackageJson: 'node_modules/@helmx/plugins/package.json',
   pluginsArchive: 'plugins.tgz',
-  pluginBuild: 'node_modules/@helm/plugin-build/dist/index.js',
-  pluginBuildPackageJson: 'node_modules/@helm/plugin-build/package.json',
+  pluginBuild: 'node_modules/@helmx/plugin-build/dist/index.js',
+  pluginBuildPackageJson: 'node_modules/@helmx/plugin-build/package.json',
   pluginBuildArchive: 'plugin-build.tgz',
-  envIo: 'node_modules/@helm/env-io/dist/index.js',
-  envIoPackageJson: 'node_modules/@helm/env-io/package.json',
+  envIo: 'node_modules/@helmx/env-io/dist/index.js',
+  envIoPackageJson: 'node_modules/@helmx/env-io/package.json',
   envIoArchive: 'env-io.tgz',
-  protocol: 'node_modules/@helm/protocol/dist/index.js',
-  protocolPackageJson: 'node_modules/@helm/protocol/package.json',
+  protocol: 'node_modules/@helmx/protocol/dist/index.js',
+  protocolPackageJson: 'node_modules/@helmx/protocol/package.json',
   protocolArchive: 'protocol.tgz',
   cli: 'cli/dist/index.js',
   cliPackageJson: 'cli/package.json',
@@ -350,7 +350,7 @@ const entryChecksums = Object.fromEntries(
     // node_modules entries hash their packing input (the staged bytes inside the archive): strip the
     // consumer-side install prefix down to the staged component path; every other entry hashes the
     // shipped file directly.
-    const stagedRel = rel.startsWith('node_modules/@helm/') ? rel.replace(/^node_modules\/@helm\//, '') : rel;
+    const stagedRel = rel.startsWith('node_modules/@helmx/') ? rel.replace(/^node_modules\/@helmx\//, '') : rel;
     return [key, sha256Of(path.join(stagingDir, stagedRel))];
   }),
 );
@@ -374,9 +374,9 @@ for (const dir of ['hub', 'kernel', 'plugins', 'plugin-build', 'env-io', 'protoc
 
 const stats = walkStats(stagingDir);
 console.log(`[payload] assembly complete: ${stagingDir}`);
-console.log(`[payload] publish package name: ${distPackageJson.name}@${distPackageJson.version} (overridable via HELM_PAYLOAD_PACKAGE)`);
-console.log(`[payload] root dependencies: ${Object.keys(rootDependencies).length} entries (${externalDeps.length} exact external pins + ${externalPeers.length} peers + @helm/* file:./<pkg>.tgz ×6)`);
+console.log(`[payload] publish package name: ${distPackageJson.name}@${distPackageJson.version} (overridable via HELMX_PAYLOAD_PACKAGE)`);
+console.log(`[payload] root dependencies: ${Object.keys(rootDependencies).length} entries (${externalDeps.length} exact external pins + ${externalPeers.length} peers + @helmx/* file:./<pkg>.tgz ×6)`);
 console.log(`[payload] ${stats.files} files, ${(stats.bytes / 1024 / 1024).toFixed(1)} MiB total`);
 console.log(`[payload] runtime asset directories packed into plugins.tgz: ${copiedAssets.length}: ${copiedAssets.join(', ')}`);
-console.log('[payload] note: node_modules is not bundled; consumers run npm install --omit=dev --ignore-scripts to unpack the six @helm archives and complete dependencies (verified by start.mjs check)');
+console.log('[payload] note: node_modules is not bundled; consumers run npm install --omit=dev --ignore-scripts to unpack the six @helmx archives and complete dependencies (verified by start.mjs check)');
 console.log(`[payload] cli entry: cli/dist/index.js is the same zero-dependency bundle as the dist-cli artifact (${path.basename(cliArtifact.bundleFile)})`);

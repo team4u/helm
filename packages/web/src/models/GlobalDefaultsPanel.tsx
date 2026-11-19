@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { assetsApi } from '../lib/api.js'
-import { HelmIcon } from '@helm/plugin-client'
+import { HelmxIcon } from '@helmx/plugin-client'
 import { useOptionalModels, useOptionalStoreActions } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { ModelPickerControl } from '../conversation/ModelPicker.js'
@@ -162,7 +162,7 @@ export function GlobalDefaultsPanel({
     <div className="model-defaults-panel">
       <div className="section-flat">
         <div className="section-flat-header">
-          <HelmIcon name="sliders" size={14} />
+          <HelmxIcon name="sliders" size={14} />
           <span className="section-flat-title">{t('models.defaults.section')}</span>
         </div>
         <p className="text-muted">
@@ -241,7 +241,7 @@ export function GlobalDefaultsPanel({
               onClick={() => setPerModelRows((rows) => [...rows, { model: '', level: '' }])}
               disabled={saving}
             >
-              <HelmIcon name="plus" size={14} />
+              <HelmxIcon name="plus" size={14} />
               <span>{t('models.defaults.perModelAdd')}</span>
             </button>
           </div>
@@ -297,7 +297,7 @@ export function GlobalDefaultsPanel({
                 title={t('models.defaults.perModelRemove')}
                 aria-label={t('models.defaults.perModelRemove')}
               >
-                <HelmIcon name="x" size={14} />
+                <HelmxIcon name="x" size={14} />
               </button>
             </div>
           ))}
@@ -310,7 +310,7 @@ export function GlobalDefaultsPanel({
             onClick={handleSave}
             disabled={saving}
           >
-            <HelmIcon name="check" size={14} />
+            <HelmxIcon name="check" size={14} />
             <span>{saving ? t('models.saving') : t('models.defaults.save')}</span>
           </button>
           <button type="button" className="btn btn-ghost" onClick={handleReset} disabled={saving}>
@@ -322,7 +322,7 @@ export function GlobalDefaultsPanel({
         </div>
         {saveError && (
           <div className="callout callout-error" role="alert">
-            <HelmIcon name="alert-circle" size={13} />
+            <HelmxIcon name="alert-circle" size={13} />
             <span className="callout-text">{saveError}</span>
           </div>
         )}

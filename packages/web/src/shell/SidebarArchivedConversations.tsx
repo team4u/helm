@@ -3,7 +3,7 @@
  *
  * - Shows only human-owned root conversations carrying the host archive tag
  *   (same exposure rule as agent standings: conversations with a parent chain,
- *   bot/helm ownership, or taken over by a plugin section never enter);
+ *   bot/helmx ownership, or taken over by a plugin section never enter);
  * - Collapsed by default; once expanded, rows are identified by owning agent +
  *   title; single-row restore goes through the inline "more actions" menu
  *   (which automatically offers restore for archived conversations), or use
@@ -18,7 +18,7 @@
  */
 import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-import { Checkbox, HelmIcon } from '@helm/plugin-client'
+import { Checkbox, HelmxIcon } from '@helmx/plugin-client'
 import { conversationsApi } from '../lib/api.js'
 import {
   useConversations,
@@ -266,12 +266,12 @@ export function ArchivedConversationsGroup({
           onClick={() => setOpen((v) => !v)}
         >
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
-            <HelmIcon name="archive" size={12} />
+            <HelmxIcon name="archive" size={12} />
             <span className="nav-item-label">{t('shell.archived.groupTitle')}</span>
           </span>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
             <span className="badge badge-neutral tabular-nums">{items.length}</span>
-            <HelmIcon name={open ? 'chevron-down' : 'chevron-right'} size={12} />
+            <HelmxIcon name={open ? 'chevron-down' : 'chevron-right'} size={12} />
           </span>
         </button>
         {open && (
@@ -289,7 +289,7 @@ export function ArchivedConversationsGroup({
                 })
               }}
             >
-              <HelmIcon name="check-square" size={12} />
+              <HelmxIcon name="check-square" size={12} />
             </button>
           </Tooltip>
         )}

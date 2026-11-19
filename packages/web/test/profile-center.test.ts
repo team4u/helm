@@ -5,7 +5,7 @@ import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import type { Profile, SkillSummary } from '@helm/protocol'
+import type { Profile, SkillSummary } from '@helmx/protocol'
 import { ensureHappyDom } from './helpers/dom-harness.js'
 import {
   buildProfileCategoryCounts,
@@ -25,13 +25,13 @@ import {
 import { ProfileCard } from '../src/profiles/ProfileCard.js'
 import { ProfileDetailDrawer } from '../src/profiles/ProfileDetailDrawer.js'
 import { ProfileCenter } from '../src/profiles/ProfileCenter.js'
-import type { NodeInfo } from '@helm/protocol/browser'
+import type { NodeInfo } from '@helmx/protocol/browser'
 import type { ModelDescriptor } from '../src/lib/api.js'
 import { makeTestStore } from './helpers/store.js'
 import { HostStoreProviders } from './helpers/host-store.js'
 import { seedPluginClientModule } from '../src/lib/plugin-client.js'
 import { groupUiContributions } from '../src/lib/types.js'
-import { PROFILE_DETAIL_SECTION_SLOT } from '@helm/protocol'
+import { PROFILE_DETAIL_SECTION_SLOT } from '@helmx/protocol'
 
 ensureHappyDom()
 
@@ -888,8 +888,8 @@ test('ProfileCard: inherited model, node and cwd, conversation count, bottom-rig
     name: '远程研发助手',
     description: '在 GPU 节点运行',
     nodeId: 'gpu-node-1',
-    cwd: '/data/workspace/helm',
-    skills: ['helm-cli'],
+    cwd: '/data/workspace/helmx',
+    skills: ['helmx-cli'],
   }
 
   const store = makeTestStore({
@@ -899,7 +899,7 @@ test('ProfileCard: inherited model, node and cwd, conversation count, bottom-rig
         title: '调试任务',
         profileId: 'remote-dev',
         tags: [],
-        cwd: '/data/workspace/helm',
+        cwd: '/data/workspace/helmx',
         model: 'anthropic/claude-3-7-sonnet',
         thinkingLevel: 'high',
         status: 'blocked',
@@ -947,7 +947,7 @@ test('ProfileCard: inherited model, node and cwd, conversation count, bottom-rig
       'Inherits global default model: anthropic/claude-3-7-sonnet (thinking level: high)',
     )
     assert.match(text, /Global default/)
-    assert.match(text, /gpu-node-1 · \/data\/workspace\/helm/)
+    assert.match(text, /gpu-node-1 · \/data\/workspace\/helmx/)
     assert.match(text, /Pending approval/)
     assert.match(text, /Linked to 1 conversations/)
     assert.equal(host.querySelectorAll('[style]').length, 0, 'ProfileCard must keep zero inline styles')

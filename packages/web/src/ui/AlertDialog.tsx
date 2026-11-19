@@ -1,6 +1,6 @@
 import React from 'react'
 import * as RadixAlertDialog from '@radix-ui/react-alert-dialog'
-import { OverlayLayerContext, useOverlayLayer } from '@helm/plugin-client'
+import { OverlayLayerContext, useOverlayLayer } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 
 const AlertDialogInlineContext = React.createContext<boolean>(false)

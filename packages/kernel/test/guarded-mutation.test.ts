@@ -27,7 +27,7 @@ import {
   fauxAssistantMessage,
   fauxToolCall,
 } from '@earendil-works/pi-ai/providers/faux'
-import { HelmError } from '@helm/protocol'
+import { HelmxError } from '@helmx/protocol'
 import { cleanupDir, makeFauxModels, makeTempDir, waitFor } from './helpers.js'
 import { KernelRuntime } from '../src/runtime/index.js'
 
@@ -76,14 +76,14 @@ async function flushToBarrier(): Promise<void> {
   await new Promise((resolve) => setImmediate(resolve))
 }
 
-function isHelmError(code: string, status: number) {
-  return (err: unknown): boolean => err instanceof HelmError && err.code === code && err.status === status
+function isHelmxError(code: string, status: number) {
+  return (err: unknown): boolean => err instanceof HelmxError && err.code === code && err.status === status
 }
 
 let root: string
 
 test.before(async () => {
-  root = await makeTempDir('helm-guarded-')
+  root = await makeTempDir('helmx-guarded-')
 })
 
 test.after(async () => {
@@ -113,7 +113,7 @@ test('guarded abort: flipping ownership to human inside await window -> 409 owne
     // Simulated takeover inside the legacy await window: human takes over.
     kernel.markConversationOwnership(1, 'human')
     barrier.release()
-    await assert.rejects(attempt, isHelmError('ownership_conflict', 409))
+    await assert.rejects(attempt, isHelmxError('ownership_conflict', 409))
 
     // SDK abort did not fire: in-flight turn keeps running (abort would have settled to idle immediately).
     assert.equal(kernel.getConversation(1).status, 'working', 'turn must not abort after guarded rejection')
@@ -171,14 +171,14 @@ test('guarded submit: flipping to human inside preparation window -> 409, zero c
     await flushToBarrier()
     kernel.markConversationOwnership(conv.id, 'human')
     barrier.release()
-    await assert.rejects(attempt, isHelmError('ownership_conflict', 409))
+    await assert.rejects(attempt, isHelmxError('ownership_conflict', 409))
 
-    // Zero commit side effects: title un-derived, no helm.input entry, conversation stays idle.
+    // Zero commit side effects: title un-derived, no helmx.input entry, conversation stays idle.
     const after = kernel.getConversation(conv.id)
     assert.equal(after.status, 'idle')
     assert.equal(after.title, '')
     const detail = await kernel.getConversationDetail(conv.id, { limit: 50 })
-    assert.equal(detail.entries.filter((e) => e.kind === 'helm.input').length, 0, 'must not insert input entry')
+    assert.equal(detail.entries.filter((e) => e.kind === 'helmx.input').length, 0, 'must not insert input entry')
     // Faux response untouched (model never invoked).
     assert.equal(kernel.__faux.getPendingResponseCount(), 1)
   } finally {
@@ -201,10 +201,10 @@ test('guarded steer whenIdle=reject: idle conversation atomically rejects withou
       kernel.submitInputGuarded(conversation.id, 'steer only in-flight task', {
         origin: 'agent', whenBusy: 'steer', whenIdle: 'reject',
       }, { expectedOwnership: 'bot', expectedStateSeq: kernel.getConversation(conversation.id).stateChangeSeq }),
-      isHelmError('conversation_idle', 409),
+      isHelmxError('conversation_idle', 409),
     )
     const detail = await kernel.getConversationDetail(conversation.id)
-    assert.equal(detail.entries.filter((entry) => entry.kind === 'helm.input').length, 0)
+    assert.equal(detail.entries.filter((entry) => entry.kind === 'helmx.input').length, 0)
     assert.equal(kernel.__faux.getPendingResponseCount(), 1)
     assert.equal(kernel.getConversation(conversation.id).status, 'idle')
   } finally {
@@ -245,8 +245,8 @@ test('guarded submit success path: bot conversation submits agent input and comp
     await kernel.waitForIdle(conv.id)
     assert.equal(kernel.getConversation(conv.id).status, 'done')
     const detail = await kernel.getConversationDetail(conv.id, { limit: 10 })
-    const input = detail.entries.find((e) => e.kind === 'helm.input')
-    assert.ok(input, 'helm.input entry should exist')
+    const input = detail.entries.find((e) => e.kind === 'helmx.input')
+    assert.ok(input, 'helmx.input entry should exist')
     assert.equal(kernel.__faux.getPendingResponseCount(), 0)
   } finally {
     await kernel.close().catch(() => {})
@@ -261,47 +261,47 @@ test('guarded rejection matrix: human ownership / ownership mismatch / stale seq
     kernel.markConversationOwnership(conv.id, 'human')
     await assert.rejects(
       kernel.abortConversationGuarded(conv.id, {}),
-      isHelmError('ownership_conflict', 409),
+      isHelmxError('ownership_conflict', 409),
       'human ownership hard rule',
     )
     await assert.rejects(
       kernel.submitInputGuarded(conv.id, 'x', { origin: 'agent' }, {}),
-      isHelmError('ownership_conflict', 409),
+      isHelmxError('ownership_conflict', 409),
       'human ownership hard rule (submit)',
     )
 
-    kernel.markConversationOwnership(conv.id, 'helm')
+    kernel.markConversationOwnership(conv.id, 'helmx')
     await assert.rejects(
       kernel.abortConversationGuarded(conv.id, { expectedOwnership: 'bot' }),
-      isHelmError('ownership_conflict', 409),
+      isHelmxError('ownership_conflict', 409),
       'exact ownership mismatch',
     )
 
     const seq = kernel.getConversation(conv.id).stateChangeSeq
     await assert.rejects(
       kernel.abortConversationGuarded(conv.id, { expectedStateSeq: seq + 100 }),
-      isHelmError('state_seq_conflict', 409),
+      isHelmxError('state_seq_conflict', 409),
       'stale watermark CAS',
     )
 
     await assert.rejects(
       kernel.abortConversationGuarded(999_999, {}),
-      isHelmError('not_found', 404),
+      isHelmxError('not_found', 404),
       'missing explicit target must not fall back to default route',
     )
     await assert.rejects(
       kernel.submitInputGuarded(999_999, 'x', { origin: 'agent' }, {}),
-      isHelmError('not_found', 404),
+      isHelmxError('not_found', 404),
     )
 
     await assert.rejects(
       kernel.abortConversationGuarded(conv.id, { expectedOwnership: 'human' as never }),
-      isHelmError('validation_error', 400),
+      isHelmxError('validation_error', 400),
       'expectedOwnership forbids human',
     )
     await assert.rejects(
       kernel.abortConversationGuarded(conv.id, { expectedStateSeq: -1 }),
-      isHelmError('validation_error', 400),
+      isHelmxError('validation_error', 400),
     )
   } finally {
     await kernel.close().catch(() => {})
@@ -316,7 +316,7 @@ test('guarded submit rejects replaceFromEntryId (automation cannot rewrite histo
     kernel.markConversationOwnership(conv.id, 'bot')
     await assert.rejects(
       kernel.submitInputGuarded(conv.id, 'x', { origin: 'agent', replaceFromEntryId: 1 }, {}),
-      isHelmError('validation_error', 400),
+      isHelmxError('validation_error', 400),
     )
   } finally {
     await kernel.close().catch(() => {})
@@ -361,7 +361,7 @@ test('guarded mutation serial gate: serialized within conversation; early failur
     // Early guarded submit failure (stale watermark 400/409) must never poison the serial gate.
     await assert.rejects(
       kernel.submitInputGuarded(conv.id, 'x', { origin: 'agent' }, { expectedStateSeq: 1_000_000 }),
-      isHelmError('state_seq_conflict', 409),
+      isHelmxError('state_seq_conflict', 409),
     )
     const first = await kernel.submitInputGuarded(conv.id, 'a', { origin: 'agent', whenBusy: 'followUp' }, { expectedOwnership: 'bot' })
     const second = await kernel.submitInputGuarded(conv.id, 'second', { origin: 'agent', whenBusy: 'followUp' }, { expectedOwnership: 'bot' })
@@ -369,7 +369,7 @@ test('guarded mutation serial gate: serialized within conversation; early failur
     assert.ok(second.submissionId)
     await kernel.waitForIdle(conv.id)
     const detail = await kernel.getConversationDetail(conv.id, { limit: 50 })
-    const inputs = detail.entries.filter((e) => e.kind === 'helm.input')
+    const inputs = detail.entries.filter((e) => e.kind === 'helmx.input')
     assert.equal(inputs.length, 2, 'both guarded inputs should be queued')
   } finally {
     await kernel.close().catch(() => {})
@@ -398,13 +398,13 @@ test('guarded reset: flipping ownership to human inside await window -> 409 owne
     // Simulated takeover inside the legacy await window: human takes over.
     kernel.markConversationOwnership(conv.id, 'human')
     barrier.release()
-    await assert.rejects(attempt, isHelmError('ownership_conflict', 409))
+    await assert.rejects(attempt, isHelmxError('ownership_conflict', 409))
 
     // SDK reset never fired: stateChangeSeq unchanged and history is still readable.
     const after = kernel.getConversation(conv.id)
     assert.equal(after.stateChangeSeq, seqBefore, 'rejected guarded reset must not touch stateChangeSeq')
     const detail = await kernel.getConversationDetail(conv.id, { limit: 10 })
-    assert.ok(detail.entries.some((e) => e.kind === 'helm.input'), 'history must survive a rejected guarded reset')
+    assert.ok(detail.entries.some((e) => e.kind === 'helmx.input'), 'history must survive a rejected guarded reset')
 
     // Plain human API still works under human ownership.
     const resetSummary = await kernel.resetConversation(conv.id)
@@ -435,7 +435,7 @@ test('guarded reset success path: bot conversation resets with handoff and advan
     // Missing explicit target must not fall back to default routing.
     await assert.rejects(
       kernel.resetConversationGuarded(999_999, {}, {}),
-      isHelmError('not_found', 404),
+      isHelmxError('not_found', 404),
     )
   } finally {
     await kernel.close().catch(() => {})
@@ -451,7 +451,7 @@ test('guarded compact: human rejected before enqueue; bot success returns taskId
     const seqBefore = kernel.getConversation(conv.id).stateChangeSeq
     await assert.rejects(
       kernel.compactConversationGuarded(conv.id, {}, {}),
-      isHelmError('ownership_conflict', 409),
+      isHelmxError('ownership_conflict', 409),
       'human ownership hard rule (compact)',
     )
     assert.equal(
@@ -460,9 +460,9 @@ test('guarded compact: human rejected before enqueue; bot success returns taskId
       'rejected guarded compact must not touch stateChangeSeq',
     )
 
-    kernel.markConversationOwnership(conv.id, 'helm')
+    kernel.markConversationOwnership(conv.id, 'helmx')
     const seqHuman = kernel.getConversation(conv.id).stateChangeSeq
-    const result = await kernel.compactConversationGuarded(conv.id, { instructions: 'keep decisions' }, { expectedOwnership: 'helm' })
+    const result = await kernel.compactConversationGuarded(conv.id, { instructions: 'keep decisions' }, { expectedOwnership: 'helmx' })
     assert.ok(Number.isInteger(result.taskId) && result.taskId >= 0, 'compaction returns a background task id')
     assert.equal(result.conversation.id, conv.id)
     assert.equal(result.conversation.stateChangeSeq, seqHuman + 1, 'guarded compact advances the watermark by exactly one')
@@ -470,11 +470,11 @@ test('guarded compact: human rejected before enqueue; bot success returns taskId
     // Stale watermark CAS and missing target.
     await assert.rejects(
       kernel.compactConversationGuarded(conv.id, {}, { expectedStateSeq: result.conversation.stateChangeSeq + 100 }),
-      isHelmError('state_seq_conflict', 409),
+      isHelmxError('state_seq_conflict', 409),
     )
     await assert.rejects(
       kernel.compactConversationGuarded(999_999, {}, {}),
-      isHelmError('not_found', 404),
+      isHelmxError('not_found', 404),
     )
   } finally {
     await kernel.close().catch(() => {})
@@ -486,31 +486,31 @@ test('guarded reset/compact rejection matrix: ownership mismatch / invalid guard
   const kernel = await openRuntime(dir)
   try {
     const conv = await kernel.createConversation({})
-    kernel.markConversationOwnership(conv.id, 'helm')
+    kernel.markConversationOwnership(conv.id, 'helmx')
     await assert.rejects(
       kernel.resetConversationGuarded(conv.id, {}, { expectedOwnership: 'bot' }),
-      isHelmError('ownership_conflict', 409),
+      isHelmxError('ownership_conflict', 409),
       'exact ownership mismatch (reset)',
     )
     await assert.rejects(
       kernel.compactConversationGuarded(conv.id, {}, { expectedOwnership: 'bot' }),
-      isHelmError('ownership_conflict', 409),
+      isHelmxError('ownership_conflict', 409),
       'exact ownership mismatch (compact)',
     )
     const seq = kernel.getConversation(conv.id).stateChangeSeq
     await assert.rejects(
       kernel.resetConversationGuarded(conv.id, {}, { expectedStateSeq: seq + 100 }),
-      isHelmError('state_seq_conflict', 409),
+      isHelmxError('state_seq_conflict', 409),
       'stale watermark CAS (reset)',
     )
     await assert.rejects(
       kernel.resetConversationGuarded(conv.id, {}, { expectedOwnership: 'human' as never }),
-      isHelmError('validation_error', 400),
+      isHelmxError('validation_error', 400),
       'expectedOwnership forbids human (reset)',
     )
     await assert.rejects(
       kernel.compactConversationGuarded(conv.id, {}, { expectedStateSeq: -1 }),
-      isHelmError('validation_error', 400),
+      isHelmxError('validation_error', 400),
       'expectedStateSeq must be non-negative (compact)',
     )
   } finally {

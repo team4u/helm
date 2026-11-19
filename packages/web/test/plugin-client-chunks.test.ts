@@ -1,11 +1,11 @@
 /**
- * 共享 Chunk 桥（__helm_import_chunk）行为测试：
+ * 共享 Chunk 桥（__helmx_import_chunk）行为测试：
  * - preload fetch 并发去重：同一 chunk 多次引用零重复网络请求；
  * - 模块求值按拓扑顺序（共享表依赖先于使用者求值）；
  * - fetch 失败不产生 unhandled rejection（全部已启动 Promise 均被安全消费）；
- * - evict/reset 后迟到的 chunk 不得回写 __helm_chunk_share 或成功返回旧模块
+ * - evict/reset 后迟到的 chunk 不得回写 __helmx_chunk_share 或成功返回旧模块
  *   （epoch 守卫，显式 client_module_invalidated）；evict/reset 后可重试；
- * - __helm_chunk_share 按 pluginId + moduleRef + contentHash + chunk 隔离：
+ * - __helmx_chunk_share 按 pluginId + moduleRef + contentHash + chunk 隔离：
  *   两插件同源同 hash 时停用一个不删另一个的共享条目；
  * - 浏览器 Blob import 真实错误显式上报（不回退 data URL 掩盖）。
  */
@@ -28,7 +28,7 @@ type ImportChunk = (
   preloads?: string[],
 ) => Promise<Record<string, unknown>>
 
-const importChunk: ImportChunk = (globalThis as Record<string, unknown>).__helm_import_chunk as ImportChunk
+const importChunk: ImportChunk = (globalThis as Record<string, unknown>).__helmx_import_chunk as ImportChunk
 const originalFetch = globalThis.fetch
 const originalCreateObjectURL = URL.createObjectURL
 const originalRevokeObjectURL = URL.revokeObjectURL
@@ -45,7 +45,7 @@ const shareKey = (pluginId: string, moduleRef: string, contentHash: string, chun
  * - fetch 按 chunk 名返回注册源；并发 fetch 也不会串内容；
  * - Blob 替身为同步可读文本（Node 无法 import blob: URL，createObjectURL 返回
  *   data URL 让模块真实求值——与浏览器 ESM 求值语义一致）；
- * - 每个 chunk 源尾部追加与编译器一致的 __helm_chunk_share 注册语句，
+ * - 每个 chunk 源尾部追加与编译器一致的 __helmx_chunk_share 注册语句，
  *   真实驱动共享表写入（隔离清理与 epoch 守卫测试依赖真实注册行为）。
  */
 function makeChunkFixture() {
@@ -91,7 +91,7 @@ function makeChunkFixture() {
      * 源按 (pluginId, chunk) 登记：两插件同名 chunk 各自独立。 */
     addChunk(pluginId: string, moduleRef: string, contentHash: string, name: string, marker?: string, extra = ''): void {
       const m = marker ?? name
-      const reg = `;(globalThis.__helm_chunk_share ??= {})[${JSON.stringify(shareKey(pluginId, moduleRef, contentHash, name))}] = { v: ${JSON.stringify(m)} };\n`
+      const reg = `;(globalThis.__helmx_chunk_share ??= {})[${JSON.stringify(shareKey(pluginId, moduleRef, contentHash, name))}] = { v: ${JSON.stringify(m)} };\n`
       sources.set(
         `${pluginId}\0${name}`,
         `globalThis.__chunkEvalLog?.push(${JSON.stringify(m)});${extra}\nexport const v = ${JSON.stringify(m)};\n${reg}`,
@@ -110,7 +110,7 @@ afterEach(() => {
   URL.revokeObjectURL = originalRevokeObjectURL
   ;(globalThis as { Blob: unknown }).Blob = originalBlob
   delete evalLogSlot.__chunkEvalLog
-  delete (globalThis as Record<string, unknown>).__helm_chunk_share
+  delete (globalThis as Record<string, unknown>).__helmx_chunk_share
   resetPluginClientCache()
 })
 
@@ -177,7 +177,7 @@ test('evict 清除本插件共享表条目；同 key 可重新加载', { timeout
   fx.addChunk('p', 'index.tsx', 'h1', 'dep1.js')
   fx.addChunk('p', 'index.tsx', 'h1', 'leaf.js')
   await importChunk('p', 'index.tsx', 'h1', 'leaf.js', ['dep1.js'])
-  const share = (globalThis as Record<string, unknown>).__helm_chunk_share as Record<string, unknown>
+  const share = (globalThis as Record<string, unknown>).__helmx_chunk_share as Record<string, unknown>
   assert.ok(
     Object.hasOwn(share, shareKey('p', 'index.tsx', 'h1', 'leaf.js')),
     '共享表必须按 pluginId\\0module\\0hash\\0chunk 隔离登记',
@@ -208,7 +208,7 @@ test('evict 竞态：fetch 在途时 evict，放行后显式失效且绝不求�
     'evict 后迟到的 fetch 结果必须显式失效，不得求值',
   )
   assert.deepEqual(evalLogSlot.__chunkEvalLog ?? [], [], '失效后绝不求值旧产物')
-  const share = (globalThis as Record<string, unknown>).__helm_chunk_share as Record<string, unknown> | undefined
+  const share = (globalThis as Record<string, unknown>).__helmx_chunk_share as Record<string, unknown> | undefined
   assert.equal(share === undefined ? 0 : Object.keys(share).length, 0, '失效后不得回写共享表')
 })
 
@@ -221,7 +221,7 @@ test('共享表隔离：两插件同源同 hash，停用 A 不删 B 的共享条
   fx.addChunk('pluginB', 'index.tsx', 'samehash', 'leaf.js', 'leaf')
   await importChunk('pluginA', 'index.tsx', 'samehash', 'leaf.js', ['shared.js'])
   await importChunk('pluginB', 'index.tsx', 'samehash', 'leaf.js', ['shared.js'])
-  const share = (globalThis as Record<string, unknown>).__helm_chunk_share as Record<string, unknown>
+  const share = (globalThis as Record<string, unknown>).__helmx_chunk_share as Record<string, unknown>
   const bKeys = Object.keys(share).filter((k) => k.startsWith('pluginB\0'))
   assert.ok(
     Object.keys(share).some((k) => k.startsWith('pluginA\0')) && bKeys.length > 0,

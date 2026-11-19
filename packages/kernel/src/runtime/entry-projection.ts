@@ -6,7 +6,7 @@
  * SDK rewind/context/settlement, and waitForInput results never pass through this projection—preserving
  * existing semantics of toConversationEntry.
  *
- * Policy (see @helm/protocol ConversationEntry projection docs for details):
+ * Policy (see @helmx/protocol ConversationEntry projection docs for details):
  * - `pi.system`: model-side bookkeeping (system prompt / tool declarations), hidden on detail pages;
  * - Provider signature payloads thinkingSignature / textSignature / thoughtSignature
  *   (pi-ai TextContent / ThinkingContent / ToolCall opaque encrypted blocks): meaningless to clients and observable
@@ -18,7 +18,7 @@
  *   (truncating would break downstream parsers); trailing `[Artifact] id=` markers stay intact automatically because the tail is kept.
  */
 
-import type { ConversationEntry } from '@helm/protocol'
+import type { ConversationEntry } from '@helmx/protocol'
 
 /** Provider signature payload keys (pi-ai content block / tool call fields). */
 const SIGNATURE_KEYS: ReadonlySet<string> = new Set([
@@ -140,7 +140,7 @@ function truncatePlainText(text: string): { text: string; totalChars: number; to
   const tail = text.slice(totalChars - TOOL_RESULT_TAIL_CHARS)
   const omitted = totalChars - TOOL_RESULT_HEAD_CHARS - TOOL_RESULT_TAIL_CHARS
   const marker =
-    `\n\n...[helm truncate: omitted ${omitted} characters (${totalChars} chars / ${totalLines} lines; ` +
+    `\n\n...[helmx truncate: omitted ${omitted} characters (${totalChars} chars / ${totalLines} lines; ` +
     'GET /api/conversations/<id>/entries/<entryId> for untruncated original text)]...\n\n'
   return { text: `${head}${marker}${tail}`, totalChars, totalLines }
 }

@@ -7,7 +7,7 @@
  *   returns `AuthResult | undefined` (`undefined` = unconfigured channel, a valid state).
  * - `Model` requires `provider` (must equal the registered provider id for request dispatch)
  *   and `baseUrl` (passed directly to `openai-completions` string URL building); four `cost` rates are required.
- * - Built-in providers handle credentials, env vars, and provider-specific config themselves; helm only injects
+ * - Built-in providers handle credentials, env vars, and provider-specific config themselves; helmx only injects
  *   already-stored keys as `credential` into native `ApiKeyAuth` without replacing native auth verification or OAuth policy.
  *
  * `providers.json`'s `models: string[]` contains only static model IDs without capability metadata;
@@ -34,9 +34,9 @@ import {
   type Provider,
 } from '@earendil-works/pi-ai'
 import { builtinProviders } from '@earendil-works/pi-ai/providers/all'
-import { HelmError, type ModelCatalog, type ModelCatalogEntry, type ModelProviderSummary, type ProviderConfig } from '@helm/protocol'
+import { HelmxError, type ModelCatalog, type ModelCatalogEntry, type ModelProviderSummary, type ProviderConfig } from '@helmx/protocol'
 
-// Shared catalog entry types re-exported from `@helm/protocol` (preserved here so existing consumer import paths keep working).
+// Shared catalog entry types re-exported from `@helmx/protocol` (preserved here so existing consumer import paths keep working).
 export type { ModelCatalog, ModelCatalogEntry }
 
 interface ModelGatewayOptions {
@@ -51,23 +51,23 @@ interface ModelGatewayOptions {
 }
 
 /**
- * Helm-specific source metadata attached to pi model objects (internal cross-cutting type; excluded from SDK contract).
+ * Helmx-specific source metadata attached to pi model objects (internal cross-cutting type; excluded from SDK contract).
  *
- * `helmContextWindowKnown`: whether `contextWindow` is a genuinely known value. pi-ai's `Model` contract
+ * `helmxContextWindowKnown`: whether `contextWindow` is a genuinely known value. pi-ai's `Model` contract
  * requires `contextWindow` as a number, so static sources (`providers.json` compat gateway or upstream
  * catalogs missing window sizes for Magpie items) can only supply conservative defaults — these models are
  * explicitly flagged `false`; built-in providers and explicit catalog windows are curated facts and default
  * (`undefined`) to known. Fields are preserved on model objects through `Models.setProvider`/`getModel`.
  */
-export interface HelmModelSourceMeta {
-  helmContextWindowKnown?: boolean
+export interface HelmxModelSourceMeta {
+  helmxContextWindowKnown?: boolean
 }
 
 /** Returns a model's genuinely known context window only when positive, finite, and not flagged as a static default;
  * returns `undefined` when unknown (missing model / flagged `false` / non-positive or non-finite), never fabricating. */
 export function knownContextWindowOf(model: Model<Api> | undefined): number | undefined {
   if (model === undefined) return undefined
-  if ((model as Model<Api> & HelmModelSourceMeta).helmContextWindowKnown === false) return undefined
+  if ((model as Model<Api> & HelmxModelSourceMeta).helmxContextWindowKnown === false) return undefined
   return Number.isFinite(model.contextWindow) && model.contextWindow > 0 ? model.contextWindow : undefined
 }
 
@@ -96,7 +96,7 @@ function compatModel(
     input: ['text'] as ModelInputModality[],
     ...COMPAT_MODEL_DEFAULTS,
     // Static default window is unprobed: mark explicitly unknown (skipped by knownContextWindowOf).
-    helmContextWindowKnown: false,
+    helmxContextWindowKnown: false,
   }
   return config.protocol === 'anthropic'
     ? { ...shared, api: 'anthropic-messages', reasoning: false }
@@ -113,7 +113,7 @@ function compatApiKeyAuth(providerId: string, apiKey: string | undefined): ApiKe
       if (!effective) return undefined
       const result: AuthResult = {
         auth: { apiKey: effective },
-        source: credential?.key ? 'stored credential' : 'helm providers.json credentials',
+        source: credential?.key ? 'stored credential' : 'helmx providers.json credentials',
       }
       return result
     },
@@ -203,7 +203,7 @@ export interface ModelRefParts {
 export function parseModelRef(ref: string): ModelRefParts {
   const slash = ref.indexOf('/')
   if (slash <= 0 || slash >= ref.length - 1) {
-    throw new HelmError('validation_error', `Model reference must be in 'provider/model' format: ${ref}`)
+    throw new HelmxError('validation_error', `Model reference must be in 'provider/model' format: ${ref}`)
   }
   return { provider: ref.slice(0, slash), modelId: ref.slice(slash + 1) }
 }
@@ -261,9 +261,9 @@ export async function listModelCatalog(
 /** Resolve default model reference; missing config fails explicitly instead of fabricating a model. */
 export function requireModelRef(ref: string | undefined): ModelRefParts {
   if (!ref || ref.trim() === '') {
-    throw new HelmError(
+    throw new HelmxError(
       'model_not_configured',
-      'No model configured: configure one in providers.json / Profile or set HELM_MODEL',
+      'No model configured: configure one in providers.json / Profile or set HELMX_MODEL',
       503,
     )
   }
@@ -281,7 +281,7 @@ export function requireModelRef(ref: string | undefined): ModelRefParts {
  *
  * Pass-through exemptions (missing capabilities must not break contracts):
  * - Models absent from current `Models` registry (mock test models, catalog refresh windows, externally injected sets)
- *   pass through unchanged — helm never fabricates capabilities or overwrites user config on missing metadata;
+ *   pass through unchanged — helmx never fabricates capabilities or overwrites user config on missing metadata;
  * - Models with `reasoning: false` and no `thinkingLevelMap` have no declared boundary and pass levels through
  *   for the underlying adapter to determine behavior.
  *

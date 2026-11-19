@@ -10,8 +10,8 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import type { ConversationEntry } from '@helm/protocol'
-import { HelmError } from '@helm/protocol'
+import type { ConversationEntry } from '@helmx/protocol'
+import { HelmxError } from '@helmx/protocol'
 import {
   projectDetailEntry,
   stripEntrySignatures,
@@ -40,7 +40,7 @@ function toolResultEntry(text: string, extra: Record<string, unknown> = {}): Con
 test('filters pi.system and passes other kinds through intact', { timeout: 60_000 }, () => {
   const system: ConversationEntry = { id: '1', kind: 'pi.system', data: { pos: 1 } }
   assert.equal(projectDetailEntry(system), undefined)
-  const input: ConversationEntry = { id: '2', kind: 'helm.input', data: { id: 'i', text: 'hi' } }
+  const input: ConversationEntry = { id: '2', kind: 'helmx.input', data: { id: 'i', text: 'hi' } }
   assert.deepEqual(projectDetailEntry(input), input)
 })
 
@@ -67,7 +67,7 @@ test('signature stripping: deep-removes thinkingSignature/textSignature/thoughtS
   assert.equal('thinkingSignature' in content[0]!, false)
   assert.equal('textSignature' in content[1]!, false)
   assert.equal('thoughtSignature' in content[2]!, false)
-  // entry.data carries plugin/helm business JSON that may legitimately reuse those field names: strip only targets model payload.
+  // entry.data carries plugin/helmx business JSON that may legitimately reuse those field names: strip only targets model payload.
   assert.deepEqual((projected!.data as any).nested.deep[0], { textSignature: 'sig-4', keep: 1 })
   // Input object must remain unmutated (shared across SSE/DB).
   assert.deepEqual(entry, frozen)
@@ -94,7 +94,7 @@ test('truncates oversized plaintext: keeps head/tail, adds message-level markers
   const out = ((msg['content'] as Array<{ type: string; text: string }>)[0]!.text)
   assert.ok(out.startsWith(head), 'preserves head')
   assert.ok(out.endsWith(tail), 'preserves tail')
-  assert.ok(out.includes('helm truncate'), 'omission marker describes itself')
+  assert.ok(out.includes('helmx truncate'), 'omission marker describes itself')
   assert.ok(out.length < text.length, 'projected output is shorter than raw text')
   // Does not truncate at or below threshold.
   const small = projectDetailEntry(toolResultEntry('x'.repeat(TOOL_RESULT_TRUNCATE_THRESHOLD_CHARS)))
@@ -173,7 +173,7 @@ test('pageVisibleEntries: hides pi.system inside paging loop so limit counts vis
     { id: 8, kind: 'pi.assistant' },
     { id: 7, kind: 'pi.system' },
     { id: 6, kind: 'pi.tool-result' },
-    { id: 5, kind: 'helm.input' },
+    { id: 5, kind: 'helmx.input' },
     { id: 4, kind: 'pi.system' },
     { id: 3, kind: 'pi.assistant' },
   ]
@@ -195,7 +195,7 @@ test('pageVisibleEntries: hides pi.system inside paging loop so limit counts vis
     store: {} as never,
     stash: {} as never,
     getConversation: () => {
-      throw new HelmError('not_found', 'unreachable', 404)
+      throw new HelmxError('not_found', 'unreachable', 404)
     },
     collectRewindIntervals: async () => [],
     ensureContextUsage: async () => {},

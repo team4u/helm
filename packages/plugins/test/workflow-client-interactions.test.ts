@@ -8,7 +8,7 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import type { ConversationSummary, PluginClientContext as PluginClientContextType } from '@helm/protocol'
+import type { ConversationSummary, PluginClientContext as PluginClientContextType } from '@helmx/protocol'
 import {
   React,
   SDK,
@@ -193,7 +193,7 @@ test('时间线单行与工作台紧凑卡均有实时内容也不内联展开�
     conversations: [child],
     conversation: (id) => id === 11 ? {
       summary: child,
-      detail: { ...child, entries: [{ id: '1', kind: 'helm.input', data: { text: '子代理历史指令' } }] },
+      detail: { ...child, entries: [{ id: '1', kind: 'helmx.input', data: { text: '子代理历史指令' } }] },
       live: { conversationId: 11, text: '实时回复内容', tools: [], updatedAt: 1 },
       pendingAsks: [], reload: () => {},
     } : { pendingAsks: [], reload: () => {} },
@@ -357,7 +357,7 @@ test('中止 / 清理按钮 stopPropagation：点击按钮不触发整卡打开�
   const bgRun = {
     id: 'wf_bg', name: '后台任务', conversationId: 1, kind: 'subagent',
     status: 'running', createdAt: 1, updatedAt: 2, parentToolCallId: 'call-bg',
-    nodes: [{ id: 'n', kind: 'agent', status: 'running', conversationId: 11, worktree: { path: '/wt/x', branch: 'helm/x' } }],
+    nodes: [{ id: 'n', kind: 'agent', status: 'running', conversationId: 11, worktree: { path: '/wt/x', branch: 'helmx/x' } }],
   }
   setWorkflowClientStub({
     docValue: { runs: [bgRun] },
@@ -970,11 +970,11 @@ test('WorkflowActiveTray 清亮化：横栏主体真实按钮切换、Workbench 
     const wbBtn = [...bar.querySelectorAll(':scope > button')].find((b) => (b.textContent ?? '').includes('Workbench')) as HTMLButtonElement | undefined
     assert.ok(wbBtn !== undefined, 'Workbench 为横栏同级 sibling button')
     // 主状态纯灯：无 spinner、无可見状态文字（计数只作为可访问名称）。
-    assert.ok(toggle.querySelector('.helm-status-light .status-dot-working') !== null, '主状态为统一状态灯')
-    assert.equal(toggle.querySelectorAll('.helm-status-light').length, 1, '主状态只渲染一盏灯')
+    assert.ok(toggle.querySelector('.helmx-status-light .status-dot-working') !== null, '主状态为统一状态灯')
+    assert.equal(toggle.querySelectorAll('.helmx-status-light').length, 1, '主状态只渲染一盏灯')
     assert.equal(toggle.querySelector('.spin-slow') === null, true, '主状态不再用 spinner')
-    assert.equal((toggle.querySelector('.helm-status-light')?.getAttribute('aria-label') ?? '').includes('running'), true, '状态词转为可访问名称')
-    assert.ok(toggle.querySelector('.helm-status-light > .helm-sr-only') !== null, '可访问名称经屏幕阅读器专用文本承载（无可見 label）')
+    assert.equal((toggle.querySelector('.helmx-status-light')?.getAttribute('aria-label') ?? '').includes('running'), true, '状态词转为可访问名称')
+    assert.ok(toggle.querySelector('.helmx-status-light > .helmx-sr-only') !== null, '可访问名称经屏幕阅读器专用文本承载（无可見 label）')
     // 主体按钮点击展开；再点击收起；键盘 Enter 同样切换。
     await act(async () => { toggle.click() })
     assert.equal(toggle.getAttribute('aria-expanded'), 'true')

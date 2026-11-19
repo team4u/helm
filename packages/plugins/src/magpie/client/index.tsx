@@ -16,7 +16,7 @@
 import { useState } from 'react'
 import './styles.css'
 import type { ReactNode } from 'react'
-import { formatTime, usePluginContext, usePluginDoc, usePluginLocale, usePluginTranslator } from '@helm/plugin-client'
+import { formatTime, usePluginContext, usePluginDoc, usePluginLocale, usePluginTranslator } from '@helmx/plugin-client'
 import {
   boolLabel,
   parseStatus,
@@ -109,8 +109,8 @@ function StatusSummary({ status }: { status: MagpieStatusView }): ReactNode {
 function DiagnosticsTable({ diagnostics }: { diagnostics: string[] }): ReactNode {
   const t = usePluginTranslator()
   return (
-    <div className="helm-table-wrap">
-      <table className="helm-table">
+    <div className="helmx-table-wrap">
+      <table className="helmx-table">
         <thead>
           <tr>
             <th>{t(MAGPIE_DIAGNOSTICS_COL)}</th>
@@ -138,8 +138,8 @@ function DiagnosticsTable({ diagnostics }: { diagnostics: string[] }): ReactNode
 function QuotaTable({ quotas }: { quotas: MagpieStatusView['quotas'] }): ReactNode {
   const t = usePluginTranslator()
   return (
-    <div className="helm-table-wrap">
-      <table className="helm-table">
+    <div className="helmx-table-wrap">
+      <table className="helmx-table">
         <thead>
           <tr>
             <th>{t(MAGPIE_COL_PROVIDER)}</th>
@@ -181,8 +181,8 @@ function QuotaTable({ quotas }: { quotas: MagpieStatusView['quotas'] }): ReactNo
 function RouteTable({ routes }: { routes: MagpieStatusView['routes'] }): ReactNode {
   const t = usePluginTranslator()
   return (
-    <div className="helm-table-wrap">
-      <table className="helm-table">
+    <div className="helmx-table-wrap">
+      <table className="helmx-table">
         <thead>
           <tr>
             <th>{t(MAGPIE_ROUTES_COL_GROUP)}</th>

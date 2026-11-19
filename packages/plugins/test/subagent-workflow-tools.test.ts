@@ -16,11 +16,11 @@
  *   String 化）、scriptPath、resumeFromRunId 断点恢复经真实 WorkflowService；
  * - KernelRuntime.buildSpawnEnv / buildManagedEnv：仅会话 stash + 受管五变量
  *   + 受管 token（覆盖 stash 同名伪造），绝不携带 process.env（PATH/HOME/
- *   自定义 spy 键均不外泄）；无受管 token 时不透传任何 HELM_TOKEN；秘密与
+ *   自定义 spy 键均不外泄）；无受管 token 时不透传任何 HELMX_TOKEN；秘密与
  *   受管 token 均在 stash 脱敏登记内（日志/模型上下文只见 [REDACTED]）。
  * - runGate/runShell options.env：本机 Gate 与实际 Herdr 任务同环境
- *   （process.env < options.env < 受管变量三级合并；HELM 固定值与受管
- *   token 不被注入劫持；无受管 token 时剥除一切来源的 HELM_TOKEN）。
+ *   （process.env < options.env < 受管变量三级合并；HELMX 固定值与受管
+ *   token 不被注入劫持；无受管 token 时剥除一切来源的 HELMX_TOKEN）。
  *
  * 诚实性纪律：模型输出全部来自 faux 脚本；spawn/workflow/HTTP 层为真实执行
  * （真子会话、真 worker 线程、真 journal），绝不 mock 引擎或伪造完成结果。
@@ -30,26 +30,26 @@ import {
   fauxAssistantMessage,
   fauxToolCall,
 } from '@earendil-works/pi-ai/providers/faux'
-import type { AgentSpawnRequest } from '@helm/protocol'
-import { HelmError } from '@helm/protocol'
+import type { AgentSpawnRequest } from '@helmx/protocol'
+import { HelmxError } from '@helmx/protocol'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, before, describe, it, test } from 'node:test'
 import assert from 'node:assert/strict'
-import { createHelm } from '../../hub/src/app.js'
+import { createHelmx } from '../../hub/src/app.js'
 import { KernelRuntime } from '../../kernel/src/runtime/index.js'
 import { createWorkflowPlugin } from '../src/workflow.js'
 import { buildManagedEnv, runShell } from '../../kernel/src/runtime/tools.js'
-import type { HelmToolDeps } from '../../kernel/src/runtime/tool-deps.js'
+import type { HelmxToolDeps } from '../../kernel/src/runtime/tool-deps.js'
 import { SecretStash } from '../../kernel/src/services/index.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { makeFauxProvider, useTempDir } from './helpers/plugin-test-env.js'
 
 let rootDir: string
 
 before(() => {
-  rootDir = mkdtempSync(join(tmpdir(), 'helm-subagent-tools-test-'))
+  rootDir = mkdtempSync(join(tmpdir(), 'helmx-subagent-tools-test-'))
 })
 
 after(() => {
@@ -339,8 +339,8 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
             req.onResolved?.({
               nodeId: 'local',
               executionId: 'pane-9',
-              effectiveCwd: '/srv/wt/helm-42',
-              meta: { 'builtin:workflow': { worktree: { path: '/srv/wt/helm-42', branch: 'helm/wf-run-1' } } },
+              effectiveCwd: '/srv/wt/helmx-42',
+              meta: { 'builtin:workflow': { worktree: { path: '/srv/wt/helmx-42', branch: 'helmx/wf-run-1' } } },
             })
             return { action: 'handled', result: { external: 'done', detail: 7 } }
           })
@@ -366,8 +366,8 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
       assert.deepEqual(structured['execution'], {
         nodeId: 'local',
         executionId: 'pane-9',
-        effectiveCwd: '/srv/wt/helm-42',
-        worktree: { id: 'local:/srv/wt/helm-42', path: '/srv/wt/helm-42', branch: 'helm/wf-run-1' },
+        effectiveCwd: '/srv/wt/helmx-42',
+        worktree: { id: 'local:/srv/wt/helmx-42', path: '/srv/wt/helmx-42', branch: 'helmx/wf-run-1' },
       })
       assert.equal(
         kernel.listConversations().filter((c) => c.parentConversationId === 1).length,
@@ -386,11 +386,11 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
 
 describe('SubagentWorkflow 工具入参贯通（真实引擎）', { timeout: 60_000 }, () => {
   /** 引擎动作（与 HTTP/CLI 同链路；wait:true 返回终态 run）。 */
-  const wfRun = (app: Awaited<ReturnType<typeof createHelm>>, request: Record<string, unknown>) =>
+  const wfRun = (app: Awaited<ReturnType<typeof createHelmx>>, request: Record<string, unknown>) =>
     app.kernel.plugins.invokeAction('builtin:workflow', 'run', request) as Promise<{
       run: import('../src/contracts.js').WorkflowRunSummary
     }>
-  const wfInspect = (app: Awaited<ReturnType<typeof createHelm>>, runId: string) =>
+  const wfInspect = (app: Awaited<ReturnType<typeof createHelmx>>, runId: string) =>
     app.kernel.plugins.invokeAction('builtin:workflow', 'inspect', { runId }) as Promise<{
       run: import('../src/contracts.js').WorkflowRunSummary
     }>
@@ -398,7 +398,7 @@ describe('SubagentWorkflow 工具入参贯通（真实引擎）', { timeout: 60_
   it('args 为任意 JSON 对象原样到达真实引擎（args.items.map 可用，绝不 String 化）；scriptPath 与 resumeFromRunId 均贯通', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'wf1')
     const faux = makeFauxProvider()
-    const app = await createHelm({ buildProvider: createPluginBuildProvider(),
+    const app = await createHelmx({ buildProvider: createPluginBuildProvider(),
       dataDir: dir,
       cwd: dir,
       model: 'faux/faux-1',
@@ -474,7 +474,7 @@ describe('SubagentWorkflow 工具入参贯通（真实引擎）', { timeout: 60_
   it('非法组合（script 与 scriptPath 同时提供）经工具显式失败，不伪造运行', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'wf2')
     const faux = makeFauxProvider()
-    const app = await createHelm({ buildProvider: createPluginBuildProvider(),
+    const app = await createHelmx({ buildProvider: createPluginBuildProvider(),
       dataDir: dir,
       cwd: dir,
       model: 'faux/faux-1',
@@ -531,7 +531,7 @@ describe('SubagentWorkflow 工具入参贯通（真实引擎）', { timeout: 60_
   it('模型 tool_call 传 JSON 字符串或双重序列化 args 时，prepareArguments 与工具执行链自动规范化，持久化记录为真实对象', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'wf3')
     const faux = makeFauxProvider()
-    const app = await createHelm({ buildProvider: createPluginBuildProvider(),
+    const app = await createHelmx({ buildProvider: createPluginBuildProvider(),
       dataDir: dir,
       cwd: dir,
       model: 'faux/faux-1',
@@ -636,7 +636,7 @@ function extractRunId(text: string): string | undefined {
 test('subagent 失败于子会话创建后：错误结果不附文本 footer，仍持久化 structuredOutput.execution（失败卡可续接子会话）', { timeout: 60_000 }, async () => {
   const dir = join(rootDir, 'sa-err-footer')
   const faux = makeFauxProvider()
-  const app = await createHelm({ buildProvider: createPluginBuildProvider(),
+  const app = await createHelmx({ buildProvider: createPluginBuildProvider(),
     dataDir: dir,
     cwd: dir,
     model: 'faux/faux-1',
@@ -694,43 +694,43 @@ describe('buildSpawnEnv 外部环境构造', { timeout: 60_000 }, () => {
       model: 'faux/faux-1',
     })
     try {
-      process.env['HELM_SPAWN_SPY'] = 'host-secret'
+      process.env['HELMX_SPAWN_SPY'] = 'host-secret'
       kernel.stash.put(9, 'MY_API_KEY', 'sekrit-value')
-      // stash 同名伪造：受管变量必须覆盖（HELM_CWD/HELM_TOKEN 不可被会话秘密劫持）。
-      kernel.stash.put(9, 'HELM_CWD', '/evil')
-      kernel.stash.put(9, 'HELM_TOKEN', 'stash-spoofed-token')
+      // stash 同名伪造：受管变量必须覆盖（HELMX_CWD/HELMX_TOKEN 不可被会话秘密劫持）。
+      kernel.stash.put(9, 'HELMX_CWD', '/evil')
+      kernel.stash.put(9, 'HELMX_TOKEN', 'stash-spoofed-token')
 
       const env = kernel.buildSpawnEnv(9, '/srv/work')
       assert.equal(env['MY_API_KEY'], undefined, '缺省最小授权：外部 spawn 不携带任何父会话机密')
-      assert.equal(env['HELM_ENV'], '1')
-      assert.equal(env['HELM_HUB_URL'], 'http://127.0.0.1:3999')
-      assert.equal(env['HELM_CONVERSATION_ID'], '9')
-      assert.equal(env['HELM_CWD'], '/srv/work', '受管 HELM_CWD 保持权威（stash 同名伪造未注入）')
-      assert.equal(env['HELM_DATA_DIR'], dir)
-      const token = env['HELM_TOKEN']
-      assert.ok(token && token !== 'stash-spoofed-token', 'HELM_TOKEN 必须是受管 token（不受 stash 伪造影响）')
+      assert.equal(env['HELMX_ENV'], '1')
+      assert.equal(env['HELMX_HUB_URL'], 'http://127.0.0.1:3999')
+      assert.equal(env['HELMX_CONVERSATION_ID'], '9')
+      assert.equal(env['HELMX_CWD'], '/srv/work', '受管 HELMX_CWD 保持权威（stash 同名伪造未注入）')
+      assert.equal(env['HELMX_DATA_DIR'], dir)
+      const token = env['HELMX_TOKEN']
+      assert.ok(token && token !== 'stash-spoofed-token', 'HELMX_TOKEN 必须是受管 token（不受 stash 伪造影响）')
       assert.ok(token!.length > 8)
 
       // 显式授予（含受管同名伪造）：逐名注入 + 受管变量仍固定覆盖。
       const granted = kernel.buildSpawnEnv(9, '/srv/work', 'local', {
-        secretNames: ['MY_API_KEY', 'HELM_CWD', 'HELM_TOKEN'],
+        secretNames: ['MY_API_KEY', 'HELMX_CWD', 'HELMX_TOKEN'],
       })
       assert.equal(granted['MY_API_KEY'], 'sekrit-value', '显式 secretNames 逐名注入（spawn env 设计目标）')
-      assert.equal(granted['HELM_CWD'], '/srv/work', '受管 HELM_CWD 覆盖 stash 同名伪造')
-      assert.equal(granted['HELM_TOKEN'], token, 'HELM_TOKEN 必须是受管 token（覆盖 stash 伪造）')
+      assert.equal(granted['HELMX_CWD'], '/srv/work', '受管 HELMX_CWD 覆盖 stash 同名伪造')
+      assert.equal(granted['HELMX_TOKEN'], token, 'HELMX_TOKEN 必须是受管 token（覆盖 stash 伪造）')
 
       // 绝不携带宿主 process.env：PATH/HOME 与 spy 键均不得外泄到远端。
       assert.equal(env['PATH'], undefined, 'spawn env 不得携带宿主 PATH')
       assert.equal(env['HOME'], undefined, 'spawn env 不得携带宿主 HOME')
-      assert.equal(env['HELM_SPAWN_SPY'], undefined, '宿主自定义环境变量不得外泄')
-      delete process.env['HELM_SPAWN_SPY']
+      assert.equal(env['HELMX_SPAWN_SPY'], undefined, '宿主自定义环境变量不得外泄')
+      delete process.env['HELMX_SPAWN_SPY']
 
       // 秘密与受管 token 均在脱敏登记内：日志/模型上下文只见 [REDACTED]。
       assert.ok(kernel.stash.redact(`x${token}y`).includes('[REDACTED'), '受管 token 必须可被脱敏')
       const redacted = kernel.stash.redact(`prefix${'sekrit-value'}suffix`)
       assert.ok(!redacted.includes('sekrit-value'), 'stash 秘密明文不得出现在脱敏产物')
     } finally {
-      delete process.env['HELM_SPAWN_SPY']
+      delete process.env['HELMX_SPAWN_SPY']
       await kernel.close()
     }
   })
@@ -742,13 +742,13 @@ describe('buildSpawnEnv 外部环境构造', { timeout: 60_000 }, () => {
     const dir = join(rootDir, 'env-host-port')
     const kernel = await KernelRuntime.open({ dataDir: dir, cwd: dir, model: 'faux/faux-1' })
     try {
-      let api!: import('@helm/protocol').HelmHostApi
+      let api!: import('@helmx/protocol').HelmxHostApi
       await kernel.plugins.register({
         id: 'test:host-spawn-env-port',
         definePlugin(ctx) {
           api = ctx.host
         },
-      } satisfies import('@helm/protocol').PluginDefinition, { enabled: true })
+      } satisfies import('@helmx/protocol').PluginDefinition, { enabled: true })
       kernel.stash.put(9, 'HOST_PORT_KEY', 'host-port-value')
 
       // 缺省最小授权：不携带任何父会话机密。
@@ -764,7 +764,7 @@ describe('buildSpawnEnv 外部环境构造', { timeout: 60_000 }, () => {
       // 授予不存在机密名：显式 404 secret_not_found，不静默空注入（同步端口契约）。
       assert.throws(
         () => api.buildSpawnEnv(9, '/srv/host-port', 'local', { secretNames: ['MISSING_NAME'] }),
-        (error: unknown) => error instanceof HelmError && error.code === 'secret_not_found',
+        (error: unknown) => error instanceof HelmxError && error.code === 'secret_not_found',
       )
     } finally {
       await kernel.close()
@@ -780,15 +780,15 @@ describe('buildSpawnEnv 外部环境构造', { timeout: 60_000 }, () => {
     })
     try {
       assert.throws(() => kernel.buildSpawnEnv(0, '/x'), (err: unknown) => {
-        assert.ok(err instanceof HelmError && err.code === 'validation_error')
+        assert.ok(err instanceof HelmxError && err.code === 'validation_error')
         return true
       })
       assert.throws(() => kernel.buildSpawnEnv(1.5, '/x'), (err: unknown) => {
-        assert.ok(err instanceof HelmError && err.code === 'validation_error')
+        assert.ok(err instanceof HelmxError && err.code === 'validation_error')
         return true
       })
       assert.throws(() => kernel.buildSpawnEnv(1, ''), (err: unknown) => {
-        assert.ok(err instanceof HelmError && err.code === 'validation_error')
+        assert.ok(err instanceof HelmxError && err.code === 'validation_error')
         return true
       })
     } finally {
@@ -796,10 +796,10 @@ describe('buildSpawnEnv 外部环境构造', { timeout: 60_000 }, () => {
     }
   })
 
-  it('buildManagedEnv：无受管 token provider 时不透传任何 HELM_TOKEN（继承语义不存在——本构造无 process.env 基底）', { timeout: 60_000 }, () => {
+  it('buildManagedEnv：无受管 token provider 时不透传任何 HELMX_TOKEN（继承语义不存在——本构造无 process.env 基底）', { timeout: 60_000 }, () => {
     const stash = new SecretStash()
-    stash.put(3, 'HELM_TOKEN', 'spoof')
-    const deps: HelmToolDeps = {
+    stash.put(3, 'HELMX_TOKEN', 'spoof')
+    const deps: HelmxToolDeps = {
       dataDir: '/d',
       defaultCwd: '/base',
       hubUrl: 'http://127.0.0.1:3202',
@@ -808,9 +808,9 @@ describe('buildSpawnEnv 外部环境构造', { timeout: 60_000 }, () => {
       artifacts: null as never,
     }
     const env = buildManagedEnv(deps, '/work', 3)
-    assert.equal(env['HELM_TOKEN'], undefined, '无 provider 时 stash 同名伪造也不得透传')
+    assert.equal(env['HELMX_TOKEN'], undefined, '无 provider 时 stash 同名伪造也不得透传')
     const withProvider = buildManagedEnv({ ...deps, processToken: () => 'managed-tok' }, '/work', 3)
-    assert.equal(withProvider['HELM_TOKEN'], 'managed-tok', '有 provider 时受管 token 覆盖伪造')
+    assert.equal(withProvider['HELMX_TOKEN'], 'managed-tok', '有 provider 时受管 token 覆盖伪造')
   })
 })
 
@@ -819,7 +819,7 @@ describe('buildSpawnEnv 外部环境构造', { timeout: 60_000 }, () => {
 // ---------------------------------------------------------------------------
 
 describe('runGate/runShell options.env 注入（本机 Gate 与 Herdr 任务同环境）', { timeout: 60_000 }, () => {
-  it('真实 Gate 子进程读自定义 env；HELM 固定值与受管 token 不被注入覆盖；无 provider 时剥除注入的旧 token', { timeout: 60_000 }, async () => {
+  it('真实 Gate 子进程读自定义 env；HELMX 固定值与受管 token 不被注入覆盖；无 provider 时剥除注入的旧 token', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'gate1')
     const kernel = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(),
       dataDir: dir,
@@ -829,22 +829,22 @@ describe('runGate/runShell options.env 注入（本机 Gate 与 Herdr 任务同�
     })
     try {
       // 插件会传 Profile.runtime.env 与管理环境组成的 spawnEnv：自定义 CI 路径
-      // 可达，但 HELM 固定值不得被外部注入劫持。
+      // 可达，但 HELMX 固定值不得被外部注入劫持。
       const spawnEnv: Record<string, string> = {
         CI_TOOL_HOME: '/opt/ci-tools',
-        HELM_CWD: '/evil-cwd',
-        HELM_HUB_URL: 'http://evil.example',
-        HELM_TOKEN: 'injected-stale-token',
+        HELMX_CWD: '/evil-cwd',
+        HELMX_HUB_URL: 'http://evil.example',
+        HELMX_TOKEN: 'injected-stale-token',
       }
       const gate = await kernel.runGate(
-        'printf "%s|%s|%s|%s" "$CI_TOOL_HOME" "$HELM_CWD" "$HELM_HUB_URL" "${HELM_TOKEN:+set}"',
+        'printf "%s|%s|%s|%s" "$CI_TOOL_HOME" "$HELMX_CWD" "$HELMX_HUB_URL" "${HELMX_TOKEN:+set}"',
         { cwd: dir, conversationId: 1, env: spawnEnv },
       )
       assert.equal(gate.ok, true, `gate 应成功：${gate.output}`)
-      const [toolHome, helmCwd, hubUrl, tokenFlag] = gate.output.split('|')
+      const [toolHome, helmxCwd, hubUrl, tokenFlag] = gate.output.split('|')
       assert.equal(toolHome, '/opt/ci-tools', '自定义 env 键应真实到达 Gate 子进程')
-      assert.equal(helmCwd, dir, '受管 HELM_CWD 不得被注入覆盖')
-      assert.equal(hubUrl, 'http://127.0.0.1:3999', '受管 HELM_HUB_URL 不得被注入覆盖')
+      assert.equal(helmxCwd, dir, '受管 HELMX_CWD 不得被注入覆盖')
+      assert.equal(hubUrl, 'http://127.0.0.1:3999', '受管 HELMX_HUB_URL 不得被注入覆盖')
       assert.equal(tokenFlag, 'set', '受管 token 应覆盖注入的旧 token（非空）')
       assert.ok(!gate.output.includes('injected-stale-token'), '旧 token 值不得泄漏')
     } finally {
@@ -852,11 +852,11 @@ describe('runGate/runShell options.env 注入（本机 Gate 与 Herdr 任务同�
     }
   })
 
-  it('无受管 token provider 时 options.env 注入的 HELM_TOKEN 也被剥除（真实子进程不可见）', { timeout: 60_000 }, async () => {
+  it('无受管 token provider 时 options.env 注入的 HELMX_TOKEN 也被剥除（真实子进程不可见）', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'gate2')
     mkdirSync(dir, { recursive: true })
     const stash = new SecretStash()
-    const deps: HelmToolDeps = {
+    const deps: HelmxToolDeps = {
       dataDir: dir,
       defaultCwd: dir,
       hubUrl: 'http://127.0.0.1:3202',
@@ -864,12 +864,12 @@ describe('runGate/runShell options.env 注入（本机 Gate 与 Herdr 任务同�
       redact: (t) => stash.redact(t),
       artifacts: null as never,
     }
-    const result = await runShell(deps, 'echo "${HELM_TOKEN:-UNSET} $CUSTOM_KEY"', {
+    const result = await runShell(deps, 'echo "${HELMX_TOKEN:-UNSET} $CUSTOM_KEY"', {
       cwd: dir,
-      env: { HELM_TOKEN: 'stale-injected', CUSTOM_KEY: 'visible' },
+      env: { HELMX_TOKEN: 'stale-injected', CUSTOM_KEY: 'visible' },
     })
     assert.equal(result.ok, true)
-    assert.ok(result.output.includes('UNSET'), '无 provider 时注入的 HELM_TOKEN 必须被剥除')
+    assert.ok(result.output.includes('UNSET'), '无 provider 时注入的 HELMX_TOKEN 必须被剥除')
     assert.ok(result.output.includes('visible'), '其余注入键正常透传')
   })
 
@@ -881,23 +881,23 @@ describe('runGate/runShell options.env 注入（本机 Gate 与 Herdr 任务同�
       model: 'faux/faux-1',
     })
     try {
-      process.env['HELM_GATE_TEST_BASE'] = 'from-host'
-      const gate = await kernel.runGate('printf "%s" "$HELM_GATE_TEST_BASE"', {
+      process.env['HELMX_GATE_TEST_BASE'] = 'from-host'
+      const gate = await kernel.runGate('printf "%s" "$HELMX_GATE_TEST_BASE"', {
         cwd: dir,
-        env: { HELM_GATE_TEST_BASE: 'from-inject' },
+        env: { HELMX_GATE_TEST_BASE: 'from-inject' },
       })
-      delete process.env['HELM_GATE_TEST_BASE']
+      delete process.env['HELMX_GATE_TEST_BASE']
       assert.equal(gate.ok, true)
       assert.ok(gate.output.includes('from-inject'), `注入应覆盖宿主同名键：${gate.output}`)
     } finally {
-      delete process.env['HELM_GATE_TEST_BASE']
+      delete process.env['HELMX_GATE_TEST_BASE']
       await kernel.close()
     }
   })
 })
 
 test('外部子代理执行元数据的工具正文与持久结果统一脱敏', { timeout: 60_000 }, async (t) => {
-  const dataDir = useTempDir(t, 'helm-spawn-metadata-')
+  const dataDir = useTempDir(t, 'helmx-spawn-metadata-')
   const faux = makeFauxProvider()
   const kernel = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, providers: [faux.provider], model: 'faux/faux-1' })
   try {
@@ -913,7 +913,7 @@ test('外部子代理执行元数据的工具正文与持久结果统一脱敏',
             nodeId: 'local',
             executionId: 'pane-9',
             effectiveCwd: `/srv/${secret}/task`,
-            meta: { 'builtin:workflow': { worktree: { path: `/srv/${secret}/task`, branch: `helm/${secret}/task` } } },
+            meta: { 'builtin:workflow': { worktree: { path: `/srv/${secret}/task`, branch: `helmx/${secret}/task` } } },
           })
           return { action: 'handled', result: { answer: 42 } }
         })

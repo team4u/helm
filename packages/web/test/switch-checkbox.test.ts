@@ -4,8 +4,8 @@ import React from 'react'
 import { renderToString } from 'react-dom/server'
 
 ;(globalThis as Record<string, unknown>).React = React
-const { Switch } = await import('@helm/plugin-client')
-const { Checkbox } = await import('@helm/plugin-client')
+const { Switch } = await import('@helmx/plugin-client')
+const { Checkbox } = await import('@helmx/plugin-client')
 
 const e = React.createElement
 
@@ -24,13 +24,13 @@ test('Switch：基础状态、受控 checked、WAI-ARIA 属性与零 Emoji', { t
     }),
   )
 
-  assert.match(offHtml, /class="helm-switch-wrap"/)
+  assert.match(offHtml, /class="helmx-switch-wrap"/)
   assert.match(offHtml, /role="switch"/)
   assert.match(offHtml, /aria-checked="false"/)
   assert.match(offHtml, /id="gateway-switch"/)
-  assert.match(offHtml, /class="helm-switch"/)
-  assert.match(offHtml, /class="helm-switch-thumb"/)
-  assert.match(offHtml, /class="helm-switch-label">网关状态<\/span>/)
+  assert.match(offHtml, /class="helmx-switch"/)
+  assert.match(offHtml, /class="helmx-switch-thumb"/)
+  assert.match(offHtml, /class="helmx-switch-label">网关状态<\/span>/)
   assert.doesNotMatch(offHtml, /is-checked/)
   // 零 Emoji 保证
   assert.doesNotMatch(offHtml, /[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}]/u)
@@ -57,7 +57,7 @@ test('Switch：基础状态、受控 checked、WAI-ARIA 属性与零 Emoji', { t
     }),
   )
 
-  assert.match(disabledHtml, /class="helm-switch-wrap is-disabled"/)
+  assert.match(disabledHtml, /class="helmx-switch-wrap is-disabled"/)
   assert.match(disabledHtml, /disabled=""/)
 
   // 无 label 模式直接渲染 switchButton 容器
@@ -68,9 +68,9 @@ test('Switch：基础状态、受控 checked、WAI-ARIA 属性与零 Emoji', { t
       'aria-label': '静默开关',
     }),
   )
-  assert.match(noLabelHtml, /<span class="helm-switch-wrap">/)
+  assert.match(noLabelHtml, /<span class="helmx-switch-wrap">/)
   assert.match(noLabelHtml, /aria-label="静默开关"/)
-  assert.doesNotMatch(noLabelHtml, /helm-switch-label/)
+  assert.doesNotMatch(noLabelHtml, /helmx-switch-label/)
 })
 
 // ---------------------------------------------------------------------------
@@ -88,12 +88,12 @@ test('Checkbox：未选、勾选、半选（indeterminate）、无障碍与零 E
     }),
   )
 
-  assert.match(uncheckedHtml, /class="helm-checkbox-wrap"/)
+  assert.match(uncheckedHtml, /class="helmx-checkbox-wrap"/)
   assert.match(uncheckedHtml, /role="checkbox"/)
   assert.match(uncheckedHtml, /aria-checked="false"/)
   assert.match(uncheckedHtml, /id="item-chk"/)
-  assert.match(uncheckedHtml, /class="helm-checkbox"/)
-  assert.match(uncheckedHtml, /class="helm-checkbox-label">多选条目<\/span>/)
+  assert.match(uncheckedHtml, /class="helmx-checkbox"/)
+  assert.match(uncheckedHtml, /class="helmx-checkbox-label">多选条目<\/span>/)
   assert.doesNotMatch(uncheckedHtml, /is-checked/)
   assert.doesNotMatch(uncheckedHtml, /is-indeterminate/)
   assert.doesNotMatch(uncheckedHtml, /[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}]/u)
@@ -135,7 +135,7 @@ test('Checkbox：未选、勾选、半选（indeterminate）、无障碍与零 E
     }),
   )
 
-  assert.match(disabledHtml, /class="helm-checkbox-wrap is-disabled"/)
+  assert.match(disabledHtml, /class="helmx-checkbox-wrap is-disabled"/)
   assert.match(disabledHtml, /disabled=""/)
 
   // 无 label 模式（例如侧栏批量选择框）
@@ -147,6 +147,6 @@ test('Checkbox：未选、勾选、半选（indeterminate）、无障碍与零 E
       'aria-label': '选择会话',
     }),
   )
-  assert.match(noLabelHtml, /class="helm-checkbox-wrap sidebar-batch-checkbox"/)
-  assert.doesNotMatch(noLabelHtml, /helm-checkbox-label/)
+  assert.match(noLabelHtml, /class="helmx-checkbox-wrap sidebar-batch-checkbox"/)
+  assert.doesNotMatch(noLabelHtml, /helmx-checkbox-label/)
 })

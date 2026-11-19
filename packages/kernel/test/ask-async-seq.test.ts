@@ -24,20 +24,20 @@
  *   still checks against latest persisted spec after re-read).
  */
 
-import { HelmError } from '@helm/protocol'
+import { HelmxError } from '@helmx/protocol'
 import { after, before, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { join } from 'node:path'
 import { AskService } from '../src/runtime/asks.js'
-import { HelmStore } from '../src/runtime/store.js'
-import { openHelmDatabase } from '../src/runtime/sqlite.js'
+import { HelmxStore } from '../src/runtime/store.js'
+import { openHelmxDatabase } from '../src/runtime/sqlite.js'
 import { SecretStash } from '../src/services/index.js'
 import { errorToResponse } from '../src/http/http-utils.js'
 import { cleanupDir, deferred as kitDeferred, makeTempDir } from './helpers.js'
 
 interface TestContext {
   service: AskService
-  store: HelmStore
+  store: HelmxStore
   stash: SecretStash
   events: Array<{ type: string; payload: unknown }>
   close(): Promise<void>
@@ -46,7 +46,7 @@ interface TestContext {
 let rootDir: string
 
 before(async () => {
-  rootDir = await makeTempDir('helm-ask-async-seq-')
+  rootDir = await makeTempDir('helmx-ask-async-seq-')
 })
 
 after(async () => {
@@ -54,8 +54,8 @@ after(async () => {
 })
 
 async function openService(): Promise<TestContext> {
-  const db = await openHelmDatabase(join(rootDir, `ask-${Math.random().toString(36).slice(2)}`))
-  const store = new HelmStore(db)
+  const db = await openHelmxDatabase(join(rootDir, `ask-${Math.random().toString(36).slice(2)}`))
+  const store = new HelmxStore(db)
   await store.load()
   const stash = new SecretStash()
   const events: Array<{ type: string; payload: unknown }> = []
@@ -179,7 +179,7 @@ describe('async seq resolver: watermark evaluation and honest failure', { timeou
       gate.resolve()
       await assert.rejects(
         () => answering,
-        (err: unknown) => err instanceof HelmError && err.code === 'ask_already_settled',
+        (err: unknown) => err instanceof HelmxError && err.code === 'ask_already_settled',
       )
       // Old outcome preserved: stays cancelled, no answers, no stashed secret, no duplicate events.
       const row = ctx.store.getAsk(id)!
@@ -213,7 +213,7 @@ describe('async seq resolver: watermark evaluation and honest failure', { timeou
       secondGate.resolve()
       await assert.rejects(
         () => second,
-        (err: unknown) => err instanceof HelmError && err.code === 'ask_already_settled',
+        (err: unknown) => err instanceof HelmxError && err.code === 'ask_already_settled',
       )
       // Winner outcome stays intact: loser neither overwrote persisted result nor corrupted stash.
       assert.equal(ctx.stash.envFor(1).TOKEN, 'first-answer')
@@ -241,7 +241,7 @@ describe('async seq resolver: watermark evaluation and honest failure', { timeou
         await assert.rejects(
           () => answering,
           (err: unknown) =>
-            err instanceof HelmError &&
+            err instanceof HelmxError &&
             err.code === 'ask_state_conflict' &&
             (err.details as { storedSeq?: number } | undefined)?.storedSeq === nextSeq,
         )
@@ -274,11 +274,11 @@ describe('async seq resolver: watermark evaluation and honest failure', { timeou
 
       const id2 = await createPending(ctx.service, { ...secretSpec, id: 'resolver-async-fail' })
       ctx.service.registerSeqResolver(async () => {
-        throw new HelmError('ask_state_unavailable', 'remote agent.get failed', 502)
+        throw new HelmxError('ask_state_unavailable', 'remote agent.get failed', 502)
       })
       await assert.rejects(
         () => ctx.service.answerAsk(id2, { TOKEN: 'v' }),
-        (err: unknown) => err instanceof HelmError && err.code === 'ask_state_unavailable',
+        (err: unknown) => err instanceof HelmxError && err.code === 'ask_state_unavailable',
       )
       assert.equal(ctx.store.getAsk(id2)!.status, 'pending')
       assert.equal(ctx.stash.envFor(1).TOKEN, undefined)
@@ -311,7 +311,7 @@ describe('async seq resolver: watermark evaluation and honest failure', { timeou
           () => assert.fail(`invalid seq ${bad.label} must fail explicitly`),
           (error: unknown) => error,
         )
-        assert.ok(error instanceof HelmError)
+        assert.ok(error instanceof HelmxError)
         assert.equal(error.code, 'ask_seq_resolver_invalid')
         const response = errorToResponse(undefined, (text) => text, error)
         assert.equal(response.status, 500)
@@ -368,7 +368,7 @@ describe('async seq resolver: watermark evaluation and honest failure', { timeou
       gate.resolve()
       await assert.rejects(
         () => answering,
-        (err: unknown) => err instanceof HelmError && err.code === 'not_found',
+        (err: unknown) => err instanceof HelmxError && err.code === 'not_found',
       )
       assert.equal(ctx.events.filter((e) => e.type === 'ask.resolved').length, 0)
       releaseGate()

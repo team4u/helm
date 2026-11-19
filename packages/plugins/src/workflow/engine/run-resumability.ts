@@ -3,7 +3,7 @@
  *
  * 职责：
  * - classifyRunFailureCode：在一切失败出口确定性填充结构化 errorCode（优先取
- *   HelmError.code / WorkflowMetaError / WorkflowRuntimeError，取代下游子串猜测）；
+ *   HelmxError.code / WorkflowMetaError / WorkflowRuntimeError，取代下游子串猜测）；
  * - nonRetryableFailureCodeOf：优先判定结构化 errorCode；仅对未写 errorCode 的
  *   磁盘手工测试夹具保留单点最小回退识别；
  * - inspectRunResumability：引擎唯一权威可续跑判定函数，统一服务于：
@@ -13,7 +13,7 @@
  *   4) resumeFromRunId 显式续接校验（mode='explicit_resume'）。
  */
 
-import { HelmError } from '@helm/protocol'
+import { HelmxError } from '@helmx/protocol'
 import { readJournal, type JournalReadResult, type WorkflowJournalEntry } from './journal.js'
 import { WorkflowMetaError } from './meta.js'
 import type { RunRecord } from './run-store.js'
@@ -38,7 +38,7 @@ export function classifyRunFailureCode(
   errorText?: string,
   fallbackCode = 'workflow_failed',
 ): string {
-  if (cause instanceof HelmError && cause.code !== '') return cause.code
+  if (cause instanceof HelmxError && cause.code !== '') return cause.code
   if (cause instanceof WorkflowMetaError) return 'validation_error'
   if (cause instanceof WorkflowRuntimeError) {
     return cause.message.toLowerCase().includes('workflow script has a syntax error')

@@ -1,11 +1,11 @@
 /**
- * `helm-node` upgrade handoff over native Node stdio IPC (CLI side, inside the old daemon).
+ * `helmx-node` upgrade handoff over native Node stdio IPC (CLI side, inside the old daemon).
  *
  * Three-phase protocol:
- * 1) Candidate reports `{ type: 'helm-node.ready', pid, instanceId, state: 'registered' }`;
+ * 1) Candidate reports `{ type: 'helmx-node.ready', pid, instanceId, state: 'registered' }`;
  *    `state: 'starting'` is treated as unready (upgrades require live Hub registration).
- * 2) `commit()` atomically writes `node.pid`, sends `{ type: 'helm-node.activate', ... }`, and
- *    waits for local `{ type: 'helm-node.activated' }` confirmation (independent of Hub ACK).
+ * 2) `commit()` atomically writes `node.pid`, sends `{ type: 'helmx-node.activate', ... }`, and
+ *    waits for local `{ type: 'helmx-node.activated' }` confirmation (independent of Hub ACK).
  * 3) Post-send confirmation failures fall into two buckets:
  *    - Write failure (message definitely never sent): throws regular Error so the caller rolls back safely;
  *    - Unconfirmed after write (disconnect/timeout/candidate exit): throws `UpgradeCommitUnconfirmedError`
@@ -19,9 +19,9 @@ import { UpgradeCommitUnconfirmedError, type PreparedNodeReplacement, type Stage
 
 /** Candidate ready timeout, sized to cover backoff reconnects if the Hub is briefly unreachable. */
 export const CANDIDATE_READY_TIMEOUT_MS = 150_000;
-/** Timeout waiting for local `helm-node.activated` ACK after sending `activate`. */
+/** Timeout waiting for local `helmx-node.activated` ACK after sending `activate`. */
 export const ACTIVATE_ACK_TIMEOUT_MS = 30_000;
-/** Maximum time a candidate waits for `helm-node.activate` after reporting ready. */
+/** Maximum time a candidate waits for `helmx-node.activate` after reporting ready. */
 export const CANDIDATE_ACTIVATE_WAIT_MS = 10 * 60_000;
 
 export interface UpgradeHandoffContext {
@@ -51,7 +51,7 @@ export interface PrepareNodeReplacementOptions {
 }
 
 export interface ActivateMessage {
-  type: 'helm-node.activate';
+  type: 'helmx-node.activate';
   attemptId: string;
   version: string;
   previousVersion: string;
@@ -66,10 +66,10 @@ export interface CandidateUpgradeHandoff {
 
 /** Parse upgrade context injected into the candidate's environment (`undefined` for normal daemons). */
 export function parseUpgradeHandoffEnv(env: NodeJS.ProcessEnv | undefined): CandidateUpgradeHandoff | undefined {
-  const attemptId = env?.['HELM_NODE_UPGRADE_ATTEMPT'];
+  const attemptId = env?.['HELMX_NODE_UPGRADE_ATTEMPT'];
   if (attemptId === undefined || attemptId === '') return undefined;
-  const previousVersion = env?.['HELM_NODE_UPGRADE_PREVIOUS_VERSION'];
-  const targetVersion = env?.['HELM_NODE_UPGRADE_TARGET_VERSION'];
+  const previousVersion = env?.['HELMX_NODE_UPGRADE_PREVIOUS_VERSION'];
+  const targetVersion = env?.['HELMX_NODE_UPGRADE_TARGET_VERSION'];
   return {
     attemptId,
     ...(previousVersion !== undefined && previousVersion !== '' ? { previousVersion } : {}),
@@ -77,17 +77,17 @@ export function parseUpgradeHandoffEnv(env: NodeJS.ProcessEnv | undefined): Cand
   };
 }
 
-/** Validate incoming `helm-node.activate` message on the candidate side. */
+/** Validate incoming `helmx-node.activate` message on the candidate side. */
 export function parseActivateMessage(message: unknown): ActivateMessage | undefined {
   if (typeof message !== 'object' || message === null) return undefined;
   const record = message as Record<string, unknown>;
-  if (record['type'] !== 'helm-node.activate') return undefined;
+  if (record['type'] !== 'helmx-node.activate') return undefined;
   const { attemptId, version, previousVersion, pid } = record;
   if (typeof attemptId !== 'string' || attemptId === '') return undefined;
   if (typeof version !== 'string' || version === '') return undefined;
   if (typeof previousVersion !== 'string' || previousVersion === '') return undefined;
   if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0) return undefined;
-  return { type: 'helm-node.activate', attemptId, version, previousVersion, pid };
+  return { type: 'helmx-node.activate', attemptId, version, previousVersion, pid };
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -132,21 +132,21 @@ export async function prepareNodeReplacement(
   const endpoint = options.controlEndpoint(options.dataDir, instanceId);
   const childEnv: NodeJS.ProcessEnv = { ...(options.env ?? process.env) };
   // Isolate candidate control/version env vars and strip NODE_OPTIONS so dev tsx loaders don't leak into compiled releases.
-  delete childEnv['HELM_NODE_INSTANCE_ID'];
-  delete childEnv['HELM_NODE_CONTROL_ENDPOINT'];
-  delete childEnv['HELM_NODE_PENDING_ACTIVATION'];
-  delete childEnv['HELM_VERSION_OVERRIDE'];
+  delete childEnv['HELMX_NODE_INSTANCE_ID'];
+  delete childEnv['HELMX_NODE_CONTROL_ENDPOINT'];
+  delete childEnv['HELMX_NODE_PENDING_ACTIVATION'];
+  delete childEnv['HELMX_VERSION_OVERRIDE'];
   delete childEnv['NODE_OPTIONS'];
   for (const key of Object.keys(childEnv)) {
-    if (key.toUpperCase() === 'HELM_TOKEN') delete childEnv[key];
+    if (key.toUpperCase() === 'HELMX_TOKEN') delete childEnv[key];
   }
-  childEnv['HELM_CLI_BIN_DIR'] = release.cliBinDir;
-  childEnv['HELM_NODE_UPGRADE_ATTEMPT'] = context.attemptId;
-  childEnv['HELM_NODE_UPGRADE_PREVIOUS_VERSION'] = context.previousVersion;
-  childEnv['HELM_NODE_UPGRADE_TARGET_VERSION'] = context.targetVersion;
-  childEnv['HELM_NODE_PENDING_ACTIVATION'] = '1';
-  childEnv['HELM_NODE_INSTANCE_ID'] = instanceId;
-  childEnv['HELM_NODE_CONTROL_ENDPOINT'] = endpoint;
+  childEnv['HELMX_CLI_BIN_DIR'] = release.cliBinDir;
+  childEnv['HELMX_NODE_UPGRADE_ATTEMPT'] = context.attemptId;
+  childEnv['HELMX_NODE_UPGRADE_PREVIOUS_VERSION'] = context.previousVersion;
+  childEnv['HELMX_NODE_UPGRADE_TARGET_VERSION'] = context.targetVersion;
+  childEnv['HELMX_NODE_PENDING_ACTIVATION'] = '1';
+  childEnv['HELMX_NODE_INSTANCE_ID'] = instanceId;
+  childEnv['HELMX_NODE_CONTROL_ENDPOINT'] = endpoint;
 
   await fsp.mkdir(options.dataDir, { recursive: true });
   let logHandle: fsp.FileHandle;
@@ -200,7 +200,7 @@ export async function prepareNodeReplacement(
       resolve(value);
     };
     const onMessage = (message: unknown): void => {
-      if (!isRecord(message) || message['type'] !== 'helm-node.ready') return;
+      if (!isRecord(message) || message['type'] !== 'helmx-node.ready') return;
       if (asString(message['instanceId']) !== instanceId) return;
       if (message['pid'] !== child.pid) return;
       if (message['state'] === 'registered') finish({ kind: 'ready' });
@@ -264,8 +264,8 @@ export async function prepareNodeReplacement(
     if (!isRecord(message)) return;
     const attempt = asString(message['attemptId']);
     if (attempt !== context.attemptId) return;
-    if (message['type'] === 'helm-node.activated') finishAck('activated');
-    else if (message['type'] === 'helm-node.activate-rejected') {
+    if (message['type'] === 'helmx-node.activated') finishAck('activated');
+    else if (message['type'] === 'helmx-node.activate-rejected') {
       rejectReason = asString(message['reason']) ?? 'unknown';
       finishAck('rejected');
     }
@@ -293,7 +293,7 @@ export async function prepareNodeReplacement(
 
     phase = 'activating';
     const activate: ActivateMessage = {
-      type: 'helm-node.activate',
+      type: 'helmx-node.activate',
       attemptId: context.attemptId,
       version: context.targetVersion,
       previousVersion: context.previousVersion,

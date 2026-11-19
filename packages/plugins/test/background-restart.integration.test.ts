@@ -17,11 +17,11 @@
  * 未完成的真实模型生成任务，checkpoint 持久在 request 阶段）；恢复侧全部走
  * 真实 SDK 路径，绝不 mock 恢复，不用 callCount 假证明。
  *
- * 环境Constraints:子进程与主进程 cwd/HELM_DATA_DIR 全部在 mkdtemp 临时目录；
+ * 环境Constraints:子进程与主进程 cwd/HELMX_DATA_DIR 全部在 mkdtemp 临时目录；
  * 全程无 Hub、无端口监听；finally 杀干净子进程并删除临时目录。
  * 每用例 timeout: 60_000；运行命令带总超时（timeout 50s tsx --test 本文件）。
  */
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { test } from 'node:test'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -36,7 +36,7 @@ import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { createModels } from '@earendil-works/pi-ai/models'
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import { Harness, createRegistry } from '@earendil-works/pi-durable'
-import { type HelmEventFrame, type PluginDefinition } from '@helm/protocol'
+import { type HelmxEventFrame, type PluginDefinition } from '@helmx/protocol'
 
 import { KernelRuntime } from '../../kernel/src/runtime/index.js'
 import { createWorkflowPlugin } from '../src/workflow.js'
@@ -67,7 +67,7 @@ test('恢复顺序: prepareRecovery 先收集子会话落标记，init 才 abort
     },
     flush: async () => {},
   }
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-bg-order-'))
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-bg-order-'))
   t.after(() => {
     rmSync(dataDir, { recursive: true, force: true })
   })
@@ -147,7 +147,7 @@ import { fauxAssistantMessage, fauxProvider } from '${piAiFauxSrc}'
 import { KernelRuntime } from '${kernelSrc}'
 import { createPluginBuildProvider } from '${pluginBuildSrc}'
 
-const dataDir = process.env.HELM_SEED_DIR!
+const dataDir = process.env.HELMX_SEED_DIR!
 const faux = fauxProvider({ tokensPerSecond: 1, tokenSize: { min: 1, max: 1 } })
 faux.setResponses([fauxAssistantMessage('这是一段被慢速流式输出的长文本用于确保 SIGKILL 时模型回合仍在流式中')])
 const kernel = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider], autoResume: false })
@@ -190,8 +190,8 @@ process.kill(process.pid, 'SIGKILL')
 
 /** 只读探针 Harness：验证 paused + abort 标记（不解锁调度器）。 */
 async function readOnlyInspect(dataDir: string): Promise<{ scheduling: string; tasks: Array<{ kind: string; conversationId: number; abortRequested: boolean; status: string }> }> {
-  const { openHelmDatabase } = await import('../../kernel/src/runtime/sqlite.js')
-  const db = await openHelmDatabase(dataDir)
+  const { openHelmxDatabase } = await import('../../kernel/src/runtime/sqlite.js')
+  const db = await openHelmxDatabase(dataDir)
   try {
     const probe = await Harness.open(db.storage, { models: createModels(), registry: createRegistry(), readOnly: true }, BACKGROUND_CONTEXT)
     try {
@@ -219,10 +219,10 @@ async function readOnlyInspect(dataDir: string): Promise<{ scheduling: string; t
 // ---------------------------------------------------------------------------
 
 test('真实恢复: SIGKILL 遗留子会话仍 paused 时 prepareRecovery 只落 abort 标记零模型调用；init 终止后父收 interrupted 报告；resume 原子会话执行新输入', { timeout: 60_000 }, async (t) => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-bg-restart-'))
-  const seedDir = mkdtempSync(join(tmpdir(), 'helm-bg-seed-'))
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-bg-restart-'))
+  const seedDir = mkdtempSync(join(tmpdir(), 'helmx-bg-seed-'))
   const seederPath = join(seedDir, 'seed.mts')
-  writeFileSync(seederPath, seederSource(KERNEL_SRC, pathToFileURL(join(PI_AI_DIR, 'dist/models.js')).href, pathToFileURL(join(PI_AI_DIR, 'dist/providers/faux.js')).href, import.meta.resolve('@helm/plugin-build')), 'utf8')
+  writeFileSync(seederPath, seederSource(KERNEL_SRC, pathToFileURL(join(PI_AI_DIR, 'dist/models.js')).href, pathToFileURL(join(PI_AI_DIR, 'dist/providers/faux.js')).href, import.meta.resolve('@helmx/plugin-build')), 'utf8')
   const tsxCli = require.resolve('tsx/cli')
   let child: ReturnType<typeof spawn> | undefined
   // t.after 按注册顺序执行：先杀子进程/清理 seeder 目录；dataDir 必须等内核
@@ -238,9 +238,9 @@ test('真实恢复: SIGKILL 遗留子会话仍 paused 时 prepareRecovery 只落
       env: {
         PATH: process.env.PATH ?? '',
         HOME: seedDir,
-        HELM_SEED_DIR: dataDir,
-        HELM_DATA_DIR: dataDir,
-        HELM_WATCHDOG_INTERVAL_MS: '0',
+        HELMX_SEED_DIR: dataDir,
+        HELMX_DATA_DIR: dataDir,
+        HELMX_WATCHDOG_INTERVAL_MS: '0',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     })
@@ -277,9 +277,9 @@ test('真实恢复: SIGKILL 遗留子会话仍 paused 时 prepareRecovery 只落
       rmSync(dataDir, { recursive: true, force: true })
     })
     const rootInputs: Array<{ conversationId: number; origin?: string; kind?: string }> = []
-    kernel.events.subscribe((frame: HelmEventFrame) => {
+    kernel.events.subscribe((frame: HelmxEventFrame) => {
       const e = frame.event as { type?: string; conversationId?: number; entry?: { kind?: string; data?: { origin?: string; meta?: { kind?: string } } } }
-      if (e.type === 'conversation.entry' && e.conversationId === ROOT && e.entry?.kind === 'helm.input') {
+      if (e.type === 'conversation.entry' && e.conversationId === ROOT && e.entry?.kind === 'helmx.input') {
         rootInputs.push({ conversationId: e.conversationId, origin: e.entry.data?.origin, kind: e.entry.data?.meta?.kind })
       }
     })
@@ -383,10 +383,10 @@ test('真实恢复: SIGKILL 遗留子会话仍 paused 时 prepareRecovery 只落
 // ---------------------------------------------------------------------------
 
 test('相位自适应 guarded 中止: paused 时逐会话落持久标记且不 resume；human 归属在恢复窗口同样拒绝；start 后同方法回落普通中止语义', { timeout: 60_000 }, async (t) => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-bg-restart3-'))
-  const seedDir = mkdtempSync(join(tmpdir(), 'helm-bg-seed3-'))
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-bg-restart3-'))
+  const seedDir = mkdtempSync(join(tmpdir(), 'helmx-bg-seed3-'))
   const seederPath = join(seedDir, 'seed.mts')
-  writeFileSync(seederPath, seederSource(KERNEL_SRC, pathToFileURL(join(PI_AI_DIR, 'dist/models.js')).href, pathToFileURL(join(PI_AI_DIR, 'dist/providers/faux.js')).href, import.meta.resolve('@helm/plugin-build')), 'utf8')
+  writeFileSync(seederPath, seederSource(KERNEL_SRC, pathToFileURL(join(PI_AI_DIR, 'dist/models.js')).href, pathToFileURL(join(PI_AI_DIR, 'dist/providers/faux.js')).href, import.meta.resolve('@helmx/plugin-build')), 'utf8')
   const tsxCli = require.resolve('tsx/cli')
   let child: ReturnType<typeof spawn> | undefined
   // 同用例 2：先杀子进程/清理 seeder 目录，dataDir 在内核 close 后再删。
@@ -400,9 +400,9 @@ test('相位自适应 guarded 中止: paused 时逐会话落持久标记且不 r
       env: {
         PATH: process.env.PATH ?? '',
         HOME: seedDir,
-        HELM_SEED_DIR: dataDir,
-        HELM_DATA_DIR: dataDir,
-        HELM_WATCHDOG_INTERVAL_MS: '0',
+        HELMX_SEED_DIR: dataDir,
+        HELMX_DATA_DIR: dataDir,
+        HELMX_WATCHDOG_INTERVAL_MS: '0',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     })
@@ -442,8 +442,8 @@ test('相位自适应 guarded 中止: paused 时逐会话落持久标记且不 r
     assert.ok(task !== undefined && task.abortRequested === false, 'human 拒绝路径绝不落 abort 标记')
     assert.equal(snap.scheduling, 'paused', 'human 拒绝路径不得唤醒调度器')
 
-    // helm 归属：paused 相位只落持久 abort 标记（不 resume、不等结算、零模型调用）。
-    kernel.markConversationOwnership(childId, 'helm')
+    // helmx 归属：paused 相位只落持久 abort 标记（不 resume、不等结算、零模型调用）。
+    kernel.markConversationOwnership(childId, 'helmx')
     await kernel.abortConversationGuarded(childId, {})
     snap = await readOnlyInspect(dataDir)
     task = snap.tasks.find((tk) => tk.conversationId === childId)
@@ -469,8 +469,8 @@ test('相位自适应 guarded 中止: paused 时逐会话落持久标记且不 r
 
 test('同步工作流全覆盖收敛：SIGKILL 与 graceful close() 均回收遗留原生子会话、清 pendingChildCleanup 且绝不通知父会话', { timeout: 60_000 }, async (t) => {
   // ---- A) SIGKILL 中断同步工作流 ----
-  const sigkillDir = mkdtempSync(join(tmpdir(), 'helm-sync-sigkill-'))
-  const seedDir = mkdtempSync(join(tmpdir(), 'helm-sync-seed-'))
+  const sigkillDir = mkdtempSync(join(tmpdir(), 'helmx-sync-sigkill-'))
+  const seedDir = mkdtempSync(join(tmpdir(), 'helmx-sync-seed-'))
   const seederPath = join(seedDir, 'sync-seed.mts')
   const workflowSrc = pathToFileURL(new URL('../src/workflow.ts', import.meta.url).pathname).href
   writeFileSync(
@@ -478,10 +478,10 @@ test('同步工作流全覆盖收敛：SIGKILL 与 graceful close() 均回收遗
     `import { setTimeout as delay } from 'node:timers/promises'
 import { fauxAssistantMessage, fauxProvider } from ${JSON.stringify(pathToFileURL(join(PI_AI_DIR, 'dist/providers/faux.js')).href)}
 import { KernelRuntime } from ${JSON.stringify(KERNEL_SRC)}
-import { createPluginBuildProvider } from ${JSON.stringify(import.meta.resolve('@helm/plugin-build'))}
+import { createPluginBuildProvider } from ${JSON.stringify(import.meta.resolve('@helmx/plugin-build'))}
 import { createWorkflowPlugin } from ${JSON.stringify(workflowSrc)}
 
-const dataDir = process.env.HELM_SEED_DIR!
+const dataDir = process.env.HELMX_SEED_DIR!
 const faux = fauxProvider({ tokensPerSecond: 1, tokenSize: { min: 1, max: 1 } })
 faux.setResponses([fauxAssistantMessage('这是一段慢速同步工作流输出确保在进程被强杀前子会话仍处于工作状态')])
 const kernel = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider], autoResume: false })
@@ -523,9 +523,9 @@ process.kill(process.pid, 'SIGKILL')
       env: {
         PATH: process.env.PATH ?? '',
         HOME: seedDir,
-        HELM_SEED_DIR: sigkillDir,
-        HELM_DATA_DIR: sigkillDir,
-        HELM_WATCHDOG_INTERVAL_MS: '0',
+        HELMX_SEED_DIR: sigkillDir,
+        HELMX_DATA_DIR: sigkillDir,
+        HELMX_WATCHDOG_INTERVAL_MS: '0',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     })
@@ -567,9 +567,9 @@ process.kill(process.pid, 'SIGKILL')
     })
     kernelAfterKill = kernel
     const rootInputs: unknown[] = []
-    kernel.events.subscribe((frame: HelmEventFrame) => {
+    kernel.events.subscribe((frame: HelmxEventFrame) => {
       const e = frame.event as { type?: string; conversationId?: number; entry?: { kind?: string } }
-      if (e.type === 'conversation.entry' && e.conversationId === ROOT && e.entry?.kind === 'helm.input') {
+      if (e.type === 'conversation.entry' && e.conversationId === ROOT && e.entry?.kind === 'helmx.input') {
         rootInputs.push(e.entry)
       }
     })
@@ -591,7 +591,7 @@ process.kill(process.pid, 'SIGKILL')
   }
 
   // ---- B) graceful kernel.close() 中断同步工作流 ----
-  const closeDir = mkdtempSync(join(tmpdir(), 'helm-sync-close-'))
+  const closeDir = mkdtempSync(join(tmpdir(), 'helmx-sync-close-'))
   const fauxC1 = makeFauxProvider({ tokensPerSecond: 1, tokenSize: { min: 1, max: 1 } })
   fauxC1.setResponses([fauxAssistantMessage('优雅关停期缓慢输出的同步子会话长回复内容确保仍在执行中')])
   const k1 = await KernelRuntime.open({
@@ -643,9 +643,9 @@ process.kill(process.pid, 'SIGKILL')
     autoResume: false,
   })
   const rootInputs2: unknown[] = []
-  k2.events.subscribe((frame: HelmEventFrame) => {
+  k2.events.subscribe((frame: HelmxEventFrame) => {
     const e = frame.event as { type?: string; conversationId?: number; entry?: { kind?: string } }
-    if (e.type === 'conversation.entry' && e.conversationId === ROOT && e.entry?.kind === 'helm.input') {
+    if (e.type === 'conversation.entry' && e.conversationId === ROOT && e.entry?.kind === 'helmx.input') {
       rootInputs2.push(e.entry)
     }
   })
@@ -664,7 +664,7 @@ process.kill(process.pid, 'SIGKILL')
 // ---------------------------------------------------------------------------
 
 test('原生 isolation:worktree SIGKILL 崩溃租约在重启 runtime.started 后自动回收并放行 cleanup_worktree；外部 executionId 租约保持 fail-closed', { timeout: 60_000 }, async (t) => {
-  const baseDir = mkdtempSync(join(tmpdir(), 'helm-wt-sigkill-'))
+  const baseDir = mkdtempSync(join(tmpdir(), 'helmx-wt-sigkill-'))
   const repoDir = join(baseDir, 'repo')
   const dataDir = join(baseDir, 'data')
   const seedDir = join(baseDir, 'seed')
@@ -673,8 +673,8 @@ test('原生 isolation:worktree SIGKILL 崩溃租约在重启 runtime.started �
   mkdirSync(seedDir, { recursive: true })
 
   execFileSync('git', ['init'], { cwd: repoDir })
-  execFileSync('git', ['config', 'user.email', 'test@helm.local'], { cwd: repoDir })
-  execFileSync('git', ['config', 'user.name', 'Helm Test'], { cwd: repoDir })
+  execFileSync('git', ['config', 'user.email', 'test@helmx.local'], { cwd: repoDir })
+  execFileSync('git', ['config', 'user.name', 'Helmx Test'], { cwd: repoDir })
   writeFileSync(join(repoDir, 'README.md'), 'init\n', 'utf8')
   execFileSync('git', ['add', '.'], { cwd: repoDir })
   execFileSync('git', ['commit', '-m', 'init'], { cwd: repoDir })
@@ -686,11 +686,11 @@ test('原生 isolation:worktree SIGKILL 崩溃租约在重启 runtime.started �
     `import { setTimeout as delay } from 'node:timers/promises'
 import { fauxAssistantMessage, fauxProvider } from ${JSON.stringify(pathToFileURL(join(PI_AI_DIR, 'dist/providers/faux.js')).href)}
 import { KernelRuntime } from ${JSON.stringify(KERNEL_SRC)}
-import { createPluginBuildProvider } from ${JSON.stringify(import.meta.resolve('@helm/plugin-build'))}
+import { createPluginBuildProvider } from ${JSON.stringify(import.meta.resolve('@helmx/plugin-build'))}
 import { createWorkflowPlugin } from ${JSON.stringify(workflowSrc)}
 
-const dataDir = process.env.HELM_SEED_DIR!
-const repoDir = process.env.HELM_REPO_DIR!
+const dataDir = process.env.HELMX_SEED_DIR!
+const repoDir = process.env.HELMX_REPO_DIR!
 const faux = fauxProvider({ tokensPerSecond: 1, tokenSize: { min: 1, max: 1 } })
 faux.setResponses([fauxAssistantMessage('这是一段慢速工作树隔离子代理流式文本确保进程崩溃时原生租约仍在运行中')])
 const kernel = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(), dataDir, cwd: repoDir, model: 'faux/faux-1', providers: [faux.provider], autoResume: false })
@@ -735,10 +735,10 @@ process.kill(process.pid, 'SIGKILL')
       env: {
         PATH: process.env.PATH ?? '',
         HOME: seedDir,
-        HELM_SEED_DIR: dataDir,
-        HELM_REPO_DIR: repoDir,
-        HELM_DATA_DIR: dataDir,
-        HELM_WATCHDOG_INTERVAL_MS: '0',
+        HELMX_SEED_DIR: dataDir,
+        HELMX_REPO_DIR: repoDir,
+        HELMX_DATA_DIR: dataDir,
+        HELMX_WATCHDOG_INTERVAL_MS: '0',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     })

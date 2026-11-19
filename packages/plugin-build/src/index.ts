@@ -1,8 +1,8 @@
 /**
- * @helm/plugin-build — default implementation of the plugin build port (`PluginBuildProvider`).
+ * @helmx/plugin-build — default implementation of the plugin build port (`PluginBuildProvider`).
  *
  * Injected explicitly into the kernel `PluginHost` (`PluginHostOptions.buildProvider`) by the product
- * composition root (`@helm/hub`). Depends only on `@helm/protocol`, `@helm/env-io` (shared atomic
+ * composition root (`@helmx/hub`). Depends only on `@helmx/protocol`, `@helmx/env-io` (shared atomic
  * writes), and `esbuild`, with zero reverse dependency on `kernel`, `hub`, or `web`.
  *
  * Capabilities:
@@ -12,7 +12,7 @@
  *   with `manifest.json`, `.mjs`/`.js` bundles, and `.gz` artifacts;
  * - `transformBackendTs`: synchronously transpiles external plugin backend TypeScript to ESM.
  */
-import type { PluginBuildProvider } from '@helm/protocol';
+import type { PluginBuildProvider } from '@helmx/protocol';
 import { transformBackendTs } from './backend-ts-transform.js';
 import { compilePluginClientModule } from './client-compiler.js';
 

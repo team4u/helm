@@ -4,7 +4,7 @@
  * Every `cwd` entering persistence (conversation mirror / sub-conversation registration) or execution
  * (SDK agent cwd / worktree source directory / Herdr pane cwd) flows through `normalizeSessionCwd`:
  * - Relative paths (including Windows drive-relative paths like `C:rel`) are explicitly rejected by contract;
- * - When target platform is known, delegates to `@helm/protocol` `normalizeTargetPath`: on `win32`,
+ * - When target platform is known, delegates to `@helmx/protocol` `normalizeTargetPath`: on `win32`,
  *   WSL `/mnt/<drive>`, Git Bash `/<drive>`, and `//server/share` are deterministically converted into
  *   canonical Windows paths; on POSIX targets only `path.posix.normalize` is applied (never rewritten backward);
  * - When target platform is unknown (remote unregistered or not yet reported), never guesses or rewrites —
@@ -15,7 +15,7 @@
  * on `NodeRegistry` registration, never probing or inferring platform from path syntax.
  */
 
-import { HelmError, isAbsoluteTargetPath, normalizeTargetPath, targetPlatformOf, type TargetPlatform } from '@helm/protocol'
+import { HelmxError, isAbsoluteTargetPath, normalizeTargetPath, targetPlatformOf, type TargetPlatform } from '@helmx/protocol'
 import type { EnvFabric } from '../env/index.js'
 
 /**
@@ -93,7 +93,7 @@ interface NormalizeSessionCwdOptions {
  */
 export function normalizeCwdForPlatform(cwd: string, platform: TargetPlatform | undefined, entry: string): string {
   if (!isAbsoluteTargetPath(cwd)) {
-    throw new HelmError(
+    throw new HelmxError(
       'validation_error',
       `${entry}: cwd must be an absolute path (starting with / on POSIX, drive letter C:\\ or UNC \\\\server\\share on Windows; drive-relative and relative paths are rejected): received '${cwd}'`,
       400,
@@ -103,7 +103,7 @@ export function normalizeCwdForPlatform(cwd: string, platform: TargetPlatform | 
   if (platform === undefined) return cwd
   const result = normalizeTargetPath(cwd, platform)
   if (!result.ok) {
-    throw new HelmError(result.code, `${entry}: ${result.reason}`, 400, { cwd, entry })
+    throw new HelmxError(result.code, `${entry}: ${result.reason}`, 400, { cwd, entry })
   }
   return result.path
 }

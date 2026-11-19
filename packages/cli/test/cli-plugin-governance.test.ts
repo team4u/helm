@@ -27,7 +27,7 @@ const inUseResponse = (usages: Array<{ kind: string; id: string; label: string }
 })
 
 test('plugins disable: without --force sends no request body', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-gov-')
+  const dir = useTempDir(t, 'helmx-cli-gov-')
   const hub = await startMockHub(
     {
       'POST /api/plugins/builtin%3Atriggers/disable': () => ({
@@ -45,7 +45,7 @@ test('plugins disable: without --force sends no request body', { timeout: 60_000
 })
 
 test('plugins disable --force: sends { force: true } in request body', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-gov-')
+  const dir = useTempDir(t, 'helmx-cli-gov-')
   let sawForce: unknown
   const hub = await startMockHub(
     {
@@ -65,7 +65,7 @@ test('plugins disable --force: sends { force: true } in request body', { timeout
 })
 
 test('plugins disable: 409 plugin_in_use prints usage list and --force hint in human mode; --json keeps raw envelope', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-gov-')
+  const dir = useTempDir(t, 'helmx-cli-gov-')
   const usages = [
     { kind: 'cron_job', id: 'rule-1', label: 'Daily check (cron 0 9 * * *)' },
     { kind: 'profile_runtime', id: 'watchdog', label: 'Profile watchdog runtime depends on this plugin' },
@@ -99,7 +99,7 @@ test('plugins disable: 409 plugin_in_use prints usage list and --force hint in h
 })
 
 test('plugins config --unset: PUT sends { values: { [key]: null } } and combines with --set', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-gov-')
+  const dir = useTempDir(t, 'helmx-cli-gov-')
   let lastBody: unknown
   const hub = await startMockHub(
     {
@@ -132,7 +132,7 @@ test('plugins config --unset: PUT sends { values: { [key]: null } } and combines
 })
 
 test('plugins config: same key in --set and --unset rejects with conflicting_flags', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-gov-')
+  const dir = useTempDir(t, 'helmx-cli-gov-')
   const hub = await startMockHub(
     {
       'PUT /api/plugins/builtin%3Aherdr/config': () => ({ body: { ok: true } }),
@@ -152,7 +152,7 @@ test('plugins config: same key in --set and --unset rejects with conflicting_fla
 })
 
 test('plugins config --unset: rejects empty key or key containing = (invalid_flag_value)', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-gov-')
+  const dir = useTempDir(t, 'helmx-cli-gov-')
   const hub = await startMockHub({}, { autoRegisterCleanup: t })
   const bad = await runCliCaptured(['plugins', 'config', 'p1', '--unset', 'a=b', '--json'], makeCliEnv(hub.url, dir))
   assert.equal(bad.code, 1)
@@ -160,7 +160,7 @@ test('plugins config --unset: rejects empty key or key containing = (invalid_fla
 })
 
 test('plugins list: passes through PluginSummary with status/error', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-gov-')
+  const dir = useTempDir(t, 'helmx-cli-gov-')
   const summary = [
     makePluginSummary({ id: 'builtin:profile', name: 'Profile Base', locked: true, status: 'active' }),
     makePluginSummary({
@@ -184,7 +184,7 @@ test('plugins list: passes through PluginSummary with status/error', { timeout: 
 })
 
 test('plugins list: human table resolves LocalizedText display copy; --json keeps raw maps', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-gov-')
+  const dir = useTempDir(t, 'helmx-cli-gov-')
   const summary = [
     makePluginSummary({
       id: 'demo:board',

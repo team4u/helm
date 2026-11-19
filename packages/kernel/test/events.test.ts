@@ -3,13 +3,13 @@
  *
  * Covers: SSE initial snapshot / incremental frame protocol, abort & reader.cancel unsubscription, close() cleanup,
  * slow-consumer byte backpressure stream closing, race-free snapshot/subscribe ordering, snapshot redaction,
- * monotonic sequence assignment, dual envelope/unwrapped event shapes, CustomHelmEvent passthrough,
+ * monotonic sequence assignment, dual envelope/unwrapped event shapes, CustomHelmxEvent passthrough,
  * strict rejection of invalid payloads, and field-level validation of conversation.upsert / ask.upsert / notification
  * using in-memory fixtures (no fake models/stores; persistSeq captured via callback).
  */
 import { strict as assert } from 'node:assert'
 import { describe, it } from 'node:test'
-import type { ConversationSummary, HelmEventFrame, HelmSnapshot } from '@helm/protocol'
+import type { ConversationSummary, HelmxEventFrame, HelmxSnapshot } from '@helmx/protocol'
 import { EventHub, type SseFrame, type SnapshotProvider } from '../src/runtime/events.js'
 import { makeConversationSummary, waitFor } from './helpers.js'
 
@@ -108,7 +108,7 @@ async function readWithDeadline(
 // ---------------------------------------------------------------------------
 
 describe('EventHub.response SSE protocol', { timeout: 60_000 }, () => {
-  it('emits event:snapshot carrying HelmSnapshot first, then incremental event:<type> carrying {seq, event}', { timeout: 60_000 }, async () => {
+  it('emits event:snapshot carrying HelmxSnapshot first, then incremental event:<type> carrying {seq, event}', { timeout: 60_000 }, async () => {
     const { hub, snapshotValue } = makeFixture()
     snapshotValue.conversations = [summary(1, 'person assist')]
     const controller = new AbortController()
@@ -129,7 +129,7 @@ describe('EventHub.response SSE protocol', { timeout: 60_000 }, () => {
 
     const first = frames[0]
     assert.ok(first && first.event === 'snapshot', 'first frame must be snapshot')
-    const snap = first.data as HelmSnapshot
+    const snap = first.data as HelmxSnapshot
     assert.equal(snap.seq, 0)
     assert.equal(snap.conversations.length, 1)
     assert.equal(snap.conversations[0]?.title, 'person assist')
@@ -283,11 +283,11 @@ describe('EventHub snapshot race', { timeout: 60_000 }, () => {
     controller.abort()
     await reading
 
-    const snap = frames[0]?.data as HelmSnapshot
+    const snap = frames[0]?.data as HelmxSnapshot
     assert.equal(snap.seq, 5)
     const eventFrames = frames.filter((f) => f.event !== 'snapshot') as Array<{
       event: string
-      data: HelmEventFrame
+      data: HelmxEventFrame
     }>
     assert.equal(eventFrames.length, 1)
     assert.equal(eventFrames[0]?.data.seq, 6)
@@ -298,7 +298,7 @@ describe('EventHub snapshot race', { timeout: 60_000 }, () => {
     // Provider publishes 600 events synchronously during first call (>512 buffer cap).
     let reentrant = false
     const persisted: number[] = []
-    const snapValue: HelmSnapshot = { bootId: 'test-boot', seq: 0, conversations: [], pendingAsks: [], plugins: [], ui: [], pluginDocs: [] }
+    const snapValue: HelmxSnapshot = { bootId: 'test-boot', seq: 0, conversations: [], pendingAsks: [], plugins: [], ui: [], pluginDocs: [] }
     const hub = new EventHub({
       initialSeq: 0,
       snapshot: () => {
@@ -380,7 +380,7 @@ describe('EventHub redaction', { timeout: 60_000 }, () => {
     assert.ok(!JSON.stringify(frame).includes('leak-me'), 'event payload must not leak plaintext secrets')
   })
 
-  it('snapshot containing non-JSON value (Date) throws HelmError explicitly in currentSnapshot', { timeout: 60_000 }, () => {
+  it('snapshot containing non-JSON value (Date) throws HelmxError explicitly in currentSnapshot', { timeout: 60_000 }, () => {
     const { hub, snapshotValue } = makeFixture()
     snapshotValue.conversations = [
       { ...summary(1, 'x'), createdAt: new Date(0) as unknown as number },
@@ -429,7 +429,7 @@ describe('EventHub.publish event shapes', { timeout: 60_000 }, () => {
     const ui = [
       { pluginId: 'builtin:herdr', surface: 'sidebar.item', spec: { id: 's1', label: 'Herdr' } },
     ]
-    const frames: HelmEventFrame[] = []
+    const frames: HelmxEventFrame[] = []
     const off = hub.subscribe((f) => frames.push(f))
     // Enveloped form (matching PluginHost emitEvent: {type, plugin, ui}).
     hub.publish('plugin.changed', { type: 'plugin.changed', plugin, ui })
@@ -456,7 +456,7 @@ describe('EventHub.publish event shapes', { timeout: 60_000 }, () => {
   it('other core event types accept both enveloped and unwrapped shapes', { timeout: 60_000 }, () => {
     const { hub } = makeFixture()
     const conv = summary(3, 'dual shape')
-    const frames: HelmEventFrame[] = []
+    const frames: HelmxEventFrame[] = []
     const off = hub.subscribe((f) => frames.push(f))
     hub.publish('conversation.upsert', conv)
     hub.publish('conversation.upsert', { type: 'conversation.upsert', conversation: conv })
@@ -606,7 +606,7 @@ describe('EventHub.publish event shapes', { timeout: 60_000 }, () => {
 
   it('node.changed accepts enveloped and unwrapped shapes, preserving complete NodeInfo including health and removed', { timeout: 60_000 }, () => {
     const { hub } = makeFixture()
-    const frames: HelmEventFrame[] = []
+    const frames: HelmxEventFrame[] = []
     const off = hub.subscribe((f) => frames.push(f))
     const node = {
       id: 'gpu-box',
@@ -652,7 +652,7 @@ describe('EventHub.publish event shapes', { timeout: 60_000 }, () => {
     assert.ok(e3 && 'node' in e3)
     assert.equal(e3.node.id, 'gpu-box')
     assert.equal(e3.removed, true, 'removed: true passes through for Web list removal')
-    assert.ok(!('payload' in e1), 'must not fall into CustomHelmEvent payload wrapper')
+    assert.ok(!('payload' in e1), 'must not fall into CustomHelmxEvent payload wrapper')
   })
 
   it('node.changed rejects invalid inputs without advancing seq', { timeout: 60_000 }, () => {
@@ -685,9 +685,9 @@ describe('EventHub.publish event shapes', { timeout: 60_000 }, () => {
     assert.equal(hub.seq, 2)
   })
 
-  it('unknown event types pass through as CustomHelmEvent {type, payload} without posing as notifications', { timeout: 60_000 }, () => {
+  it('unknown event types pass through as CustomHelmxEvent {type, payload} without posing as notifications', { timeout: 60_000 }, () => {
     const { hub } = makeFixture()
-    const frames: HelmEventFrame[] = []
+    const frames: HelmxEventFrame[] = []
     const off = hub.subscribe((f) => frames.push(f))
     hub.publish('workflow.progress', { step: 3, detail: { done: true } })
     hub.publish('herdr.pane.update', 'pane-2 info')
@@ -708,7 +708,7 @@ describe('EventHub.publish event shapes', { timeout: 60_000 }, () => {
 
   it('subscriber callback exception isolates failing subscriber without affecting peers', { timeout: 60_000 }, () => {
     const { hub } = makeFixture()
-    const good: HelmEventFrame[] = []
+    const good: HelmxEventFrame[] = []
     const bad = (): void => {
       throw new Error('consumer boom')
     }
@@ -744,7 +744,7 @@ describe('EventHub.sseStream programmatic consumer', { timeout: 60_000 }, () => 
 
   it('consumer exception cleans up subscription without escaping publish()', { timeout: 60_000 }, () => {
     const { hub } = makeFixture()
-    const other: HelmEventFrame[] = []
+    const other: HelmxEventFrame[] = []
     hub.subscribe((f) => other.push(f))
     hub.sseStream(() => {
       throw new Error('boom')
@@ -766,9 +766,9 @@ describe('EventHub.sseStream programmatic consumer', { timeout: 60_000 }, () => 
     })
     await new Promise((r) => setTimeout(r, 50))
     sub.unsubscribe()
-    const snap = frames[0] as HelmSnapshot
+    const snap = frames[0] as HelmxSnapshot
     assert.equal(snap.seq, 2)
-    const events = frames.slice(1) as HelmEventFrame[]
+    const events = frames.slice(1) as HelmxEventFrame[]
     assert.ok(events.length >= 1)
     assert.ok(events.every((f) => f.seq > snap.seq))
   })

@@ -177,7 +177,7 @@ export interface AgentSpawnRequest {
   attachments?: string[]
   /**
    * 显式授予外部运行时（如 herdr 窗格）注入的父会话机密环境变量名列表。
-   * 缺省不携带任何父会话机密（最小授权；受管 HELM_* 不受影响）；逐名授予，
+   * 缺省不携带任何父会话机密（最小授权；受管 HELMX_* 不受影响）；逐名授予，
    * 名字需在父会话 SecretStash 内现存，缺失在 spawn 边界显式拒绝。仅外部
    * 运行时消费：原生子会话工具环境按子会话自身 stash 计算，无法承接本授予——
    * agent_spawn 钩子未接管（无外部运行时）而非空 secretNames 到达原生执行行时
@@ -286,7 +286,7 @@ export interface PluginActionSpec<TIn, TOut> extends PluginPromptFields {
   description: string
   inputSchema: JsonSchema
   outputSchema: JsonSchema
-  /** CLI 暴露微调；缺省自动挂载为 `helm <plugin> <action>`。 */
+  /** CLI 暴露微调；缺省自动挂载为 `helmx <plugin> <action>`。 */
   cli?: PluginActionCliSpec
   /** true 直接注入模型工具列表；否则经元工具 run_action 按需调用。 */
   exposeAsTool?: boolean
@@ -418,12 +418,12 @@ export interface PluginSkillAsset {
 // ---------------------------------------------------------------------------
 
 /** 插件可用的 Profile 数据端口（类型化只读 + 托管写入；服务机制仍在内核）。 */
-export interface HelmHostProfilesPort {
+export interface HelmxHostProfilesPort {
   /** 全部 Profile（不含 system 全文）。 */
   list(): Promise<Profile[]>
-  /** 单个 Profile；不存在时返回 undefined。id 非法时抛 HelmError。 */
+  /** 单个 Profile；不存在时返回 undefined。id 非法时抛 HelmxError。 */
   get(id: string): Promise<Profile | undefined>
-  /** 读取 Profile 的 SYSTEM.md 全文；缺失抛 FileNotFoundError 语义（HelmError not_found）。 */
+  /** 读取 Profile 的 SYSTEM.md 全文；缺失抛 FileNotFoundError 语义（HelmxError not_found）。 */
   getSystem(id: string): Promise<string>
   /**
    * 新建或整体保存 Profile（携带 system 时原子同步至 SYSTEM.md）。
@@ -440,7 +440,7 @@ export interface HelmHostProfilesPort {
 
 /** 插件自举的技能包资产（SKILL.md + references 子文件内容；与 kernel services 同形）。 */
 /** 插件可用的技能数据端口（读 + 受管自举）。 */
-export interface HelmHostSkillsPort {
+export interface HelmxHostSkillsPort {
   /** 全部技能摘要（含 references 相对路径）。 */
   list(): Promise<SkillSummary[]>
   /** 读取技能内相对路径文件（SKILL.md / references/...）；穿越/绝对路径/软链均拒绝。 */
@@ -462,7 +462,7 @@ export interface HelmHostSkillsPort {
  * 插件私有 secrets（绑定 pluginId 命名空间）：持久化于 credentials.json
  * pluginSecrets.<pluginId>（恒 0600），明文绝不进入公共文档、事件或模型上下文。
  */
-export interface HelmHostSecretsPort {
+export interface HelmxHostSecretsPort {
   /** 读取（不存在返回 undefined）。 */
   get(key: string): Promise<string | undefined>
   /** 写入（空值拒绝）；成功后可逃逸的旧值（若有）仍保留脱敏。 */
@@ -474,7 +474,7 @@ export interface HelmHostSecretsPort {
 }
 
 /** 节点 IPC 机制端口（经内核 EnvFabric 跨节点 Unix Socket / Named Pipe；不静默回退本机）。 */
-export interface HelmHostNodeIpcPort {
+export interface HelmxHostNodeIpcPort {
   /** 节点是否在线（'local' 恒 true）。 */
   isOnline(nodeId: string): boolean
   /** 节点注册时上报的可达 Hub URL（若有）。 */
@@ -503,7 +503,7 @@ export interface HelmHostNodeIpcPort {
  * 绝不回退 local。每次调用的返回函数均已纳入插件在途任务跟踪与周期
  * 守卫（新流在停用/停止窗口拒绝）。
  */
-export interface HelmHostNodeFetchPort {
+export interface HelmxHostNodeFetchPort {
   /** 取目标节点的 fetch（可直接调用：fetch(input, init)）。 */
   (nodeId: string): typeof fetch
 }
@@ -515,14 +515,14 @@ export interface HelmHostNodeFetchPort {
  * destroy）即结束任务——插件停用预检可见活动隧道，停用/宿主 dispose 时
  * 统一销毁不泄漏。
  */
-export interface HelmHostOpenTunnelPort {
+export interface HelmxHostOpenTunnelPort {
   /** 建立任意 TCP 隧道；host 缺省 127.0.0.1（由目标节点解析连接）。 */
   (nodeId: string, target: { host?: string; port: number }, signal?: AbortSignal): Promise<Duplex>
 }
 
 /**
  * 宿主后端的插件治理端口（PluginHostBackend.plugins 的形状；类型层上拆窄：
- * 只读入口复用 HelmHostApi 既有 listPlugins/listUi 成员；写面聚合在
+ * 只读入口复用 HelmxHostApi 既有 listPlugins/listUi 成员；写面聚合在
  * doctorPlugin/installPlugin/updatePlugin/removePlugin/enablePlugin/disablePlugin
  * 六个与 PluginHost 公共方法同语义的后端成员）。宿主可整体不接线
  * （undefined：轻量测试宿主），接线后修改操作沿用宿主现有生命周期队列、
@@ -549,7 +549,7 @@ export interface BackendPluginsLifecyclePort {
  * 在途任务跟踪（停用预检可见）；结构化结果出站前经宿主统一脱敏，
  * 不把机密或源码内容无界带出。
  */
-export interface HelmHostPluginsPort {
+export interface HelmxHostPluginsPort {
   /** 当前全部已注册插件摘要（与 listPlugins() 同源；只读快照）。 */
   list(): PluginSummary[]
   /** 当前全部已启用插件的 UI 贡献清单（与 listUi() 同源；只读快照）。 */
@@ -569,35 +569,35 @@ export interface HelmHostPluginsPort {
 }
 
 /** ctx.host：插件可调用的宿主内核能力（插件拿到的实现已绑定其 pluginId，不可伪造他人身份）。 */
-export interface HelmHostApi {
+export interface HelmxHostApi {
   /** 宿主关闭状态（get）：true 后拒绝新回合/新后台任务，插件据此停投递。 */
   readonly isClosing: boolean
   /** Profile 数据端口（读 + system 读取；写入仍经 HTTP/CLI 管理面）。 */
-  readonly profiles: HelmHostProfilesPort
+  readonly profiles: HelmxHostProfilesPort
   /** 技能数据端口（读 + 受管自举 ensureSkill）。 */
-  readonly skills: HelmHostSkillsPort
+  readonly skills: HelmxHostSkillsPort
   /** 插件私有 secrets（pluginId 命名空间；不进文档/事件/模型上下文）。 */
-  readonly secrets: HelmHostSecretsPort
+  readonly secrets: HelmxHostSecretsPort
   /** 跨节点 IPC 机制端口（EnvFabric；herdr 等外部运行时桥接用）。 */
-  readonly nodeIpc: HelmHostNodeIpcPort
+  readonly nodeIpc: HelmxHostNodeIpcPort
   /**
    * 节点 HTTP(S) fetch 适配层（基于 openTunnel；任意 host 的 http/https，
    * 模型/插件经此访问目标节点视角的服务）。未接线时调用显式报 501，
    * 绝不回退 local。
    */
-  readonly nodeFetch: HelmHostNodeFetchPort
+  readonly nodeFetch: HelmxHostNodeFetchPort
   /**
    * 任意 TCP 透传隧道（进程内调用获得原始 Duplex）：local 进程内直连；
    * 远端复用既有节点隧道传输。未接线时调用显式报 501，绝不回退 local。
    * 活动隧道纳入插件在途任务跟踪（停用预检可见；停用/dispose 不泄漏）。
    */
-  readonly openTunnel: HelmHostOpenTunnelPort
+  readonly openTunnel: HelmxHostOpenTunnelPort
   /**
    * 宿主插件治理端口（受管包生命周期；编排插件如 builtin:apps 消费）。
    * 后端未接线包管理器时 doctor/install/update/remove 显式 501；
    * 自指 update/remove/disable 一律 409 拒绝（防生命周期队列自等待）。
    */
-  readonly plugins: HelmHostPluginsPort
+  readonly plugins: HelmxHostPluginsPort
   /**
    * 更新本插件自身配置（不可改其他插件）：与 HTTP PUT /api/plugins/:id/config
    * 同一校验与持久化链（configSchema 边界校验；secret 字段落 credentials.json）。
@@ -656,7 +656,7 @@ export interface HelmHostApi {
     opts?: { entryId?: number; title?: string; parentConversationId?: number },
   ): Promise<ConversationSummary>
   listConversations(filter?: ConversationListFilter): ConversationSummary[]
-  /** 读取单个会话摘要；不存在时抛 HelmError。 */
+  /** 读取单个会话摘要；不存在时抛 HelmxError。 */
   getConversation(id: number): ConversationSummary
   /** 会话详情（时间线条目 + 元数据；limit 1..500，cursor 分页）。 */
   getConversationDetail(
@@ -711,7 +711,7 @@ export interface HelmHostApi {
     guard?: GuardedMutationExpectation,
   ): Promise<{ taskId: number; conversation: ConversationSummary }>
   /** 会话归属权现读（Watchdog 红线判定唯一可信来源；未标记一律 human）。 */
-  getConversationOwnership(id: number): 'helm' | 'bot' | 'human'
+  getConversationOwnership(id: number): 'helmx' | 'bot' | 'human'
   /** 列出会话产物元数据（本会话全部；明文内容不进返回值）。 */
   listArtifacts(conversationId: number): Promise<ArtifactMetadata[]>
   /**
@@ -768,7 +768,7 @@ export interface HelmHostApi {
   /** 原子写文件（临时文件 + rename；通用机制，失败显式拒绝）。 */
   atomicWriteFile(path: string, content: string): Promise<void>
   /**
-   * 外部 spawn 环境变量（受管 HELM_* 回连集合；绝不携带宿主 process.env）。
+   * 外部 spawn 环境变量（受管 HELMX_* 回连集合；绝不携带宿主 process.env）。
    * 缺省不携带任何父会话 SecretStash 机密（外部窗格最小授权）；仅当显式传
    * secretNames 时逐名注入（需在父会话 stash 内现存，缺失显式抛错）。
    * nodeId 为实际选定目标节点。
@@ -786,7 +786,7 @@ export interface HelmHostApi {
    */
   manageConversation(id: number): () => void
   /** 标记会话归属权；'human' 会话严禁自动按键/中止（Watchdog 红线）。 */
-  markConversationOwnership(id: number, owner: 'helm' | 'bot' | 'human'): void
+  markConversationOwnership(id: number, owner: 'helmx' | 'bot' | 'human'): void
   /** 派生或续接子代理（经过 agent_spawn Hook 管道 + 原生子会话底座）。 */
   spawnAgent(request: AgentSpawnRequest): Promise<unknown>
   /** 在目标节点/会话工作目录执行验证门禁命令。 */
@@ -802,7 +802,7 @@ export interface HelmHostApi {
     },
   ): Promise<{ ok: boolean; output: string; exitCode?: number | null; timedOut?: boolean }>
   /**
-   * 经内核 EnvFabric 跨节点执行命令（复用 local / 远端 @helm/node 通道、SecretStash 注入与脱敏）。
+   * 经内核 EnvFabric 跨节点执行命令（复用 local / 远端 @helmx/node 通道、SecretStash 注入与脱敏）。
    * 靶点解析优先级：显式 nodeId/cwd > conversationId 绑定 (nodeId, cwd) > 'local'/Hub cwd。
    * 远端节点离线时显式抛 409 node_offline，绝不静默回退本机。
    */
@@ -874,9 +874,9 @@ export interface HelmHostApi {
    * 进程清单（PID/进程名/引用路径；绝不读 cmdline/environ）。快照不完整
    * （权限不足/扫描上限）时 complete=false，调用方必须 fail-closed，绝不
    * 当作 0 占用。节点离线 / 守护进程版本不支持 / 平台不支持均显式 reject
-   * （HelmError），绝不静默回退本机扫描。这是诊断快照而非跨进程互斥：
+   * （HelmxError），绝不静默回退本机扫描。这是诊断快照而非跨进程互斥：
    * 扫描之后新启动的进程不在保护范围；内核也绝不基于此自动终止任何进程。
-   * Linux /proc 扫描实现在 @helm/env-io（kernel 与 @helm/node 共享同一实现）。
+   * Linux /proc 扫描实现在 @helmx/env-io（kernel 与 @helmx/node 共享同一实现）。
    */
   inspectNodePathUsage(input: {
     nodeId: string
@@ -914,7 +914,7 @@ export interface HelmHostApi {
   /** 注册 askId -> 当前 stateChangeSeq 解析器（AskDoc CAS 乐观锁用，可为异步——真实水位需远端 IO）；返回注销函数。 */
   registerAskSeqResolver(resolver: (askId: string) => MaybePromise<number | undefined>): () => void
   /** 订阅宿主通用事件（真实 EventHub 广播事件与 broadcast:false 进程内事件；
-   * 含 'conversation.entry' 等 core 事件，payload 为 HelmEvent 形状）；
+   * 含 'conversation.entry' 等 core 事件，payload 为 HelmxEvent 形状）；
    * 插件停用时自动解除。监听器可异步，发布方会等待其完成。 */
   onEvent(type: string, listener: (payload: unknown) => MaybePromise<void>): () => void
   /** 发布事件并等待内部监听器；broadcast:false 仅在进程内分发，不进入全局 SSE。 */
@@ -925,9 +925,9 @@ export interface HelmHostApi {
 // 唯一插件定义入口
 // ---------------------------------------------------------------------------
 
-export interface HelmPluginContext<TConfig = Record<string, unknown>> {
+export interface HelmxPluginContext<TConfig = Record<string, unknown>> {
   readonly pluginId: string
-  /** 插件专属数据目录（~/.helm/plugins/<id>/）。 */
+  /** 插件专属数据目录（~/.helmx/plugins/<id>/）。 */
   readonly dataDir: string
   getConfig(): TConfig
 
@@ -971,7 +971,7 @@ export interface HelmPluginContext<TConfig = Record<string, unknown>> {
   ui: PluginUiRegistry
 
   /** 宿主运行时能力。 */
-  host: HelmHostApi
+  host: HelmxHostApi
 }
 
 export interface PluginDefinition {
@@ -991,7 +991,7 @@ export interface PluginDefinition {
    */
   description?: LocalizedText
   /**
-   * 插件线性矢量图标名称（对应 HelmIcon name，可选）。
+   * 插件线性矢量图标名称（对应 HelmxIcon name，可选）。
    * 缺省时使用默认图标占位。
    */
   icon?: string
@@ -1025,10 +1025,10 @@ export interface PluginDefinition {
   prebuiltClientDir?: string
   /** 插件自带的受控 npm 依赖（说明符 -> 提供包的解析根）：解析根须为内核包根
    * （含锁定版本的 node_modules，内置插件声明）或外部插件自身目录（由清单
-   * helm.clientDependencies / plugin.json clientDependencies 归一映射产生，见
+   * helmx.clientDependencies / plugin.json clientDependencies 归一映射产生，见
    * external-loader normalizeDefinition——外部插件不得在代码内自指解析根）。
    * 编译器把声明的说明符解析进 bundle 并逐文件 containment 校验，随依赖
    * hash 与缓存复查。 */
   npmDependencies?: Readonly<Record<string, string>>
-  definePlugin(ctx: HelmPluginContext): MaybePromise<void>
+  definePlugin(ctx: HelmxPluginContext): MaybePromise<void>
 }

@@ -7,7 +7,7 @@ import * as React from 'react'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
-import { compilePluginClientModule } from '@helm/plugin-build'
+import { compilePluginClientModule } from '@helmx/plugin-build'
 import { evictPluginClientCache, resetPluginClientCache } from '../src/lib/plugin-client.js'
 import { PluginUiView } from '../src/ui/PluginUiView.js'
 import { makeTestStore } from './helpers/store.js'
@@ -19,12 +19,12 @@ Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
 mountSharedPluginNamespaces({ realHooks: true })
 
 test('已挂载插件视图在快照重建后重载模块与样式，无关插件失效不重建视图', { timeout: 60_000 }, async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'helm-client-snapshot-'))
+  const dir = await mkdtemp(join(tmpdir(), 'helmx-client-snapshot-'))
   const originalFetch = globalThis.fetch
   const originalCreateObjectURL = URL.createObjectURL
   const originalRevokeObjectURL = URL.revokeObjectURL
   const globals = globalThis as Record<string, unknown>
-  globals.__helmCssViewGeneration = 0
+  globals.__helmxCssViewGeneration = 0
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root = createRoot(host)
@@ -36,7 +36,7 @@ test('已挂载插件视图在快照重建后重载模块与样式，无关插�
       import './base.css'
       import './styles.css'
       export function Panel() {
-        const [generation] = useState(() => ++globalThis.__helmCssViewGeneration)
+        const [generation] = useState(() => ++globalThis.__helmxCssViewGeneration)
         return <div className="revision-card" data-generation={generation}>持续挂载的插件视图</div>
       }
     `)
@@ -46,7 +46,7 @@ test('已挂载插件视图在快照重建后重载模块与样式，无关插�
     let onImport: ((url: string) => void) | undefined
     globalThis.fetch = async () => {
       fetches++
-      return new Response(code, { headers: { 'x-helm-client-hash': contentHash } })
+      return new Response(code, { headers: { 'x-helmx-client-hash': contentHash } })
     }
     URL.createObjectURL = () => {
       const url = `data:text/javascript;base64,${Buffer.from(code).toString('base64')}#snapshot-${++imports}`
@@ -72,7 +72,7 @@ test('已挂载插件视图在快照重建后重载模块与样式，无关插�
         if (timer) clearTimeout(timer)
       }
       assert.equal(host.querySelector('.revision-card')?.textContent, '持续挂载的插件视图')
-      assert.equal(document.querySelectorAll('style[data-helm-plugin-css]').length, 1)
+      assert.equal(document.querySelectorAll('style[data-helmx-plugin-css]').length, 1)
       const card = host.querySelector('.revision-card')!
       assert.equal(getComputedStyle(card).borderTopWidth, '1px', '第一份 CSS 必须保留并随视图恢复')
       const reference = document.createElement('span')
@@ -104,7 +104,7 @@ test('已挂载插件视图在快照重建后重载模块与样式，无关插�
     URL.revokeObjectURL = originalRevokeObjectURL
     resetPluginClientCache()
     host.remove()
-    delete globals.__helmCssViewGeneration
+    delete globals.__helmxCssViewGeneration
     await rm(dir, { recursive: true, force: true })
   }
 })

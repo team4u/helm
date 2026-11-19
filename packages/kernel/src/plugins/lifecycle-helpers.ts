@@ -3,12 +3,12 @@
  * terminal error projection, and PluginSummary construction.
  */
 import {
-  HelmError,
+  HelmxError,
   parseNonEmptyLocalizedText,
   type PluginDefinition,
   type PluginDiagnosticError,
   type PluginSummary,
-} from '@helm/protocol';
+} from '@helmx/protocol';
 import { redactJsonValue } from '../redact.js';
 import type { CapabilityRegistry } from './capability-registry.js';
 import type { PluginTaskTracker } from './tracking.js';
@@ -28,10 +28,10 @@ import { unregisterProviders } from './provider-coordinator.js';
 
 export function assertDefinition(definition: PluginDefinition): void {
   if (!definition || typeof definition.id !== 'string' || definition.id.length === 0) {
-    throw new HelmError('invalid_plugin_definition', 'Plugin definition is missing id', 400);
+    throw new HelmxError('invalid_plugin_definition', 'Plugin definition is missing id', 400);
   }
   if (!/^[A-Za-z0-9:_-]+$/.test(definition.id)) {
-    throw new HelmError('invalid_plugin_definition', `Plugin id may only contain letters, digits, :, _, or -: ${definition.id}`, 400);
+    throw new HelmxError('invalid_plugin_definition', `Plugin id may only contain letters, digits, :, _, or -: ${definition.id}`, 400);
   }
   // Display copy boundary guard: a plain string or a per-locale map with
   // supported locale keys and non-blank copy (same rule for builtin and
@@ -39,7 +39,7 @@ export function assertDefinition(definition: PluginDefinition): void {
   for (const field of ['name', 'description'] as const) {
     const value = definition[field];
     if (value !== undefined && parseNonEmptyLocalizedText(value) === undefined) {
-      throw new HelmError(
+      throw new HelmxError(
         'invalid_plugin_definition',
         `Plugin ${definition.id} ${field} must be display copy (non-empty string or { en, 'zh-CN' } map with non-blank values)`,
         400,
@@ -48,7 +48,7 @@ export function assertDefinition(definition: PluginDefinition): void {
     }
   }
   if (typeof definition.definePlugin !== 'function') {
-    throw new HelmError('invalid_plugin_definition', `plugin ${definition.id} missing definePlugin function`, 400);
+    throw new HelmxError('invalid_plugin_definition', `plugin ${definition.id} missing definePlugin function`, 400);
   }
   normalizeDependencies(definition);
   for (const field of ['clientRoot', 'prebuiltClientDir'] as const) {
@@ -59,7 +59,7 @@ export function assertDefinition(definition: PluginDefinition): void {
         !isCrossPlatformAbsolutePath(value) ||
         value.split(/[\\/]/).includes('..'))
     ) {
-      throw new HelmError(
+      throw new HelmxError(
         'invalid_plugin_definition',
         `Plugin ${definition.id} ${field} must be a cross-platform absolute directory path without '..' segments (POSIX /, Windows drive, or UNC)`,
         400,
@@ -80,7 +80,7 @@ export function normalizeDependencies(definition: PluginDefinition): string[] {
   const deps = definition.dependencies;
   if (deps === undefined) return [];
   if (!Array.isArray(deps) || deps.some((d) => typeof d !== 'string' || !PLUGIN_DEPENDENCY_ID_PATTERN.test(d))) {
-    throw new HelmError(
+    throw new HelmxError(
       'invalid_plugin_definition',
       `Plugin ${definition.id} dependencies must be an array of plugin IDs (letters, digits, :, _, - only; version specifiers not supported)`,
       400,
@@ -91,7 +91,7 @@ export function normalizeDependencies(definition: PluginDefinition): string[] {
   const out: string[] = [];
   for (const dep of deps) {
     if (dep === definition.id) {
-      throw new HelmError(
+      throw new HelmxError(
         'plugin_dependency_cycle',
         `Plugin ${definition.id} declared a self-dependency cycle`,
         409,
@@ -179,7 +179,7 @@ export function topoSortByDependencies<T>(
   }
   if (out.length !== items.length) {
     const stuck = items.filter((i) => !out.includes(i)).map(idOf);
-    throw new HelmError(
+    throw new HelmxError(
       'plugin_dependency_cycle',
       `Plugin dependency graph contains a cycle and cannot be sorted: ${stuck.join(' -> ')}`,
       409,
@@ -191,7 +191,7 @@ export function topoSortByDependencies<T>(
 
 export function assertNotLocked(state: PluginState): void {
   if (state.definition.locked === true) {
-    throw new HelmError('plugin_locked', `Plugin ${state.definition.id} is locked and cannot be disabled or unregistered`, 403, {
+    throw new HelmxError('plugin_locked', `Plugin ${state.definition.id} is locked and cannot be disabled or unregistered`, 403, {
       pluginId: state.definition.id,
     });
   }
@@ -200,7 +200,7 @@ export function assertNotLocked(state: PluginState): void {
 /** Active for external callers = enabled and idle (not in `defining` or `deactivating` transitions). */
 export function assertActive(state: PluginState): void {
   if (!state.enabled || state.phase !== 'idle') {
-    throw new HelmError('plugin_disabled', `Plugin ${state.definition.id} is disabled or transitioning`, 409, {
+    throw new HelmxError('plugin_disabled', `Plugin ${state.definition.id} is disabled or transitioning`, 409, {
       pluginId: state.definition.id,
       phase: state.phase,
     });
@@ -216,7 +216,7 @@ export function assertContextUsable(
   isDisposed: boolean,
 ): void {
   if (isDisposed) {
-    throw new HelmError('plugin_host_disposed', 'PluginHost has already been disposed', 409);
+    throw new HelmxError('plugin_host_disposed', 'PluginHost has already been disposed', 409);
   }
   if (
     currentState !== state ||
@@ -224,7 +224,7 @@ export function assertContextUsable(
     state.phase === 'deactivating' ||
     !(state.phase === 'defining' || state.enabled)
   ) {
-    throw new HelmError(
+    throw new HelmxError(
       'plugin_context_expired',
       `Plugin ${state.definition.id} ${what} has expired (plugin disabled or cycled)`,
       409,
@@ -242,8 +242,8 @@ export function resolveInitialEnabled(
   try {
     persisted = store?.getEnabled?.(definition.id);
   } catch (err) {
-    if (err instanceof HelmError) throw err;
-    throw new HelmError(
+    if (err instanceof HelmxError) throw err;
+    throw new HelmxError(
       'plugin_registration_failed',
       `Plugin ${definition.id} registration failed while reading persisted enablement state: ${err instanceof Error ? err.message : String(err)}`,
       500,
@@ -251,7 +251,7 @@ export function resolveInitialEnabled(
     );
   }
   if (persisted !== undefined && typeof persisted !== 'boolean') {
-    throw new HelmError(
+    throw new HelmxError(
       'plugin_enabled_state_invalid',
       `Plugin ${definition.id} has invalid persisted enablement state (expected boolean, got ${typeof persisted})`,
       500,
@@ -272,7 +272,7 @@ export async function persistEnabled(
   try {
     await store.setEnabled(state.definition.id, enabled);
   } catch (err) {
-    throw new HelmError(
+    throw new HelmxError(
       'plugin_enabled_persist_failed',
       `Failed to persist enablement state for plugin ${state.definition.id}: ${err instanceof Error ? err.message : String(err)}`,
       500,
@@ -297,7 +297,7 @@ export async function teardownPlugin(
     await unregisterProviders(state);
   } catch (err) {
     providerErrors =
-      err instanceof HelmError && Array.isArray((err.details as { unregisterErrors?: unknown } | undefined)?.unregisterErrors)
+      err instanceof HelmxError && Array.isArray((err.details as { unregisterErrors?: unknown } | undefined)?.unregisterErrors)
         ? ((err.details as { unregisterErrors: Array<{ providerId: string; error: JsonSafeErrorInfo }> }).unregisterErrors)
         : [{ providerId: '<unknown>', error: toJsonSafeError(err) }];
   }
@@ -315,7 +315,7 @@ export async function teardownPlugin(
   clearRegistrations?.(state);
 
   if (stopErrors.length > 0) {
-    throw new HelmError(
+    throw new HelmxError(
       'plugin_service_stop_failed',
       `Plugin ${state.definition.id} failed to stop services during cleanup: ${stopErrors.map((e) => e.serviceId).join(', ')}`,
       500,
@@ -328,7 +328,7 @@ export async function teardownPlugin(
     );
   }
   if (providerErrors.length > 0) {
-    throw new HelmError(
+    throw new HelmxError(
       'plugin_provider_unregister_failed',
       `Plugin ${state.definition.id} failed to unregister providers during cleanup: ${providerErrors.map((e) => e.providerId).join(', ')}`,
       500,
@@ -336,7 +336,7 @@ export async function teardownPlugin(
     );
   }
   if (releaseErrors.length > 0) {
-    throw new HelmError(
+    throw new HelmxError(
       'plugin_resource_release_failed',
       `Plugin ${state.definition.id} failed to release host resources during cleanup (guards/listeners may remain; check kernel logs)`,
       500,
@@ -345,12 +345,12 @@ export async function teardownPlugin(
   }
 }
 
-/** Normalizes any thrown error into a JSON-safe `PluginDiagnosticError` preserving HelmError code/status/details. */
+/** Normalizes any thrown error into a JSON-safe `PluginDiagnosticError` preserving HelmxError code/status/details. */
 export function toDiagnosticError(
   err: unknown,
   stage: PluginDiagnosticError['stage'],
 ): PluginDiagnosticError {
-  if (err instanceof HelmError) {
+  if (err instanceof HelmxError) {
     return {
       code: err.code,
       message: err.message,
@@ -372,17 +372,17 @@ export function wrapRegistrationError(
   seq: number,
   err: unknown,
   rollbackError?: JsonSafeErrorInfo,
-): HelmError {
-  if (err instanceof HelmError) {
+): HelmxError {
+  if (err instanceof HelmxError) {
     if (rollbackError) {
-      return new HelmError(err.code, err.message, err.status, {
+      return new HelmxError(err.code, err.message, err.status, {
         ...((err.details as object) ?? {}),
         rollbackError,
       });
     }
     return err;
   }
-  return new HelmError(
+  return new HelmxError(
     'plugin_registration_failed',
     `Plugin ${pluginId} registration failed: ${err instanceof Error ? err.message : String(err)}`,
     500,
@@ -394,17 +394,17 @@ export function wrapEnableError(
   pluginId: string,
   err: unknown,
   rollbackError?: JsonSafeErrorInfo,
-): HelmError {
-  if (err instanceof HelmError) {
+): HelmxError {
+  if (err instanceof HelmxError) {
     if (rollbackError) {
-      return new HelmError(err.code, err.message, err.status, {
+      return new HelmxError(err.code, err.message, err.status, {
         ...((err.details as object) ?? {}),
         rollbackError,
       });
     }
     return err;
   }
-  return new HelmError(
+  return new HelmxError(
     'plugin_enable_failed',
     `Failed to enable plugin ${pluginId}: ${err instanceof Error ? err.message : String(err)}`,
     500,
@@ -507,7 +507,7 @@ export async function disposePlugins(
   }
   plugins.clear();
   if (errors.length > 0) {
-    throw new HelmError(
+    throw new HelmxError(
       'plugin_dispose_failed',
       `Failed to clean up some plugins during dispose: ${errors.map((e) => e.pluginId).join(', ')}`,
       500,
@@ -540,14 +540,14 @@ export function settleLifecycleChanged(
   const extras: Record<string, unknown> = {};
   if (stopError && persistError) extras.persistError = toJsonSafeError(persistError.err);
   if (eventError) extras.eventError = eventError;
-  if (primary!.err instanceof HelmError) {
-    throw new HelmError(primary!.err.code, primary!.err.message, primary!.err.status, {
+  if (primary!.err instanceof HelmxError) {
+    throw new HelmxError(primary!.err.code, primary!.err.message, primary!.err.status, {
       ...((primary!.err.details as Record<string, unknown>) ?? {}),
       ...extras,
     });
   }
   if (persistError && !stopError) {
-    throw new HelmError(
+    throw new HelmxError(
       'plugin_enabled_persist_failed',
       `Plugin ${state.definition.id} was disabled, but persisting enablement state failed: ${persistError.err instanceof Error ? persistError.err.message : String(persistError.err)}`,
       500,
@@ -559,7 +559,7 @@ export function settleLifecycleChanged(
     );
   }
   if (eventError) {
-    throw new HelmError(
+    throw new HelmxError(
       'plugin_changed_emit_failed',
       `Plugin ${state.definition.id} completed disable/removal, but both service stop and plugin.changed emission failed`,
       500,

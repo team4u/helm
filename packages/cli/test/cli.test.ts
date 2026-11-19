@@ -13,7 +13,7 @@ import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { updateCliCredentials } from '../src/credentials.js'
 import { CliError } from '../src/errors.js'
-import { withTimeout } from '@helm/test-kit'
+import { withTimeout } from '@helmx/test-kit'
 import {
   deferred,
   makeCliEnv,
@@ -45,7 +45,7 @@ function resolveTsxCli(): string {
 }
 
 test('setup/login exchanges token and writes 0600 cli-token without modifying providers/pluginSecrets', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-test-')
+  const dir = useTempDir(t, 'helmx-cli-test-')
   const credFile = path.join(dir, 'credentials.json')
   const tokenFile = path.join(dir, 'cli-token')
   // Pre-seed server-side structure + extra unknown keys (no legacy cli key): login must not touch this file
@@ -61,7 +61,7 @@ test('setup/login exchanges token and writes 0600 cli-token without modifying pr
     },
     { autoRegisterCleanup: t },
   )
-  const r = await runCliCaptured(['login', '--password', 'pw', '--json'], makeCliEnv(hub.url, dir, { HELM_TOKEN: undefined }))
+  const r = await runCliCaptured(['login', '--password', 'pw', '--json'], makeCliEnv(hub.url, dir, { HELMX_TOKEN: undefined }))
   assert.equal(r.code, 0, r.err)
   assert.equal(JSON.parse(r.out).token, 'tok-1')
   // Login state lives in standalone cli-token (0600); credentials.json remains untouched
@@ -69,14 +69,14 @@ test('setup/login exchanges token and writes 0600 cli-token without modifying pr
   const saved = JSON.parse(await fsp.readFile(tokenFile, 'utf8')) as Record<string, unknown>
   assert.deepEqual(saved, { hubUrl: hub.url, token: 'tok-1' })
   assert.equal(await fsp.readFile(credFile, 'utf8'), legacyBefore)
-  // HELM_TOKEN env var takes precedence over credentials file
-  const r2 = await runCliCaptured(['conversations', 'list', '--json'], makeCliEnv(hub.url, dir, { HELM_TOKEN: 'env-tok' }))
+  // HELMX_TOKEN env var takes precedence over credentials file
+  const r2 = await runCliCaptured(['conversations', 'list', '--json'], makeCliEnv(hub.url, dir, { HELMX_TOKEN: 'env-tok' }))
   assert.equal(r2.code, 0, r2.err)
   assert.equal(hub.recorded.hits.at(-1)?.authorization, 'Bearer env-tok')
 })
 
 test('conversations list noise-free query contract: omits default params, --all sets all=1, --parent sets parent=<id>, rejects invalid combinations', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-test-')
+  const dir = useTempDir(t, 'helmx-cli-test-')
   const listBody: unknown[] = []
   const hub = await startMockHub(
     {
@@ -118,7 +118,7 @@ test('conversations list noise-free query contract: omits default params, --all 
 })
 
 test('thinkingLevel CLI passthrough: global default, current conversation override, and Profile merge', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-thinking-cli-')
+  const dir = useTempDir(t, 'helmx-thinking-cli-')
   const hub = await startMockHub(
     {
       'PUT /api/models/default': (body) => ({ body }),
@@ -128,7 +128,7 @@ test('thinkingLevel CLI passthrough: global default, current conversation overri
     },
     { autoRegisterCleanup: t },
   )
-  const env = makeCliEnv(hub.url, dir, { HELM_CONVERSATION_ID: '7' })
+  const env = makeCliEnv(hub.url, dir, { HELMX_CONVERSATION_ID: '7' })
 
   const defaults = await runCliCaptured(['models', 'default', '--thinking', 'high', '--json'], env)
   assert.equal(defaults.code, 0, defaults.err)
@@ -172,7 +172,7 @@ test('thinkingLevel CLI passthrough: global default, current conversation overri
 })
 
 test('conversations create/send/abort/update/delete paths, bodies, and --current', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-test-')
+  const dir = useTempDir(t, 'helmx-cli-test-')
   const hub = await startMockHub(
     {
       'POST /api/conversations': (body) => ({ body: { id: 7, ...(body as object) } }),
@@ -197,11 +197,11 @@ test('conversations create/send/abort/update/delete paths, bodies, and --current
   const sendHit = hub.recorded.hits.find((h) => h.path === '/api/conversations/7/input')!
   assert.deepEqual(sendHit.body, { text: '你好 世界', whenBusy: 'followUp', origin: 'agent' })
 
-  const sentCurrent = await runCliCaptured(['send', '--current', 'hi', '--json'], { ...env, HELM_CONVERSATION_ID: '7' })
+  const sentCurrent = await runCliCaptured(['send', '--current', 'hi', '--json'], { ...env, HELMX_CONVERSATION_ID: '7' })
   assert.equal(sentCurrent.code, 0, sentCurrent.err)
   assert.equal(hub.recorded.hits.at(-1)?.path, '/api/conversations/7/input')
 
-  const aborted = await runCliCaptured(['abort', '--current', '--json'], { ...env, HELM_CONVERSATION_ID: '7' })
+  const aborted = await runCliCaptured(['abort', '--current', '--json'], { ...env, HELMX_CONVERSATION_ID: '7' })
   assert.equal(aborted.code, 0, aborted.err)
   assert.equal(hub.recorded.hits.at(-1)?.path, '/api/conversations/7/abort')
 
@@ -232,7 +232,7 @@ test('conversations create/send/abort/update/delete paths, bodies, and --current
 })
 
 test('--current missing/invalid and explicit missing IDs fail explicitly', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-test-')
+  const dir = useTempDir(t, 'helmx-cli-test-')
   const hub = await startMockHub({}, { autoRegisterCleanup: t })
   const env = makeCliEnv(hub.url, dir)
 
@@ -250,7 +250,7 @@ test('--current missing/invalid and explicit missing IDs fail explicitly', { tim
 })
 
 test('asks answer sends answers JSON and expectedStateSeq', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-test-')
+  const dir = useTempDir(t, 'helmx-cli-test-')
   const hub = await startMockHub(
     {
       'POST /api/asks/ask-1/answer': () => ({ body: { askId: 'ask-1', answers: {}, answeredAt: 1 } }),
@@ -265,7 +265,7 @@ test('asks answer sends answers JSON and expectedStateSeq', { timeout: 60_000 },
 })
 
 test('skills read prints {text} directly as raw text in non-JSON mode', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-test-')
+  const dir = useTempDir(t, 'helmx-cli-test-')
   const hub = await startMockHub(
     {
       'GET /api/skills/demo': () => ({ body: { text: '# title\ncontent' } }),
@@ -286,7 +286,7 @@ test('skills read prints {text} directly as raw text in non-JSON mode', { timeou
 })
 
 test('providers set sends full array; credentials set/delete use REST paths', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-test-')
+  const dir = useTempDir(t, 'helmx-cli-test-')
   const hub = await startMockHub(
     {
       'GET /api/providers': () => ({ body: [] }),
@@ -313,7 +313,7 @@ test('providers set sends full array; credentials set/delete use REST paths', { 
 })
 
 test('dynamic actions: schema-to-flags, type coercion, --input mutual exclusion, cli.command path, conflict error', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-test-')
+  const dir = useTempDir(t, 'helmx-cli-test-')
   const manifests = [
     {
       pluginId: 'builtin:test', id: 'task.create', description: 'Create task',
@@ -349,7 +349,7 @@ test('dynamic actions: schema-to-flags, type coercion, --input mutual exclusion,
   assert.equal(hub.recorded.hits.at(-1)?.path, '/api/actions/builtin%3Atriggers/fire')
 
   // --current attaches conversationId
-  const cur = await runCliCaptured(['triggers', 'fire', '--current', '--json'], { ...env, HELM_CONVERSATION_ID: '3' })
+  const cur = await runCliCaptured(['triggers', 'fire', '--current', '--json'], { ...env, HELMX_CONVERSATION_ID: '3' })
   assert.equal(cur.code, 0, cur.err)
   assert.deepEqual(hub.recorded.hits.at(-1)?.body, { input: {}, conversationId: 3 })
 
@@ -381,7 +381,7 @@ test('dynamic actions: schema-to-flags, type coercion, --input mutual exclusion,
 })
 
 test('core commands still execute when dynamic commands attempt to shadow core paths; conflicts only fail dynamic invocations', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-test-')
+  const dir = useTempDir(t, 'helmx-cli-test-')
   const hub = await startMockHub(
     {
       'GET /api/actions': () => ({
@@ -400,7 +400,7 @@ test('core commands still execute when dynamic commands attempt to shadow core p
   const env = makeCliEnv(hub.url, dir)
 
   // Core commands match and execute directly: broken plugins cannot break the core control plane (fault isolation).
-  // Even when a dynamic manifest claims parent path ["asks"], `helm asks list` runs directly without fetching manifests.
+  // Even when a dynamic manifest claims parent path ["asks"], `helmx asks list` runs directly without fetching manifests.
   const r = await runCliCaptured(['conversations', 'list', '--json'], env)
   assert.equal(r.code, 0, r.err)
   assert.equal(JSON.parse(r.out)[0]?.id, 9)
@@ -419,7 +419,7 @@ test('core commands still execute when dynamic commands attempt to shadow core p
 })
 
 test('workflows inspect/abort: positional argument maps to runId (dynamic action command)', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-test-')
+  const dir = useTempDir(t, 'helmx-cli-test-')
   const manifests = [
     {
       pluginId: 'builtin:workflow', id: 'inspect', description: 'Inspect a workflow run',
@@ -461,7 +461,7 @@ test('workflows inspect/abort: positional argument maps to runId (dynamic action
 })
 
 test('artifacts: streams text directly, requires --output for binary, lists via conversation endpoint', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-test-')
+  const dir = useTempDir(t, 'helmx-cli-test-')
   const hub = await startMockHub(
     {
       'GET /api/conversations/3/artifacts': () => ({ body: [{ id: 'a1', conversationId: 3, kind: 'upload', name: 'out.txt', path: 'artifacts/3/out.txt', mimeType: 'text/plain', size: 3, createdAt: 0 }] }),
@@ -474,7 +474,7 @@ test('artifacts: streams text directly, requires --output for binary, lists via 
     },
     { autoRegisterCleanup: t },
   )
-  const env = makeCliEnv(hub.url, dir, { HELM_CONVERSATION_ID: '3' })
+  const env = makeCliEnv(hub.url, dir, { HELMX_CONVERSATION_ID: '3' })
 
   const list = await runCliCaptured(['artifacts', 'list', '--current', '--json'], env)
   assert.equal(list.code, 0, list.err)
@@ -487,7 +487,7 @@ test('artifacts: streams text directly, requires --output for binary, lists via 
 })
 
 test('search,models,plugins,actions list,status', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-test-')
+  const dir = useTempDir(t, 'helmx-cli-test-')
   const hub = await startMockHub(
     {
       'GET /api/search?q=hello%20world': () => ({ body: [{ id: 1 }] }),
@@ -576,7 +576,7 @@ test('search,models,plugins,actions list,status', { timeout: 60_000 }, async (t)
 })
 
 test('models filter: lists disabled models / --disable full-replace / --clear resets (PUT /api/models/filter)', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-test-')
+  const dir = useTempDir(t, 'helmx-cli-test-')
   const catalog = {
     models: [
       { provider: 'faux', modelId: 'faux-1', available: true },
@@ -634,7 +634,7 @@ test('models filter: lists disabled models / --disable full-replace / --clear re
 })
 
 test('events watch: SSE snapshot + deltas, --json emits one line per event', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-test-')
+  const dir = useTempDir(t, 'helmx-cli-test-')
   const snapshot = {
     bootId: '00000000-0000-0000-0000-000000000001',
     seq: 5,
@@ -673,8 +673,8 @@ test('events watch: SSE snapshot + deltas, --json emits one line per event', { t
 })
 
 test('hub unreachable and 401 suggest login', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-test-')
-  const unreachable = await runCliCaptured(['conversations', 'list', '--json'], makeCliEnv('http://127.0.0.1:1', dir, { HELM_TOKEN: 'x' }))
+  const dir = useTempDir(t, 'helmx-cli-test-')
+  const unreachable = await runCliCaptured(['conversations', 'list', '--json'], makeCliEnv('http://127.0.0.1:1', dir, { HELMX_TOKEN: 'x' }))
   assert.equal(unreachable.code, 1)
   assert.equal(parseCliError(unreachable).code, 'hub_unreachable')
 
@@ -688,19 +688,19 @@ test('hub unreachable and 401 suggest login', { timeout: 60_000 }, async (t) => 
   assert.equal(unauth.code, 1)
   const err = parseCliError(unauth)
   assert.equal(err.code, 'unauthorized')
-  assert.match(err.message, /helm login/)
+  assert.match(err.message, /helmx login/)
 })
 
 test('fails explicitly without a token (no silent unauthenticated fallback); --json outputs valid error JSON', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-test-')
+  const dir = useTempDir(t, 'helmx-cli-test-')
   const hub = await startMockHub({ 'GET /api/conversations': () => ({ body: [] }) }, { autoRegisterCleanup: t })
-  const r = await runCliCaptured(['conversations', 'list', '--json'], makeCliEnv(hub.url, dir, { HELM_TOKEN: undefined }))
+  const r = await runCliCaptured(['conversations', 'list', '--json'], makeCliEnv(hub.url, dir, { HELMX_TOKEN: undefined }))
   assert.equal(r.code, 1)
   assert.equal(parseCliError(r).code, 'unauthorized')
 })
 
 test('unknown and missing commands return dedicated error codes', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-test-')
+  const dir = useTempDir(t, 'helmx-cli-test-')
   const hub = await startMockHub({}, { autoRegisterCleanup: t })
   const env = makeCliEnv(hub.url, dir)
 
@@ -718,7 +718,7 @@ test('unknown and missing commands return dedicated error codes', { timeout: 60_
 })
 
 test('setup --password end-to-end; --help works even when Hub is offline', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-test-')
+  const dir = useTempDir(t, 'helmx-cli-test-')
   const hub = await startMockHub(
     {
       'POST /api/auth/setup': (body) => {
@@ -735,13 +735,13 @@ test('setup --password end-to-end; --help works even when Hub is offline', { tim
   assert.deepEqual(saved, { hubUrl: hub.url, token: 'tok-2' })
 
   // --help works offline (prints core help when Hub is unreachable, noting empty dynamic commands)
-  const help = await runCliCaptured(['--help'], makeCliEnv('http://127.0.0.1:1', dir, { HELM_TOKEN: undefined }))
+  const help = await runCliCaptured(['--help'], makeCliEnv('http://127.0.0.1:1', dir, { HELMX_TOKEN: undefined }))
   assert.equal(help.code, 0)
   assert.match(help.out, /Core commands/)
 })
 
 test('hidden dynamic actions do not expose commands', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-test-')
+  const dir = useTempDir(t, 'helmx-cli-test-')
   const hub = await startMockHub(
     {},
     {
@@ -755,7 +755,7 @@ test('hidden dynamic actions do not expose commands', { timeout: 60_000 }, async
 })
 
 test('dynamic actions with empty command path or invalid segments fail explicitly', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-test-')
+  const dir = useTempDir(t, 'helmx-cli-test-')
   const hub = await startMockHub(
     {},
     {
@@ -769,7 +769,7 @@ test('dynamic actions with empty command path or invalid segments fail explicitl
 })
 
 test('dynamic actions whose properties collide with reserved flag names remain invokable via --input', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-test-')
+  const dir = useTempDir(t, 'helmx-cli-test-')
   const hub = await startMockHub(
     {
       'POST /api/actions/builtin%3Atest/odd': () => ({ body: { ok: true } }),
@@ -812,7 +812,7 @@ test('dynamic actions whose properties collide with reserved flag names remain i
 })
 
 test('camelCase vs kebab-case property collision fails safely instead of last-wins while preserving non-colliding flags', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-test-')
+  const dir = useTempDir(t, 'helmx-cli-test-')
   const hub = await startMockHub(
     {
       'POST /api/actions/builtin%3Atest/dupe': () => ({ body: { ok: true } }),
@@ -855,13 +855,13 @@ test('camelCase vs kebab-case property collision fails safely instead of last-wi
 // ---------------------------------------------------------------------------
 
 test('corrupt cli-token does not fall back to unauthenticated; core commands fail explicitly, --help still renders with diagnostic', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-test-')
+  const dir = useTempDir(t, 'helmx-cli-test-')
   // Corrupt token file: reads must error instead of pretending the user is simply logged out
   await fsp.writeFile(path.join(dir, 'cli-token'), '{ broken json !!', 'utf8')
   const hub = await startMockHub({ 'GET /api/conversations': () => ({ body: [] }) }, { autoRegisterCleanup: t })
 
   // Without env token: core command reads corrupt file and fails explicitly (never falls back silently)
-  const r = await runCliCaptured(['conversations', 'list', '--json'], makeCliEnv(hub.url, dir, { HELM_TOKEN: '' }))
+  const r = await runCliCaptured(['conversations', 'list', '--json'], makeCliEnv(hub.url, dir, { HELMX_TOKEN: '' }))
   assert.equal(r.code, 1)
   assert.equal(parseCliError(r).code, 'credentials_unreadable')
 
@@ -871,20 +871,20 @@ test('corrupt cli-token does not fall back to unauthenticated; core commands fai
   assert.equal(await fsp.readFile(path.join(dir, 'cli-token'), 'utf8'), '{ broken json !!')
 
   // --help: core help still prints, credential error goes to stderr (without env token), and avoids misleading "no dynamic actions" text
-  const help = await runCliCaptured(['--help'], makeCliEnv(hub.url, dir, { HELM_TOKEN: '' }))
+  const help = await runCliCaptured(['--help'], makeCliEnv(hub.url, dir, { HELMX_TOKEN: '' }))
   assert.equal(help.code, 0)
   assert.match(help.out, /Core commands/)
   assert.match(help.err, /CLI credentials file is corrupt/)
   assert.doesNotMatch(help.out, /Hub provided no plugin action commands/)
 
   // Human mode surfaces the exact credential error
-  const human = await runCliCaptured(['conversations', 'list'], makeCliEnv(hub.url, dir, { HELM_TOKEN: '' }))
+  const human = await runCliCaptured(['conversations', 'list'], makeCliEnv(hub.url, dir, { HELMX_TOKEN: '' }))
   assert.equal(human.code, 1)
   assert.match(human.err, /CLI credentials file is corrupt/)
 })
 
 test('status works without a token and attaches token when present to report real authentication state', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-test-')
+  const dir = useTempDir(t, 'helmx-cli-test-')
   // Without stored token: status must not fail with unauthorized
   const hub = await startMockHub(
     {
@@ -892,7 +892,7 @@ test('status works without a token and attaches token when present to report rea
     },
     { autoRegisterCleanup: t },
   )
-  const noTokenEnv = makeCliEnv(hub.url, dir, { HELM_TOKEN: undefined })
+  const noTokenEnv = makeCliEnv(hub.url, dir, { HELMX_TOKEN: undefined })
 
   const noToken = await runCliCaptured(['status', '--json'], noTokenEnv)
   assert.equal(noToken.code, 0, noToken.err)
@@ -920,12 +920,12 @@ test('status works without a token and attaches token when present to report rea
     },
     { autoRegisterCleanup: t },
   )
-  const setup = await runCliCaptured(['setup', '--password', 'pw', '--json'], makeCliEnv(hub2.url, dir, { HELM_TOKEN: 'ignored-env' }))
+  const setup = await runCliCaptured(['setup', '--password', 'pw', '--json'], makeCliEnv(hub2.url, dir, { HELMX_TOKEN: 'ignored-env' }))
   assert.equal(setup.code, 0, setup.err)
 })
 
 test('send honors -- separator: --json after -- is sent as message text rather than parsed globally', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-test-')
+  const dir = useTempDir(t, 'helmx-cli-test-')
   const hub = await startMockHub({ 'POST /api/conversations/1/input': () => ({ body: { ok: true } }) }, { autoRegisterCleanup: t })
   const env = makeCliEnv(hub.url, dir)
 
@@ -943,8 +943,8 @@ test('send honors -- separator: --json after -- is sent as message text rather t
   assert.deepEqual((hub.recorded.hits.at(-1)?.body as { text: string; origin: string }), { text: 'plain text', origin: 'agent' })
 })
 
-test('cross-Hub isolation: ignores stored token when HELM_HUB_URL points to a different Hub', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-test-')
+test('cross-Hub isolation: ignores stored token when HELMX_HUB_URL points to a different Hub', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helmx-cli-test-')
   // Old Hub: credentials file stores its hubUrl and token
   const oldHub = await startMockHub(
     {
@@ -963,14 +963,14 @@ test('cross-Hub isolation: ignores stored token when HELM_HUB_URL points to a di
     { autoRegisterCleanup: t },
   )
 
-  const login = await runCliCaptured(['login', '--password', 'pw', '--json'], makeCliEnv(oldHub.url, dir, { HELM_TOKEN: undefined }))
+  const login = await runCliCaptured(['login', '--password', 'pw', '--json'], makeCliEnv(oldHub.url, dir, { HELMX_TOKEN: undefined }))
   assert.equal(login.code, 0, login.err)
   const saved = JSON.parse(await fsp.readFile(path.join(dir, 'cli-token'), 'utf8')) as { hubUrl: string; token: string }
   assert.equal(saved.hubUrl, oldHub.url)
   assert.equal(saved.token, 'tok-old-hub')
 
-  // When HELM_HUB_URL points to newHub: old token is not sent across Hubs
-  const newEnvNoToken = makeCliEnv(newHub.url, dir, { HELM_TOKEN: undefined })
+  // When HELMX_HUB_URL points to newHub: old token is not sent across Hubs
+  const newEnvNoToken = makeCliEnv(newHub.url, dir, { HELMX_TOKEN: undefined })
   const probe = await runCliCaptured(['status', '--json'], newEnvNoToken)
   assert.equal(probe.code, 0, probe.err)
   assert.deepEqual(JSON.parse(probe.out), { configured: true, authenticated: false }, 'new Hub must not receive old Hub token')
@@ -982,22 +982,22 @@ test('cross-Hub isolation: ignores stored token when HELM_HUB_URL points to a di
   assert.equal(leaked.code, 1)
   assert.equal(parseCliError(leaked).code, 'unauthorized')
 
-  // Explicit HELM_TOKEN still takes precedence
-  const explicit = await runCliCaptured(['conversations', 'list', '--json'], makeCliEnv(newHub.url, dir, { HELM_TOKEN: 'tok-new-hub' }))
+  // Explicit HELMX_TOKEN still takes precedence
+  const explicit = await runCliCaptured(['conversations', 'list', '--json'], makeCliEnv(newHub.url, dir, { HELMX_TOKEN: 'tok-new-hub' }))
   assert.equal(explicit.code, 0, explicit.err)
   assert.equal(newHub.recorded.hits.at(-1)?.authorization, 'Bearer tok-new-hub')
 
   // Without env URL: uses credentials file hubUrl + token consistently
-  const sameHub = await runCliCaptured(['conversations', 'list', '--json'], { HELM_DATA_DIR: dir })
+  const sameHub = await runCliCaptured(['conversations', 'list', '--json'], { HELMX_DATA_DIR: dir })
   assert.equal(sameHub.code, 0, sameHub.err)
   assert.equal(oldHub.recorded.hits.at(-1)?.authorization, 'Bearer tok-old-hub')
 })
 
 test('setup persists credentials even when data directory does not exist yet (creates dir before acquiring lock)', { timeout: 60_000 }, async (t) => {
-  const parentDir = useTempDir(t, 'helm-cli-fresh-')
+  const parentDir = useTempDir(t, 'helmx-cli-fresh-')
   const dir = path.join(parentDir, 'nested-data') // Directory does not exist yet
   const hub = await startMockHub({ 'POST /api/auth/setup': () => ({ body: { token: 'tok-fresh' } }) }, { autoRegisterCleanup: t })
-  const r = await runCliCaptured(['setup', '--password', 'pw', '--json'], makeCliEnv(hub.url, dir, { HELM_TOKEN: undefined }))
+  const r = await runCliCaptured(['setup', '--password', 'pw', '--json'], makeCliEnv(hub.url, dir, { HELMX_TOKEN: undefined }))
   assert.equal(r.code, 0, r.err)
   const saved = JSON.parse(await fsp.readFile(path.join(dir, 'cli-token'), 'utf8')) as { token: string }
   assert.equal(saved.token, 'tok-fresh')
@@ -1008,7 +1008,7 @@ test('setup persists credentials even when data directory does not exist yet (cr
 })
 
 test('cross-process concurrency: child CLI cli-token writes and Hub credentials.json writes do not interfere when login responses are released together', { timeout: 60_000 }, async (t) => {
-  const dataDir = useTempDir(t, 'helm-cli-race-')
+  const dataDir = useTempDir(t, 'helmx-cli-race-')
   const contenders = 4
   const arrived = deferred()
   const release = deferred()
@@ -1031,7 +1031,7 @@ test('cross-process concurrency: child CLI cli-token writes and Hub credentials.
   const runCliChild = (dataDir: string, password: string): Promise<{ code: number | null; err: string }> =>
     new Promise((resolve, reject) => {
       const child = spawn(process.execPath, [tsxCli, cliEntry, 'login', '--password', password, '--json'], {
-        env: { ...process.env, ...makeCliEnv(hub.url, dataDir, { HELM_TOKEN: '' }) },
+        env: { ...process.env, ...makeCliEnv(hub.url, dataDir, { HELMX_TOKEN: '' }) },
         stdio: ['ignore', 'ignore', 'pipe'],
       })
       let err = ''
@@ -1079,7 +1079,7 @@ test('cross-process concurrency: child CLI cli-token writes and Hub credentials.
 })
 
 test('origin binding: cli-token only authenticates the matching Hub and omits token when targeting another Hub', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-test-')
+  const dir = useTempDir(t, 'helmx-cli-test-')
   const hub = await startMockHub(
     {
       'POST /api/auth/login': () => ({ body: { token: 'tok-origin' } }),
@@ -1087,40 +1087,40 @@ test('origin binding: cli-token only authenticates the matching Hub and omits to
     },
     { autoRegisterCleanup: t },
   )
-  const login = await runCliCaptured(['login', '--password', 'pw', '--json'], makeCliEnv(hub.url, dir, { HELM_TOKEN: '' }))
+  const login = await runCliCaptured(['login', '--password', 'pw', '--json'], makeCliEnv(hub.url, dir, { HELMX_TOKEN: '' }))
   assert.equal(login.code, 0, login.err)
   const tokenFile = JSON.parse(await fsp.readFile(path.join(dir, 'cli-token'), 'utf8')) as Record<string, unknown>
   assert.deepEqual(tokenFile, { hubUrl: hub.url, token: 'tok-origin' })
   await assertPrivateCredentialFile(path.join(dir, 'cli-token'))
   // Matching origin carries token
-  const same = await runCliCaptured(['conversations', 'list', '--json'], { HELM_DATA_DIR: dir, HELM_TOKEN: '' })
+  const same = await runCliCaptured(['conversations', 'list', '--json'], { HELMX_DATA_DIR: dir, HELMX_TOKEN: '' })
   assert.equal(same.code, 0, same.err)
   assert.equal(hub.recorded.hits.at(-1)?.authorization, 'Bearer tok-origin')
 
-  // Origin binding: omits stored token when HELM_HUB_URL points to a different Hub
+  // Origin binding: omits stored token when HELMX_HUB_URL points to a different Hub
   const otherHub = await startMockHub(
     {
       'GET /api/auth/status': (_body, req) => ({ body: { configured: true, authenticated: req.headers['authorization'] !== undefined } }),
     },
     { autoRegisterCleanup: t },
   )
-  const probe = await runCliCaptured(['status', '--json'], makeCliEnv(otherHub.url, dir, { HELM_TOKEN: '' }))
+  const probe = await runCliCaptured(['status', '--json'], makeCliEnv(otherHub.url, dir, { HELMX_TOKEN: '' }))
   assert.equal(probe.code, 0, probe.err)
   assert.deepEqual(JSON.parse(probe.out), { configured: true, authenticated: false }, 'new Hub must not receive old Hub token')
 })
 
-test('corrupt cli-token errors explicitly; HELM_TOKEN env var bypasses disk reads', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-test-')
+test('corrupt cli-token errors explicitly; HELMX_TOKEN env var bypasses disk reads', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helmx-cli-test-')
   const hub = await startMockHub({ 'GET /api/conversations': () => ({ body: [] }) }, { autoRegisterCleanup: t })
   await fsp.writeFile(path.join(dir, 'cli-token'), '{ broken !!', { mode: 0o600 })
 
   // Without env token: corrupt file errors explicitly instead of falling back to unauthenticated
-  const broken = await runCliCaptured(['conversations', 'list', '--json'], makeCliEnv(hub.url, dir, { HELM_TOKEN: '' }))
+  const broken = await runCliCaptured(['conversations', 'list', '--json'], makeCliEnv(hub.url, dir, { HELMX_TOKEN: '' }))
   assert.equal(broken.code, 1)
   assert.equal(parseCliError(broken).code, 'credentials_unreadable')
 
   // Env token takes precedence: skips disk reads so corrupt file is untouched and command runs normally
-  const bypass = await runCliCaptured(['conversations', 'list', '--json'], makeCliEnv(hub.url, dir, { HELM_TOKEN: 'env-tok' }))
+  const bypass = await runCliCaptured(['conversations', 'list', '--json'], makeCliEnv(hub.url, dir, { HELMX_TOKEN: 'env-tok' }))
   assert.equal(bypass.code, 0, bypass.err)
   assert.equal(hub.recorded.hits.at(-1)?.authorization, 'Bearer env-tok')
   assert.equal(await fsp.readFile(path.join(dir, 'cli-token'), 'utf8'), '{ broken !!')
@@ -1170,7 +1170,7 @@ const WF_RUN_MANIFESTS = [
 ]
 
 test('conversations entry: parses and validates [id] <entryId> and --current', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-test-')
+  const dir = useTempDir(t, 'helmx-cli-test-')
   const hub = await startMockHub(
     {
       'GET /api/conversations/7/entries/42': () => ({
@@ -1181,7 +1181,7 @@ test('conversations entry: parses and validates [id] <entryId> and --current', {
     { autoRegisterCleanup: t },
   )
   const env = makeCliEnv(hub.url, dir)
-  const envCurrent = makeCliEnv(hub.url, dir, { HELM_CONVERSATION_ID: '9' })
+  const envCurrent = makeCliEnv(hub.url, dir, { HELMX_CONVERSATION_ID: '9' })
 
   const explicit = await runCliCaptured(['conversations', 'entry', '7', '42', '--json'], env)
   assert.equal(explicit.code, 0, explicit.err)
@@ -1214,7 +1214,7 @@ test('conversations entry: parses and validates [id] <entryId> and --current', {
 })
 
 test('conversations get: --limit/--cursor map to query params; --current reads env var', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-test-')
+  const dir = useTempDir(t, 'helmx-cli-test-')
   const hub = await startMockHub(
     {
       'GET /api/conversations/7': () => ({
@@ -1242,7 +1242,7 @@ test('conversations get: --limit/--cursor map to query params; --current reads e
 
   const both = await runCliCaptured(
     ['conversations', 'get', '--current', '--limit', '10', '--cursor', '{"a":1}', '--json'],
-    makeCliEnv(hub.url, dir, { HELM_CONVERSATION_ID: '7' }),
+    makeCliEnv(hub.url, dir, { HELMX_CONVERSATION_ID: '7' }),
   )
   assert.equal(both.code, 0, both.err)
   assert.equal(hub.hits.at(-1)?.path, '/api/conversations/7?limit=10&cursor=%7B%22a%22%3A1%7D')
@@ -1254,7 +1254,7 @@ test('conversations get: --limit/--cursor map to query params; --current reads e
 })
 
 test('conversations list: --profile maps to profileId and --status validates against enum', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-test-')
+  const dir = useTempDir(t, 'helmx-cli-test-')
   const hub = await startMockHub(
     {
       'GET /api/conversations': () => ({ body: [] }),
@@ -1284,7 +1284,7 @@ test('conversations list: --profile maps to profileId and --status validates aga
 })
 
 test('send --meta: passes JSON object as body.meta; rejects non-object JSON at CLI boundary', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-test-')
+  const dir = useTempDir(t, 'helmx-cli-test-')
   const hub = await startMockHub(
     {
       'POST /api/conversations/7/input': () => ({ status: 202, body: { submissionId: 'sub-9' } }),
@@ -1310,7 +1310,7 @@ test('send --meta: passes JSON object as body.meta; rejects non-object JSON at C
 })
 
 test('send --wait: uses ?wait=1; --json returns full result, human mode prints answer text', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-test-')
+  const dir = useTempDir(t, 'helmx-cli-test-')
   const result = {
     conversationId: 7,
     submissionId: 'sub-9',
@@ -1355,7 +1355,7 @@ test('send --wait: uses ?wait=1; --json returns full result, human mode prints a
 })
 
 test('workflows runs: lists all runs, --current filters by conversationId, extra positionals rejected', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-test-')
+  const dir = useTempDir(t, 'helmx-cli-test-')
   const hub = await startMockHub(
     {
       'POST /api/actions/builtin%3Aworkflow/runs': (body) => {
@@ -1377,7 +1377,7 @@ test('workflows runs: lists all runs, --current filters by conversationId, extra
   assert.equal((JSON.parse(all.out) as { runs: Array<{ id: string }> }).runs[0]?.id, 'wf_1')
   assert.equal(hub.hits.at(-1)?.path, '/api/actions/builtin%3Aworkflow/runs')
 
-  const filtered = await runCliCaptured(['workflows', 'runs', '--current', '--json'], { ...env, HELM_CONVERSATION_ID: '7' })
+  const filtered = await runCliCaptured(['workflows', 'runs', '--current', '--json'], { ...env, HELMX_CONVERSATION_ID: '7' })
   assert.equal(filtered.code, 0, filtered.err)
   // --current injects conversationId context (body.conversationId);
   // server runs action uses it as filter (input.conversationId takes precedence).
@@ -1390,7 +1390,7 @@ test('workflows runs: lists all runs, --current filters by conversationId, extra
 })
 
 test('workflows run --wait: prints run/result on success and exits non-zero on failure', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-test-')
+  const dir = useTempDir(t, 'helmx-cli-test-')
   const workflowName = `saved-${path.basename(dir)}`
   const doneRun = {
     id: 'wf_w',
@@ -1449,7 +1449,7 @@ test('workflows run --wait: prints run/result on success and exits non-zero on f
 })
 
 test('workflows run: file positional reads script, name positional sets name, passes --resume-from-run-id and --args', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-test-')
+  const dir = useTempDir(t, 'helmx-cli-test-')
   const workflowName = `saved-${path.basename(dir)}`
   const hub = await startMockHub(
     {
@@ -1494,7 +1494,7 @@ test('workflows run: file positional reads script, name positional sets name, pa
 })
 
 test('plugins doc: GET /api/plugins/:id/docs/:name; --json returns full envelope, human mode prints value', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-test-')
+  const dir = useTempDir(t, 'helmx-cli-test-')
   const hub = await startMockHub(
     {
       'GET /api/plugins/builtin%3Astatusboard/docs/board': () => ({
@@ -1539,7 +1539,7 @@ test('plugins doc: GET /api/plugins/:id/docs/:name; --json returns full envelope
 // ---------------------------------------------------------------------------
 
 test('fails explicitly on permission error reading existing credential lock while preserving lock and token files', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-lock-error-')
+  const dir = useTempDir(t, 'helmx-cli-lock-error-')
   const lockPath = path.join(dir, 'cli-token.lock')
   const tokenPath = path.join(dir, 'cli-token')
   const owner = `${process.pid} existing-owner\n`
@@ -1562,14 +1562,14 @@ test('fails explicitly on permission error reading existing credential lock whil
   }
 })
 
-test('helm update --check queries the selected channel without loading Hub credentials', { timeout: 60_000 }, async (t) => {
-  const dataDir = useTempDir(t, 'helm-cli-update-data-')
+test('helmx update --check queries the selected channel without loading Hub credentials', { timeout: 60_000 }, async (t) => {
+  const dataDir = useTempDir(t, 'helmx-cli-update-data-')
   const installRoot = path.join(dataDir, 'installation')
   await fsp.writeFile(path.join(dataDir, 'cli-token'), 'invalid-json')
   const env = makeCliEnv('http://127.0.0.1:1', dataDir, {
-    HELM_TOKEN: undefined,
-    HELM_HUB_INSTALL_ROOT: installRoot,
-    HELM_PAYLOAD_PACKAGE: '@test/helm-hub',
+    HELMX_TOKEN: undefined,
+    HELMX_HUB_INSTALL_ROOT: installRoot,
+    HELMX_PAYLOAD_PACKAGE: '@test/helmx-hub',
   })
   const requests: string[] = []
   const result = await runCliCaptured(['update', '--check', '--channel', 'beta', '--registry', 'https://registry.example', '--json'], env, {
@@ -1579,7 +1579,7 @@ test('helm update --check queries the selected channel without loading Hub crede
     },
   })
   assert.equal(result.code, 0, result.err)
-  assert.deepEqual(requests, ['https://registry.example/@test/helm-hub/beta'])
+  assert.deepEqual(requests, ['https://registry.example/@test/helmx-hub/beta'])
   assert.deepEqual(JSON.parse(result.out), {
     currentVersion: null,
     latestVersion: '1.2.0-beta.1',
@@ -1592,9 +1592,9 @@ test('helm update --check queries the selected channel without loading Hub crede
   assert.equal(JSON.parse(status.out).current, null)
 })
 
-test('helm update help and mode validation work offline', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-update-flags-')
-  const env = makeCliEnv('http://127.0.0.1:1', dir, { HELM_HUB_INSTALL_ROOT: path.join(dir, 'install') })
+test('helmx update help and mode validation work offline', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helmx-cli-update-flags-')
+  const env = makeCliEnv('http://127.0.0.1:1', dir, { HELMX_HUB_INSTALL_ROOT: path.join(dir, 'install') })
   let requests = 0
   const options = {
     fetch: async () => {

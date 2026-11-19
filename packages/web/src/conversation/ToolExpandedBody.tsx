@@ -22,8 +22,8 @@
  */
 import { Fragment, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { ToolEditDiff } from '@helm/protocol/browser'
-import { HelmIcon, CopyButton } from '@helm/plugin-client'
+import type { ToolEditDiff } from '@helmx/protocol/browser'
+import { HelmxIcon, CopyButton } from '@helmx/plugin-client'
 import { useStoreActions } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { formatBytes } from '../lib/format.js'
@@ -102,7 +102,7 @@ function DiffFoldButton({ hidden, expanded, onToggle }: { hidden: number; expand
   const { t } = useWebLocale()
   return (
     <button type="button" className="trace-inline-btn trace-diff-more" onClick={onToggle}>
-      <HelmIcon name={expanded ? 'chevron-up' : 'chevron-down'} size={11} />
+      <HelmxIcon name={expanded ? 'chevron-up' : 'chevron-down'} size={11} />
       {expanded ? t('common.collapse') : t('conv.diff.expandRemaining', { count: hidden })}
     </button>
   )
@@ -185,12 +185,12 @@ function TruncatedOutputFooter({
   if (resultFetch.phase === 'failed') {
     return (
       <div className="callout callout--error" role="alert">
-        <HelmIcon name="alert-triangle" size={12} />
+        <HelmxIcon name="alert-triangle" size={12} />
         <span className="callout-text">
           {t('conv.trunc.fetchFailed', { error: resultFetch.error ?? t('conv.trunc.unknownError') })}
         </span>
         <button type="button" className="trace-inline-btn" onClick={resultFetch.load}>
-          <HelmIcon name="rotate-ccw" size={11} />
+          <HelmxIcon name="rotate-ccw" size={11} />
           {t('conv.trunc.retryFetch')}
         </button>
       </div>
@@ -214,7 +214,7 @@ function TruncatedOutputFooter({
         disabled={resultFetch.phase === 'loading'}
         onClick={resultFetch.load}
       >
-        <HelmIcon
+        <HelmxIcon
           name={resultFetch.phase === 'loading' ? 'loader' : 'download'}
           size={11}
           className={resultFetch.phase === 'loading' ? 'spin-slow' : undefined}
@@ -247,7 +247,7 @@ function ResultCopyGate({
       : t('conv.copy.truncatedTitle')
   return (
     <button type="button" className="btn btn-ghost btn-sm" disabled title={title} aria-label={t('conv.copy.disabledAria', { label })}>
-      <HelmIcon name="copy" size={12} />
+      <HelmxIcon name="copy" size={12} />
       <span>{label}</span>
     </button>
   )
@@ -269,7 +269,7 @@ function RawToolData({ tool, resultFetch, defaultOpen = false }: { tool: ToolTra
   return (
     <div className="trace-raw">
       <button type="button" className="trace-inline-btn" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
-        <HelmIcon name={open ? 'chevron-down' : 'chevron-right'} size={11} />
+        <HelmxIcon name={open ? 'chevron-down' : 'chevron-right'} size={11} />
         {t('conv.raw.toggle')}
       </button>
       {open ? (
@@ -357,7 +357,7 @@ function EditToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
       <>
         <div className="trace-section-label">{t('conv.edit.succeededNoDiff')}</div>
         <div className="callout callout--error" role="alert">
-          <HelmIcon name="alert-triangle" size={12} />
+          <HelmxIcon name="alert-triangle" size={12} />
           <span className="callout-text">
             {t('conv.edit.invalidMeta', { reason: resultCheck === undefined ? t('conv.edit.missingStructured') : resultCheck.reason })}
           </span>
@@ -427,7 +427,7 @@ function WriteToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
           <SyntaxCode code={expanded ? data.content : slice!.visible} language={data.language} />
           {foldable ? (
             <button type="button" className="trace-inline-btn" onClick={() => setExpanded((v) => !v)}>
-              <HelmIcon name={expanded ? 'chevron-up' : 'chevron-down'} size={11} />
+              <HelmxIcon name={expanded ? 'chevron-up' : 'chevron-down'} size={11} />
               {expanded ? t('common.collapse') : t('conv.tool.expandAll', { count: data.lineCount! })}
             </button>
           ) : null}
@@ -485,7 +485,7 @@ function ReadToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
             />
           ) : foldable ? (
             <button type="button" className="trace-inline-btn" onClick={() => setExpanded((v) => !v)}>
-              <HelmIcon name={expanded ? 'chevron-up' : 'chevron-down'} size={11} />
+              <HelmxIcon name={expanded ? 'chevron-up' : 'chevron-down'} size={11} />
               {expanded ? t('common.collapse') : t('conv.tool.expandAll', { count: slice.totalLines })}
             </button>
           ) : null}
@@ -519,7 +519,7 @@ function ReadToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
             />
           ) : foldable ? (
             <button type="button" className="trace-inline-btn" onClick={() => setExpanded((v) => !v)}>
-              <HelmIcon name={expanded ? 'chevron-up' : 'chevron-down'} size={11} />
+              <HelmxIcon name={expanded ? 'chevron-up' : 'chevron-down'} size={11} />
               {expanded ? t('common.collapse') : t('conv.tool.expandAll', { count: slice.totalLines })}
             </button>
           ) : null}
@@ -581,7 +581,7 @@ function BashToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
             <div className="trace-out-foot">
               {!expanded ? <span className="trace-tool-note">{t('conv.tool.collapsedAbove', { count: slice.hiddenLines })}</span> : null}
               <button type="button" className="trace-inline-btn" onClick={() => setExpanded((value) => !value)}>
-                <HelmIcon name={expanded ? 'chevron-up' : 'chevron-down'} size={11} />
+                <HelmxIcon name={expanded ? 'chevron-up' : 'chevron-down'} size={11} />
                 {expanded ? t('common.collapse') : t('conv.tool.expandAll', { count: slice.totalLines })}
               </button>
             </div>
@@ -637,7 +637,7 @@ function GenericToolBody({ tool, resultFetch }: ToolBodyProps): ReactNode {
             />
           ) : slice.hiddenLines > 0 ? (
             <button type="button" className="trace-inline-btn" onClick={() => setResultExpanded((value) => !value)}>
-              <HelmIcon name={resultExpanded ? 'chevron-up' : 'chevron-down'} size={11} />
+              <HelmxIcon name={resultExpanded ? 'chevron-up' : 'chevron-down'} size={11} />
               {resultExpanded ? t('common.collapse') : t('conv.tool.expandAll', { count: slice.totalLines })}
             </button>
           ) : null}
@@ -663,7 +663,7 @@ function ArtifactEntry({ tool, conversationId }: { tool: ToolTrace; conversation
       className="btn btn-sm btn-primary"
       onClick={() => setActiveModal({ kind: 'artifact-preview', artifactId: artifactRef, conversationId })}
     >
-      <HelmIcon name="external-link" size={12} />
+      <HelmxIcon name="external-link" size={12} />
       {t('conv.tool.openFullArtifact', { id: artifactRef })}
     </button>
   )

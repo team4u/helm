@@ -5,7 +5,7 @@
  * this plugin carries the product-layer app catalog and lifecycle orchestration):
  * - The public persistent doc catalog (AppsCatalogDoc): app-level product metadata (icon/category/
  *   pinned/workspaceDir/originConversationId/timestamps) that PluginSummary does not carry;
- * - 5 ctx.actions: validate / publish / list / update_meta / remove, auto-mapped to the `helm
+ * - 5 ctx.actions: validate / publish / list / update_meta / remove, auto-mapped to the `helmx
  *   apps ...` CLI, HTTP, Agent Tool, Workflow, and Web -- five ends;
  * - The left-sidebar "App Center" entry + the fullscreen screen `center` (client components come
  *   from the host-port branch; this file only declares the registration structure, with a placeholder client module kept for compilation);
@@ -16,7 +16,7 @@
  * - validate/publish relies on the host plugins.doctor's real four-phase self-check (manifest/backend/
  *   register/client), maintaining no second approximate validation; additionally enforcing "at least one
  *   ctx.ui.screen" (a hard requirement of full-stack apps; a miss is reported honestly as a missing_app_screen failure item);
- * - The host port (HelmHostApi.plugins) comes from the protocol-host branch; on this branch it is
+ * - The host port (HelmxHostApi.plugins) comes from the protocol-host branch; on this branch it is
  *   accessed via local compatibility types + an explicit 501 when missing -- never silently degrading or faking install success;
  * - Remote-node conversations + relative paths explicitly fail 400 app_source_must_be_on_hub (PluginHost
  *   and PackageManager run on the Hub host and only work on the local node's filesystem);
@@ -26,14 +26,14 @@ import { existsSync, readFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, resolve as resolvePath } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
-  HelmError,
+  HelmxError,
   LOCALIZED_TEXT_JSON_SCHEMA,
-  type HelmHostApi,
+  type HelmxHostApi,
   type LocalizedText,
   type PluginDefinition,
   type PluginDoctorReport,
   type PluginSummary,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 import { resolvePluginClientAssets } from './asset-paths.js'
 
 export const APPS_PLUGIN_ID = 'builtin:apps'
@@ -93,7 +93,7 @@ function readSkillAssets(): { skillMd: string; references: Record<string, string
     ? local
     : join(dirname(here), 'src', 'apps', 'skill')
   if (!existsSync(dir)) {
-    throw new HelmError('apps_skill_missing', `built-in plugin ${APPS_PLUGIN_ID} cannot find its skill asset directory`, 500)
+    throw new HelmxError('apps_skill_missing', `built-in plugin ${APPS_PLUGIN_ID} cannot find its skill asset directory`, 500)
   }
   return {
     skillMd: readFileSync(join(dir, 'SKILL.md'), 'utf-8'),
@@ -118,14 +118,14 @@ function resolveAppSourceDir(
   deps: { getConversation(id: number): { nodeId?: string; cwd: string }; hubCwd: string },
 ): string {
   if (dir.includes('\0')) {
-    throw new HelmError('validation_error', 'app directory path contains illegal characters', 400, { dir })
+    throw new HelmxError('validation_error', 'app directory path contains illegal characters', 400, { dir })
   }
   let baseCwd = deps.hubCwd
   if (!isAbsolute(dir) && context.conversationId !== undefined) {
     const conv = deps.getConversation(context.conversationId)
     const nodeId = conv.nodeId ?? 'local'
     if (nodeId !== 'local') {
-      throw new HelmError(
+      throw new HelmxError(
         'app_source_must_be_on_hub',
         `The conversation is bound to remote node ${nodeId}; the app source directory must live on the Hub's local (local-node) filesystem; provide a Hub-local absolute path, or use a Git/npm source instead`,
         400,
@@ -136,14 +136,14 @@ function resolveAppSourceDir(
   }
   const resolved = resolvePath(baseCwd, dir)
   if (!isAbsolute(resolved)) {
-    throw new HelmError('validation_error', `app directory cannot be resolved to an absolute path: ${dir}`, 400, { dir, resolved })
+    throw new HelmxError('validation_error', `app directory cannot be resolved to an absolute path: ${dir}`, 400, { dir, resolved })
   }
   return resolved
 }
 
 function assertNotSelfTarget(pluginId: string): void {
   if (pluginId === APPS_PLUGIN_ID) {
-    throw new HelmError(
+    throw new HelmxError(
       'app_target_is_self',
       `This operation is not allowed on ${APPS_PLUGIN_ID} itself (the app center is not a publishable app)`,
       409,
@@ -151,7 +151,7 @@ function assertNotSelfTarget(pluginId: string): void {
     )
   }
   if (pluginId.startsWith('builtin:')) {
-    throw new HelmError(
+    throw new HelmxError(
       'app_target_is_builtin',
       `built-in plugin ${pluginId} is not a full-stack app managed by the app center (only external managed plugins are operable)`,
       409,
@@ -162,7 +162,7 @@ function assertNotSelfTarget(pluginId: string): void {
 
 function assertCategory(value: string): AppCategory {
   if (!(APP_CATEGORIES as readonly string[]).includes(value)) {
-    throw new HelmError(
+    throw new HelmxError(
       'validation_error',
       `invalid app category: ${value} (allowed: ${APP_CATEGORIES.join(' | ')})`,
       400,
@@ -197,7 +197,7 @@ interface AppValidateResult {
  * as missing_app_screen -- never mark an unverified draft publishable. On doctor failure keep the original diagnostics; do not use partial registration results.
  */
 async function validateAppDir(
-  port: HelmHostApi['plugins'],
+  port: HelmxHostApi['plugins'],
   dir: string,
 ): Promise<AppValidateResult> {
   const report = await port.doctor({ dir })
@@ -238,7 +238,7 @@ async function validateAppDir(
 }
 
 /** Collect the given plugin's screen id list from the host listUi (registered-plugin facts). */
-function screensOf(port: HelmHostApi['plugins'], pluginId: string): string[] {
+function screensOf(port: HelmxHostApi['plugins'], pluginId: string): string[] {
   return port
     .listUi()
     .filter((c) => c.pluginId === pluginId && c.surface === 'screen')
@@ -369,7 +369,7 @@ export function createAppsPlugin(deps: { hubCwd?: string } = {}): PluginDefiniti
           const validation = await validateAppDir(port, resolvedDir)
           if (!validation.ok) {
             const failed = validation.checks.filter((c) => c.error !== undefined)
-            throw new HelmError(
+            throw new HelmxError(
               'app_validate_failed',
               `App precheck failed (${failed.length} failing items); publishing refused: ${failed.map((c) => `${c.label}: ${c.error!.message}`).join('; ')}`,
               422,
@@ -378,7 +378,7 @@ export function createAppsPlugin(deps: { hubCwd?: string } = {}): PluginDefiniti
           }
           const pluginId = validation.pluginId
           if (pluginId === undefined) {
-            throw new HelmError(
+            throw new HelmxError(
               'app_validate_failed',
               `Precheck passed but no plugin id identified (inconsistent internal state): ${resolvedDir}`,
               500,
@@ -401,7 +401,7 @@ export function createAppsPlugin(deps: { hubCwd?: string } = {}): PluginDefiniti
             const result = await port.install(resolvedDir, { enable: true })
             if (result.enableError !== undefined) {
               // Install succeeded but enable failed: report honestly (the install record is kept; enable can be retried)
-              throw new HelmError(
+              throw new HelmxError(
                 'app_enable_failed',
                 `App ${pluginId} installed but enabling failed (install record kept; retryable): ${result.enableError.message}`,
                 422,
@@ -424,7 +424,7 @@ export function createAppsPlugin(deps: { hubCwd?: string } = {}): PluginDefiniti
           // 3. Screen recheck and catalog registration (facts read from the host listUi after publishing)
           const screenIds = screensOf(port, pluginId)
           if (screenIds.length === 0) {
-            throw new HelmError(
+            throw new HelmxError(
               'missing_app_screen',
               `App ${pluginId} installed but no enabled Screen found (the app center cannot open it); check the ctx.ui.screen declarations and the plugin enablement state`,
               422,
@@ -591,7 +591,7 @@ export function createAppsPlugin(deps: { hubCwd?: string } = {}): PluginDefiniti
           const existing = catalog.get().apps[input.pluginId]
           // The target must already exist in the catalog (unpublished apps have no metadata to change)
           if (existing === undefined) {
-            throw new HelmError(
+            throw new HelmxError(
               'app_not_published',
               `App ${input.pluginId} is not registered in the app center (publish first, then edit metadata)`,
               404,

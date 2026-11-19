@@ -1,15 +1,15 @@
 import {
-  HelmError,
+  HelmxError,
   type ArtifactMetadata,
   type ConversationEntryEvent,
   type ConversationScope,
   type ConversationSummary,
-  type HelmPluginContext,
+  type HelmxPluginContext,
   type MaybePromise,
   type PluginDocHandle,
   type TurnOutcome,
   isJsonObject,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 
 /*
  * SuperAgentDependencies 已删除：业务依赖全部经公开 ctx.host 端口
@@ -99,7 +99,7 @@ export interface RecallNode {
   conversationId: number
   profileId: string
   completionSeq: number
-  /** 本回合消费的输入 ID（去重；helm.rewind omittedInputIds 命中即删节点）。 */
+  /** 本回合消费的输入 ID（去重；helmx.rewind omittedInputIds 命中即删节点）。 */
   inputIds: string[]
   outcome: TurnOutcome
   summary: string
@@ -178,7 +178,7 @@ export function asConversationEntryEvent(payload: unknown): ConversationEntryEve
   return payload as ConversationEntryEvent
 }
 
-export { isAbsoluteTargetPath } from '@helm/protocol'
+export { isAbsoluteTargetPath } from '@helmx/protocol'
 
 /** mutedSources 逗号/换行分隔解析为精确 source 集合（空项剔除）。 */
 export function parseMutedSources(raw: string): Set<string> {
@@ -192,8 +192,8 @@ export function parseMutedSources(raw: string): Set<string> {
 
 /** 即时读取并严格校验配置：非法显式抛错，绝不悄悄取默认。 */
 export function resolveSuperAgentConfig(raw: Record<string, unknown>): SuperAgentConfig {
-  const err = (msg: string): HelmError =>
-    new HelmError('superagent_config_invalid', `builtin:superagent 配置非法：${msg}`, 500, { pluginId: SUPERAGENT_PLUGIN_ID })
+  const err = (msg: string): HelmxError =>
+    new HelmxError('superagent_config_invalid', `builtin:superagent 配置非法：${msg}`, 500, { pluginId: SUPERAGENT_PLUGIN_ID })
   const readBool = (key: 'routerMode' | 'watchdogEnabled'): boolean => {
     if (key in raw) {
       if (typeof raw[key] !== 'boolean') throw err(`字段 ${key} 必须是布尔值（实际：${typeof raw[key]}）`)
@@ -231,7 +231,7 @@ export function resolveSuperAgentConfig(raw: Record<string, unknown>): SuperAgen
 }
 
 /**
- * conversation.live 事件载荷边界守卫（看门狗活动统计消费）：完整 HelmEvent
+ * conversation.live 事件载荷边界守卫（看门狗活动统计消费）：完整 HelmxEvent
  * 信封形状（type + live.{conversationId 正整数, text 字符串, tools 数组,
  * updatedAt 有限非负}）；非法返回 undefined（调用方丢弃并诊断），绝不粗 as 信任。
  */
@@ -265,7 +265,7 @@ export function asConversationLiveEvent(
 }
 
 /**
- * conversation.upsert 事件载荷边界守卫（看门狗活动统计消费）：完整 HelmEvent
+ * conversation.upsert 事件载荷边界守卫（看门狗活动统计消费）：完整 HelmxEvent
  * 信封形状（type + conversation.{id 正整数, status 字符串, updatedAt 有限非负}）。
  */
 export function asConversationUpsertEvent(
@@ -284,7 +284,7 @@ export function asConversationUpsertEvent(
 }
 
 /**
- * conversation.deleted 事件载荷边界守卫（看门狗统计清理消费）：完整 HelmEvent
+ * conversation.deleted 事件载荷边界守卫（看门狗统计清理消费）：完整 HelmxEvent
  * 信封形状（type + conversationId 正整数）。
  */
 export function asConversationDeletedEvent(payload: unknown): number | undefined {
@@ -303,12 +303,12 @@ export function isFiniteTime(v: unknown): v is number {
   return typeof v === 'number' && Number.isFinite(v) && v >= 0
 }
 
-const docCorrupt = (detail: string): HelmError =>
-  new HelmError('superagent_doc_corrupt', `插件 doc ${INDEX_DOC_NAME} ${detail}`, 500, { pluginId: SUPERAGENT_PLUGIN_ID })
+const docCorrupt = (detail: string): HelmxError =>
+  new HelmxError('superagent_doc_corrupt', `插件 doc ${INDEX_DOC_NAME} ${detail}`, 500, { pluginId: SUPERAGENT_PLUGIN_ID })
 
 export function assertIndexDoc(value: unknown): SuperAgentIndexDoc {
   if (!isJsonObject(value) || value.version !== 1 || !Array.isArray(value.workers)) {
-    throw new HelmError(
+    throw new HelmxError(
       'superagent_doc_corrupt',
       `插件 doc ${INDEX_DOC_NAME} 结构非法（期望 { version: 1, workers: [] }）`,
       500,
@@ -335,12 +335,12 @@ export function assertIndexDoc(value: unknown): SuperAgentIndexDoc {
       w.profileId.trim() === '' ||
       !isFiniteTime(w.createdAt)
     ) {
-      throw new HelmError('superagent_doc_corrupt', `插件 doc ${INDEX_DOC_NAME}.workers 含非法条目`, 500, {
+      throw new HelmxError('superagent_doc_corrupt', `插件 doc ${INDEX_DOC_NAME}.workers 含非法条目`, 500, {
         pluginId: SUPERAGENT_PLUGIN_ID,
       })
     }
     if (seenWorkerIds.has(w.conversationId)) {
-      throw new HelmError(
+      throw new HelmxError(
         'superagent_doc_corrupt',
         `插件 doc ${INDEX_DOC_NAME}.workers 重复登记会话 #${w.conversationId}`,
         500,
@@ -354,7 +354,7 @@ export function assertIndexDoc(value: unknown): SuperAgentIndexDoc {
 
 export function assertSubscriptionsDoc(value: unknown): ThreadSubscriptionDoc {
   if (!isJsonObject(value) || value.version !== 1 || !Array.isArray(value.subscriptions)) {
-    throw new HelmError(
+    throw new HelmxError(
       'superagent_doc_corrupt',
       `插件 doc ${SUBSCRIPTIONS_DOC_NAME} 结构非法（期望 { version: 1, subscriptions: [] }）`,
       500,
@@ -371,12 +371,12 @@ export function assertSubscriptionsDoc(value: unknown): ThreadSubscriptionDoc {
       !isPosIntId(s.workerConversationId) ||
       !isFiniteTime(s.createdAt)
     ) {
-      throw new HelmError('superagent_doc_corrupt', `插件 doc ${SUBSCRIPTIONS_DOC_NAME}.subscriptions 含非法条目`, 500, {
+      throw new HelmxError('superagent_doc_corrupt', `插件 doc ${SUBSCRIPTIONS_DOC_NAME}.subscriptions 含非法条目`, 500, {
         pluginId: SUPERAGENT_PLUGIN_ID,
       })
     }
     if (seenKeys.has(s.threadKey)) {
-      throw new HelmError(
+      throw new HelmxError(
         'superagent_doc_corrupt',
         `插件 doc ${SUBSCRIPTIONS_DOC_NAME}.subscriptions 重复订阅 threadKey '${s.threadKey}'`,
         500,

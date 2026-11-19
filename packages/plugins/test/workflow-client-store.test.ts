@@ -1,5 +1,5 @@
 /**
- * builtin:workflow 插件 client 会话文档响应与后台活动注册测试（零 @helm/web 依赖）：
+ * builtin:workflow 插件 client 会话文档响应与后台活动注册测试（零 @helmx/web 依赖）：
  * - usePluginSessionDoc('runs') 快照与增量推送驱动 SubagentToolView / WorkflowToolView；
  * - useToolActivity (`activeToolCallIds`) 精确按真实 subagent summary 状态与
  *   run.running 状态登记 / 释放后台活动，不从静态文本推断；
@@ -8,7 +8,7 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import type { ConversationSummary } from '@helm/protocol'
+import type { ConversationSummary } from '@helmx/protocol'
 import type { WorkflowRunSummary } from '../src/contracts.js'
 import {
   React,

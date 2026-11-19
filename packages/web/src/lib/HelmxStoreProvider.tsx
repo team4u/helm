@@ -4,16 +4,16 @@ import * as ReactDom from 'react-dom'
 import * as ReactDomClient from 'react-dom/client'
 import * as ReactJsxRuntime from 'react/jsx-runtime'
 import * as LucideReact from 'lucide-react'
-import * as HelmPluginClient from '@helm/plugin-client'
-import { usePluginDocValue } from '@helm/plugin-client'
-import { HelmExternalStore, type StoreBootLocation } from './helm-store.js'
+import * as HelmxPluginClient from '@helmx/plugin-client'
+import { usePluginDocValue } from '@helmx/plugin-client'
+import { HelmxExternalStore, type StoreBootLocation } from './helmx-store.js'
 import { PluginClientHostBridge } from './plugin-host-bridge.js'
 import {
-  HelmExternalStoreContext,
+  HelmxExternalStoreContext,
   useActiveModal,
   useAuthenticated,
   useConversationDetail,
-  useHelmStore,
+  useHelmxStore,
   useHighlightedEntry,
   useLoadError,
   useLocationState,
@@ -28,7 +28,7 @@ import { useGlobalShortcuts } from './use-global-shortcuts.js'
 import { useSseEvents } from './use-sse-events.js'
 import { useUnreadSync } from './use-unread-sync.js'
 
-function HomeLandingWatcher({ store, boot }: { store: HelmExternalStore; boot: StoreBootLocation }) {
+function HomeLandingWatcher({ store, boot }: { store: HelmxExternalStore; boot: StoreBootLocation }) {
   const pendingRef = useRef(boot.needsHomeLanding)
   const authenticated = useAuthenticated()
   const { profilesLoaded } = useProfilesSlice()
@@ -49,7 +49,7 @@ function HighlightedEntryActiveWatcher({
   conversationId,
   highlightedEntry,
 }: {
-  store: HelmExternalStore
+  store: HelmxExternalStore
   conversationId: number
   highlightedEntry: { conversationId: number; entryId: string }
 }) {
@@ -63,7 +63,7 @@ function HighlightedEntryActiveWatcher({
   return null
 }
 
-function HighlightedEntryWatcher({ store }: { store: HelmExternalStore }) {
+function HighlightedEntryWatcher({ store }: { store: HelmxExternalStore }) {
   const highlightedEntry = useHighlightedEntry()
   if (highlightedEntry === null) return null
   return (
@@ -75,7 +75,7 @@ function HighlightedEntryWatcher({ store }: { store: HelmExternalStore }) {
   )
 }
 
-function HelmStoreEffects({ store, boot }: { store: HelmExternalStore; boot: StoreBootLocation }) {
+function HelmxStoreEffects({ store, boot }: { store: HelmxExternalStore; boot: StoreBootLocation }) {
   const authenticated = useAuthenticated()
   const { primaryTarget, splitTarget } = useLocationTargets()
   const activeModal = useActiveModal()
@@ -155,8 +155,8 @@ function HelmStoreEffects({ store, boot }: { store: HelmExternalStore; boot: Sto
   store.bindLogout(logout)
 
   useEffect(() => {
-    window.addEventListener('helm:unauthorized', logout)
-    return () => window.removeEventListener('helm:unauthorized', logout)
+    window.addEventListener('helmx:unauthorized', logout)
+    return () => window.removeEventListener('helmx:unauthorized', logout)
   }, [logout])
 
   // ---- Screen route param updates (implemented inside the single navigation
@@ -259,7 +259,7 @@ function HelmStoreEffects({ store, boot }: { store: HelmExternalStore; boot: Sto
   )
 }
 
-export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
+export function HelmxStoreProvider({ children }: { children: React.ReactNode }) {
   const [boot] = useState<StoreBootLocation>(() => {
     const rawHash = typeof window !== 'undefined' ? window.location.hash : ''
     const parsed = parseLocationHash(rawHash)
@@ -269,36 +269,36 @@ export function HelmStoreProvider({ children }: { children: React.ReactNode }) {
     }
   })
 
-  const storeRef = useRef<HelmExternalStore | null>(null)
+  const storeRef = useRef<HelmxExternalStore | null>(null)
   if (storeRef.current === null) {
-    storeRef.current = new HelmExternalStore(boot.location)
+    storeRef.current = new HelmxExternalStore(boot.location)
   }
   const store = storeRef.current
 
   useEffect(() => {
     const w = window as unknown as Record<string, unknown>
-    w.__HELM_SHARED__ = { React, useHelmStore, usePluginDoc: usePluginDocValue }
-    w.__helm_shared_react = React
-    w.__helm_shared_react_dom = ReactDom
-    w.__helm_shared_react_dom_client = ReactDomClient
-    w.__helm_shared_react_jsx_runtime = ReactJsxRuntime
-    w.__helm_shared_lucide_react = LucideReact
-    w.__helm_shared_plugin_client = HelmPluginClient
+    w.__HELMX_SHARED__ = { React, useHelmxStore, usePluginDoc: usePluginDocValue }
+    w.__helmx_shared_react = React
+    w.__helmx_shared_react_dom = ReactDom
+    w.__helmx_shared_react_dom_client = ReactDomClient
+    w.__helmx_shared_react_jsx_runtime = ReactJsxRuntime
+    w.__helmx_shared_lucide_react = LucideReact
+    w.__helmx_shared_plugin_client = HelmxPluginClient
     return () => {
-      delete w.__HELM_SHARED__
-      delete w.__helm_shared_react
-      delete w.__helm_shared_react_dom
-      delete w.__helm_shared_react_dom_client
-      delete w.__helm_shared_react_jsx_runtime
-      delete w.__helm_shared_lucide_react
-      delete w.__helm_shared_plugin_client
+      delete w.__HELMX_SHARED__
+      delete w.__helmx_shared_react
+      delete w.__helmx_shared_react_dom
+      delete w.__helmx_shared_react_dom_client
+      delete w.__helmx_shared_react_jsx_runtime
+      delete w.__helmx_shared_lucide_react
+      delete w.__helmx_shared_plugin_client
     }
   }, [])
 
   return (
-    <HelmExternalStoreContext.Provider value={store}>
-      <HelmStoreEffects store={store} boot={boot} />
+    <HelmxExternalStoreContext.Provider value={store}>
+      <HelmxStoreEffects store={store} boot={boot} />
       <PluginClientHostBridge store={store}>{children}</PluginClientHostBridge>
-    </HelmExternalStoreContext.Provider>
+    </HelmxExternalStoreContext.Provider>
   )
 }

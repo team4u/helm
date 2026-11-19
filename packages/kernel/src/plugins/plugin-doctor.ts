@@ -13,14 +13,14 @@ import { mkdtempSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
-  HelmError,
+  HelmxError,
   clientNpmRootsOf,
   type PluginBuildProvider,
   type PluginDefinition,
   type PluginDoctorCheck,
   type PluginDoctorReport,
   type PluginSummary,
-} from '@helm/protocol';
+} from '@helmx/protocol';
 import { PluginHost, type PluginHostBackend } from './plugin-host.js';
 import { nextPluginGeneration, registerPluginTsRoot } from './backend-ts-loader.js';
 import {
@@ -55,7 +55,7 @@ class DoctorDocStore {
  */
 function doctorBackend(): PluginHostBackend {
   const unavailable = (what: string): never => {
-    throw new HelmError(
+    throw new HelmxError(
       'unsupported',
       `Doctor static check does not provide host runtime capability '${what}' (plugins must not invoke host ports at top level of definePlugin)`,
       501,
@@ -86,11 +86,11 @@ function doctorBackend(): PluginHostBackend {
     abortConversation: () => unavailable('host.abortConversation'),
     abortConversationGuarded: () => unavailable('host.abortConversationGuarded') as never as Promise<void>,
     resetConversationGuarded: () =>
-      unavailable('host.resetConversationGuarded') as never as Promise<import('@helm/protocol').ConversationSummary>,
+      unavailable('host.resetConversationGuarded') as never as Promise<import('@helmx/protocol').ConversationSummary>,
     compactConversationGuarded: () =>
       unavailable('host.compactConversationGuarded') as never as Promise<{
         taskId: number
-        conversation: import('@helm/protocol').ConversationSummary
+        conversation: import('@helmx/protocol').ConversationSummary
       }>,
     getConversationOwnership: () => unavailable('host.getConversationOwnership'),
     markConversationOwnership: () => unavailable('host.markConversationOwnership'),
@@ -122,7 +122,7 @@ function doctorBackend(): PluginHostBackend {
 
 /** Normalizes a thrown error into a serializable doctor diagnostic object. */
 function toErrorInfo(err: unknown): { code: string; message: string; details?: unknown } {
-  if (err instanceof HelmError) {
+  if (err instanceof HelmxError) {
     return {
       code: err.code,
       message: err.message,
@@ -182,7 +182,7 @@ async function doctorPluginDirInternal(
   const entryOk = await push('manifest', 'manifest and entry resolution', async () => {
     entryPath = await resolvePluginEntry(dir);
     if (entryPath === undefined) {
-      throw new HelmError(
+      throw new HelmxError(
         'plugin_entry_missing',
         `Directory ${dir} does not contain a plugin entrypoint (no plugin.json or conventional entrypoint found)`,
         404,
@@ -218,7 +218,7 @@ async function doctorPluginDirInternal(
         await host.register(withClientCapture(definition!, clientRefs, screenIds), { enabled: false });
         const found = host.list().find((s) => s.id === definition!.id);
         if (!found) {
-          throw new HelmError(
+          throw new HelmxError(
             'invalid_plugin_definition',
             `Plugin ${definition!.id} not found in host summary after registration (inconsistent doctor state)`,
             500,
@@ -249,7 +249,7 @@ async function doctorPluginDirInternal(
             definition!.id,
           );
           if (!prebuilt.exports.includes(ref.export)) {
-            throw new HelmError(
+            throw new HelmxError(
               'invalid_client_export',
               `Plugin ${definition!.id} client reference ${ref.module}#${ref.export} is dangling: module exports [${prebuilt.exports.join(', ') || 'none'}]`,
               422,
@@ -260,7 +260,7 @@ async function doctorPluginDirInternal(
         return;
       }
       if (clientRefs.length > 0 && options.buildProvider === undefined) {
-        throw new HelmError(
+        throw new HelmxError(
           'unsupported_client_build',
           'Plugin declared client module references, but host has no buildProvider wired to compile client modules',
           501,
@@ -283,7 +283,7 @@ async function doctorPluginDirInternal(
         });
         // Reject missing named exports so dangling UI declarations fail during doctor rather than silently rendering blank.
         if (!compiled.exports.includes(ref.export)) {
-          throw new HelmError(
+          throw new HelmxError(
             'invalid_client_export',
             `Plugin ${definition!.id} client reference ${ref.module}#${ref.export} is dangling: module exports [${compiled.exports.join(', ') || 'none'}]`,
             422,
@@ -357,7 +357,7 @@ function withClientCapture(
 
 /** Runs `fn` inside a temporary scratch directory and deletes it on exit. */
 async function withDoctorScratch<T>(fn: (scratch: string) => Promise<T>): Promise<T> {
-  const scratch = mkdtempSync(join(tmpdir(), 'helm-doctor-'));
+  const scratch = mkdtempSync(join(tmpdir(), 'helmx-doctor-'));
   try {
     return await fn(scratch);
   } finally {

@@ -1,10 +1,10 @@
 /**
  * CLI login state: `<dataDir>/cli-token` (0600 JSON `{ hubUrl, token }`), dedicated solely to the CLI.
- * `credentials.json` holds only model and plugin secrets (managed by `@helm/kernel` CredentialService),
+ * `credentials.json` holds only model and plugin secrets (managed by `@helmx/kernel` CredentialService),
  * and the CLI never reads or writes it. Writes take an exclusive lock (`cli-token.lock`: written to a
  * temp file then published atomically via `fs.link`, with PID as the first token, broken as stale only
  * after the holder PID is confirmed dead; filesystems without hard links fall back to O_EXCL + a
- * reader-side settle grace window) + atomic temp write. Setting `HELM_TOKEN` short-circuits disk reads.
+ * reader-side settle grace window) + atomic temp write. Setting `HELMX_TOKEN` short-circuits disk reads.
  * Origin binding: stored tokens are attached only when the target baseUrl matches the recorded hubUrl
  * (see hub-client).
  */
@@ -14,7 +14,7 @@ import path from 'node:path'
 import os from 'node:os'
 import process from 'node:process'
 import { CliError } from './errors.js'
-import { atomicWriteFile } from '@helm/env-io'
+import { atomicWriteFile } from '@helmx/env-io'
 
 export interface CliCredential {
   hubUrl?: string
@@ -27,9 +27,9 @@ const LOCK_POLL_MS = 25
 const LOCK_SETTLE_GRACE_MS = 2_000
 
 export function dataDirFor(env: NodeJS.ProcessEnv): string {
-  const v = env['HELM_DATA_DIR']
+  const v = env['HELMX_DATA_DIR']
   if (v && v.trim()) return v.trim()
-  return path.join(os.homedir(), '.helm')
+  return path.join(os.homedir(), '.helmx')
 }
 
 /** Path to the CLI login state file (`0600` JSON `{ hubUrl, token }`). */
@@ -172,7 +172,7 @@ async function acquireCliTokenLock(lockFile: string): Promise<() => Promise<void
 }
 
 /**
- * Atomic write delegated to the shared `@helm/env-io` primitive (hidden temp + 0600 + fsync + bounded
+ * Atomic write delegated to the shared `@helmx/env-io` primitive (hidden temp + 0600 + fsync + bounded
  * transient-lock retry on all platforms); wraps failures into the CLI error envelope.
  */
 async function atomicWrite0600(file: string, text: string): Promise<void> {
@@ -205,7 +205,7 @@ async function ensureMode0600(file: string): Promise<void> {
 
 /**
  * Load CLI login state; returns empty credentials when the file is missing (not logged in).
- * Callers should check HELM_TOKEN first to short-circuit disk reads when overridden by env.
+ * Callers should check HELMX_TOKEN first to short-circuit disk reads when overridden by env.
  */
 export async function loadCliCredential(dataDir: string): Promise<CliCredential> {
   const file = credentialsPath(dataDir)

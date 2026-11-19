@@ -19,7 +19,7 @@
 import { lstatSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 import {
-  HelmError,
+  HelmxError,
   PREBUILT_CLIENT_MANIFEST_FILE,
   assertModuleRefShape,
   assertPrebuiltChunkName,
@@ -33,8 +33,8 @@ import {
   type PluginUiContribution,
   type PrebuiltClientManifest,
   type PrebuiltClientModuleEntry,
-} from '@helm/protocol';
-import { isPlainObject } from '@helm/protocol'
+} from '@helmx/protocol';
+import { isPlainObject } from '@helmx/protocol'
 import { assertConversationScope, jsonClone } from './shared.js'
 import {
   UI_ACTION_SURFACES,
@@ -70,7 +70,7 @@ function resolvePrebuiltFileSafe(
     } catch {
       // ENOENT
     }
-    throw new HelmError(
+    throw new HelmxError(
       'prebuilt_client_invalid',
       `Prebuilt client ${label} file ${isSymlink ? 'is a dangling symlink' : 'is missing'} for plugin ${pluginId}: ${relPath}`,
       400,
@@ -79,7 +79,7 @@ function resolvePrebuiltFileSafe(
   }
   const rel = relative(rootReal, real);
   if (rel === '' || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
-    throw new HelmError(
+    throw new HelmxError(
       'client_module_out_of_root',
       `Prebuilt client ${label} escapes prebuiltClientDir (${prebuiltDir}): ${relPath}`,
       400,
@@ -90,7 +90,7 @@ function resolvePrebuiltFileSafe(
   try {
     stat = statSync(real);
   } catch {
-    throw new HelmError(
+    throw new HelmxError(
       'prebuilt_client_invalid',
       `Prebuilt client ${label} file cannot be read for plugin ${pluginId}: ${relPath}`,
       400,
@@ -98,7 +98,7 @@ function resolvePrebuiltFileSafe(
     );
   }
   if (!stat.isFile()) {
-    throw new HelmError(
+    throw new HelmxError(
       'prebuilt_client_invalid',
       `Prebuilt client ${label} is not a regular file for plugin ${pluginId}: ${relPath}`,
       400,
@@ -121,7 +121,7 @@ function resolveOptionalPrebuiltGzipSafe(
     lstatSync(gzCandidate);
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
-    throw new HelmError(
+    throw new HelmxError(
       'prebuilt_client_invalid',
       `Prebuilt client ${label}.gz stat failed for plugin ${pluginId}: ${err instanceof Error ? err.message : String(err)}`,
       400,
@@ -143,7 +143,7 @@ export function readPrebuiltClientManifest(
   try {
     rootStat = statSync(prebuiltDir);
   } catch {
-    throw new HelmError(
+    throw new HelmxError(
       'prebuilt_client_invalid',
       `Prebuilt client directory does not exist for plugin ${pluginId}: ${prebuiltDir}`,
       400,
@@ -151,7 +151,7 @@ export function readPrebuiltClientManifest(
     );
   }
   if (!rootStat.isDirectory()) {
-    throw new HelmError(
+    throw new HelmxError(
       'prebuilt_client_invalid',
       `Prebuilt client directory is not a directory for plugin ${pluginId}: ${prebuiltDir}`,
       400,
@@ -170,7 +170,7 @@ export function readPrebuiltClientManifest(
   try {
     raw = JSON.parse(readFileSync(manifestReal, 'utf-8'));
   } catch (err) {
-    throw new HelmError(
+    throw new HelmxError(
       'prebuilt_client_invalid',
       `Prebuilt client manifest JSON parse failed in ${prebuiltDir}: ${err instanceof Error ? err.message : String(err)}`,
       400,
@@ -196,7 +196,7 @@ function assertPrebuiltEntryIntegrity(
 ): VerifiedPrebuiltEntry {
   const entry = manifest.modules[moduleRef];
   if (!entry) {
-    throw new HelmError(
+    throw new HelmxError(
       'prebuilt_client_invalid',
       `Prebuilt client manifest for plugin ${pluginId} does not contain declared module ${moduleRef}`,
       404,
@@ -244,7 +244,7 @@ function materializePrebuiltBundle(
   if (chunk !== undefined) {
     const target = chunkPaths.get(chunk);
     if (!target) {
-      throw new HelmError(
+      throw new HelmxError(
         'client_chunk_not_found',
         `plugin ${pluginId} module ${moduleRef} did not generate chunk: ${chunk}`,
         404,
@@ -358,11 +358,11 @@ export class UiRegistry {
     clientAssets?: string | PluginClientAssetsLookup,
   ): void {
     if (!isPlainObject(spec)) {
-      throw new HelmError('invalid_ui_spec', `plugin ${pluginId} ui.${fnName} spec must be a plain object`, 400);
+      throw new HelmxError('invalid_ui_spec', `plugin ${pluginId} ui.${fnName} spec must be a plain object`, 400);
     }
     const id = spec.id;
     if (typeof id !== 'string' || id.length === 0) {
-      throw new HelmError('invalid_ui_spec', `plugin ${pluginId} ui.${fnName} declaration is missing id`, 400);
+      throw new HelmxError('invalid_ui_spec', `plugin ${pluginId} ui.${fnName} declaration is missing id`, 400);
     }
 
     let list = this.ui.get(pluginId);
@@ -371,14 +371,14 @@ export class UiRegistry {
       this.ui.set(pluginId, list);
     }
     if (list.some((u) => u.surface === surface && (u.spec as { id?: string }).id === id)) {
-      throw new HelmError('duplicate_ui', `plugin ${pluginId} already declared id ${id} in ${surface}`, 409);
+      throw new HelmxError('duplicate_ui', `plugin ${pluginId} already declared id ${id} in ${surface}`, 409);
     }
 
     // priority / order: when provided, must be a finite safe integer (invalid values would silently corrupt sort order).
     for (const field of ['priority', 'order'] as const) {
       const value = spec[field];
       if (value !== undefined && (typeof value !== 'number' || !Number.isSafeInteger(value))) {
-        throw new HelmError(
+        throw new HelmxError(
           'invalid_ui_spec',
           `plugin ${pluginId} ui.${fnName} ${field} must be a safe integer (actual: ${String(value)})`,
           400,
@@ -394,7 +394,7 @@ export class UiRegistry {
     for (const field of ['label', 'title', 'description'] as const) {
       const value = spec[field];
       if (value !== undefined && parseNonEmptyLocalizedText(value) === undefined) {
-        throw new HelmError(
+        throw new HelmxError(
           'invalid_ui_spec',
           `plugin ${pluginId} ui.${fnName}  ${field} must be display copy (non-empty string or { en, 'zh-CN' } map with non-blank values)`,
           400,
@@ -433,7 +433,7 @@ export class UiRegistry {
     const client = spec.client;
     if (client !== undefined) {
       if (clientRoot === undefined && prebuiltClientDir === undefined) {
-        throw new HelmError(
+        throw new HelmxError(
           'invalid_ui_spec',
           `Plugin ${pluginId} ui.${fnName} declared a client reference, but definition did not provide clientRoot or prebuiltClientDir`,
           400,
@@ -441,12 +441,12 @@ export class UiRegistry {
         );
       }
       if (!isPlainObject(client) || Object.keys(client).some((k) => k !== 'module' && k !== 'export')) {
-        throw new HelmError('invalid_ui_spec', `Plugin ${pluginId} ui.${fnName} client may only contain { module, export }`, 400);
+        throw new HelmxError('invalid_ui_spec', `Plugin ${pluginId} ui.${fnName} client may only contain { module, export }`, 400);
       }
       const moduleRef = String(client.module ?? '');
       assertModuleRefShape(pluginId, moduleRef);
       if (typeof client.export !== 'string' || client.export.length === 0 || !/^[A-Za-z0-9_$]+$/.test(client.export)) {
-        throw new HelmError(
+        throw new HelmxError(
           'invalid_ui_spec',
           `Plugin ${pluginId} ui.${fnName} client.export must be a valid non-empty export identifier`,
           400,
@@ -458,7 +458,7 @@ export class UiRegistry {
         const { rootReal, manifest } = readPrebuiltClientManifest(prebuiltClientDir, pluginId);
         const { entry } = assertPrebuiltEntryIntegrity(rootReal, prebuiltClientDir, moduleRef, manifest, pluginId);
         if (!entry.exports.includes(client.export)) {
-          throw new HelmError(
+          throw new HelmxError(
             'invalid_client_export',
             `Plugin ${pluginId} ui.${fnName} prebuilt module ${moduleRef} does not export "${client.export}" (exports: ${entry.exports.join(', ') || 'none'})`,
             422,
@@ -467,7 +467,7 @@ export class UiRegistry {
         }
       } else if (this.buildProvider === undefined) {
         // Require build port upfront for source-compiled plugins: fail registration rather than silently discarding client UI.
-        throw new HelmError(
+        throw new HelmxError(
           'unsupported_client_build',
           `Plugin ${pluginId} ui.${fnName} declared a client reference, but host has no build port (PluginHostOptions.buildProvider) to compile client modules`,
           501,
@@ -485,7 +485,7 @@ export class UiRegistry {
     try {
       normalized = jsonClone(spec);
     } catch (err) {
-      throw new HelmError(
+      throw new HelmxError(
         'invalid_ui_spec',
         `plugin ${pluginId} ui.${fnName} declaration spec must can JSON serialization (client.tsx reference please use client field)` +
           `:${err instanceof Error ? err.message : String(err)}`,
@@ -531,7 +531,7 @@ export class UiRegistry {
         if (u.surface === 'profile.runtime' && typeof spec.kind === 'string') {
           const prev = kindOwners.get(spec.kind);
           if (prev !== undefined) {
-            throw new HelmError(
+            throw new HelmxError(
               'duplicate_profile_runtime_kind',
               `plugin ${ownerPluginId} declaration profile.runtime kind "${spec.kind}" already by plugin ${prev} occupy`,
               409,
@@ -543,7 +543,7 @@ export class UiRegistry {
         if (u.surface === 'commandPalette' && typeof spec.slash === 'string') {
           const prev = slashOwners.get(spec.slash);
           if (prev !== undefined) {
-            throw new HelmError(
+            throw new HelmxError(
               'duplicate_command_slash',
               `plugin ${ownerPluginId} declaration command slash trigger term /${spec.slash} already by plugin ${prev} occupy`,
               409,
@@ -626,7 +626,7 @@ export class UiRegistry {
    */
   async precompileClientModules(pluginId: string, options: ClientLifecycleLookup): Promise<void> {
     if (options.isDisposed()) {
-      throw new HelmError('plugin_host_disposed', 'PluginHost has already been disposed', 409);
+      throw new HelmxError('plugin_host_disposed', 'PluginHost has already been disposed', 409);
     }
     const modules = this.getDeclaredClientModules(pluginId);
     if (modules.length === 0) {
@@ -640,7 +640,7 @@ export class UiRegistry {
       }),
     );
     if (options.isDisposed()) {
-      throw new HelmError('plugin_host_disposed', 'PluginHost has already been disposed', 409);
+      throw new HelmxError('plugin_host_disposed', 'PluginHost has already been disposed', 409);
     }
     const hashes = new Map<string, string>();
     for (const [moduleRef, contentHash] of compiled) {
@@ -656,14 +656,14 @@ export class UiRegistry {
     allowedPhases: 'idle-only' | 'defining-or-idle',
   ) {
     if (options.isDisposed()) {
-      throw new HelmError('plugin_host_disposed', 'PluginHost has already been disposed', 409);
+      throw new HelmxError('plugin_host_disposed', 'PluginHost has already been disposed', 409);
     }
     const info = options.getPluginLifecycle(pluginId);
     const phaseOk =
       info !== undefined &&
       ((info.enabled && info.phase === 'idle') || (allowedPhases === 'defining-or-idle' && info.phase === 'defining'));
     if (!phaseOk) {
-      throw new HelmError('plugin_client_unavailable', `Plugin ${pluginId} is not enabled; client module unavailable`, 409, {
+      throw new HelmxError('plugin_client_unavailable', `Plugin ${pluginId} is not enabled; client module unavailable`, 409, {
         pluginId,
         module: moduleRef,
       });
@@ -684,14 +684,14 @@ export class UiRegistry {
     }
     const clientRoot = info.clientRoot;
     if (clientRoot === undefined) {
-      throw new HelmError('plugin_client_unavailable', `Plugin ${pluginId} did not declare clientRoot`, 404, { pluginId });
+      throw new HelmxError('plugin_client_unavailable', `Plugin ${pluginId} did not declare clientRoot`, 404, { pluginId });
     }
     const identity = info.identity;
     const epoch = info.epoch;
     // Build port is injected via PluginHostOptions; never fabricate empty artifacts when missing.
     const provider = this.buildProvider;
     if (provider === undefined) {
-      throw new HelmError(
+      throw new HelmxError(
         'unsupported_client_build',
         `Host has not wired plugin build port (PluginHostOptions.buildProvider): cannot serve client module ${moduleRef} for plugin ${pluginId}`,
         501,
@@ -718,7 +718,7 @@ export class UiRegistry {
       current.identity !== identity ||
       current.epoch !== epoch
     ) {
-      throw new HelmError(
+      throw new HelmxError(
         'plugin_client_unavailable',
         `plugin ${pluginId} was deactivated or entered a new enable cycle before client module compilation completed; discarding artifact`,
         409,
@@ -726,7 +726,7 @@ export class UiRegistry {
       );
     }
     if (typeof result.contentHash !== 'string' || result.contentHash.length === 0) {
-      throw new HelmError(
+      throw new HelmxError(
         'client_compile_failed',
         `plugin ${pluginId} client module ${moduleRef} produced invalid empty contentHash`,
         500,
@@ -747,14 +747,14 @@ export class UiRegistry {
       return;
     }
     if (chunk !== undefined) {
-      throw new HelmError(
+      throw new HelmxError(
         'client_chunk_stale',
         `plugin ${pluginId} requested chunk hash (${requestedHash}) does not match current artifact hash (${actualHash})`,
         409,
         { pluginId, module: moduleRef, chunk, hash: requestedHash, currentHash: actualHash },
       );
     }
-    throw new HelmError(
+    throw new HelmxError(
       'client_module_stale',
       `plugin ${pluginId} requested client module hash (${requestedHash}) does not match current artifact hash (${actualHash})`,
       409,
@@ -768,7 +768,7 @@ export class UiRegistry {
     options: ClientModuleOptions,
   ): Promise<PluginClientBundle> {
     if (options.isDisposed()) {
-      throw new HelmError('plugin_host_disposed', 'PluginHost is already disposed', 409);
+      throw new HelmxError('plugin_host_disposed', 'PluginHost is already disposed', 409);
     }
     assertModuleRefShape(pluginId, moduleRef);
     if (options.chunk !== undefined) {
@@ -777,7 +777,7 @@ export class UiRegistry {
         !/^[A-Za-z0-9._-]+\.js$/.test(options.chunk) ||
         options.chunk.includes('..')
       ) {
-        throw new HelmError(
+        throw new HelmxError(
           'invalid_client_module',
           `plugin ${pluginId} invalid chunk module name (must match /^[A-Za-z0-9._-]+\\.js$/ and exclude ..): ${String(options.chunk)}`,
           400,
@@ -820,7 +820,7 @@ export class UiRegistry {
     if (options.chunk !== undefined) {
       const chunkData = result.chunks?.[options.chunk];
       if (!chunkData) {
-        throw new HelmError(
+        throw new HelmxError(
           'client_chunk_not_found',
           `plugin ${pluginId} module ${moduleRef} did not generate chunk: ${options.chunk}`,
           404,

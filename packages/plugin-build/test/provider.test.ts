@@ -1,5 +1,5 @@
 /**
- * @helm/plugin-build port tests:
+ * @helmx/plugin-build port tests:
  * - minimal real-behavior verification of both tracks of createPluginBuildProvider
  *   (compileClientModule / transformBackendTs) (the full compilation chain is covered by
  *   plugin-client-css.test.ts and the kernel integration tests);
@@ -20,13 +20,13 @@ import {
   safeFileName,
   transformBackendTs,
 } from '../src/index.js'
-import { assertModuleRefShape, clientNpmRootsOf } from '@helm/protocol'
-import { HelmError } from '@helm/protocol'
+import { assertModuleRefShape, clientNpmRootsOf } from '@helmx/protocol'
+import { HelmxError } from '@helmx/protocol'
 
 let workDir: string
 
 beforeEach(() => {
-  workDir = mkdtempSync(join(tmpdir(), 'helm-plugin-build-'))
+  workDir = mkdtempSync(join(tmpdir(), 'helmx-plugin-build-'))
 })
 
 afterEach(() => {
@@ -115,14 +115,14 @@ test('port: compileClientModule rejects an illegal moduleRef (the same validatio
       cacheDir: workDir,
       npmRoots: [],
     }),
-    (err: unknown) => err instanceof HelmError && err.code === 'invalid_client_module',
+    (err: unknown) => err instanceof HelmxError && err.code === 'invalid_client_module',
   )
 })
 
 test('contract pure functions: assertModuleRefShape and clientNpmRootsOf shapes (protocol as the single source of truth)', { timeout: 60_000 }, () => {
   assert.throws(() => assertModuleRefShape('p', 'a/../b.tsx'), (err: unknown) => {
-    assert.ok(err instanceof HelmError)
-    assert.equal((err as HelmError).code, 'invalid_client_module')
+    assert.ok(err instanceof HelmxError)
+    assert.equal((err as HelmxError).code, 'invalid_client_module')
     return true
   })
   assert.doesNotThrow(() => assertModuleRefShape('p', 'a/b.tsx'))

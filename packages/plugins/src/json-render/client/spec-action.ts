@@ -3,9 +3,9 @@
  *
  * Three standard directives (mirroring the real-world spellings inside the
  * kernel's built-in plugins):
- * - helm:action: { type: 'helm:action', actionId, input?, pluginId? }
- * - helm:open  : { type: 'helm:open', target, split? }
- * - helm:send  : { type: 'helm:send', target?, text, whenBusy? }
+ * - helmx:action: { type: 'helmx:action', actionId, input?, pluginId? }
+ * - helmx:open  : { type: 'helmx:open', target, split? }
+ * - helmx:send  : { type: 'helmx:send', target?, text, whenBusy? }
  *   Falling back to the current conversation (defaultConversationId) is only
  *   allowed when the target field is entirely omitted (undefined/null) or
  *   explicitly written as 'current' / 'conversation:current'; when the
@@ -23,8 +23,8 @@
  * notifications, so they resolve against the host locale (execution errors
  * from the host pass through unchanged).
  */
-import type { HelmLocale } from '@helm/plugin-client'
-import { DEFAULT_HELM_LOCALE } from '@helm/plugin-client'
+import type { HelmxLocale } from '@helmx/plugin-client'
+import { DEFAULT_HELMX_LOCALE } from '@helmx/plugin-client'
 import { evaluateSpecValue, type EvalScope } from './evaluator.js'
 import {
   jsonRenderActionMissingActionId,
@@ -66,7 +66,7 @@ function safeConversationId(value: unknown): number | null {
 }
 
 /**
- * helm:send target resolution:
+ * helmx:send target resolution:
  * - undefined (field omitted) or explicit 'current' / 'conversation:current' -> the default conversation;
  * - a positive integer / 'conversation:<id>' / a pure digit string -> the targeted id;
  * - null / empty / blank strings (typical products of failed template
@@ -98,7 +98,7 @@ export function resolveSpecAction(
   raw: unknown,
   scope: EvalScope,
   defaultConversationId?: number,
-  locale: HelmLocale = DEFAULT_HELM_LOCALE,
+  locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
 ): ResolvedSpecDirective | { kind: 'invalid'; message: string } {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
     return { kind: 'invalid', message: jsonRenderActionNotObject(locale) }
@@ -106,7 +106,7 @@ export function resolveSpecAction(
   const action = raw as Record<string, unknown>
   const type = action['type']
 
-  if (type === 'helm:action') {
+  if (type === 'helmx:action') {
     const actionId = action['actionId']
     if (typeof actionId !== 'string' || actionId.trim() === '') {
       return { kind: 'invalid', message: jsonRenderActionMissingActionId(locale) }
@@ -125,7 +125,7 @@ export function resolveSpecAction(
     }
   }
 
-  if (type === 'helm:open') {
+  if (type === 'helmx:open') {
     const target = evaluateSpecValue<string>(action['target'], scope)
     if (typeof target !== 'string' || target.trim() === '') {
       return { kind: 'invalid', message: jsonRenderOpenTargetEmpty(locale) }
@@ -133,7 +133,7 @@ export function resolveSpecAction(
     return { kind: 'open', target, split: action['split'] === true }
   }
 
-  if (type === 'helm:send') {
+  if (type === 'helmx:send') {
     // Raw-field check: when the declaration explicitly provides a target (not
     // undefined) that is not an explicit current, an evaluated result of
     // undefined/null/empty must be invalid — a whole-template expression with

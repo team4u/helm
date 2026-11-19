@@ -6,7 +6,7 @@
  * 1. 冷却退避：autoResumeCount 0/1/2 → 2/5/15 分钟；未满冷却零动作（不 invoke、
  *    不通知、不唤醒 L2）；期满调用 invokeAction('builtin:workflow','run',
  *    {resumeFromRunId, conversationId}) 并成功通知。
- * 2. 严格仅 helm 归属：human/bot 探针只通知不续跑。
+ * 2. 严格仅 helmx 归属：human/bot 探针只通知不续跑。
  * 3. 事实残缺 / 缺权威 stateChangeSeq：notify_only，绝不猜造续跑参数。
  * 4. autoResumeCount 达上限（3）：不再自动续跑，限频告知一次。
  * 5. 每 tick 最多恢复 1 个，failedAt 升序（最旧失败优先）。
@@ -14,18 +14,18 @@
  * 7. in-flight 防重叠：invoke 未结算期间相邻 tick 不重复调用；防重权威在探针
  *    侧 resumedByRunId/stateChangeSeq 机制（续跑成功后旧 Run 不再上报）。
  */
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  HelmError,
+  HelmxError,
   type ConversationSummary,
   type MaybePromise,
   type PluginDefinition,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 import {
   PluginHost,
   type PluginHostBackend,
@@ -73,11 +73,11 @@ async function makeResumeHarness() {
     listConversations: () => [...conversations.values()],
     getConversation: (id: number) => {
       const found = conversations.get(id)
-      if (!found) throw new HelmError('not_found', `会话不存在：${id}`, 404, { conversationId: id })
+      if (!found) throw new HelmxError('not_found', `会话不存在：${id}`, 404, { conversationId: id })
       return found
     },
     getConversationDetail: async (id: number) => ({ ...(conversations.get(id) ?? makeConversationSummary(id)), entries: [] }),
-    getConversationOwnership: (id: number) => (id === 1 ? 'human' : 'helm'),
+    getConversationOwnership: (id: number) => (id === 1 ? 'human' : 'helmx'),
     onEvent: (type: string, listener: (payload: unknown) => MaybePromise<void>) => {
       const list = eventListeners.get(type) ?? []
       list.push(listener)
@@ -101,7 +101,7 @@ async function makeResumeHarness() {
     },
   }
 
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-superagent-watchdog-resume-'))
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-superagent-watchdog-resume-'))
   const host = new PluginHost({
     buildProvider: createPluginBuildProvider(),
     dataDir,
@@ -222,7 +222,7 @@ function workflowRunProbe(
     targetId: `workflow:${runId}`,
     targetKind: 'external',
     nodeId: 'local',
-    ownedBy: over.ownedBy ?? 'helm',
+    ownedBy: over.ownedBy ?? 'helmx',
     status: 'error',
     ...(over.stateChangeSeq === null ? {} : { stateChangeSeq: over.stateChangeSeq ?? autoResumeCount }),
     facts,
@@ -256,7 +256,7 @@ test('冷却期满：按 2/5/15 分钟梯度恰好触发一次 invokeAction({res
   await h.dispose()
 })
 
-test('严格仅 helm 归属：human/bot 探针只通知不续跑', { timeout: 60_000 }, async () => {
+test('严格仅 helmx 归属：human/bot 探针只通知不续跑', { timeout: 60_000 }, async () => {
   const h = await makeResumeHarness()
   await h.tick([
     workflowRunProbe('run-human', { ownedBy: 'human' }),
@@ -309,7 +309,7 @@ test('每 tick 最多恢复 1 个：failedAt 升序（最旧失败优先），�
 test('invoke 失败：错误通知 + 推迟重试（相邻 tick 不刷屏重试）', { timeout: 60_000 }, async () => {
   const h = await makeResumeHarness()
   h.setWorkflowRunImpl(async () => {
-    throw new HelmError('workflow_not_resumable', '账本缺失，无法断点恢复', 409, { runId: 'x' })
+    throw new HelmxError('workflow_not_resumable', '账本缺失，无法断点恢复', 409, { runId: 'x' })
   })
   const probe = workflowRunProbe('run-fail', { failedAgoMs: 3 * 60_000 })
   await h.tick([probe])

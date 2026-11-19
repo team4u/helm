@@ -414,8 +414,8 @@ test('shouldPushLocationHistory: 工作台内切 Tab 与等价态走 replace', {
 const readSource = (relative: string): Promise<string> =>
   readFile(new URL(relative, import.meta.url), 'utf8')
 
-test('契约: HelmStoreProvider 初始状态取自 Hash、监听外部变更、认证后才写回', { timeout: 60_000 }, async () => {
-  const source = await readSource('../src/lib/HelmStoreProvider.tsx')
+test('契约: HelmxStoreProvider 初始状态取自 Hash、监听外部变更、认证后才写回', { timeout: 60_000 }, async () => {
+  const source = await readSource('../src/lib/HelmxStoreProvider.tsx')
   // 初始状态从 window.location.hash 解析（含 SSR 安全守卫；boot 初始化器内
   // 先取 rawHash 再 parseLocationHash，同源产出初始位置与首页落地判定）
   assert.match(source, /const rawHash = typeof window !== 'undefined' \? window\.location\.hash : ''/)
@@ -548,9 +548,9 @@ test('screen params: isSameResolvedTarget 浅比较 params，仅 params 变化�
 // resolveTargetString：screen:<pluginId>/<screenId>?k=v 严格解析
 // ---------------------------------------------------------------------------
 
-// resolveTargetString 直携参数解析（sidebar target / helm:open 真实入口）
+// resolveTargetString 直携参数解析（sidebar target / helmx:open 真实入口）
 
-test('resolveTargetString: screen 查询串解析进 params（helm:open / sidebar target 直携参数）', { timeout: 60_000 }, () => {
+test('resolveTargetString: screen 查询串解析进 params（helmx:open / sidebar target 直携参数）', { timeout: 60_000 }, () => {
   assert.deepEqual(
     resolveTargetString('screen:builtin:workflow/runs?runId=wf_1&tab=all', []),
     { kind: 'screen', pluginId: 'builtin:workflow', screenId: 'runs', params: { runId: 'wf_1', tab: 'all' } },

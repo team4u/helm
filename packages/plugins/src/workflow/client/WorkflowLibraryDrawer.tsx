@@ -19,7 +19,7 @@ import {
   useConversations,
   usePluginContext,
   usePluginLocale,
-} from '@helm/plugin-client'
+} from '@helmx/plugin-client'
 import { Icon } from './WorkflowIcon.tsx'
 import {
   buildWorkflowEditRequest,

@@ -6,7 +6,7 @@
  */
 import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
-import type { ArtifactMetadata, ConversationInit, ConversationSummary } from '@helm/protocol'
+import type { ArtifactMetadata, ConversationInit, ConversationSummary } from '@helmx/protocol'
 import {
   standbyManageAction,
   admitStandbyFiles,
@@ -330,7 +330,7 @@ test('epoch voiding: after a reset, in-flight responses return stale — no anch
   deps.create = async (init) => {
     log.creates.push(init)
     await gate
-    return { id: 9, profileId: 'assistant' } as import('@helm/protocol').ConversationSummary
+    return { id: 9, profileId: 'assistant' } as import('@helmx/protocol').ConversationSummary
   }
   updateStandbyDraft(key, { text: '会被释放的草稿' })
   const task = run(key, 'assistant', deps)

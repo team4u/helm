@@ -30,11 +30,11 @@ Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
 // unchanged and never fires.
 const { act } = await import('react')
 const { createRoot } = await import('react-dom/client')
-import type { ComposerController, ConversationSummary, PluginUiContribution } from '@helm/protocol'
+import type { ComposerController, ConversationSummary, PluginUiContribution } from '@helmx/protocol'
 import { seedPluginClientModule } from '../src/lib/plugin-client.js'
-import { usePluginContext } from '@helm/plugin-client'
+import { usePluginContext } from '@helmx/plugin-client'
 import { groupUiContributions } from '../src/lib/types.js'
-import type { HelmExternalStore } from '../src/lib/helm-store.js'
+import type { HelmxExternalStore } from '../src/lib/helmx-store.js'
 import {
   buildSlashMenuItems,
   commandActionPluginId,
@@ -259,7 +259,7 @@ interface CapturedRequest {
 function makeStore(
   conversation: ConversationSummary,
   ui: PluginUiContribution[] = [],
-): HelmExternalStore & { actionCalls: Array<{ pluginId: string; actionId: string; input: unknown; conversationId?: number }> } {
+): HelmxExternalStore & { actionCalls: Array<{ pluginId: string; actionId: string; input: unknown; conversationId?: number }> } {
   const actionCalls: Array<{ pluginId: string; actionId: string; input: unknown; conversationId?: number }> = []
   const store = makeTestStore({
     conversations: [conversation],
@@ -279,7 +279,7 @@ function stubFetch(captured: CapturedRequest[], ok: boolean): () => void {
   const original = globalThis.fetch
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input)
-    if (path.includes('/client.mjs')) return new Response('', { headers: { 'x-helm-client-hash': 'seeded' } })
+    if (path.includes('/client.mjs')) return new Response('', { headers: { 'x-helmx-client-hash': 'seeded' } })
     captured.push({ method: String(init?.method ?? 'GET'), path, body: init?.body ? JSON.parse(String(init.body)) : {} })
     if (!ok) {
       return new Response(JSON.stringify({ error: { code: 'validation_error', message: '服务端拒绝' } }), {

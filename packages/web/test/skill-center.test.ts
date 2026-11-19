@@ -9,7 +9,7 @@ const { act } = await import('react')
 const ReactDOMClient = await import('react-dom/client')
 const { renderToString } = await import('react-dom/server')
 
-import type { SkillSummary } from '@helm/protocol'
+import type { SkillSummary } from '@helmx/protocol'
 import {
   buildSkillCategoryCounts,
   filterSkills,
@@ -30,14 +30,14 @@ import {
   skillFileBasename,
   skillFileLanguage,
 } from '../src/skills/skill-reader-model.js'
-import { makeTestStore, HelmExternalStoreContext } from './helpers/store.js'
+import { makeTestStore, HelmxExternalStoreContext } from './helpers/store.js'
 
 // The drawer and skill center carry the @radix-ui/react-select dependency
 // graph and must be dynamically loaded after happy-dom
 // GlobalRegistrator.register() (same convention as select.test.ts);
 // otherwise Radix Select popovers cannot open in a pre-registered environment.
 const { HostStoreProviders } = await import('./helpers/host-store.js')
-// SkillCard statically imports HelmIcon via @helm/plugin-client (Radix dependency graph): dynamically loaded after register, same convention
+// SkillCard statically imports HelmxIcon via @helmx/plugin-client (Radix dependency graph): dynamically loaded after register, same convention
 const { SkillCard } = await import('../src/skills/SkillCard.js')
 const { SkillDetailDrawer } = await import('../src/skills/SkillDetailDrawer.js')
 const { SkillCenter } = await import('../src/skills/SkillCenter.js')
@@ -55,14 +55,14 @@ function makeSkill(partial: Partial<SkillSummary> & { id: string }): SkillSummar
   }
 }
 
-/** Render the drawer inside a real host store context (MarkdownView depends on useHelmStore). */
+/** Render the drawer inside a real host store context (MarkdownView depends on useHelmxStore). */
 function renderDrawerElement(props: React.ReactElement): React.ReactElement {
-  return e(HelmExternalStoreContext.Provider, { value: makeTestStore() }, props)
+  return e(HelmxExternalStoreContext.Provider, { value: makeTestStore() }, props)
 }
 
 /** Open the file picker via keyboard interaction and pick the given option (Radix Select has no native select). */
 async function chooseFileOption(host: HTMLElement, optionText: string): Promise<void> {
-  const trigger = host.querySelector('.skill-file-select .helm-select-trigger') as HTMLElement | null
+  const trigger = host.querySelector('.skill-file-select .helmx-select-trigger') as HTMLElement | null
   assert.ok(trigger, 'the file picker trigger must render')
   await act(async () => {
     trigger.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
@@ -77,9 +77,9 @@ async function chooseFileOption(host: HTMLElement, optionText: string): Promise<
 
 const mockSkills: [SkillSummary, SkillSummary, SkillSummary, SkillSummary, SkillSummary, SkillSummary] = [
   makeSkill({
-    id: 'helm-cli',
-    name: 'Helm 命令行操作手册',
-    description: '指导大模型通过 helm 命令行控制 Hub、检查状态与排查问题',
+    id: 'helmx-cli',
+    name: 'Helmx 命令行操作手册',
+    description: '指导大模型通过 helmx 命令行控制 Hub、检查状态与排查问题',
     references: ['references/cli-reference.md', 'references/generative-ui.md'],
     managedByPlugin: 'builtin:profile',
   }),
@@ -124,7 +124,7 @@ const mockSkills: [SkillSummary, SkillSummary, SkillSummary, SkillSummary, Skill
 
 test('skill-center-model: skill category pure functions (builtin / plugin / shared / workspace)', { timeout: 60_000 }, () => {
   const builtinAssistant = makeSkill({ id: 'assistant-helper', managedByPlugin: 'builtin:profile' })
-  const builtinCli = makeSkill({ id: 'helm-cli', managedByPlugin: 'builtin:profile' })
+  const builtinCli = makeSkill({ id: 'helmx-cli', managedByPlugin: 'builtin:profile' })
   const pluginManaged = makeSkill({ id: 'custom-skill', managedByPlugin: 'vendor:tools' })
   const workspacePrivate = makeSkill({ id: 'my-private-skill' })
   const agentsShared = makeSkill({ id: 'git-commit', source: 'agents' })
@@ -160,7 +160,7 @@ test('skill-center-model: skill category pure functions (builtin / plugin / shar
 test('skill-center-model: buildSkillCategoryCounts counts each category accurately', { timeout: 60_000 }, () => {
   const counts = buildSkillCategoryCounts(mockSkills)
   // mockSkills contains:
-  // 1. helm-cli (builtin:profile) -> builtin
+  // 1. helmx-cli (builtin:profile) -> builtin
   // 2. code-review (no managedByPlugin) -> workspace
   // 3. database-migration (no managedByPlugin) -> workspace
   // 4. herdr-deploy (builtin:herdr) -> builtin
@@ -213,9 +213,9 @@ test('skill-center-model: filterSkills category filtering and multi-dimension se
   assert.equal(nameSearch[0]!.id, 'code-review')
 
   // Keyword search by ID
-  const idSearch = filterSkills(mockSkills, { query: 'helm-cli', categoryTab: 'all' })
+  const idSearch = filterSkills(mockSkills, { query: 'helmx-cli', categoryTab: 'all' })
   assert.equal(idSearch.length, 1)
-  assert.equal(idSearch[0]!.id, 'helm-cli')
+  assert.equal(idSearch[0]!.id, 'helmx-cli')
 
   // Keyword search by description
   const descSearch = filterSkills(mockSkills, { query: 'PostgreSQL', categoryTab: 'all' })
@@ -225,7 +225,7 @@ test('skill-center-model: filterSkills category filtering and multi-dimension se
   // Keyword search by reference files
   const refSearch = filterSkills(mockSkills, { query: 'generative-ui.md', categoryTab: 'all' })
   assert.equal(refSearch.length, 1)
-  assert.equal(refSearch[0]!.id, 'helm-cli')
+  assert.equal(refSearch[0]!.id, 'helmx-cli')
 
   // Combined filter: category + search
   const comboMatch = filterSkills(mockSkills, { query: '多节点', categoryTab: 'builtin' })
@@ -237,7 +237,7 @@ test('skill-center-model: filterSkills category filtering and multi-dimension se
 })
 
 test('skill-center-model: getSkillSourceBadge mapping', { timeout: 60_000 }, () => {
-  const cliSkill = makeSkill({ id: 'helm-cli', managedByPlugin: 'builtin:profile' })
+  const cliSkill = makeSkill({ id: 'helmx-cli', managedByPlugin: 'builtin:profile' })
   const codeSkill = makeSkill({ id: 'code-review' })
   const sharedSkill = makeSkill({ id: 'git-commit', source: 'agents' })
 
@@ -312,11 +312,11 @@ test('skill-reader-model: skillFileBasename and isSkillMarkdownFile classificati
 test('skill-reader-model: extractSkillFrontmatter parses fields and body (single-line scalars / block scalars / quotes)', { timeout: 60_000 }, () => {
   // Regular frontmatter: fields keep their original YAML order; the body strips the fence and trailing blank line
   const doc = extractSkillFrontmatter(
-    '---\nname: helm-cli\ndescription: 手册\nmanagedByPlugin: builtin:profile\n---\n\n# 正文\n\n段落。',
+    '---\nname: helmx-cli\ndescription: 手册\nmanagedByPlugin: builtin:profile\n---\n\n# 正文\n\n段落。',
   )
   assert.deepEqual(doc, {
     fields: [
-      { key: 'name', value: 'helm-cli' },
+      { key: 'name', value: 'helmx-cli' },
       { key: 'description', value: '手册' },
       { key: 'managedByPlugin', value: 'builtin:profile' },
     ],
@@ -424,13 +424,13 @@ test('skill-reader-model: renderSkillFrontmatterTable converts fields in order i
 test('skill-reader-model: renderSkillDocMarkdown unified doc view (table + body in one flow, unclosed fallback)', { timeout: 60_000 }, () => {
   // With frontmatter: the metadata table comes first, the body follows
   assert.equal(
-    renderSkillDocMarkdown('---\nname: helm-cli\ndescription: 手册\n---\n\n# 正文\n\n段落。'),
+    renderSkillDocMarkdown('---\nname: helmx-cli\ndescription: 手册\n---\n\n# 正文\n\n段落。'),
     [
       '## Skill metadata',
       '',
       '| Field | Value |',
       '| --- | --- |',
-      '| name | helm-cli |',
+      '| name | helmx-cli |',
       '| description | 手册 |',
       '',
       '# 正文',
@@ -480,7 +480,7 @@ function renderCardElement(props: React.ReactElement): React.ReactElement {
 }
 
 test('SkillCard: SSR structure, source badge, reference pills and the zero-emoji rule', { timeout: 60_000 }, () => {
-  const skill = mockSkills[0] // helm-cli, 2 references
+  const skill = mockSkills[0] // helmx-cli, 2 references
   const html = renderToString(
     renderCardElement(
       e(SkillCard, {
@@ -494,9 +494,9 @@ test('SkillCard: SSR structure, source badge, reference pills and the zero-emoji
   // Structure assertions
   assert.ok(html.includes('primary-card'), 'must include the primary-card class')
   assert.ok(html.includes('skill-card'), 'must include the skill-card class')
-  assert.ok(html.includes('Helm 命令行操作手册'), 'must show the skill name (zh fixture)')
-  assert.ok(html.includes('helm-cli'), 'must show the skill ID')
-  assert.ok(html.includes('指导大模型通过 helm 命令行控制 Hub'), 'must show the description (zh fixture)')
+  assert.ok(html.includes('Helmx 命令行操作手册'), 'must show the skill name (zh fixture)')
+  assert.ok(html.includes('helmx-cli'), 'must show the skill ID')
+  assert.ok(html.includes('指导大模型通过 helmx 命令行控制 Hub'), 'must show the description (zh fixture)')
   assert.ok(html.includes('Built-in'), 'built-in skills must show the built-in source badge')
   assert.ok(html.includes('2 reference files'), 'must show the 2-reference-files pill')
 
@@ -665,7 +665,7 @@ test('SkillCard: mouse click and keyboard accessibility activation', { timeout: 
 
 test('SkillDetailDrawer: SSR renders the single-row file toolbar and rich reader area (no tab wall, zero emoji)', { timeout: 60_000 }, () => {
   const skill = mockSkills[0]
-  const initialContent = '# Helm CLI 技能规范\n\n这是测试用 Markdown 文档正文。'
+  const initialContent = '# Helmx CLI 技能规范\n\n这是测试用 Markdown 文档正文。'
 
   const html = renderToString(
     renderDrawerElement(
@@ -682,13 +682,13 @@ test('SkillDetailDrawer: SSR renders the single-row file toolbar and rich reader
   // Drawer structure assertions
   assert.ok(html.includes('primary-drawer-content'), 'must include primary-drawer-content')
   assert.ok(html.includes('primary-drawer-title'), 'must include the drawer title')
-  assert.ok(html.includes('Helm 命令行操作手册'), 'must show the skill name (zh fixture)')
-  assert.ok(html.includes('helm-cli'), 'must show the skill ID')
+  assert.ok(html.includes('Helmx 命令行操作手册'), 'must show the skill name (zh fixture)')
+  assert.ok(html.includes('helmx-cli'), 'must show the skill ID')
   assert.ok(html.includes('Built-in'), 'must show the built-in source badge')
 
   // Single-row file toolbar: shared Select trigger + reading mode toggle + file index and line count
   assert.ok(html.includes('skill-reader-toolbar'), 'must include the skill-reader-toolbar')
-  assert.ok(html.includes('helm-select-trigger'), 'multi-file readers must use the shared Select dropdown')
+  assert.ok(html.includes('helmx-select-trigger'), 'multi-file readers must use the shared Select dropdown')
   assert.ok(html.includes('aria-label="Choose a skill file"'), 'the file picker must carry an accessibility label')
   assert.ok(html.includes('SKILL.md'), 'the trigger must show the current file short name SKILL.md')
   assert.ok(html.includes('Rich text'), 'the rich reading mode button must be offered')
@@ -704,9 +704,9 @@ test('SkillDetailDrawer: SSR renders the single-row file toolbar and rich reader
   // Rich reader area: MarkdownView renders the heading and body; raw Markdown hashes never show by default
   assert.ok(html.includes('skill-reader-doc'), 'must include the skill-reader-doc rich reader area')
   assert.ok(html.includes('msg-ai-body'), 'rich mode must reuse MarkdownView')
-  assert.ok(html.includes('Helm CLI 技能规范</h1>'), 'must render the Markdown heading (zh fixture)')
+  assert.ok(html.includes('Helmx CLI 技能规范</h1>'), 'must render the Markdown heading (zh fixture)')
   assert.ok(html.includes('这是测试用 Markdown 文档正文。'), 'must render the body paragraph (zh fixture)')
-  assert.ok(!html.includes('# Helm CLI 技能规范'), 'rich mode must not show raw Markdown hashes')
+  assert.ok(!html.includes('# Helmx CLI 技能规范'), 'rich mode must not show raw Markdown hashes')
 
   // Zero-emoji assertion
   assert.doesNotMatch(html, emojiRegex, 'SkillDetailDrawer output must contain no emoji')
@@ -718,7 +718,7 @@ test('SkillDetailDrawer: rich mode converts frontmatter into a metadata table fl
   const root = ReactDOMClient.createRoot(host)
 
   const frontmatterDoc =
-    '---\nname: helm-cli\ndescription: 头部元信息\nmanagedByPlugin: builtin:profile\n---\n\n# 正文标题\n\n内容段落。'
+    '---\nname: helmx-cli\ndescription: 头部元信息\nmanagedByPlugin: builtin:profile\n---\n\n# 正文标题\n\n内容段落。'
   const reader = async () => ({ text: frontmatterDoc })
 
   await act(async () => {
@@ -751,7 +751,7 @@ test('SkillDetailDrawer: rich mode converts frontmatter into a metadata table fl
     (tr) => Array.from(tr.querySelectorAll('td')).map((td) => td.textContent),
   )
   assert.deepEqual(rows, [
-    ['name', 'helm-cli'],
+    ['name', 'helmx-cli'],
     ['description', '头部元信息'],
     ['managedByPlugin', 'builtin:profile'],
   ], 'fields keep their original YAML order')
@@ -759,7 +759,7 @@ test('SkillDetailDrawer: rich mode converts frontmatter into a metadata table fl
   // The body follows in the same content flow; raw YAML key/value syntax never leaks
   assert.ok(doc.textContent?.includes('正文标题'), 'the body after the frontmatter must survive (zh fixture)')
   assert.ok(doc.textContent?.includes('内容段落。'), 'the body paragraph must survive (zh fixture)')
-  assert.ok(!doc.textContent?.includes('name: helm-cli'), 'frontmatter must not render as raw YAML')
+  assert.ok(!doc.textContent?.includes('name: helmx-cli'), 'frontmatter must not render as raw YAML')
   assert.ok(!doc.textContent?.includes('description: 头部元信息'), 'no frontmatter key/value pair may leak')
   assert.ok(!doc.textContent?.includes('---'), 'rich mode must not leave fence dividers behind')
 
@@ -776,7 +776,7 @@ test('SkillDetailDrawer: rich mode converts frontmatter into a metadata table fl
   const codeWrap = host.querySelector('.skill-reader-code .code-block-wrap') as HTMLElement
   assert.ok(codeWrap, 'source mode must use the CodeBlockView code block')
   assert.ok(codeWrap.textContent?.includes('---'), 'source mode must keep the YAML frontmatter --- fence')
-  assert.ok(codeWrap.textContent?.includes('name: helm-cli'), 'source mode must keep the raw YAML frontmatter')
+  assert.ok(codeWrap.textContent?.includes('name: helmx-cli'), 'source mode must keep the raw YAML frontmatter')
   assert.ok(codeWrap.textContent?.includes('# 正文标题'), 'source mode must keep the raw body (zh fixture)')
 
   // Switch back to rich: table + body restored, still no raw YAML
@@ -827,7 +827,7 @@ test('SkillDetailDrawer: file dropdown switches reference files with index/line-
 
   // Initially loads the main SKILL.md; the toolbar shows index 1/3 and the line count
   assert.equal(readCalls.length, 1)
-  assert.equal(readCalls[0]!.id, 'helm-cli')
+  assert.equal(readCalls[0]!.id, 'helmx-cli')
   assert.equal(readCalls[0]!.path, undefined)
   assert.ok(host.querySelector('.skill-reader-doc')?.textContent?.includes('Main file'), 'the root file body must load')
   assert.ok(host.querySelector('.skill-reader-index')?.textContent?.includes('1/3'))
@@ -919,7 +919,7 @@ test('SkillDetailDrawer: non-Markdown files use CodeBlockView with suffix-derive
   })
 
   assert.ok(host2.querySelector('.skill-file-select') === null, 'single-file readers render no dropdown')
-  assert.ok(host2.querySelector('.helm-select-trigger') === null, 'single-file readers have no Select trigger')
+  assert.ok(host2.querySelector('.helmx-select-trigger') === null, 'single-file readers have no Select trigger')
   const fileLabel = host2.querySelector('.skill-reader-file-label') as HTMLElement
   assert.ok(fileLabel.textContent?.includes('SKILL.md'), 'single-file readers show the file name directly')
   assert.ok(host2.querySelector('.skill-reader-index')?.textContent?.includes('1/1'), 'the index must be 1/1')
@@ -1147,7 +1147,7 @@ test('SkillDetailDrawer: layout contract — the toolbar hugs the header; metada
           skill: mockSkills[0],
           open: true,
           inline: true,
-          initialContent: '# Helm CLI 技能规范\n\n正文。',
+          initialContent: '# Helmx CLI 技能规范\n\n正文。',
           onClose: () => {},
         }),
       ),
@@ -1214,7 +1214,7 @@ test('SkillCenter: SSR renders the top bar, search bar, grid flow and zero-emoji
 
   // Card grid
   assert.ok(html.includes('primary-center-grid'), 'must include the primary-center-grid')
-  assert.ok(html.includes('Helm 命令行操作手册'), 'the grid must render mock skill cards (zh fixture)')
+  assert.ok(html.includes('Helmx 命令行操作手册'), 'the grid must render mock skill cards (zh fixture)')
   assert.ok(html.includes('工程代码审查规范'), 'the grid must render mock skill cards (zh fixture)')
 
   // Zero-emoji assertion
@@ -1365,7 +1365,7 @@ test('SkillCenter: interactive filtering, search and drawer wiring (openTarget)'
   await act(async () => {
     cards[0]!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
   })
-  assert.deepEqual(store.getPrimaryTarget(), { kind: 'skills', skillId: 'helm-cli' })
+  assert.deepEqual(store.getPrimaryTarget(), { kind: 'skills', skillId: 'helmx-cli' })
 
   await act(async () => {
     root.unmount()

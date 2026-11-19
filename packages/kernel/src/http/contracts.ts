@@ -50,7 +50,7 @@ import type {
   SessionDocSubscription,
   SkillSummary,
   Profile,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 import type {
   AuthService as RealAuthService,
   ArtifactService as RealArtifactService,
@@ -152,7 +152,7 @@ export interface PluginHost {
   ): Promise<PublicPluginSessionDoc> | PublicPluginSessionDoc
   /**
    * Fetch compiled client.tsx bundle for an enabled plugin (`GET /api/plugins/:id/client.mjs?module=...`).
-   * Disabled/unregistered/missing clientRoot/out-of-bounds/compile errors throw explicitly (`HelmError`).
+   * Disabled/unregistered/missing clientRoot/out-of-bounds/compile errors throw explicitly (`HelmxError`).
    */
   getClientModule(
     pluginId: string,
@@ -291,7 +291,7 @@ export interface KernelRuntimeLike {
     id: number,
     opts: { submissionId: number },
   ): Promise<ConversationWithdrawResponse> | ConversationWithdrawResponse
-  /** `?wait=1`: wait for a single submission to settle and return its result; throws HelmError on failure/abort. */
+  /** `?wait=1`: wait for a single submission to settle and return its result; throws HelmxError on failure/abort. */
   waitForInput(
     id: number,
     submissionId: string,
@@ -408,7 +408,7 @@ export interface KernelRuntimeLike {
 /** Options and handle returned by `startHub`. */
 export interface StartHubOptions {
   kernel: KernelRuntimeLike
-  /** Defaults to 3202 (`HELM_PORT` convention; tests should use 0). */
+  /** Defaults to 3202 (`HELMX_PORT` convention; tests should use 0). */
   port?: number
   /** Defaults to `127.0.0.1`. */
   hostname?: string

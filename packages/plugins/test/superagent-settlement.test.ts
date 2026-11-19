@@ -2,11 +2,11 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import { KernelRuntime } from '../../kernel/src/runtime/index.js'
-import type { TurnSettledPayload } from '@helm/protocol'
+import type { TurnSettledPayload } from '@helmx/protocol'
 import { cleanupDir, deferred, makeFauxProvider, makeTempDir, type Deferred } from './helpers/plugin-test-env.js'
 
 async function fixture() {
-  const dataDir = await makeTempDir('helm-settlement-')
+  const dataDir = await makeTempDir('helmx-settlement-')
   const faux = makeFauxProvider()
   const kernel = await KernelRuntime.open({ dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider] })
   return { kernel, faux, async close() { try { await kernel.close() } finally { await cleanupDir(dataDir) } } }

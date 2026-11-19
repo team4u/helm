@@ -2,7 +2,7 @@
  * 全屏插件中心端到端集成测试 (PluginCenter Integration Test)
  *
  * 覆盖：
- * 1. 结构与主视图渲染：顶部搜索框（HelmIcon search）、分类药丸标签栏及 buildCategoryCounts 统计徽章、卡片网格；
+ * 1. 结构与主视图渲染：顶部搜索框（HelmxIcon search）、分类药丸标签栏及 buildCategoryCounts 统计徽章、卡片网格；
  * 2. 多维分类过滤与搜索联动：关键字搜索实时过滤、分类药丸过滤、组合过滤、空状态重置；
  * 3. 卡片点击与详情抽屉联动：点击卡片调用 store.openTarget 展开 PluginDetailDrawer，关闭抽屉回退；
  * 4. 全局导航收敛：CommandPaletteModal 点击「打开插件中心」调用 openTarget({ kind: 'plugins' })；
@@ -22,7 +22,7 @@ const { act } = await import('react')
 const ReactDOMClient = await import('react-dom/client')
 const { renderToString } = await import('react-dom/server')
 
-import type { PluginSummary } from '@helm/protocol'
+import type { PluginSummary } from '@helmx/protocol'
 const { makeTestStore } = await import('./helpers/store.js')
 const { HostStoreProviders } = await import('./helpers/host-store.js')
 const { CommandPaletteModal } = await import('../src/modals/CommandPaletteModal.js')
@@ -104,7 +104,7 @@ const mockPluginsWithFailure: PluginSummary[] = [
 // ---------------------------------------------------------------------------
 
 /** 记录真实 openTarget 调用序列（委托真实导航动作）。 */
-function spyOpenTarget(store: import('../src/lib/helm-store.js').HelmExternalStore, opened: unknown[]): void {
+function spyOpenTarget(store: import('../src/lib/helmx-store.js').HelmxExternalStore, opened: unknown[]): void {
   ;(store.actions as unknown as { openTarget: (target: unknown) => void }).openTarget = (target) => {
     opened.push(target)
     store.applyPrimaryTarget(
@@ -159,7 +159,7 @@ test('PluginCenter SSR：存在 failed 故障态插件时顶栏统计追加异�
   // 2. 故障卡片标记 is-failed 并渲染异常状态灯（failed 实心红点 + 可见 Error 文案）
   assert.match(html, /data-plugin-id="external:broken"/)
   assert.match(html, /is-failed/)
-  assert.match(html, /helm-status-light-failed[\s\S]*?status-dot-error[\s\S]*?Error/)
+  assert.match(html, /helmx-status-light-failed[\s\S]*?status-dot-error[\s\S]*?Error/)
 })
 
 // ---------------------------------------------------------------------------

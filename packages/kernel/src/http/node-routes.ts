@@ -2,10 +2,10 @@
  * Node domain routes: /api/nodes (list/issue/remove/upgrade/port-forwarding) and
  * POST /api/env/exec (cross-node command execution, NDJSON streaming or single JSON response).
  */
-import { HelmError, isStrictSemver, stripSemverVPrefix } from '@helm/protocol'
-import type { EnvExecStreamFrame, JsonSchema } from '@helm/protocol'
+import { HelmxError, isStrictSemver, stripSemverVPrefix } from '@helmx/protocol'
+import type { EnvExecStreamFrame, JsonSchema } from '@helmx/protocol'
 import { redactJsonValue } from '../redact.js'
-import { isAbsoluteTargetPath } from '@helm/protocol'
+import { isAbsoluteTargetPath } from '@helmx/protocol'
 import { jsonOk, errorResponse, readJsonBody, type JsonRedactor } from './http-utils.js'
 import { decodeSegment } from './route-match.js'
 import type { KernelRuntimeLike } from './contracts.js'
@@ -53,13 +53,13 @@ export async function handleNodeDomain(
     if (fourth === 'check' && method === 'GET') {
       if (fifth !== undefined) return errorResponse(redactor, 404, 'not_found', 'route not found')
       if (kernel.checkNodeUpgrade === undefined) {
-        throw new HelmError('not_implemented', 'current runtime does not support node upgrade check', 501)
+        throw new HelmxError('not_implemented', 'current runtime does not support node upgrade check', 501)
       }
       return jsonOk(redactor, await kernel.checkNodeUpgrade(nodeId, parseNodeUpgradeCheckQuery(ctx.url)))
     }
     if (fourth === undefined && method === 'POST') {
       if (kernel.upgradeNode === undefined) {
-        throw new HelmError('not_implemented', 'current runtime does not support node upgrade', 501)
+        throw new HelmxError('not_implemented', 'current runtime does not support node upgrade', 501)
       }
       const body = await parseOptionalJsonObjectBody(ctx.request, parseNodeUpgradeBody)
       return jsonOk(redactor, await kernel.upgradeNode(nodeId, body))
@@ -69,7 +69,7 @@ export async function handleNodeDomain(
   // ---- Foreground port forwarding: POST /:id/forward, forward list/detail/events/stop ----------
   if (second !== undefined && third === 'forward' && fourth === undefined && method === 'POST') {
     if (kernel.startNodeForward === undefined) {
-      throw new HelmError('not_implemented', 'current runtime does not support node port forwarding', 501)
+      throw new HelmxError('not_implemented', 'current runtime does not support node port forwarding', 501)
     }
     const nodeId = requireNodeSegment(second)
     const body = await parseOptionalJsonObjectBody(ctx.request, parseNodeForwardBody)
@@ -94,14 +94,14 @@ async function handleForwardSubtree(
   // GET /api/nodes/forward: active forwarding sessions.
   if (third === undefined && method === 'GET') {
     if (kernel.listNodeForwards === undefined) {
-      throw new HelmError('not_implemented', 'current runtime does not support node port forwarding', 501)
+      throw new HelmxError('not_implemented', 'current runtime does not support node port forwarding', 501)
     }
     return jsonOk(redactor, kernel.listNodeForwards())
   }
   const forwardId = third
   if (forwardId !== undefined && fourth === undefined && method === 'GET') {
     if (kernel.getNodeForward === undefined) {
-      throw new HelmError('not_implemented', 'current runtime does not support node port forwarding', 501)
+      throw new HelmxError('not_implemented', 'current runtime does not support node port forwarding', 501)
     }
     const session = kernel.getNodeForward(requireForwardSegment(forwardId))
     if (session === undefined) {
@@ -116,7 +116,7 @@ async function handleForwardSubtree(
   // DELETE /api/nodes/forward/:id: stop forwarding (closes Hub listener and all tunnels).
   if (forwardId !== undefined && fourth === undefined && method === 'DELETE') {
     if (kernel.stopNodeForward === undefined) {
-      throw new HelmError('not_implemented', 'current runtime does not support node port forwarding', 501)
+      throw new HelmxError('not_implemented', 'current runtime does not support node port forwarding', 501)
     }
     // Idempotency expressed via 404: stopping an absent forward returns 404 (prevents duplicate exit errors).
     if (kernel.getNodeForward !== undefined && kernel.getNodeForward(requireForwardSegment(forwardId)) === undefined) {
@@ -219,7 +219,7 @@ function requireHttpUrl(raw: unknown, field: string): string {
   return raw
 }
 
-/** Boundary validation for targetVersion: optional single v/V prefix after trim, remainder must be strict SemVer (single implementation in @helm/protocol/semver). */
+/** Boundary validation for targetVersion: optional single v/V prefix after trim, remainder must be strict SemVer (single implementation in @helmx/protocol/semver). */
 function requireVersionField(raw: string): string {
   const bare = stripSemverVPrefix(raw)
   if (!isStrictSemver(bare)) {
@@ -312,7 +312,7 @@ export async function handleEnvExecDomain(
 
   if (body.stream === true) {
     // Streaming: StreamingRedactor retains tail buffer to prevent secrets split across chunk boundaries from leaking; flushed on finish.
-    // Frame protocol aligns with @helm/protocol EnvExecStreamFrame:
+    // Frame protocol aligns with @helmx/protocol EnvExecStreamFrame:
     // - per chunk `{ type: 'output', stream, text }` (redacted across chunks);
     // - final frame on completion `{ type: 'exit', ok, exitCode, timedOut }` (must follow tail flush);
     // - mid-stream error `{ type: 'error', error: { code, message, details? } }` (never fabricate exit).
@@ -353,7 +353,7 @@ export async function handleEnvExecDomain(
           })
         } catch (error) {
           // Mid-stream exception: emit redacted error frame without fabricating an exit frame.
-          if (error instanceof HelmError) {
+          if (error instanceof HelmxError) {
             write({
               type: 'error',
               error: {
@@ -420,7 +420,7 @@ async function getNodeForwardEvents(
     return errorResponse(undefined, 409, 'client_disconnected', 'client disconnected; refusing to open forwarding monitor stream')
   }
   if (kernel.getNodeForward === undefined || kernel.onNodeForwardEvent === undefined) {
-    throw new HelmError('not_implemented', 'current runtime does not support node port forwarding', 501)
+    throw new HelmxError('not_implemented', 'current runtime does not support node port forwarding', 501)
   }
   const session = kernel.getNodeForward(forwardId)
   if (session === undefined) {

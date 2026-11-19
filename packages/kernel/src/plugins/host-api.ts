@@ -3,15 +3,15 @@
  * profiles / skills / nodeIpc / secrets / plugins / env / conversations / agents / asks / events / triggers / actions / artifacts / models.
  */
 import {
-  HelmError,
+  HelmxError,
   type ActionManifest,
   type BackendPluginsLifecyclePort,
-  type HelmHostApi,
-  type HelmHostOpenTunnelPort,
+  type HelmxHostApi,
+  type HelmxHostOpenTunnelPort,
   type PluginActionContext,
   type PluginSummary,
   type PluginUiContribution,
-} from '@helm/protocol';
+} from '@helmx/protocol';
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env';
 import { redactJsonValue } from '../redact.js';
 import { idempotentRelease } from './shared.js';
@@ -114,7 +114,7 @@ export function wrapHostApi(
   state: PluginState,
   epoch: number,
   deps: HostApiDependencies,
-): HelmHostApi {
+): HelmxHostApi {
   const pluginId = state.definition.id;
   const backend = deps.backend;
 
@@ -160,7 +160,7 @@ export function wrapHostApi(
   const assertPluginsPort = (what: string): BackendPluginsLifecyclePort => {
     guard(`host.plugins.${what}`);
     if (backend.plugins === undefined) {
-      throw new HelmError(
+      throw new HelmxError(
         'not_supported',
         `Current host has not wired the plugin governance port (host.plugins.${what} unavailable)`,
         501,
@@ -172,7 +172,7 @@ export function wrapHostApi(
 
   const assertNotSelfTarget = (op: 'update' | 'remove' | 'disable', targetPluginId: string): void => {
     if (targetPluginId !== pluginId) return;
-    throw new HelmError(
+    throw new HelmxError(
       'plugin_self_lifecycle_forbidden',
       `Plugin ${pluginId} cannot ${op} itself from its own task (would deadlock the lifecycle queue); trigger from HTTP/CLI or another plugin`,
       409,
@@ -193,7 +193,7 @@ export function wrapHostApi(
       })
     | undefined
 
-  const pluginsPort: HelmHostApi['plugins'] = {
+  const pluginsPort: HelmxHostApi['plugins'] = {
     list: () => {
       guard('host.plugins.list');
       return backendPlugins?.list?.() ?? deps.list();
@@ -255,15 +255,15 @@ export function wrapHostApi(
       ? {
           isOnline: () => {
             guard('host.nodeIpc.isOnline');
-            throw new HelmError('node_ipc_unavailable', 'Host does not provide a node IPC channel (EnvFabric not wired)', 501);
+            throw new HelmxError('node_ipc_unavailable', 'Host does not provide a node IPC channel (EnvFabric not wired)', 501);
           },
           call: () => {
             guard('host.nodeIpc.call');
-            throw new HelmError('node_ipc_unavailable', 'Host does not provide a node IPC channel (EnvFabric not wired)', 501);
+            throw new HelmxError('node_ipc_unavailable', 'Host does not provide a node IPC channel (EnvFabric not wired)', 501);
           },
           subscribe: () => {
             guard('host.nodeIpc.subscribe');
-            throw new HelmError('node_ipc_unavailable', 'Host does not provide a node IPC channel (EnvFabric not wired)', 501);
+            throw new HelmxError('node_ipc_unavailable', 'Host does not provide a node IPC channel (EnvFabric not wired)', 501);
           },
         }
       : {
@@ -332,7 +332,7 @@ export function wrapHostApi(
     openTunnel: backend.openTunnel === undefined
       ? ((nodeId: string): Promise<never> => {
           guard(`host.openTunnel:${nodeId}`);
-          throw new HelmError(
+          throw new HelmxError(
             'node_tunnel_not_supported',
             `Current host has not wired the node tunnel port (host.openTunnel(${nodeId}) unavailable)`,
             501,
@@ -374,13 +374,13 @@ export function wrapHostApi(
             end();
             throw error;
           }
-        }) as HelmHostOpenTunnelPort,
+        }) as HelmxHostOpenTunnelPort,
 
     // 3.5 nodeFetch: epoch-guarded fetch tracking response body streams until EOF/cancel/error/dispose.
     nodeFetch: backend.nodeFetch === undefined
       ? ((nodeId: string): typeof fetch => {
           guard(`host.nodeFetch:${nodeId}`);
-          throw new HelmError(
+          throw new HelmxError(
             'node_tunnel_not_supported',
             `Current host has not wired the node fetch port (host.nodeFetch(${nodeId}) unavailable)`,
             501,
@@ -408,7 +408,7 @@ export function wrapHostApi(
               if (released) return;
               released = true;
               hostClose.abort(
-                new HelmError(
+                new HelmxError(
                   'plugin_host_disposed',
                   'host already destroy:nodeFetch in-flight request determinism cancel (owned cleanup)',
                   503,
@@ -564,7 +564,7 @@ export function wrapHostApi(
       guard('host.submitInputGuarded');
       const port = backend.submitInputGuarded;
       if (port === undefined) {
-        throw new HelmError(
+        throw new HelmxError(
           'not_supported',
           'Current host has not wired guarded input submission (host.submitInputGuarded)',
           501,
@@ -595,7 +595,7 @@ export function wrapHostApi(
       guard('host.abortConversationGuarded');
       const port = backend.abortConversationGuarded;
       if (port === undefined) {
-        throw new HelmError(
+        throw new HelmxError(
           'not_supported',
           'Current host has not wired guarded abort (host.abortConversationGuarded)',
           501,
@@ -610,7 +610,7 @@ export function wrapHostApi(
       guard('host.resetConversationGuarded');
       const port = backend.resetConversationGuarded;
       if (port === undefined) {
-        throw new HelmError(
+        throw new HelmxError(
           'not_supported',
           'Current host has not wired guarded context reset (host.resetConversationGuarded)',
           501,
@@ -625,7 +625,7 @@ export function wrapHostApi(
       guard('host.compactConversationGuarded');
       const port = backend.compactConversationGuarded;
       if (port === undefined) {
-        throw new HelmError(
+        throw new HelmxError(
           'not_supported',
           'Current host has not wired guarded manual compaction (host.compactConversationGuarded)',
           501,

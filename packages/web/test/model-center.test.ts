@@ -2,9 +2,9 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import React from 'react'
 import { renderToStaticMarkup, renderToString } from 'react-dom/server'
-import type { ProviderConfig } from '@helm/protocol'
-import type { ModelProviderSummary } from '@helm/protocol'
-import type { HelmLocale } from '@helm/protocol/browser'
+import type { ProviderConfig } from '@helmx/protocol'
+import type { ModelProviderSummary } from '@helmx/protocol'
+import type { HelmxLocale } from '@helmx/protocol/browser'
 import { ensureHappyDom, typeIntoControl, waitForCondition } from './helpers/dom-harness.js'
 import type { ModelDescriptor } from '../src/lib/api.js'
 import { ModelCard } from '../src/models/ModelCard.js'
@@ -458,7 +458,7 @@ test('ModelCard SSR: renders provider card header, badges, description and model
   assert.match(html, /class="[^"]*mono[^"]*"[^>]*>deepseek<\/span>/)
 
   // 3. Configuration status light (configured → done tone + visible label)
-  assert.match(html, /helm-status-light-done[\s\S]*?status-dot-done[\s\S]*?Configured/)
+  assert.match(html, /helmx-status-light-done[\s\S]*?status-dot-done[\s\S]*?Configured/)
 
   // 4. Description
   assert.match(html, /深度求索 R1 与通用基座。/)
@@ -497,7 +497,7 @@ test('ModelCard SSR: unconfigured and selected-state assertions', { timeout: 60_
   assert.match(html, /aria-selected="true"/)
 
   // Unconfigured status light (neutral pending ring + visible label)
-  assert.match(html, /helm-status-light-pending[\s\S]*?Not configured/)
+  assert.match(html, /helmx-status-light-pending[\s\S]*?Not configured/)
   assert.match(html, /3 models available/)
 
   // Zero Emoji

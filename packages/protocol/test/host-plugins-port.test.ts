@@ -1,6 +1,6 @@
 /**
- * HelmHostPluginsPort contract lock tests (pure type shapes, no runtime dependencies):
- * - HelmHostApi.plugins mounts HelmHostPluginsPort and keeps the existing
+ * HelmxHostPluginsPort contract lock tests (pure type shapes, no runtime dependencies):
+ * - HelmxHostApi.plugins mounts HelmxHostPluginsPort and keeps the existing
  *   listPlugins/listUi compatibility entries;
  * - port method signatures (list/listUi synchronous snapshots; doctor/install/
  *   update/remove/enable/disable asynchronous);
@@ -14,8 +14,8 @@ import { test } from 'node:test'
 import type {
   AgentSpawnRequest,
   BackendPluginsLifecyclePort,
-  HelmHostApi,
-  HelmHostPluginsPort,
+  HelmxHostApi,
+  HelmxHostPluginsPort,
   PluginDoctorReport,
   PluginInstallResult,
   PluginRemoveResult,
@@ -24,19 +24,19 @@ import type {
   PluginUpdateResult,
   ArtifactMetadata,
   GuardedMutationExpectation,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 
-test('HelmHostApi.plugins mounts HelmHostPluginsPort and keeps the listPlugins/listUi compatibility entries', { timeout: 60_000 }, () => {
-  // Compile-time type checks: ensure HelmHostApi mounts HelmHostPluginsPort and keeps the existing read-only method signatures
-  type HasPlugins = HelmHostApi['plugins'] extends HelmHostPluginsPort ? true : false
-  type HasListPlugins = HelmHostApi['listPlugins'] extends () => PluginSummary[] ? true : false
-  type HasListUi = HelmHostApi['listUi'] extends () => unknown[] ? true : false
+test('HelmxHostApi.plugins mounts HelmxHostPluginsPort and keeps the listPlugins/listUi compatibility entries', { timeout: 60_000 }, () => {
+  // Compile-time type checks: ensure HelmxHostApi mounts HelmxHostPluginsPort and keeps the existing read-only method signatures
+  type HasPlugins = HelmxHostApi['plugins'] extends HelmxHostPluginsPort ? true : false
+  type HasListPlugins = HelmxHostApi['listPlugins'] extends () => PluginSummary[] ? true : false
+  type HasListUi = HelmxHostApi['listUi'] extends () => unknown[] ? true : false
   const typeLocks: [HasPlugins, HasListPlugins, HasListUi] = [true, true, true]
   assert.deepEqual(typeLocks, [true, true, true])
 })
 
-test('HelmHostPluginsPort method signatures and existing result models (compile-time shape lock)', { timeout: 60_000 }, () => {
-  const port: HelmHostPluginsPort = {
+test('HelmxHostPluginsPort method signatures and existing result models (compile-time shape lock)', { timeout: 60_000 }, () => {
+  const port: HelmxHostPluginsPort = {
     list: (): PluginSummary[] => [],
     listUi: () => [],
     doctor: async (t: { dir?: string; id?: string }): Promise<PluginDoctorReport> =>
@@ -48,7 +48,7 @@ test('HelmHostPluginsPort method signatures and existing result models (compile-
     enable: async (): Promise<PluginSummary> => ({ id: 'x', name: 'x', locked: false, enabled: true, hooks: [], actions: [], tools: [] }),
     disable: async (): Promise<PluginSummary> => ({ id: 'x', name: 'x', locked: false, enabled: false, hooks: [], actions: [], tools: [] }),
   }
-  const methodNames: (keyof HelmHostPluginsPort)[] = [
+  const methodNames: (keyof HelmxHostPluginsPort)[] = [
     'list',
     'listUi',
     'doctor',
@@ -129,19 +129,19 @@ test('AgentSpawnRequest reattach/requestId and PluginToolSpec replay contract fi
   assert.equal(unsafeTool.replay, 'unsafe')
 })
 
-test('HelmHostApi.createArtifact and submitInput attachments (compile-time shape lock)', { timeout: 60_000 }, () => {
+test('HelmxHostApi.createArtifact and submitInput attachments (compile-time shape lock)', { timeout: 60_000 }, () => {
   // Compile-time: createArtifact accepts raw bytes and resolves ArtifactMetadata; both submission
   // ports declare the optional attachments artifact-ID list (rest of the opts shape unchanged).
-  type CreateArtifact = HelmHostApi['createArtifact']
+  type CreateArtifact = HelmxHostApi['createArtifact']
   type CreateArtifactOk = CreateArtifact extends
     (conversationId: number, input: { name: string; bytes: Uint8Array; mimeType?: string }) => Promise<ArtifactMetadata>
     ? true
     : false
-  type SubmitAttachments = HelmHostApi['submitInput'] extends
+  type SubmitAttachments = HelmxHostApi['submitInput'] extends
     (conversationId: number, text: string, opts?: { attachments?: string[] } | undefined) => Promise<void>
     ? true
     : false
-  type GuardedAttachments = HelmHostApi['submitInputGuarded'] extends
+  type GuardedAttachments = HelmxHostApi['submitInputGuarded'] extends
     (conversationId: number, text: string, opts?: { attachments?: string[] } | undefined, guard?: GuardedMutationExpectation | undefined) => Promise<void>
     ? true
     : false

@@ -102,7 +102,7 @@ export function createNodeShellProbeIo(overrides: Partial<ShellProbeIo> = {}): S
   }
 }
 
-/** Resolve available host bash configuration (shared by the Hub local runtime and @helm/node). */
+/** Resolve available host bash configuration (shared by the Hub local runtime and @helmx/node). */
 export async function resolveHostShellConfig(
   customShellPath?: string,
   io?: ShellProbeIo,

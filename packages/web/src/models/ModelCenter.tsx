@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import type { ModelProviderSummary } from '@helm/protocol/browser'
+import type { ModelProviderSummary } from '@helmx/protocol/browser'
 import { assetsApi } from '../lib/api.js'
-import { HelmIcon, Tabs, TabsContent, TabsList, TabsTrigger } from '@helm/plugin-client'
+import { HelmxIcon, Tabs, TabsContent, TabsList, TabsTrigger } from '@helmx/plugin-client'
 import {
   useCredentials,
   useLocationTargets,
@@ -278,7 +278,7 @@ export function ModelCenter({
       <div className="primary-center-topbar pane-topbar">
         <div className="primary-center-title-wrap pane-title-group">
           <div className="primary-center-title">
-            <HelmIcon name="cpu" size={14} />
+            <HelmxIcon name="cpu" size={14} />
             <span>{t('models.title')}</span>
           </div>
         </div>
@@ -291,7 +291,7 @@ export function ModelCenter({
             disabled={refreshingCatalog}
             title={t('models.refreshCatalogTitle')}
           >
-            <HelmIcon name="refresh-cw" size={12} className={refreshingCatalog ? 'spin' : undefined} />
+            <HelmxIcon name="refresh-cw" size={12} className={refreshingCatalog ? 'spin' : undefined} />
             <span className="pane-action-label">{t('models.refreshCatalog')}</span>
           </button>
           {isSplit ? (
@@ -309,11 +309,11 @@ export function ModelCenter({
       <Tabs value={centerTab} onValueChange={handleTabChange} className="model-center-tabs">
         <TabsList aria-label={t('models.viewsAria')}>
           <TabsTrigger value="providers" className="model-center-tab-btn">
-            <HelmIcon name="layers" size={13} />
+            <HelmxIcon name="layers" size={13} />
             <span>{t('models.tab.providers')}</span>
           </TabsTrigger>
           <TabsTrigger value="defaults" className="model-center-tab-btn">
-            <HelmIcon name="sliders" size={13} />
+            <HelmxIcon name="sliders" size={13} />
             <span>{t('models.tab.defaults')}</span>
           </TabsTrigger>
         </TabsList>
@@ -321,7 +321,7 @@ export function ModelCenter({
 
       {/* Global default model compact status row */}
       <div className="model-defaults-status">
-        <HelmIcon name="sliders" size={13} />
+        <HelmxIcon name="sliders" size={13} />
         <span
           className={`badge ${defaultModelInfo?.defaultModel ? 'badge-ok' : 'badge-neutral'}`}
         >
@@ -357,7 +357,7 @@ export function ModelCenter({
           {/* Toolbar: search box, category pills and catalog refresh */}
           <div className="primary-center-toolbar model-toolbar-inline">
             <div className="primary-search-box">
-              <HelmIcon name="search" size={14} />
+              <HelmxIcon name="search" size={14} />
               <input
                 type="text"
                 value={query}
@@ -373,7 +373,7 @@ export function ModelCenter({
                   aria-label={t('models.searchClear')}
                   title={t('models.searchClear')}
                 >
-                  <HelmIcon name="x" size={12} />
+                  <HelmxIcon name="x" size={12} />
                 </button>
               )}
             </div>
@@ -407,7 +407,7 @@ export function ModelCenter({
           {filteredProviders.length === 0 ? (
             <div className="primary-center-empty">
               <div className="primary-center-empty-icon">
-                <HelmIcon name="search" size={22} />
+                <HelmxIcon name="search" size={22} />
               </div>
               <div className="primary-center-empty-text">{t('models.emptyTitle')}</div>
               <div className="primary-center-empty-hint">{t('models.emptyHint')}</div>

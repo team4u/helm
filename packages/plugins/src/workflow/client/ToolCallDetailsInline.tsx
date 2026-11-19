@@ -4,7 +4,7 @@
  * ctx.openArtifact(artifactId) to open the host artifact preview modal.
  */
 import { useMemo, useState } from 'react'
-import { resolveLocalizedText, usePluginContext, usePluginLocale } from '@helm/plugin-client'
+import { resolveLocalizedText, usePluginContext, usePluginLocale } from '@helmx/plugin-client'
 import { stringifyPretty } from './model-format.ts'
 import { DETAILS_INPUT, DETAILS_OUTPUT, DETAILS_SUMMARY, detailsOpenArtifactLabel } from './copy.ts'
 

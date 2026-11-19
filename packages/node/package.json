@@ -1,12 +1,12 @@
 {
-  "name": "@helm/node",
+  "name": "@helmx/node",
   "private": true,
   "version": "0.1.0",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
-    "helm-node": "./dist/cli.js"
+    "helmx-node": "./dist/cli.js"
   },
   "exports": {
     ".": {
@@ -21,13 +21,13 @@
   "dependencies": {
     "@earendil-works/chord": "1.5.2",
     "@earendil-works/pi-durable": "1.5.2",
-    "@helm/protocol": "workspace:*",
-    "@helm/env-io": "workspace:*",
+    "@helmx/protocol": "workspace:*",
+    "@helmx/env-io": "workspace:*",
     "birpc": "^2.9.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {
-    "@helm/test-kit": "workspace:*",
+    "@helmx/test-kit": "workspace:*",
     "@types/ws": "^8.18.0"
   }
 }

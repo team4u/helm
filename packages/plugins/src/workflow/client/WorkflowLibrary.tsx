@@ -5,8 +5,8 @@
  */
 import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { ScreenProps } from '@helm/protocol'
-import { formatBytes, formatTime, resolveLocalizedText, usePluginLocale } from '@helm/plugin-client'
+import type { ScreenProps } from '@helmx/protocol'
+import { formatBytes, formatTime, resolveLocalizedText, usePluginLocale } from '@helmx/plugin-client'
 import { useWorkflowLibrary } from './hooks.ts'
 import { Icon } from './WorkflowIcon.tsx'
 import { WorkflowLibraryDrawer } from './WorkflowLibraryDrawer.tsx'

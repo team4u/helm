@@ -4,7 +4,7 @@ import * as React from 'react'
 import { act } from 'react'
 import type { Root } from 'react-dom/client'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
-import type { ConversationSummary } from '@helm/protocol'
+import type { ConversationSummary } from '@helmx/protocol'
 import { hangingEventStream, type SseFrameSender } from './helpers/sse-stream.js'
 import {
   ESC_ABORT_WINDOW_MS,
@@ -21,16 +21,16 @@ import {
   isInlineInputEscapeTarget,
   persistSidebarCollapsed,
   resolveFocusedPanel,
-  type HelmShortcutDetail,
+  type HelmxShortcutDetail,
 } from '../src/shell/shortcuts-model.js'
-import type { HelmStoreValue, ResolvedTarget } from '../src/lib/types.js'
+import type { HelmxStoreValue, ResolvedTarget } from '../src/lib/types.js'
 
 GlobalRegistrator.register()
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
 
 const { createRoot } = await import('react-dom/client')
-const { HelmStoreProvider } = await import('../src/lib/HelmStoreProvider.js')
-const { useHelmStore } = await import('../src/lib/store-context.js')
+const { HelmxStoreProvider } = await import('../src/lib/HelmxStoreProvider.js')
+const { useHelmxStore } = await import('../src/lib/store-context.js')
 const { App } = await import('../src/App.js')
 
 const originalFetch = globalThis.fetch
@@ -38,7 +38,7 @@ const originalFetch = globalThis.fetch
 let root: Root | undefined
 let host: HTMLElement | undefined
 let sendEvent: SseFrameSender | undefined
-let capturedStore: HelmStoreValue | undefined
+let capturedStore: HelmxStoreValue | undefined
 let abortCalls: number[] = []
 let artifactRequests: number[] = []
 
@@ -166,12 +166,12 @@ function installFetch(options: FetchHarnessOptions = {}): void {
 }
 
 function ShortcutHarness(): React.ReactNode {
-  const store = useHelmStore()
+  const store = useHelmxStore()
   capturedStore = store
   return (
     <div data-testid="shortcut-harness">
       <div
-        data-helm-panel="primary"
+        data-helmx-panel="primary"
         tabIndex={-1}
         onPointerDownCapture={() => store.setFocusedPanel?.('primary')}
         onFocusCapture={() => store.setFocusedPanel?.('primary')}
@@ -180,7 +180,7 @@ function ShortcutHarness(): React.ReactNode {
       </div>
       {store.splitTarget !== null && (
         <div
-          data-helm-panel="split"
+          data-helmx-panel="split"
           tabIndex={-1}
           onPointerDownCapture={() => store.setFocusedPanel?.('split')}
           onFocusCapture={() => store.setFocusedPanel?.('split')}
@@ -211,7 +211,7 @@ async function settle(ms = 30): Promise<void> {
 async function mountProvider(
   hash: string,
   options: FetchHarnessOptions = {},
-): Promise<HelmStoreValue> {
+): Promise<HelmxStoreValue> {
   window.history.replaceState(null, '', hash)
   host = document.createElement('div')
   document.body.appendChild(host)
@@ -219,13 +219,13 @@ async function mountProvider(
   await act(async () => {
     root = createRoot(host!)
     root.render(
-      <HelmStoreProvider>
+      <HelmxStoreProvider>
         <ShortcutHarness />
-      </HelmStoreProvider>,
+      </HelmxStoreProvider>,
     )
   })
   await settle()
-  assert.ok(capturedStore, 'HelmStoreProvider must supply the store to child components')
+  assert.ok(capturedStore, 'HelmxStoreProvider must supply the store to child components')
   return capturedStore
 }
 
@@ -265,7 +265,7 @@ afterEach(() => {
 })
 
 test('shortcuts-model pure functions: split focus, status checks and local persistence contracts', { timeout: 60_000 }, () => {
-  assert.equal(SIDEBAR_COLLAPSED_STORAGE_KEY, 'helm:sidebar-collapsed')
+  assert.equal(SIDEBAR_COLLAPSED_STORAGE_KEY, 'helmx:sidebar-collapsed')
   assert.equal(ESC_ABORT_WINDOW_MS, 1500)
 
   const primary: ResolvedTarget = { kind: 'conversation', conversationId: 1 }
@@ -314,7 +314,7 @@ test('shortcuts-model pure functions: split focus, status checks and local persi
 
   const modelPopover = document.createElement('div')
   modelPopover.setAttribute('role', 'dialog')
-  modelPopover.className = 'helm-popover-content composer-model-popover'
+  modelPopover.className = 'helmx-popover-content composer-model-popover'
   document.body.appendChild(modelPopover)
   assert.equal(hasDialogOpen(), true)
   assert.equal(hasNonModelPickerDialogOpen(), false)
@@ -339,14 +339,14 @@ test('shortcuts-model pure functions: split focus, status checks and local persi
   assert.equal(isInlineInputEscapeTarget(bareInput), false)
 })
 
-test('HelmStoreProvider ignores global shortcuts while unauthenticated', { timeout: 60_000 }, async () => {
+test('HelmxStoreProvider ignores global shortcuts while unauthenticated', { timeout: 60_000 }, async () => {
   await mountProvider('#/c/1', { authenticated: false })
 
-  const fired: HelmShortcutDetail[] = []
+  const fired: HelmxShortcutDetail[] = []
   const listener = (ev: Event) => {
-    fired.push((ev as CustomEvent<HelmShortcutDetail>).detail)
+    fired.push((ev as CustomEvent<HelmxShortcutDetail>).detail)
   }
-  window.addEventListener('helm:shortcut', listener)
+  window.addEventListener('helmx:shortcut', listener)
 
   try {
     dispatchWindowKey(modInit('k'))
@@ -364,11 +364,11 @@ test('HelmStoreProvider ignores global shortcuts while unauthenticated', { timeo
     assert.equal(fired.length, 0)
     assert.equal(abortCalls.length, 0)
   } finally {
-    window.removeEventListener('helm:shortcut', listener)
+    window.removeEventListener('helmx:shortcut', listener)
   }
 })
 
-test('HelmStoreProvider split-focus routing and global single-key shortcut dispatch (Ctrl+L/O, Mod+K/B/J)', { timeout: 60_000 }, async () => {
+test('HelmxStoreProvider split-focus routing and global single-key shortcut dispatch (Ctrl+L/O, Mod+K/B/J)', { timeout: 60_000 }, async () => {
   const store = await mountProvider('#/c/1')
   assert.equal(store.focusedPanel, 'primary')
 
@@ -388,11 +388,11 @@ test('HelmStoreProvider split-focus routing and global single-key shortcut dispa
   })
   assert.equal(capturedStore?.focusedPanel, 'split')
 
-  const fired: HelmShortcutDetail[] = []
+  const fired: HelmxShortcutDetail[] = []
   const onShortcut = (ev: Event) => {
-    fired.push((ev as CustomEvent<HelmShortcutDetail>).detail)
+    fired.push((ev as CustomEvent<HelmxShortcutDetail>).detail)
   }
-  window.addEventListener('helm:shortcut', onShortcut)
+  window.addEventListener('helmx:shortcut', onShortcut)
 
   try {
     const evL1 = dispatchWindowKey({ key: 'l', ctrlKey: true })
@@ -430,7 +430,7 @@ test('HelmStoreProvider split-focus routing and global single-key shortcut dispa
     // a second Ctrl+L still dispatches toggle-model-picker to close the popover; Ctrl+O stays blocked
     const modelPopover = document.createElement('div')
     modelPopover.setAttribute('role', 'dialog')
-    modelPopover.className = 'helm-popover-content composer-model-popover'
+    modelPopover.className = 'helmx-popover-content composer-model-popover'
     document.body.appendChild(modelPopover)
     const countBeforePopover = fired.length
     const evLToggleClose = dispatchWindowKey({ key: 'l', ctrlKey: true })
@@ -450,7 +450,7 @@ test('HelmStoreProvider split-focus routing and global single-key shortcut dispa
     assert.equal(fired.length, countBeforeNormalDialog)
     normalDialog.remove()
   } finally {
-    window.removeEventListener('helm:shortcut', onShortcut)
+    window.removeEventListener('helmx:shortcut', onShortcut)
   }
 
   // Mod+K: toggle the CommandPaletteModal
@@ -486,7 +486,7 @@ test('HelmStoreProvider split-focus routing and global single-key shortcut dispa
   assert.equal(window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY), '0')
 })
 
-test('HelmStoreProvider double-Esc misfire-protection state machine (overlay interception / non-running skip / 1.5s timeout reset / double-tap abort)', { timeout: 60_000 }, async () => {
+test('HelmxStoreProvider double-Esc misfire-protection state machine (overlay interception / non-running skip / 1.5s timeout reset / double-tap abort)', { timeout: 60_000 }, async () => {
   await mountProvider('#/c/1')
 
   // 1) Pressing Esc on an idle conversation (#1) never arms or aborts
@@ -561,7 +561,7 @@ test('HelmStoreProvider double-Esc misfire-protection state machine (overlay int
   assert.equal(capturedStore?.pendingEscAbortConversationId, 2)
 })
 
-test('App split containers with data-helm-panel capture focus and coordinate the WorkbenchDrawer and sidebar-collapsed', { timeout: 60_000 }, async () => {
+test('App split containers with data-helmx-panel capture focus and coordinate the WorkbenchDrawer and sidebar-collapsed', { timeout: 60_000 }, async () => {
   window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, '1')
   window.history.replaceState(null, '', '#/c/1?split=c/2&wb=artifacts')
   installFetch()
@@ -574,22 +574,22 @@ test('App split containers with data-helm-panel capture focus and coordinate the
   })
   await settle(60)
 
-  const shell = host.querySelector<HTMLElement>('.helm-shell')
-  assert.ok(shell, 'App must render .helm-shell')
+  const shell = host.querySelector<HTMLElement>('.helmx-shell')
+  assert.ok(shell, 'App must render .helmx-shell')
   assert.equal(shell.classList.contains('sidebar-collapsed'), true, 'with the collapsed state saved in localStorage, App must attach .sidebar-collapsed')
 
   // Press Mod+B to expand the sidebar
   dispatchWindowKey(modInit('b'))
   assert.equal(shell.classList.contains('sidebar-collapsed'), false, 'Mod+B must remove .sidebar-collapsed')
 
-  const primaryPane = host.querySelector<HTMLElement>('[data-helm-panel="primary"]')
-  const splitPane = host.querySelector<HTMLElement>('[data-helm-panel="split"]')
-  assert.ok(primaryPane, 'the primary pane must carry data-helm-panel="primary"')
-  assert.ok(splitPane, 'the split pane must carry data-helm-panel="split"')
+  const primaryPane = host.querySelector<HTMLElement>('[data-helmx-panel="primary"]')
+  const splitPane = host.querySelector<HTMLElement>('[data-helmx-panel="split"]')
+  assert.ok(primaryPane, 'the primary pane must carry data-helmx-panel="primary"')
+  assert.ok(splitPane, 'the split pane must carry data-helmx-panel="split"')
 
   // The WorkbenchDrawer initially points at primary (#1)
-  const workbenchInitial = document.querySelector<HTMLElement>('.helm-workbench')
-  assert.ok(workbenchInitial, 'with wb=artifacts the .helm-workbench must be open')
+  const workbenchInitial = document.querySelector<HTMLElement>('.helmx-workbench')
+  assert.ok(workbenchInitial, 'with wb=artifacts the .helmx-workbench must be open')
   assert.equal(artifactRequests.includes(1), true)
 
   // Pointer/Focus entering the split container -> the WorkbenchDrawer switches to split conversation #2's artifacts
@@ -598,12 +598,12 @@ test('App split containers with data-helm-panel capture focus and coordinate the
   })
   await settle(40)
   assert.equal(artifactRequests.includes(2), true, 'after focusing split, the WorkbenchDrawer must switch to conversation #2')
-  assert.match(document.querySelector('.helm-workbench')?.textContent ?? '', /split-artifact\.md/)
+  assert.match(document.querySelector('.helmx-workbench')?.textContent ?? '', /split-artifact\.md/)
 
   // Switch focus back to primary
   await act(async () => {
     primaryPane.dispatchEvent(new FocusEvent('focusin', { bubbles: true }))
   })
   await settle(40)
-  assert.match(document.querySelector('.helm-workbench')?.textContent ?? '', /primary-artifact\.md/)
+  assert.match(document.querySelector('.helmx-workbench')?.textContent ?? '', /primary-artifact\.md/)
 })

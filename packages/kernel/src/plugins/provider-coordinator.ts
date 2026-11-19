@@ -2,7 +2,7 @@
  * Coordinates mounting, unmounting, and lifecycle guards for plugin model `Provider`s.
  */
 import type { Provider } from '@earendil-works/pi-ai';
-import { HelmError, isJsonObject, isPlainObject } from '@helm/protocol';
+import { HelmxError, isJsonObject, isPlainObject } from '@helmx/protocol';
 import {
   toJsonSafeError,
   type JsonSafeErrorInfo,
@@ -19,8 +19,8 @@ import type {
  * `getModels`/`stream`/`streamSimple` functions. Invalid providers fail loudly at boundary.
  */
 export function assertValidProviderShape(pluginId: string, provider: Provider): void {
-  const fail = (detail: string): HelmError =>
-    new HelmError('invalid_provider_spec', `Plugin ${pluginId} declared provider ${detail}`, 400, { pluginId });
+  const fail = (detail: string): HelmxError =>
+    new HelmxError('invalid_provider_spec', `Plugin ${pluginId} declared provider ${detail}`, 400, { pluginId });
   if (!isPlainObject(provider)) throw fail('must be a plain object');
   const { id, name, auth } = provider as { id?: unknown; name?: unknown; auth?: unknown };
   if (typeof id !== 'string' || id.length === 0) throw fail('missing non-empty string id');
@@ -44,7 +44,7 @@ export function assertValidProviderShape(pluginId: string, provider: Provider): 
 export async function registerProviders(state: PluginState, port?: PluginProviderPort): Promise<void> {
   if (state.providers.length === 0) return;
   if (!port) {
-    throw new HelmError(
+    throw new HelmxError(
       'provider_port_unavailable',
       `Plugin ${state.definition.id} declared providers, but PluginHost has no provider mount port wired (runtime missing)`,
       501,
@@ -71,15 +71,15 @@ export async function registerProviders(state: PluginState, port?: PluginProvide
         rollbackErrors.push({ providerId, error: toJsonSafeError(unregisterErr) });
       }
     }
-    if (err instanceof HelmError) {
+    if (err instanceof HelmxError) {
       throw rollbackErrors.length > 0
-        ? new HelmError(err.code, err.message, err.status, {
+        ? new HelmxError(err.code, err.message, err.status, {
             ...((err.details as object) ?? {}),
             unregisterErrors: rollbackErrors,
           })
         : err;
     }
-    throw new HelmError(
+    throw new HelmxError(
       'plugin_provider_register_failed',
       `Plugin ${pluginId} failed to register provider: ${err instanceof Error ? err.message : String(err)}`,
       500,
@@ -106,7 +106,7 @@ export async function unregisterProviders(state: PluginState): Promise<void> {
     }
   }
   if (errors.length > 0) {
-    throw new HelmError(
+    throw new HelmxError(
       'plugin_provider_unregister_failed',
       `Plugin ${state.definition.id} failed to unregister providers: ${errors.map((e) => e.providerId).join(', ')}`,
       500,
@@ -125,8 +125,8 @@ export function assertProvidersIdle(
   try {
     port?.assertIdle?.(pluginId);
   } catch (err) {
-    if (err instanceof HelmError) throw err;
-    throw new HelmError(
+    if (err instanceof HelmxError) throw err;
+    throw new HelmxError(
       'plugin_has_live_tasks',
       `Plugin ${pluginId} provider port reported active in-flight tasks: ${err instanceof Error ? err.message : String(err)}`,
       409,
@@ -138,6 +138,6 @@ export function assertProvidersIdle(
 /** Re-checks plugin lifecycle at model request/refresh start to close preflight teardown races. */
 export function assertProviderAvailable(state: PluginState | undefined, pluginId: string): void {
   if (state && (state.phase === 'deactivating' || (!state.enabled && state.phase === 'idle'))) {
-    throw new HelmError('plugin_disabled', `Plugin ${pluginId} is deactivating or disabled`, 409);
+    throw new HelmxError('plugin_disabled', `Plugin ${pluginId} is deactivating or disabled`, 409);
   }
 }

@@ -14,7 +14,7 @@ import {
 
 const pkgRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
-test('@helm/protocol/browser: export declarations aligned with the root entry\'s pure cross-runtime surface', { timeout: 60_000 }, async () => {
+test('@helmx/protocol/browser: export declarations aligned with the root entry\'s pure cross-runtime surface', { timeout: 60_000 }, async () => {
   const pkg = JSON.parse(readFileSync(join(pkgRoot, 'package.json'), 'utf8')) as {
     exports?: Record<string, { types?: string; default?: string }>
   }
@@ -23,10 +23,10 @@ test('@helm/protocol/browser: export declarations aligned with the root entry\'s
     default: './dist/browser.js',
   })
 
-  const pkgBrowser = (await import('@helm/protocol/browser')) as Record<string, unknown>
+  const pkgBrowser = (await import('@helmx/protocol/browser')) as Record<string, unknown>
 
   const requiredRuntimeExports = [
-    'HelmError',
+    'HelmxError',
     'PLUGIN_HOOK_NAMES',
     'PLUGIN_CLIENT_SHARED_EXPORTS',
     'PLUGIN_UI_METHOD_NAMES',
@@ -52,9 +52,9 @@ test('@helm/protocol/browser: export declarations aligned with the root entry\'s
     'isArtifactKind',
     'ARTIFACT_KINDS',
     'compareStrictSemver',
-    'HELM_LOCALES',
-    'DEFAULT_HELM_LOCALE',
-    'isHelmLocale',
+    'HELMX_LOCALES',
+    'DEFAULT_HELMX_LOCALE',
+    'isHelmxLocale',
     'normalizeLocaleTag',
     'parseLocalizedText',
     'resolveLocalizedText',
@@ -68,7 +68,7 @@ test('@helm/protocol/browser: export declarations aligned with the root entry\'s
   assert.deepEqual(Object.keys(browserRecord).sort(), Object.keys(rootRecord).sort())
   for (const key of Object.keys(browserRecord)) {
     assert.equal(browserRecord[key], rootRecord[key], `browser.ts export ${key} must stay identical to index.ts`)
-    assert.ok(key in pkgBrowser, `@helm/protocol/browser package entry is missing export ${key}`)
+    assert.ok(key in pkgBrowser, `@helmx/protocol/browser package entry is missing export ${key}`)
   }
   for (const key of requiredRuntimeExports) {
     assert.ok(key in browserRecord, `browser.ts is missing runtime export ${key}`)

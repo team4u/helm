@@ -29,7 +29,7 @@
  */
 
 import { setTimeout as delay } from 'node:timers/promises'
-import { HelmError, type AgentSpawnRequest } from '@helm/protocol'
+import { HelmxError, type AgentSpawnRequest } from '@helmx/protocol'
 import type {
   CreateAskResultLike,
   CreateAskSpecLike,
@@ -266,7 +266,7 @@ export class ApprovalBridge {
       try {
         return { outcome: await Promise.race([result, polling.then(() => result)]), plan }
       } catch (error) {
-        const isIdConflict = error instanceof HelmError && error.code === 'ask_id_conflict'
+        const isIdConflict = error instanceof HelmxError && error.code === 'ask_id_conflict'
         if (!isIdConflict || conflict >= ApprovalBridge.MAX_ASK_CONFLICT_RETRIES) {
           throw error
         }
@@ -320,7 +320,7 @@ export class ApprovalBridge {
     }
     const authority = await this.port.agentGet(targetOf(pane), pane.paneId, request.signal)
     await this.cancelSuperseded(pane, authority)
-    if (authority.name !== pane.agentName) throw new HelmError('herdr_ownership_lost', `pane ${pane.paneId}'s Agent identity has changed; cannot send keystrokes`, 409)
+    if (authority.name !== pane.agentName) throw new HelmxError('herdr_ownership_lost', `pane ${pane.paneId}'s Agent identity has changed; cannot send keystrokes`, 409)
     if (authority.stateChangeSeq !== entry.seq || authority.agentStatus !== 'blocked') {
       this.port.asks.settle(entry, { keysSent: false })
       return true
@@ -366,9 +366,9 @@ export class ApprovalBridge {
     if (!pong.sendKeysCas) throw this.casUnsupportedError(target, pong)
   }
 
-  private casUnsupportedError(target: HerdrTarget, server?: { version: string; protocol: number }): HelmError {
+  private casUnsupportedError(target: HerdrTarget, server?: { version: string; protocol: number }): HelmxError {
     const serverLabel = server !== undefined ? ` (version ${server.version}, protocol ${server.protocol})` : ''
-    return new HelmError(
+    return new HelmxError(
       'herdr_cas_unsupported',
       `Target Herdr${serverLabel} does not advertise '${SEND_KEYS_CAS_CAPABILITY}' in ping capabilities; refusing CAS-less agent.send_keys: old servers silently ignore expected_state_seq and write keys anyway (reproducing the approval bridge's CAS residual window); upgrade the Herdr server to a version that advertises the capability and re-enable the herdr plugin`,
       502,

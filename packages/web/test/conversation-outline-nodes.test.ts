@@ -2,14 +2,14 @@
  * 会话大纲回合导航升级纯函数测试：
  * - 助手摘要节点（无标题正文）与 B 智能合并（有标题时由标题代表，不重复 assistant 摘要）；
  * - 业务卡节点：AssistantTurn 顶层 tool.view 卡（通用 toolName + 入参摘要、cardId 二级锚）
- *   与 timeline.renderer 接管的 plugin-card（helm.input 文本首行摘要）；
+ *   与 timeline.renderer 接管的 plugin-card（helmx.input 文本首行摘要）；
  * - step-group 内普通工具与 thinking 不进大纲；无正文无卡片回合保留诚实状态摘要；
  * - 搜索（人类/助手全文、卡片摘要）与「仅提问」过滤、父提问保留、节点定位数据
  *   （entryId / headingIndex / cardId）。
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import type { ConversationEntry } from '@helm/protocol'
+import type { ConversationEntry } from '@helmx/protocol'
 import type { QualifiedRenderer, QualifiedToolView } from '../src/conversation/timeline-model.js'
 import { buildTimelineItems } from '../src/conversation/timeline-model.js'
 import {
@@ -31,16 +31,16 @@ const TOOL_VIEWS: QualifiedToolView[] = [
   { pluginId: 'builtin:workflow', spec: { id: 'subagent-card', toolNames: ['subagent'], replaceRow: true } },
 ]
 
-/** 机制信号替身：timeline.renderer 精确接管带 meta.renderer 标记的 helm.input。 */
+/** 机制信号替身：timeline.renderer 精确接管带 meta.renderer 标记的 helmx.input。 */
 const RENDERERS: QualifiedRenderer[] = [
   {
     pluginId: 'builtin:workflow',
-    spec: { id: 'background-report', kinds: ['helm.input'], matchMeta: { renderer: 'workflow:background-report' } },
+    spec: { id: 'background-report', kinds: ['helmx.input'], matchMeta: { renderer: 'workflow:background-report' } },
   },
 ]
 
 function humanEntry(id: string, text: string): ConversationEntry {
-  return { id, kind: 'helm.input', data: { id: `in-${id}`, text, origin: 'human' }, createdAt: 1000 }
+  return { id, kind: 'helmx.input', data: { id: `in-${id}`, text, origin: 'human' }, createdAt: 1000 }
 }
 
 function assistantTextEntry(id: string, text: string): ConversationEntry {
@@ -73,7 +73,7 @@ function toolResultEntry(id: string, callId: string, toolName: string, isError =
 
 const backgroundReportEntry: ConversationEntry = {
   id: '9',
-  kind: 'helm.input',
+  kind: 'helmx.input',
   data: {
     id: 'in-9',
     text: '后台子代理任务已结算。以下为运行 abc123 的结果数据（仅代表本次任务）：\n{"ok":true}',
@@ -233,7 +233,7 @@ test('tool.view 业务卡运行中：状态 running 保留在节点数据中', {
   assert.equal(card.status, 'running')
 })
 
-test('plugin-card（timeline.renderer 接管卡）：helm.input 文本首行摘要 + entryId 精确定位', { timeout: 60_000 }, () => {
+test('plugin-card（timeline.renderer 接管卡）：helmx.input 文本首行摘要 + entryId 精确定位', { timeout: 60_000 }, () => {
   const items = buildTimelineItems(
     [humanEntry('1', '开始任务'), backgroundReportEntry],
     { timelineRenderers: RENDERERS },
@@ -249,11 +249,11 @@ test('plugin-card（timeline.renderer 接管卡）：helm.input 文本首行摘�
   assert.equal(card.parentHumanKey, nodes[0]!.key)
 })
 
-test('summarizePluginCardEntry：非 helm.input 或空文本时回退稳定契约标识，绝不读插件私有渲染内容', { timeout: 60_000 }, () => {
-  const fallback = summarizePluginCardEntry({ id: '1', kind: 'helm.report' })
-  assert.equal(fallback.label, 'helm.report')
-  const empty = summarizePluginCardEntry({ id: '2', kind: 'helm.input', data: { text: '   ', origin: 'human' } })
-  assert.equal(empty.label, 'helm.input')
+test('summarizePluginCardEntry：非 helmx.input 或空文本时回退稳定契约标识，绝不读插件私有渲染内容', { timeout: 60_000 }, () => {
+  const fallback = summarizePluginCardEntry({ id: '1', kind: 'helmx.report' })
+  assert.equal(fallback.label, 'helmx.report')
+  const empty = summarizePluginCardEntry({ id: '2', kind: 'helmx.input', data: { text: '   ', origin: 'human' } })
+  assert.equal(empty.label, 'helmx.input')
 })
 
 // ---------------------------------------------------------------------------
@@ -339,7 +339,7 @@ test('搜索：助手全文、卡片摘要与标题均可命中，且保留父�
     ['human', 'card'],
   )
 
-  // plugin-card 汇报文本命中（searchText 为 helm.input 全文）
+  // plugin-card 汇报文本命中（searchText 为 helmx.input 全文）
   const byReport = filterOutlineNodes(nodes, { query: '结果数据' })
   assert.deepEqual(
     byReport.map((n) => n.kind),
@@ -357,8 +357,8 @@ test('三态过滤模式：dialogue 过滤 card 与 agent/trigger 输入；quest
       humanEntry('1', '派子代理调研数据库索引'),
       toolCallEntry('2', 'call-1', 'subagent', { prompt: '调研数据库索引缺失' }),
       toolResultEntry('3', 'call-1', 'subagent'),
-      { id: '3b', kind: 'helm.input', data: { id: 'in-agent', text: '子代理自动跟进检查', origin: 'agent' }, createdAt: 1500 },
-      { id: '3c', kind: 'helm.input', data: { id: 'in-trigger', text: '定时巡检触发消息', origin: 'trigger' }, createdAt: 1600 },
+      { id: '3b', kind: 'helmx.input', data: { id: 'in-agent', text: '子代理自动跟进检查', origin: 'agent' }, createdAt: 1500 },
+      { id: '3c', kind: 'helmx.input', data: { id: 'in-trigger', text: '定时巡检触发消息', origin: 'trigger' }, createdAt: 1600 },
       humanEntry('4', '总结一下'),
       assistantTextEntry('5', '索引缺失是慢查询根因，建议补建复合索引。'),
       backgroundReportEntry,

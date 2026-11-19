@@ -28,7 +28,7 @@ import assert from 'node:assert/strict'
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test, type TestContext } from 'node:test'
-import { HelmError, type ConversationSummary } from '@helm/protocol'
+import { HelmxError, type ConversationSummary } from '@helmx/protocol'
 import {
   WorkflowService,
   type WorkflowServiceHost,
@@ -49,7 +49,7 @@ const makeConversationSummary = (id: number): ConversationSummary =>
   baseConversationSummary({ id, model: 'faux/faux-1', createdAt: 0, updatedAt: 0 })
 
 function makeEnv(t: TestContext) {
-  const dataDir = createTempDir(t, 'helm-wf-auto-resume-')
+  const dataDir = createTempDir(t, 'helmx-wf-auto-resume-')
   const docs = new Map<string, unknown>()
   const state: WorkflowStateStore = {
     get<T>(key: string, initial: T): T {
@@ -251,7 +251,7 @@ test('过滤矩阵：状态/后台标记/接管/种类/次数/不可重试错误
   })
   seedCandidateRun(env, 'wf_validation013', 113, at(13), {
     ...journal,
-    error: 'HelmError [validation_error] 工作流参数非法',
+    error: 'HelmxError [validation_error] 工作流参数非法',
   })
   seedCandidateRun(env, 'wf_syntax000014', 114, at(14), {
     ...journal,
@@ -358,7 +358,7 @@ test('maxAttempts 非正整数显式 validation_error；1 时 count 1 排除、0
   for (const bad of [0, -1, 1.5, Number.NaN]) {
     assert.throws(
       () => env.service.listAutoResumeCandidates(bad),
-      (error: unknown) => error instanceof HelmError && error.code === 'validation_error',
+      (error: unknown) => error instanceof HelmxError && error.code === 'validation_error',
       `maxAttempts=${String(bad)} 必须显式拒绝`,
     )
   }
@@ -411,7 +411,7 @@ test('索引损坏（非数组 / 项形状非法）显式 workflow_index_corrupt
     env.docs.set('workflow/runs', broken)
     assert.throws(
       () => env.service.listAutoResumeCandidates(),
-      (error: unknown) => error instanceof HelmError && error.code === 'workflow_index_corrupt',
+      (error: unknown) => error instanceof HelmxError && error.code === 'workflow_index_corrupt',
       '索引损坏必须显式上抛（Watchdog 依赖候选面，绝不静默空列表）',
     )
   }

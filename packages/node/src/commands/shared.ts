@@ -30,14 +30,14 @@ export const flagString = (parsed: ParsedCli, name: string): string | undefined 
   return typeof value === 'string' ? value : undefined;
 };
 
-/** Resolve Hub URL from `--hub` or `HELM_HUB_URL`; throws `missing_hub_url` when `requireUrl` is true. */
+/** Resolve Hub URL from `--hub` or `HELMX_HUB_URL`; throws `missing_hub_url` when `requireUrl` is true. */
 export async function resolveHubUrl(io: NodeCliIo, parsed: ParsedCli, requireUrl: boolean): Promise<string> {
   const explicit = flagString(parsed, 'hub');
   if (explicit !== undefined && explicit !== '') return explicit;
-  const fromEnv = io.env?.['HELM_HUB_URL'];
+  const fromEnv = io.env?.['HELMX_HUB_URL'];
   if (fromEnv !== undefined && fromEnv !== '') return fromEnv;
   if (requireUrl) {
-    throw new UsageError('missing Hub URL: pass positional <hubUrl>, --hub <url>, or HELM_HUB_URL', 'missing_hub_url');
+    throw new UsageError('missing Hub URL: pass positional <hubUrl>, --hub <url>, or HELMX_HUB_URL', 'missing_hub_url');
   }
   return '';
 }
@@ -47,7 +47,7 @@ export async function readNodeIdentityStrict(dataDir: string): Promise<{ nodeId:
   const identity = await readNodeIdentity(dataDir);
   if (identity === null) {
     throw new UsageError(
-      `node identity not found (${path.join(dataDir, 'node.json')}); bind one first with helm-node connect <hubUrl> --token <token>`,
+      `node identity not found (${path.join(dataDir, 'node.json')}); bind one first with helmx-node connect <hubUrl> --token <token>`,
       'missing_identity',
     );
   }

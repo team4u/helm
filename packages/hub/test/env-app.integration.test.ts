@@ -1,5 +1,5 @@
 /**
- * 跨节点真实守护进程（createNodeDaemon + startHub + createHelm）端到端集成测试（共享单套 Hub/Node 环境减少冷启动）。
+ * 跨节点真实守护进程（createNodeDaemon + startHub + createHelmx）端到端集成测试（共享单套 Hub/Node 环境减少冷启动）。
  */
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import assert from 'node:assert/strict'
@@ -43,14 +43,14 @@ async function eventually(check: () => Promise<boolean> | boolean, description: 
 }
 
 before(async () => {
-  const root = await makeTempDir('helm-node-app-')
+  const root = await makeTempDir('helmx-node-app-')
   const hubDir = join(root, 'hub')
   const nodeDir = join(root, 'node')
   const remoteCwd = join(root, 'remote-workspace')
   await Promise.all([mkdir(hubDir, { recursive: true }), mkdir(nodeDir, { recursive: true }), mkdir(remoteCwd, { recursive: true })])
 
   const hubEnv = await openHubHttpEnv({ dataDir: hubDir, cwd: hubDir, swallowCloseError: true })
-  const cliEnv = { HELM_HUB_URL: hubEnv.hubUrl, HELM_TOKEN: hubEnv.token, HELM_DATA_DIR: join(root, 'client') }
+  const cliEnv = { HELMX_HUB_URL: hubEnv.hubUrl, HELMX_TOKEN: hubEnv.token, HELMX_DATA_DIR: join(root, 'client') }
 
   async function cli(args: string[]) {
     let out = ''
@@ -70,7 +70,7 @@ before(async () => {
       hubUrl: hubEnv.hubUrl,
       identity: { nodeId: 'integration-node', token: nodeToken },
       dataDir: nodeDir,
-      envServer: { shellEnv: { HELM_NODE_TEST_ORIGIN: 'remote-executor' } },
+      envServer: { shellEnv: { HELMX_NODE_TEST_ORIGIN: 'remote-executor' } },
       reconnectBaseDelayMs: 50,
       log: () => undefined,
     })
@@ -120,7 +120,7 @@ test('跨节点后台原生 subagent：真实 WS 节点分配 worktree、执行�
   await mkdir(repoDir, { recursive: true })
   const setup = await env.cli([
     'env', 'exec', '--node', 'integration-node', '--cwd', repoDir, '--json', '--',
-    'git init . && git config user.email test@helm.local && git config user.name HelmTest && printf base > base.txt && git add base.txt && git commit -m base',
+    'git init . && git config user.email test@helmx.local && git config user.name HelmxTest && printf base > base.txt && git add base.txt && git commit -m base',
   ])
   assert.equal(setup.code, 0, setup.err)
   assert.equal(JSON.parse(setup.out).ok, true, setup.out)
@@ -131,7 +131,7 @@ test('跨节点后台原生 subagent：真实 WS 节点分配 worktree、执行�
       prompt: 'execute remote verify',
       background: true,
       isolation: 'worktree',
-      gate: 'test "$HELM_NODE_TEST_ORIGIN" = remote-executor && printf "$HELM_NODE_TEST_ORIGIN" > remote-proof.txt',
+      gate: 'test "$HELMX_NODE_TEST_ORIGIN" = remote-executor && printf "$HELMX_NODE_TEST_ORIGIN" > remote-proof.txt',
     }),
     ...Array.from({ length: 4 }, () => fauxAssistantMessage('remote task result')),
   ])
@@ -184,7 +184,7 @@ test('跨节点后台原生 subagent：真实 WS 节点分配 worktree、执行�
   await assert.rejects(access(wtPath), { code: 'ENOENT' })
 })
 
-test('HTTP /api/env/exec 参数边界校验与本机受管 Shell helm 包装器入口', { timeout: 60_000 }, async () => {
+test('HTTP /api/env/exec 参数边界校验与本机受管 Shell helmx 包装器入口', { timeout: 60_000 }, async () => {
   for (const body of [
     { command: [] },
     { command: '   ' },
@@ -197,13 +197,13 @@ test('HTTP /api/env/exec 参数边界校验与本机受管 Shell helm 包装器�
     assert.equal((await response.json() as { error: { code: string } }).error.code, 'validation_error')
   }
 
-  const wrapper = await readFile(join(env.hubDir, 'bin', 'helm'), 'utf8')
+  const wrapper = await readFile(join(env.hubDir, 'bin', 'helmx'), 'utf8')
   assert.match(wrapper, /packages[\\/]cli[\\/]src[\\/]index\.ts/)
   const response = await env.request('/api/env/exec', {
     nodeId: 'local',
     cwd: env.hubDir,
     conversationId: 1,
-    command: 'helm status --json',
+    command: 'helmx status --json',
   })
   assert.equal(response.status, 200)
   const result = await response.json() as { ok: boolean; output: string }
@@ -241,7 +241,7 @@ test('节点全链路贯通：Herdr 停用时 CLI、真实模型工具、Gate �
     fauxAssistantMessage([fauxToolCall('write', { path: 'proof.txt', content: 'first' })], { stopReason: 'toolUse' }),
     fauxAssistantMessage([fauxToolCall('edit', { path: 'proof.txt', oldText: 'first', newText: 'second' })], { stopReason: 'toolUse' }),
     fauxAssistantMessage([fauxToolCall('read', { path: 'proof.txt' })], { stopReason: 'toolUse' }),
-    fauxAssistantMessage([fauxToolCall('bash', { command: 'helm status --json' })], { stopReason: 'toolUse' }),
+    fauxAssistantMessage([fauxToolCall('bash', { command: 'helmx status --json' })], { stopReason: 'toolUse' }),
     fauxAssistantMessage('node tool turn complete'),
   ])
   await kernel.submitInput(conversation.id, 'execute file edit and query Hub state')
@@ -254,7 +254,7 @@ test('节点全链路贯通：Herdr 停用时 CLI、真实模型工具、Gate �
   assert.doesNotMatch(toolResults, /"isError":true/)
   assert.match(toolResults, /authenticated/)
 
-  const gate = await kernel.runGate('test "$HELM_NODE_TEST_ORIGIN" = remote-executor', {
+  const gate = await kernel.runGate('test "$HELMX_NODE_TEST_ORIGIN" = remote-executor', {
     conversationId: conversation.id,
     cwd: wsDir,
   })
@@ -262,7 +262,7 @@ test('节点全链路贯通：Herdr 停用时 CLI、真实模型工具、Gate �
 
   const executed = await env.cli([
     'env', 'exec', '--node', 'integration-node', '--cwd', wsDir, '--json', '--',
-    process.execPath, '-e', 'process.stdout.write(JSON.stringify({origin:process.env.HELM_NODE_TEST_ORIGIN,dataDir:process.env.HELM_DATA_DIR,hubUrl:process.env.HELM_HUB_URL}))',
+    process.execPath, '-e', 'process.stdout.write(JSON.stringify({origin:process.env.HELMX_NODE_TEST_ORIGIN,dataDir:process.env.HELMX_DATA_DIR,hubUrl:process.env.HELMX_HUB_URL}))',
   ])
   assert.equal(executed.code, 0, executed.err)
   const remoteEnvironment = JSON.parse(JSON.parse(executed.out).output)
@@ -281,7 +281,7 @@ test('节点全链路贯通：Herdr 停用时 CLI、真实模型工具、Gate �
     parentConversationId: 1,
     agentType: 'node-expert',
     prompt: 'execute node dedicated household task',
-    gate: 'test "$HELM_NODE_TEST_ORIGIN" = remote-executor && printf gate >> native-gate',
+    gate: 'test "$HELMX_NODE_TEST_ORIGIN" = remote-executor && printf gate >> native-gate',
     onResolved: (info) => { childId = info.conversationId },
   })
   assert.ok(childId)

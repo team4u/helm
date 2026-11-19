@@ -8,7 +8,7 @@ import { fauxAssistantMessage, fauxProvider, fauxToolCall, type FauxResponseFact
 import { KernelRuntime } from '../src/runtime/index.js'
 
 test('concurrent native-spawn structured output subagents isolate validation and result slots per conversation', { timeout: 60_000 }, async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'helm-structured-concurrent-'))
+  const dir = await mkdtemp(join(tmpdir(), 'helmx-structured-concurrent-'))
   const models = createModels()
   const faux = fauxProvider()
   models.setProvider(faux.provider)

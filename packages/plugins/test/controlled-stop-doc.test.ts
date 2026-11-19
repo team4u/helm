@@ -19,10 +19,10 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
-import { HelmError, type ConversationSummary, type EnvExecResponse, type PluginDefinition, type PluginDocHandle, type PublicPluginDoc } from '@helm/protocol'
+import { HelmxError, type ConversationSummary, type EnvExecResponse, type PluginDefinition, type PluginDocHandle, type PublicPluginDoc } from '@helmx/protocol'
 import { PluginHost, type PluginDocStore } from '../../kernel/src/plugins/index.js'
 import { PluginHostBackendFixtureBase } from '../../kernel/test/helpers/plugin-host-backend.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { makeConversationSummary } from './helpers/plugin-test-env.js'
 
 /** 初始会话 id（SDK 保留 #1 承载；普通会话语义，无产品级特权）。 */
@@ -58,7 +58,7 @@ class FakeBackend extends PluginHostBackendFixtureBase {
   }
   getConversation(id: number): ConversationSummary {
     const found = this.conversations.get(id)
-    if (found === undefined) throw new HelmError('not_found', `会话不存在: ${id}`, 404)
+    if (found === undefined) throw new HelmxError('not_found', `会话不存在: ${id}`, 404)
     return found
   }
   updateConversation(id: number): Promise<ConversationSummary> {
@@ -67,7 +67,7 @@ class FakeBackend extends PluginHostBackendFixtureBase {
   abortConversation(): Promise<void> {
     return Promise.resolve()
   }
-  getConversationOwnership(): 'helm' | 'bot' | 'human' {
+  getConversationOwnership(): 'helmx' | 'bot' | 'human' {
     return 'human'
   }
   spawnAgent(): Promise<unknown> {
@@ -87,7 +87,7 @@ class FakeBackend extends PluginHostBackendFixtureBase {
     return { idempotent: false }
   }
   execEnv(): Promise<EnvExecResponse> {
-    return Promise.reject(new HelmError('unsupported', '本 fixture 不执行节点命令', 501))
+    return Promise.reject(new HelmxError('unsupported', '本 fixture 不执行节点命令', 501))
   }
   withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') }
   listActions(): never[] {
@@ -98,7 +98,7 @@ class FakeBackend extends PluginHostBackendFixtureBase {
   }
   markConversationOwnership(): void {}
   createAsk(): Promise<never> {
-    return Promise.reject(new HelmError('unsupported', '测试后端不提供 ask', 501))
+    return Promise.reject(new HelmxError('unsupported', '测试后端不提供 ask', 501))
   }
   cancelAsk(): Promise<void> {
     return Promise.resolve()
@@ -212,7 +212,7 @@ function makeHost(options: { deferServices?: boolean } = {}): PluginHost {
 }
 
 beforeEach(() => {
-  dataDir = mkdtempSync(join(tmpdir(), 'helm-stop-doc-'))
+  dataDir = mkdtempSync(join(tmpdir(), 'helmx-stop-doc-'))
   backend = new FakeBackend()
   docs = new JsonDocStore()
   sessionDocs = new JsonSessionDocStore()
@@ -251,7 +251,7 @@ function stopWriterPlugin(id: string, opts: { writeKey: string; failStop?: boole
           // 常规 guard 此时已因 deactivating 拒绝，受控停止窗口必须放行。
           await delay(30)
           handle.set({ phase: 'stopped-final', key: opts.writeKey })
-          if (opts.failStop) throw new HelmError('stop_boom', `${id} stop 故意失败`, 500)
+          if (opts.failStop) throw new HelmxError('stop_boom', `${id} stop 故意失败`, 500)
         },
       })
     },
@@ -271,13 +271,13 @@ test('disable 路径：service.stop 内经 await 后仍能写 ctx.doc，且序�
   // stop 返回后：同句柄写入立即恢复拒绝
   assert.throws(
     () => firstHandle.current!.set({ phase: 'after-stop' }),
-    (err: unknown) => err instanceof HelmError && err.code === 'plugin_context_expired',
+    (err: unknown) => err instanceof HelmxError && err.code === 'plugin_context_expired',
     'stop 返回后写入必须被拒',
   )
   const flushCalls = docs.flushCalls
   await assert.rejects(
     firstHandle.current!.flush(),
-    (err: unknown) => err instanceof HelmError && err.code === 'plugin_context_expired',
+    (err: unknown) => err instanceof HelmxError && err.code === 'plugin_context_expired',
   )
   assert.equal(docs.flushCalls, flushCalls, '失效句柄不能再触发底层 flush')
   await host.dispose()
@@ -333,7 +333,7 @@ test('窗口边界：stop 返回后运行期残留回调写入被拒（窗口不
   gateRef.release() // 窗口确定关闭后放行残留链
   await strayWrite
   assert.equal(strayErrors.length, 1, `stop 返回后残留写入应恰好被拒一次（实际 ${JSON.stringify(strayErrors)}）`)
-  assert.ok(strayErrors[0] instanceof HelmError && strayErrors[0].code === 'plugin_context_expired')
+  assert.ok(strayErrors[0] instanceof HelmxError && strayErrors[0].code === 'plugin_context_expired')
   await host.dispose()
 })
 
@@ -395,10 +395,10 @@ test('窗口边界：reenable 后旧周期句柄写入被拒（epoch 更替）',
   // 旧句柄（firstHandle 闭包 epoch=1）在新周期（epoch=2）写入/读取均被拒
   assert.throws(
     () => firstHandle.current!.set({ phase: 'old-cycle' }),
-    (err: unknown) => err instanceof HelmError && err.code === 'plugin_context_expired',
+    (err: unknown) => err instanceof HelmxError && err.code === 'plugin_context_expired',
     'reenable 后旧周期句柄必须被拒',
   )
-  assert.throws(() => firstHandle.current!.get(), (err: unknown) => err instanceof HelmError && err.code === 'plugin_context_expired')
+  assert.throws(() => firstHandle.current!.get(), (err: unknown) => err instanceof HelmxError && err.code === 'plugin_context_expired')
   await host.dispose()
 })
 
@@ -484,7 +484,7 @@ test('start 屏障：某插件 start 失败且先前插件 stop 失败，错误�
         start() {},
         async stop() {
           await delay(10)
-          throw new HelmError('stop_boom', 'first 的 stop 故意失败', 500)
+          throw new HelmxError('stop_boom', 'first 的 stop 故意失败', 500)
         },
       })
     },
@@ -497,7 +497,7 @@ test('start 屏障：某插件 start 失败且先前插件 stop 失败，错误�
       ctx.service({
         id: 'svc',
         async start() {
-          throw new HelmError('start_boom', 'second 的 start 故意失败', 500)
+          throw new HelmxError('start_boom', 'second 的 start 故意失败', 500)
         },
         async stop() {},
       })
@@ -507,7 +507,7 @@ test('start 屏障：某插件 start 失败且先前插件 stop 失败，错误�
     () => undefined,
     (e: unknown) => e,
   )
-  assert.ok(err instanceof HelmError, `应抛 HelmError（实际 ${String(err)}）`)
+  assert.ok(err instanceof HelmxError, `应抛 HelmxError（实际 ${String(err)}）`)
   assert.equal(err.code, 'start_boom', '保留原始 start 失败 code（不被 stop 失败覆盖）')
   assert.equal(err.status, 500)
   const details = err.details as { rollbackStopErrors?: Array<{ pluginId: string; stopErrors: Array<{ serviceId: string; error: { message: string } }> }> }
@@ -570,13 +570,13 @@ test('flush 失败：durable 快照 flush 失败时 run 拒绝且零 spawn（不
   await host.register(createWorkflowPlugin())
   // flush 失败（真实持久层故障形态）：durable running 快照已写但落盘失败——
   // 副作用 spawn 必须被拒绝，错误显式上抛给调用方（绝不静默降级继续 spawn）。
-  docs.flushFail = new HelmError('store_flush_failed', '持久层冲刷失败（测试注入）', 500)
+  docs.flushFail = new HelmxError('store_flush_failed', '持久层冲刷失败（测试注入）', 500)
   await assert.rejects(
     () =>
       host.invokeAction('builtin:workflow', 'run', {
         script: 'export const meta = { name: "bg-flush-fail", description: "d" }\nconst v = await agent("bg 任务")\nreturn v',
       }, { conversationId: 1 }),
-    (err: unknown) => err instanceof HelmError,
+    (err: unknown) => err instanceof HelmxError,
     'flush 失败必须使 run 显式失败',
   )
   assert.equal(spawnCalls, 0, `flush 失败后不得启动 spawn（实际 ${spawnCalls}）`)

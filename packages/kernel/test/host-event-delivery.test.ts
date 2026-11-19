@@ -9,7 +9,7 @@
  *
  * Current contract:
  * 1. Public broadcast emitHostEvent('conversation.entry', etc.): internal listeners fire once,
- *    receiving the validated + redacted HelmEvent envelope; returned Promise settles only after
+ *    receiving the validated + redacted HelmxEvent envelope; returned Promise settles only after
  *    all registered async internal listeners finish (awaitable emitEvent contract); SSE emits 1 frame.
  * 2. Kernel-generated events (real commit -> tracker publishes conversation.entry): internal
  *    listeners and SSE frames correspond 1-to-1, once each with zero duplicates.
@@ -20,11 +20,11 @@
  * Runner: tsx --test; every test specifies explicit timeout against deadlocks.
  */
 import { strict as assert } from 'node:assert'
-import { withTimeout } from '@helm/test-kit'
+import { withTimeout } from '@helmx/test-kit'
 import { after, before, describe, it } from 'node:test'
 import { join } from 'node:path'
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
-import type { HelmEventFrame, MaybePromise } from '@helm/protocol'
+import type { HelmxEventFrame, MaybePromise } from '@helmx/protocol'
 import { KernelRuntime } from '../src/runtime/index.js'
 import { EventHub } from '../src/runtime/events.js'
 import { cleanupDir, deferred, makeFauxModels, makeTempDir } from './helpers.js'
@@ -34,7 +34,7 @@ type FauxHandle = ReturnType<typeof makeFauxModels>['faux']
 let root: string
 
 before(async () => {
-  root = await makeTempDir('helm-host-event-delivery-')
+  root = await makeTempDir('helmx-host-event-delivery-')
 })
 
 after(async () => {
@@ -63,7 +63,7 @@ async function registerEntryListener(
     definePlugin(ctx) {
       ctx.host.onEvent('conversation.entry', (raw) => {
         const entry = (raw as { entry?: { id?: string } }).entry
-        if (entry?.id === undefined) throw new Error('internal listener must receive HelmEvent envelope (missing entry field)')
+        if (entry?.id === undefined) throw new Error('internal listener must receive HelmxEvent envelope (missing entry field)')
         return onCall(entry.id)
       })
     },
@@ -82,7 +82,7 @@ describe('host event single-delivery contract', { timeout: 60_000 }, () => {
         await gate.promise
         completed += 1
       })
-      const frames: HelmEventFrame[] = []
+      const frames: HelmxEventFrame[] = []
       kernel.events.subscribe((frame) => {
         if (frame.event.type === 'conversation.entry') frames.push(frame)
       })
@@ -90,7 +90,7 @@ describe('host event single-delivery contract', { timeout: 60_000 }, () => {
       const settled = deferred()
       const emit = kernel.emitHostEvent('conversation.entry', {
         conversationId: 1,
-        entry: { id: 'manual-e1', kind: 'helm.note', createdAt: 1, data: { n: 1 } },
+        entry: { id: 'manual-e1', kind: 'helmx.note', createdAt: 1, data: { n: 1 } },
       })
       assert.ok(emit instanceof Promise, 'emitEvent broadcast path returns an awaitable delivery Promise')
       void Promise.resolve(emit).then(() => settled.resolve(), () => settled.resolve())
@@ -233,7 +233,7 @@ describe('host event single-delivery contract', { timeout: 60_000 }, () => {
           })
         },
       })
-      const frames: HelmEventFrame[] = []
+      const frames: HelmxEventFrame[] = []
       kernel.events.subscribe((frame) => frames.push(frame))
       const seqBefore = kernel.events.seq
 

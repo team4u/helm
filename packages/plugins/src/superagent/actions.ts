@@ -1,9 +1,9 @@
 import {
-  HelmError,
+  HelmxError,
   assertProfileId,
-  type HelmPluginContext,
+  type HelmxPluginContext,
   type PluginToolContext,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 import {
   ROUTER_TOOL_SCOPE,
   SUPERAGENT_PLUGIN_ID,
@@ -37,7 +37,7 @@ function assertRouterAuthority(
 ): void {
   if (conversationId === undefined) return // 人工 HTTP/CLI 调用：无会话上下文放行
   if (conversationId !== routerConversationId) {
-    throw new HelmError(
+    throw new HelmxError(
       'conversation_scope_violation',
       `该操作仅允许在 SuperAgent 中枢会话内执行，当前会话 #${conversationId} 不是中枢`,
       403,
@@ -49,7 +49,7 @@ function assertRouterAuthority(
 export function assertThreadKey(key: string): string {
   const trimmed = key.trim()
   if (trimmed === '' || trimmed.length > 200) {
-    throw new HelmError('validation_error', `threadKey 非法（需 1..200 字符，收到：${key}）`, 400, {})
+    throw new HelmxError('validation_error', `threadKey 非法（需 1..200 字符，收到：${key}）`, 400, {})
   }
   return trimmed
 }
@@ -79,7 +79,7 @@ const dispatchInputSchema: Record<string, unknown> = {
 }
 
 export function registerSuperAgentActions(
-  ctx: HelmPluginContext,
+  ctx: HelmxPluginContext,
   coordinator: SuperAgentCoordinator,
 ): void {
   const {
@@ -102,18 +102,18 @@ export function registerSuperAgentActions(
   ): Promise<{ workerConversationId: number }> => {
     assertRouterAuthority(conversationId, getRouterConversationId())
     if (typeof input.prompt !== 'string' || input.prompt.trim() === '') {
-      throw new HelmError('validation_error', 'dispatch_worker 需要 prompt（非空文本）', 400, {})
+      throw new HelmxError('validation_error', 'dispatch_worker 需要 prompt（非空文本）', 400, {})
     }
     const routerConversationId = getRouterConversationId()
     if (routerConversationId === undefined) {
-      throw new HelmError('superagent_not_ready', 'SuperAgent 中枢尚未自举完成', 409, {
+      throw new HelmxError('superagent_not_ready', 'SuperAgent 中枢尚未自举完成', 409, {
         pluginId: SUPERAGENT_PLUGIN_ID,
       })
     }
     if (input.profileId !== undefined) assertProfileId(input.profileId)
     const targetProfile = input.profileId ?? 'assistant'
     if (SUPERAGENT_PROFILE_IDS.includes(targetProfile)) {
-      throw new HelmError(
+      throw new HelmxError(
         'validation_error',
         `dispatch_worker 禁止派生中枢/看门狗 Profile（${targetProfile}），避免自激`,
         400,
@@ -121,7 +121,7 @@ export function registerSuperAgentActions(
       )
     }
     if ((await ctx.host.profiles.get(targetProfile)) === undefined) {
-      throw new HelmError('validation_error', `Profile 不存在：${targetProfile}`, 400, { profileId: targetProfile })
+      throw new HelmxError('validation_error', `Profile 不存在：${targetProfile}`, 400, { profileId: targetProfile })
     }
     const threadKey = input.threadKey === undefined ? undefined : assertThreadKey(input.threadKey)
     const title =
@@ -136,7 +136,7 @@ export function registerSuperAgentActions(
         const existing = readSubscriptions().subscriptions.find((s) => s.threadKey === threadKey)
         if (existing !== undefined) {
           if (isRegisteredWorker(existing.workerConversationId)) {
-            throw new HelmError(
+            throw new HelmxError(
               'superagent_thread_key_conflict',
               `threadKey '${threadKey}' 已被 Worker #${existing.workerConversationId} 订阅；如需改绑请先 archive_worker 解绑`,
               409,
@@ -164,7 +164,7 @@ export function registerSuperAgentActions(
         createdAt: Date.now(),
       }
       try {
-        ctx.host.markConversationOwnership(worker.id, 'helm')
+        ctx.host.markConversationOwnership(worker.id, 'helmx')
         updateIndex((doc) => ({ ...doc, workers: [...doc.workers, workerEntry] }))
         if (threadKey !== undefined) {
           updateSubscriptions((doc) => ({
@@ -212,7 +212,7 @@ export function registerSuperAgentActions(
       failures.push(err)
     }
     if (failures.length > 0) {
-      throw new HelmError(
+      throw new HelmxError(
         'superagent_dispatch_rollback_failed',
         `Worker #${workerId} 提交失败后回滚不完整（${failures.length} 项）：原始错误 ${cause instanceof Error ? cause.message : String(cause)}；回滚错误 ${failures.map((e) => (e instanceof Error ? e.message : String(e))).join('; ')}，请人工核对 index/subscriptions doc`,
         500,
@@ -228,7 +228,7 @@ export function registerSuperAgentActions(
     assertRouterAuthority(conversationId, getRouterConversationId())
     const workerId = assertWorkerConversationId(input.workerConversationId)
     if (!isRegisteredWorker(workerId)) {
-      throw new HelmError('not_found', `会话 #${workerId} 不是已登记的后台 Worker`, 404, {
+      throw new HelmxError('not_found', `会话 #${workerId} 不是已登记的后台 Worker`, 404, {
         workerConversationId: workerId,
       })
     }
@@ -254,7 +254,7 @@ export function registerSuperAgentActions(
     assertRouterAuthority(conversationId, getRouterConversationId())
     const limit = input.limit === undefined ? 10 : input.limit
     if (typeof limit !== 'number' || !Number.isInteger(limit) || limit <= 0 || limit > 100) {
-      throw new HelmError('validation_error', `limit 必须是 1..100 整数（收到：${String(input.limit)}）`, 400, {})
+      throw new HelmxError('validation_error', `limit 必须是 1..100 整数（收到：${String(input.limit)}）`, 400, {})
     }
     const query = input.query === undefined ? '' : String(input.query)
     return { nodes: searchRecallNodes(coordinator.getDocs().recall.get(), query, limit) }
@@ -268,13 +268,13 @@ export function registerSuperAgentActions(
     const key = assertThreadKey(input.threadKey)
     const workerId = assertWorkerConversationId(input.workerConversationId)
     if (!isRegisteredWorker(workerId)) {
-      throw new HelmError('not_found', `会话 #${workerId} 不是已登记的后台 Worker`, 404, {
+      throw new HelmxError('not_found', `会话 #${workerId} 不是已登记的后台 Worker`, 404, {
         workerConversationId: workerId,
       })
     }
     return enqueueDispatch(async () => {
       if (!isRegisteredWorker(workerId)) {
-        throw new HelmError('not_found', `会话 #${workerId} 已不是活跃 Worker`, 404, {
+        throw new HelmxError('not_found', `会话 #${workerId} 已不是活跃 Worker`, 404, {
           workerConversationId: workerId,
         })
       }
@@ -284,7 +284,7 @@ export function registerSuperAgentActions(
           return { threadKey: key, workerConversationId: workerId } // 幂等重订
         }
         if (isRegisteredWorker(existing.workerConversationId)) {
-          throw new HelmError(
+          throw new HelmxError(
             'superagent_thread_key_conflict',
             `threadKey '${key}' 已被 Worker #${existing.workerConversationId} 订阅，拒绝静默抢占`,
             409,
@@ -313,13 +313,13 @@ export function registerSuperAgentActions(
     const summary = readConversationOrUndefined(workerId)
     const registered = readIndex().workers.some((w) => w.conversationId === workerId)
     if (summary === undefined || !registered || !summary.tags.includes(WORKER_TAG)) {
-      throw new HelmError('not_found', `会话 #${workerId} 不是 builtin:superagent 登记的后台 Worker`, 404, {
+      throw new HelmxError('not_found', `会话 #${workerId} 不是 builtin:superagent 登记的后台 Worker`, 404, {
         workerConversationId: workerId,
       })
     }
     if (summary.tags.includes(WORKER_ARCHIVED_TAG)) return { archived: true }
     if (summary.status === 'working' || summary.status === 'blocked' || settlingWorkers.has(workerId)) {
-      throw new HelmError(
+      throw new HelmxError(
         'superagent_worker_busy',
         settlingWorkers.has(workerId) && summary.status !== 'working' && summary.status !== 'blocked'
           ? `Worker #${workerId} 正在结算上一回合（写记忆图谱/汇报中枢），拒绝归档`
@@ -331,10 +331,10 @@ export function registerSuperAgentActions(
     return enqueueDispatch(async () => {
       const fresh = readConversationOrUndefined(workerId)
       if (fresh === undefined || !fresh.tags.includes(WORKER_TAG)) {
-        throw new HelmError('not_found', `会话 #${workerId} 已不是活跃 Worker`, 404, { workerConversationId: workerId })
+        throw new HelmxError('not_found', `会话 #${workerId} 已不是活跃 Worker`, 404, { workerConversationId: workerId })
       }
       if (fresh.status === 'working' || fresh.status === 'blocked' || settlingWorkers.has(workerId)) {
-        throw new HelmError(
+        throw new HelmxError(
           'superagent_worker_busy',
           `Worker #${workerId} 已进入运行（${fresh.status}）或正在结算，拒绝归档`,
           409,
@@ -358,7 +358,7 @@ export function registerSuperAgentActions(
   ): Promise<{ routerMode: boolean }> => {
     assertRouterAuthority(conversationId, getRouterConversationId())
     if (typeof input.enabled !== 'boolean') {
-      throw new HelmError('validation_error', 'enabled 必须是布尔值', 400, {})
+      throw new HelmxError('validation_error', 'enabled 必须是布尔值', 400, {})
     }
     await ctx.host.setConfig({ routerMode: input.enabled })
     const applied = coordinator.getConfig()

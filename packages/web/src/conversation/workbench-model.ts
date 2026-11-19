@@ -6,8 +6,8 @@
  * - 汇总顶栏「工作台」按钮总角标计数与最高优先级色调（warn > accent > neutral）；
  * - 解析当前有效激活页签（无效页签回退首个可用页签）。
  */
-import type { ArtifactKind, ArtifactMetadata, HelmLocale, WorkbenchPanelBadgeSpec, WorkbenchPanelSpec } from '@helm/protocol/browser'
-import { resolveLocalizedText } from '@helm/protocol/browser'
+import type { ArtifactKind, ArtifactMetadata, HelmxLocale, WorkbenchPanelBadgeSpec, WorkbenchPanelSpec } from '@helmx/protocol/browser'
+import { resolveLocalizedText } from '@helmx/protocol/browser'
 import { createWebTranslator, englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 import type { GroupedUiSpecs } from '../lib/types.js'
 
@@ -100,7 +100,7 @@ export function buildWorkbenchTabs(input: {
   /** 当前会话 ID（badge 按会话索引时使用）。 */
   conversationId: number | undefined
   /** 面板 label（LocalizedText）的解析 locale。 */
-  locale: HelmLocale
+  locale: HelmxLocale
   /** 可选 Web 翻译器（未传时按 input.locale 派生）。 */
   t?: WebMessageTranslator
 }): WorkbenchTab[] {

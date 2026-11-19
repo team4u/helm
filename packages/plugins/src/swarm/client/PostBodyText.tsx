@@ -6,7 +6,7 @@
  */
 import { useState } from 'react'
 import type { ReactNode } from 'react'
-import { resolveLocalizedText, usePluginLocale } from '@helm/plugin-client'
+import { resolveLocalizedText, usePluginLocale } from '@helmx/plugin-client'
 import { previewPostBody } from './board-model.ts'
 import { SW_BODY_COLLAPSE, SW_BODY_EXPAND } from './copy.ts'
 

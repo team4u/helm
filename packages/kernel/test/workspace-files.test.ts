@@ -14,8 +14,8 @@ import http from 'node:http'
 import { after, before, describe, it } from 'node:test'
 import { chmod, mkdir, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { HelmError } from '@helm/protocol'
-import { createNodeDaemon } from '@helm/node'
+import { HelmxError } from '@helmx/protocol'
+import { createNodeDaemon } from '@helmx/node'
 import {
   KernelRuntime,
   MAX_ARTIFACT_BYTES,
@@ -141,7 +141,7 @@ describe('workspace file reader & HTTP GET /api/conversations/:id/files/content'
   let convId: number
 
   before(async () => {
-    root = await makeTempDir('helm-ws-files-')
+    root = await makeTempDir('helmx-ws-files-')
     dataDir = join(root, 'data')
     workspaceDir = join(root, 'workspace')
     outsideDir = join(root, 'outside')
@@ -336,7 +336,7 @@ describe('workspace file reader & HTTP GET /api/conversations/:id/files/content'
       artifacts: kernel.artifacts,
       plugins: kernel.plugins,
       listConversations: () => [],
-      getConversationDetail: () => { throw new HelmError('not_found', 'missing', 404) },
+      getConversationDetail: () => { throw new HelmxError('not_found', 'missing', 404) },
       createConversation: () => { throw new Error('unused') },
       updateConversation: () => { throw new Error('unused') },
       deleteConversation: () => {},

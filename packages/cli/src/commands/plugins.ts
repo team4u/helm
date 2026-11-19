@@ -3,10 +3,10 @@
  * (DX loop), install/update/remove (managed package management), and actions list.
  * In addition to --input <json>, config supports repeatable --set key=value (values parsed
  * as JSON boolean/number when valid, otherwise string). plugins init scaffolds local
- * plugins using minimal/full/app templates (app artifacts pass helm apps validate directly).
+ * plugins using minimal/full/app templates (app artifacts pass helmx apps validate directly).
  */
 import {
-  HelmError,
+  HelmxError,
   PREBUILT_CLIENT_DIR_NAME,
   type ActionManifest,
   type BuildPluginClientBundleDirOptions,
@@ -19,7 +19,7 @@ import {
   type PluginRescanResult,
   type PluginSummary,
   type PluginUpdateResult,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
 import { CliError } from '../errors.js'
@@ -79,7 +79,7 @@ async function watchSessionDoc(
         try {
           payload = JSON.parse(data)
         } catch {
-          ctx.io.err(`helm: ignoring non-JSON SSE frame (${data.slice(0, 120)})\n`)
+          ctx.io.err(`helmx: ignoring non-JSON SSE frame (${data.slice(0, 120)})\n`)
           return
         }
         if (ctx.json) {
@@ -240,7 +240,7 @@ export function pluginsCommands(): CommandSpec[] {
       'Read a public plugin document (GET /api/plugins/:id/docs/:name; --conversation/--current reads a session doc; --watch subscribes to session doc SSE)',
     flags: [
       { name: 'conversation', type: 'number', help: 'target conversation ID for session document (mutually exclusive with --current)' },
-      { name: 'current', type: 'boolean', help: 'use HELM_CONVERSATION_ID from environment (mutually exclusive with --conversation)' },
+      { name: 'current', type: 'boolean', help: 'use HELMX_CONVERSATION_ID from environment (mutually exclusive with --conversation)' },
       { name: 'watch', type: 'boolean', help: 'subscribe to dedicated SSE for a session document (requires --conversation/--current; Ctrl-C to exit)' },
     ],
     positional: '<pluginId> <name>',
@@ -339,7 +339,7 @@ export function pluginsCommands(): CommandSpec[] {
       }
       const response = await hub.raw(path)
       const code = await response.text()
-      const contentHash = response.headers.get('x-helm-client-hash') ?? ''
+      const contentHash = response.headers.get('x-helmx-client-hash') ?? ''
       if (ctx.json) {
         printResult(ctx, {
           pluginId: id,
@@ -468,7 +468,7 @@ export function pluginsCommands(): CommandSpec[] {
       } else {
         ctx.io.out(`Registered ${result.registered.length} new plugin(s) (disabled by default):\n`)
         for (const id of result.registered) ctx.io.out(`  - ${id}\n`)
-        ctx.io.out('Enable with: helm plugins enable <id>\n')
+        ctx.io.out('Enable with: helmx plugins enable <id>\n')
       }
       ctx.io.out(`(skipped ${result.skipped} directory(ies); ${result.plugins.length} plugin(s) total)\n`)
     },
@@ -477,14 +477,14 @@ export function pluginsCommands(): CommandSpec[] {
   cmds.push({
     path: ['plugins', 'init'],
     description:
-      'Local scaffold: generate an external plugin skeleton in the target directory without contacting Hub; --template app passes helm apps validate',
+      'Local scaffold: generate an external plugin skeleton in the target directory without contacting Hub; --template app passes helmx apps validate',
     flags: [
       { name: 'dir', type: 'string', help: 'target parent directory (defaults to <dataDir>/plugins; must exist or be creatable)' },
       { name: 'name', type: 'string', help: 'plugin directory name and default id (alphanumeric plus - _, defaults to sample-plugin)' },
       {
         name: 'template',
         type: 'string',
-        help: 'skeleton template: minimal (backend ping action only) | full (doc/action/workbench panel) | app (full-stack micro-app: doc/actions/screen + sidebar item, passes helm apps validate); defaults to full',
+        help: 'skeleton template: minimal (backend ping action only) | full (doc/action/workbench panel) | app (full-stack micro-app: doc/actions/screen + sidebar item, passes helmx apps validate); defaults to full',
       },
       { name: 'force', type: 'boolean', help: 'proceed even if target directory is non-empty (rejected by default to prevent overwriting)' },
     ],
@@ -547,7 +547,7 @@ export function pluginsCommands(): CommandSpec[] {
       ctx.io.out(
         result.summary.enabled
           ? 'Status: enabled\n'
-          : `Status: disabled (enable with: helm plugins enable ${result.summary.id})\n`,
+          : `Status: disabled (enable with: helmx plugins enable ${result.summary.id})\n`,
       )
     },
   })
@@ -771,8 +771,8 @@ async function runPluginsInit(ctx: CommandContext): Promise<void> {
     targetExisted,
     nextSteps:
       template === 'app'
-        ? [`helm plugins doctor ${target}`, `helm apps validate ${target}`, `helm apps publish ${target}`]
-        : [`helm plugins doctor ${target}`, 'helm plugins rescan', `helm plugins enable ${name}`],
+        ? [`helmx plugins doctor ${target}`, `helmx apps validate ${target}`, `helmx apps publish ${target}`]
+        : [`helmx plugins doctor ${target}`, 'helmx plugins rescan', `helmx plugins enable ${name}`],
   }
   if (ctx.json) {
     printResult(ctx, summary)
@@ -931,23 +931,23 @@ async function runPluginsBuild(ctx: CommandContext): Promise<void> {
 
   const pluginJson = await readOptionalManifestObject(path.join(pluginDir, 'plugin.json'), 'plugin.json')
   const packageJson = await readOptionalManifestObject(path.join(pluginDir, 'package.json'), 'package.json')
-  const helmFieldRaw = packageJson?.['helm']
+  const helmxFieldRaw = packageJson?.['helmx']
   if (
-    helmFieldRaw !== undefined &&
-    (helmFieldRaw === null || typeof helmFieldRaw !== 'object' || Array.isArray(helmFieldRaw))
+    helmxFieldRaw !== undefined &&
+    (helmxFieldRaw === null || typeof helmxFieldRaw !== 'object' || Array.isArray(helmxFieldRaw))
   ) {
-    throw new CliError(`package.json helm field in ${pluginDir} must be an object`, 'invalid_plugin_manifest')
+    throw new CliError(`package.json helmx field in ${pluginDir} must be an object`, 'invalid_plugin_manifest')
   }
-  const helmField = helmFieldRaw as Record<string, unknown> | undefined
+  const helmxField = helmxFieldRaw as Record<string, unknown> | undefined
 
-  const rawId = pluginJson?.['id'] ?? helmField?.['id'] ?? packageJson?.['name']
+  const rawId = pluginJson?.['id'] ?? helmxField?.['id'] ?? packageJson?.['name']
   const pluginId = typeof rawId === 'string' && rawId.trim().length > 0 ? rawId.trim() : path.basename(pluginDir)
 
   const manifestClientRoot =
     typeof pluginJson?.['clientRoot'] === 'string'
       ? pluginJson['clientRoot']
-      : typeof helmField?.['clientRoot'] === 'string'
-        ? helmField['clientRoot']
+      : typeof helmxField?.['clientRoot'] === 'string'
+        ? helmxField['clientRoot']
         : undefined
   let clientRoot: string
   if (manifestClientRoot !== undefined && manifestClientRoot.length > 0) {
@@ -972,8 +972,8 @@ async function runPluginsBuild(ctx: CommandContext): Promise<void> {
     const manifestDist =
       typeof pluginJson?.['clientDist'] === 'string'
         ? pluginJson['clientDist']
-        : typeof helmField?.['clientDist'] === 'string'
-          ? helmField['clientDist']
+        : typeof helmxField?.['clientDist'] === 'string'
+          ? helmxField['clientDist']
           : undefined
     if (manifestDist !== undefined && manifestDist.length > 0) {
       outDir = path.resolve(pluginDir, manifestDist)
@@ -984,7 +984,7 @@ async function runPluginsBuild(ctx: CommandContext): Promise<void> {
   }
 
   const specSet = new Set<string>()
-  for (const list of [pluginJson?.['clientDependencies'], helmField?.['clientDependencies']]) {
+  for (const list of [pluginJson?.['clientDependencies'], helmxField?.['clientDependencies']]) {
     if (list === undefined) continue
     if (!Array.isArray(list) || list.some((x) => typeof x !== 'string' || x.trim().length === 0)) {
       throw new CliError(`clientDependencies in ${pluginDir} must be an array of non-empty strings`, 'invalid_plugin_manifest')
@@ -995,8 +995,8 @@ async function runPluginsBuild(ctx: CommandContext): Promise<void> {
     specSet.size > 0 ? [{ specifiers: [...specSet], packageRoot: pluginDir }] : []
   const explicitModules = repeatedValues(parsed.flags, 'module')
 
-  // Dynamically load the workspace/runtime build package without creating a static @helm/cli -> @helm/plugin-build dependency edge.
-  const pluginBuildPkg = ['@helm', 'plugin-build'].join('/')
+  // Dynamically load the workspace/runtime build package without creating a static @helmx/cli -> @helmx/plugin-build dependency edge.
+  const pluginBuildPkg = ['@helmx', 'plugin-build'].join('/')
   let buildMod: {
     buildPluginClientBundleDir?: (
       options: BuildPluginClientBundleDirOptions,
@@ -1036,7 +1036,7 @@ async function runPluginsBuild(ctx: CommandContext): Promise<void> {
       ...(npmRoots.length > 0 ? { npmRoots } : {}),
     })
   } catch (err) {
-    if (err instanceof HelmError) {
+    if (err instanceof HelmxError) {
       throw new CliError(err.message, err.code, 1, err.details)
     }
     throw err

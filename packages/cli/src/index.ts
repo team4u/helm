@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * helm CLI main entry point.
+ * helmx CLI main entry point.
  * - runCli(argv, options) is the sole test/embed entry; direct CLI invocation executes only when import.meta.url === argv[1].
  * - Command dispatch: core static commands match exactly with top priority; /api/actions is fetched to build
  *   dynamic commands only when no core command matches (and conflicts are validated and reported there).
@@ -40,8 +40,8 @@ function printHelp(
   dynamic: readonly CommandSpec[],
   diagnostics: readonly string[],
 ): void {
-  io.out('helm — minimalist durable microkernel personal assistant CLI (parity with the Web API)\n\n')
-  io.out('Usage: helm <command> [subcommand] [--flags] [--json]\n\n')
+  io.out('helmx — minimalist durable microkernel personal assistant CLI (parity with the Web API)\n\n')
+  io.out('Usage: helmx <command> [subcommand] [--flags] [--json]\n\n')
   io.out('Global options:\n')
   io.out('  --json            machine-readable JSON output (stdout; errors on stderr + non-zero exit code)\n')
   io.out('  --help, -h        show help\n\n')
@@ -67,9 +67,9 @@ function printHelp(
   } else {
     io.out('\n(No plugin action commands fetched; expected when the Hub is stopped, not logged in, or no actions are available)\n')
   }
-  io.out('\nEnvironment variables: HELM_HUB_URL (default http://127.0.0.1:3202) · HELM_TOKEN · HELM_DATA_DIR (default ~/.helm) · HELM_CONVERSATION_ID (--current)\n')
-  io.out('Cross-node: helm nodes list|issue|remove manage compute nodes; helm env exec --node <id> -- <cmd...> run across nodes; helm api <method> <path> raw HTTP\n')
-  for (const d of diagnostics) io.err(`helm: ${d}\n`)
+  io.out('\nEnvironment variables: HELMX_HUB_URL (default http://127.0.0.1:3202) · HELMX_TOKEN · HELMX_DATA_DIR (default ~/.helmx) · HELMX_CONVERSATION_ID (--current)\n')
+  io.out('Cross-node: helmx nodes list|issue|remove manage compute nodes; helmx env exec --node <id> -- <cmd...> run across nodes; helmx api <method> <path> raw HTTP\n')
+  for (const d of diagnostics) io.err(`helmx: ${d}\n`)
 }
 
 /**
@@ -128,10 +128,10 @@ function printCommandDetail(io: Io, cmd: CommandSpec): void {
 
 /**
  * Load credentials and build a HubClient; throws on corrupt credentials rather than treating them as missing.
- * HELM_TOKEN takes precedence: when explicitly set, short-circuit disk access without touching credential files.
+ * HELMX_TOKEN takes precedence: when explicitly set, short-circuit disk access without touching credential files.
  */
 async function hubFromEnv(env: NodeJS.ProcessEnv, dataDir: string, io: Io): Promise<HubClient> {
-  if (env['HELM_TOKEN']) {
+  if (env['HELMX_TOKEN']) {
     return new HubClient(resolveEndpoint(env, {}), io)
   }
   const credential = await loadCliCredential(dataDir)
@@ -193,8 +193,8 @@ export async function runCli(argv: readonly string[] = [], options: RunCliOption
       diagnostics.push(`dynamic plugin commands unavailable: ${describeError(err).message}`)
     }
     if (rest.length === 0) {
-      // Bare `helm --json` is invalid (help is plain text; never fabricate JSON output)
-      if (json) return emitError(describeError(new CliError('missing command (run helm --help for usage)', 'missing_command')))
+      // Bare `helmx --json` is invalid (help is plain text; never fabricate JSON output)
+      if (json) return emitError(describeError(new CliError('missing command (run helmx --help for usage)', 'missing_command')))
       printHelp(io, core, dynamic, diagnostics)
       return 0
     }
@@ -233,7 +233,7 @@ export async function runCli(argv: readonly string[] = [], options: RunCliOption
   }
 
   // No exact core match: resolve dynamic commands (/api/actions + conflict check; invalid cases fail explicitly).
-  // Note: if a core prefix needing more subcommands exists (e.g. `asks` from `helm asks list`),
+  // Note: if a core prefix needing more subcommands exists (e.g. `asks` from `helmx asks list`),
   // a dynamic parent-path declaration could shadow the core subcommand — reject before execution.
   const corePartial = coreMatched !== undefined && coreMatched.consumed < 0 ? coreMatched.command.path : undefined
   let dynamicSpecs: CommandSpec[]
@@ -245,14 +245,14 @@ export async function runCli(argv: readonly string[] = [], options: RunCliOption
   const matched = matchCommand([...core, ...dynamicSpecs], rest)
   if (!matched || matched.consumed < 0) {
     const head = rest.filter((t) => !isOptionLike(t)).slice(0, 2).join(' ')
-    return emitError(describeError(new CliError(`unknown command: helm ${head || '(empty)'} (run helm --help for available commands)`, 'unknown_command')))
+    return emitError(describeError(new CliError(`unknown command: helmx ${head || '(empty)'} (run helmx --help for available commands)`, 'unknown_command')))
   }
   // Dynamic command shadowing a core command (exact or prefix): reject explicitly rather than executing under an alias
   const isDynamic = !core.some((c) => c === matched.command)
   if (isDynamic && corePartial !== undefined) {
     const joined = matched.command.path.join(' ')
     return emitError(describeError(new CliError(
-      `plugin action command "helm ${joined}" shadows core command path "helm ${corePartial.join(' ')}": execution refused (check plugin cli.command declaration)`,
+      `plugin action command "helmx ${joined}" shadows core command path "helmx ${corePartial.join(' ')}": execution refused (check plugin cli.command declaration)`,
       'command_conflict',
     )))
   }

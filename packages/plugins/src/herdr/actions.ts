@@ -8,7 +8,7 @@
  *   caller-ancestor-chain authorization, parent conversation/run strict matching and exact managed (nodeId, paneId) targeting (no authorization exemption for direct calls).
  */
 
-import { HelmError, type HelmPluginContext } from '@helm/protocol'
+import { HelmxError, type HelmxPluginContext } from '@helmx/protocol'
 import type { ExternalSteerRequest, ExternalSteerResult } from '../contracts.js'
 import { HERDR_STEER_CONTROLS, targetNodeId, type HerdrTransport } from './contracts.js'
 import type { HerdrExecutor } from './executor.js'
@@ -64,11 +64,11 @@ function resolvePane(
 ): ManagedPane {
   if (input.nodeId !== undefined && input.nodeId !== '') {
     if (!isValidNodeId(input.nodeId)) {
-      throw new HelmError('validation_error', `nodeId '${input.nodeId}' is invalid`, 400, { nodeId: input.nodeId })
+      throw new HelmxError('validation_error', `nodeId '${input.nodeId}' is invalid`, 400, { nodeId: input.nodeId })
     }
     const pane = registry.get(input.nodeId === 'local' ? undefined : input.nodeId, input.paneId)
     if (pane === undefined) {
-      throw new HelmError('not_found', `pane ${input.paneId}@${input.nodeId} is not managed by builtin:herdr`, 404, {
+      throw new HelmxError('not_found', `pane ${input.paneId}@${input.nodeId} is not managed by builtin:herdr`, 404, {
         paneId: input.paneId,
         nodeId: input.nodeId,
       })
@@ -77,10 +77,10 @@ function resolvePane(
   }
   const candidates = registry.all().filter((p) => p.paneId === input.paneId)
   if (candidates.length === 0) {
-    throw new HelmError('not_found', `pane ${input.paneId} is not managed by builtin:herdr`, 404, { paneId: input.paneId })
+    throw new HelmxError('not_found', `pane ${input.paneId} is not managed by builtin:herdr`, 404, { paneId: input.paneId })
   }
   if (candidates.length > 1) {
-    throw new HelmError(
+    throw new HelmxError(
       'pane_ambiguous',
       `pane ${input.paneId} exists on multiple nodes (${candidates.map((p) => targetNodeId(p.target) ?? 'local').join(', ')}); disambiguate with the nodeId field`,
       409,
@@ -91,7 +91,7 @@ function resolvePane(
 }
 
 /** Register the four actions list / read / focus / steer (called once at herdr.ts definePlugin). */
-export function registerHerdrActions(ctx: HelmPluginContext, deps: HerdrActionsDeps): void {
+export function registerHerdrActions(ctx: HelmxPluginContext, deps: HerdrActionsDeps): void {
   // ---- actions (HTTP/CLI equal footing; read redacts to 40 lines; focus is an explicit action) ----
   ctx.action<Record<string, never>, { panes: Array<Record<string, unknown>> }>({
     id: 'list',
@@ -144,7 +144,7 @@ export function registerHerdrActions(ctx: HelmPluginContext, deps: HerdrActionsD
     async handler(input) {
       const registry = deps.registry()
       if (registry === undefined) {
-        throw new HelmError('not_found', `pane ${input.paneId} is not managed by builtin:herdr`, 404, { paneId: input.paneId })
+        throw new HelmxError('not_found', `pane ${input.paneId} is not managed by builtin:herdr`, 404, { paneId: input.paneId })
       }
       const { isValidNodeId, parsePaneRead } = await loadActionHelpers()
       const pane = resolvePane(registry, input, isValidNodeId)
@@ -181,7 +181,7 @@ export function registerHerdrActions(ctx: HelmPluginContext, deps: HerdrActionsD
     async handler(input) {
       const registry = deps.registry()
       if (registry === undefined) {
-        throw new HelmError('not_found', `pane ${input.paneId} is not managed by builtin:herdr`, 404, { paneId: input.paneId })
+        throw new HelmxError('not_found', `pane ${input.paneId} is not managed by builtin:herdr`, 404, { paneId: input.paneId })
       }
       const { isValidNodeId, parseAgentResult } = await loadActionHelpers()
       const pane = resolvePane(registry, input, isValidNodeId)
@@ -193,7 +193,7 @@ export function registerHerdrActions(ctx: HelmPluginContext, deps: HerdrActionsD
         'agent_info',
       )
       if (info.focused !== true) {
-        throw new HelmError(
+        throw new HelmxError(
           'herdr_focus_failed',
           `agent.focus returned focused=false (pane ${pane.paneId}@${targetNodeId(pane.target) ?? 'local'})`,
           502,
@@ -233,7 +233,7 @@ export function registerHerdrActions(ctx: HelmPluginContext, deps: HerdrActionsD
         executionId: { type: 'string' },
         nodeId: { type: 'string' },
         stateChangeSeq: { type: 'number', minimum: 0, description: 'The authoritative watermark observed by the pre-send precheck' },
-        ownership: { type: 'string', const: 'helm' },
+        ownership: { type: 'string', const: 'helmx' },
         guardLevel: { type: 'string', const: 'preflight', description: 'Pre-send check; no commit-point CAS promise' },
       },
       required: ['steered', 'executionId', 'nodeId', 'stateChangeSeq', 'ownership', 'guardLevel'],
@@ -241,14 +241,14 @@ export function registerHerdrActions(ctx: HelmPluginContext, deps: HerdrActionsD
     },
     cli: {
       command: ['herdr', 'steer'],
-      description: 'Supplement guidance to a managed Herdr pane (usually auto-routed via helm workflows steer <runId>)',
+      description: 'Supplement guidance to a managed Herdr pane (usually auto-routed via helmx workflows steer <runId>)',
       timeoutMs: 15_000,
     },
     async handler(input, context) {
       const registry = deps.registry()
       const executor = deps.executor()
       if (registry === undefined || executor === undefined) {
-        throw new HelmError(
+        throw new HelmxError(
           'herdr_not_connected',
           'The Herdr service is not started (target server not connected); cannot steer',
           409,
@@ -258,11 +258,11 @@ export function registerHerdrActions(ctx: HelmPluginContext, deps: HerdrActionsD
       // Exact managed-node targeting: an explicit nodeId must match the registration (the same pane on a
       // different node is not accepted; 'local' folds to the local default).
       if (input.nodeId !== 'local' && !isValidNodeId(input.nodeId)) {
-        throw new HelmError('validation_error', `nodeId '${input.nodeId}' is invalid`, 400, { nodeId: input.nodeId })
+        throw new HelmxError('validation_error', `nodeId '${input.nodeId}' is invalid`, 400, { nodeId: input.nodeId })
       }
       const pane = registry.get(input.nodeId === 'local' ? undefined : input.nodeId, input.executionId)
       if (pane === undefined) {
-        throw new HelmError(
+        throw new HelmxError(
           'not_found',
           `pane ${input.executionId}@${input.nodeId} is not managed by builtin:herdr`,
           404,
@@ -275,7 +275,7 @@ export function registerHerdrActions(ctx: HelmPluginContext, deps: HerdrActionsD
       const caller = context.conversationId
       if (caller !== undefined) {
         if (!isAncestorOrSelf(input.parentConversationId, caller, deps.parentOfConversation)) {
-          throw new HelmError(
+          throw new HelmxError(
             'herdr_steer_out_of_scope',
             `conversation ${caller} is not allowed to steer pane ${input.executionId}: the pane belongs to a run of parent conversation ${input.parentConversationId}; only itself or its ancestors (or manual HTTP/CLI) may steer`,
             403,
@@ -295,7 +295,7 @@ export function registerHerdrActions(ctx: HelmPluginContext, deps: HerdrActionsD
         executionId: pane.paneId,
         nodeId: targetNodeId(pane.target) ?? 'local',
         stateChangeSeq,
-        ownership: 'helm' as const,
+        ownership: 'helmx' as const,
         guardLevel: 'preflight' as const,
       }
     },

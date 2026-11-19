@@ -15,7 +15,7 @@ import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 
 import { join } from 'node:path'
 import { after, before, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import { EDIT_TOOL_RESULT_SCHEMA, validateOrThrow, type EditToolResult } from '@helm/protocol'
+import { EDIT_TOOL_RESULT_SCHEMA, validateOrThrow, type EditToolResult } from '@helmx/protocol'
 import { KernelRuntime } from '../src/runtime/index.js'
 import {
   ArtifactService,
@@ -35,7 +35,7 @@ import {
   runGate,
   runShell,
 } from '../src/runtime/tools.js'
-import type { HelmToolDeps } from '../src/runtime/tool-deps.js'
+import type { HelmxToolDeps } from '../src/runtime/tool-deps.js'
 import { cleanupDir, makeFauxModels, makeTempDir } from './helpers.js'
 
 type FauxHandle = ReturnType<typeof makeFauxModels>['faux']
@@ -52,7 +52,7 @@ async function openRuntime(dir: string) {
 }
 
 /** real service dependency: real ArtifactService(Promise signature)+ real SecretStash. */
-async function makeRealDeps(dir: string, stash = new SecretStash()): Promise<HelmToolDeps> {
+async function makeRealDeps(dir: string, stash = new SecretStash()): Promise<HelmxToolDeps> {
   await ensureDataDir(dir)
   const artifacts = new ArtifactService(dir, new InMemoryArtifactRepository(), stash)
   return {
@@ -68,7 +68,7 @@ async function makeRealDeps(dir: string, stash = new SecretStash()): Promise<Hel
 let rootDir: string
 
 before(async () => {
-  rootDir = await makeTempDir('helm-tools-test-')
+  rootDir = await makeTempDir('helmx-tools-test-')
 })
 
 after(async () => {
@@ -217,11 +217,11 @@ describe('runShell real process behavior', { timeout: 60_000 }, () => {
     assert.equal(okResult.output, 'small-stream')
   })
 
-  it('buildToolEnv: host six variable fixed override stash same name inject;HELM_DATA_DIR from deps', { timeout: 60_000 }, () => {
+  it('buildToolEnv: host six variable fixed override stash same name inject;HELMX_DATA_DIR from deps', { timeout: 60_000 }, () => {
     const stash = new SecretStash()
-    stash.put(7, 'HELM_CWD', '/evil')
-    stash.put(7, 'HELM_DATA_DIR', '/evil-data')
-    const deps: HelmToolDeps = {
+    stash.put(7, 'HELMX_CWD', '/evil')
+    stash.put(7, 'HELMX_DATA_DIR', '/evil-data')
+    const deps: HelmxToolDeps = {
       dataDir: '/d',
       defaultCwd: '/base',
       hubUrl: 'http://127.0.0.1:3202',
@@ -230,20 +230,20 @@ describe('runShell real process behavior', { timeout: 60_000 }, () => {
       artifacts: null as never,
     }
     const env = buildToolEnv(deps, '/work', 7)
-    assert.equal(env['HELM_ENV'], '1')
-    assert.equal(env['HELM_HUB_URL'], 'http://127.0.0.1:3202')
-    assert.equal(env['HELM_CONVERSATION_ID'], '7')
-    assert.equal(env['HELM_CWD'], '/work')
-    assert.equal(env['HELM_DATA_DIR'], '/d')
-    // without provider: inherit HELM_TOKEN must by strip except (without leaking host token)
-    assert.equal(env['HELM_TOKEN'], undefined)
+    assert.equal(env['HELMX_ENV'], '1')
+    assert.equal(env['HELMX_HUB_URL'], 'http://127.0.0.1:3202')
+    assert.equal(env['HELMX_CONVERSATION_ID'], '7')
+    assert.equal(env['HELMX_CWD'], '/work')
+    assert.equal(env['HELMX_DATA_DIR'], '/d')
+    // without provider: inherit HELMX_TOKEN must by strip except (without leaking host token)
+    assert.equal(env['HELMX_TOKEN'], undefined)
   })
 
-  it('buildToolEnv: without provider when strip except inherit HELM_TOKEN; has provider when managed token takes precedence at stash same name value', { timeout: 60_000 }, () => {
+  it('buildToolEnv: without provider when strip except inherit HELMX_TOKEN; has provider when managed token takes precedence at stash same name value', { timeout: 60_000 }, () => {
     const stash = new SecretStash()
-    // other conversation stash in same name HELM_TOKEN cannot smoke fill managed token
-    stash.put(8, 'HELM_TOKEN', 'stash-spoofed-token')
-    const base: HelmToolDeps = {
+    // other conversation stash in same name HELMX_TOKEN cannot smoke fill managed token
+    stash.put(8, 'HELMX_TOKEN', 'stash-spoofed-token')
+    const base: HelmxToolDeps = {
       dataDir: '/d',
       defaultCwd: '/base',
       hubUrl: 'http://127.0.0.1:3202',
@@ -253,13 +253,13 @@ describe('runShell real process behavior', { timeout: 60_000 }, () => {
     }
     // has provider: managed token fixed inject,stash same name inject by override
     const withProvider = buildToolEnv({ ...base, processToken: () => 'managed-tok-1' }, '/work', 8)
-    assert.equal(withProvider['HELM_TOKEN'], 'managed-tok-1')
+    assert.equal(withProvider['HELMX_TOKEN'], 'managed-tok-1')
     // without provider: strip except (do not because stash store in same name value while pass-through other conversation secret)
     const noProvider = buildToolEnv(base, '/work', 8)
-    assert.equal(noProvider['HELM_TOKEN'], undefined)
+    assert.equal(noProvider['HELMX_TOKEN'], undefined)
   })
 
-  it('runShell: child process hold managed HELM_TOKEN and output redaction inside outside token; without provider when child process without HELM_TOKEN', { timeout: 60_000 }, async () => {
+  it('runShell: child process hold managed HELMX_TOKEN and output redaction inside outside token; without provider when child process without HELMX_TOKEN', { timeout: 60_000 }, async () => {
     // has provider: child process visible managed token(honest boundary: can message code solid has permission), but output redaction
     const auth = new AuthService(join(rootDir, 'rs10'))
     const managed = auth.createProcessToken()
@@ -268,31 +268,31 @@ describe('runShell real process behavior', { timeout: 60_000 }, () => {
       return { stash, release: stash.addRedaction(managed.token) }
     })()
     const depsManaged = await makeRealDeps(join(rootDir, 'rs11'), releaseRedaction.stash)
-    const depsWithToken: HelmToolDeps = {
+    const depsWithToken: HelmxToolDeps = {
       ...depsManaged,
       processToken: () => managed.token,
     }
-    const echo = await runShell(depsWithToken, 'printf %s "$HELM_TOKEN" | dd bs=1 2>/dev/null', { conversationId: 1 })
+    const echo = await runShell(depsWithToken, 'printf %s "$HELMX_TOKEN" | dd bs=1 2>/dev/null', { conversationId: 1 })
     assert.equal(echo.ok, true)
     assert.ok(!echo.output.includes(managed.token), 'managed token plaintext must not appear in output')
     assert.ok(echo.output.includes('[REDACTED]'), 'should replace is REDACTED mark record')
 
     // also contains inherit host token and managed token output: two all must not leak leak
-    const hostEnv = process.env['HELM_TOKEN']
+    const hostEnv = process.env['HELMX_TOKEN']
     const both = await runShell(
       depsWithToken,
-      `printf '%s %s' "${hostEnv ?? 'inherited-host-token'}" "$HELM_TOKEN" | dd bs=1 2>/dev/null`,
+      `printf '%s %s' "${hostEnv ?? 'inherited-host-token'}" "$HELMX_TOKEN" | dd bs=1 2>/dev/null`,
       { conversationId: 1 },
     )
     assert.equal(both.ok, true)
     assert.ok(!both.output.includes(managed.token), 'managed token must not leak leak')
     assert.ok(!hostEnv || !both.output.includes(hostEnv), 'inherit host token must not leak leak')
 
-    // without provider: child process environment in no HELM_TOKEN(inherit value by strip except)
+    // without provider: child process environment in no HELMX_TOKEN(inherit value by strip except)
     const depsPlain = await makeRealDeps(join(rootDir, 'rs12'))
-    const absent = await runShell(depsPlain, 'echo "${HELM_TOKEN:-UNSET}"', { conversationId: 1 })
+    const absent = await runShell(depsPlain, 'echo "${HELMX_TOKEN:-UNSET}"', { conversationId: 1 })
     assert.equal(absent.ok, true)
-    assert.ok(absent.output.includes('UNSET'), 'without provider when child process must not inherit HELM_TOKEN')
+    assert.ok(absent.output.includes('UNSET'), 'without provider when child process must not inherit HELMX_TOKEN')
 
     // dispose after managed token expires (process inside lifecycle)
     managed.dispose()
@@ -537,7 +537,7 @@ describe('read_artifact real ArtifactService behavior', { timeout: 60_000 }, () 
     await ensureDataDir(dir)
     const real = new ArtifactService(dir, new InMemoryArtifactRepository(), new SecretStash())
     const storageBug = new Error('sqlite: disk I/O error')
-    const deps: HelmToolDeps = {
+    const deps: HelmxToolDeps = {
       dataDir: dir,
       defaultCwd: dir,
       hubUrl: 'http://127.0.0.1:3202',
@@ -753,7 +753,7 @@ describe('closure stop abort state:spill protect and replay mark record', { time
     const dir = join(rootDir, 'abort-bash')
     const baseDeps = await makeRealDeps(dir)
     let spillCalled = 0
-    const deps: HelmToolDeps = {
+    const deps: HelmxToolDeps = {
       ...baseDeps,
       artifacts: {
         ...baseDeps.artifacts,
@@ -787,7 +787,7 @@ describe('closure stop abort state:spill protect and replay mark record', { time
     const baseDeps = await makeRealDeps(dir)
     writeFileSync(join(dir, 'sample.txt'), 'hello abort world\n', 'utf8')
     let spillCalled = 0
-    const deps: HelmToolDeps = {
+    const deps: HelmxToolDeps = {
       ...baseDeps,
       artifacts: {
         ...baseDeps.artifacts,
@@ -862,7 +862,7 @@ function existsSyncSafe(path: string): boolean {
 }
 
 describe('Profile.restrictToCwd guardrail: file tools confined to the conversation cwd', { timeout: 60_000 }, () => {
-  async function makeRestrictedDeps(dir: string): Promise<HelmToolDeps> {
+  async function makeRestrictedDeps(dir: string): Promise<HelmxToolDeps> {
     const deps = await makeRealDeps(dir)
     return { ...deps, restrictToCwdOf: async () => true }
   }

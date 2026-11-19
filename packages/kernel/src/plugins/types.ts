@@ -5,10 +5,10 @@ import type {
   BackendPluginsLifecyclePort,
   ConversationSummary,
   GuardedMutationExpectation,
-  HelmHostApi,
-  HelmHostNodeIpcPort,
-  HelmHostNodeFetchPort,
-  HelmHostOpenTunnelPort,
+  HelmxHostApi,
+  HelmxHostNodeIpcPort,
+  HelmxHostNodeFetchPort,
+  HelmxHostOpenTunnelPort,
   HookName,
   PluginBuildProvider,
   MaybePromise,
@@ -19,7 +19,7 @@ import type {
   PluginDiagnosticError,
   PluginServiceSpec,
   PluginSkillAsset,
-} from '@helm/protocol';
+} from '@helmx/protocol';
 import type { Provider } from '@earendil-works/pi-ai';
 import type { PluginDocStore, PluginSessionDocStore } from './doc-registry.js';
 
@@ -51,7 +51,7 @@ export interface PluginProviderPort {
 /**
  * Host backend port backing `ctx.host` (provided by Runtime; see `runtime-host-backend.ts`).
  *
- * Shape policy: members identical to `HelmHostApi` are reused via `Pick` (preserving `MaybePromise<void>`
+ * Shape policy: members identical to `HelmxHostApi` are reused via `Pick` (preserving `MaybePromise<void>`
  * awaitable contracts on `onEvent`/`emitEvent` without manual signature drift or `Omit`/Proxy indirection).
  * Divergent members are declared explicitly:
  * 1. Scoped by `pluginId`: `secrets` / `setPluginConfig` / `skills.ensureSkill` / `manageConversation`
@@ -65,7 +65,7 @@ export interface PluginProviderPort {
  */
 export interface PluginHostBackend
   extends Pick<
-    HelmHostApi,
+    HelmxHostApi,
     | 'profiles'
     | 'dispatchTrigger'
     | 'submitInput'
@@ -104,7 +104,7 @@ export interface PluginHostBackend
   /** Host closing status (backing `ctx.host.isClosing` getter). */
   isClosing(): boolean
   /** Skill catalog port; `ensureSkill` tags the owning `pluginId`. */
-  skills: Pick<HelmHostApi['skills'], 'list' | 'readFile' | 'directory'> & {
+  skills: Pick<HelmxHostApi['skills'], 'list' | 'readFile' | 'directory'> & {
     ensureSkill(asset: PluginSkillAsset, pluginId: string): Promise<void>
   }
   /** Plugin-private secrets backend (`PluginHost` scopes keys by `pluginId`). */
@@ -117,18 +117,18 @@ export interface PluginHostBackend
   /** Plugin configuration writer (validated against schema by `PluginHost` before forwarding). */
   setPluginConfig(pluginId: string, value: Record<string, unknown>): Promise<void>
   /** Node IPC port (EnvFabric channel; 501 when unwired). `nodePlatform` is reported by `NodeRegistry` or `undefined` if unknown. */
-  nodeIpc?: HelmHostNodeIpcPort
+  nodeIpc?: HelmxHostNodeIpcPort
   /** Node-local HTTP fetch port (`EnvFabric.nodeFetch`; 501 when unwired, never falls back to local). */
-  nodeFetch?: HelmHostNodeFetchPort
+  nodeFetch?: HelmxHostNodeFetchPort
   /** Arbitrary TCP passthrough tunnel port (`EnvFabric.openTunnel`; 501 when unwired). */
-  openTunnel?: HelmHostOpenTunnelPort
+  openTunnel?: HelmxHostOpenTunnelPort
   /** Host plugin governance backend (`ctx.host.plugins`; write operations fail with 501 when unwired). */
   plugins?: BackendPluginsLifecyclePort
   /** Guarded input submission port (kernel atomic ownership/seq check; 501 when unwired). */
   submitInputGuarded?(
     conversationId: number,
     text: string,
-    opts?: Parameters<HelmHostApi['submitInputGuarded']>[2],
+    opts?: Parameters<HelmxHostApi['submitInputGuarded']>[2],
     guard?: GuardedMutationExpectation,
   ): Promise<void>
   /** Guarded abort port (includes scheduler-paused durability path; 501 when unwired). */
@@ -160,7 +160,7 @@ export interface PluginHostOptions {
   providers?: PluginProviderPort;
   /** Host text redactor (`SecretStash`) applied to `ctx.host.invokeAction` outputs. */
   redactText?: (text: string) => string;
-  /** Plugin build port (`client.tsx` compilation + backend TS transpilation) injected by composition root (`@helm/plugin-build`). */
+  /** Plugin build port (`client.tsx` compilation + backend TS transpilation) injected by composition root (`@helmx/plugin-build`). */
   buildProvider?: PluginBuildProvider;
   /**
    * Defer service `start()` until `PluginHost.start()` runs the global `prepare -> start` barrier.

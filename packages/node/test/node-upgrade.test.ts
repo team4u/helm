@@ -1,12 +1,12 @@
 /**
  * Node-side regressions for the node self-upgrade adapter (npm artifacts default to
- * `@team4u/helm-node` + `@team4u/helm-cli`) over the shared update engine re-exported
- * from `@helm/env-io`.
+ * `@helmx/node` + `@helmx/cli`) over the shared update engine re-exported
+ * from `@helmx/env-io`.
  *
  * Everything here locks Node external behavior only: own version resolution
  * (`getNodeVersion` / `resolveEffectiveNodeVersion`), the launcher-compatible flat
- * `current.json` disk contract, dual-package name wiring (`HELM_NPM_PACKAGE` /
- * `HELM_NPM_CLI_PACKAGE`), staged-entry adaptation (`StagedNodeRelease`), delegation
+ * `current.json` disk contract, dual-package name wiring (`HELMX_NPM_PACKAGE` /
+ * `HELMX_NPM_CLI_PACKAGE`), staged-entry adaptation (`StagedNodeRelease`), delegation
  * of engine hooks through `performNodeUpgrade`, verbatim rollback of the flat record
  * on commit failure, and error-class identity with the shared engine module.
  *
@@ -21,8 +21,8 @@ import fs from 'node:fs/promises';
 import rawFs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
-import { makeTempDir as tempDir } from '@helm/test-kit/node';
-import { UpgradeRejectedError } from '@helm/env-io';
+import { makeTempDir as tempDir } from '@helmx/test-kit/node';
+import { UpgradeRejectedError } from '@helmx/env-io';
 import {
   getNodeVersion,
   resolveEffectiveNodeVersion,
@@ -37,8 +37,8 @@ import {
   type PreparedNodeReplacement,
 } from '../src/daemon/upgrader.js';
 
-const NODE_PACKAGE_NAME = '@team4u/helm-node';
-const CLI_PACKAGE_NAME = '@team4u/helm-cli';
+const NODE_PACKAGE_NAME = '@helmx/node';
+const CLI_PACKAGE_NAME = '@helmx/cli';
 
 function makeReplacement(pid: number, opts?: { commitError?: Error; abortError?: Error }) {
   const calls: string[] = [];
@@ -91,11 +91,11 @@ async function makeNpmReleaseCache(dir: string, version: string, nodePkg = NODE_
   await fs.mkdir(path.join(candidateDir, 'node_modules', '.bin'), { recursive: true });
   await fs.writeFile(path.join(nodePkgDir, 'dist', 'cli.js'), '#!/usr/bin/env node\n', 'utf8');
   await fs.writeFile(path.join(nodePkgDir, 'package.json'), JSON.stringify({ name: nodePkg, version }), 'utf8');
-  // The published CLI artifact ships its single-file bundle at the package root (bin `helm` -> `./index.js`).
+  // The published CLI artifact ships its single-file bundle at the package root (bin `helmx` -> `./index.js`).
   await fs.writeFile(path.join(cliPkgDir, 'index.js'), '#!/usr/bin/env node\n', 'utf8');
   await fs.writeFile(
     path.join(cliPkgDir, 'package.json'),
-    JSON.stringify({ name: cliPkg, version, bin: { helm: './index.js' } }),
+    JSON.stringify({ name: cliPkg, version, bin: { helmx: './index.js' } }),
     'utf8',
   );
   await fs.writeFile(
@@ -130,21 +130,21 @@ function makeHooks(log: UpgradeLog) {
 // 1. Node version resolution
 // ---------------------------------------------------------------------------
 
-test('getNodeVersion: reads package.json and honors HELM_VERSION_OVERRIDE', { timeout: 60_000 }, () => {
+test('getNodeVersion: reads package.json and honors HELMX_VERSION_OVERRIDE', { timeout: 60_000 }, () => {
   const self = getNodeVersion();
   assert.match(self, /^\d+\.\d+\.\d+/);
-  const prev = process.env.HELM_VERSION_OVERRIDE;
-  process.env.HELM_VERSION_OVERRIDE = '9.9.9-dev';
+  const prev = process.env.HELMX_VERSION_OVERRIDE;
+  process.env.HELMX_VERSION_OVERRIDE = '9.9.9-dev';
   try {
     assert.equal(getNodeVersion(), '9.9.9-dev');
   } finally {
-    if (prev === undefined) delete process.env.HELM_VERSION_OVERRIDE;
-    else process.env.HELM_VERSION_OVERRIDE = prev;
+    if (prev === undefined) delete process.env.HELMX_VERSION_OVERRIDE;
+    else process.env.HELMX_VERSION_OVERRIDE = prev;
   }
 });
 
 test('resolveEffectiveNodeVersion: prefers current.json and falls back to own package version', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-node-upgrade-');
+  const dir = await tempDir('helmx-node-upgrade-');
   assert.equal(await resolveEffectiveNodeVersion(dir), getNodeVersion());
   await writeCurrentRelease(dir, { version: '3.2.1', entryPath: '/x/dist/cli.js', updatedAt: new Date().toISOString() });
   assert.equal(await resolveEffectiveNodeVersion(dir), '3.2.1');
@@ -156,7 +156,7 @@ test('resolveEffectiveNodeVersion: prefers current.json and falls back to own pa
 // ---------------------------------------------------------------------------
 
 test('flat current.json: ENOENT returns null, atomic 0600 writes round-trip, optional cliBinDir stays absent, idempotent delete', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-node-upgrade-');
+  const dir = await tempDir('helmx-node-upgrade-');
   assert.equal(await readCurrentRelease(dir), null);
 
   await writeCurrentRelease(dir, {
@@ -186,7 +186,7 @@ test('flat current.json: ENOENT returns null, atomic 0600 writes round-trip, opt
 });
 
 test('flat current.json: corrupt or incomplete records throw explicitly rather than returning null', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-node-upgrade-');
+  const dir = await tempDir('helmx-node-upgrade-');
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(path.join(dir, 'current.json'), '{ not json', 'utf8');
   await assert.rejects(() => readCurrentRelease(dir), /corrupt/);
@@ -204,16 +204,16 @@ test('flat current.json: corrupt or incomplete records throw explicitly rather t
 // 3. Node adapter wiring over the shared update engine
 // ---------------------------------------------------------------------------
 
-test('checkNodeUpgrade: queries the @team4u/helm-node package latest and falls back to getNodeVersion', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-node-upgrade-');
+test('checkNodeUpgrade: queries the @helmx/node package latest and falls back to getNodeVersion', { timeout: 60_000 }, async () => {
+  const dir = await tempDir('helmx-node-upgrade-');
   const { fetchFn, urls } = makeRegistryFetch('1.2.0');
   const result = await checkNodeUpgrade(dir, { currentVersion: '1.0.0', fetchFn });
   assert.equal(result.latestVersion, '1.2.0');
   assert.equal(result.updateAvailable, true);
-  assert.match(urls[0]!, /@team4u%2Fhelm-node\/latest|@team4u\/helm-node\/latest/);
+  assert.match(urls[0]!, /@helmx%2Fnode\/latest|@helmx\/node\/latest/);
 
   // Fall back to getNodeVersion when current.json is absent and currentVersion is omitted
-  const dir2 = await tempDir('helm-node-upgrade-');
+  const dir2 = await tempDir('helmx-node-upgrade-');
   const result2 = await checkNodeUpgrade(dir2, { fetchFn: makeRegistryFetch('0.0.1').fetchFn });
   assert.equal(result2.currentVersion, getNodeVersion());
   assert.equal(result2.updateAvailable, false);
@@ -221,12 +221,12 @@ test('checkNodeUpgrade: queries the @team4u/helm-node package latest and falls b
   await fs.rm(dir2, { recursive: true, force: true });
 });
 
-test('dual package names: HELM_NPM_PACKAGE / HELM_NPM_CLI_PACKAGE drive registry URL and staged layout', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-node-upgrade-');
-  const prevNodePkg = process.env.HELM_NPM_PACKAGE;
-  const prevCliPkg = process.env.HELM_NPM_CLI_PACKAGE;
-  process.env.HELM_NPM_PACKAGE = '@custom/node';
-  process.env.HELM_NPM_CLI_PACKAGE = '@custom/cli';
+test('dual package names: HELMX_NPM_PACKAGE / HELMX_NPM_CLI_PACKAGE drive registry URL and staged layout', { timeout: 60_000 }, async () => {
+  const dir = await tempDir('helmx-node-upgrade-');
+  const prevNodePkg = process.env.HELMX_NPM_PACKAGE;
+  const prevCliPkg = process.env.HELMX_NPM_CLI_PACKAGE;
+  process.env.HELMX_NPM_PACKAGE = '@custom/node';
+  process.env.HELMX_NPM_CLI_PACKAGE = '@custom/cli';
   try {
     // Latest check queries the overridden node package
     const { fetchFn, urls } = makeRegistryFetch('2.0.0');
@@ -241,16 +241,16 @@ test('dual package names: HELM_NPM_PACKAGE / HELM_NPM_CLI_PACKAGE drive registry
     assert.ok(staged.entryPath.endsWith(path.join('node_modules', '@custom', 'node', 'dist', 'cli.js')), staged.entryPath);
     assert.ok(staged.cliBinDir.endsWith('node_modules/.bin'));
   } finally {
-    if (prevNodePkg === undefined) delete process.env.HELM_NPM_PACKAGE;
-    else process.env.HELM_NPM_PACKAGE = prevNodePkg;
-    if (prevCliPkg === undefined) delete process.env.HELM_NPM_CLI_PACKAGE;
-    else process.env.HELM_NPM_CLI_PACKAGE = prevCliPkg;
+    if (prevNodePkg === undefined) delete process.env.HELMX_NPM_PACKAGE;
+    else process.env.HELMX_NPM_PACKAGE = prevNodePkg;
+    if (prevCliPkg === undefined) delete process.env.HELMX_NPM_CLI_PACKAGE;
+    else process.env.HELMX_NPM_CLI_PACKAGE = prevCliPkg;
   }
   await fs.rm(dir, { recursive: true, force: true });
 });
 
 test('performNodeUpgrade: success path delegates engine hooks and adapts staged entries into the flat current.json', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-node-upgrade-');
+  const dir = await tempDir('helmx-node-upgrade-');
   const log: UpgradeLog = { draining: [], execCount: { value: 0 }, shutdownPids: [] };
   const { replacement, calls } = makeReplacement(4242);
   const contexts: Array<{ attemptId: string; previousVersion: string; targetVersion: string }> = [];
@@ -290,7 +290,7 @@ test('performNodeUpgrade: success path delegates engine hooks and adapts staged 
 });
 
 test('performNodeUpgrade: commit failure restores the previous flat current.json record verbatim', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-node-upgrade-');
+  const dir = await tempDir('helmx-node-upgrade-');
   const originalCurrent = {
     version: '1.0.0',
     entryPath: '/old/dist/cli.js',
@@ -321,7 +321,7 @@ test('performNodeUpgrade: commit failure restores the previous flat current.json
 });
 
 test('adapter rejects with the shared update-engine error classes (instanceof identity)', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-node-upgrade-');
+  const dir = await tempDir('helmx-node-upgrade-');
   // Downgrade guard through the Node wrapper throws the shared UpgradeRejectedError
   await assert.rejects(
     () =>

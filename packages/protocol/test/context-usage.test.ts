@@ -13,7 +13,7 @@
  */
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import type { ConversationContextUsage, ConversationLive, ConversationSummary } from '@helm/protocol'
+import type { ConversationContextUsage, ConversationLive, ConversationSummary } from '@helmx/protocol'
 
 describe('ConversationSummary.contextUsage contract', () => {
   it('minimal usage (tokens only) is valid: unknown window/compaction state omitted', { timeout: 60_000 }, () => {

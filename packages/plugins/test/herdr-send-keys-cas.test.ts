@@ -17,7 +17,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
-import { HelmError } from '@helm/protocol'
+import { HelmxError } from '@helmx/protocol'
 import {
   HerdrFakeBackend,
   StandardFakeHerdrTransport,
@@ -47,7 +47,7 @@ function prepareBlockedOutput(env: HerdrUnitEnv): void {
   env.transport.pongVersion = 'cas-test-server'
   env.transport.promptStatus = 'blocked'
   env.transport.onPrompt = (pane, text) => {
-    env.transport.outputFiles.set(`${pane.cwd}/.helm/${herdrFileNameOf(text)}`, 'approved')
+    env.transport.outputFiles.set(`${pane.cwd}/.helmx/${herdrFileNameOf(text)}`, 'approved')
   }
 }
 
@@ -69,7 +69,7 @@ test('契约: buildSendKeysParams / parsePong / isStaleStateError / parseAgentRe
     { target: 'p', keys: ['y'], expectedStateSeq: 1.5 },
     { target: 'p', keys: ['y'], expectedStateSeq: Number.MAX_SAFE_INTEGER + 1 },
   ]) {
-    assert.throws(() => buildSendKeysParams(bad), HelmError)
+    assert.throws(() => buildSendKeysParams(bad), HelmxError)
   }
 
   const supported = parsePong({
@@ -105,12 +105,12 @@ test('契约: buildSendKeysParams / parsePong / isStaleStateError / parseAgentRe
     { type: 'pong', version: 'v', protocol: 22, capabilities: [] },
     { type: 'pong', version: 'v', protocol: 22, capabilities: { [SEND_KEYS_CAS_CAPABILITY]: 'yes' } },
   ]) {
-    assert.throws(() => parsePong(bad), (error: unknown) => (error as HelmError).code === 'herdr_protocol_violation')
+    assert.throws(() => parsePong(bad), (error: unknown) => (error as HelmxError).code === 'herdr_protocol_violation')
   }
 
-  assert.equal(isStaleStateError(new HelmError('stale_state', 'seq mismatch', 409)), true)
+  assert.equal(isStaleStateError(new HelmxError('stale_state', 'seq mismatch', 409)), true)
   assert.equal(isStaleStateError({ code: 'stale_state' }), true)
-  assert.equal(isStaleStateError(new HelmError('herdr_timeout', 'no response', 504)), false)
+  assert.equal(isStaleStateError(new HelmxError('herdr_timeout', 'no response', 504)), false)
   assert.equal(isStaleStateError(new Error('plain')), false)
   assert.equal(isStaleStateError(undefined), false)
 
@@ -123,7 +123,7 @@ test('契约: buildSendKeysParams / parsePong / isStaleStateError / parseAgentRe
     () => parsePaneRead({ type: 'pane_read', read: { pane_id: 'p', text: 42 } }),
     () => parsePaneRead({ type: 'pane_read', read: { pane_id: 'p' } }),
   ]) {
-    assert.throws(fn, (e: unknown) => (e as HelmError).code === 'herdr_protocol_violation')
+    assert.throws(fn, (e: unknown) => (e as HelmxError).code === 'herdr_protocol_violation')
   }
   assert.equal(parsePaneRead({ type: 'pane_read', read: { pane_id: 'w1:p1', text: '' } }).text, '')
 })
@@ -240,7 +240,7 @@ test('审批桥 CAS: 未通告能力显式 herdr_cas_unsupported 零盲发；pon
     const askId = String(env1.backend.createdAsks[0]!['id'])
     env1.backend.answerAsk(askId, { id: askId, status: 'answered', answers: { decision: 'allow-y' } })
     await assert.rejects(p1, (error: unknown) => {
-      assert.ok(error instanceof HelmError)
+      assert.ok(error instanceof HelmxError)
       assert.equal(error.code, 'herdr_cas_unsupported')
       assert.ok(error.message.includes(SEND_KEYS_CAS_CAPABILITY))
       assert.ok(error.message.includes('cas-test-server'))
@@ -261,7 +261,7 @@ test('审批桥 CAS: 未通告能力显式 herdr_cas_unsupported 零盲发；pon
     await waitFor(() => env2.backend.createdAsks.length === 1)
     const askId = String(env2.backend.createdAsks[0]!['id'])
     env2.backend.answerAsk(askId, { id: askId, status: 'answered', answers: { decision: 'allow-y' } })
-    await assert.rejects(p2, (error: unknown) => error instanceof HelmError && error.code === 'herdr_protocol_violation')
+    await assert.rejects(p2, (error: unknown) => error instanceof HelmxError && error.code === 'herdr_protocol_violation')
     assert.equal(env2.transport.calls.filter((c) => c.method === 'agent.send_keys').length, 0)
   } finally {
     await env2.close()
@@ -285,7 +285,7 @@ test('askId 三段归属校验：CAS resolver 拒绝伪造 id，现查权威 age
     assert.equal(await resolver(realAskId), pane.seq)
     await waitFor(() => env.backend.cancelledAsks.some((c) => c.id === realAskId))
     const promptCall = env.transport.calls.find((c) => c.method === 'agent.prompt')!
-    env.transport.outputFiles.set(`${pane.cwd}/.helm/${herdrFileNameOf(promptCall.params['text'] as string)}`, 'resolver-ok')
+    env.transport.outputFiles.set(`${pane.cwd}/.helmx/${herdrFileNameOf(promptCall.params['text'] as string)}`, 'resolver-ok')
     env.transport.advancePane(pane.paneId, 'done')
     assert.equal(await resultPromise, 'resolver-ok')
   } finally {
@@ -307,7 +307,7 @@ test('启动 blocked 先审批后 prompt；自愈追问遇 blocked 走同一审�
     transport.call = async (target, method, params) => {
       const pane = env1.transport.panes.get(String(params['target']))
       if (method === 'agent.prompt' && pane?.agentStatus === 'blocked') {
-        throw new HelmError('agent_blocked', 'must approve first', 409)
+        throw new HelmxError('agent_blocked', 'must approve first', 409)
       }
       const result = await original(target, method, params)
       if (method === 'agent.start') {
@@ -351,7 +351,7 @@ test('启动 blocked 先审批后 prompt；自愈追问遇 blocked 走同一审�
     await waitFor(() => env2.transport.sendKeysLog.length === 1)
     const pane = [...env2.transport.panes.values()][0]!
     const healPrompt = env2.transport.calls.filter((c) => c.method === 'agent.prompt').pop()!
-    env2.transport.outputFiles.set(`${pane.cwd}/.helm/${herdrFileNameOf(healPrompt.params['text'] as string)}`, 'healed-after-ask')
+    env2.transport.outputFiles.set(`${pane.cwd}/.helmx/${herdrFileNameOf(healPrompt.params['text'] as string)}`, 'healed-after-ask')
     env2.transport.advancePane(pane.paneId, 'done')
     assert.equal(await resultPromise, 'healed-after-ask')
   } finally {
@@ -446,7 +446,7 @@ test('审批等待期间 Agent 身份变化抛 herdr_ownership_lost 绝不发键
     activePane.name = 'human-agent'
     const askId = String(env.backend.createdAsks[0]!['id'])
     env.backend.answerAsk(askId, { id: askId, status: 'answered', answers: { decision: 'allow-y' } })
-    assert.equal(((await observed) as HelmError).code, 'herdr_ownership_lost')
+    assert.equal(((await observed) as HelmxError).code, 'herdr_ownership_lost')
     assert.equal(env.transport.sendKeysLog.length, 0)
     assert.equal(env.transport.tabs.get(activePane.tabId)?.closed, false)
   } finally {
@@ -470,7 +470,7 @@ test('Ask 存续轮询容错：瞬时 herdr_timeout 退避容忍、持续失败�
       if (method === 'agent.get' && failuresLeft > 0) {
         failuresLeft -= 1
         injected += 1
-        throw new HelmError('herdr_timeout', 'transient blip', 504)
+        throw new HelmxError('herdr_timeout', 'transient blip', 504)
       }
       return orig1(target, method, params)
     }
@@ -503,7 +503,7 @@ test('Ask 存续轮询容错：瞬时 herdr_timeout 退避容忍、持续失败�
     const orig2 = env2.transport.call.bind(env2.transport)
     ;(env2.transport as HerdrTransport).call = async (target, method, params) => {
       if (method === 'agent.get' && persistentFailure) {
-        throw new HelmError('herdr_timeout', 'node down', 504)
+        throw new HelmxError('herdr_timeout', 'node down', 504)
       }
       return orig2(target, method, params)
     }
@@ -511,7 +511,7 @@ test('Ask 存续轮询容错：瞬时 herdr_timeout 退避容忍、持续失败�
     await waitFor(() => env2.backend.createdAsks.length === 1)
     persistentFailure = true
     const askId = String(env2.backend.createdAsks[0]!['id'])
-    const error = (await obs2) as HelmError
+    const error = (await obs2) as HelmxError
     assert.equal(error.code, 'herdr_timeout')
     assert.ok(env2.backend.cancelledAsks.some((ask) => ask.id === askId && ask.reason === 'cancelled'))
     assert.equal(env2.backend.pendingAskResolvers.size, 0)
@@ -528,7 +528,7 @@ test('Ask 存续轮询容错：瞬时 herdr_timeout 退避容忍、持续失败�
   const cancelCalls: string[] = []
   backend3.cancelAsk = async (id: string) => {
     cancelCalls.push(id)
-    throw new HelmError('ask_store_broken', 'cancel boom', 500)
+    throw new HelmxError('ask_store_broken', 'cancel boom', 500)
   }
   const env3 = await openHerdrUnitEnv({ backend: backend3, transport: new StandardFakeHerdrTransport() })
   const c3 = new AbortController()
@@ -540,7 +540,7 @@ test('Ask 存续轮询容错：瞬时 herdr_timeout 退避容忍、持续失败�
     await waitFor(() => env3.backend.createdAsks.length === 1)
     const askId = String(env3.backend.createdAsks[0]!['id'])
     c3.abort()
-    assert.equal(((await obs3) as HelmError).code, 'aborted')
+    assert.equal(((await obs3) as HelmxError).code, 'aborted')
     await waitFor(() => cancelCalls.filter((id) => id === askId).length >= 5, 3_000, 10)
     await delay(50)
     const count = cancelCalls.filter((id) => id === askId).length

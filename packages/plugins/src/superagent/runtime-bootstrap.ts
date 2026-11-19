@@ -6,13 +6,13 @@
  */
 
 import {
-  HelmError,
+  HelmxError,
   type BeforeTurnHookPayload,
   type ConversationDetail,
   type ConversationSummary,
   type ExternalTriggerEnvelope,
-  type HelmHostApi,
-  type HelmPluginContext,
+  type HelmxHostApi,
+  type HelmxPluginContext,
   type HookHandler,
   type HookResult,
   type MaybePromise,
@@ -22,7 +22,7 @@ import {
   type PluginToolContext,
   type ToolCallHookPayload,
   type TurnSettledPayload,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 import { registerSuperAgentActions } from './actions.js'
 import {
   SUPERAGENT_PROFILE_ASSET,
@@ -58,13 +58,13 @@ import type { WatchdogDedupDoc } from './watchdog-dedup.js'
 import { registerSuperAgentWatchdog } from './watchdog.js'
 
 /** 自举 superagent/watchdog Profile 与 watchdog-playbooks 技能包（逐文件幂等）。 */
-async function bootstrapAssets(host: Pick<HelmHostApi, 'profiles' | 'skills'> & AssetHostPorts): Promise<void> {
+async function bootstrapAssets(host: Pick<HelmxHostApi, 'profiles' | 'skills'> & AssetHostPorts): Promise<void> {
   await ensureProfileDir(host, SUPERAGENT_PROFILE_ASSET)
   await ensureProfileDir(host, WATCHDOG_PROFILE_ASSET)
   await ensureSkillDir(host, WATCHDOG_PLAYBOOK_SKILL_ASSET)
   for (const id of SUPERAGENT_PROFILE_IDS) {
     if ((await host.profiles.get(id)) === undefined) {
-      throw new HelmError(
+      throw new HelmxError(
         'superagent_bootstrap_failed',
         `自举后 Profile ${id} 仍不可读（profile.json 缺失或损坏）`,
         500,
@@ -93,7 +93,7 @@ export interface SuperAgentRuntimeController {
 }
 
 interface CreateSuperAgentRuntimeOptions {
-  ctx: HelmPluginContext
+  ctx: HelmxPluginContext
   docs: SuperAgentDocs
   watchdogDedupDoc: PluginDocHandle<WatchdogDedupDoc>
 }
@@ -122,7 +122,7 @@ export function createSuperAgentRuntime(
 
   async function track<T>(label: string, task: () => MaybePromise<T>): Promise<T> {
     if (shutdown) {
-      throw new HelmError('plugin_disabled', `builtin:superagent 已停用，拒绝后台任务 ${label}`, 409, {
+      throw new HelmxError('plugin_disabled', `builtin:superagent 已停用，拒绝后台任务 ${label}`, 409, {
         pluginId: SUPERAGENT_PLUGIN_ID,
       })
     }
@@ -193,7 +193,7 @@ export function createSuperAgentRuntime(
     try {
       return ctx.host.getConversation(conversationId).tags.includes('worker')
     } catch (err) {
-      if (err instanceof HelmError && err.code === 'not_found') return false
+      if (err instanceof HelmxError && err.code === 'not_found') return false
       throw err
     }
   }
@@ -203,7 +203,7 @@ export function createSuperAgentRuntime(
     try {
       return ctx.host.getConversation(id as number)
     } catch (err) {
-      if (err instanceof HelmError && err.code === 'not_found') return undefined
+      if (err instanceof HelmxError && err.code === 'not_found') return undefined
       throw err
     }
   }
@@ -216,7 +216,7 @@ export function createSuperAgentRuntime(
     const existing = readConversationOrUndefined(recordedId)
     if (existing !== undefined) {
       if (existing.profileId !== profileId) {
-        throw new HelmError(
+        throw new HelmxError(
           'superagent_resident_conversation_conflict',
           `插件常驻会话（${kind}）记录为 #${recordedId}，但该会话当前 profileId 是 '${existing.profileId}'（期望 '${profileId}'）；拒绝占用，请人工核对该会话或修正插件 doc index`,
           409,
@@ -247,9 +247,9 @@ export function createSuperAgentRuntime(
     if (omitted === undefined) {
       reportError(
         'RecallGraph rewind 联动失败',
-        new HelmError(
+        new HelmxError(
           'superagent_rewind_payload_invalid',
-          `会话 #${conversationId} 的 helm.rewind 标记载荷非法（omittedInputIds 缺失或含非字符串项），已跳过 RecallGraph 清理，请人工核对`,
+          `会话 #${conversationId} 的 helmx.rewind 标记载荷非法（omittedInputIds 缺失或含非字符串项），已跳过 RecallGraph 清理，请人工核对`,
           500,
           { pluginId: SUPERAGENT_PLUGIN_ID, conversationId, entryId: entry.id },
         ),
@@ -260,7 +260,7 @@ export function createSuperAgentRuntime(
     try {
       const removed = removeRecallNodesByInputs(docs.recall, conversationId, new Set(omitted))
       if (removed.length > 0) {
-        logDiagnostic(`helm.rewind 联动删除 RecallGraph 节点 ${removed.join(', ')}（会话 #${conversationId}）`)
+        logDiagnostic(`helmx.rewind 联动删除 RecallGraph 节点 ${removed.join(', ')}（会话 #${conversationId}）`)
       }
     } catch (err) {
       reportError(`RecallGraph rewind 联动失败（会话 #${conversationId}）`, err)
@@ -282,7 +282,7 @@ export function createSuperAgentRuntime(
             ...(cursor !== undefined ? { cursor } : {}),
           })
         } catch (err) {
-          if (err instanceof HelmError && err.code === 'not_found') break
+          if (err instanceof HelmxError && err.code === 'not_found') break
           throw err
         }
         for (const entry of page.entries) {
@@ -335,10 +335,10 @@ export function createSuperAgentRuntime(
   let watchdogService: PluginServiceSpec | undefined
 
   const unexpectedRegistration = (what: string): never => {
-    throw new HelmError('superagent_internal_error', `Unexpected runtime registration during lazy bootstrap: ${what}`, 500)
+    throw new HelmxError('superagent_internal_error', `Unexpected runtime registration during lazy bootstrap: ${what}`, 500)
   }
 
-  const captureCtx: HelmPluginContext = {
+  const captureCtx: HelmxPluginContext = {
     pluginId: ctx.pluginId,
     dataDir: ctx.dataDir,
     getConfig: () => ctx.getConfig(),
@@ -347,13 +347,13 @@ export function createSuperAgentRuntime(
     route: () => unexpectedRegistration('route'),
     provider: () => unexpectedRegistration('provider'),
     sessionDoc: () => unexpectedRegistration('sessionDoc'),
-    ui: new Proxy({} as HelmPluginContext['ui'], {
+    ui: new Proxy({} as HelmxPluginContext['ui'], {
       get: (_target, prop) => () => unexpectedRegistration(`ui.${String(prop)}`),
     }),
     doc: ((name: string) => {
       if (name === 'watchdog-dedup') return watchdogDedupDoc
       return unexpectedRegistration(`doc:${name}`)
-    }) as HelmPluginContext['doc'],
+    }) as HelmxPluginContext['doc'],
     action: (spec) => {
       actionHandlers.set(spec.id, spec.handler as (input: unknown, context: PluginActionContext) => unknown)
     },
@@ -390,7 +390,7 @@ export function createSuperAgentRuntime(
     toolCallHooks.length !== 2 ||
     turnSettledHooks.length !== 2
   ) {
-    throw new HelmError('superagent_internal_error', 'Incomplete SuperAgent lazy runtime initialization', 500)
+    throw new HelmxError('superagent_internal_error', 'Incomplete SuperAgent lazy runtime initialization', 500)
   }
 
   const capturedWatchdogService = watchdogService
@@ -416,7 +416,7 @@ export function createSuperAgentRuntime(
           const s = ctx.host.getConversation(id)
           if (s.status === 'working' || s.status === 'blocked') labels.push(`worker-run:${id}`)
         } catch (err) {
-          if (err instanceof HelmError && err.code === 'not_found') continue
+          if (err instanceof HelmxError && err.code === 'not_found') continue
           throw err
         }
       }
@@ -438,8 +438,8 @@ export function createSuperAgentRuntime(
       const watchdog = await ensureResidentConversation('watchdog', WATCHDOG_PROFILE_ID, index.watchdogConversationId)
       releases.push(ctx.host.manageConversation(router))
       releases.push(ctx.host.manageConversation(watchdog))
-      ctx.host.markConversationOwnership(router, 'helm')
-      ctx.host.markConversationOwnership(watchdog, 'helm')
+      ctx.host.markConversationOwnership(router, 'helmx')
+      ctx.host.markConversationOwnership(watchdog, 'helmx')
       routerId = router
       watchdogId = watchdog
       await replayMissedRewinds()
@@ -450,7 +450,7 @@ export function createSuperAgentRuntime(
           logDiagnostic(`conversation.entry 事件载荷非法被丢弃：${JSON.stringify(payload)?.slice(0, 120)}`)
           return
         }
-        if (event.entry.kind !== 'helm.rewind') return
+        if (event.entry.kind !== 'helmx.rewind') return
         handleRewindMarker(event.conversationId, event.entry)
       })
       syncRoutingDoc()
@@ -480,14 +480,14 @@ export function createSuperAgentRuntime(
     invokeAction(id: string, input: unknown, context: PluginActionContext): MaybePromise<unknown> {
       const handler = actionHandlers.get(id)
       if (handler === undefined) {
-        throw new HelmError('not_found', `Unknown superagent action: ${id}`, 404, { pluginId: SUPERAGENT_PLUGIN_ID, id })
+        throw new HelmxError('not_found', `Unknown superagent action: ${id}`, 404, { pluginId: SUPERAGENT_PLUGIN_ID, id })
       }
       return handler(input, context)
     },
     executeTool(name: string, input: unknown, context: PluginToolContext): MaybePromise<unknown> {
       const execute = toolExecutors.get(name)
       if (execute === undefined) {
-        throw new HelmError('not_found', `Unknown superagent tool: ${name}`, 404, { pluginId: SUPERAGENT_PLUGIN_ID, name })
+        throw new HelmxError('not_found', `Unknown superagent tool: ${name}`, 404, { pluginId: SUPERAGENT_PLUGIN_ID, name })
       }
       return execute(input, context)
     },

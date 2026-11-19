@@ -9,7 +9,7 @@
  * kernel/dist/main.js, kernel/dist/builtin-plugins/*), which payload then sweeps
  * up in whole-directory packaging. This module surgically deletes only artifacts whose
  * source files no longer exist, plus empty directories; passing --force or setting
- * HELM_CLEAN_DIST=1 falls back to a full wipe that also removes the matching
+ * HELMX_CLEAN_DIST=1 falls back to a full wipe that also removes the matching
  * .tsbuildinfo.
  */
 import { existsSync, lstatSync, readdirSync, readFileSync, rmdirSync, rmSync } from 'node:fs';
@@ -110,7 +110,7 @@ export function pruneDist(options) {
   const distDir = path.join(pkgRoot, 'dist');
   const preserveClients = options.preserveClients === true;
   const env = options.env ?? process.env;
-  const force = options.force === true || env.HELM_CLEAN_DIST === '1';
+  const force = options.force === true || env.HELMX_CLEAN_DIST === '1';
   const buildInfo =
     options.tsBuildInfoFile !== undefined ? options.tsBuildInfoFile : resolveTsBuildInfoFile(pkgRoot);
 

@@ -8,7 +8,7 @@
  * branches and `builtin:superagent` resident workers that have no `WorkflowRun`)
  * never enter the execution tree, workbench panel, or active tray.
  */
-import type { ConversationSummary } from '@helm/protocol'
+import type { ConversationSummary } from '@helmx/protocol'
 import type { WorkflowNodeState, WorkflowRunSummary } from '../../contracts.js'
 import type { ExecutionAggregate, ExecutionNodeStatus } from './model-execution-status.ts'
 import {

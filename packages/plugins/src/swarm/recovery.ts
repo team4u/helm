@@ -6,13 +6,13 @@
  * - reconcileOrphanConversations / reconcileOrphanWorktreeHolds：按 meta.json 单真源清理半途强杀遗留的孤儿会话标签与 Worktree 锁。
  */
 import {
-  HelmError,
+  HelmxError,
   isJsonObject,
   type ConversationEntry,
   type ConversationSummary,
-  type HelmHostApi,
-  type HelmPluginContext,
-} from '@helm/protocol'
+  type HelmxHostApi,
+  type HelmxPluginContext,
+} from '@helmx/protocol'
 import {
   ARCHIVED_COORDINATOR_TAG,
   ARCHIVED_WORKER_TAG,
@@ -47,8 +47,8 @@ export function inspectBoardWalLines(
   groupId: string,
   headSeq: number,
 ): WalInspectionResult {
-  const corrupt = (detail: string, extra?: Record<string, unknown>): HelmError =>
-    new HelmError('swarm_doc_corrupt', `协作组 '${groupId}' ${detail}`, 500, {
+  const corrupt = (detail: string, extra?: Record<string, unknown>): HelmxError =>
+    new HelmxError('swarm_doc_corrupt', `协作组 '${groupId}' ${detail}`, 500, {
       pluginId: SWARM_PLUGIN_ID,
       groupId,
       ...extra,
@@ -149,11 +149,11 @@ export type InflightIntentStatus = 'missing_conv' | 'active' | 'settled' | 'unco
 /**
  * 统一对账在途提交意图（唤醒 / 续催 / 主控汇总共用）：
  * - active：会话正在跑（含阻塞待审批），提交已生效；
- * - settled：completionSeq 已推进或时间线已出现同 requestId 的 helm.input（涵盖 HelmStore 未及刷盘的强杀窗口）；
+ * - settled：completionSeq 已推进或时间线已出现同 requestId 的 helmx.input（涵盖 HelmxStore 未及刷盘的强杀窗口）；
  * - uncommitted：尚未进入时间线，可安全释放水位并幂等重投。
  */
 export async function classifyInflightIntent(
-  host: Pick<HelmHostApi, 'getConversationDetail'>,
+  host: Pick<HelmxHostApi, 'getConversationDetail'>,
   conversationId: number,
   summary: ConversationSummary | undefined,
   intent: InflightSubmissionMarker,
@@ -168,12 +168,12 @@ export async function classifyInflightIntent(
     const detail = await host.getConversationDetail(conversationId, { limit: 50 })
     detailEntries = detail.entries
   } catch (err) {
-    if (err instanceof HelmError && err.code === 'not_found') return 'missing_conv'
+    if (err instanceof HelmxError && err.code === 'not_found') return 'missing_conv'
     throw err
   }
   const hasMatchingInput = detailEntries.some(
     (entry) =>
-      entry.kind === 'helm.input' &&
+      entry.kind === 'helmx.input' &&
       isJsonObject(entry.data) &&
       entry.data['id'] === intent.requestId,
   )
@@ -196,7 +196,7 @@ function matchesMemberWakeOrNudgeInput(
   memberName: string,
   taskSeq: number,
 ): boolean {
-  if (entry.kind !== 'helm.input' || !isJsonObject(entry.data)) return false
+  if (entry.kind !== 'helmx.input' || !isJsonObject(entry.data)) return false
   const id = entry.data['id']
   if (typeof id !== 'string') return false
   if (id === `swarm-nudge:${groupId}:${memberName}:${taskSeq}`) return true
@@ -236,7 +236,7 @@ export function classifyMemberDetailOutcome(
 
   let lastInputIdx = -1
   for (let i = entries.length - 1; i >= 0; i -= 1) {
-    if (entries[i]!.kind === 'helm.input') {
+    if (entries[i]!.kind === 'helmx.input') {
       lastInputIdx = i
       break
     }
@@ -276,7 +276,7 @@ export function classifyMemberDetailOutcome(
 
 /** 启动阶段按 meta.json 单真源收敛孤儿/错配的 Swarm 会话标签与归属权。 */
 export async function reconcileOrphanConversations(
-  ctx: HelmPluginContext,
+  ctx: HelmxPluginContext,
   groups: Iterable<CollabGroupRecord>,
 ): Promise<void> {
   const activeCoordinators = new Set<number>()
@@ -307,7 +307,7 @@ export async function reconcileOrphanConversations(
     }
 
     if (activeWorkers.has(conv.id)) {
-      ctx.host.markConversationOwnership(conv.id, 'helm')
+      ctx.host.markConversationOwnership(conv.id, 'helmx')
       if (!hasWorkerTag || hasArchivedWorkerTag || hasCoordTag) {
         const nextTags = [
           ...conv.tags.filter((t) => t !== ARCHIVED_WORKER_TAG && t !== COORDINATOR_TAG && t !== WORKER_TAG),
@@ -319,7 +319,7 @@ export async function reconcileOrphanConversations(
     }
 
     if (hasWorkerTag || (hasCoordTag && conv.parentConversationId !== undefined)) {
-      ctx.host.markConversationOwnership(conv.id, 'helm')
+      ctx.host.markConversationOwnership(conv.id, 'helmx')
       const base = conv.tags.filter(
         (t) => t !== WORKER_TAG && t !== COORDINATOR_TAG && t !== ARCHIVED_WORKER_TAG,
       )
@@ -346,7 +346,7 @@ interface ListedWorktreeEntry {
  * keepWorktree: true 主动释放锁（hold 已为空）的分支不受影响。
  */
 export async function reconcileOrphanWorktreeHolds(
-  ctx: HelmPluginContext,
+  ctx: HelmxPluginContext,
   groups: Iterable<CollabGroupRecord>,
   logDiagnostic: (message: string) => void,
 ): Promise<boolean> {
@@ -357,7 +357,7 @@ export async function reconcileOrphanWorktreeHolds(
     }
   } catch (err) {
     if (
-      err instanceof HelmError &&
+      err instanceof HelmxError &&
       (err.code === 'plugin_disabled' || err.code === 'unknown_action')
     ) {
       return false

@@ -3,12 +3,12 @@ import { afterEach, test } from 'node:test'
 import * as React from 'react'
 import { act } from 'react'
 import type { Root } from 'react-dom/client'
-import type { ConversationSummary } from '@helm/protocol'
+import type { ConversationSummary } from '@helmx/protocol'
 import { ensureHappyDom, flushMacrotask } from './helpers/dom-harness.js'
 import { makeTestStore } from './helpers/store.js'
 
 ensureHappyDom()
-const { Screen } = await import('@helm/plugin-client')
+const { Screen } = await import('@helmx/plugin-client')
 const { resetPluginClientCache, seedPluginClientModule } = await import('../src/lib/plugin-client.js')
 const { HostStoreProviders } = await import('./helpers/host-store.js')
 const { mountSharedPluginNamespaces } = await import('./helpers/builtin-clients.js')
@@ -113,7 +113,7 @@ test('ScreenHost 双重头部去重容器、ScreenProps 注入与缺失视图 wa
   )
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     if (String(input).includes('/api/plugins/ext-demo/client.mjs')) {
-      return new Response('', { status: 200, headers: { 'x-helm-client-hash': 'demo-hash-1' } })
+      return new Response('', { status: 200, headers: { 'x-helmx-client-hash': 'demo-hash-1' } })
     }
     return new Response('{}', { status: 200 })
   }) as typeof fetch
@@ -187,7 +187,7 @@ test('CommandPaletteModal 单键快捷键徽章、聚焦分屏上下文与空查
   const onShortcut = (ev: Event) => {
     dispatched.push(ev as CustomEvent)
   }
-  window.addEventListener('helm:shortcut', onShortcut)
+  window.addEventListener('helmx:shortcut', onShortcut)
 
   try {
     const conversations = [1, 2, 3, 4, 5, 6, 7].map((id) =>
@@ -231,7 +231,7 @@ test('CommandPaletteModal 单键快捷键徽章、聚焦分屏上下文与空查
       '当前聚焦分屏会话 #6 不应重复出现在最近会话列表',
     )
 
-    // 点击「切换当前模型」应派发指向 focusedPanel ('split') 的 helm:shortcut 并关闭面板
+    // 点击「切换当前模型」应派发指向 focusedPanel ('split') 的 helmx:shortcut 并关闭面板
     const modelIdx = allRows.findIndex((el) => (el.textContent ?? '').includes('Switch current model'))
     const firstRecentIdx = allRows.findIndex((el) => (el.textContent ?? '').includes('最近话题'))
     const navIdx = allRows.findIndex((el) => (el.textContent ?? '').includes('Open agent profile center'))
@@ -244,7 +244,7 @@ test('CommandPaletteModal 单键快捷键徽章、聚焦分屏上下文与空查
     assert.equal(dispatched.length, 1)
     assert.deepEqual(dispatched[0]?.detail, { action: 'toggle-model-picker', panel: 'split' })
   } finally {
-    window.removeEventListener('helm:shortcut', onShortcut)
+    window.removeEventListener('helmx:shortcut', onShortcut)
   }
 })
 

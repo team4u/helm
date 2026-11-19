@@ -26,7 +26,7 @@ import { join } from 'node:path'
 import { WebSocket } from 'ws'
 import { createBirpc } from 'birpc'
 import { BACKGROUND_CONTEXT, type Context } from '@earendil-works/chord/context'
-import type { NodeRegisterInput, NodeRegisterResult } from '@helm/protocol'
+import type { NodeRegisterInput, NodeRegisterResult } from '@helmx/protocol'
 import type { HubConnectionLocal } from '../src/env/registry.js'
 import { attachNodeWsGateway, createEnvFabric, type EnvFabric } from '../src/env/index.js'
 import {
@@ -41,14 +41,14 @@ import {
   targetPlatformForNode,
 } from '../src/runtime/target-platform.js'
 import { NodeManager } from '../src/runtime/node-manager.js'
-import type { HelmToolDeps } from '../src/runtime/tool-deps.js'
+import type { HelmxToolDeps } from '../src/runtime/tool-deps.js'
 import { ArtifactService, InMemoryArtifactRepository, SecretStash, ensureDataDir } from '../src/services/index.js'
-import { HelmError } from '@helm/protocol'
+import { HelmxError } from '@helmx/protocol'
 
 let rootDir: string
 
 before(async () => {
-  rootDir = mkdtempSync(join(tmpdir(), 'helm-target-platform-'))
+  rootDir = mkdtempSync(join(tmpdir(), 'helmx-target-platform-'))
 })
 
 after(async () => {
@@ -165,7 +165,7 @@ function makePlatformFabric(options: {
   } as never
 }
 
-async function makeDeps(dir: string, envFabric?: EnvFabric, nodeIdOf?: (id: number) => string): Promise<HelmToolDeps> {
+async function makeDeps(dir: string, envFabric?: EnvFabric, nodeIdOf?: (id: number) => string): Promise<HelmxToolDeps> {
   await ensureDataDir(dir)
   const stash = new SecretStash()
   const artifacts = new ArtifactService(dir, new InMemoryArtifactRepository(), stash)
@@ -568,7 +568,7 @@ describe('resolveExecTarget: platform-aware cwd normalization (HTTP exec target)
     assert.throws(
       () => manager.resolveExecTarget({ nodeId: 'win-node', cwd: '/home/user/x' }),
       (error: unknown) => {
-        assert.ok(error instanceof HelmError)
+        assert.ok(error instanceof HelmxError)
         assert.equal(error.code, 'validation_error')
         assert.equal(error.status, 400)
         assert.match(error.message, /\/home\/user\/x/, 'error message preserves original path')
@@ -594,7 +594,7 @@ describe('resolveExecTarget: platform-aware cwd normalization (HTTP exec target)
     assert.throws(
       () => manager.resolveExecTarget({ nodeId: 'off-node', cwd: '/mnt/d/proj' }),
       (error: unknown) => {
-        assert.ok(error instanceof HelmError)
+        assert.ok(error instanceof HelmxError)
         assert.equal(error.code, 'node_offline')
         assert.equal(error.status, 409)
         return true

@@ -89,10 +89,10 @@ export async function startCommand(ctx: CommandContext): Promise<number> {
   if (detached) {
     return await startDetached(ctx, token, hubUrl);
   }
-  // Controlled child (spawned with HELM_NODE_INSTANCE_ID / HELM_NODE_CONTROL_ENDPOINT) runs the daemon directly;
+  // Controlled child (spawned with HELMX_NODE_INSTANCE_ID / HELMX_NODE_CONTROL_ENDPOINT) runs the daemon directly;
   // plain foreground `start` (systemd/launchd main process) enters the foreground launcher loop.
-  const instanceId = io.env?.['HELM_NODE_INSTANCE_ID'];
-  const endpoint = io.env?.['HELM_NODE_CONTROL_ENDPOINT'];
+  const instanceId = io.env?.['HELMX_NODE_INSTANCE_ID'];
+  const endpoint = io.env?.['HELMX_NODE_CONTROL_ENDPOINT'];
   if (instanceId !== undefined && instanceId !== '' && endpoint !== undefined && endpoint !== '') {
     return await startControlled(ctx, { instanceId, endpoint }, token, hubUrl);
   }
@@ -119,7 +119,7 @@ export async function restartCommand(ctx: CommandContext): Promise<number> {
   const hubUrl = await resolveHubUrl(io, parsed, false);
   const identity = await readNodeIdentityStrict(dataDir);
   const effectiveHub = hubUrl !== '' ? hubUrl : identity.hubUrl ?? '';
-  if (effectiveHub === '') throw new UsageError('restart requires a bound Hub URL (run helm-node connect first)', 'missing_identity');
+  if (effectiveHub === '') throw new UsageError('restart requires a bound Hub URL (run helmx-node connect first)', 'missing_identity');
   const previous = await readPidRecord(dataDir);
   let previousPid: number | null = null;
   if (previous !== null) {

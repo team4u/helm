@@ -10,7 +10,7 @@
  *   subscribe 回 ack 后保持连接推裸事件帧）。插件生产 transport 经
  *   backend.nodeIpc（LocalNodeChannel，endpoint 指向本 socket）真实到达，
  *   测试注入零私有缝。
- * - FsOutputFiles：Map 形状的交接文件存储（键 <cwd>/.helm/<name>），set
+ * - FsOutputFiles：Map 形状的交接文件存储（键 <cwd>/.helmx/<name>），set
  *   真实落盘（含父目录创建）、delete 真实删除——生产 readLocalOutput /
  *   removeLocalOutput 在同一路径真实生效。
  */
@@ -20,16 +20,16 @@ import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import {
-  HelmError,
+  HelmxError,
   type AgentGateResult,
   type AskResult,
   type ConversationSummary,
-  type HelmHostNodeIpcPort,
+  type HelmxHostNodeIpcPort,
   type MaybePromise,
   type Profile,
   type RpcResult,
-} from '@helm/protocol'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+} from '@helmx/protocol'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import { PluginHost, type PluginHostBackend } from '../../../kernel/src/plugins/index.js'
 import type { WorkflowRunSummary } from '../../src/contracts.js'
@@ -195,7 +195,7 @@ export async function serveTransport(
             const result = await transport.call(targetOf(), request.method, request.params)
             socket.end(`${JSON.stringify({ id: request.id, result })}\n`)
           } catch (error) {
-            const body = error instanceof HelmError
+            const body = error instanceof HelmxError
               ? { code: error.code, message: error.message }
               : { code: 'internal', message: error instanceof Error ? error.message : String(error) }
             socket.end(`${JSON.stringify({ id: request.id, error: body })}\n`)
@@ -246,9 +246,9 @@ export async function serveTransport(
   }
 }
 
-/** 交接文件目录真实化辅助：mkdirSync(join(cwd, '.helm'), recursive)。 */
-export function ensureHelmDir(cwd: string): string {
-  const dir = join(cwd, '.helm')
+/** 交接文件目录真实化辅助：mkdirSync(join(cwd, '.helmx'), recursive)。 */
+export function ensureHelmxDir(cwd: string): string {
+  const dir = join(cwd, '.helmx')
   mkdirSync(dir, { recursive: true })
   return dir
 }
@@ -366,7 +366,7 @@ export abstract class BaseFakeHerdrTransport implements HerdrTransport {
   protected paneOf(ref: unknown): HerdrPaneState {
     const id = typeof ref === 'string' ? ref : String((ref as { pane_id?: unknown })?.pane_id ?? '')
     const pane = this.panes.get(id)
-    if (!pane) throw new HelmError('agent_not_found', `no pane ${id}`, 404)
+    if (!pane) throw new HelmxError('agent_not_found', `no pane ${id}`, 404)
     return pane
   }
 
@@ -376,7 +376,7 @@ export abstract class BaseFakeHerdrTransport implements HerdrTransport {
     const paneId = `${workspaceId}:p${n}`
     const tabId = `${workspaceId}:t${n}`
     const paneCwd = (params['cwd'] as string) ?? '/tmp'
-    if (ensureDir && isPosixWritablePath(paneCwd)) ensureHelmDir(paneCwd)
+    if (ensureDir && isPosixWritablePath(paneCwd)) ensureHelmxDir(paneCwd)
     this.panes.set(paneId, {
       paneId,
       tabId,
@@ -399,7 +399,7 @@ export abstract class BaseFakeHerdrTransport implements HerdrTransport {
     const paneId = `${workspaceId}:p1`
     const tabId = `${workspaceId}:t1`
     const path = `${params['cwd']}/.worktrees/wt${n}`
-    if (ensureDir && isPosixWritablePath(path)) ensureHelmDir(path)
+    if (ensureDir && isPosixWritablePath(path)) ensureHelmxDir(path)
     this.panes.set(paneId, { paneId, tabId, workspaceId, agentStatus: 'idle', seq: 1, cwd: path })
     this.tabs.set(tabId, { closed: false })
     this.workspaces.set(workspaceId, { closed: false })
@@ -408,7 +408,7 @@ export abstract class BaseFakeHerdrTransport implements HerdrTransport {
       workspace: { workspace_id: workspaceId },
       tab: { tab_id: tabId, workspace_id: workspaceId },
       root_pane: { pane_id: paneId, workspace_id: workspaceId, tab_id: tabId },
-      worktree: { path, branch: (params['branch'] as string) ?? 'helm/wf-x' },
+      worktree: { path, branch: (params['branch'] as string) ?? 'helmx/wf-x' },
     }
   }
 
@@ -424,10 +424,10 @@ export abstract class BaseFakeHerdrTransport implements HerdrTransport {
   protected assertSendKeysCas(pane: HerdrPaneState | undefined, params: Record<string, unknown>): void {
     const expected = params['expected_state_seq']
     if (typeof expected !== 'number' || !Number.isSafeInteger(expected) || expected < 0) {
-      throw new HelmError('invalid_params', 'agent.send_keys 必须携带非负整数 expected_state_seq（CAS 契约）', 400)
+      throw new HelmxError('invalid_params', 'agent.send_keys 必须携带非负整数 expected_state_seq（CAS 契约）', 400)
     }
     if (pane !== undefined && expected !== pane.seq) {
-      throw new HelmError('stale_state', `expected_state_seq=${expected} 与当前 state_change_seq=${pane.seq} 不符，按键未发送`, 409)
+      throw new HelmxError('stale_state', `expected_state_seq=${expected} 与当前 state_change_seq=${pane.seq} 不符，按键未发送`, 409)
     }
   }
 
@@ -463,16 +463,16 @@ export abstract class BaseFakeHerdrTransport implements HerdrTransport {
     const errorFactory = this.errors.get('readOutput')
     if (errorFactory) throw errorFactory()
     this.record(target, 'readOutput', { cwd, fileName })
-    const content = this.outputFiles.get(`${cwd}/.helm/${fileName}`)
+    const content = this.outputFiles.get(`${cwd}/.helmx/${fileName}`)
     if (content === undefined) {
-      throw new HelmError('herdr_output_missing', `交接文件不存在: ${cwd}/.helm/${fileName}`, 404)
+      throw new HelmxError('herdr_output_missing', `交接文件不存在: ${cwd}/.helmx/${fileName}`, 404)
     }
     return content
   }
 
   async removeOutput(target: HerdrTarget, cwd: string, fileName: string): Promise<void> {
     this.record(target, 'removeOutput', { cwd, fileName })
-    const key = `${cwd}/.helm/${fileName}`
+    const key = `${cwd}/.helmx/${fileName}`
     if (this.outputFiles.delete(key)) this.removedFiles.push(key)
   }
 
@@ -495,7 +495,7 @@ export abstract class BaseFakeHerdrTransport implements HerdrTransport {
     onError: (error: unknown) => void,
   ): Promise<() => void> {
     if (this.subscribeAck === 'fail') {
-      throw new HelmError('herdr_socket', 'subscribe failed', 502)
+      throw new HelmxError('herdr_socket', 'subscribe failed', 502)
     }
     this.record(target, 'events.subscribe', {})
     this.eventListeners.push(onEvent)
@@ -548,7 +548,7 @@ export class StandardFakeHerdrTransport extends BaseFakeHerdrTransport {
       case 'tab.close': {
         const tabId = params['tab_id'] as string
         const tab = this.tabs.get(tabId)
-        if (!tab) throw new HelmError('tab_not_found', `no tab ${tabId}`, 404)
+        if (!tab) throw new HelmxError('tab_not_found', `no tab ${tabId}`, 404)
         tab.closed = true
         if (this.autoCloseEmptyWorkspace) {
           const pane = [...this.panes.values()].find((p) => p.tabId === tabId)
@@ -562,7 +562,7 @@ export class StandardFakeHerdrTransport extends BaseFakeHerdrTransport {
       case 'workspace.close': {
         const wsId = params['workspace_id'] as string
         const ws = this.workspaces.get(wsId)
-        if (!ws) throw new HelmError('workspace_not_found', `no workspace ${wsId}`, 404)
+        if (!ws) throw new HelmxError('workspace_not_found', `no workspace ${wsId}`, 404)
         ws.closed = true
         return { type: 'ok' }
       }
@@ -605,7 +605,7 @@ export class StandardFakeHerdrTransport extends BaseFakeHerdrTransport {
             break
           }
         }
-        throw new HelmError('timeout', 'timed out waiting for agent status', 408)
+        throw new HelmxError('timeout', 'timed out waiting for agent status', 408)
       }
       case 'agent.prompt': {
         const pane = this.paneOf(params['target'])
@@ -646,7 +646,7 @@ export class StandardFakeHerdrTransport extends BaseFakeHerdrTransport {
       case 'session.snapshot':
         return this.buildSessionSnapshot()
       default:
-        throw new HelmError('method_not_found', `fake transport 不支持 ${method}`, 400)
+        throw new HelmxError('method_not_found', `fake transport 不支持 ${method}`, 400)
     }
   }
 
@@ -656,7 +656,7 @@ export class StandardFakeHerdrTransport extends BaseFakeHerdrTransport {
 }
 
 export function makeHerdrConversation(id: number, over: Partial<ConversationSummary> = {}): ConversationSummary {
-  return makeConversationSummary({ id, cwd: '/tmp/helm-herdr-parent', model: '', ...over })
+  return makeConversationSummary({ id, cwd: '/tmp/helmx-herdr-parent', model: '', ...over })
 }
 
 /**
@@ -691,14 +691,14 @@ export class HerdrFakeBackend implements PluginHostBackend {
     list: async () => [...this.profileStore.values()],
     get: async (id: string) => this.profileStore.get(id),
     getSystem: async (id: string) => {
-      throw new HelmError('not_found', `Profile ${id} 无 SYSTEM.md`, 404)
+      throw new HelmxError('not_found', `Profile ${id} 无 SYSTEM.md`, 404)
     },
-    save: async () => { throw new HelmError('unsupported', 'fixture 只读', 501) },
+    save: async () => { throw new HelmxError('unsupported', 'fixture 只读', 501) },
     directory: async (id: string) => `/tmp/herdr-fixture-profiles/${id}`,
   }
   skills = {
     list: async () => [],
-    readFile: async () => { throw new HelmError('unsupported', '本 fixture 无技能', 501) },
+    readFile: async () => { throw new HelmxError('unsupported', '本 fixture 无技能', 501) },
     directory: async (id: string) => `/tmp/herdr-fixture-skills/${id}`,
     ensureSkill: async () => {},
   }
@@ -709,47 +709,47 @@ export class HerdrFakeBackend implements PluginHostBackend {
     addRedaction: () => () => {},
   }
   setPluginConfig(): Promise<void> { return Promise.resolve() }
-  nodeIpc: HelmHostNodeIpcPort = {
+  nodeIpc: HelmxHostNodeIpcPort = {
     isOnline: () => true,
     getNodeHubUrl: () => undefined,
-    call: async () => { throw new HelmError('unsupported', '本 fixture 无节点 IPC', 501) },
-    subscribe: async () => { throw new HelmError('unsupported', '本 fixture 无节点 IPC', 501) },
+    call: async () => { throw new HelmxError('unsupported', '本 fixture 无节点 IPC', 501) },
+    subscribe: async () => { throw new HelmxError('unsupported', '本 fixture 无节点 IPC', 501) },
   }
   redact = (text: string) => text.replaceAll('SECRET-TOKEN', '[REDACTED]').replaceAll('SECRET-VALUE', '[REDACTED]')
   buildSpawnEnv = (conversationId: number, cwd: string, nodeId: string) => {
     this.spawnEnvLog.push({ conversationId, cwd, nodeId })
     return {
-      HELM_ENV: '1',
-      HELM_HUB_URL: 'http://127.0.0.1:3202',
-      HELM_TOKEN: this.spawnToken,
-      HELM_CWD: cwd,
-      HELM_CONVERSATION_ID: String(conversationId),
+      HELMX_ENV: '1',
+      HELMX_HUB_URL: 'http://127.0.0.1:3202',
+      HELMX_TOKEN: this.spawnToken,
+      HELMX_CWD: cwd,
+      HELMX_CONVERSATION_ID: String(conversationId),
     }
   }
-  async getConversationDetail(): Promise<never> { throw new HelmError('unsupported', '本 fixture 无详情', 501) }
+  async getConversationDetail(): Promise<never> { throw new HelmxError('unsupported', '本 fixture 无详情', 501) }
   async listArtifacts(): Promise<never[]> { return [] }
-  async createArtifact(): Promise<never> { throw new HelmError('unsupported', 'fixture does not create artifacts', 501) }
+  async createArtifact(): Promise<never> { throw new HelmxError('unsupported', 'fixture does not create artifacts', 501) }
   async getArtifact(id: string, conversationId: number): Promise<{ id: string; name: string; mimeType: string; size: number; absPath: string }> {
     if (this.getArtifactImpl !== undefined) return this.getArtifactImpl(id, conversationId)
     return undefined as never
   }
   async completeText(input: { conversationId: number; systemPrompt: string; text: string }): Promise<string> {
     if (this.completeTextImpl !== undefined) return this.completeTextImpl(input)
-    throw new HelmError('unsupported', '本 fixture 无模型', 501)
+    throw new HelmxError('unsupported', '本 fixture 无模型', 501)
   }
   executionEnv = (_nodeId: string, cwd: string) => {
     if (isPosixWritablePath(cwd)) mkdirSync(cwd, { recursive: true })
     return new NodeExecutionEnv({ cwd })
   }
   withFileLock<T>(_path: string, fn: () => Promise<T>): Promise<T> { return fn() }
-  async atomicWriteFile(): Promise<never> { throw new HelmError('unsupported', '本 fixture 无原子写', 501) }
-  async refreshModels(): Promise<never> { throw new HelmError('unsupported', '本 fixture 无模型刷新', 501) }
+  async atomicWriteFile(): Promise<never> { throw new HelmxError('unsupported', '本 fixture 无原子写', 501) }
+  async refreshModels(): Promise<never> { throw new HelmxError('unsupported', '本 fixture 无模型刷新', 501) }
   createConversation(): Promise<ConversationSummary> { return Promise.resolve(makeHerdrConversation(99)) }
   forkConversation(id: number): Promise<ConversationSummary> { return Promise.resolve(makeHerdrConversation(id + 100)) }
   listConversations(): ConversationSummary[] { return [...this.conversations.values()] }
   getConversation(id: number): ConversationSummary {
     const found = this.conversations.get(id)
-    if (found === undefined) throw new HelmError('not_found', `会话不存在: ${id}`, 404)
+    if (found === undefined) throw new HelmxError('not_found', `会话不存在: ${id}`, 404)
     return found
   }
   updateConversation(id: number): Promise<ConversationSummary> { return Promise.resolve(this.getConversation(id)) }
@@ -777,7 +777,7 @@ export class HerdrFakeBackend implements PluginHostBackend {
     return () => { this.askSeqResolvers.delete(resolver) }
   }
   async abortConversation(): Promise<void> {}
-  getConversationOwnership(): 'helm' | 'bot' | 'human' { return 'human' }
+  getConversationOwnership(): 'helmx' | 'bot' | 'human' { return 'human' }
   isClosing(): boolean { return false }
   async spawnAgent(): Promise<unknown> { return {} }
   async runGate(command: string, options?: { cwd?: string; env?: Record<string, string> }): Promise<{ ok: boolean; output: string }> {
@@ -786,14 +786,14 @@ export class HerdrFakeBackend implements PluginHostBackend {
   }
   async invokeAction(): Promise<unknown> { return {} }
   prepareAction(): { idempotent: boolean } { return { idempotent: false } }
-  async execEnv(): Promise<import('@helm/protocol').EnvExecResponse> {
-    throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501)
+  async execEnv(): Promise<import('@helmx/protocol').EnvExecResponse> {
+    throw new HelmxError('unsupported', '本 fixture 不执行节点命令', 501)
   }
   withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') }
   redactText(text: string): string { return text }
-  async resolveSpawnTarget(): Promise<never> { throw new HelmError('unsupported', '本 fixture 不解析 spawn 靶点', 501) }
+  async resolveSpawnTarget(): Promise<never> { throw new HelmxError('unsupported', '本 fixture 不解析 spawn 靶点', 501) }
   listActiveSpawnExecutions(): [] { return [] }
-  async inspectNodePathUsage(): Promise<never> { throw new HelmError('unsupported', '本 fixture 不扫描进程占用', 501) }
+  async inspectNodePathUsage(): Promise<never> { throw new HelmxError('unsupported', '本 fixture 不扫描进程占用', 501) }
   listActions(): [] { return [] }
   onEvent(type: string, listener: (payload: unknown) => void | Promise<void>): () => void {
     const set = this.typedListeners.get(type) ?? new Set()
@@ -854,10 +854,10 @@ export interface HerdrUnitEnv<TTransport extends HerdrTransport = StandardFakeHe
 export async function openHerdrUnitEnv<TTransport extends HerdrTransport = StandardFakeHerdrTransport>(
   options: HerdrUnitEnvOptions<TTransport> = {},
 ): Promise<HerdrUnitEnv<TTransport>> {
-  const dataDir = options.dataDir ?? mkdtempSync(join(tmpdir(), 'helm-herdr-unit-'))
+  const dataDir = options.dataDir ?? mkdtempSync(join(tmpdir(), 'helmx-herdr-unit-'))
   const backend = options.backend ?? new HerdrFakeBackend()
   const parentCwd = options.conversationOverrides?.cwd ?? join(dataDir, 'parent')
-  if (options.conversationOverrides?.cwd === undefined || isPosixWritablePath(parentCwd)) ensureHelmDir(parentCwd)
+  if (options.conversationOverrides?.cwd === undefined || isPosixWritablePath(parentCwd)) ensureHelmxDir(parentCwd)
   const parentConversation = backend.conversations.get(1)
   if (parentConversation !== undefined) {
     Object.assign(parentConversation, options.conversationOverrides, { cwd: parentCwd })
@@ -888,7 +888,7 @@ export async function openHerdrUnitEnv<TTransport extends HerdrTransport = Stand
         routedNodeId = undefined
       }
     },
-    subscribe: async () => { throw new HelmError('unsupported', '本 fixture 无节点 IPC 订阅', 501) },
+    subscribe: async () => { throw new HelmxError('unsupported', '本 fixture 无节点 IPC 订阅', 501) },
   }
 
   const host = new PluginHost({
@@ -965,6 +965,6 @@ export function scriptHerdrSuccess(
 ): void {
   env.transport.promptStatus = 'done'
   env.transport.onPrompt = (pane, text) => {
-    env.transport.outputFiles.set(`${pane.cwd}/.helm/${herdrFileNameOf(text)}`, content)
+    env.transport.outputFiles.set(`${pane.cwd}/.helmx/${herdrFileNameOf(text)}`, content)
   }
 }

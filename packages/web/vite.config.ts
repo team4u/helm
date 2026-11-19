@@ -2,7 +2,7 @@ import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
-const hubPort = process.env.HELM_PORT ?? '3202'
+const hubPort = process.env.HELMX_PORT ?? '3202'
 const hubTarget = `http://127.0.0.1:${hubPort}`
 
 function packageNameFromId(id: string): string | null {
@@ -33,8 +33,8 @@ export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: [
-      { find: '@helm/protocol/browser', replacement: fileURLToPath(new URL('../protocol/src/browser.ts', import.meta.url)) },
-      { find: /^@helm\/protocol$/, replacement: fileURLToPath(new URL('../protocol/src/index.ts', import.meta.url)) },
+      { find: '@helmx/protocol/browser', replacement: fileURLToPath(new URL('../protocol/src/browser.ts', import.meta.url)) },
+      { find: /^@helmx\/protocol$/, replacement: fileURLToPath(new URL('../protocol/src/index.ts', import.meta.url)) },
     ],
     dedupe: ['react', 'react-dom'],
   },

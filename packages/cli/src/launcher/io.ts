@@ -1,6 +1,6 @@
 /**
  * Shared CLI primitives for the Hub launcher: injectable I/O hooks and the usage error type.
- * Mirrors `@helm/node`'s `cli-context.ts` pattern (pure mechanism, no command business logic).
+ * Mirrors `@helmx/node`'s `cli-context.ts` pattern (pure mechanism, no command business logic).
  */
 import process from 'node:process';
 

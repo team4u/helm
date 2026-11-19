@@ -16,7 +16,7 @@
  * host-adapter.ts，本模块只做动作面的解析、校验与调用。
  */
 
-import { HelmError, isAbsoluteTargetPath, type EnvExecResponse } from '@helm/protocol'
+import { HelmxError, isAbsoluteTargetPath, type EnvExecResponse } from '@helmx/protocol'
 import type { ActiveRun } from './active-run.js'
 import type { EngineHostDeps, WorkflowServiceHost } from './host-adapter.js'
 
@@ -60,7 +60,7 @@ export function resolveActionId(
         builtin: 'env.exec',
       }
     }
-    throw new HelmError(
+    throw new HelmxError(
       'ambiguous_action',
       `动作短 id "${qualified}" 命中多个动作（含内建 env.exec），请用全限定 id：env.exec, ${sameShort.map((m) => `${m.pluginId}.${m.id}`).join(', ')}`,
       400,
@@ -80,28 +80,28 @@ export function resolveActionId(
     return { pluginId: sameShort[0]!.pluginId, actionId: sameShort[0]!.id }
   }
   if (sameShort.length > 1) {
-    throw new HelmError(
+    throw new HelmxError(
       'ambiguous_action',
       `动作短 id "${qualified}" 命中多个插件，请用全限定 id：${sameShort.map((m) => `${m.pluginId}.${m.id}`).join(', ')}`,
       400,
       { qualified },
     )
   }
-  throw new HelmError('unknown_action', `未注册的动作：${qualified}`, 404, { qualified })
+  throw new HelmxError('unknown_action', `未注册的动作：${qualified}`, 404, { qualified })
 }
 
 export function validateEnvExecInput(host: WorkflowServiceHost, input: unknown): ValidatedEnvExecInput {
   if (host.execEnv === undefined) {
-    throw new HelmError('not_supported', '当前工作流宿主未配置 env.exec 命令执行端口', 501)
+    throw new HelmxError('not_supported', '当前工作流宿主未配置 env.exec 命令执行端口', 501)
   }
   if (typeof input !== 'object' || input === null || Array.isArray(input)) {
-    throw new HelmError('validation_error', 'env.exec 入参必须是 JSON 对象', 400)
+    throw new HelmxError('validation_error', 'env.exec 入参必须是 JSON 对象', 400)
   }
   const raw = input as Record<string, unknown>
   const allowedKeys = new Set(['command', 'nodeId', 'cwd', 'env', 'timeoutMs', 'allowFailure'])
   for (const key of Object.keys(raw)) {
     if (!allowedKeys.has(key)) {
-      throw new HelmError('validation_error', `env.exec 发现未知选项 "${key}"`, 400)
+      throw new HelmxError('validation_error', `env.exec 发现未知选项 "${key}"`, 400)
     }
   }
 
@@ -109,7 +109,7 @@ export function validateEnvExecInput(host: WorkflowServiceHost, input: unknown):
   let command: string | string[]
   if (typeof rawCommand === 'string') {
     if (rawCommand.trim().length === 0) {
-      throw new HelmError('validation_error', 'env.exec command 不能为空字符串', 400)
+      throw new HelmxError('validation_error', 'env.exec command 不能为空字符串', 400)
     }
     command = rawCommand
   } else if (Array.isArray(rawCommand)) {
@@ -118,17 +118,17 @@ export function validateEnvExecInput(host: WorkflowServiceHost, input: unknown):
       !rawCommand.every((item) => typeof item === 'string') ||
       rawCommand[0]!.trim().length === 0
     ) {
-      throw new HelmError('validation_error', 'env.exec command 数组必须非空且首项为非空字符串', 400)
+      throw new HelmxError('validation_error', 'env.exec command 数组必须非空且首项为非空字符串', 400)
     }
     command = rawCommand as string[]
   } else {
-    throw new HelmError('validation_error', 'env.exec command 必须是非空字符串或非空字符串数组', 400)
+    throw new HelmxError('validation_error', 'env.exec command 必须是非空字符串或非空字符串数组', 400)
   }
 
   let nodeId: string | undefined
   if (raw.nodeId !== undefined) {
     if (typeof raw.nodeId !== 'string' || !NODE_ID_RE.test(raw.nodeId)) {
-      throw new HelmError(
+      throw new HelmxError(
         'validation_error',
         'env.exec nodeId 需匹配 /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/（字母数字开头，可含 . _ -）',
         400,
@@ -140,7 +140,7 @@ export function validateEnvExecInput(host: WorkflowServiceHost, input: unknown):
   let cwd: string | undefined
   if (raw.cwd !== undefined) {
     if (typeof raw.cwd !== 'string' || raw.cwd.trim().length === 0 || !isAbsoluteTargetPath(raw.cwd)) {
-      throw new HelmError(
+      throw new HelmxError(
         'validation_error',
         'env.exec cwd 必须为跨平台绝对路径（POSIX/Windows/UNC）',
         400,
@@ -152,11 +152,11 @@ export function validateEnvExecInput(host: WorkflowServiceHost, input: unknown):
   let env: Record<string, string> | undefined
   if (raw.env !== undefined) {
     if (typeof raw.env !== 'object' || raw.env === null || Array.isArray(raw.env)) {
-      throw new HelmError('validation_error', 'env.exec env 必须是键值对象', 400)
+      throw new HelmxError('validation_error', 'env.exec env 必须是键值对象', 400)
     }
     for (const [k, v] of Object.entries(raw.env)) {
       if (typeof v !== 'string') {
-        throw new HelmError('validation_error', `env.exec env.${k} 必须为字符串`, 400)
+        throw new HelmxError('validation_error', `env.exec env.${k} 必须为字符串`, 400)
       }
     }
     env = raw.env as Record<string, string>
@@ -165,7 +165,7 @@ export function validateEnvExecInput(host: WorkflowServiceHost, input: unknown):
   let timeoutMs: number | undefined
   if (raw.timeoutMs !== undefined) {
     if (typeof raw.timeoutMs !== 'number' || !Number.isInteger(raw.timeoutMs) || raw.timeoutMs < 1 || raw.timeoutMs > 600_000) {
-      throw new HelmError('validation_error', 'env.exec timeoutMs 必须是 1 到 600000 之间的整数', 400)
+      throw new HelmxError('validation_error', 'env.exec timeoutMs 必须是 1 到 600000 之间的整数', 400)
     }
     timeoutMs = raw.timeoutMs
   }
@@ -173,7 +173,7 @@ export function validateEnvExecInput(host: WorkflowServiceHost, input: unknown):
   let allowFailure: boolean | undefined
   if (raw.allowFailure !== undefined) {
     if (typeof raw.allowFailure !== 'boolean') {
-      throw new HelmError('validation_error', 'env.exec allowFailure 必须为 boolean', 400)
+      throw new HelmxError('validation_error', 'env.exec allowFailure 必须为 boolean', 400)
     }
     allowFailure = raw.allowFailure
   }
@@ -191,7 +191,7 @@ export async function enginePrepareAction(
   // 在落盘 action_started 前拦截宿主关停：既阻止新动作启动，又避免写悬空 action_started。
   if (deps.host.isHostClosing?.() === true) {
     run.abort.abort()
-    throw new HelmError('aborted', '宿主正在关停，中止动作调用', 409)
+    throw new HelmxError('aborted', '宿主正在关停，中止动作调用', 409)
   }
   const resolved = resolveActionId(deps.host, actionId)
   if (resolved.builtin === 'env.exec') {
@@ -232,7 +232,7 @@ export async function engineInvokeAction(
       context.signal,
     )
     if (execPromise === undefined) {
-      throw new HelmError('not_supported', '当前工作流宿主未配置 env.exec 命令执行端口', 501)
+      throw new HelmxError('not_supported', '当前工作流宿主未配置 env.exec 命令执行端口', 501)
     }
     run.pendingExecs.add(execPromise)
     let res: EnvExecResponse
@@ -245,7 +245,7 @@ export async function engineInvokeAction(
     const succeeded = res.ok && res.exitCode === 0 && !res.timedOut
     if (!succeeded && parsed.allowFailure !== true) {
       const tail = redactedOutput.length > 2000 ? redactedOutput.slice(-2000) : redactedOutput
-      throw new HelmError(
+      throw new HelmxError(
         'env_exec_failed',
         `命令执行失败${res.timedOut ? '（超时）' : ''}（exitCode=${String(res.exitCode)}）${tail ? ': ' + tail : ''}`,
         502,

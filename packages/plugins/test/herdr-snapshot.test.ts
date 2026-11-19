@@ -11,7 +11,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { HelmError } from '@helm/protocol'
+import { HelmxError } from '@helmx/protocol'
 import { parseSessionSnapshot } from '../src/herdr/rpc.js'
 
 const okResult = (snapshot: Record<string, unknown>): Record<string, unknown> => ({
@@ -48,7 +48,7 @@ const humanAgent = (over: Record<string, unknown> = {}): Record<string, unknown>
 
 const violation = (fn: () => unknown): void => {
   assert.throws(fn, (e: unknown) => {
-    assert.ok(e instanceof HelmError, `应为 HelmError，实际：${String(e)}`)
+    assert.ok(e instanceof HelmxError, `应为 HelmxError，实际：${String(e)}`)
     assert.equal(e.code, 'herdr_protocol_violation')
     return true
   })
@@ -70,7 +70,7 @@ test('完整快照可读：shell 窗格 + 完整 human agent；shell 不虚构 s
           foreground_cwd: '/root/code/helm/packages',
           label: 'worker',
           agent: 'claude',
-          title: 'pi@helm',
+          title: 'pi@helmx',
         },
       ],
     }),
@@ -94,7 +94,7 @@ test('完整快照可读：shell 窗格 + 完整 human agent；shell 不虚构 s
   assert.equal(agentPane.foregroundCwd, '/root/code/helm/packages')
   assert.equal(agentPane.label, 'worker')
   assert.equal(agentPane.agent, 'claude')
-  assert.equal(agentPane.title, 'pi@helm')
+  assert.equal(agentPane.title, 'pi@helmx')
 
   assert.equal(data.agents.length, 1)
   const agent = data.agents[0]

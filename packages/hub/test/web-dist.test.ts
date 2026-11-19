@@ -9,7 +9,7 @@ import { resolveHubWebDistDir, resolveWebDistOption } from '../src/web-dist.js'
 import { useTempDir } from './helpers/hub-test-env.js'
 
 test('payload/repo 布局：hub/dist 与 hub/src 入口均探测同级 web/dist（含 index.html）', { timeout: 60_000 }, (t) => {
-  const root = useTempDir(t, 'helm-webdist-')
+  const root = useTempDir(t, 'helmx-webdist-')
   mkdirSync(join(root, 'hub', 'dist'), { recursive: true })
   mkdirSync(join(root, 'hub', 'src'), { recursive: true })
   mkdirSync(join(root, 'web', 'dist'), { recursive: true })
@@ -19,7 +19,7 @@ test('payload/repo 布局：hub/dist 与 hub/src 入口均探测同级 web/dist�
 })
 
 test('无 index.html 或无 web 目录：返回 undefined（纯 API，不伪装静态站）', { timeout: 60_000 }, (t) => {
-  const root = useTempDir(t, 'helm-webdist-')
+  const root = useTempDir(t, 'helmx-webdist-')
   mkdirSync(join(root, 'hub', 'dist'), { recursive: true })
   mkdirSync(join(root, 'web', 'dist'), { recursive: true })
   assert.equal(resolveHubWebDistDir(join(root, 'hub', 'dist')), undefined)
@@ -31,7 +31,7 @@ test('默认目录探测遇 I/O 故障显式失败，不回退为纯 API', {
   timeout: 60_000,
   skip: process.platform === 'win32' ? '创建 symlink 需 Windows 开发者模式或管理员权限' : false,
 }, (t) => {
-  const root = useTempDir(t, 'helm-webdist-')
+  const root = useTempDir(t, 'helmx-webdist-')
   mkdirSync(join(root, 'web', 'dist'), { recursive: true })
   symlinkSync('index.html', join(root, 'web', 'dist', 'index.html'))
   assert.throws(
@@ -40,8 +40,8 @@ test('默认目录探测遇 I/O 故障显式失败，不回退为纯 API', {
   )
 })
 
-test('HELM_WEB_DIST_DIR：显式目录优先，禁用字面量显式关闭，未设置走默认探测', { timeout: 60_000 }, (t) => {
-  const root = useTempDir(t, 'helm-webdist-')
+test('HELMX_WEB_DIST_DIR：显式目录优先，禁用字面量显式关闭，未设置走默认探测', { timeout: 60_000 }, (t) => {
+  const root = useTempDir(t, 'helmx-webdist-')
   mkdirSync(join(root, 'hub', 'dist'), { recursive: true })
   mkdirSync(join(root, 'web', 'dist'), { recursive: true })
   writeFileSync(join(root, 'web', 'dist', 'index.html'), '<!doctype html>')

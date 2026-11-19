@@ -3,28 +3,28 @@ import { test } from 'node:test'
 import net from 'node:net'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { deferred } from '@helm/test-kit'
-import { useTempDir } from '@helm/test-kit/node'
+import { deferred } from '@helmx/test-kit'
+import { useTempDir } from '@helmx/test-kit/node'
 import { createNodeEnvRpcServer } from '../src/daemon/env-rpc-server.js'
 
-test('node does not inherit case-variant Helm_Token from host environment', { timeout: 60_000 }, async () => {
-  const previous = process.env.Helm_Token
-  process.env.Helm_Token = 'mixed-case-host-credential'
+test('node does not inherit case-variant Helmx_Token from host environment', { timeout: 60_000 }, async () => {
+  const previous = process.env.Helmx_Token
+  process.env.Helmx_Token = 'mixed-case-host-credential'
   let output = ''
   const rpc = createNodeEnvRpcServer({ defaultCwd: process.cwd(), onExecOutput: (event) => { output += event.text } })
   try {
-    const result = await rpc.envExec({ execId: 'mixed-token', command: [process.execPath, '-e', 'process.stdout.write(process.env.Helm_Token ?? "absent")'] })
+    const result = await rpc.envExec({ execId: 'mixed-token', command: [process.execPath, '-e', 'process.stdout.write(process.env.Helmx_Token ?? "absent")'] })
     assert.equal(result.ok, true)
     assert.equal(output, 'absent')
   } finally {
-    if (previous === undefined) delete process.env.Helm_Token
-    else process.env.Helm_Token = previous
+    if (previous === undefined) delete process.env.Helmx_Token
+    else process.env.Helmx_Token = previous
     await rpc.dispose()
   }
 })
 
 test('opening a binary reader concurrently with dispose leaks no handles', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-reader-race-')
+  const dir = useTempDir(t, 'helmx-reader-race-')
   await writeFile(join(dir, 'file.txt'), 'content')
   for (let index = 0; index < 20; index++) {
     const server = createNodeEnvRpcServer({ defaultCwd: dir })
@@ -41,7 +41,7 @@ test('opening a binary reader concurrently with dispose leaks no handles', { tim
 })
 
 test('confirmed IPC subscription sends exactly one closed notification on disconnect', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-ipc-close-')
+  const dir = useTempDir(t, 'helmx-ipc-close-')
   const endpoint = join(dir, 'close.sock')
   let peer: net.Socket | undefined
   const ipc = net.createServer((socket) => {
@@ -67,7 +67,7 @@ test('confirmed IPC subscription sends exactly one closed notification on discon
 })
 
 test('uncorrelated IPC calls and pre-ACK subscriptions still clean up owned connections', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-ipc-race-')
+  const dir = useTempDir(t, 'helmx-ipc-race-')
   const endpoint = join(dir, 'pending.sock')
   const sockets = new Set<net.Socket>()
   const bothConnected = deferred()

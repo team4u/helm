@@ -16,7 +16,7 @@ function makeEnv(
   spawnAgent: WorkflowServiceHost['spawnAgent'],
   overrides?: Partial<WorkflowServiceHost> & { concurrency?: number },
 ) {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-workflow-events-'))
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-workflow-events-'))
   const docs = new Map<string, unknown>()
   const state: WorkflowStateStore = {
     get<T>(key: string, initial: T): T {
@@ -179,7 +179,7 @@ test('phase/log 与 onResolved 元数据立即推送：workflow.updated 携带 p
     async (request) => {
       request.onResolved?.({
         conversationId: 4242,
-        meta: { 'builtin:workflow': { worktree: { path: '/tmp/wt-iso', branch: 'helm/wf-1' } } },
+        meta: { 'builtin:workflow': { worktree: { path: '/tmp/wt-iso', branch: 'helmx/wf-1' } } },
       })
       request.onGateResult?.({ ok: true, output: '' })
       return '完成结果'

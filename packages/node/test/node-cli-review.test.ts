@@ -1,5 +1,5 @@
 /**
- * Acceptance review tests for `helm-node` CLI background control (portable control IPC contract).
+ * Acceptance review tests for `helmx-node` CLI background control (portable control IPC contract).
  *
  * Exercises real multi-process lifecycles: detached daemon child processes (stdio IPC readiness +
  * persistent control UDS) and a real Hub fixture (`http.Server` + `WebSocketServer` + `birpc`).
@@ -26,10 +26,10 @@ import net from 'node:net';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
-import { makeTempDir as tempDir, waitFor as kitWaitFor } from '@helm/test-kit/node';
+import { makeTempDir as tempDir, waitFor as kitWaitFor } from '@helmx/test-kit/node';
 import { WebSocket, WebSocketServer } from 'ws';
 import { createBirpc } from 'birpc';
-import type { EnvExecOutputEvent } from '@helm/protocol';
+import type { EnvExecOutputEvent } from '@helmx/protocol';
 import { sanitizedHostEnv } from './helpers/sanitized-env.js';
 import { bindIdentityFromJoinToken } from '../src/daemon/index.js';
 import { isDirectRun, runNodeCli, type NodeCliIo } from '../src/cli.js';
@@ -52,7 +52,7 @@ async function runCli(argv: string[], io: Partial<NodeCliIo> = {}): Promise<Capt
   let out = '';
   let err = '';
   const code = await runNodeCli(argv, {
-    // Strip host-managed HELM_* variables so CLI startup reflects only test argv and node.json.
+    // Strip host-managed HELMX_* variables so CLI startup reflects only test argv and node.json.
     env: sanitizedHostEnv(),
     out: (t) => (out += t),
     err: (t) => (err += t),
@@ -161,7 +161,7 @@ const waitFor = (condition: () => boolean | Promise<boolean>, timeoutMs: number,
 // ---------------------------------------------------------------------------
 
 test('start -d / status / stop: registered comes from genuine ACK, stop exits cleanly and removes pid', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('helm-review-lifecycle-');
+  const dir = await tempDir('helmx-review-lifecycle-');
   t.after(async () => {
     await runCli(['stop', '--data-dir', dir, '--json']).catch(() => undefined);
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
@@ -191,7 +191,7 @@ test('start -d / status / stop: registered comes from genuine ACK, stop exits cl
   };
   assert.equal(record.pid, payload.pid);
   assert.match(record.instanceId, /^[0-9a-f]{32}$/);
-  assert.match(record.endpoint, /^\/tmp\/helm-node-[0-9a-f]{16}\.sock$/);
+  assert.match(record.endpoint, /^\/tmp\/helmx-node-[0-9a-f]{16}\.sock$/);
   const pidStat = await fs.stat(path.join(dir, 'node.pid'));
   // Skip 0600 mode check on Windows (NTFS uses ACLs instead of POSIX modes).
   if (process.platform !== 'win32') assert.equal(pidStat.mode & 0o777, 0o600);
@@ -228,12 +228,12 @@ test('start -d / status / stop: registered comes from genuine ACK, stop exits cl
 });
 
 test('three independent CLI child processes can start, query, and stop the same daemon instance', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('helm-cli-processes-');
+  const dir = await tempDir('helmx-cli-processes-');
   const hub = await startHubFixture({ expectedToken: 'cli-process:s' });
   t.after(async () => { await runCli(['stop', '--data-dir', dir, '--json']); await hub.close(); await fs.rm(dir, { recursive: true, force: true }); });
   await bindIdentityFromJoinToken(dir, 'cli-process:s', hub.url);
   const childCli = (args: string[]): Promise<Captured> => new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ['--import', import.meta.resolve('tsx'), fileURLToPath(new URL('../src/cli.ts', import.meta.url)), ...args, '--data-dir', dir, '--json'], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...sanitizedHostEnv(), HELM_HUB_URL: hub.url } });
+    const child = spawn(process.execPath, ['--import', import.meta.resolve('tsx'), fileURLToPath(new URL('../src/cli.ts', import.meta.url)), ...args, '--data-dir', dir, '--json'], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...sanitizedHostEnv(), HELMX_HUB_URL: hub.url } });
     let out = ''; let err = '';
     child.stdout.on('data', (chunk) => { out += chunk.toString() });
     child.stderr.on('data', (chunk) => { err += chunk.toString() });
@@ -254,7 +254,7 @@ test('three independent CLI child processes can start, query, and stop the same 
 });
 
 test('restart: old instance exits cleanly over control channel and new instance registers', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('helm-review-restart-');
+  const dir = await tempDir('helmx-review-restart-');
   t.after(async () => {
     await runCli(['stop', '--data-dir', dir, '--json']).catch(() => undefined);
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
@@ -287,7 +287,7 @@ test('restart: old instance exits cleanly over control channel and new instance 
 });
 
 test('start -d reports state=starting truthfully when Hub is unreachable without claiming registered', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('helm-review-startd-offline-');
+  const dir = await tempDir('helmx-review-startd-offline-');
   t.after(async () => {
     await runCli(['stop', '--data-dir', dir, '--json']).catch(() => undefined);
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
@@ -314,7 +314,7 @@ test('start -d reports state=starting truthfully when Hub is unreachable without
 // ---------------------------------------------------------------------------
 
 test('start -d passes no token in argv or env; child argv contains only start --data-dir [--hub]', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('helm-review-notoken-');
+  const dir = await tempDir('helmx-review-notoken-');
   t.after(async () => {
     await runCli(['stop', '--data-dir', dir, '--json']).catch(() => undefined);
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
@@ -343,12 +343,12 @@ test('start -d passes no token in argv or env; child argv contains only start --
   assert.ok(capturedArgs.includes(dir));
   // No token in env (instanceId/endpoint are local control metadata)
   assert.ok(!JSON.stringify(capturedEnv ?? {}).includes('s3cret'), 'env must not contain token secret');
-  assert.ok((capturedEnv?.['HELM_NODE_INSTANCE_ID'] ?? '').length >= 16, 'instanceId passed via env');
-  assert.ok((capturedEnv?.['HELM_NODE_CONTROL_ENDPOINT'] ?? '').length > 0, 'endpoint passed via env');
+  assert.ok((capturedEnv?.['HELMX_NODE_INSTANCE_ID'] ?? '').length >= 16, 'instanceId passed via env');
+  assert.ok((capturedEnv?.['HELMX_NODE_CONTROL_ENDPOINT'] ?? '').length > 0, 'endpoint passed via env');
 });
 
 test('control channel rejects unknown instance nonce without harming unrelated processes and preserves pid file', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('helm-review-nonce-');
+  const dir = await tempDir('helmx-review-nonce-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
   });
@@ -405,7 +405,7 @@ test('control channel rejects unknown instance nonce without harming unrelated p
 });
 
 test('duplicate start is rejected after control channel verification (already_running)', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('helm-review-dup-');
+  const dir = await tempDir('helmx-review-dup-');
   t.after(async () => {
     await runCli(['stop', '--data-dir', dir, '--json']).catch(() => undefined);
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
@@ -431,7 +431,7 @@ test('duplicate start is rejected after control channel verification (already_ru
 });
 
 test('unreachable control channel with live pid rejects both stop and start while keeping pid file', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('helm-review-unreach-');
+  const dir = await tempDir('helmx-review-unreach-');
   t.after(async () => {
     // Cleanup removes dir since pid points to this live test process
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
@@ -460,7 +460,7 @@ test('unreachable control channel with live pid rejects both stop and start whil
 });
 
 test('dead pid: stop cleans up as stale and start recovers normally', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('helm-review-stale-');
+  const dir = await tempDir('helmx-review-stale-');
   t.after(async () => {
     await runCli(['stop', '--data-dir', dir, '--json']).catch(() => undefined);
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
@@ -486,7 +486,7 @@ test('dead pid: stop cleans up as stale and start recovers normally', { timeout:
 });
 
 test('corrupt pid file and leftover start lock fail explicitly without silent removal', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('helm-review-badpid-');
+  const dir = await tempDir('helmx-review-badpid-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
   });
@@ -525,7 +525,7 @@ test('corrupt pid file and leftover start lock fail explicitly without silent re
 // ---------------------------------------------------------------------------
 
 test('start -d fails explicitly on missing node binary without fake success', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('helm-review-spawn-err-');
+  const dir = await tempDir('helmx-review-spawn-err-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
   });
@@ -550,7 +550,7 @@ test('start -d fails explicitly on missing node binary without fake success', { 
 });
 
 test('start -d fails with log tail on immediate child exit without writing pid', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('helm-review-exit-');
+  const dir = await tempDir('helmx-review-exit-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
   });
@@ -573,7 +573,7 @@ test('start -d fails with log tail on immediate child exit without writing pid',
 });
 
 test('start -d fails explicitly when node.log cannot be opened (blocked by directory)', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('helm-review-logfail-');
+  const dir = await tempDir('helmx-review-logfail-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
   });
@@ -591,7 +591,7 @@ test('start -d fails explicitly when node.log cannot be opened (blocked by direc
 // ---------------------------------------------------------------------------
 
 test('start -d clean start/stop leaves no orphan control socket and leaks no token into node.log', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('helm-review-clean-');
+  const dir = await tempDir('helmx-review-clean-');
   t.after(async () => {
     await runCli(['stop', '--data-dir', dir, '--json']).catch(() => undefined);
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
@@ -624,7 +624,7 @@ test('start -d clean start/stop leaves no orphan control socket and leaks no tok
 // ---------------------------------------------------------------------------
 
 test('service install entry prefers dist and prompts pnpm build when running from source without dist', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('helm-review-svc-entry-');
+  const dir = await tempDir('helmx-review-svc-entry-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
   });
@@ -647,7 +647,7 @@ test('service install entry prefers dist and prompts pnpm build when running fro
 });
 
 test('connect foreground prints connecting before registration, ready state after, and exits cleanly on Ctrl+C', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('helm-review-connect-');
+  const dir = await tempDir('helmx-review-connect-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
   });
@@ -673,7 +673,7 @@ test('connect foreground prints connecting before registration, ready state afte
 });
 
 test('connect --once exits after single attempt and reports auth rejection truthfully', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('helm-review-once-');
+  const dir = await tempDir('helmx-review-once-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
   });
@@ -700,8 +700,8 @@ const failExec: ServiceExec = {
 };
 
 test('install places targetPath under temp serviceHome with zero host side effects', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('helm-review-svc-');
-  const home = await tempDir('helm-review-svc-home-');
+  const dir = await tempDir('helmx-review-svc-');
+  const home = await tempDir('helmx-review-svc-home-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true });
     await fs.rm(home, { recursive: true, force: true });
@@ -738,8 +738,8 @@ test('install places targetPath under temp serviceHome with zero host side effec
 });
 
 test('install fails explicitly when daemon-reload or registration fails and preserves config', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('helm-review-svc-cmdfail-');
-  const home = await tempDir('helm-review-svc-cmdfail-home-');
+  const dir = await tempDir('helmx-review-svc-cmdfail-');
+  const home = await tempDir('helmx-review-svc-cmdfail-home-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true });
     await fs.rm(home, { recursive: true, force: true });
@@ -759,7 +759,7 @@ test('install fails explicitly when daemon-reload or registration fails and pres
   );
   // Staged config copy preserved for diagnosis and retry
   assert.equal(
-    await fs.stat(path.join(dir, 'service', 'helm-node.service')).then(() => true, () => false),
+    await fs.stat(path.join(dir, 'service', 'helmx-node.service')).then(() => true, () => false),
     true,
   );
 
@@ -771,8 +771,8 @@ test('install fails explicitly when daemon-reload or registration fails and pres
 });
 
 test('uninstall preserves configs and throws when deregistration fails instead of pretending uninstalled', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('helm-review-svc-unfail-');
-  const home = await tempDir('helm-review-svc-unfail-home-');
+  const dir = await tempDir('helmx-review-svc-unfail-');
+  const home = await tempDir('helmx-review-svc-unfail-home-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true });
     await fs.rm(home, { recursive: true, force: true });
@@ -787,18 +787,18 @@ test('uninstall preserves configs and throws when deregistration fails instead o
   );
   // Config files preserved (including active platform file)
   assert.equal(
-    await fs.stat(path.join(home, '.config/systemd/user/helm-node.service')).then(() => true, () => false),
+    await fs.stat(path.join(home, '.config/systemd/user/helmx-node.service')).then(() => true, () => false),
     true,
   );
   assert.equal(
-    await fs.stat(path.join(dir, 'service', 'helm-node.service')).then(() => true, () => false),
+    await fs.stat(path.join(dir, 'service', 'helmx-node.service')).then(() => true, () => false),
     true,
   );
 });
 
 test('status distinguishes installed/running/unknown and diagnoses query failures explicitly', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('helm-review-svc-status-');
-  const home = await tempDir('helm-review-svc-status-home-');
+  const dir = await tempDir('helmx-review-svc-status-');
+  const home = await tempDir('helmx-review-svc-status-home-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true });
     await fs.rm(home, { recursive: true, force: true });
@@ -848,9 +848,9 @@ test('status distinguishes installed/running/unknown and diagnoses query failure
 
 test('renderServiceSpec applies serviceHome override across platforms and rejects unsupported ones', { timeout: 60_000 }, () => {
   const opts = { cliEntryPath: '/opt/cli.js', dataDir: '/opt/data', serviceHome: '/srv/fake-home' } as const;
-  assert.equal(renderServiceSpec({ ...opts, platform: 'darwin' }).targetPath, '/srv/fake-home/Library/LaunchAgents/ai.helm.node.plist');
-  assert.equal(renderServiceSpec({ ...opts, platform: 'linux' }).targetPath, '/srv/fake-home/.config/systemd/user/helm-node.service');
-  assert.equal(renderServiceSpec({ ...opts, platform: 'win32' }).targetPath, '/srv/fake-home/HelmNode.xml');
+  assert.equal(renderServiceSpec({ ...opts, platform: 'darwin' }).targetPath, '/srv/fake-home/Library/LaunchAgents/ai.helmx.node.plist');
+  assert.equal(renderServiceSpec({ ...opts, platform: 'linux' }).targetPath, '/srv/fake-home/.config/systemd/user/helmx-node.service');
+  assert.equal(renderServiceSpec({ ...opts, platform: 'win32' }).targetPath, '/srv/fake-home/HelmxNode.xml');
   assert.throws(() => renderServiceSpec({ ...opts, platform: 'sunos' }), /unsupported platform/);
 });
 

@@ -7,12 +7,12 @@
  */
 
 import {
-  HelmError,
+  HelmxError,
   escapeXml,
   isJsonObject,
   type GuardedMutationExpectation,
-  type HelmHostApi,
-} from '@helm/protocol'
+  type HelmxHostApi,
+} from '@helmx/protocol'
 import type { WatchdogOwnership } from '../diagnostics.js'
 
 // ---------------------------------------------------------------------------
@@ -156,15 +156,15 @@ export function parseTargetKey(key: string): { kind: string; nodeId?: string; ta
   }
 }
 
-/** HelmError 附带稳定错误码（内核守卫拒绝的通知可被程序化判别）。 */
+/** HelmxError 附带稳定错误码（内核守卫拒绝的通知可被程序化判别）。 */
 export function describeError(err: unknown): string {
-  return err instanceof HelmError ? `[${err.code}] ${err.message}` : err instanceof Error ? err.message : String(err)
+  return err instanceof HelmxError ? `[${err.code}] ${err.message}` : err instanceof Error ? err.message : String(err)
 }
 
 /** 内核守卫拒绝（目标已变）与真实失败区分：冲突/缺失是确定性放弃，可重试。 */
 export function isGuardConflict(err: unknown): boolean {
   return (
-    err instanceof HelmError &&
+    err instanceof HelmxError &&
     (err.code === 'ownership_conflict' || err.code === 'state_seq_conflict' || err.code === 'not_found')
   )
 }
@@ -175,7 +175,7 @@ export function guardOf(
   extra: { withSeq?: boolean } = {},
 ): GuardedMutationExpectation {
   return {
-    ...(finding.ownedBy === 'bot' || finding.ownedBy === 'helm' ? { expectedOwnership: finding.ownedBy } : {}),
+    ...(finding.ownedBy === 'bot' || finding.ownedBy === 'helmx' ? { expectedOwnership: finding.ownedBy } : {}),
     ...(extra.withSeq === true && finding.stateChangeSeq !== undefined
       ? { expectedStateSeq: finding.stateChangeSeq }
       : {}),
@@ -187,7 +187,7 @@ export function guardOf(
 // ---------------------------------------------------------------------------
 
 export function createWatchdogNotifier(
-  host: Pick<HelmHostApi, 'emitEvent' | 'redact'>,
+  host: Pick<HelmxHostApi, 'emitEvent' | 'redact'>,
   isClosing: () => boolean,
 ): WatchdogNotify {
   return (level, title, body, conversationId) => {

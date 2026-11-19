@@ -4,7 +4,7 @@ import * as React from 'react'
 import { act } from 'react'
 import type { Root } from 'react-dom/client'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
-import type { ConversationSummary } from '@helm/protocol'
+import type { ConversationSummary } from '@helmx/protocol'
 import { hangingEventStream, type SseFrameSender } from './helpers/sse-stream.js'
 import type { ResolvedTarget, ActiveModal } from '../src/lib/types.js'
 
@@ -12,8 +12,8 @@ GlobalRegistrator.register()
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
 const { createRoot } = await import('react-dom/client')
 const { ConversationPane } = await import('../src/conversation/ConversationPane.js')
-const { HelmStoreProvider } = await import('../src/lib/HelmStoreProvider.js')
-const { useHelmStore } = await import('../src/lib/store-context.js')
+const { HelmxStoreProvider } = await import('../src/lib/HelmxStoreProvider.js')
+const { useHelmxStore } = await import('../src/lib/store-context.js')
 const e = React.createElement
 const originalFetch = globalThis.fetch
 let root: Root | undefined
@@ -106,7 +106,7 @@ function installFetch(): void {
 }
 
 function App(): React.ReactNode {
-  const store = useHelmStore()
+  const store = useHelmxStore()
   observed = { primary: store.primaryTarget, split: store.splitTarget, modal: store.activeModal }
   navigateTo = (target) => store.openTarget(target)
   const pane = (target: ResolvedTarget | null, key: string, props: { isSplit?: boolean; isDrawer?: boolean } = {}) =>
@@ -135,7 +135,7 @@ async function mount(hash: string): Promise<void> {
   installFetch()
   await act(async () => {
     root = createRoot(host!)
-    root.render(e(HelmStoreProvider, null, e(App)))
+    root.render(e(HelmxStoreProvider, null, e(App)))
   })
   await settle()
 }

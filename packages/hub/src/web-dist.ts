@@ -7,9 +7,9 @@
  *
  * Layout convention (isomorphic under `src` and `dist`, stepping two levels up to sibling packages):
  * - Repository dev: `packages/hub/{src,dist}/main.ts` -> `packages/web/dist`;
- * - npm payload: the hub entry lives at `node_modules/@helm/hub/dist/main.js`, so this sibling probe
+ * - npm payload: the hub entry lives at `node_modules/@helmx/hub/dist/main.js`, so this sibling probe
  *   misses by design; static hosting is guaranteed by the payload's start.mjs declaring
- *   HELM_WEB_DIST_DIR at `<payload>/web/dist` explicitly (never silently disabled).
+ *   HELMX_WEB_DIST_DIR at `<payload>/web/dist` explicitly (never silently disabled).
  * The directory is treated as valid only if `index.html` exists (unbuilt dirs never pose as static sites).
  */
 import { statSync } from 'node:fs';
@@ -27,7 +27,7 @@ export function resolveHubWebDistDir(entryDir: string): string | undefined {
   }
 }
 
-/** Parses `HELM_WEB_DIST_DIR`: explicit path wins; `'false'` / `'0'` / `''` disables static hosting; unset falls back to `resolveHubWebDistDir`. */
+/** Parses `HELMX_WEB_DIST_DIR`: explicit path wins; `'false'` / `'0'` / `''` disables static hosting; unset falls back to `resolveHubWebDistDir`. */
 export function resolveWebDistOption(
   env: string | undefined,
   entryDir: string,

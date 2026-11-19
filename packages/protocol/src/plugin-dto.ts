@@ -2,9 +2,9 @@
  * Cross-end serializable plugin DTOs and constants (zero `node:*`, zero
  * `@earendil-works/pi-*` dependencies).
  *
- * This file is exported jointly by `@helm/protocol` and `@helm/protocol/browser`:
+ * This file is exported jointly by `@helmx/protocol` and `@helmx/protocol/browser`:
  * the web frontend, browser SDK, CLI and kernel can all safely consume it via
- * `@helm/protocol/browser` without pulling in any Node stream or backend
+ * `@helmx/protocol/browser` without pulling in any Node stream or backend
  * runtime dependency.
  */
 
@@ -128,7 +128,7 @@ export interface PluginActionCliSpec {
   command?: string[]
   /** CLI help copy; defaults to the action description. */
   description?: string
-  /** true to hide from the top-level `helm <plugin> <action>` commands. */
+  /** true to hide from the top-level `helmx <plugin> <action>` commands. */
   hidden?: boolean
   /** Positional argument mapping list (consumes CLI positional arguments in order). */
   positional?: PluginActionCliPositionalSpec[]
@@ -236,12 +236,12 @@ export interface PluginConfigResponse {
 export interface GuardedMutationExpectation {
   /**
    * Ownership at authorization time (probe fact). The kernel requires current
-   * ownership to belong to the automation domain ('bot' | 'helm'; 'human' is
+   * ownership to belong to the automation domain ('bot' | 'helmx'; 'human' is
    * always rejected); when a concrete value is provided, current ownership
-   * must match it exactly (bot/helm handover counts as a new fact and is
+   * must match it exactly (bot/helmx handover counts as a new fact and is
    * conservatively rejected).
    */
-  expectedOwnership?: 'bot' | 'helm'
+  expectedOwnership?: 'bot' | 'helmx'
   /** Authoritative watermark at authorization time (stateChangeSeq); when provided, the current value must be equal (CAS). */
   expectedStateSeq?: number
 }
@@ -277,7 +277,7 @@ export interface PluginSummary {
    */
   description?: LocalizedText
   /**
-   * Linear vector icon name of the plugin (maps to a HelmIcon name, optional).
+   * Linear vector icon name of the plugin (maps to a HelmxIcon name, optional).
    * The frontend falls back to the default icon placeholder
    * (DEFAULT_PLUGIN_ICON: 'puzzle') when absent.
    */
@@ -362,7 +362,7 @@ export interface ActionManifest extends PluginPromptFields {
 
 // ---------------------------------------------------------------------------
 // External plugin ecosystem DX loop (doctor / reload / rescan;
-// helm plugins init is a CLI-local command)
+// helmx plugins init is a CLI-local command)
 // ---------------------------------------------------------------------------
 
 /** Single doctor check result. */
@@ -430,9 +430,9 @@ export interface PluginRescanResult {
 /** npm registry source: `npm:<spec>` (spec is any valid npm dependency specifier). */
 export interface PluginSourceNpm {
   kind: 'npm'
-  /** Raw source string (canonical echo, e.g. `npm:helm-plugin-foo@^1.2.0`). */
+  /** Raw source string (canonical echo, e.g. `npm:helmx-plugin-foo@^1.2.0`). */
   raw: string
-  /** npm dependency specifier (part after the `npm:` prefix, e.g. `helm-plugin-foo@^1.2.0`). */
+  /** npm dependency specifier (part after the `npm:` prefix, e.g. `helmx-plugin-foo@^1.2.0`). */
   spec: string
 }
 
@@ -441,7 +441,7 @@ export interface PluginSourceGit {
   kind: 'git'
   /** Raw source string (canonical echo). */
   raw: string
-  /** Git repository address (e.g. `https://github.com/user/helm-plugin-foo.git` or the repo part of `git@host:path`). */
+  /** Git repository address (e.g. `https://github.com/user/helmx-plugin-foo.git` or the repo part of `git@host:path`). */
   repo: string
   /** Checked-out Git ref (branch/tag/commit; defaults to the installer's choice, usually the repository default branch). */
   ref?: string

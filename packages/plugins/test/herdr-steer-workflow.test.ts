@@ -19,11 +19,11 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
-import { HelmError, type AgentSpawnRequest, type ConversationSummary } from '@helm/protocol'
+import { HelmxError, type AgentSpawnRequest, type ConversationSummary } from '@helmx/protocol'
 import type { WorkflowRunSummary } from '../src/contracts.js'
 import { WORKFLOW_PLUGIN_ID } from '../src/contracts.js'
 import { PluginHost, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { createHerdrPlugin } from '../src/herdr.js'
 import { createWorkflowPlugin } from '../src/workflow.js'
 import { completeBackend } from '../../kernel/test/helpers/host-backend-stub.js'
@@ -57,7 +57,7 @@ class ProtocolServerTransport implements HerdrTransport {
   private paneOf(ref: unknown): PaneState {
     const id = typeof ref === 'string' ? ref : String((ref as { pane_id?: unknown })?.pane_id ?? '')
     let pane = this.panes.get(id) ?? [...this.panes.values()].find((p) => p.name === id)
-    if (!pane) throw new HelmError('agent_not_found', `no pane ${id}`, 404)
+    if (!pane) throw new HelmxError('agent_not_found', `no pane ${id}`, 404)
     return pane
   }
 
@@ -79,7 +79,7 @@ class ProtocolServerTransport implements HerdrTransport {
         const paneId = `${workspaceId}:p1`
         const tabId = `${workspaceId}:t1`
         const path = `${params['cwd']}/.worktrees/wt-steer`
-        mkdirSync(join(path, '.helm'), { recursive: true })
+        mkdirSync(join(path, '.helmx'), { recursive: true })
         this.panes.set(paneId, { paneId, tabId, workspaceId, agentStatus: 'idle', seq: 1, cwd: path })
         this.tabs.set(tabId, { closed: false })
         return {
@@ -87,7 +87,7 @@ class ProtocolServerTransport implements HerdrTransport {
           workspace: { workspace_id: workspaceId },
           tab: { tab_id: tabId, workspace_id: workspaceId },
           root_pane: { pane_id: paneId, workspace_id: workspaceId, tab_id: tabId },
-          worktree: { path, branch: (params['branch'] as string) ?? 'helm/wf-steer' },
+          worktree: { path, branch: (params['branch'] as string) ?? 'helmx/wf-steer' },
         }
       }
       case 'tab.create': {
@@ -96,7 +96,7 @@ class ProtocolServerTransport implements HerdrTransport {
         const paneId = `${workspaceId}:p${n}`
         const tabId = `${workspaceId}:t${n}`
         const paneCwd = (params['cwd'] as string) ?? '/tmp'
-        mkdirSync(join(paneCwd, '.helm'), { recursive: true })
+        mkdirSync(join(paneCwd, '.helmx'), { recursive: true })
         this.panes.set(paneId, { paneId, tabId, workspaceId, agentStatus: 'idle', seq: 1, cwd: paneCwd })
         this.tabs.set(tabId, { closed: false })
         return {
@@ -107,7 +107,7 @@ class ProtocolServerTransport implements HerdrTransport {
       }
       case 'tab.close': {
         const tab = this.tabs.get(params['tab_id'] as string)
-        if (!tab) throw new HelmError('tab_not_found', 'no tab', 404)
+        if (!tab) throw new HelmxError('tab_not_found', 'no tab', 404)
         tab.closed = true
         for (const [id, pane] of this.panes) if (pane.tabId === params['tab_id']) this.panes.delete(id)
         return { type: 'ok' }
@@ -127,13 +127,13 @@ class ProtocolServerTransport implements HerdrTransport {
         const pane = this.paneOf(params['target'])
         const until = ((params['until'] as string[]) ?? []).map((s) => s as PaneStatus)
         for (let i = 0; i < 4_000; i += 1) {
-          if (!this.panes.has(pane.paneId)) throw new HelmError('agent_not_found', 'pane closed', 404)
+          if (!this.panes.has(pane.paneId)) throw new HelmxError('agent_not_found', 'pane closed', 404)
           if (until.length === 0 || until.includes(pane.agentStatus)) {
             return { type: 'agent_info', agent: agentInfoOf(pane) }
           }
           await delay(10)
         }
-        throw new HelmError('timeout', 'timed out', 408)
+        throw new HelmxError('timeout', 'timed out', 408)
       }
       case 'agent.prompt': {
         // 分支判别（真实协议形状）：任务 prompt 携带 wait；插话不携带 wait 且
@@ -143,8 +143,8 @@ class ProtocolServerTransport implements HerdrTransport {
         if (params['wait'] === undefined) {
           // 真实 admission：launch_pending / blocked 零写入拒绝；预检 working
           // 后刚转 idle 的提交接续新回合。
-          if (pane.launchPending === true) throw new HelmError('agent_not_ready', 'launch_pending，输入未写入', 409)
-          if (pane.agentStatus === 'blocked') throw new HelmError('agent_blocked', 'blocked，输入未写入', 409)
+          if (pane.launchPending === true) throw new HelmxError('agent_not_ready', 'launch_pending，输入未写入', 409)
+          if (pane.agentStatus === 'blocked') throw new HelmxError('agent_blocked', 'blocked，输入未写入', 409)
           pane.seq += 1
           pane.agentStatus = 'working'
           this.steerDelivered.push({ paneId: pane.paneId, text })
@@ -155,7 +155,7 @@ class ProtocolServerTransport implements HerdrTransport {
         pane.seq += 1
         // 任务 prompt 一到即落盘交接文件（模拟 CLI 按原契约交付首版结果）。
         const fileName = text.match(/wf-out-[A-Za-z0-9_.-]+\.(?:json|md)/)?.[0]
-        if (fileName !== undefined) this.outputFiles.set(`${pane.cwd}/.helm/${fileName}`, 'task-done')
+        if (fileName !== undefined) this.outputFiles.set(`${pane.cwd}/.helmx/${fileName}`, 'task-done')
         this.emit({ type: 'pane.updated', paneId: pane.paneId })
         return { type: 'agent_prompted', agent: agentInfoOf(pane) }
       }
@@ -167,7 +167,7 @@ class ProtocolServerTransport implements HerdrTransport {
         const pane = this.paneOf(params['target'])
         const expected = params['expected_state_seq']
         if (typeof expected !== 'number' || expected !== pane.seq) {
-          throw new HelmError('stale_state', 'CAS 水位不符，按键未发送', 409)
+          throw new HelmxError('stale_state', 'CAS 水位不符，按键未发送', 409)
         }
         return { type: 'ok' }
       }
@@ -176,18 +176,18 @@ class ProtocolServerTransport implements HerdrTransport {
       case 'session.snapshot':
         return { type: 'session_snapshot', snapshot: { version: 'test', protocol: 22, workspaces: [], tabs: [], panes: [], agents: [] } }
       default:
-        throw new HelmError('method_not_found', `protocol fixture 不支持 ${method}`, 400)
+        throw new HelmxError('method_not_found', `protocol fixture 不支持 ${method}`, 400)
     }
   }
 
   async readOutput(_t: HerdrTarget, cwd: string, fileName: string): Promise<string> {
-    const content = this.outputFiles.get(`${cwd}/.helm/${fileName}`)
-    if (content === undefined) throw new HelmError('herdr_output_missing', `交接文件不存在: ${fileName}`, 404)
+    const content = this.outputFiles.get(`${cwd}/.helmx/${fileName}`)
+    if (content === undefined) throw new HelmxError('herdr_output_missing', `交接文件不存在: ${fileName}`, 404)
     return content
   }
 
   async removeOutput(_t: HerdrTarget, cwd: string, fileName: string): Promise<void> {
-    this.outputFiles.delete(`${cwd}/.helm/${fileName}`)
+    this.outputFiles.delete(`${cwd}/.helmx/${fileName}`)
   }
 
   async runGate(): Promise<{ ok: boolean; output: string }> {
@@ -221,9 +221,9 @@ class ProtocolServerTransport implements HerdrTransport {
     if (status === 'idle' || status === 'done') {
       const delivered = this.steerDelivered.filter((entry) => entry.paneId === paneId).at(-1)?.text
       if (delivered !== undefined) {
-        const file = delivered.match(/the new file [^\n]*?\.helm\/(wf-out-[A-Za-z0-9_.-]+\.(?:json|md))/)?.[1]
+        const file = delivered.match(/the new file [^\n]*?\.helmx\/(wf-out-[A-Za-z0-9_.-]+\.(?:json|md))/)?.[1]
         assert.ok(file !== undefined, '插话文本应含新交接文件名')
-        this.outputFiles.set(`${pane.cwd}/.helm/${file}`, 'steered-done')
+        this.outputFiles.set(`${pane.cwd}/.helmx/${file}`, 'steered-done')
       }
     }
     this.emit({ type: 'pane.updated', paneId })
@@ -269,7 +269,7 @@ interface Env {
 }
 
 async function makeEnv(): Promise<Env> {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-herdr-steer-wf-'))
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-herdr-steer-wf-'))
   const parentCwd = join(dataDir, 'parent')
   mkdirSync(parentCwd, { recursive: true })
   const transport = new ProtocolServerTransport()
@@ -282,14 +282,14 @@ async function makeEnv(): Promise<Env> {
     conversations,
     getConversation: (id: number) => {
       const found = conversations.get(id)
-      if (found === undefined) throw new HelmError('not_found', `会话不存在: ${id}`, 404, { conversationId: id })
+      if (found === undefined) throw new HelmxError('not_found', `会话不存在: ${id}`, 404, { conversationId: id })
       return found
     },
     listConversations: () => [...conversations.values()],
     // 模拟内核 agent_spawn 管道：钩子链（herdr 拦截）→ 原生兜底（fixture 不可用）。
     spawnAgent: (request: AgentSpawnRequest) =>
       hostRef.current!.runHookAround('agent_spawn', request, async () => {
-        throw new HelmError('spawn_native_unavailable', 'fixture：本环境仅 herdr 路由', 500)
+        throw new HelmxError('spawn_native_unavailable', 'fixture：本环境仅 herdr 路由', 500)
       }),
     submitInput: (conversationId: number, text: string, opts?: { meta?: Record<string, unknown> }) => {
       parentNotifications.push({ conversationId, text, meta: opts?.meta ?? {} })
@@ -301,10 +301,10 @@ async function makeEnv(): Promise<Env> {
     },
     nodeIpc: {
       isOnline: () => true,
-      call: async () => { throw new HelmError('unsupported', 'fixture 无节点 IPC', 501) },
-      subscribe: async () => { throw new HelmError('unsupported', 'fixture 无节点 IPC 订阅', 501) },
+      call: async () => { throw new HelmxError('unsupported', 'fixture 无节点 IPC', 501) },
+      subscribe: async () => { throw new HelmxError('unsupported', 'fixture 无节点 IPC 订阅', 501) },
     },
-    buildSpawnEnv: (_conversationId: number, cwd: string) => ({ HELM_TOKEN: 'SECRET-TOKEN', HELM_CWD: cwd }),
+    buildSpawnEnv: (_conversationId: number, cwd: string) => ({ HELMX_TOKEN: 'SECRET-TOKEN', HELMX_CWD: cwd }),
     createAsk: async () => new Promise(() => {}),
     cancelAsk: async () => {},
     emitEvent: () => {},
@@ -355,7 +355,7 @@ test('双插件联调: 真实形状服务端上 herdr 后台 run 经 workflow.st
     await waitFor(() => pane.agentStatus === 'working')
     const taskFileName = (() => {
       const text = env.transport.calls.find((c) => c.method === 'agent.prompt' && c.params['wait'] !== undefined)!.params['text'] as string
-      const name = text.match(/[Ww]rite[^\n]*?\.helm\/(wf-out-[A-Za-z0-9_.-]+\.(?:json|md))/)?.[1]
+      const name = text.match(/[Ww]rite[^\n]*?\.helmx\/(wf-out-[A-Za-z0-9_.-]+\.(?:json|md))/)?.[1]
       assert.ok(name !== undefined)
       return name
     })()
@@ -381,7 +381,7 @@ test('双插件联调: 真实形状服务端上 herdr 后台 run 经 workflow.st
         targetKind: 'external',
         executionId: pane.paneId,
         nodeId: 'local',
-        ownership: 'helm',
+        ownership: 'helmx',
         stateChangeSeq: out['stateChangeSeq'],
         guardLevel: 'preflight',
       },
@@ -394,7 +394,7 @@ test('双插件联调: 真实形状服务端上 herdr 后台 run 经 workflow.st
     assert.deepEqual(Object.keys(steerCall.params).sort(), ['target', 'text'], '现有 agent.prompt 形状（无 wait/无附加字段）')
     assert.equal(steerCall.params['target'], pane.name, '以受管 agentName 寻址')
     const steerText = env.transport.steerDelivered[0]!.text
-    const newFile = steerText.match(/the new file [^\n]*?\.helm\/(wf-out-[A-Za-z0-9_.-]+\.(?:json|md))/)?.[1]
+    const newFile = steerText.match(/the new file [^\n]*?\.helmx\/(wf-out-[A-Za-z0-9_.-]+\.(?:json|md))/)?.[1]
     assert.ok(newFile !== undefined, '投递文本指向全新唯一交接文件')
     assert.notEqual(newFile, taskFileName)
     assert.ok(steerText.includes(`The original handoff file ${taskFileName} is voided`), '投递文本明确旧路径作废')
@@ -414,8 +414,8 @@ test('双插件联调: 真实形状服务端上 herdr 后台 run 经 workflow.st
       '父会话结算通知恰好一次',
     )
     // 新旧交接文件成功后均已清理（真实 fs）。
-    assert.equal(existsSync(join(pane.cwd, '.helm', newFile)), false, '最新交接文件被删除')
-    assert.equal(existsSync(join(pane.cwd, '.helm', taskFileName)), false, '作废旧文件被清理')
+    assert.equal(existsSync(join(pane.cwd, '.helmx', newFile)), false, '最新交接文件被删除')
+    assert.equal(existsSync(join(pane.cwd, '.helmx', taskFileName)), false, '作废旧文件被清理')
   } finally {
     await env.close()
   }
@@ -438,7 +438,7 @@ test('双插件联调: 跨树会话经 workflow.steer 对外部执行同样拒�
     } catch (error) {
       caught = error
     }
-    assert.ok(caught instanceof HelmError)
+    assert.ok(caught instanceof HelmxError)
     assert.equal(caught.code, 'steer_out_of_scope')
     assert.equal(env.transport.steerDelivered.length, 0)
   } finally {

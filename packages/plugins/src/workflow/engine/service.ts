@@ -17,11 +17,11 @@
  */
 
 import {
-  HelmError,
+  HelmxError,
   type AgentExecutionInfo,
   type AgentSpawnRequest,
   type ConversationSummary,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 import type {
   SavedWorkflowDetail,
   SavedWorkflowSummary,
@@ -147,7 +147,7 @@ export class WorkflowService {
     this.recovery = new StartupRecovery(this.ctx)
   }
 
-  /** Whether automatic recovery on restart is enabled (config option and HELM_AUTO_RECOVER=0/false escape hatch). */
+  /** Whether automatic recovery on restart is enabled (config option and HELMX_AUTO_RECOVER=0/false escape hatch). */
   isAutoRecoverOnRestart(): boolean {
     if (this.autoRecoverOption === false) return false
     if (typeof this.autoRecoverOption === 'function' && !this.autoRecoverOption()) return false
@@ -207,7 +207,7 @@ export class WorkflowService {
    * Start a workflow run: executes in the background, returns the summary immediately (no waiting).
    * context.foreground=true marks a foreground synchronous run (record.syncForeground, detachable
    * to the background).
-   * @throws HelmError validation_error / not_found / workflow_action_uncertain / journal_read_failed。
+   * @throws HelmxError validation_error / not_found / workflow_action_uncertain / journal_read_failed。
    */
   async run(
     request: WorkflowRunRequest,
@@ -308,10 +308,10 @@ export class WorkflowService {
       try {
         out.push(this.summaryOf(this.runs.loadByEntry(entry)))
       } catch (error) {
-        if (error instanceof HelmError && error.code === 'not_found') {
+        if (error instanceof HelmxError && error.code === 'not_found') {
           throw this.runs.indexCorruptError(entry.id, `record missing or ID mismatch: ${error.message}`)
         }
-        if (error instanceof HelmError && error.code === 'workflow_record_corrupt') throw error
+        if (error instanceof HelmxError && error.code === 'workflow_record_corrupt') throw error
         throw this.runs.indexCorruptError(entry.id, `record corrupted: ${errorMessage(error)}`)
       }
     }
@@ -557,7 +557,7 @@ export class WorkflowService {
   }
 
   private assertNotClosed(): void {
-    if (this.closed) throw new HelmError('closed', 'WorkflowService is closed', 409)
+    if (this.closed) throw new HelmxError('closed', 'WorkflowService is closed', 409)
   }
 
   /**

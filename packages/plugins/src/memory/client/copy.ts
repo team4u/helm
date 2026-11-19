@@ -6,8 +6,8 @@
  * LocalizedText entries against the active host locale; backend action
  * payloads and error messages pass through unchanged.
  */
-import type { HelmLocale, LocalizedText } from '@helm/plugin-client'
-import { resolveLocalizedText } from '@helm/plugin-client'
+import type { HelmxLocale, LocalizedText } from '@helmx/plugin-client'
+import { resolveLocalizedText } from '@helmx/plugin-client'
 
 /** Section heading shown in the profile detail drawer. */
 export const MEMORY_SECTION_TITLE: LocalizedText = {
@@ -45,10 +45,10 @@ export const MEMORY_DISABLED_HINT: LocalizedText = {
 }
 
 /** Editor size counters (`n / 65536 chars`, optionally with line count). */
-export function memoryCharCount(chars: number, locale: HelmLocale): string {
+export function memoryCharCount(chars: number, locale: HelmxLocale): string {
   return resolveLocalizedText({ en: `${chars} / 65536 chars`, 'zh-CN': `${chars} / 65536 字符` }, locale)
 }
-export function memoryLineCount(lines: number, locale: HelmLocale): string {
+export function memoryLineCount(lines: number, locale: HelmxLocale): string {
   return resolveLocalizedText({ en: ` · ${lines} lines`, 'zh-CN': ` · ${lines} 行` }, locale)
 }
 

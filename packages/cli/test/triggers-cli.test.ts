@@ -3,7 +3,7 @@
  *
  * Follows the same discipline as cli.test.ts: temporary HTTP server mocks Hub contract
  * (real fetch boundary) with manifests mirroring the plugin action schema (7 actions +
- * semantic cli.command paths) to verify top-level `helm cron ...` / `helm webhook ...`,
+ * semantic cli.command paths) to verify top-level `helmx cron ...` / `helmx webhook ...`,
  * flag conversion, --json, --current, and error envelopes. Full Hub E2E runs separately
  * (kernel/test/triggers.test.ts covers the host side).
  *
@@ -11,7 +11,7 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import type { ActionManifest } from '@helm/protocol'
+import type { ActionManifest } from '@helmx/protocol'
 import {
   makeCliEnv,
   parseCliError,
@@ -139,7 +139,7 @@ async function startTriggersHub(
 }
 
 test('cron subcommand family: top-level path, required flag validation, type coercion, and --json', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-triggers-cli-')
+  const dir = useTempDir(t, 'helmx-triggers-cli-')
   const hub = await startTriggersHub(t, (actionId, body) => {
     if (actionId === 'cron_list') return { body: { jobs: [{ id: 'nightly', schedule: '0 3 * * *', text: 'aggregate', timezone: 'UTC', enabled: true, catchUp: false, nextRunAt: null }] } }
     if (actionId === 'cron_create') return { body: { job: (body as { input: object }).input } }
@@ -204,7 +204,7 @@ test('cron subcommand family: top-level path, required flag validation, type coe
 })
 
 test('webhook subcommand family: create/list/delete top-level path and body shape', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-triggers-cli-')
+  const dir = useTempDir(t, 'helmx-triggers-cli-')
   const hub = await startTriggersHub(t, (actionId, body) => {
     if (actionId === 'webhook_create') return { body: { webhook: { id: (body as { input: { id: string } }).input.id, hasSecret: true } } }
     if (actionId === 'webhook_list') return { body: { webhooks: [{ id: 'ci', hasSecret: true }] } }
@@ -231,9 +231,9 @@ test('webhook subcommand family: create/list/delete top-level path and body shap
 })
 
 test('cron/webhook actions support --current conversation context and --input full submission', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-triggers-cli-')
+  const dir = useTempDir(t, 'helmx-triggers-cli-')
   const hub = await startTriggersHub(t)
-  const env = makeCliEnv(hub.url, dir, { HELM_CONVERSATION_ID: '5' })
+  const env = makeCliEnv(hub.url, dir, { HELMX_CONVERSATION_ID: '5' })
 
   // --current: injects conversation context (cron list has no secrets)
   const cur = await runCliCaptured(['cron', 'list', '--current', '--json'], env)
@@ -262,7 +262,7 @@ test('cron/webhook actions support --current conversation context and --input fu
 })
 
 test('help lists cron/webhook top-level commands and forwards server error envelopes', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-triggers-cli-')
+  const dir = useTempDir(t, 'helmx-triggers-cli-')
   const hub = await startTriggersHub(t, () => ({
     status: 409,
     body: { error: { code: 'triggers_job_exists', message: 'job already exists' } },
@@ -289,7 +289,7 @@ test('help lists cron/webhook top-level commands and forwards server error envel
 })
 
 test('cron and webhook do not conflict with core commands like conversations', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-triggers-cli-')
+  const dir = useTempDir(t, 'helmx-triggers-cli-')
   const hub = await startTriggersHub(t)
   // Cannot reuse same mock server for core routes (startTriggersHub only mounts action routes);
   // verifies command resolution: manifest declarations never shadow core prefixes.

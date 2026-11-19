@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState, type ReactNode } from 'react'
-import { ToolActivityContext } from '@helm/plugin-client'
+import { ToolActivityContext } from '@helmx/plugin-client'
 
 /** 每个 assistant 回合独享注册表；token 区分同一 callId 的不同挂载来源。 */
 export function ToolActivityProvider({ children }: { children: ReactNode }) {

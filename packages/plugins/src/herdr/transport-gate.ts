@@ -1,6 +1,6 @@
 import { BACKGROUND_CONTEXT, withAbortSignal } from '@earendil-works/chord/context'
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
-import type { AgentGateResult } from '@helm/protocol'
+import type { AgentGateResult } from '@helmx/protocol'
 import type { HerdrNodeChannel, HerdrNodeEnv } from './contracts.js'
 import { checkAborted, HerdrTransportError } from './transport-shared.js'
 
@@ -27,7 +27,7 @@ function validEnvEntries(env: Record<string, string> | undefined): [string, stri
  * Gate execution core (isomorphic local & remote): SDK `NodeExecutionEnv.exec` -- cross-platform shell
  * selection (Unix /bin/bash->sh; Windows Git Bash/WSL probing) and process-tree termination
  * (Unix process-group SIGKILL; Windows taskkill /F /T) are the SDK's job.
- * `inheritEnv: false`: only the explicit managed env is injected (host HELM_TOKEN etc. never leak into
+ * `inheritEnv: false`: only the explicit managed env is injected (host HELMX_TOKEN etc. never leak into
  * the gate subprocess; a token can only be provided via explicit env). Streaming over the limit cancels and fails explicitly.
  */
 async function execGate(

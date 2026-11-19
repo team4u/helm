@@ -4,14 +4,14 @@ import './styles.css'
 import './responsive.css'
 import { App } from './App.js'
 import { registerBrowserNotificationServiceWorker } from './lib/browser-notification.js'
-import { ViewBoundary } from '@helm/plugin-client'
+import { ViewBoundary } from '@helmx/plugin-client'
 
 const container = document.getElementById('root')
 if (container) {
   void registerBrowserNotificationServiceWorker()
   createRoot(container).render(
     <StrictMode>
-      <ViewBoundary label="Helm Console"><App /></ViewBoundary>
+      <ViewBoundary label="Helmx Console"><App /></ViewBoundary>
     </StrictMode>,
   )
 }

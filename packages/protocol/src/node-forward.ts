@@ -1,6 +1,6 @@
 /**
  * Hub-side foreground TCP port-forwarding contract (shared request/response types for
- * POST /api/nodes/:id/forward and /api/nodes/forward/*; `helm nodes forward*` CLI has the same access).
+ * POST /api/nodes/:id/forward and /api/nodes/forward/*; `helmx nodes forward*` CLI has the same access).
  *
  * Lifecycle (foreground lease):
  * - The listener exists only for the duration of an explicit command: if it is not bound to a

@@ -1,10 +1,10 @@
 /** Output rendering: `--json` preserves exact JSON; human mode renders aligned tables, key-value pairs, or raw text. */
 import {
   createLocaleTranslator,
-  DEFAULT_HELM_LOCALE,
+  DEFAULT_HELMX_LOCALE,
   parseLocalizedText,
   type LocaleTranslator,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 import type { Io } from './options.js'
 
 const CELL_LIMIT = 64
@@ -14,7 +14,7 @@ const CELL_LIMIT = 64
  * own, so per the protocol copy model human output resolves `LocalizedText`
  * with the default locale ('en'); `--json` always keeps the raw shape.
  */
-const humanDisplayCopy: LocaleTranslator = createLocaleTranslator(DEFAULT_HELM_LOCALE)
+const humanDisplayCopy: LocaleTranslator = createLocaleTranslator(DEFAULT_HELMX_LOCALE)
 
 /** Plain JSON-shaped record (Object.prototype or null prototype) safe to rebuild for display. */
 function isPlainRecord(value: unknown): value is Record<string, unknown> {

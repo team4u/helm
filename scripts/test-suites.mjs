@@ -4,7 +4,7 @@
  *
  * Why it exists: `pnpm test` runs everything in one go, while local iteration needs a
  * faster pure-unit tier; tests in kernel / node heavily spawn real subprocesses, open
- * SQLite, create Git worktrees, and run WebSocket plus the @helm/node daemon — not pure
+ * SQLite, create Git worktrees, and run WebSocket plus the @helmx/node daemon — not pure
  * units. To avoid misclassification, this script only does a [conservative package-level
  * split]:
  *
@@ -38,8 +38,8 @@
  *     file set across every package's test directory, subdirectories included (so new
  *     packages, files, or nested test directories cannot be silently missed here).
  *
- * Note: do not raise the total timeout via the HELM_TEST_SUITE_TIMEOUT_MS env var —
- * packages/kernel/test/env-registry-races.test.ts asserts every host HELM_* variable is
+ * Note: do not raise the total timeout via the HELMX_TEST_SUITE_TIMEOUT_MS env var —
+ * packages/kernel/test/env-registry-races.test.ts asserts every host HELMX_* variable is
  * stripped, and injecting it would make that test fail spuriously.
  *
  * Usage: node scripts/test-suites.mjs <unit|integration|all> [extra args passed through to the node test runner]
@@ -200,7 +200,7 @@ const SLOW_TEST_PREFIXES = [
   'sidebar-spaces',
   'composer-thinking-badge',
   'conversation-archive-menu',
-  'helm-store',
+  'helmx-store',
   'tool-activity',
   'ask-dock',
   'select.test.ts',

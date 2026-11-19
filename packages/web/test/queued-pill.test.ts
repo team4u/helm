@@ -5,13 +5,13 @@
  * 1. buildTimelineItems：live.queuedInputs 尾部胶囊、input.id 去重（原地转正
  *    时 key 不变不重复）、queuedMode 与 origin 透传。
  * 2. ConversationTimeline SSR：steer / followUp 胶囊文案与样式类名。
- *（helm:send 求值测试已迁 packages/plugins/test/json-render-send-target.test.ts）
+ *（helmx:send 求值测试已迁 packages/plugins/test/json-render-send-target.test.ts）
  */
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import * as React from 'react'
 import { renderToString } from 'react-dom/server'
-import type { ConversationEntry, ConversationLive, ConversationStatus, ConversationSummary } from '@helm/protocol'
+import type { ConversationEntry, ConversationLive, ConversationStatus, ConversationSummary } from '@helmx/protocol'
 import { buildTimelineItems } from '../src/conversation/timeline-model.js'
 import type { HumanInputItem } from '../src/conversation/timeline-model.js'
 import { HostStoreProviders } from './helpers/host-store.js'
@@ -52,7 +52,7 @@ test('buildTimelineItems: 排队项落入正式 entries 后按 input.id 去重�
   const entries: ConversationEntry[] = [
     {
       id: '41',
-      kind: 'helm.input',
+      kind: 'helmx.input',
       data: { id: 'q-1', text: '已转正的排队消息', origin: 'human', createdAt: 2 },
     },
   ]
@@ -74,9 +74,9 @@ test('buildTimelineItems: 排队项落入正式 entries 后按 input.id 去重�
   assert.equal(humans[0]!.entryId, '41')
 })
 
-test('buildTimelineItems: 无 data.id 的历史 helm.input 仍用 entry.id 作 key', { timeout: 60_000 }, () => {
+test('buildTimelineItems: 无 data.id 的历史 helmx.input 仍用 entry.id 作 key', { timeout: 60_000 }, () => {
   const entries: ConversationEntry[] = [
-    { id: '7', kind: 'helm.input', data: { text: '旧输入', origin: 'human' } },
+    { id: '7', kind: 'helmx.input', data: { text: '旧输入', origin: 'human' } },
   ]
   const items = buildTimelineItems(entries, {})
   const humans = items.filter((i): i is HumanInputItem => i.kind === 'human')
@@ -134,7 +134,7 @@ test('ConversationTimeline: steer 与 followUp 胶囊文案、状态标记与统
 
 test('ConversationTimeline: 正式消息无 queued 样式，分叉按钮保留', { timeout: 60_000 }, () => {
   const entries: ConversationEntry[] = [
-    { id: '9', kind: 'helm.input', data: { id: 'k-1', text: '正式消息', origin: 'human', createdAt: 1 } },
+    { id: '9', kind: 'helmx.input', data: { id: 'k-1', text: '正式消息', origin: 'human', createdAt: 1 } },
   ]
   const html = renderTimeline('idle', undefined, entries)
   assert.doesNotMatch(html, /msg-human-pill-queued/)
@@ -145,8 +145,8 @@ test('ConversationTimeline: 正式消息无 queued 样式，分叉按钮保留',
 
 test('ConversationTimeline: 外部来源（agent / trigger）行附加 msg-human-row-external 且保留胶囊与脚部类', { timeout: 60_000 }, () => {
   const entries: ConversationEntry[] = [
-    { id: '10', kind: 'helm.input', data: { id: 't-1', text: '定时任务触发', origin: 'trigger', createdAt: 1 } },
-    { id: '11', kind: 'helm.input', data: { id: 'a-1', text: '智能体汇报内容', origin: 'agent', createdAt: 2 } },
+    { id: '10', kind: 'helmx.input', data: { id: 't-1', text: '定时任务触发', origin: 'trigger', createdAt: 1 } },
+    { id: '11', kind: 'helmx.input', data: { id: 'a-1', text: '智能体汇报内容', origin: 'agent', createdAt: 2 } },
   ]
   const html = renderTimeline('idle', undefined, entries)
   assert.equal((html.match(/msg-human-row-external/g) ?? []).length, 2)

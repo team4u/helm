@@ -1,17 +1,17 @@
 import { posix, win32 } from 'node:path'
-import { HelmError } from '@helm/protocol'
+import { HelmxError } from '@helmx/protocol'
 import type { Context } from '@earendil-works/chord/context'
 import type { HerdrNodeChannel, HerdrNodeEnv, HerdrTarget } from './contracts.js'
 import { checkAborted, contextOf, HerdrTransportError } from './transport-shared.js'
 
 /**
- * `.helm/wf-out-*` handoff file IO and cross-platform path safety boundary (split out of transport.ts,
+ * `.helmx/wf-out-*` handoff file IO and cross-platform path safety boundary (split out of transport.ts,
  * behavior line-for-line equivalent to before the split):
  * - filename whitelist OUTPUT_FILE_PATTERN (rejects herdr_invalid_output_name);
- * - local: cwd realpath + `.helm` must be a real directory (not a symlink) and still inside the real cwd;
+ * - local: cwd realpath + `.helmx` must be a real directory (not a symlink) and still inside the real cwd;
  *   O_NOFOLLOW opening converges TOCTOU (Windows has no O_NOFOLLOW; falls back to post-read realpath recheck);
- * - remote: pick win32/posix pure rules by the cwd path shape to join `<cwd>/.helm`, validate via the node env's
- *   canonicalPath, and after reading recheck the canonical path still anchors inside realHelm;
+ * - remote: pick win32/posix pure rules by the cwd path shape to join `<cwd>/.helmx`, validate via the node env's
+ *   canonicalPath, and after reading recheck the canonical path still anchors inside realHelmx;
  * - missing directory = 404 herdr_output_missing (the only self-healable boundary); remove semantics are idempotent;
  * - MAX_OUTPUT_BYTES size cap; over the limit fails explicitly, never silently truncated.
  */
@@ -26,7 +26,7 @@ export function assertSafeOutputName(fileName: string, target: string): void {
   }
 }
 
-/** Local output path: validate the cwd really exists, `.helm` is a real directory (not a symlink) and inside the real cwd. */
+/** Local output path: validate the cwd really exists, `.helmx` is a real directory (not a symlink) and inside the real cwd. */
 async function resolveLocalOutputPath(cwd: string, fileName: string, target: string): Promise<string> {
   const fs = await import('node:fs/promises')
   const path = await import('node:path')
@@ -36,27 +36,27 @@ async function resolveLocalOutputPath(cwd: string, fileName: string, target: str
   } catch (err) {
     throw new HerdrTransportError('herdr_invalid_cwd', `cwd not accessible: ${cwd}`, target, { cause: err })
   }
-  const helmDir = path.join(realCwd, '.helm')
-  let helmStat
+  const helmxDir = path.join(realCwd, '.helmx')
+  let helmxStat
   try {
-    helmStat = await fs.lstat(helmDir)
+    helmxStat = await fs.lstat(helmxDir)
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code
     if (code === 'ENOENT' || code === 'ENOTDIR') {
       // Missing directory = missing handoff file: read reports 404, remove is idempotent (the one self-heal boundary).
-      throw new HelmError('herdr_output_missing', `handoff directory does not exist: ${helmDir}`, 404)
+      throw new HelmxError('herdr_output_missing', `handoff directory does not exist: ${helmxDir}`, 404)
     }
-    throw new HerdrTransportError('herdr_io', `failed to inspect ${helmDir}: ${code ?? String(err)}`, target, { cause: err })
+    throw new HerdrTransportError('herdr_io', `failed to inspect ${helmxDir}: ${code ?? String(err)}`, target, { cause: err })
   }
-  if (helmStat.isSymbolicLink() || !helmStat.isDirectory()) {
-    throw new HerdrTransportError('herdr_output_escaping', `.helm must be a real directory inside cwd`, target)
+  if (helmxStat.isSymbolicLink() || !helmxStat.isDirectory()) {
+    throw new HerdrTransportError('herdr_output_escaping', `.helmx must be a real directory inside cwd`, target)
   }
   // realpath then re-verify: no intermediate symlink inside the directory may move the final path out of the cwd.
-  const realHelm = await fs.realpath(helmDir)
-  if (realHelm !== helmDir) {
-    throw new HerdrTransportError('herdr_output_escaping', `.helm resolves outside cwd`, target)
+  const realHelmx = await fs.realpath(helmxDir)
+  if (realHelmx !== helmxDir) {
+    throw new HerdrTransportError('herdr_output_escaping', `.helmx resolves outside cwd`, target)
   }
-  return path.join(helmDir, fileName)
+  return path.join(helmxDir, fileName)
 }
 
 export async function readLocalOutput(cwd: string, fileName: string, signal: AbortSignal | undefined, target: string, redact: (s: string) => string): Promise<string> {
@@ -65,8 +65,8 @@ export async function readLocalOutput(cwd: string, fileName: string, signal: Abo
   checkAborted(signal, target)
   const path = await resolveLocalOutputPath(cwd, fileName, target)
   // Open with O_NOFOLLOW to converge TOCTOU: when lstat and readFile are separated, the file can be replaced
-  // by a symlink escaping .helm within the window; reject symlinks at open time, then fstat+read from the same
-  // handle (Windows has no O_NOFOLLOW; the post-read realpath recheck still anchors inside .helm).
+  // by a symlink escaping .helmx within the window; reject symlinks at open time, then fstat+read from the same
+  // handle (Windows has no O_NOFOLLOW; the post-read realpath recheck still anchors inside .helmx).
   const noFollow = fs.constants.O_NOFOLLOW ?? 0
   let fh: Awaited<ReturnType<typeof fs.open>>
   try {
@@ -74,7 +74,7 @@ export async function readLocalOutput(cwd: string, fileName: string, signal: Abo
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code
     if (code === 'ENOENT') {
-      throw new HelmError('herdr_output_missing', `handoff file does not exist: ${path}`, 404)
+      throw new HelmxError('herdr_output_missing', `handoff file does not exist: ${path}`, 404)
     }
     if (code === 'ELOOP') {
       throw new HerdrTransportError('herdr_output_escaping', `output path is a symlink: ${path}`, target)
@@ -96,7 +96,7 @@ export async function readLocalOutput(cwd: string, fileName: string, signal: Abo
     if (!noFollow) {
       const real = await fs.realpath(path)
       if (!pathContains(await fs.realpath(dirname(path)), real)) {
-        throw new HerdrTransportError('herdr_output_escaping', `output resolves outside .helm`, target)
+        throw new HerdrTransportError('herdr_output_escaping', `output resolves outside .helmx`, target)
       }
     }
     return content
@@ -113,7 +113,7 @@ export async function removeLocalOutput(cwd: string, fileName: string, signal: A
     path = await resolveLocalOutputPath(cwd, fileName, target)
   } catch (err) {
     // Missing directory/file: remove semantics are an idempotent no-op (consistent with the plugin's one self-heal boundary).
-    if (err instanceof HelmError && err.code === 'herdr_output_missing') return
+    if (err instanceof HelmxError && err.code === 'herdr_output_missing') return
     throw err
   }
   try {
@@ -123,7 +123,7 @@ export async function removeLocalOutput(cwd: string, fileName: string, signal: A
     }
     await fs.unlink(path)
   } catch (err) {
-    if (err instanceof HerdrTransportError || err instanceof HelmError) throw err
+    if (err instanceof HerdrTransportError || err instanceof HelmxError) throw err
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return
     throw new HerdrTransportError('herdr_io', `failed to remove output file: ${redact(String(err))}`, target, { cause: err })
   }
@@ -161,11 +161,11 @@ export function pathContains(root: string, child: string): boolean {
 
 /**
  * Remote node output directory resolution (the same safety boundary as local resolveLocalOutputPath):
- * - the cwd picks win32/posix pure rules by its own path shape to join `<cwd>/.helm` (the Hub's
+ * - the cwd picks win32/posix pure rules by its own path shape to join `<cwd>/.helmx` (the Hub's
  *   node:path.join would split Windows paths per the Hub platform -- a Linux Hub treats `\\` as an
  *   ordinary character producing a wrong directory name, a Windows Hub shreds a POSIX cwd);
  * - the cwd is validated really resolvable via env.canonicalPath (unreachable = invalid_cwd);
- * - `<realCwd>/.helm` must be a real directory (missing = the 404 self-heal boundary; symlink/non-directory = escape rejection);
+ * - `<realCwd>/.helmx` must be a real directory (missing = the 404 self-heal boundary; symlink/non-directory = escape rejection);
  * - after canonicalization it must still fall inside realCwd (pathContains; intermediate symlinks intercepted).
  */
 async function resolveNodeOutputDir(
@@ -173,7 +173,7 @@ async function resolveNodeOutputDir(
   cwd: string,
   target: string,
   context: Context,
-): Promise<{ realCwd: string; realHelm: string }> {
+): Promise<{ realCwd: string; realHelmx: string }> {
   const rules = pathRulesFor(cwd)
   const canonicalCwd = await env.canonicalPath(cwd, context)
   if (!canonicalCwd.ok) {
@@ -185,32 +185,32 @@ async function resolveNodeOutputDir(
     )
   }
   const realCwd = canonicalCwd.value
-  const helmDir = rules.join(realCwd, '.helm')
-  const helmInfo = await env.fileInfo(helmDir, context)
-  if (!helmInfo.ok) {
-    const code = helmInfo.error.code
+  const helmxDir = rules.join(realCwd, '.helmx')
+  const helmxInfo = await env.fileInfo(helmxDir, context)
+  if (!helmxInfo.ok) {
+    const code = helmxInfo.error.code
     if (code === 'not_found' || code === 'not_directory') {
       // Missing directory = missing handoff file: read reports 404, remove is idempotent (the one self-heal boundary).
-      throw new HelmError('herdr_output_missing', `handoff directory does not exist: ${helmDir}`, 404)
+      throw new HelmxError('herdr_output_missing', `handoff directory does not exist: ${helmxDir}`, 404)
     }
     throw new HerdrTransportError(
       'herdr_io',
-      `failed to inspect ${helmDir}: ${code}: ${helmInfo.error.message}`,
+      `failed to inspect ${helmxDir}: ${code}: ${helmxInfo.error.message}`,
       target,
     )
   }
-  if (helmInfo.value.kind === 'symlink' || helmInfo.value.kind !== 'directory') {
-    throw new HerdrTransportError('herdr_output_escaping', `.helm must be a real directory inside cwd`, target)
+  if (helmxInfo.value.kind === 'symlink' || helmxInfo.value.kind !== 'directory') {
+    throw new HerdrTransportError('herdr_output_escaping', `.helmx must be a real directory inside cwd`, target)
   }
-  const canonicalHelm = await env.canonicalPath(helmDir, context)
-  if (!canonicalHelm.ok) {
-    throw new HerdrTransportError('herdr_io', `failed to resolve ${helmDir}: ${canonicalHelm.error.message}`, target)
+  const canonicalHelmx = await env.canonicalPath(helmxDir, context)
+  if (!canonicalHelmx.ok) {
+    throw new HerdrTransportError('herdr_io', `failed to resolve ${helmxDir}: ${canonicalHelmx.error.message}`, target)
   }
-  const realHelm = canonicalHelm.value
-  if (!pathContains(realCwd, realHelm)) {
-    throw new HerdrTransportError('herdr_output_escaping', `.helm resolves outside cwd`, target)
+  const realHelmx = canonicalHelmx.value
+  if (!pathContains(realCwd, realHelmx)) {
+    throw new HerdrTransportError('herdr_output_escaping', `.helmx resolves outside cwd`, target)
   }
-  return { realCwd, realHelm }
+  return { realCwd, realHelmx }
 }
 
 export async function readNodeOutput(
@@ -224,12 +224,12 @@ export async function readNodeOutput(
 ): Promise<string> {
   const context = contextOf(signal, targetLabel)
   const env = nodeChannel.envFor(nodeId, cwd)
-  const { realHelm } = await resolveNodeOutputDir(env, cwd, targetLabel, context)
-  const filePath = pathRulesFor(realHelm).join(realHelm, fileName)
+  const { realHelmx } = await resolveNodeOutputDir(env, cwd, targetLabel, context)
+  const filePath = pathRulesFor(realHelmx).join(realHelmx, fileName)
   const info = await env.fileInfo(filePath, context)
   if (!info.ok) {
     if (info.error.code === 'not_found') {
-      throw new HelmError('herdr_output_missing', `handoff file does not exist: ${filePath}`, 404)
+      throw new HelmxError('herdr_output_missing', `handoff file does not exist: ${filePath}`, 404)
     }
     throw new HerdrTransportError('herdr_io', `failed to inspect output file: ${info.error.code}: ${info.error.message}`, targetLabel)
   }
@@ -244,14 +244,14 @@ export async function readNodeOutput(
     throw new HerdrTransportError('herdr_io', `failed to read output file: ${content.error.code}: ${content.error.message}`, targetLabel)
   }
   // Post-read canonical recheck (TOCTOU convergence): between fileInfo (lstat) and readTextFile (follows
-  // symlinks) the file can be replaced by a symlink escaping .helm; the node env has no O_NOFOLLOW semantics,
-  // so realpath rechecks that the actually read path still anchors inside realHelm (content already read but never returned).
+  // symlinks) the file can be replaced by a symlink escaping .helmx; the node env has no O_NOFOLLOW semantics,
+  // so realpath rechecks that the actually read path still anchors inside realHelmx (content already read but never returned).
   const canonical = await env.canonicalPath(filePath, context)
   if (!canonical.ok) {
     throw new HerdrTransportError('herdr_io', `failed to resolve ${filePath}: ${canonical.error.message}`, targetLabel)
   }
-  if (!pathContains(realHelm, canonical.value)) {
-    throw new HerdrTransportError('herdr_output_escaping', `output resolves outside .helm`, targetLabel)
+  if (!pathContains(realHelmx, canonical.value)) {
+    throw new HerdrTransportError('herdr_output_escaping', `output resolves outside .helmx`, targetLabel)
   }
   if (Buffer.byteLength(content.value, 'utf8') > MAX_OUTPUT_BYTES) {
     throw new HerdrTransportError('herdr_output_too_large', `output grew past limit while reading`, targetLabel)
@@ -269,15 +269,15 @@ export async function removeNodeOutput(
 ): Promise<void> {
   const context = contextOf(signal, targetLabel)
   const env = nodeChannel.envFor(nodeId, cwd)
-  let realHelm: string
+  let realHelmx: string
   try {
-    realHelm = (await resolveNodeOutputDir(env, cwd, targetLabel, context)).realHelm
+    realHelmx = (await resolveNodeOutputDir(env, cwd, targetLabel, context)).realHelmx
   } catch (err) {
     // Missing directory: remove is an idempotent no-op (consistent with local semantics).
-    if (err instanceof HelmError && err.code === 'herdr_output_missing') return
+    if (err instanceof HelmxError && err.code === 'herdr_output_missing') return
     throw err
   }
-  const filePath = pathRulesFor(realHelm).join(realHelm, fileName)
+  const filePath = pathRulesFor(realHelmx).join(realHelmx, fileName)
   const info = await env.fileInfo(filePath, context)
   if (!info.ok) {
     if (info.error.code === 'not_found') return // missing file: idempotent

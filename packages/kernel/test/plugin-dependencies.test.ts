@@ -15,13 +15,13 @@
  */
 import test, { beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
-import { HelmError, type PluginDefinition } from '@helm/protocol'
+import { HelmxError, type PluginDefinition } from '@helmx/protocol'
 import {
   PluginHost,
   type PluginHostBackend,
 } from '../src/plugins/index.js'
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { MemoryDocStore, assertRejectsCode, cleanupDir, makeTempDir } from './helpers.js'
 
 // ---------------------------------------------------------------------------
@@ -59,7 +59,7 @@ function def(id: string, dependencies?: string[], define?: PluginDefinition['def
 }
 
 beforeEach(async () => {
-  dataDir = await makeTempDir('helm-plugin-deps-')
+  dataDir = await makeTempDir('helmx-plugin-deps-')
   docs = new MemoryDocStore()
   events = []
 })
@@ -95,7 +95,7 @@ test('self-dependency and two-plugin cycle reject explicitly at registration wit
 
   // Register b first (depends on unregistered a -- allowed while disabled; checked on enable), then register a -> b creating cycle.
   await host.register(def('b', ['a']), { enabled: false })
-  const err = (await assertRejectsCode(() => host.register(def('a', ['b'])), 'plugin_dependency_cycle', 409)) as HelmError
+  const err = (await assertRejectsCode(() => host.register(def('a', ['b'])), 'plugin_dependency_cycle', 409)) as HelmxError
   assert.deepEqual((err.details as { cycle: string[] }).cycle, ['a', 'b', 'a'])
   assert.equal(host.list().some((s) => s.id === 'a'), false, 'cyclic plugin never enters registry')
 })
@@ -110,11 +110,11 @@ test('enable dependency validation: missing / registered-only disabled / succeed
   await host.register(def('user2', ['disabled-dep']), { enabled: false })
   await host.register(def('user3', ['enabled-dep']), { enabled: false })
 
-  const missingErr = (await assertRejectsCode(() => host.enable('user'), 'plugin_dependency_missing', 409)) as HelmError
+  const missingErr = (await assertRejectsCode(() => host.enable('user'), 'plugin_dependency_missing', 409)) as HelmxError
   assert.equal((missingErr.details as { dependency: string }).dependency, 'missing-dep')
 
   await host.register(def('disabled-dep'), { enabled: false })
-  const notEnabledErr = (await assertRejectsCode(() => host.enable('user2'), 'plugin_dependency_not_enabled', 409)) as HelmError
+  const notEnabledErr = (await assertRejectsCode(() => host.enable('user2'), 'plugin_dependency_not_enabled', 409)) as HelmxError
   assert.equal((notEnabledErr.details as { dependency: string }).dependency, 'disabled-dep')
   assert.equal(host.get('user2')?.enabled, false, 'failed enable leaves plugin disabled')
 
@@ -238,7 +238,7 @@ test('non-forced disable while depended upon is blocked by plugin_in_use (includ
   await host.register(def('mid', ['base']), { enabled: true })
   await host.register(def('top', ['mid']), { enabled: true })
 
-  const err = (await assertRejectsCode(() => host.disable('base'), 'plugin_in_use', 409)) as HelmError
+  const err = (await assertRejectsCode(() => host.disable('base'), 'plugin_in_use', 409)) as HelmxError
   const usages = (err.details as { usages: Array<{ kind: string; id: string }> }).usages
   assert.deepEqual(
     usages.map((u) => u.id).sort(),

@@ -10,7 +10,7 @@
  *   check and are trusted capabilities, not model cwd choices;
  * - hard isolation for untrusted roles belongs to node-level deployment (bind the Profile to a dedicated node).
  */
-import { targetPathShape, type TargetPlatform } from '@helm/protocol'
+import { targetPathShape, type TargetPlatform } from '@helmx/protocol'
 import { isStrictlyInsideRoot, resolveTargetPath } from './target-path.js'
 
 /** Shared violation text: names the raw input, the resolved escape, and the boundary. */

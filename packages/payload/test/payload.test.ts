@@ -1,16 +1,16 @@
 /**
- * @helm/payload integration tests: really executes the assembly script, npm pack, an isolated npm
+ * @helmx/payload integration tests: really executes the assembly script, npm pack, an isolated npm
  * install, and the launch entry.
  *
  * Coverage:
  * 1. assembly: missing build artifacts are rebuilt on demand (with explicit timeouts); after assemble
  *    the directory/manifest/checksum contract holds;
- * 2. publish package contract: the dist root package.json (@team4u/helm-hub default name, overridable
- *    via HELM_PAYLOAD_PACKAGE) is a standalone package fit for npm pack/publish: an explicit files
- *    whitelist (six @helm archives + cli bundle + web dist + contract files, NO unpacked component
- *    directories) + exact external dependency versions + the six @helm/* file:./<pkg>.tgz entries;
+ * 2. publish package contract: the dist root package.json (@helmx/hub default name, overridable
+ *    via HELMX_PAYLOAD_PACKAGE) is a standalone package fit for npm pack/publish: an explicit files
+ *    whitelist (six @helmx archives + cli bundle + web dist + contract files, NO unpacked component
+ *    directories) + exact external dependency versions + the six @helmx/* file:./<pkg>.tgz entries;
  *    manifest.name shares its source;
- * 3. layout: the six @helm runtime packages exist as tgz-only archives whose members mirror the
+ * 3. layout: the six @helmx runtime packages exist as tgz-only archives whose members mirror the
  *    repository dist trees (plus the built-in plugin runtime assets packed inside plugins.tgz), the
  *    cli bundle and web dist mirror directly at the payload root, no unpacked component directories,
  *    no node_modules carried; manifest node_modules/ entries are checksummed against the exact bytes
@@ -30,26 +30,26 @@
  * single-file bundle of the complete control CLI: packages/cli/dist/index.js with the
  * bundled-in launcher update-path closure inlined):
  * 6. cli assembly contract: shebang single-file bundle, bin/name/version/engines (name
- *    overridable via HELM_CLI_PACKAGE, bin single-sourced from packages/cli/package.json), an
+ *    overridable via HELMX_CLI_PACKAGE, bin single-sourced from packages/cli/package.json), an
  *    empty dependency set (no unpublished private workspace packages), exact files whitelist;
  *    the Hub payload's cli/dist/index.js is the exact same bundle bytes;
- * 7. cli bundle runs for real (`helm --help` on an isolated data dir; `status --json` against a
+ * 7. cli bundle runs for real (`helmx --help` on an isolated data dir; `status --json` against a
  *    guaranteed-dead endpoint reports an honest error envelope) and installs from a real tarball
  *    via `npm install -g` into an isolated prefix (the one-shot install story);
- * 8. golden sequence (PAYLOAD_NPM_SMOKE=1): the globally installed `helm` installs a real Hub
+ * 8. golden sequence (PAYLOAD_NPM_SMOKE=1): the globally installed `helmx` installs a real Hub
  *    payload tarball (`update --tarball --version`: unpack → candidate-root npm install → check →
  *    commit → launch → health gate), `update --status` reports the running hub, and `update --stop`
  *    shuts it down cleanly — the only place the CLI artifact and the real payload artifact meet
  *    before a release ships.
  *
  * The same assembly also produces the node daemon artifact (dist-node/, the remote-machine install
- * target: bin helm-node → dist/cli.js; @helm/node + @helm/env-io + @helm/protocol inlined, exactly
+ * target: bin helmx-node → dist/cli.js; @helmx/node + @helmx/env-io + @helmx/protocol inlined, exactly
  * four external exact-version dependencies):
  * 9. node assembly contract: shebang single-file bundle, bin/name/version/engines (name overridable
- *    via HELM_NODE_PACKAGE, bin single-sourced from packages/node/package.json), dependencies
+ *    via HELMX_NODE_PACKAGE, bin single-sourced from packages/node/package.json), dependencies
  *    exactly the four external packages pinned to the repository's installed versions (never
  *    floating ranges), overrides consistent with those pins, exact files whitelist;
- * 10. node bundle runs for real (`helm-node --help` on an isolated data dir; `restart --json`
+ * 10. node bundle runs for real (`helmx-node --help` on an isolated data dir; `restart --json`
  *    without a bound identity reports an honest error envelope) and installs from a real tarball
  *    via `npm install -g` into an isolated prefix (network-gated like the payload e2e: the four
  *    external dependencies download from the registry — PAYLOAD_NPM_SMOKE=1).
@@ -66,8 +66,8 @@ import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, re
 import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { PluginHost, type PluginDocStore, type PluginHostBackend } from '@helm/kernel';
-import type { createMermaidPlugin } from '@helm/plugins/mermaid';
+import { PluginHost, type PluginDocStore, type PluginHostBackend } from '@helmx/kernel';
+import type { createMermaidPlugin } from '@helmx/plugins/mermaid';
 import { createPluginHostBackendFixture } from '../../kernel/test/helpers/plugin-host-backend.js';
 
 const payloadPkgRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -75,8 +75,8 @@ const repoRoot = path.resolve(payloadPkgRoot, '../..');
 const stagingDir = path.join(payloadPkgRoot, 'dist');
 const cliStagingDir = path.join(payloadPkgRoot, 'dist-cli');
 const nodeStagingDir = path.join(payloadPkgRoot, 'dist-node');
-const cliPackageName = process.env.HELM_CLI_PACKAGE ?? '@team4u/helm-cli';
-const nodePackageName = process.env.HELM_NODE_PACKAGE ?? '@team4u/helm-node';
+const cliPackageName = process.env.HELMX_CLI_PACKAGE ?? '@helmx/cli';
+const nodePackageName = process.env.HELMX_NODE_PACKAGE ?? '@helmx/node';
 
 /** Minimal type shape of the manifest contract (validated isomorphically on the start.mjs side). */
 interface PayloadManifest {
@@ -167,31 +167,31 @@ test('payload assembly: missing build artifacts are rebuilt on demand, then buil
   // rebuild only what is missing (zero extra cost on an already-built CI flow); build commands carry
   // explicit timeouts and terminate with output on failure.
   if (!existsSync(path.join(repoRoot, 'packages/protocol/dist/index.js'))) {
-    runCommand('pnpm', ['--filter', '@helm/protocol', 'run', 'build'], repoRoot, 180_000);
+    runCommand('pnpm', ['--filter', '@helmx/protocol', 'run', 'build'], repoRoot, 180_000);
   }
   if (!existsSync(path.join(repoRoot, 'packages/env-io/dist/index.js'))) {
-    runCommand('pnpm', ['--filter', '@helm/env-io', 'run', 'build'], repoRoot, 180_000);
+    runCommand('pnpm', ['--filter', '@helmx/env-io', 'run', 'build'], repoRoot, 180_000);
   }
   if (!existsSync(path.join(repoRoot, 'packages/node/dist/cli.js'))) {
-    runCommand('pnpm', ['--filter', '@helm/node', 'run', 'build'], repoRoot, 240_000);
+    runCommand('pnpm', ['--filter', '@helmx/node', 'run', 'build'], repoRoot, 240_000);
   }
   if (!existsSync(path.join(repoRoot, 'packages/plugin-build/dist/index.js'))) {
-    runCommand('pnpm', ['--filter', '@helm/plugin-build', 'run', 'build'], repoRoot, 240_000);
+    runCommand('pnpm', ['--filter', '@helmx/plugin-build', 'run', 'build'], repoRoot, 240_000);
   }
   if (!existsSync(path.join(repoRoot, 'packages/kernel/dist/index.js'))) {
-    runCommand('pnpm', ['--filter', '@helm/kernel', 'run', 'build'], repoRoot, 240_000);
+    runCommand('pnpm', ['--filter', '@helmx/kernel', 'run', 'build'], repoRoot, 240_000);
   }
   if (!existsSync(path.join(repoRoot, 'packages/plugins/dist/index.js'))) {
-    runCommand('pnpm', ['--filter', '@helm/plugins', 'run', 'build'], repoRoot, 240_000);
+    runCommand('pnpm', ['--filter', '@helmx/plugins', 'run', 'build'], repoRoot, 240_000);
   }
   if (!existsSync(path.join(repoRoot, 'packages/hub/dist/main.js'))) {
-    runCommand('pnpm', ['--filter', '@helm/hub', 'run', 'build'], repoRoot, 240_000);
+    runCommand('pnpm', ['--filter', '@helmx/hub', 'run', 'build'], repoRoot, 240_000);
   }
   if (!existsSync(path.join(repoRoot, 'packages/web/dist/index.html'))) {
-    runCommand('pnpm', ['--filter', '@helm/web', 'run', 'build'], repoRoot, 300_000);
+    runCommand('pnpm', ['--filter', '@helmx/web', 'run', 'build'], repoRoot, 300_000);
   }
   if (!existsSync(path.join(repoRoot, 'packages/cli/dist/index.js'))) {
-    runCommand('pnpm', ['--filter', '@helm/cli', 'run', 'build'], repoRoot, 120_000);
+    runCommand('pnpm', ['--filter', '@helmx/cli', 'run', 'build'], repoRoot, 120_000);
   }
 
   runCommand(process.execPath, [path.join(payloadPkgRoot, 'build.mjs')], repoRoot, 120_000);
@@ -200,34 +200,34 @@ test('payload assembly: missing build artifacts are rebuilt on demand, then buil
 
 test('payload publish package contract: the dist root package.json is a standalone npm pack/publish package', { timeout: 60_000 }, () => {
   const distPkg = JSON.parse(readFileSync(path.join(stagingDir, 'package.json'), 'utf-8'));
-  assert.equal(distPkg.name, '@team4u/helm-hub', 'the default publish package name must be @team4u/helm-hub');
+  assert.equal(distPkg.name, '@helmx/hub', 'the default publish package name must be @helmx/hub');
   assert.equal(distPkg.type, 'module');
   assert.equal(distPkg.private, undefined, 'the publish package must not be marked private');
   assert.equal(distPkg.repository.url, 'git+https://github.com/team4u/helm.git');
   assert.equal(distPkg.license, 'MIT');
   // files explicit whitelist: the root gitignore dist/ rule must not let npm pack strip the archives
-  // or the cli/web trees; the six @helm runtime packages ride as archives only — no unpacked
+  // or the cli/web trees; the six @helmx runtime packages ride as archives only — no unpacked
   // component directories ship.
   assert.deepEqual(
     (distPkg.files as string[]).slice().sort(),
     ['LICENSE', 'THIRD_PARTY_NOTICES.md', 'cli', 'env-io.tgz', 'hub.tgz', 'kernel.tgz', 'manifest.json', 'plugin-build.tgz', 'plugins.tgz', 'protocol.tgz', 'start.mjs', 'web'].sort(),
   );
-  // @helm runtime packages install from archives (all six, hub included); direct external
+  // @helmx runtime packages install from archives (all six, hub included); direct external
   // dependencies use exact versions (no ^/~/>= floating).
-  assert.equal(distPkg.dependencies['@helm/protocol'], 'file:./protocol.tgz');
-  assert.equal(distPkg.dependencies['@helm/kernel'], 'file:./kernel.tgz');
-  assert.equal(distPkg.dependencies['@helm/plugins'], 'file:./plugins.tgz');
-  assert.equal(distPkg.dependencies['@helm/plugin-build'], 'file:./plugin-build.tgz');
-  assert.equal(distPkg.dependencies['@helm/env-io'], 'file:./env-io.tgz');
-  assert.equal(distPkg.dependencies['@helm/hub'], 'file:./hub.tgz');
+  assert.equal(distPkg.dependencies['@helmx/protocol'], 'file:./protocol.tgz');
+  assert.equal(distPkg.dependencies['@helmx/kernel'], 'file:./kernel.tgz');
+  assert.equal(distPkg.dependencies['@helmx/plugins'], 'file:./plugins.tgz');
+  assert.equal(distPkg.dependencies['@helmx/plugin-build'], 'file:./plugin-build.tgz');
+  assert.equal(distPkg.dependencies['@helmx/env-io'], 'file:./env-io.tgz');
+  assert.equal(distPkg.dependencies['@helmx/hub'], 'file:./hub.tgz');
   // Browser-only SDK and UI/AJV/mermaid trees must never leak into the server payload production closure.
-  for (const excluded of ['@helm/plugin-client', 'lucide-react', 'react', 'react-dom', 'react-markdown', 'remark-gfm', 'ajv', 'mermaid']) {
+  for (const excluded of ['@helmx/plugin-client', 'lucide-react', 'react', 'react-dom', 'react-markdown', 'remark-gfm', 'ajv', 'mermaid']) {
     assert.equal(distPkg.dependencies[excluded], undefined, `server payload must not pull ${excluded} into production dependencies`);
   }
   // The staged (archive-internal) plugins package.json must not declare browser-tree runtime deps.
   const pluginsStagedPkg = JSON.parse(tarMemberBytes(path.join(stagingDir, 'plugins.tgz'), 'package/package.json').toString('utf-8'));
   assert.equal(pluginsStagedPkg.dependencies?.['mermaid'], undefined, 'staged plugins/package.json must not declare mermaid runtime dependency');
-  assert.equal(pluginsStagedPkg.dependencies?.['@helm/plugin-client'], undefined, 'staged plugins/package.json must not declare @helm/plugin-client runtime dependency');
+  assert.equal(pluginsStagedPkg.dependencies?.['@helmx/plugin-client'], undefined, 'staged plugins/package.json must not declare @helmx/plugin-client runtime dependency');
   assert.ok(
     Object.keys(distPkg.dependencies).every((name) => !name.startsWith('@radix-ui/')),
     'server payload must not pull @radix-ui/* packages into production dependencies',
@@ -240,7 +240,7 @@ test('payload publish package contract: the dist root package.json is a standalo
     }),
   );
   for (const [name, spec] of Object.entries<string>(distPkg.dependencies)) {
-    if (name.startsWith('@helm/')) continue;
+    if (name.startsWith('@helmx/')) continue;
     const owner = Object.keys(runtimeDeps).find((dir) => runtimeDeps[dir]![name] !== undefined);
     assert.ok(owner !== undefined, `root dependency ${name} is not inside the runtime packages' production/peer dependency closure`);
     assert.match(spec, /^\d/, `external dependency ${name} must be an exact version, got ${spec}`);
@@ -268,11 +268,11 @@ test('payload manifest contract: formatVersion/version/entries/checksums all hol
   const keys = Object.keys(manifest.entries).sort();
   assert.deepEqual(Object.keys(manifest.entryChecksums).sort(), keys, 'entryChecksums keys must match entries keys');
   for (const [key, rel] of Object.entries(manifest.entries)) {
-    if (rel.startsWith('node_modules/@helm/')) {
+    if (rel.startsWith('node_modules/@helmx/')) {
       // The six runtime entries point at the consumer-side npm install layout; their checksums pin
       // the exact bytes packed inside the corresponding archive (npm materializes file: tarballs
       // verbatim, so post-install checkLayout verifies the installed tree against these bytes).
-      const rest = rel.replace(/^node_modules\/@helm\//, '');
+      const rest = rel.replace(/^node_modules\/@helmx\//, '');
       const slash = rest.indexOf('/');
       const dir = rest.slice(0, slash);
       const member = `package/${rest.slice(slash + 1)}`;
@@ -297,7 +297,7 @@ test('payload manifest contract: formatVersion/version/entries/checksums all hol
 });
 
 test('payload layout: six tgz-only archives mirror the repo dist trees, assets packed, cli/web at root, no node_modules', { timeout: 60_000 }, () => {
-  // tgz-only contract: the payload root carries each @helm runtime package exactly once, as an
+  // tgz-only contract: the payload root carries each @helmx runtime package exactly once, as an
   // archive; the pre-change unpacked duplicate directories must not exist.
   const ARCHIVED_PKGS = ['hub', 'kernel', 'plugins', 'plugin-build', 'env-io', 'protocol'];
   for (const dir of ARCHIVED_PKGS) {
@@ -369,7 +369,7 @@ test('payload layout: six tgz-only archives mirror the repo dist trees, assets p
 });
 
 test('start.mjs check: uninstalled payload exits with code 3 before checksum verification, listing the completion step', { timeout: 60_000 }, () => {
-  // beside the payload dist inside the repository workspace node_modules/@helm/* does not exist
+  // beside the payload dist inside the repository workspace node_modules/@helmx/* does not exist
   // (the archives install only consumer-side), so check must honestly exit 3 from the install-state
   // gate — BEFORE any checksum verification (an uninstalled payload is not a corrupt payload);
   // strip NODE_PATH so the verdict is immune to the host environment.
@@ -388,13 +388,13 @@ test('start.mjs check: uninstalled payload exits with code 3 before checksum ver
 });
 
 test('start.mjs check: tampered checksum or manifest path escape exits explicitly with code 1', { timeout: 60_000 }, () => {
-  const broken = mkdtempSync(path.join(path.dirname(repoRoot), 'helm-payload-broken-'));
+  const broken = mkdtempSync(path.join(path.dirname(repoRoot), 'helmx-payload-broken-'));
   cpSync(stagingDir, broken, { recursive: true });
   try {
     // Materialize the archives under node_modules exactly like a consumer-side npm install (the
     // checksum verification only runs past the install-state gate).
     for (const dir of ['hub', 'kernel', 'plugins', 'plugin-build', 'env-io', 'protocol']) {
-      const dest = path.join(broken, 'node_modules', '@helm', dir);
+      const dest = path.join(broken, 'node_modules', '@helmx', dir);
       mkdirSync(dest, { recursive: true });
       runCommand('tar', ['-xzf', path.join(broken, `${dir}.tgz`), '-C', dest, '--strip-components=1'], broken, 30_000);
     }
@@ -426,7 +426,7 @@ test('start.mjs check: tampered checksum or manifest path escape exits explicitl
   }
 });
 
-test('start.mjs start: refuses to launch the hub when dependencies are missing (no Helm Hub output)', { timeout: 60_000 }, () => {
+test('start.mjs start: refuses to launch the hub when dependencies are missing (no Helmx Hub output)', { timeout: 60_000 }, () => {
   const env = { ...process.env };
   delete env.NODE_PATH;
   const res = spawnSync(process.execPath, [path.join(stagingDir, 'start.mjs'), 'start'], {
@@ -436,7 +436,7 @@ test('start.mjs start: refuses to launch the hub when dependencies are missing (
     timeout: 50_000,
   });
   assert.equal(res.status, 3, `expected exit code 3 (refusing to start), got ${res.status}\nstderr: ${res.stderr}`);
-  assert.doesNotMatch(res.stdout, /Helm Hub:/, 'kernel startup output must not appear while dependencies are missing');
+  assert.doesNotMatch(res.stdout, /Helmx Hub:/, 'kernel startup output must not appear while dependencies are missing');
 });
 
 test('start.mjs without arguments: usage error exits with code 1', { timeout: 60_000 }, () => {
@@ -450,7 +450,7 @@ test('start.mjs without arguments: usage error exits with code 1', { timeout: 60
 });
 
 // ---------------------------------------------------------------------------
-// Stable CLI artifact (dist-cli): the zero-dependency single-file bundle of the complete helm CLI.
+// Stable CLI artifact (dist-cli): the zero-dependency single-file bundle of the complete helmx CLI.
 // ---------------------------------------------------------------------------
 
 test('cli artifact assembly contract: dist-cli is a zero-dependency publish package with a shebang single-file bundle', { timeout: 60_000 }, () => {
@@ -462,20 +462,20 @@ test('cli artifact assembly contract: dist-cli is a zero-dependency publish pack
   assert.equal(pkg.type, 'module');
   const rootPkg = JSON.parse(readFileSync(path.join(repoRoot, 'package.json'), 'utf-8'));
   assert.equal(pkg.engines.node, rootPkg.engines?.node ?? '>=24.12.0');
-  // the bin name is single-sourced from the CLI workspace package (exactly one entry: helm)
+  // the bin name is single-sourced from the CLI workspace package (exactly one entry: helmx)
   const cliPkg = JSON.parse(readFileSync(path.join(repoRoot, 'packages/cli/package.json'), 'utf-8'));
-  assert.deepEqual(Object.keys(cliPkg.bin ?? {}), ['helm'], 'the workspace CLI package must declare exactly one bin entry: helm');
+  assert.deepEqual(Object.keys(cliPkg.bin ?? {}), ['helmx'], 'the workspace CLI package must declare exactly one bin entry: helmx');
   const bin = pkg.bin;
-  assert.deepEqual(Object.keys(bin), ['helm'], 'the bin name is single-sourced from the CLI package');
-  const bundle = readFileSync(path.join(cliStagingDir, bin['helm']), 'utf-8');
+  assert.deepEqual(Object.keys(bin), ['helmx'], 'the bin name is single-sourced from the CLI package');
+  const bundle = readFileSync(path.join(cliStagingDir, bin['helmx']), 'utf-8');
   assert.ok(bundle.startsWith('#!/usr/bin/env node'), 'the bundle must keep the shebang to work as a bin target');
-  // The authoritative zero-dependency gate runs build-side on esbuild's metafile (external @helm/*
+  // The authoritative zero-dependency gate runs build-side on esbuild's metafile (external @helmx/*
   // imports fail the assembly): text-scanning the bundle would false-positive on scaffold-template
-  // sample code that legitimately embeds `from '@helm/...'` inside string literals. Text-level here:
+  // sample code that legitimately embeds `from '@helmx/...'` inside string literals. Text-level here:
   // no workspace: specifiers and no literal dynamic imports of workspace packages may remain (a
-  // non-inlined lazy import would crash at global-install time where no @helm/* package exists).
+  // non-inlined lazy import would crash at global-install time where no @helmx/* package exists).
   assert.ok(!/workspace:/.test(bundle), 'the bundle must not carry workspace: specifiers');
-  for (const match of bundle.matchAll(/import\(\s*['"](@helm\/[^'"]+)['"]/g)) {
+  for (const match of bundle.matchAll(/import\(\s*['"](@helmx\/[^'"]+)['"]/g)) {
     assert.fail(`the bundle must not carry a literal dynamic import of an unpackaged workspace package: ${match[1]}`);
   }
   assert.deepEqual(pkg.files.slice().sort(), ['LICENSE', 'THIRD_PARTY_NOTICES.md', 'index.js']);
@@ -483,14 +483,14 @@ test('cli artifact assembly contract: dist-cli is a zero-dependency publish pack
     assert.ok(existsSync(path.join(cliStagingDir, file)), `files whitelist entry missing on disk: ${file}`);
   }
   // one esbuild output, two consumers: the Hub payload's cli entry must be the exact same bundle
-  // bytes as the publish artifact (both artifacts run one identical helm CLI).
+  // bytes as the publish artifact (both artifacts run one identical helmx CLI).
   const payloadCliEntry = path.join(stagingDir, 'cli', 'dist', 'index.js');
   assert.ok(existsSync(payloadCliEntry), 'the payload must ship cli/dist/index.js');
   assert.equal(sha256Of(payloadCliEntry), sha256Of(path.join(cliStagingDir, 'index.js')), 'payload cli/dist/index.js must be the same bundle as dist-cli/index.js');
 });
 
 test('cli bundle: help and honest error paths run for real from the single file', { timeout: 60_000 }, () => {
-  const dataDir = mkdtempSync(path.join(path.dirname(repoRoot), 'helm-cli-bundle-'));
+  const dataDir = mkdtempSync(path.join(path.dirname(repoRoot), 'helmx-cli-bundle-'));
   try {
     // isolated data dir + dead endpoint: help must never fail on Hub/credential issues (core help
     // prints with a separate diagnostic line), and exit 0.
@@ -498,10 +498,10 @@ test('cli bundle: help and honest error paths run for real from the single file'
       cwd: dataDir,
       encoding: 'utf8',
       timeout: 50_000,
-      env: { ...process.env, HELM_DATA_DIR: dataDir, HELM_HUB_URL: 'http://127.0.0.1:1' },
+      env: { ...process.env, HELMX_DATA_DIR: dataDir, HELMX_HUB_URL: 'http://127.0.0.1:1' },
     });
-    assert.equal(help.status, 0, `helm --help expected exit 0, got ${help.status}\nstdout: ${help.stdout}\nstderr: ${help.stderr}`);
-    assert.match(help.stdout, /Usage: helm <command>/, 'core help must print the usage header');
+    assert.equal(help.status, 0, `helmx --help expected exit 0, got ${help.status}\nstdout: ${help.stdout}\nstderr: ${help.stderr}`);
+    assert.match(help.stdout, /Usage: helmx <command>/, 'core help must print the usage header');
 
     // a guaranteed-dead endpoint (port 1 on loopback never listens) must surface an explicit error
     // envelope, never a fabricated response: --json puts the envelope on stderr with a non-zero exit.
@@ -509,7 +509,7 @@ test('cli bundle: help and honest error paths run for real from the single file'
       cwd: dataDir,
       encoding: 'utf8',
       timeout: 50_000,
-      env: { ...process.env, HELM_DATA_DIR: dataDir, HELM_HUB_URL: 'http://127.0.0.1:1' },
+      env: { ...process.env, HELMX_DATA_DIR: dataDir, HELMX_HUB_URL: 'http://127.0.0.1:1' },
     });
     assert.notEqual(status.status, 0, 'status against a dead endpoint must not exit 0');
     assert.match(status.stderr, /"error"/, 'the --json failure envelope must land on stderr');
@@ -522,7 +522,7 @@ test('cli tarball acceptance: npm pack → npm install -g into an isolated prefi
   timeout: 240_000,
   skip: process.platform === 'win32' ? 'bin link execution via shebang is verified on POSIX lanes' : false,
 }, () => {
-  const outsideRoot = mkdtempSync(path.join(path.dirname(repoRoot), 'helm-cli-tgz-'));
+  const outsideRoot = mkdtempSync(path.join(path.dirname(repoRoot), 'helmx-cli-tgz-'));
   try {
     const packDir = path.join(outsideRoot, 'pack');
     mkdirSync(packDir, { recursive: true });
@@ -544,8 +544,8 @@ test('cli tarball acceptance: npm pack → npm install -g into an isolated prefi
     // The one-shot story itself: install -g from the real tarball into an isolated prefix.
     const prefix = path.join(outsideRoot, 'global-prefix');
     runCommand('npm', ['install', '-g', tgz, '--prefix', prefix, '--no-audit', '--no-fund'], outsideRoot, 120_000);
-    const binPath = path.join(prefix, 'bin', 'helm');
-    assert.ok(existsSync(binPath), `npm install -g must create the helm bin link under ${prefix}/bin`);
+    const binPath = path.join(prefix, 'bin', 'helmx');
+    assert.ok(existsSync(binPath), `npm install -g must create the helmx bin link under ${prefix}/bin`);
 
     // Zero-dependency proof at the installed location: no node_modules was created beside the package.
     const installedPkgDir = path.join(prefix, 'lib', 'node_modules', ...cliPackageName.split('/'));
@@ -557,10 +557,10 @@ test('cli tarball acceptance: npm pack → npm install -g into an isolated prefi
       cwd: outsideRoot,
       encoding: 'utf8',
       timeout: 50_000,
-      env: { ...process.env, HELM_DATA_DIR: dataDir, HELM_HUB_URL: 'http://127.0.0.1:1' },
+      env: { ...process.env, HELMX_DATA_DIR: dataDir, HELMX_HUB_URL: 'http://127.0.0.1:1' },
     });
-    assert.equal(res.status, 0, `installed helm --help expected exit 0, got ${res.status}\nstdout: ${res.stdout}\nstderr: ${res.stderr}`);
-    assert.match(res.stdout, /Usage: helm <command>/, 'the installed bin must run the bundled CLI');
+    assert.equal(res.status, 0, `installed helmx --help expected exit 0, got ${res.status}\nstdout: ${res.stdout}\nstderr: ${res.stderr}`);
+    assert.match(res.stdout, /Usage: helmx <command>/, 'the installed bin must run the bundled CLI');
   } finally {
     rmSync(outsideRoot, { recursive: true, force: true });
   }
@@ -587,8 +587,8 @@ test('node artifact assembly contract: dist-node is a four-external-dependency p
 
   // the bin name and target are single-sourced from the node workspace package (exactly one entry)
   const nodePkg = JSON.parse(readFileSync(path.join(repoRoot, 'packages/node/package.json'), 'utf-8'));
-  assert.deepEqual(nodePkg.bin, { 'helm-node': './dist/cli.js' }, 'the workspace node package must declare exactly one bin entry: helm-node → ./dist/cli.js');
-  assert.deepEqual(pkg.bin, { 'helm-node': './dist/cli.js' }, 'the bin shape is single-sourced from the node workspace package');
+  assert.deepEqual(nodePkg.bin, { 'helmx-node': './dist/cli.js' }, 'the workspace node package must declare exactly one bin entry: helmx-node → ./dist/cli.js');
+  assert.deepEqual(pkg.bin, { 'helmx-node': './dist/cli.js' }, 'the bin shape is single-sourced from the node workspace package');
 
   // the dual-package self-upgrade contract: dependencies are exactly the four external packages at
   // the repository's installed versions — no fifth dependency, no floating ranges.
@@ -615,7 +615,7 @@ test('node artifact assembly contract: dist-node is a four-external-dependency p
   // imports of workspace packages may remain (the authoritative external-closure gate runs
   // build-side on esbuild's metafile).
   assert.ok(!/workspace:/.test(bundle), 'the bundle must not carry workspace: specifiers');
-  for (const match of bundle.matchAll(/import\(\s*['"](@helm\/[^'"]+)['"]/g)) {
+  for (const match of bundle.matchAll(/import\(\s*['"](@helmx\/[^'"]+)['"]/g)) {
     assert.fail(`the bundle must not carry a literal dynamic import of an unpackaged workspace package: ${match[1]}`);
   }
   assert.deepEqual(pkg.files.slice().sort(), ['LICENSE', 'THIRD_PARTY_NOTICES.md', 'dist/cli.js']);
@@ -625,17 +625,17 @@ test('node artifact assembly contract: dist-node is a four-external-dependency p
 });
 
 test('node bundle: help and honest error paths run for real from the single file', { timeout: 60_000 }, () => {
-  const dataDir = mkdtempSync(path.join(path.dirname(repoRoot), 'helm-node-bundle-'));
+  const dataDir = mkdtempSync(path.join(path.dirname(repoRoot), 'helmx-node-bundle-'));
   try {
     // isolated data dir: help must never touch the network or the Hub and exit 0.
     const help = spawnSync(process.execPath, [path.join(nodeStagingDir, 'dist/cli.js'), '--help'], {
       cwd: dataDir,
       encoding: 'utf8',
       timeout: 50_000,
-      env: { ...process.env, HELM_DATA_DIR: dataDir },
+      env: { ...process.env, HELMX_DATA_DIR: dataDir },
     });
-    assert.equal(help.status, 0, `helm-node --help expected exit 0, got ${help.status}\nstdout: ${help.stdout}\nstderr: ${help.stderr}`);
-    assert.match(help.stdout, /Usage: helm-node <command>/, 'core help must print the usage header');
+    assert.equal(help.status, 0, `helmx-node --help expected exit 0, got ${help.status}\nstdout: ${help.stdout}\nstderr: ${help.stderr}`);
+    assert.match(help.stdout, /Usage: helmx-node <command>/, 'core help must print the usage header');
 
     // an unbound data dir must surface an explicit error envelope, never a fabricated result:
     // --json puts the envelope on stderr with a non-zero exit.
@@ -643,7 +643,7 @@ test('node bundle: help and honest error paths run for real from the single file
       cwd: dataDir,
       encoding: 'utf8',
       timeout: 50_000,
-      env: { ...process.env, HELM_DATA_DIR: dataDir },
+      env: { ...process.env, HELMX_DATA_DIR: dataDir },
     });
     assert.notEqual(restart.status, 0, 'restart without a bound identity must not exit 0');
     assert.match(restart.stderr, /"error"/, 'the --json failure envelope must land on stderr');
@@ -661,7 +661,7 @@ test('node tarball acceptance: npm pack → npm install -g into an isolated pref
       ? 'bin link execution via shebang is verified on POSIX lanes'
       : false,
 }, () => {
-  const outsideRoot = mkdtempSync(path.join(path.dirname(repoRoot), 'helm-node-tgz-'));
+  const outsideRoot = mkdtempSync(path.join(path.dirname(repoRoot), 'helmx-node-tgz-'));
   try {
     const packDir = path.join(outsideRoot, 'pack');
     mkdirSync(packDir, { recursive: true });
@@ -684,8 +684,8 @@ test('node tarball acceptance: npm pack → npm install -g into an isolated pref
     // external dependencies resolve and download from the registry).
     const prefix = path.join(outsideRoot, 'global-prefix');
     runCommand('npm', ['install', '-g', tgz, '--prefix', prefix, '--no-audit', '--no-fund'], outsideRoot, 180_000);
-    const binPath = path.join(prefix, 'bin', 'helm-node');
-    assert.ok(existsSync(binPath), `npm install -g must create the helm-node bin link under ${prefix}/bin`);
+    const binPath = path.join(prefix, 'bin', 'helmx-node');
+    assert.ok(existsSync(binPath), `npm install -g must create the helmx-node bin link under ${prefix}/bin`);
 
     // Dependency resolution proof at the installed location: the four external packages landed
     // beside the bundle and resolved to the exact pinned versions (transitive dependencies of
@@ -703,10 +703,10 @@ test('node tarball acceptance: npm pack → npm install -g into an isolated pref
       cwd: outsideRoot,
       encoding: 'utf8',
       timeout: 50_000,
-      env: { ...process.env, HELM_DATA_DIR: dataDir },
+      env: { ...process.env, HELMX_DATA_DIR: dataDir },
     });
-    assert.equal(res.status, 0, `installed helm-node --help expected exit 0, got ${res.status}\nstdout: ${res.stdout}\nstderr: ${res.stderr}`);
-    assert.match(res.stdout, /Usage: helm-node <command>/, 'the installed bin must run the bundled daemon CLI');
+    assert.equal(res.status, 0, `installed helmx-node --help expected exit 0, got ${res.status}\nstdout: ${res.stdout}\nstderr: ${res.stderr}`);
+    assert.match(res.stdout, /Usage: helmx-node <command>/, 'the installed bin must run the bundled daemon CLI');
   } finally {
     rmSync(outsideRoot, { recursive: true, force: true });
   }
@@ -722,7 +722,7 @@ test('end-to-end: npm pack → isolated npm install → check → start really l
   timeout: 240_000,
   skip: process.env.PAYLOAD_NPM_SMOKE !== '1' ? 'the real npm network acceptance runs as a dedicated CI step with PAYLOAD_NPM_SMOKE=1' : false,
 }, async () => {
-  const outsideRoot = mkdtempSync(path.join(path.dirname(repoRoot), 'helm-payload-e2e-'));
+  const outsideRoot = mkdtempSync(path.join(path.dirname(repoRoot), 'helmx-payload-e2e-'));
   const packDir = path.join(outsideRoot, 'pack');
   let extractDir = path.join(outsideRoot, 'extracted');
   try {
@@ -751,18 +751,18 @@ test('end-to-end: npm pack → isolated npm install → check → start really l
 
     // 3. local file: dependencies are copy-installed; after the promotion rename it must still launch.
     runCommand('npm', ['install', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'], extractDir, 300_000);
-    for (const helmPkg of ['protocol', 'kernel', 'plugins', 'plugin-build', 'env-io', 'hub']) {
-      assert.equal(lstatSync(path.join(extractDir, 'node_modules', '@helm', helmPkg)).isSymbolicLink(), false, `@helm/${helmPkg} must be a real archive-installed directory`);
+    for (const helmxPkg of ['protocol', 'kernel', 'plugins', 'plugin-build', 'env-io', 'hub']) {
+      assert.equal(lstatSync(path.join(extractDir, 'node_modules', '@helmx', helmxPkg)).isSymbolicLink(), false, `@helmx/${helmxPkg} must be a real archive-installed directory`);
     }
     const promoted = path.join(outsideRoot, 'release');
     renameSync(extractDir, promoted);
     extractDir = promoted;
-    assert.ok(existsSync(path.join(extractDir, 'node_modules', '@helm', 'protocol', 'dist', 'index.js')), 'protocol dependency broke after promotion');
-    assert.ok(existsSync(path.join(extractDir, 'node_modules', '@helm', 'kernel', 'dist', 'index.js')), 'kernel dependency broke after promotion');
-    assert.ok(existsSync(path.join(extractDir, 'node_modules', '@helm', 'plugins', 'dist', 'index.js')), 'plugins dependency broke after promotion');
-    assert.ok(existsSync(path.join(extractDir, 'node_modules', '@helm', 'plugin-build', 'dist', 'index.js')), 'plugin-build dependency broke after promotion');
-    assert.ok(existsSync(path.join(extractDir, 'node_modules', '@helm', 'env-io', 'dist', 'index.js')), 'env-io dependency broke after promotion');
-    assert.ok(existsSync(path.join(extractDir, 'node_modules', '@helm', 'hub', 'dist', 'main.js')), 'hub dependency broke after promotion');
+    assert.ok(existsSync(path.join(extractDir, 'node_modules', '@helmx', 'protocol', 'dist', 'index.js')), 'protocol dependency broke after promotion');
+    assert.ok(existsSync(path.join(extractDir, 'node_modules', '@helmx', 'kernel', 'dist', 'index.js')), 'kernel dependency broke after promotion');
+    assert.ok(existsSync(path.join(extractDir, 'node_modules', '@helmx', 'plugins', 'dist', 'index.js')), 'plugins dependency broke after promotion');
+    assert.ok(existsSync(path.join(extractDir, 'node_modules', '@helmx', 'plugin-build', 'dist', 'index.js')), 'plugin-build dependency broke after promotion');
+    assert.ok(existsSync(path.join(extractDir, 'node_modules', '@helmx', 'env-io', 'dist', 'index.js')), 'env-io dependency broke after promotion');
+    assert.ok(existsSync(path.join(extractDir, 'node_modules', '@helmx', 'hub', 'dist', 'main.js')), 'hub dependency broke after promotion');
 
     // 4. check: the seven entry-point dependencies resolve + node:sqlite + a real esbuild exercise,
     // exit code 0.
@@ -782,7 +782,7 @@ test('end-to-end: npm pack → isolated npm install → check → start really l
     const port = await freePort();
     const child = spawn(process.execPath, [path.join(extractDir, 'start.mjs'), 'start'], {
       cwd: extractDir,
-      env: { ...env, HELM_PORT: String(port), HELM_HOST: '127.0.0.1', HELM_DATA_DIR: dataDir, HELM_CWD: dataDir },
+      env: { ...env, HELMX_PORT: String(port), HELMX_HOST: '127.0.0.1', HELMX_DATA_DIR: dataDir, HELMX_CWD: dataDir },
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: process.platform !== 'win32',
     });
@@ -844,10 +844,10 @@ test('end-to-end: npm pack → isolated npm install → check → start really l
       // page/probe alone can't cover): after a temporary setup auth (the smoke test owns a brand-new
       // dataDir and touches no real users/credentials), fetch the compiled client module artifacts of
       // two real built-in plugins. A 200 JavaScript response simultaneously proves: the clientRoot
-      // runtime assets landed with the plugins archive, @helm/plugin-build installed via the file: tgz
+      // runtime assets landed with the plugins archive, @helmx/plugin-build installed via the file: tgz
       // with a correct npm resolution root, and the host shared shim works (the token never lands in
       // logs).
-      const setupPassword = `helm-smoke-${process.pid}-${Date.now()}`;
+      const setupPassword = `helmx-smoke-${process.pid}-${Date.now()}`;
       const setupRes = await fetch(`http://127.0.0.1:${port}/api/auth/setup`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -867,8 +867,8 @@ test('end-to-end: npm pack → isolated npm install → check → start really l
           const moduleBody = await moduleRes.text();
           assert.equal(moduleRes.status, 200, `${detail} expected 200, got ${moduleRes.status} (body head 200 chars: ${moduleBody.slice(0, 200)})`);
           assert.match(moduleRes.headers.get('content-type') ?? '', /text\/javascript/, `${detail} must return JavaScript`);
-          const moduleHash = moduleRes.headers.get('x-helm-client-hash');
-          assert.ok(moduleHash !== null && moduleHash.length > 0, `${detail} is missing x-helm-client-hash`);
+          const moduleHash = moduleRes.headers.get('x-helmx-client-hash');
+          assert.ok(moduleHash !== null && moduleHash.length > 0, `${detail} is missing x-helmx-client-hash`);
           assert.ok(moduleBody.length > 0, `${detail} must not be an empty body`);
         }
       } finally {
@@ -879,7 +879,7 @@ test('end-to-end: npm pack → isolated npm install → check → start really l
       // dist-cli artifact): the Hub-managed CLI shim runs status --json against the live Hub over real
       // HTTP — exercising the bundled command dispatch, credential env, and JSON output path.
       const cliStatus = spawnSync(
-        process.platform === 'win32' ? process.execPath : path.join(dataDir, 'bin', 'helm'),
+        process.platform === 'win32' ? process.execPath : path.join(dataDir, 'bin', 'helmx'),
         process.platform === 'win32'
           ? [path.join(extractDir, 'cli', 'dist', 'index.js'), 'status', '--json']
           : ['status', '--json'],
@@ -887,13 +887,13 @@ test('end-to-end: npm pack → isolated npm install → check → start really l
           cwd: extractDir,
           encoding: 'utf8',
           timeout: 50_000,
-          env: { ...env, HELM_HUB_URL: `http://127.0.0.1:${port}`, HELM_TOKEN: token },
+          env: { ...env, HELMX_HUB_URL: `http://127.0.0.1:${port}`, HELMX_TOKEN: token },
         },
       );
       assert.equal(
         cliStatus.status,
         0,
-        `bundled helm status --json expected exit 0, got ${cliStatus.status}\nstdout: ${cliStatus.stdout}\nstderr: ${cliStatus.stderr}`,
+        `bundled helmx status --json expected exit 0, got ${cliStatus.status}\nstdout: ${cliStatus.stdout}\nstderr: ${cliStatus.stderr}`,
       );
       const cliStatusBody = JSON.parse(cliStatus.stdout) as Record<string, unknown>;
       assert.equal(cliStatusBody['configured'], true, 'the bundled CLI must see a configured Hub');
@@ -910,7 +910,7 @@ test('end-to-end: npm pack → isolated npm install → check → start really l
     }
     assert.ok(exitInfo, `Hub SIGTERM shutdown timed out\nstdout: ${stdout}\nstderr: ${stderr}`);
     assert.equal(exitInfo.code, 0, `Hub expected a clean exit 0 after SIGTERM, got ${exitInfo.code} ${exitInfo.signal ?? ''}\nstdout: ${stdout}\nstderr: ${stderr}`);
-    assert.match(stdout, /Helm Hub:/, 'Hub startup banner missing');
+    assert.match(stdout, /Helmx Hub:/, 'Hub startup banner missing');
   } finally {
     rmSync(outsideRoot, { recursive: true, force: true });
   }
@@ -921,10 +921,10 @@ function mkdirSyncRecursive(dir: string) {
 }
 
 test('payload prebuilt mermaid: unpacked plugins.tgz serves mermaid & chunks without node_modules/mermaid or buildProvider', { timeout: 60_000 }, async () => {
-  const outsideRoot = mkdtempSync(path.join(path.dirname(repoRoot), 'helm-payload-mermaid-'));
+  const outsideRoot = mkdtempSync(path.join(path.dirname(repoRoot), 'helmx-payload-mermaid-'));
   try {
     const isoPlugins = path.join(outsideRoot, 'plugins');
-    const isoProtocol = path.join(outsideRoot, 'plugins/node_modules/@helm/protocol');
+    const isoProtocol = path.join(outsideRoot, 'plugins/node_modules/@helmx/protocol');
     const isoTypebox = path.join(outsideRoot, 'plugins/node_modules/typebox');
     const dataDir = path.join(outsideRoot, 'data');
     mkdirSyncRecursive(isoPlugins);
@@ -935,7 +935,7 @@ test('payload prebuilt mermaid: unpacked plugins.tgz serves mermaid & chunks wit
     runCommand('tar', ['-xzf', path.join(stagingDir, 'plugins.tgz'), '-C', isoPlugins, '--strip-components=1'], outsideRoot, 30_000);
     runCommand('tar', ['-xzf', path.join(stagingDir, 'protocol.tgz'), '-C', isoProtocol, '--strip-components=1'], outsideRoot, 30_000);
     assert.ok(existsSync(path.join(isoPlugins, 'dist/mermaid/dist-client/manifest.json')), 'plugins.tgz must carry mermaid dist-client');
-    // Supply protocol's lightweight runtime dep `typebox` only if imported; note mermaid imports only @helm/protocol (`HelmError`).
+    // Supply protocol's lightweight runtime dep `typebox` only if imported; note mermaid imports only @helmx/protocol (`HelmxError`).
     const typeboxReal = realpathSync(path.join(repoRoot, 'packages/protocol/node_modules/typebox'));
     cpSync(typeboxReal, isoTypebox, { recursive: true });
 
@@ -985,17 +985,17 @@ test('payload prebuilt mermaid: unpacked plugins.tgz serves mermaid & chunks wit
 
 /**
  * CLI golden sequence (real npm network acceptance, gated like the payload e2e above): the
- * globally installed `helm` installs a real Hub payload tarball into its own release root
+ * globally installed `helmx` installs a real Hub payload tarball into its own release root
  * (`update --tarball --version`: unpack → candidate-root npm install → check → commit → launch →
- * health gate — the first `helm update` defaults to install and start), `update --status`
+ * health gate — the first `helmx update` defaults to install and start), `update --status`
  * reflects the running release, and `update --stop` shuts it down cleanly. This is the only
  * place the CLI artifact and the real payload artifact meet before a release ships.
  *
- * Note: the user-facing update surface (`helm update --check/--watch/--status/--stop/--channel/
+ * Note: the user-facing update surface (`helmx update --check/--watch/--status/--stop/--channel/
  * --interval-ms/--tarball+--version`, no --start) is implemented CLI-side on the bundled-in launcher's
  * typed API; this sequence pins the distribution contract against it.
  */
-test('cli golden sequence: installed helm updates from a real payload tarball, health-gates, and stops', {
+test('cli golden sequence: installed helmx updates from a real payload tarball, health-gates, and stops', {
   timeout: 600_000,
   skip: process.env.PAYLOAD_NPM_SMOKE !== '1'
     ? 'the real npm network acceptance runs as a dedicated CI step with PAYLOAD_NPM_SMOKE=1'
@@ -1004,7 +1004,7 @@ test('cli golden sequence: installed helm updates from a real payload tarball, h
       : false,
 }, async () => {
   const payloadPkg = JSON.parse(readFileSync(path.join(stagingDir, 'package.json'), 'utf-8'));
-  const outsideRoot = mkdtempSync(path.join(path.dirname(repoRoot), 'helm-cli-golden-'));
+  const outsideRoot = mkdtempSync(path.join(path.dirname(repoRoot), 'helmx-cli-golden-'));
   try {
     // 1. Real tarballs: cli (published form) + Hub payload (the update target).
     const packDir = path.join(outsideRoot, 'pack');
@@ -1017,8 +1017,8 @@ test('cli golden sequence: installed helm updates from a real payload tarball, h
     // 2. One-shot install of the CLI, exactly as a member machine would do it.
     const prefix = path.join(outsideRoot, 'global-prefix');
     runCommand('npm', ['install', '-g', cliTgz, '--prefix', prefix, '--no-audit', '--no-fund'], outsideRoot, 120_000);
-    const binPath = path.join(prefix, 'bin', 'helm');
-    assert.ok(existsSync(binPath), 'npm install -g must create the helm bin link');
+    const binPath = path.join(prefix, 'bin', 'helmx');
+    assert.ok(existsSync(binPath), 'npm install -g must create the helmx bin link');
 
     // 3. update --tarball --version: the first update installs and starts (default action; there is
     //    no --start flag on the new surface). The install root and the hub data dir stay separate
@@ -1028,10 +1028,10 @@ test('cli golden sequence: installed helm updates from a real payload tarball, h
     const port = await freePort();
     const updateEnv: NodeJS.ProcessEnv = {
       ...process.env,
-      HELM_HUB_INSTALL_ROOT: installRoot,
-      HELM_PORT: String(port),
-      HELM_HOST: '127.0.0.1',
-      HELM_DATA_DIR: dataDir,
+      HELMX_HUB_INSTALL_ROOT: installRoot,
+      HELMX_PORT: String(port),
+      HELMX_HOST: '127.0.0.1',
+      HELMX_DATA_DIR: dataDir,
     };
     delete updateEnv.NODE_PATH;
     const update = spawnSync(binPath, ['update', '--tarball', payloadTgz, '--version', payloadPkg.version], {
@@ -1040,12 +1040,12 @@ test('cli golden sequence: installed helm updates from a real payload tarball, h
     assert.equal(
       update.status,
       0,
-      `helm update --tarball failed (exit ${update.status})\nstdout: ${update.stdout}\nstderr: ${update.stderr}`,
+      `helmx update --tarball failed (exit ${update.status})\nstdout: ${update.stdout}\nstderr: ${update.stderr}`,
     );
 
     // 4. update --status: the committed release is current and the hub is running and healthy.
     const status = spawnSync(binPath, ['update', '--status', '--json'], { cwd: outsideRoot, encoding: 'utf8', timeout: 50_000, env: updateEnv });
-    assert.equal(status.status, 0, `helm update --status --json failed\nstdout: ${status.stdout}\nstderr: ${status.stderr}`);
+    assert.equal(status.status, 0, `helmx update --status --json failed\nstdout: ${status.stdout}\nstderr: ${status.stderr}`);
     const snapshot = JSON.parse(status.stdout);
     assert.equal(snapshot.current?.version, payloadPkg.version);
     assert.ok(snapshot.running !== null, 'the hub must be running after the default install-and-start update');
@@ -1067,7 +1067,7 @@ test('cli golden sequence: installed helm updates from a real payload tarball, h
 
     // 5. update --stop: identity-verified shutdown, leaving no pid file behind.
     const stop = spawnSync(binPath, ['update', '--stop'], { cwd: outsideRoot, encoding: 'utf8', timeout: 120_000, env: updateEnv });
-    assert.equal(stop.status, 0, `helm update --stop failed\nstdout: ${stop.stdout}\nstderr: ${stop.stderr}`);
+    assert.equal(stop.status, 0, `helmx update --stop failed\nstdout: ${stop.stdout}\nstderr: ${stop.stderr}`);
     const after = spawnSync(binPath, ['update', '--status', '--json'], { cwd: outsideRoot, encoding: 'utf8', timeout: 50_000, env: updateEnv });
     const afterSnapshot = JSON.parse(after.stdout);
     assert.equal(afterSnapshot.running, null, 'no hub may keep running after update --stop');
@@ -1075,8 +1075,8 @@ test('cli golden sequence: installed helm updates from a real payload tarball, h
     assert.ok(readdirSync(path.join(installRoot, 'releases')).length >= 1, 'release directories are retained for rollback');
   } finally {
     // Best-effort cleanup: stop anything the sequence may have left running before dropping the tree.
-    spawnSync(path.join(outsideRoot, 'global-prefix', 'bin', 'helm'), ['update', '--stop'], {
-      cwd: outsideRoot, timeout: 60_000, env: { ...process.env, HELM_HUB_INSTALL_ROOT: path.join(outsideRoot, 'install-root') },
+    spawnSync(path.join(outsideRoot, 'global-prefix', 'bin', 'helmx'), ['update', '--stop'], {
+      cwd: outsideRoot, timeout: 60_000, env: { ...process.env, HELMX_HUB_INSTALL_ROOT: path.join(outsideRoot, 'install-root') },
     });
     rmSync(outsideRoot, { recursive: true, force: true });
   }

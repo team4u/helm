@@ -19,7 +19,7 @@ import { AddressInfo } from 'node:net'
 import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import process from 'node:process'
-import type { ProviderConfig } from '@helm/protocol'
+import type { ProviderConfig } from '@helmx/protocol'
 import type { ApiKeyAuth, MutableModels, Models, Provider } from '@earendil-works/pi-ai'
 import { builtinProviders } from '@earendil-works/pi-ai/providers/all'
 import { fauxAssistantMessage, fauxProvider } from '@earendil-works/pi-ai/providers/faux'
@@ -32,11 +32,11 @@ import {
   parseModelRef,
   requireModelRef,
   wrapModelsForCompaction,
-  type HelmModelSourceMeta,
+  type HelmxModelSourceMeta,
   type ModelCatalogEntry,
 } from '../src/runtime/models.js'
 import { createFileModelsStore } from '../src/runtime/models-store.js'
-import { HelmError } from '@helm/protocol'
+import { HelmxError } from '@helmx/protocol'
 import { useTempDir } from './helpers.js'
 
 /** Single captured request. */
@@ -208,7 +208,7 @@ async function drainStream(stream: AsyncIterable<unknown>): Promise<{ done: bool
 // ---------------------------------------------------------------------------
 
 describe('compatible gateway (openai protocol)', { timeout: 60_000 }, () => {
-  test('static model window is explicitly marked unknown (helmContextWindowKnown preserved across setProvider/getModel)', { timeout: 60_000 }, () => {
+  test('static model window is explicitly marked unknown (helmxContextWindowKnown preserved across setProvider/getModel)', { timeout: 60_000 }, () => {
     const models = buildModels({
       providers: [openaiCompatConfig('http://127.0.0.1:9/v1')],
       apiKeys: () => ({}),
@@ -217,7 +217,7 @@ describe('compatible gateway (openai protocol)', { timeout: 60_000 }, () => {
     assert.ok(model, 'compat model should be registered in catalog')
     // Request schema default stays present (needed to send requests), yet is not treated as a real known window.
     assert.equal(model.contextWindow, 128_000)
-    assert.equal((model as typeof model & HelmModelSourceMeta).helmContextWindowKnown, false, 'compat static model must carry unknown marker')
+    assert.equal((model as typeof model & HelmxModelSourceMeta).helmxContextWindowKnown, false, 'compat static model must carry unknown marker')
     assert.equal(knownContextWindowOf(model), undefined, 'known-window extraction must omit static default')
     // Built-in provider models are treated as known: windows come from curated data.
     const builtin = models.getModels().find((entry) => entry.contextWindow > 0)
@@ -239,10 +239,10 @@ describe('compatible gateway (openai protocol)', { timeout: 60_000 }, () => {
       maxTokens: 4_096,
     }
     // Format matches Magpie catalog output (toPiModel): known window has no marker; unknown carries
-    // helmContextWindowKnown: false + defensive 128k default.
+    // helmxContextWindowKnown: false + defensive 128k default.
     const list = [
       { ...base, id: 'known', contextWindow: 400_000 },
-      { ...base, id: 'static-default', contextWindow: 128_000, helmContextWindowKnown: false },
+      { ...base, id: 'static-default', contextWindow: 128_000, helmxContextWindowKnown: false },
       { ...base, id: 'infinite', contextWindow: Number.POSITIVE_INFINITY },
       { ...base, id: 'zero', contextWindow: 0 },
     ]
@@ -429,7 +429,7 @@ describe('PI full provider suite', { timeout: 60_000 }, () => {
 
 describe('file-backed dynamic catalog cache (models-store.json)', { timeout: 60_000 }, () => {
   test('ENOENT returns undefined; write/update/delete persist and concurrent updates never lose writes', { timeout: 60_000 }, async (t) => {
-    const dataDir = useTempDir(t, 'helm-models-store-')
+    const dataDir = useTempDir(t, 'helmx-models-store-')
     const store = createFileModelsStore(dataDir)
     assert.equal(await store.read('p1'), undefined)
 
@@ -465,23 +465,23 @@ describe('file-backed dynamic catalog cache (models-store.json)', { timeout: 60_
   })
 
   test('corrupt file explicitly throws models_store_corrupted rather than silently acting empty', { timeout: 60_000 }, async (t) => {
-    const dataDir = useTempDir(t, 'helm-models-store-corrupt-')
+    const dataDir = useTempDir(t, 'helmx-models-store-corrupt-')
     const path = join(dataDir, 'models-store.json')
     await writeFile(path, '{invalid-json')
     const store = createFileModelsStore(dataDir)
     await assert.rejects(() => store.read('p1'), (err: unknown) => {
-      assert.ok(err instanceof HelmError)
+      assert.ok(err instanceof HelmxError)
       assert.equal(err.code, 'models_store_corrupted')
       return true
     })
     await writeFile(path, '["array"]')
     await assert.rejects(() => store.read('p1'), (err: unknown) => {
-      assert.ok(err instanceof HelmError)
+      assert.ok(err instanceof HelmxError)
       assert.equal(err.code, 'models_store_corrupted')
       return true
     })
     await assert.rejects(() => store.update('p1', () => ({ models: [] })), (err: unknown) => {
-      assert.ok(err instanceof HelmError)
+      assert.ok(err instanceof HelmxError)
       assert.equal(err.code, 'models_store_corrupted')
       return true
     })
@@ -599,15 +599,15 @@ describe('model references', { timeout: 60_000 }, () => {
   })
 
   test('invalid references and missing config error explicitly', { timeout: 60_000 }, () => {
-    assert.throws(() => parseModelRef('noslash'), HelmError)
-    assert.throws(() => parseModelRef('/leading'), HelmError)
-    assert.throws(() => parseModelRef('trailing/'), HelmError)
+    assert.throws(() => parseModelRef('noslash'), HelmxError)
+    assert.throws(() => parseModelRef('/leading'), HelmxError)
+    assert.throws(() => parseModelRef('trailing/'), HelmxError)
     assert.throws(() => requireModelRef(undefined), (error: unknown) => {
-      assert.ok(error instanceof HelmError)
-      assert.equal((error as HelmError).code, 'model_not_configured')
+      assert.ok(error instanceof HelmxError)
+      assert.equal((error as HelmxError).code, 'model_not_configured')
       return true
     })
-    assert.throws(() => requireModelRef('  '), HelmError)
+    assert.throws(() => requireModelRef('  '), HelmxError)
   })
 })
 

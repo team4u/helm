@@ -4,14 +4,14 @@
  */
 import { join } from 'node:path';
 import {
-  HelmError,
+  HelmxError,
   type HookName,
   type LocalizedText,
   type PluginConfigFieldSchema,
   type PluginDefinition,
   type PluginDiagnosticError,
   type PluginSummary,
-} from '@helm/protocol';
+} from '@helmx/protocol';
 import type { CapabilityRegistry } from './capability-registry.js';
 import type { PluginDocRegistry } from './doc-registry.js';
 import type { HookPipeline } from './hooks.js';
@@ -51,7 +51,7 @@ export function requirePlugin(
   pluginId: string,
 ): PluginState {
   const state = plugins.get(pluginId);
-  if (!state) throw new HelmError('unknown_plugin', `Unregistered plugin: ${pluginId}`, 404, { pluginId });
+  if (!state) throw new HelmxError('unknown_plugin', `Unregistered plugin: ${pluginId}`, 404, { pluginId });
   return state;
 }
 
@@ -184,7 +184,7 @@ export function registerFailedPlaceholder(
 ): void {
   const existing = ctx.plugins.get(spec.id);
   if (existing !== undefined && !existing.loadFailed) {
-    throw new HelmError(
+    throw new HelmxError(
       'plugin_already_registered',
       `Plugin ${spec.id} is already registered (conflict with failed placeholder); refusing to overwrite`,
       409,

@@ -13,7 +13,7 @@
  * Outbound JSON is redacted when `kernel.stash` is present; plugin action results are returned
  * verbatim (`null` stays `null`, while `undefined` violates the output contract and returns 500).
  */
-import { HelmError } from '@helm/protocol'
+import { HelmxError } from '@helmx/protocol'
 import type { KernelRuntimeLike } from './contracts.js'
 import { errorResponse, type JsonRedactor } from './http-utils.js'
 import { decodeSegment } from './route-match.js'
@@ -128,7 +128,7 @@ function mapServiceError(redactor: JsonRedactor | undefined, error: unknown): Re
   if (error instanceof FileNotFoundError) {
     return errorResponse(redactor, 404, 'not_found', error.message)
   }
-  if (error instanceof HelmError && error.code === 'auth_not_setup') {
+  if (error instanceof HelmxError && error.code === 'auth_not_setup') {
     return errorResponse(redactor, 409, 'not_setup', error.message)
   }
   return undefined

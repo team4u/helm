@@ -10,7 +10,7 @@ test('canConfigureSessionEnv: configurable only for empty conversations or after
   // Not allowed while details are still loading (no flapping config UI in the gap).
   assert.equal(canConfigureSessionEnv(undefined, 'idle'), false)
   // Any substantive conversational entry locks it (real SDK kinds use hyphens; legacy underscore spellings stay accepted).
-  assert.equal(canConfigureSessionEnv([e('helm.input')], 'idle'), false)
+  assert.equal(canConfigureSessionEnv([e('helmx.input')], 'idle'), false)
   assert.equal(canConfigureSessionEnv([e('pi.user')], 'idle'), false)
   assert.equal(canConfigureSessionEnv([e('pi.assistant')], 'idle'), false)
   assert.equal(canConfigureSessionEnv([e('pi.tool-call')], 'idle'), false)
@@ -23,12 +23,12 @@ test('canConfigureSessionEnv: configurable only for empty conversations or after
   assert.equal(canConfigureSessionEnv([], 'blocked'), false)
   // History ending with pi.reset (no handoff) and no new messages after -> configurable again.
   assert.equal(
-    canConfigureSessionEnv([e('helm.input'), e('pi.assistant'), e('pi.reset')], 'idle'),
+    canConfigureSessionEnv([e('helmx.input'), e('pi.assistant'), e('pi.reset')], 'idle'),
     true,
   )
-  // A new helm.input after pi.reset -> locked.
+  // A new helmx.input after pi.reset -> locked.
   assert.equal(
-    canConfigureSessionEnv([e('helm.input'), e('pi.reset'), e('helm.input')], 'idle'),
+    canConfigureSessionEnv([e('helmx.input'), e('pi.reset'), e('helmx.input')], 'idle'),
     false,
   )
   // Reset with handoff: a non-empty data.handoff string keeps it locked (the new context inherits the old environment narrative).
@@ -62,8 +62,8 @@ test('canConfigureSessionEnv: configurable only for empty conversations or after
     canConfigureSessionEnv([{ kind: 'pi.reset', model: [{ role: 'assistant', content: 'x' }] }], 'idle'),
     true,
   )
-  // Non-conversational entries (e.g. helm.notice) do not affect the empty-state verdict.
-  assert.equal(canConfigureSessionEnv([e('helm.notice')], 'idle'), true)
+  // Non-conversational entries (e.g. helmx.notice) do not affect the empty-state verdict.
+  assert.equal(canConfigureSessionEnv([e('helmx.notice')], 'idle'), true)
 })
 
 test('starting-environment draft: switching nodes never keeps the old cwd; validation rejects empty/relative paths', { timeout: 60_000 }, () => {
@@ -82,8 +82,8 @@ test('starting-environment draft: switching nodes never keeps the old cwd; valid
   assert.match(envDraftError({ nodeId: 'local', cwd: '  ' }) ?? '', /Enter the working directory/)
   assert.match(envDraftError({ nodeId: 'local', cwd: 'relative/path' }) ?? '', /absolute path/)
   assert.equal(envDraftError({ nodeId: 'local', cwd: '/root/code/helm' }), null)
-  assert.equal(envDraftError({ nodeId: 'win-node', cwd: 'C:\\workspace\\helm' }), null)
-  assert.equal(envDraftError({ nodeId: 'win-node', cwd: 'C:/workspace/helm' }), null)
+  assert.equal(envDraftError({ nodeId: 'win-node', cwd: 'C:\\workspace\\helmx' }), null)
+  assert.equal(envDraftError({ nodeId: 'win-node', cwd: 'C:/workspace/helmx' }), null)
   // Compared against the current coordinate: an absent nodeId counts as local.
   assert.equal(envDraftUnchanged({ nodeId: 'local', cwd: '/a' }, undefined, '/a'), true)
   assert.equal(envDraftUnchanged({ nodeId: 'local', cwd: '/a' }, 'local', '/a'), true)
@@ -100,9 +100,9 @@ test('formatEnvSubtitle: local omits @local, remote carries the @node prefix, to
   // An absent nodeId counts as local.
   assert.equal(formatEnvSubtitle({ profileId: 'assistant', cwd: '/root/code/helm' }).text, 'assistant · code/helm')
   // Remote node: @gpu-box:tail.
-  assert.deepEqual(formatEnvSubtitle({ profileId: 'assistant', nodeId: 'gpu-box', cwd: '/home/user/code/helm' }), {
-    text: 'assistant · @gpu-box:code/helm',
-    tooltip: 'Agent: assistant · Node: gpu-box · Working directory: /home/user/code/helm',
+  assert.deepEqual(formatEnvSubtitle({ profileId: 'assistant', nodeId: 'gpu-box', cwd: '/home/user/code/helmx' }), {
+    text: 'assistant · @gpu-box:code/helmx',
+    tooltip: 'Agent: assistant · Node: gpu-box · Working directory: /home/user/code/helmx',
   })
   // Empty cwd: local shows only profileId; remote shows @node.
   assert.equal(formatEnvSubtitle({ profileId: 'assistant', nodeId: 'local', cwd: '' }).text, 'assistant')
@@ -119,8 +119,8 @@ test('formatEnvSubtitle: local omits @local, remote carries the @node prefix, to
 test('formatEnvSubtitle: Windows backslashes and root paths; compact mode keeps only the remote node identity', { timeout: 60_000 }, () => {
   // Windows backslashes split into segments, still taking the last two.
   assert.equal(
-    formatEnvSubtitle({ profileId: 'p', nodeId: 'win-node', cwd: 'C:\\Users\\dev\\work\\helm' }).text,
-    'p · @win-node:work/helm',
+    formatEnvSubtitle({ profileId: 'p', nodeId: 'win-node', cwd: 'C:\\Users\\dev\\work\\helmx' }).text,
+    'p · @win-node:work/helmx',
   )
   // Mixed separators.
   assert.equal(formatEnvSubtitle({ profileId: 'p', cwd: 'C:\\a/b/c' }).text, 'p · b/c')

@@ -2,7 +2,7 @@
  * runtime-types.ts -- the type contracts of the workflow runtime (pure types, zero runtime code).
  */
 
-import type { AgentExecutionInfo, AgentGateResult, AgentSpawnRequest } from '@helm/protocol'
+import type { AgentExecutionInfo, AgentGateResult, AgentSpawnRequest } from '@helmx/protocol'
 import type { CompiledSchema } from './json-schema.js'
 import type { WorkflowMeta } from './meta.js'
 import type { JournalWriteInput, WorkflowJournalEntry } from './journal.js'
@@ -25,7 +25,7 @@ export interface WorkflowSpawnRequest {
   gateTimeoutMs?: number
   /** The execution handle from the ledger, carried across restart recovery. */
   resumeRef?: string
-  /** 跨重启幂等提交键（如 `"helm:spawn:" + runId + ":" + scopePath + ":" + scopeCallIndex + ":" + attempt`）。 */
+  /** 跨重启幂等提交键（如 `"helmx:spawn:" + runId + ":" + scopePath + ":" + scopeCallIndex + ":" + attempt`）。 */
   requestId?: string
   /** 跨重启原位重挂目标（与 resume / fork 互斥）。 */
   reattach?: AgentSpawnRequest['reattach']
@@ -139,7 +139,7 @@ export interface WorkflowHost {
     context: { index: number; signal?: AbortSignal },
   ): Promise<{ pluginId: string; actionId: string; idempotent?: boolean }> | { pluginId: string; actionId: string; idempotent?: boolean }
   /**
-   * Invoke a plugin action (the helm action primitive). pluginId/actionId are resolved precisely by the
+   * Invoke a plugin action (the helmx action primitive). pluginId/actionId are resolved precisely by the
    * host per manifest; input/output are both safe JSON. context.signal follows run aborts.
    */
   invokeAction(

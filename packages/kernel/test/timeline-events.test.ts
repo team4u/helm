@@ -19,13 +19,13 @@ import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import { Harness } from '@earendil-works/pi-durable'
 import { createRegistry } from '@earendil-works/pi-durable'
-import type { ConversationEntry, ConversationLive, HelmEventFrame, HelmSnapshot, HelmTransientLiveFrame } from '@helm/protocol'
-import { HelmError } from '@helm/protocol'
+import type { ConversationEntry, ConversationLive, HelmxEventFrame, HelmxSnapshot, HelmxTransientLiveFrame } from '@helmx/protocol'
+import { HelmxError } from '@helmx/protocol'
 import { ConversationTracker, type TrackerEvents } from '../src/runtime/conversations.js'
 import { deriveConversationLive, toConversationEntry } from '../src/runtime/entries.js'
 import { EventHub } from '../src/runtime/events.js'
-import { openHelmDatabase } from '../src/runtime/sqlite.js'
-import { HelmStore, summaryOf, type ConvMeta } from '../src/runtime/store.js'
+import { openHelmxDatabase } from '../src/runtime/sqlite.js'
+import { HelmxStore, summaryOf, type ConvMeta } from '../src/runtime/store.js'
 import { cleanupDir, makeFauxModels, makeTempDir, waitFor } from './helpers.js'
 
 // ---------------------------------------------------------------------------
@@ -90,36 +90,36 @@ describe('toConversationEntry', { timeout: 60_000 }, () => {
   })
 
   it('preserves data verbatim and keeps string id unchanged', () => {
-    const entry = toConversationEntry({ id: '7', kind: 'helm.input', data: { origin: 'human' } })
+    const entry = toConversationEntry({ id: '7', kind: 'helmx.input', data: { origin: 'human' } })
     assert.equal(entry.id, '7')
     assert.deepEqual(entry.data, { origin: 'human' })
     assert.equal(entry.model, undefined)
   })
 
-  it('throws HelmError explicitly for non-JSON values (Date/Map/cyclic/undefined field) without silent conversion', () => {
+  it('throws HelmxError explicitly for non-JSON values (Date/Map/cyclic/undefined field) without silent conversion', () => {
     assert.throws(
       () => toConversationEntry({ id: 1, kind: 'x', data: { at: new Date(0) } }),
-      (e: unknown) => e instanceof HelmError && e.code === 'invalid_json_value',
+      (e: unknown) => e instanceof HelmxError && e.code === 'invalid_json_value',
     )
     assert.throws(
       () => toConversationEntry({ id: 1, kind: 'x', data: new Map() }),
-      (e: unknown) => e instanceof HelmError && e.code === 'invalid_json_value',
+      (e: unknown) => e instanceof HelmxError && e.code === 'invalid_json_value',
     )
     const cyclic: Record<string, unknown> = {}
     cyclic['self'] = cyclic
     assert.throws(
       () => toConversationEntry({ id: 1, kind: 'x', data: cyclic }),
-      (e: unknown) => e instanceof HelmError && e.code === 'invalid_json_value',
+      (e: unknown) => e instanceof HelmxError && e.code === 'invalid_json_value',
     )
     assert.throws(
       () => toConversationEntry({ id: 1, kind: 'x', model: [{ role: 'assistant', extra: undefined }] }),
-      (e: unknown) => e instanceof HelmError && e.code === 'invalid_json_value',
+      (e: unknown) => e instanceof HelmxError && e.code === 'invalid_json_value',
     )
   })
 
   it('throws explicitly on invalid id/kind without fabricating defaults', () => {
-    assert.throws(() => toConversationEntry({ id: null, kind: 'x' } as never), HelmError)
-    assert.throws(() => toConversationEntry({ id: 1, kind: 3 } as never), HelmError)
+    assert.throws(() => toConversationEntry({ id: null, kind: 'x' } as never), HelmxError)
+    assert.throws(() => toConversationEntry({ id: 1, kind: 3 } as never), HelmxError)
   })
 })
 
@@ -192,8 +192,8 @@ describe('deriveConversationLive', { timeout: 60_000 }, () => {
 // ---------------------------------------------------------------------------
 
 describe('EventHub core event types', { timeout: 60_000 }, () => {
-  function makeHub(snapshot?: Partial<HelmSnapshot>): { hub: EventHub; frames: HelmEventFrame[] } {
-    const frames: HelmEventFrame[] = []
+  function makeHub(snapshot?: Partial<HelmxSnapshot>): { hub: EventHub; frames: HelmxEventFrame[] } {
+    const frames: HelmxEventFrame[] = []
     const hub = new EventHub({
       initialSeq: 0,
       snapshot: () =>
@@ -205,7 +205,7 @@ describe('EventHub core event types', { timeout: 60_000 }, () => {
           ui: [],
           pluginDocs: [],
           ...snapshot,
-        }) as HelmSnapshot,
+        }) as HelmxSnapshot,
     })
     hub.subscribe((f) => frames.push(f))
     return { hub, frames }
@@ -250,13 +250,13 @@ describe('EventHub core event types', { timeout: 60_000 }, () => {
     try {
       assert.throws(
         () => hub.publish('conversation.live', { live }),
-        (err: unknown) => err instanceof HelmError && err.code === 'invalid_event',
+        (err: unknown) => err instanceof HelmxError && err.code === 'invalid_event',
       )
       assert.throws(
         () => hub.publish('conversation.live', { type: 'conversation.live', live }),
-        (err: unknown) => err instanceof HelmError && err.code === 'invalid_event',
+        (err: unknown) => err instanceof HelmxError && err.code === 'invalid_event',
       )
-      const received: HelmTransientLiveFrame[] = []
+      const received: HelmxTransientLiveFrame[] = []
       const unsub = hub.subscribeTransientLive((f) => received.push(f))
       hub.publishTransientLive(live)
       unsub()
@@ -290,27 +290,27 @@ describe('EventHub core event types', { timeout: 60_000 }, () => {
     assert.deepEqual(e2.payload.run, run)
   })
 
-  it('invalid payloads throw HelmError explicitly without advancing seq or falling back silently', () => {
+  it('invalid payloads throw HelmxError explicitly without advancing seq or falling back silently', () => {
     const { hub, frames } = makeHub()
     // conversation.entry: missing conversationId or malformed entry
-    assert.throws(() => hub.publish('conversation.entry', { entry }), HelmError)
+    assert.throws(() => hub.publish('conversation.entry', { entry }), HelmxError)
     assert.throws(
       () => hub.publish('conversation.entry', { conversationId: 1, entry: { id: 1 } }),
-      HelmError,
+      HelmxError,
     )
     assert.throws(
       () => hub.publish('conversation.entry', { conversationId: 'x', entry }),
-      HelmError,
+      HelmxError,
     )
     // conversation.live: EventHub.publish always rejects; publishTransientLive rejects malformed shapes too
-    assert.throws(() => hub.publish('conversation.live', { live: { conversationId: 1 } }), HelmError)
-    assert.throws(() => hub.publish('conversation.live', {}), HelmError)
-    assert.throws(() => hub.publishTransientLive({ conversationId: 1 } as never), HelmError)
-    assert.throws(() => hub.publishTransientLive(null as never), HelmError)
+    assert.throws(() => hub.publish('conversation.live', { live: { conversationId: 1 } }), HelmxError)
+    assert.throws(() => hub.publish('conversation.live', {}), HelmxError)
+    assert.throws(() => hub.publishTransientLive({ conversationId: 1 } as never), HelmxError)
+    assert.throws(() => hub.publishTransientLive(null as never), HelmxError)
     // plugin.doc.updated: missing value / pluginId
     assert.throws(
       () => hub.publish('plugin.doc.updated', { doc: { pluginId: 'p', name: 'n' } }),
-      HelmError,
+      HelmxError,
     )
     // workflow.updated is a custom event (arbitrary JSON payload passes through); only JSON validity (cycles, etc.) is checked.
     assert.equal(hub.seq, 0, 'failed publishes must not advance seq')
@@ -320,11 +320,11 @@ describe('EventHub core event types', { timeout: 60_000 }, () => {
   it('unified pre-publish redaction protects entry/live/doc against leaking plaintext secrets', { timeout: 60_000 }, () => {
     const { hub, frames } = makeHub()
     hub.redactFn = (t) => t.replaceAll('sk-plain', '[REDACTED]')
-    const liveReceived: HelmTransientLiveFrame[] = []
+    const liveReceived: HelmxTransientLiveFrame[] = []
     hub.subscribeTransientLive((f) => liveReceived.push(f))
     hub.publish('conversation.entry', {
       conversationId: 1,
-      entry: { id: '1', kind: 'helm.input', data: { text: 'upload sk-plain secret key' } },
+      entry: { id: '1', kind: 'helmx.input', data: { text: 'upload sk-plain secret key' } },
     })
     hub.publish('plugin.doc.updated', { doc: { pluginId: 'p', name: 'n', value: 'token=sk-plain' } })
     hub.publishTransientLive({ conversationId: 1, text: 'secret sk-plain', tools: [], updatedAt: 10 })
@@ -351,7 +351,7 @@ describe('ConversationTracker real SDK timeline and live events', { timeout: 60_
   let root = ''
 
   before(async () => {
-    root = await makeTempDir('helm-timeline-')
+    root = await makeTempDir('helmx-timeline-')
   })
 
   after(async () => {
@@ -368,8 +368,8 @@ describe('ConversationTracker real SDK timeline and live events', { timeout: 60_
     close: () => Promise<void>
   }> {
     const dir = join(root, `t-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
-    const database = await openHelmDatabase(dir)
-    const store = new HelmStore(database)
+    const database = await openHelmxDatabase(dir)
+    const store = new HelmxStore(database)
     await store.load()
     const { models, faux } = makeFauxModels()
     const registry = createRegistry()
@@ -394,7 +394,7 @@ describe('ConversationTracker real SDK timeline and live events', { timeout: 60_
         await harness.close(BACKGROUND_CONTEXT)
         const err = await store.close()
         await database.close()
-        if (err !== undefined) throw new HelmError('store_flush_failed', String(err), 500)
+        if (err !== undefined) throw new HelmxError('store_flush_failed', String(err), 500)
       },
     }
   }
@@ -406,11 +406,11 @@ describe('ConversationTracker real SDK timeline and live events', { timeout: 60_
       const id = conv.id as number
 
       // Pre-existing history (entry persisted before observe).
-      await conv.submit({ type: 'write', entry: { kind: 'helm.note', data: { n: 1 } } }, BACKGROUND_CONTEXT)
+      await conv.submit({ type: 'write', entry: { kind: 'helmx.note', data: { n: 1 } } }, BACKGROUND_CONTEXT)
       await tracker.observe(id)
       assert.equal(collector.entries.length, 0, 'initial observe must not replay historical entries')
 
-      // Real run: faux text response -> helm.input + pi.assistant persisted.
+      // Real run: faux text response -> helmx.input + pi.assistant persisted.
       // Register through real tracker API (registerInput -> bindSubmission, same path as runtime;
       // tracking identity is durable input.id = requestId).
       faux.setResponses([fauxAssistantMessage('real response')])
@@ -426,7 +426,7 @@ describe('ConversationTracker real SDK timeline and live events', { timeout: 60_
             type: 'input',
             content: 'real prompt',
             entry: {
-              kind: 'helm.input',
+              kind: 'helmx.input',
               data: { id: 'in-1', text: 'real prompt', origin: 'human', createdAt: 1 },
             },
             requestId: 'in-1',
@@ -447,7 +447,7 @@ describe('ConversationTracker real SDK timeline and live events', { timeout: 60_
         assert.ok(numeric[i]! > numeric[i - 1]!, 'entries must arrive in monotonic commit id order')
       }
       const kinds = collector.entries.map((e) => e.entry.kind)
-      assert.ok(kinds.includes('helm.input'), 'helm.input entry event arrives')
+      assert.ok(kinds.includes('helmx.input'), 'helmx.input entry event arrives')
       assert.ok(kinds.some((k) => k.startsWith('pi.')), 'SDK internal entry event arrives')
       // Live terminal flush: at least one frame arrives with matching conversationId.
       assert.ok(collector.lives.length >= 1, 'at least one live frame emitted during/after run')
@@ -494,13 +494,13 @@ describe('ConversationTracker real SDK timeline and live events', { timeout: 60_
       const conv = await harness.createConversation({ ownership: { kind: 'ownerless' }, agent: { model: { provider: 'faux', modelId: 'faux-1' } } }, BACKGROUND_CONTEXT)
       const id = conv.id as number
       await tracker.observe(id)
-      await conv.submit({ type: 'write', entry: { kind: 'helm.note', data: { n: 2 } } }, BACKGROUND_CONTEXT)
+      await conv.submit({ type: 'write', entry: { kind: 'helmx.note', data: { n: 2 } } }, BACKGROUND_CONTEXT)
       await waitFor(() => collector.entries.length === 1, 5_000)
       tracker.stopObserving(id)
       const entriesAfter = collector.entries.length
       const livesAfter = collector.lives.length
       // Writing again after stopObserving must emit nothing.
-      await conv.submit({ type: 'write', entry: { kind: 'helm.note', data: { n: 3 } } }, BACKGROUND_CONTEXT)
+      await conv.submit({ type: 'write', entry: { kind: 'helmx.note', data: { n: 3 } } }, BACKGROUND_CONTEXT)
       await new Promise((r) => setTimeout(r, 150))
       assert.equal(collector.entries.length, entriesAfter, 'no ghost entry events after stopObserving')
       assert.equal(collector.lives.length, livesAfter, 'no ghost live events after stopObserving')
@@ -509,11 +509,11 @@ describe('ConversationTracker real SDK timeline and live events', { timeout: 60_
     }
   })
 
-  it('preserves meta from helm.input entry.data end-to-end into turn_settled payload', { timeout: 60_000 }, async () => {
+  it('preserves meta from helmx.input entry.data end-to-end into turn_settled payload', { timeout: 60_000 }, async () => {
     const settled: Array<{ inputs: Array<{ meta?: Record<string, unknown> }> }> = []
     const dir = join(root, `meta-${Date.now()}`)
-    const database = await openHelmDatabase(dir)
-    const store = new HelmStore(database)
+    const database = await openHelmxDatabase(dir)
+    const store = new HelmxStore(database)
     await store.load()
     const { models, faux } = makeFauxModels()
     faux.setResponses([fauxAssistantMessage('ok')])
@@ -554,7 +554,7 @@ describe('ConversationTracker real SDK timeline and live events', { timeout: 60_
             type: 'input',
             content: 'prompt carrying meta',
             entry: {
-              kind: 'helm.input',
+              kind: 'helmx.input',
               data: {
                 id: 'm-1',
                 text: 'prompt carrying meta',
@@ -584,8 +584,8 @@ describe('ConversationTracker real SDK timeline and live events', { timeout: 60_
   it('submissionIndex: bindSubmission hits on markConsumed and clears index on settle without leaks', { timeout: 60_000 }, async () => {
     const settled: Array<{ inputs: Array<{ id: string; meta?: Record<string, unknown> }> }> = []
     const dir = join(root, `index-${Date.now()}`)
-    const database = await openHelmDatabase(dir)
-    const store = new HelmStore(database)
+    const database = await openHelmxDatabase(dir)
+    const store = new HelmxStore(database)
     await store.load()
     const { models, faux } = makeFauxModels()
     faux.setResponses([fauxAssistantMessage('ok')])
@@ -626,7 +626,7 @@ describe('ConversationTracker real SDK timeline and live events', { timeout: 60_
         {
           type: 'input',
           content: 'index verification prompt',
-          entry: { kind: 'helm.input', data: { id: 'ix-1', text: 'index verification prompt', origin: 'human', createdAt: 3 } },
+          entry: { kind: 'helmx.input', data: { id: 'ix-1', text: 'index verification prompt', origin: 'human', createdAt: 3 } },
           requestId: 'ix-1',
         },
         BACKGROUND_CONTEXT,
@@ -652,8 +652,8 @@ describe('ConversationTracker real SDK timeline and live events', { timeout: 60_
 
   it('ConversationSummary.lastEntryId tracks latest visible entry across observe, turn, system-only write, and restart', { timeout: 60_000 }, async () => {
     const dir = join(root, `last-entry-${Date.now()}`)
-    const database = await openHelmDatabase(dir)
-    const store = new HelmStore(database)
+    const database = await openHelmxDatabase(dir)
+    const store = new HelmxStore(database)
     await store.load()
     const { models, faux } = makeFauxModels()
     faux.setResponses([fauxAssistantMessage('hello back')])
@@ -700,7 +700,7 @@ describe('ConversationTracker real SDK timeline and live events', { timeout: 60_
         {
           type: 'input',
           content: 'hi',
-          entry: { kind: 'helm.input', data: { id: 'le-1', text: 'hi', origin: 'human', createdAt: 10 } },
+          entry: { kind: 'helmx.input', data: { id: 'le-1', text: 'hi', origin: 'human', createdAt: 10 } },
           requestId: 'le-1',
         },
         BACKGROUND_CONTEXT,
@@ -745,9 +745,9 @@ describe('ConversationTracker real SDK timeline and live events', { timeout: 60_
       await database.close()
     }
 
-    // Reopen database + HelmStore + ConversationTracker: lastEntryId is restored accurately.
-    const db2 = await openHelmDatabase(dir)
-    const store2 = new HelmStore(db2)
+    // Reopen database + HelmxStore + ConversationTracker: lastEntryId is restored accurately.
+    const db2 = await openHelmxDatabase(dir)
+    const store2 = new HelmxStore(db2)
     await store2.load()
     const { models: models2 } = makeFauxModels()
     const registry2 = createRegistry()

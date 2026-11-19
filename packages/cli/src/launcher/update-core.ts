@@ -1,6 +1,6 @@
 /**
  * Real adapter binding the Hub launcher's narrow update port to the shared update engine
- * (`@helm/env-io` update subtree). The port (`UpdateCore`) exists so tests can fake the registry/npm seams without a
+ * (`@helmx/env-io` update subtree). The port (`UpdateCore`) exists so tests can fake the registry/npm seams without a
  * network; production always uses `defaultUpdateCore()`, which delegates every generic
  * mechanism — registry manifest fetch with SHA512 SRI verification, the shell-free npm runner,
  * immutable staging with `.complete` markers and cache revalidation — to the engine. Nothing
@@ -13,7 +13,7 @@ import {
   runNpm,
   stageRelease as engineStageRelease,
   type StageExtractor,
-} from '@helm/env-io';
+} from '@helmx/env-io';
 
 export interface UpdateCoreFetchOptions {
   registryUrl?: string;

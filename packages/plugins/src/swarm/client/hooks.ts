@@ -3,7 +3,7 @@
  * dependencies; pure functions live in *-model.ts, display copy in copy.ts).
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { usePluginContext, usePluginLocale, useSharedNowMs } from '@helm/plugin-client'
+import { usePluginContext, usePluginLocale, useSharedNowMs } from '@helmx/plugin-client'
 import { parseBoardReadPosts, parseBoardView, type BoardPost, type BoardViewDoc } from './board-model.ts'
 import { panelStatusInvalid } from './copy.ts'
 

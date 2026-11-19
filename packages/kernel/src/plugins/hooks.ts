@@ -9,7 +9,7 @@
  * - Invalid return shapes throw `invalid_hook_result`; exceptions wrap as `hook_execution_failed`.
  */
 import {
-  HelmError,
+  HelmxError,
   type AgentSpawnRequest,
   type BeforeTurnHookPayload,
   type ExternalTriggerEnvelope,
@@ -21,7 +21,7 @@ import {
   type ToolCallHookPayload,
   type ToolResultHookPayload,
   type TurnSettledPayload,
-} from '@helm/protocol';
+} from '@helmx/protocol';
 
 /**
  * Allowed return actions per hook point:
@@ -222,7 +222,7 @@ const PAYLOAD_CHECKS: Record<HookName, PayloadCheck> = {
 export function assertHookPayload(name: HookName, value: unknown): void {
   const err = PAYLOAD_CHECKS[name](value);
   if (err) {
-    throw new HelmError('invalid_hook_result', `Hook ${name} payload validation failed: ${err}`, 500, {
+    throw new HelmxError('invalid_hook_result', `Hook ${name} payload validation failed: ${err}`, 500, {
       hook: name,
       violation: err,
     });
@@ -232,7 +232,7 @@ export function assertHookPayload(name: HookName, value: unknown): void {
 /** Isolated error captured during `turn_settled` pipeline execution (surfaced as notification by PluginHost). */
 export interface IsolatedHookError {
   pluginId: string;
-  error: HelmError;
+  error: HelmxError;
 }
 
 export class HookPipeline<K extends HookName> {
@@ -289,9 +289,9 @@ export class HookPipeline<K extends HookName> {
       isolatedErrors.push({
         pluginId: hook.pluginId,
         error:
-          err instanceof HelmError
+          err instanceof HelmxError
             ? err
-            : new HelmError(
+            : new HelmxError(
                 'hook_execution_failed',
                 `Plugin ${hook.pluginId} ${this.name} hook threw an error: ${err instanceof Error ? err.message : String(err)}`,
                 500,
@@ -307,8 +307,8 @@ export class HookPipeline<K extends HookName> {
         result = await (hook.handler as (payload: HookPayloadMap[K]) => unknown)(current) as HookResult<HookPayloadMap[K]> | void;
       } catch (err) {
         if (!isolate) {
-          if (err instanceof HelmError) throw err;
-          throw new HelmError(
+          if (err instanceof HelmxError) throw err;
+          throw new HelmxError(
             'hook_execution_failed',
             `Plugin ${hook.pluginId} ${this.name} hook threw an error: ${err instanceof Error ? err.message : String(err)}`,
             500,
@@ -320,7 +320,7 @@ export class HookPipeline<K extends HookName> {
       }
       if (result === undefined || result === null) continue;
       if (!isObj(result) || typeof result.action !== 'string') {
-        const err = new HelmError(
+        const err = new HelmxError(
           'invalid_hook_result',
           `Plugin ${hook.pluginId} ${this.name} hook returned an invalid result (missing action field)`,
           500,
@@ -331,7 +331,7 @@ export class HookPipeline<K extends HookName> {
         continue;
       }
       if (!allowed.has(result.action)) {
-        const err = new HelmError(
+        const err = new HelmxError(
           'invalid_hook_result',
           `Plugin ${hook.pluginId} ${this.name} hook returned unsupported action "${result.action}" (allowed: ${[...allowed].join('|')})`,
           500,
@@ -344,7 +344,7 @@ export class HookPipeline<K extends HookName> {
       if (result.action === 'continue') continue;
       if (result.action === 'transform') {
         if (result.value === undefined) {
-          const err = new HelmError(
+          const err = new HelmxError(
             'invalid_hook_result',
             `Plugin ${hook.pluginId} ${this.name} hook returned transform without value`,
             500,
@@ -366,7 +366,7 @@ export class HookPipeline<K extends HookName> {
       }
       if (result.action === 'block') {
         if (typeof result.reason !== 'string' || result.reason.length === 0) {
-          const err = new HelmError(
+          const err = new HelmxError(
             'invalid_hook_result',
             `Plugin ${hook.pluginId} ${this.name} hook returned block without a non-empty reason`,
             500,
@@ -394,7 +394,7 @@ export class HookPipeline<K extends HookName> {
     if (result === undefined || result === null) return undefined;
     const allowed = HOOK_ALLOWED_ACTIONS[this.name];
     if (!isObj(result) || typeof result.action !== 'string') {
-      throw new HelmError(
+      throw new HelmxError(
         'invalid_hook_result',
         `Plugin ${hook.pluginId} ${this.name} hook returned an invalid result (missing action field)`,
         500,
@@ -402,7 +402,7 @@ export class HookPipeline<K extends HookName> {
       );
     }
     if (!allowed.has(result.action)) {
-      throw new HelmError(
+      throw new HelmxError(
         'invalid_hook_result',
         `Plugin ${hook.pluginId} ${this.name} hook returned unsupported action "${result.action}" (allowed: ${[...allowed].join('|')})`,
         500,
@@ -412,7 +412,7 @@ export class HookPipeline<K extends HookName> {
     if (result.action === 'continue') return undefined;
     if (result.action === 'transform') {
       if (result.value === undefined) {
-        throw new HelmError(
+        throw new HelmxError(
           'invalid_hook_result',
           `Plugin ${hook.pluginId} ${this.name} hook returned transform without value`,
           500,
@@ -424,7 +424,7 @@ export class HookPipeline<K extends HookName> {
     }
     if (result.action === 'block') {
       if (typeof result.reason !== 'string' || result.reason.length === 0) {
-        throw new HelmError(
+        throw new HelmxError(
           'invalid_hook_result',
           `Plugin ${hook.pluginId} ${this.name} hook returned block without a non-empty reason`,
           500,
@@ -448,7 +448,7 @@ export class HookPipeline<K extends HookName> {
     isParticipant?: (hook: RegisteredHook<K>) => boolean,
   ): Promise<unknown> {
     if (this.name !== 'agent_spawn') {
-      throw new HelmError('invalid_hook_invocation', `runAround only applies to agent_spawn (received ${this.name})`, 500, {
+      throw new HelmxError('invalid_hook_invocation', `runAround only applies to agent_spawn (received ${this.name})`, 500, {
         hook: this.name,
       });
     }
@@ -463,7 +463,7 @@ export class HookPipeline<K extends HookName> {
         /** Controlled continuation: starts downstream chain once from index `i + 1` through `defaultRun`. */
         const next = (request: HookPayloadMap[K]): Promise<unknown> => {
           if (called) {
-            throw new HelmError(
+            throw new HelmxError(
               'invalid_hook_result',
               `Plugin ${hook.pluginId} agent_spawn hook cannot duplicate invoke next (continuation may run at most once)`,
               500,
@@ -485,8 +485,8 @@ export class HookPipeline<K extends HookName> {
         } catch (err) {
           // Join background nextPromise before rethrowing handler error so downstream completes cleanly once.
           if (nextPromise !== undefined) await nextPromise.then(() => undefined, () => undefined);
-          if (err instanceof HelmError) throw err;
-          throw new HelmError(
+          if (err instanceof HelmxError) throw err;
+          throw new HelmxError(
             'hook_execution_failed',
             `Plugin ${hook.pluginId} ${this.name} hook threw an error: ${err instanceof Error ? err.message : String(err)}`,
             500,
@@ -497,7 +497,7 @@ export class HookPipeline<K extends HookName> {
           // Once continuation runs, returning transform/handled conflicts with next()'s ownership; reject after joining.
           if (result !== undefined && result !== null && isObj(result) && result.action !== 'continue') {
             await nextPromise.then(() => undefined, () => undefined);
-            throw new HelmError(
+            throw new HelmxError(
               'invalid_hook_result',
               `Plugin ${hook.pluginId} agent_spawn hook already invoked next and must not again return "${String((result as { action?: unknown }).action)}"`,
               500,
@@ -513,7 +513,7 @@ export class HookPipeline<K extends HookName> {
           continue;
         }
         if (normalized.action === 'block') {
-          throw new HelmError(
+          throw new HelmxError(
             'hook_blocked',
             `Plugin ${hook.pluginId} agent_spawn hook blocked spawn: ${normalized.reason}`,
             403,

@@ -1,11 +1,11 @@
 /**
- * Web shell 展示文案双语（en/zh-CN）行为测试——真实 HelmStoreProvider：
- * - 资产/节点加载失败 toast 与认证错误随当前 locale（helm:locale 持久化偏好，
+ * Web shell 展示文案双语（en/zh-CN）行为测试——真实 HelmxStoreProvider：
+ * - 资产/节点加载失败 toast 与认证错误随当前 locale（helmx:locale 持久化偏好，
  *   协议 createLocaleTranslator 语义），错误协议文本（HTTP error message）原样不译；
  * - 语言切换只更新 locale ref + stable translator：切换后不重新请求静态资产、
  *   不重连 SSE；切换后新产生的失败 toast 用切换后的语言（无陈旧闭包）；
  * - 后台通知偏好开关的权限拒绝 toast 随 locale；
- * - setLocale 持久化 helm:locale 并同步 <html lang>。
+ * - setLocale 持久化 helmx:locale 并同步 <html lang>。
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
@@ -13,9 +13,9 @@ import * as React from 'react'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
-import { HelmStoreProvider } from '../src/lib/HelmStoreProvider.js'
-import { useHelmStore } from '../src/lib/store-context.js'
-import type { HelmStoreValue, ToastNotice } from '../src/lib/types.js'
+import { HelmxStoreProvider } from '../src/lib/HelmxStoreProvider.js'
+import { useHelmxStore } from '../src/lib/store-context.js'
+import type { HelmxStoreValue, ToastNotice } from '../src/lib/types.js'
 import { hangingEventStream } from './helpers/sse-stream.js'
 
 GlobalRegistrator.register()
@@ -75,16 +75,16 @@ function installFetch(plan: FetchPlan): {
 }
 
 interface Mount {
-  store: () => HelmStoreValue
+  store: () => HelmxStoreValue
   waitFor: (predicate: () => boolean, ms?: number) => Promise<void>
   settle: () => Promise<void>
   unmount: () => void
 }
 
 function mountProvider(): Mount {
-  let current: HelmStoreValue | undefined
+  let current: HelmxStoreValue | undefined
   function Probe(): React.ReactNode {
-    current = useHelmStore()
+    current = useHelmxStore()
     return e('div', { 'data-probe': 'locale' })
   }
   const host = document.createElement('div')
@@ -92,7 +92,7 @@ function mountProvider(): Mount {
   let root: Root | undefined
   act(() => {
     root = createRoot(host)
-    root.render(e(HelmStoreProvider, null, e(Probe)))
+    root.render(e(HelmxStoreProvider, null, e(Probe)))
   })
   return {
     store: () => current!,
@@ -113,14 +113,14 @@ function mountProvider(): Mount {
   }
 }
 
-function noticeTitles(store: HelmStoreValue): string[] {
+function noticeTitles(store: HelmxStoreValue): string[] {
   return store.notices.map((notice: ToastNotice) => notice.title)
 }
 
 function withLocaleStorage(locale: 'en' | 'zh-CN' | null, fn: () => Promise<void>): Promise<void> {
-  if (locale === null) localStorage.removeItem('helm:locale')
-  else localStorage.setItem('helm:locale', locale)
-  return fn().finally(() => localStorage.removeItem('helm:locale'))
+  if (locale === null) localStorage.removeItem('helmx:locale')
+  else localStorage.setItem('helmx:locale', locale)
+  return fn().finally(() => localStorage.removeItem('helmx:locale'))
 }
 
 test('zh-CN 持久化偏好：资产失败 toast 用中文标题，错误协议正文原样不译', { timeout: 60_000 }, async () => {
@@ -172,7 +172,7 @@ test('切换语言：不重新请求静态资产、不重连 SSE；切换后新�
       await act(async () => { mount.store().setLocale('zh-CN') })
       await mount.settle()
       assert.equal(mount.store().locale, 'zh-CN')
-      assert.equal(localStorage.getItem('helm:locale'), 'zh-CN', '偏好持久化到既有 helm:locale 键')
+      assert.equal(localStorage.getItem('helmx:locale'), 'zh-CN', '偏好持久化到既有 helmx:locale 键')
       assert.equal(document.documentElement.lang, 'zh-CN')
       assert.equal(fetchStub.getCount('/api/profiles'), profileCalls, '切换语言不重新拉取角色')
       assert.equal(fetchStub.getCount('/api/skills'), skillsCalls, '切换语言不重新拉取技能')
@@ -221,7 +221,7 @@ test('内核连接失败：authError 前缀随 locale，协议错误详情原样
       const mount = mountProvider()
       await mount.waitFor(() => mount.store().authReady)
       assert.ok(
-        mount.store().authError?.startsWith('无法连接 Helm 内核：'),
+        mount.store().authError?.startsWith('无法连接 Helmx 内核：'),
         `中文前缀 + 原样错误，实际：${mount.store().authError}`,
       )
       assert.ok(mount.store().authError?.endsWith('hub unreachable'))
@@ -260,7 +260,7 @@ test('auto 语言模式：跟随 navigator.languages 与 languagechange，手动
         assert.equal(mount.store().localePreference, 'auto')
         assert.equal(mount.store().locale, 'en')
         assert.equal(document.documentElement.lang, 'en')
-        assert.equal(localStorage.getItem('helm:locale'), null)
+        assert.equal(localStorage.getItem('helmx:locale'), null)
 
         // 浏览器语言变化且偏好为 auto：自动切换为 zh-CN 并同步 <html lang>
         setLangs(['zh-CN', 'en-US'])
@@ -271,14 +271,14 @@ test('auto 语言模式：跟随 navigator.languages 与 languagechange，手动
         assert.equal(mount.store().localePreference, 'auto')
         assert.equal(mount.store().locale, 'zh-CN')
         assert.equal(document.documentElement.lang, 'zh-CN')
-        assert.equal(localStorage.getItem('helm:locale'), null, 'auto 模式不写入 helm:locale')
+        assert.equal(localStorage.getItem('helmx:locale'), null, 'auto 模式不写入 helmx:locale')
 
         // 手动切换到 en：持久化 en，此后浏览器 languagechange 不得覆盖
         await act(async () => { mount.store().setLocalePreference?.('en') })
         await mount.settle()
         assert.equal(mount.store().localePreference, 'en')
         assert.equal(mount.store().locale, 'en')
-        assert.equal(localStorage.getItem('helm:locale'), 'en')
+        assert.equal(localStorage.getItem('helmx:locale'), 'en')
 
         setLangs(['zh-TW'])
         await act(async () => {
@@ -289,11 +289,11 @@ test('auto 语言模式：跟随 navigator.languages 与 languagechange，手动
         assert.equal(mount.store().locale, 'en', 'languagechange 不得覆盖手动选择')
         assert.equal(document.documentElement.lang, 'en')
 
-        // 切回 auto：清除 helm:locale 并立即按当前浏览器语言（zh-TW -> zh-CN）生效
+        // 切回 auto：清除 helmx:locale 并立即按当前浏览器语言（zh-TW -> zh-CN）生效
         await act(async () => { mount.store().setLocalePreference?.('auto') })
         await mount.settle()
         assert.equal(mount.store().localePreference, 'auto')
-        assert.equal(localStorage.getItem('helm:locale'), null)
+        assert.equal(localStorage.getItem('helmx:locale'), null)
         assert.equal(mount.store().locale, 'zh-CN')
         assert.equal(document.documentElement.lang, 'zh-CN')
 

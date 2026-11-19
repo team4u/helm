@@ -9,8 +9,8 @@
  * - Tool pauses and streaming gaps keep the last valid rate of the turn and
  *   the tooltip says the timer is paused while tools run.
  */
-import type { HelmLocale, LocalizedText } from '@helm/plugin-client'
-import { resolveLocalizedText } from '@helm/plugin-client'
+import type { HelmxLocale, LocalizedText } from '@helmx/plugin-client'
+import { resolveLocalizedText } from '@helmx/plugin-client'
 
 /** Token accounting basis shown in tooltips. */
 const SOURCE_LABELS: Record<string, LocalizedText> = {
@@ -20,13 +20,13 @@ const SOURCE_LABELS: Record<string, LocalizedText> = {
 }
 
 /** Resolve the accounting-basis label for a tracker source. */
-export function tokenSpeedSourceLabel(source: string, locale: HelmLocale): string {
+export function tokenSpeedSourceLabel(source: string, locale: HelmxLocale): string {
   const entry = SOURCE_LABELS[source] ?? SOURCE_LABELS.estimate!
   return resolveLocalizedText(entry, locale)
 }
 
 /** TTFT disclosure appended to tooltips (plugin-first observation caveat). */
-export function tokenSpeedTtftSuffix(ms: number, locale: HelmLocale): string {
+export function tokenSpeedTtftSuffix(ms: number, locale: HelmxLocale): string {
   return resolveLocalizedText(
     {
       en: `; TTFT ${ms}ms (first observed by the plugin, not the exact request start)`,
@@ -43,7 +43,7 @@ export function tokenSpeedSettledTitle(parts: {
   decode: string
   source: string
   ttft: string
-}, locale: HelmLocale): string {
+}, locale: HelmxLocale): string {
   return resolveLocalizedText(
     {
       en: `Last turn decode ≈${parts.tps} tok/s (settled total ${parts.tokens} tok, observed net decode time ${parts.decode}, basis ${parts.source}; rate only counts responses whose token counts and durations can be paired; time is a throttled-frame approximation, not exact server decode time; excludes TTFT and tool execution${parts.ttft})`,
@@ -60,7 +60,7 @@ export function tokenSpeedToolsTitle(parts: {
   tokens: number
   decode: string
   ttft: string
-}, locale: HelmLocale): string {
+}, locale: HelmxLocale): string {
   return resolveLocalizedText(
     {
       en: `Timer paused during tools · latest decode ≈${parts.tps} tok/s (basis ${parts.source}; tool execution time is not counted as decode time; ${parts.tokens} tok generated / ${parts.decode} observed decode${parts.ttft})`,
@@ -78,7 +78,7 @@ export function tokenSpeedLiveTitle(parts: {
   tokens: number
   decode: string
   ttft: string
-}, locale: HelmLocale): string {
+}, locale: HelmxLocale): string {
   return resolveLocalizedText(
     {
       en: `Live decode ≈${parts.tps} tok/s (${parts.window}s sliding-window streaming rate, basis ${parts.source}; time is a throttled-frame approximation, not exact server decode time; excludes TTFT and tool execution; ${parts.tokens} tok generated / ${parts.decode} observed decode${parts.ttft})`,

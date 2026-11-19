@@ -6,8 +6,8 @@
  * human-visible string here against the active host locale; diagram source
  * and renderer diagnostics pass through unchanged.
  */
-import type { HelmLocale, LocalizedText } from '@helm/plugin-client'
-import { resolveLocalizedText } from '@helm/plugin-client'
+import type { HelmxLocale, LocalizedText } from '@helmx/plugin-client'
+import { resolveLocalizedText } from '@helmx/plugin-client'
 
 /** Inline code-block header. */
 export const MERMAID_ZOOM_IN: LocalizedText = { en: 'Zoom in', 'zh-CN': '放大预览' }
@@ -34,7 +34,7 @@ export const MERMAID_CLOSE_TITLE: LocalizedText = { en: 'Close (Esc)', 'zh-CN': 
 export const MERMAID_CLOSE: LocalizedText = { en: 'Close', 'zh-CN': '关闭' }
 
 /** In-canvas status while the modal renders on its own (error passthrough). */
-export function mermaidModalStatus(error: string | null, locale: HelmLocale): string {
+export function mermaidModalStatus(error: string | null, locale: HelmxLocale): string {
   if (error !== null) {
     return resolveLocalizedText({ en: `Render failed: ${error}`, 'zh-CN': `渲染失败：${error}` }, locale)
   }

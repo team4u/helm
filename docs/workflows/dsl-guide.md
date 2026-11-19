@@ -1,6 +1,6 @@
 # 原生 JavaScript 编排 DSL 手册
 
-本手册面向编写 Helm 工作流的编排开发者，是 DSL 的权威参考：执行模型、全部原语（`agent` / `agent.withMeta` / `goal` / `parallel` / `pipeline` / `action` / `workflow` / `phase` / `log`）、失败语义、确定性约束与资源配额。工作流由 `builtin:workflow` 插件（默认启用）的编排引擎执行；插件的能力全貌见[工作流编排插件](../plugins/workflow.md)，Worktree 隔离与门禁见[Git Worktree 与代码门禁](worktree-and-gate.md)，恢复语义见[状态流水与故障恢复](journaling-recovery.md)。
+本手册面向编写 Helmx 工作流的编排开发者，是 DSL 的权威参考：执行模型、全部原语（`agent` / `agent.withMeta` / `goal` / `parallel` / `pipeline` / `action` / `workflow` / `phase` / `log`）、失败语义、确定性约束与资源配额。工作流由 `builtin:workflow` 插件（默认启用）的编排引擎执行；插件的能力全貌见[工作流编排插件](../plugins/workflow.md)，Worktree 隔离与门禁见[Git Worktree 与代码门禁](worktree-and-gate.md)，恢复语义见[状态流水与故障恢复](journaling-recovery.md)。
 
 工作流就是一段普通 JavaScript：脚本在独立的 Worker 线程与 `node:vm` 上下文中执行，所有副作用（派生智能体、调用动作）都以 RPC 消息出走宿主统一记账——这层边界换来两个核心性质：脚本是确定性的（同输入同执行轨迹，可安全前缀重放），且任意时刻可终止（`worker.terminate()` 能停掉自旋或卡死的脚本）。
 
@@ -25,7 +25,7 @@ export const meta = {
 变量、函数调用、扩展运算符、模板插值（`${...}`）都是非法的，违规声明会在求值时抛错并拒绝执行。动态输入经全局 `args` 访问，CLI 传入的 JSON 字符串会被自动解包（最多两层，防模型双重序列化）：
 
 ```bash
-pnpm helm workflows run ./review.js --args '{"pr": 1024, "strict": true}'
+pnpm helmx workflows run ./review.js --args '{"pr": 1024, "strict": true}' --conversation-id 1
 ```
 
 最小可运行示例见仓库 [`demo/hello-orchestra.workflow.js`](../../demo/hello-orchestra.workflow.js)（并行两路翻译 + 汇总）；进阶示例见 [`docs/workflows/examples/`](examples/)（`cross-review.js` 多视角交叉审查、`module-dev.js` 单模块开发、`arch-master.js` 多模块总控）。
@@ -81,7 +81,7 @@ if (result === null) throw new Error("结构化输出校验失败")
 
 **跨 Profile 点名**：`agentType` 填真实 Profile ID（如 `reviewer`），不带 `@` 前缀，也不是显示名。用户在会话里写 `@reviewer` 是向当前智能体点名——那只是认知约定，实际执行仍由当前会话经 `subagent` 的 `agentType`（或脚本内 `agent()`）落地，点名本身不构成授权。外部运行时标识采用 `namespace:kind` 形式（含冒号），如 `herdr:agy`。
 
-**同步节点语义**：`agent()` 没有也不接受 `background` 选项——run 内的 DSL 节点始终等待真实结果（可用键固定列表不含 `background`，传未知选项名直接报错）。后台策略发生在工具层：`subagent` / `SubagentWorkflow` 模型工具按当前会话归属缺省（人类直连会话缺省后台、自动化会话缺省同步且显式 `background: true` 被拒绝）；CLI/动作 `pnpm helm workflows run` 则是缺省启动即返回、`--wait` 才同步。三个入口互不混同，不要在脚本里期待后台句柄。
+**同步节点语义**：`agent()` 没有也不接受 `background` 选项——run 内的 DSL 节点始终等待真实结果（可用键固定列表不含 `background`，传未知选项名直接报错）。后台策略发生在工具层：`subagent` / `SubagentWorkflow` 模型工具按当前会话归属缺省（人类直连会话缺省后台、自动化会话缺省同步且显式 `background: true` 被拒绝）；CLI/动作 `pnpm helmx workflows run` 则是缺省启动即返回、`--wait` 才同步。三个入口互不混同，不要在脚本里期待后台句柄。
 
 **attachments 授权边界**：只允许当前编排会话及其父链有权使用的产物；数组不能包含空 ID、纯空白 ID 或非字符串项（空数组合法，且与未提供在重放指纹上是不同调用）。宿主会校验产物存在性与授权。当前授权不覆盖子会话或兄弟会话——不能把上一个子代理产出的产物 ID 直接转交给下一个子代理，需要交接时先由有权读取的会话显式导出内容，再按接收方有权使用的方式登记。不同节点、目录与 Worktree 之间没有自动文件同步。
 
@@ -285,15 +285,15 @@ return { security, style, fix, verdict }
 
 ## 运行与观察
 
-常用命令（仓库内开发形态；`pnpm link:bins` 后可直接用 `helm`）：
+常用命令（仓库内开发形态；`pnpm link:bins` 后可直接用 `helmx`）：
 
 ```bash
-pnpm helm workflows list                                   # 已保存工作流
-pnpm helm workflows run ./review.js --current --wait       # 在当前会话启动并等待终态
-pnpm helm workflows runs --current --json                  # 当前会话的运行记录
-pnpm helm workflows inspect wf_1a2b3c4d5e6f                # 单个运行详情
-pnpm helm workflows abort wf_1a2b3c4d5e6f                  # 中止运行
-pnpm helm workflows run ./pipeline.js --resume-from-run-id wf_1a2b3c4d5e6f   # 断点续跑
+pnpm helmx workflows list                                   # 已保存工作流
+pnpm helmx workflows run ./review.js --current --wait       # 在当前会话启动并等待终态
+pnpm helmx workflows runs --current --json                  # 当前会话的运行记录
+pnpm helmx workflows inspect wf_1a2b3c4d5e6f                # 单个运行详情
+pnpm helmx workflows abort wf_1a2b3c4d5e6f                  # 中止运行
+pnpm helmx workflows run ./pipeline.js --resume-from-run-id wf_1a2b3c4d5e6f   # 断点续跑
 ```
 
 新 run 必须显式指定会话（`--conversation-id` 或 `--current`）；`resumeFromRunId` 沿用原 run 的目标会话。Web 界面的运行面板、执行树与工作流库由 `builtin:workflow` 的 UI 扩展提供。

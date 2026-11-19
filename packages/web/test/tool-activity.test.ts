@@ -7,27 +7,27 @@ import * as React from 'react'
 import { act, useContext } from 'react'
 import { createRoot } from 'react-dom/client'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
-import type { ConversationEntry, ConversationSummary } from '@helm/protocol'
-import { compilePluginClientModule } from '@helm/plugin-build'
+import type { ConversationEntry, ConversationSummary } from '@helmx/protocol'
+import { compilePluginClientModule } from '@helmx/plugin-build'
 import { ToolActivityProvider } from '../src/conversation/ToolActivityProvider.js'
-import { ToolActivityContext } from '@helm/plugin-client'
+import { ToolActivityContext } from '@helmx/plugin-client'
 import { PluginUiView } from '../src/ui/PluginUiView.js'
 import { ConversationTimeline } from '../src/conversation/ConversationTimeline.js'
-import type { HelmExternalStore } from '../src/lib/helm-store.js'
+import type { HelmxExternalStore } from '../src/lib/helmx-store.js'
 import { resetPluginClientCache, seedPluginClientModule } from '../src/lib/plugin-client.js'
 import { makeTestStore } from './helpers/store.js'
 import { HostStoreProviders } from './helpers/host-store.js'
 import { mountSharedPluginNamespaces } from './helpers/builtin-clients.js'
-import * as SDK from '@helm/plugin-client'
+import * as SDK from '@helmx/plugin-client'
 
 GlobalRegistrator.register()
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
 mountSharedPluginNamespaces({ realHooks: true })
 const e = React.createElement
-const dir = await mkdtemp(join(tmpdir(), 'helm-tool-activity-'))
+const dir = await mkdtemp(join(tmpdir(), 'helmx-tool-activity-'))
 after(async () => { await rm(dir, { recursive: true, force: true }) })
 await writeFile(join(dir, 'client.tsx'), `
-  import { useToolActivity, usePluginDoc } from '@helm/plugin-client'
+  import { useToolActivity, usePluginDoc } from '@helmx/plugin-client'
   export const sharedHook = useToolActivity
   export function Reporter(props) {
     useToolActivity(props.callId, props.active)
@@ -50,7 +50,7 @@ function seed() {
   seedPluginClientModule('sample:background', 'client.tsx', compiled)
   seedPluginClientModule('sample:other', 'client.tsx', compiled)
   seedPluginClientModule('sample:background', 'other.tsx', compiled)
-  globalThis.fetch = async () => new Response('', { headers: { 'x-helm-client-hash': 'seeded' } })
+  globalThis.fetch = async () => new Response('', { headers: { 'x-helmx-client-hash': 'seeded' } })
 }
 function view(props: Record<string, unknown>, key: string, exportName = 'Reporter', pluginId = 'sample:background', module = 'client.tsx') {
   return e(PluginUiView, { key, pluginId, spec: { client: { module, export: exportName } }, slotProps: props })
@@ -61,7 +61,7 @@ function mount() {
   const root = createRoot(host)
   return {
     host,
-    render: async (content: React.ReactNode, store: HelmExternalStore = makeTestStore()) => {
+    render: async (content: React.ReactNode, store: HelmxExternalStore = makeTestStore()) => {
       await act(async () => root.render(e(HostStoreProviders, { value: store }, content)))
     },
     close: async () => { await act(async () => root.unmount()); host.remove() },
@@ -153,7 +153,7 @@ const conversation: ConversationSummary = {
 }
 function entries(callId: string, start: number): ConversationEntry[] {
   return [
-    { id: String(start), kind: 'helm.input', data: { text: '启动后台任务', origin: 'human' } },
+    { id: String(start), kind: 'helmx.input', data: { text: '启动后台任务', origin: 'human' } },
     { id: String(start + 1), kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'toolCall', id: callId, name: 'background_job', arguments: {} }] }] },
     { id: String(start + 2), kind: 'pi.tool-result', model: [{ role: 'toolResult', toolCallId: callId, toolName: 'background_job', content: [{ type: 'text', text: '已启动' }] }] },
     { id: String(start + 3), kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: '已提交后台执行' }], stopReason: 'stop' }] },

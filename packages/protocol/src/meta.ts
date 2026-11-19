@@ -10,9 +10,9 @@
  * numbers, class instances and non-plain objects, and enforcing depth/count/length
  * limits (no unbounded arbitrary unknown objects accepted).
  *
- * This file has zero runtime dependencies (only HelmError); the kernel and internal/external plugins use it on equal footing.
+ * This file has zero runtime dependencies (only HelmxError); the kernel and internal/external plugins use it on equal footing.
  */
-import { HelmError } from './error.js'
+import { HelmxError } from './error.js'
 import { isPlainObject } from './utils.js'
 
 /**
@@ -128,8 +128,8 @@ function sanitizeJsonSafeValue(
   throw metaError(agentId, field, `${path} contains a non-JSON-safe value (${type}; functions/Symbols/undefined rejected)`)
 }
 
-function metaError(agentId: string, field: string, reason: string): HelmError {
-  return new HelmError('meta_invalid', `${field} from agent '${agentId}' is invalid: ${reason}`, 400, {
+function metaError(agentId: string, field: string, reason: string): HelmxError {
+  return new HelmxError('meta_invalid', `${field} from agent '${agentId}' is invalid: ${reason}`, 400, {
     agentId,
     field,
     reason,

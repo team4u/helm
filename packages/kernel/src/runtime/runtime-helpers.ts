@@ -7,13 +7,13 @@
 import { join } from 'node:path'
 import type { JsonValue } from '@earendil-works/chord/json'
 import type { ToolExecutionResult } from '@earendil-works/pi-durable'
-import type { ConversationSummary } from '@helm/protocol'
+import type { ConversationSummary } from '@helmx/protocol'
 import type { Models } from '@earendil-works/pi-ai'
-import { HelmError, assertProfileId, escapeXml, safeResultText } from '@helm/protocol'
+import { HelmxError, assertProfileId, escapeXml, safeResultText } from '@helmx/protocol'
 import { redactJsonValue } from '../redact.js'
 import type { ConvMeta } from './store.js'
 import { getCurrentTools } from '@earendil-works/pi-ai/utils/transcript'
-import type { HelmStore } from './store.js'
+import type { HelmxStore } from './store.js'
 import { requireModelRef } from './models.js'
 import { assertSkillId } from '../services/index.js'
 
@@ -40,9 +40,9 @@ export function stripEnvelope(text: string): string {
 // ---------------------------------------------------------------------------
 
 /** `store.getConv` + 404 check (centralized helper replacing 15+ inline checks). */
-export function requireConv(store: HelmStore, id: number): NonNullable<ReturnType<HelmStore['getConv']>> {
+export function requireConv(store: HelmxStore, id: number): NonNullable<ReturnType<HelmxStore['getConv']>> {
   const meta = store.getConv(id)
-  if (!meta) throw new HelmError('not_found', `Conversation not found: ${id}`, 404)
+  if (!meta) throw new HelmxError('not_found', `Conversation not found: ${id}`, 404)
   return meta
 }
 
@@ -97,7 +97,7 @@ export function pluginToolResult(
     const verdict = envelopeProblem(raw as Record<string, unknown>)
     if (verdict.isEnvelope) {
       if (verdict.problem !== undefined) {
-        throw new HelmError(
+        throw new HelmxError(
           'invalid_tool_result',
           `${where} result envelope has invalid field type: ${verdict.problem}`,
           500,
@@ -110,7 +110,7 @@ export function pluginToolResult(
       } else if (Array.isArray(env.output)) {
         output = env.output.map((block) => {
           if (block === null || typeof block !== 'object' || (block as { type?: unknown }).type !== 'text' || typeof (block as { text?: unknown }).text !== 'string') {
-            throw new HelmError(
+            throw new HelmxError(
               'invalid_tool_result',
               `${where} result envelope output array only accepts { type: 'text', text } blocks`,
               500,
@@ -121,7 +121,7 @@ export function pluginToolResult(
       } else if (env.output === undefined) {
         output = []
       } else {
-        throw new HelmError(
+        throw new HelmxError(
           'invalid_tool_result',
           `${where} result envelope output must be a string or an array of { type: 'text', text }`,
           500,
@@ -138,7 +138,7 @@ export function pluginToolResult(
       // `structuredOutput` is forwarded only when the tool declares a schema (SDK contract); values are redacted.
       // Returning `structuredOutput` without a schema fails explicitly instead of silently dropping data.
       if (env.structuredOutput !== undefined && options?.structuredOutputSchema === undefined) {
-        throw new HelmError(
+        throw new HelmxError(
           'invalid_tool_result',
           `${where} returned structuredOutput without declaring structuredOutputSchema (forbidden by SDK contract; declare a schema or return plain text in output)`,
           500,
@@ -276,8 +276,8 @@ export function assertSafeMessageSurgery(
   original: ReadonlyArray<Record<string, unknown>>,
   replacement: unknown,
 ): Array<Record<string, unknown>> {
-  const fail = (detail: string): HelmError =>
-    new HelmError('invalid_hook_result', `before_turn messages rewrite out of bounds: ${detail}`, 500)
+  const fail = (detail: string): HelmxError =>
+    new HelmxError('invalid_hook_result', `before_turn messages rewrite out of bounds: ${detail}`, 500)
   if (!Array.isArray(replacement) || replacement.length === 0) {
     throw fail('must be a non-empty message array')
   }
@@ -374,7 +374,7 @@ export function withToolDeclarations(
   const added: Array<Record<string, unknown>> = []
   for (const name of declared) {
     const tool = available.get(name)
-    if (!tool) throw new HelmError('unknown_tool', `before_turn selected unregistered tool: ${name}`, 500)
+    if (!tool) throw new HelmxError('unknown_tool', `before_turn selected unregistered tool: ${name}`, 500)
     added.push({ ...tool })
   }
   if (messages.length === 0 || messages[0]!['role'] !== 'system') return [...messages]
@@ -441,10 +441,10 @@ export function summaryOfFallback(
 export function normalizeBusyError(error: unknown): unknown {
   const name = (error as { name?: string })?.name
   if (name === 'ConversationBusy') {
-    return new HelmError('conversation_busy', 'Conversation is busy and whenBusy=reject was specified', 409)
+    return new HelmxError('conversation_busy', 'Conversation is busy and whenBusy=reject was specified', 409)
   }
   if (name === 'ConversationIdle') {
-    return new HelmError('conversation_idle', 'Conversation is idle and conflicts with whenIdle=reject', 409)
+    return new HelmxError('conversation_idle', 'Conversation is idle and conflicts with whenIdle=reject', 409)
   }
   return error
 }
@@ -477,7 +477,7 @@ export function assistantTextOfModel(model: unknown[] | undefined): string {
 // Rewind intervals (in-place edit & overwrite contract)
 // ---------------------------------------------------------------------------
 
-/** Overwrite range declared by a `helm.rewind` truncation marker (closed interval `[from, through]`).
+/** Overwrite range declared by a `helmx.rewind` truncation marker (closed interval `[from, through]`).
  *
  * `throughEntryId` is a strict boundary: max old entry ID within the overwritten span, so newer
  * input entries always have strictly larger IDs and are never mistakenly removed across intervals. */
@@ -489,14 +489,14 @@ export interface RewindInterval {
 
 /** Parse a single rewind interval; returns `undefined` if not a rewind marker or missing `fromEntryId`. */
 export function rewindIntervalOf(entry: { id: number | string; kind: string; data?: unknown }): RewindInterval | undefined {
-  if (entry.kind !== 'helm.rewind') return undefined
+  if (entry.kind !== 'helmx.rewind') return undefined
   const data = entry.data as { fromEntryId?: unknown; throughEntryId?: unknown } | undefined
   const from = Number(data?.fromEntryId)
   if (!Number.isSafeInteger(from) || from <= 0) return undefined
   const marker = Number(entry.id)
   const through = Number(data?.throughEntryId)
   if (!Number.isSafeInteger(marker) || !Number.isSafeInteger(through) || through < from || through >= marker) {
-    throw new HelmError('invalid_rewind_entry', `History overwrite marker ${entry.id} has an invalid interval`, 500)
+    throw new HelmxError('invalid_rewind_entry', `History overwrite marker ${entry.id} has an invalid interval`, 500)
   }
   return { from, through, marker }
 }
@@ -513,8 +513,8 @@ export function assertEditableHumanInput(
   entryId: number,
 ): void {
   if (entry.kind === 'pi.user') return
-  if (entry.kind !== 'helm.input') {
-    throw new HelmError(
+  if (entry.kind !== 'helmx.input') {
+    throw new HelmxError(
       'entry_not_editable',
       `Only human input entries can be edited (entry ${entryId} has kind=${entry.kind})`,
       400,
@@ -523,7 +523,7 @@ export function assertEditableHumanInput(
   }
   const origin = (entry.data as { origin?: unknown } | undefined)?.origin
   if (origin !== 'human') {
-    throw new HelmError(
+    throw new HelmxError(
       'entry_not_editable',
       `Entry ${entryId} has origin '${String(origin)}'; only human inputs can be edited in place`,
       409,
@@ -538,8 +538,8 @@ export type { ToolExecutionResult }
 export async function assertModelsStoreHealthyAtBoot(models: Models): Promise<void> {
   const result = await models.refresh({ allowNetwork: false })
   for (const [, err] of result.errors) {
-    if (err instanceof HelmError && err.code === 'models_store_corrupted') {
-      throw new HelmError(
+    if (err instanceof HelmxError && err.code === 'models_store_corrupted') {
+      throw new HelmxError(
         'models_store_corrupted',
         `models-store.json is corrupted (discovered while reading): ${err.message}`,
         500,
@@ -551,7 +551,7 @@ export async function assertModelsStoreHealthyAtBoot(models: Models): Promise<vo
 /** Underlying text-completion helper. */
 export async function completeConversationTextHelper(
   deps: {
-    store: HelmStore
+    store: HelmxStore
     conversations: { resolveEffectiveModel(modelOverride?: string, profileId?: string): Promise<string | undefined> }
     modelsRegistry: { models: Models; isModelDisabled(providerId: string, modelId: string): boolean }
     stash: { redact(text: string): string }
@@ -567,19 +567,19 @@ export async function completeConversationTextHelper(
   input.signal?.throwIfAborted()
   const meta = deps.store.getConv(input.conversationId)
   if (meta === undefined) {
-    throw new HelmError('not_found', `Conversation not found: ${input.conversationId}`, 404, { conversationId: input.conversationId })
+    throw new HelmxError('not_found', `Conversation not found: ${input.conversationId}`, 404, { conversationId: input.conversationId })
   }
   const effective = await deps.conversations.resolveEffectiveModel(meta.modelOverride, meta.profileId)
   if (effective === undefined || effective === '') {
-    throw new HelmError('model_not_configured', `Conversation ${input.conversationId} has no effective model resolved; cannot run text completion`, 409, { conversationId: input.conversationId })
+    throw new HelmxError('model_not_configured', `Conversation ${input.conversationId} has no effective model resolved; cannot run text completion`, 409, { conversationId: input.conversationId })
   }
   const ref = requireModelRef(effective)
   const model = deps.modelsRegistry.models.getModel(ref.provider, ref.modelId)
   if (model === undefined) {
-    throw new HelmError('model_not_found', `Effective model '${effective}' is not in the current model set (may have been removed on hot reload)`, 409, { model: effective })
+    throw new HelmxError('model_not_found', `Effective model '${effective}' is not in the current model set (may have been removed on hot reload)`, 409, { model: effective })
   }
   if (deps.modelsRegistry.isModelDisabled(ref.provider, ref.modelId)) {
-    throw new HelmError('model_disabled', `Model ${ref.provider}/${ref.modelId} is disabled; cannot run text completion`, 409, { model: effective })
+    throw new HelmxError('model_disabled', `Model ${ref.provider}/${ref.modelId} is disabled; cannot run text completion`, 409, { model: effective })
   }
   input.signal?.throwIfAborted()
   const message = await deps.modelsRegistry.models.completeSimple(
@@ -601,7 +601,7 @@ export async function completeConversationTextHelper(
   )
   input.signal?.throwIfAborted()
   if (message.stopReason !== 'stop') {
-    throw new HelmError(
+    throw new HelmxError(
       'model_completion_unavailable',
       `Text completion did not finish cleanly (stopReason=${message.stopReason}${message.errorMessage !== undefined ? `: ${deps.stash.redact(String(message.errorMessage)).slice(0, 200)}` : ''}); refusing to return partial text`,
       502,
@@ -622,7 +622,7 @@ export function skillDirectoryHelper(dataDir: string, id: string): string {
   try {
     assertSkillId(id)
   } catch (err) {
-    throw new HelmError(
+    throw new HelmxError(
       'validation_error',
       `Invalid Skill ID: ${err instanceof Error ? err.message : String(err)}`,
       400,

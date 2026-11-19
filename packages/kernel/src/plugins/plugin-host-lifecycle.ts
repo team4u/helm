@@ -3,7 +3,7 @@
  */
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { HelmError, type HelmPluginContext, type PluginDefinition } from '@helm/protocol';
+import { HelmxError, type HelmxPluginContext, type PluginDefinition } from '@helmx/protocol';
 import {
   assertNotLocked,
   getActiveEnabledPluginIds,
@@ -41,7 +41,7 @@ export interface PluginLifecycleContext extends PluginTransitionContext {
   host: PluginHostBackend;
   providers?: PluginProviderPort;
   servicesStarted: boolean;
-  createPluginContext: (state: PluginState, epoch: number) => HelmPluginContext;
+  createPluginContext: (state: PluginState, epoch: number) => HelmxPluginContext;
   getPluginLifecycle: ClientLifecycleLookup['getPluginLifecycle'];
   ensureTransientSessionDocListener?: (pluginId: string) => void;
   isDisposed: () => boolean;
@@ -104,7 +104,7 @@ export async function runRegisterTransaction(
 ): Promise<void> {
   const pluginId = definition.id;
   if (ctx.plugins.has(pluginId)) {
-    throw new HelmError('plugin_already_registered', `Plugin is already registered: ${pluginId}`, 409, { pluginId });
+    throw new HelmxError('plugin_already_registered', `Plugin is already registered: ${pluginId}`, 409, { pluginId });
   }
   const dependencies = normalizeDependencies(definition);
   assertNoDependencyCycle(ctx.plugins, pluginId, dependencies);
@@ -197,7 +197,7 @@ export async function runEnableTransaction(
   const state = requirePlugin(ctx.plugins, pluginId);
   if (state.enabled) return;
   if (state.loadFailed === true) {
-    throw new HelmError(
+    throw new HelmxError(
       'plugin_load_failed',
       `Plugin ${pluginId} failed to load (${state.lastError?.message ?? 'unknown error'}); fix plugin source and reload or restart Hub`,
       409,
@@ -246,7 +246,7 @@ export async function runDisableTransaction(
       host: ctx.host,
     });
     if (usages.length > 0) {
-      throw new HelmError(
+      throw new HelmxError(
         'plugin_in_use',
         `Plugin ${pluginId} has ${usages.length} active resource usage(s); disabling may break dependent features (pass force to override)`,
         409,

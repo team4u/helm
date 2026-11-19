@@ -16,7 +16,7 @@
 
 import { connect } from 'node:net'
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
-import type { RpcResult } from '@helm/protocol'
+import type { RpcResult } from '@helmx/protocol'
 import type { HerdrNodeChannel, HerdrNodeEnv } from './contracts.js'
 import { isWindowsShapedPath } from './transport.js'
 

@@ -10,12 +10,12 @@
 import type { AskSpec } from './ask.js'
 import type { ConversationEntry, ConversationLive, ConversationSummary } from './conversation.js'
 import type { NodeInfo } from './env-rpc.js'
-import { HelmError } from './error.js'
+import { HelmxError } from './error.js'
 import type { PluginSummary, PublicPluginDoc, PublicPluginSessionDoc } from './plugin-dto.js'
 import type { PluginUiContribution } from './ui.js'
 
 /** SSE global event sequence number (watermark). */
-export type HelmEventSeq = number
+export type HelmxEventSeq = number
 
 /**
  * Server-side event generation identifier (randomly generated per EventHub
@@ -23,13 +23,13 @@ export type HelmEventSeq = number
  * generations (server restart swaps the instance) a full snapshot is mandatory —
  * never resume on a bare seq.
  */
-export type HelmBootId = string
+export type HelmxBootId = string
 
 /** Full snapshot read atomically at connection establishment (first frame `event: snapshot`). */
-export interface HelmSnapshot {
+export interface HelmxSnapshot {
   /** Current event generation: the client records it as one of its reconnect resume credentials. */
-  bootId: HelmBootId
-  seq: HelmEventSeq
+  bootId: HelmxBootId
+  seq: HelmxEventSeq
   conversations: ConversationSummary[]
   /** Currently pending AskDocs (status = pending). */
   pendingAsks: AskSpec[]
@@ -46,10 +46,10 @@ export interface HelmSnapshot {
 
 /**
  * Durable incremental event types (`event:` names); clients should preserve unknown types as-is.
- * Transient `conversation.live` updates use `HelmTransientLiveFrame` directly and do not consume
- * `HelmEventSeq` or enter the replay ring buffer.
+ * Transient `conversation.live` updates use `HelmxTransientLiveFrame` directly and do not consume
+ * `HelmxEventSeq` or enter the replay ring buffer.
  */
-export type HelmEventType =
+export type HelmxEventType =
   | 'conversation.upsert'
   | 'conversation.deleted'
   | 'conversation.entry'
@@ -85,7 +85,7 @@ export interface ConversationEntryEvent {
  * enters the bounded replay ring buffer, preventing high-frequency streaming
  * updates from evicting durable events during short-disconnect resume.
  */
-export interface HelmTransientLiveFrame {
+export interface HelmxTransientLiveFrame {
   live: ConversationLive
 }
 
@@ -120,9 +120,9 @@ export interface PluginSessionDocUpdatedEvent {
   doc: PublicPluginSessionDoc
 }
 
-/** First frame of a session doc subscription; subsequent updates use HelmEventFrame. */
+/** First frame of a session doc subscription; subsequent updates use HelmxEventFrame. */
 export interface PluginSessionDocSnapshot {
-  seq: HelmEventSeq
+  seq: HelmxEventSeq
   doc: PublicPluginSessionDoc
 }
 
@@ -157,12 +157,12 @@ export interface NotificationEvent {
  * redaction on the publishing side); type is any non-empty string that must not
  * collide with core types (the host validates at the boundary).
  */
-export interface CustomHelmEvent {
+export interface CustomHelmxEvent {
   type: string
   payload: unknown
 }
 
-export type HelmEvent =
+export type HelmxEvent =
   | ConversationUpsertEvent
   | ConversationDeletedEvent
   | ConversationEntryEvent
@@ -174,12 +174,12 @@ export type HelmEvent =
   | ModelsChangedEvent
   | NodeChangedEvent
   | NotificationEvent
-  | CustomHelmEvent
+  | CustomHelmxEvent
 
 /** SSE incremental event frame: `data: JSON.stringify({ seq, event })`. */
-export interface HelmEventFrame {
-  seq: HelmEventSeq
-  event: HelmEvent
+export interface HelmxEventFrame {
+  seq: HelmxEventSeq
+  event: HelmxEvent
 }
 
 /**
@@ -189,13 +189,13 @@ export interface HelmEventFrame {
  * verify the bootId matches its own watermark and that it has caught up to headSeq
  * before considering itself live again.
  */
-export interface HelmResumedFrame {
+export interface HelmxResumedFrame {
   /** The server's current event generation (matching the request; the server sends a snapshot instead when across generations). */
-  bootId: HelmBootId
+  bootId: HelmxBootId
   /** The client watermark the server acknowledged for the resume (equal to the request's afterSeq). */
-  seq: HelmEventSeq
+  seq: HelmxEventSeq
   /** Server event head watermark sampled at connection time; the client is live only after replaying past this value. */
-  headSeq: HelmEventSeq
+  headSeq: HelmxEventSeq
   /**
    * Live views of active conversations (working/blocked runs or still-queued input)
    * sampled at resume time, reconciling transient `conversation.live` state that is
@@ -236,7 +236,7 @@ const SESSION_DOC_SUB_MAX_RAW_LENGTH = 274
 
 function assertValidSessionDocSubscription(sub: SessionDocSubscription): void {
   if (sub === null || typeof sub !== 'object' || Array.isArray(sub)) {
-    throw new HelmError('validation_error', 'session doc subscription must be an object', 400)
+    throw new HelmxError('validation_error', 'session doc subscription must be an object', 400)
   }
   const { pluginId, name, conversationId } = sub
   if (
@@ -244,21 +244,21 @@ function assertValidSessionDocSubscription(sub: SessionDocSubscription): void {
     !SESSION_DOC_SUB_PLUGIN_ID_PATTERN.test(pluginId) ||
     pluginId.includes('..')
   ) {
-    throw new HelmError('validation_error', 'session doc subscription pluginId is invalid', 400)
+    throw new HelmxError('validation_error', 'session doc subscription pluginId is invalid', 400)
   }
   if (
     typeof name !== 'string' ||
     !SESSION_DOC_SUB_NAME_PATTERN.test(name) ||
     name.includes('..')
   ) {
-    throw new HelmError('validation_error', 'session doc subscription name is invalid', 400)
+    throw new HelmxError('validation_error', 'session doc subscription name is invalid', 400)
   }
   if (
     typeof conversationId !== 'number' ||
     !Number.isSafeInteger(conversationId) ||
     conversationId <= 0
   ) {
-    throw new HelmError(
+    throw new HelmxError(
       'validation_error',
       'session doc subscription conversationId must be a positive safe integer',
       400,
@@ -268,7 +268,7 @@ function assertValidSessionDocSubscription(sub: SessionDocSubscription): void {
 
 /**
  * Encode a `SessionDocSubscription` into the canonical `?sub=<pluginId>/<name>/<conversationId>`
- * query parameter value shared by `@helm/kernel` and `@helm/web`. Strictly validates
+ * query parameter value shared by `@helmx/kernel` and `@helmx/web`. Strictly validates
  * all three fields and serializes nothing else, preventing parameter injection and token leakage.
  */
 export function encodeSessionDocSubParam(sub: SessionDocSubscription): string {
@@ -284,7 +284,7 @@ export function encodeSessionDocSubParam(sub: SessionDocSubscription): string {
  */
 export function parseSessionDocSubParam(raw: string): SessionDocSubscription {
   if (typeof raw !== 'string' || raw.length === 0 || raw.length > SESSION_DOC_SUB_MAX_RAW_LENGTH) {
-    throw new HelmError(
+    throw new HelmxError(
       'validation_error',
       'sub query parameter must be a non-empty string within length limit',
       400,
@@ -292,7 +292,7 @@ export function parseSessionDocSubParam(raw: string): SessionDocSubscription {
   }
   const parts = raw.split('/')
   if (parts.length !== 3) {
-    throw new HelmError(
+    throw new HelmxError(
       'validation_error',
       'sub query parameter must have format <pluginId>/<name>/<conversationId>',
       400,
@@ -300,7 +300,7 @@ export function parseSessionDocSubParam(raw: string): SessionDocSubscription {
   }
   const [pluginId, name, convRaw] = parts as [string, string, string]
   if (!SESSION_DOC_SUB_CONVERSATION_ID_PATTERN.test(convRaw)) {
-    throw new HelmError(
+    throw new HelmxError(
       'validation_error',
       'session doc subscription conversationId must be a positive safe integer',
       400,

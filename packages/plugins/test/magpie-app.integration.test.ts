@@ -5,9 +5,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import process from 'node:process'
 import { test } from 'node:test'
-import { createHelm } from '../../hub/src/app.js'
+import { createHelmx } from '../../hub/src/app.js'
 import { startHub } from '../../kernel/src/http/index.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { runCli } from '../../cli/src/index.js'
 import { makeFauxProvider } from './helpers/plugin-test-env.js'
 
@@ -85,9 +85,9 @@ async function gatewayFixture() {
 }
 
 test('Magpie 默认启用：启动即注册 provider、actions 与 settings.panel / commandPalette UI，且与 KernelRuntimeOptions.providers 共存', { timeout: 60_000 }, async () => {
-  const dataDir = await mkdtemp(join(tmpdir(), 'helm-magpie-default-'))
+  const dataDir = await mkdtemp(join(tmpdir(), 'helmx-magpie-default-'))
   const faux = makeFauxProvider()
-  const app = await createHelm({
+  const app = await createHelmx({
     buildProvider: createPluginBuildProvider(),
     dataDir,
     cwd: dataDir,
@@ -124,14 +124,14 @@ test('Magpie 默认启用：启动即注册 provider、actions 与 settings.pane
 })
 
 test('Magpie 经真实组合层默认启用→配置切换→刷新/HTTP/CLI→缓存重启→停用→重启用；密钥不出站', { timeout: 60_000 }, async () => {
-  const dataDir = await mkdtemp(join(tmpdir(), 'helm-magpie-app-'))
+  const dataDir = await mkdtemp(join(tmpdir(), 'helmx-magpie-app-'))
   const gateway = await gatewayFixture()
   const gateway2 = await gatewayFixture()
-  let app: Awaited<ReturnType<typeof createHelm>> | undefined
+  let app: Awaited<ReturnType<typeof createHelmx>> | undefined
   let hub: Awaited<ReturnType<typeof startHub>> | undefined
   let releaseCredential: (() => void) | undefined
   try {
-    app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir })
+    app = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir })
     assert.equal(app.kernel.plugins.list().find((plugin) => plugin.id === 'builtin:magpie')?.enabled, true)
     await app.kernel.plugins.setConfig('builtin:magpie', { gatewayUrl: gateway.root, apiKey: gateway.token })
     await app.kernel.plugins.invokeAction('builtin:magpie', 'refresh', {})
@@ -165,7 +165,7 @@ test('Magpie 经真实组合层默认启用→配置切换→刷新/HTTP/CLI→�
     hub = await startHub({ kernel: app.kernel, port: 0 })
     const credential = app.kernel.auth.createProcessToken()
     releaseCredential = credential.dispose
-    const env = { HELM_HUB_URL: hub.url, HELM_DATA_DIR: join(dataDir, 'cli'), HELM_TOKEN: credential.token, HELM_CONVERSATION_ID: '1' }
+    const env = { HELMX_HUB_URL: hub.url, HELMX_DATA_DIR: join(dataDir, 'cli'), HELMX_TOKEN: credential.token, HELMX_CONVERSATION_ID: '1' }
     async function cli(args: string[]) {
       let out = '', err = ''
       const code = await runCli([...args, '--json'], { env, stdout: (text) => { out += text }, stderr: (text) => { err += text } })
@@ -203,7 +203,7 @@ test('Magpie 经真实组合层默认启用→配置切换→刷新/HTTP/CLI→�
     await hub.close(); hub = undefined
     releaseCredential(); releaseCredential = undefined
     await app.close(); app = undefined
-    app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir })
+    app = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir })
     assert.equal(app.kernel.plugins.list().find((plugin) => plugin.id === 'builtin:magpie')?.enabled, true)
     assert.equal(app.kernel.listModelProviders().find((provider) => provider.id === 'magpie')?.modelCount, 3, '重启离线恢复目录')
     // 等待本周期目录刷新终态，再检查停用、停用期配置切换不连网关、以及重启用恢复路径。

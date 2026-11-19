@@ -2,12 +2,12 @@
  * builtin:herdr: intercepts agent_spawn to drive local/remote Herdr CLI agents.
  *
  * Responsibilities (design doc §4.2):
- * - "terminal runs the process, files deliver the result": background panes + .helm/wf-out-* handoff with in-place follow-up self-healing;
+ * - "terminal runs the process, files deliver the result": background panes + .helmx/wf-out-* handoff with in-place follow-up self-healing;
  * - blocked <-> AskDoc single-flight approval bridge (expectedStateSeq CAS optimistic lock, async authoritative
  *   agent.get queries the real seq live; never returns the snapshot taken at creation);
- * - $helm status token projection (self-excitation-proof heartbeat suppression + bounded renewal tied to service lifecycle);
+ * - $helmx status token projection (self-excitation-proof heartbeat suppression + bounded renewal tied to service lifecycle);
  * - dual-track keepalive cleanup (workflowRunId -> workflow.settled event; single turn -> parent turn_settled);
- * - startup reconciliation reclaims helm-wf-* orphan panes (only confirmed own resources; failed keeps the diagnostic scene;
+ * - startup reconciliation reclaims helmx-wf-* orphan panes (only confirmed own resources; failed keeps the diagnostic scene;
  *   panes genuinely still working/blocked are kept and reported, never faked as finished; keepalive orphans are reclaimable;
  *   exact agent.name === recorded-ownership verification; mismatched identity gives up ownership);
  * - ctx.action list/read/focus (HTTP/CLI equal footing with --json; read redacts to the last 40 lines;
@@ -19,7 +19,7 @@
  *   (service prepare/start). Disabled registration never evaluates heavy runtime code.
  */
 
-import { HelmError, type PluginDefinition } from '@helm/protocol'
+import { HelmxError, type PluginDefinition } from '@helmx/protocol'
 import { resolvePluginClientAssets, type PluginClientAssets } from './asset-paths.js'
 import { registerHerdrActions } from './herdr/actions.js'
 import type { HerdrPluginDependencies } from './herdr/contracts.js'
@@ -152,7 +152,7 @@ export function createHerdrPlugin(
         executor: () => runtime?.getExecutor(),
         transport: () => {
           if (runtime === undefined) {
-            throw new HelmError('herdr_not_connected', 'The Herdr service is not started (target server not connected)', 409)
+            throw new HelmxError('herdr_not_connected', 'The Herdr service is not started (target server not connected)', 409)
           }
           return runtime.getTransport()
         },
@@ -161,7 +161,7 @@ export function createHerdrPlugin(
           try {
             return ctx.host.getConversation(id).parentConversationId
           } catch (error) {
-            if (error instanceof HelmError && error.code === 'not_found') return undefined
+            if (error instanceof HelmxError && error.code === 'not_found') return undefined
             throw error
           }
         },

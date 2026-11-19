@@ -3,16 +3,16 @@
  * Build asset completion & frontend precompilation:
  * 1. Copies each src/<name>/client directory to dist/<name>/client;
  * 2. Precompiles every built-in UI plugin's declared client modules into dist/<name>/dist-client/
- *    (manifest.json + hashed entry/chunks + pre-gzipped .gz files) via @helm/plugin-build so
- *    runtime hosts and @helm/payload require zero esbuild or mermaid runtime dependencies.
+ *    (manifest.json + hashed entry/chunks + pre-gzipped .gz files) via @helmx/plugin-build so
+ *    runtime hosts and @helmx/payload require zero esbuild or mermaid runtime dependencies.
  * Idempotent — wipes previous dist/<name>/dist-client before invoking plugin factories so plugins
  * like builtin:mermaid resolve build-time npmDependencies from devDependencies during build.
  */
 import { cpSync, existsSync, readdirSync, rmSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { PREBUILT_CLIENT_DIR_NAME, PREBUILT_CLIENT_MANIFEST_FILE, clientNpmRootsOf } from '@helm/protocol';
-import { buildPluginClientBundleDir } from '@helm/plugin-build';
+import { PREBUILT_CLIENT_DIR_NAME, PREBUILT_CLIENT_MANIFEST_FILE, clientNpmRootsOf } from '@helmx/protocol';
+import { buildPluginClientBundleDir } from '@helmx/plugin-build';
 
 const pkgRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const srcPlugins = join(pkgRoot, 'src');

@@ -1,7 +1,7 @@
 /**
  * HTTPS tunnel fixture (two-phase child process script):
  * - phase=ca: generates a test CA and server certificate, emitting `{ caCert, key, cert }` JSON paths;
- * - phase=request (env HELM_TUNNEL_TLS_KEY/CERT/CA): runs a real HTTPS tunnel request using `NODE_EXTRA_CA_CERTS`
+ * - phase=request (env HELMX_TUNNEL_TLS_KEY/CERT/CA): runs a real HTTPS tunnel request using `NODE_EXTRA_CA_CERTS`
  *   to trust the test CA (evaluated at process startup), emitting `{ ok, status, body }`.
  *
  * Node only reads `NODE_EXTRA_CA_CERTS` at startup, so the two phases run in separate processes;
@@ -16,14 +16,14 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { attachNodeWsGateway, attachNodeTunnelGateway, createEnvFabric } from '@helm/kernel'
-import { createNodeDaemon } from '@helm/node'
+import { attachNodeWsGateway, attachNodeTunnelGateway, createEnvFabric } from '@helmx/kernel'
+import { createNodeDaemon } from '@helmx/node'
 
 const execFileAsync = promisify(execFile)
 const phase = process.argv[2] ?? 'request'
 
 async function generateCertificates(): Promise<{ caCert: string; key: string; cert: string }> {
-  const dir = mkdtempSync(join(tmpdir(), 'helm-tunnel-tls-'))
+  const dir = mkdtempSync(join(tmpdir(), 'helmx-tunnel-tls-'))
   const caKey = join(dir, 'ca-key.pem')
   const caCert = join(dir, 'ca-cert.pem')
   const key = join(dir, 'key.pem')
@@ -33,7 +33,7 @@ async function generateCertificates(): Promise<{ caCert: string; key: string; ce
   await execFileAsync('openssl', [
     'req', '-x509', '-newkey', 'rsa:2048', '-nodes',
     '-keyout', caKey, '-out', caCert, '-days', '2',
-    '-subj', '/CN=helm-test-ca',
+    '-subj', '/CN=helmx-test-ca',
     '-addext', 'basicConstraints=critical,CA:TRUE',
     '-addext', 'keyUsage=critical,keyCertSign,cRLSign',
   ])
@@ -44,8 +44,8 @@ async function generateCertificates(): Promise<{ caCert: string; key: string; ce
 }
 
 async function runRequest(): Promise<void> {
-  const keyPath = requireEnv('HELM_TUNNEL_TLS_KEY')
-  const certPath = requireEnv('HELM_TUNNEL_TLS_CERT')
+  const keyPath = requireEnv('HELMX_TUNNEL_TLS_KEY')
+  const certPath = requireEnv('HELMX_TUNNEL_TLS_CERT')
   const server = https.createServer(
     { key: await readFile(keyPath), cert: await readFile(certPath) },
     (req, res) => {
@@ -66,7 +66,7 @@ async function runRequest(): Promise<void> {
   const hubPort = (hubServer.address() as net.AddressInfo).port
   const gateway = attachNodeWsGateway(hubServer, { registry: fabric.registry })
   const tunnelGateway = attachNodeTunnelGateway(hubServer, { registry: fabric.registry })
-  const nodeData = mkdtempSync(join(tmpdir(), 'helm-tunnel-tls-node-'))
+  const nodeData = mkdtempSync(join(tmpdir(), 'helmx-tunnel-tls-node-'))
   const daemon = await createNodeDaemon({
     hubUrl: `http://127.0.0.1:${hubPort}`,
     identity: { nodeId: 'tls-node', token: 'tls-node:secret' },

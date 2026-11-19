@@ -4,7 +4,7 @@
  * Responsibilities:
  * - Validate in-place overwrite & resend targets and guard against concurrent edits;
  * - Execute atomic rewrite transactions (verify idle inside tx, scan tail, compute omissions, commit new input,
- *   append helm.rewind truncation marker);
+ *   append helmx.rewind truncation marker);
  * - Clean up exact overwritten FTS entries, invalidate lastAssistant cache, and register with tracker post-tx;
  * - Scan and aggregate all rewind intervals (consumed by detail projection and FTS rebuilds).
  */
@@ -19,8 +19,8 @@ import {
   type SubmissionId,
   type Tx,
 } from '@earendil-works/pi-durable'
-import type { ConversationAttachmentRef, ConversationInput } from '@helm/protocol'
-import { HelmError } from '@helm/protocol'
+import type { ConversationAttachmentRef, ConversationInput } from '@helmx/protocol'
+import { HelmxError } from '@helmx/protocol'
 import type { ConversationTracker } from './conversations.js'
 import {
   assertEditableHumanInput,
@@ -28,11 +28,11 @@ import {
   type RewindInterval,
 } from './runtime-helpers.js'
 import { asConversationId, asEntryId } from './sdk-ids.js'
-import type { HelmStore } from './store.js'
+import type { HelmxStore } from './store.js'
 
 interface ConversationRewindHost {
   readonly harness: Harness
-  readonly store: HelmStore
+  readonly store: HelmxStore
   readonly tracker: ConversationTracker
   readonly cancelPendingAsksForRewrite: (id: number) => Promise<void>
   readonly abortConversation: (id: number) => Promise<void>
@@ -52,7 +52,7 @@ export class ConversationRewind {
 
   async withHistoryEdit<T>(id: number, operation: () => Promise<T>): Promise<T> {
     if (this.historyEditsInFlight.has(id)) {
-      throw new HelmError('conversation_busy', `conversation ${id} is currently updating message history; retry later`, 409)
+      throw new HelmxError('conversation_busy', `conversation ${id} is currently updating message history; retry later`, 409)
     }
     this.historyEditsInFlight.add(id)
     try {
@@ -70,7 +70,7 @@ export class ConversationRewind {
   ): Promise<number | undefined> {
     if (raw === undefined) return undefined
     if (typeof raw !== 'number' || !Number.isSafeInteger(raw) || raw <= 0) {
-      throw new HelmError(
+      throw new HelmxError(
         'validation_error',
         `replaceFromEntryId must be a positive safe integer (received ${String(raw)})`,
         400,
@@ -86,7 +86,7 @@ export class ConversationRewind {
       BACKGROUND_CONTEXT,
     )
     if (page.items.length === 0 || Number(page.items[0]!.id) !== raw) {
-      throw new HelmError('not_found', `entry ${raw} does not exist in conversation ${id}`, 404, {
+      throw new HelmxError('not_found', `entry ${raw} does not exist in conversation ${id}`, 404, {
         conversationId: id,
         entryId: raw,
       })
@@ -95,7 +95,7 @@ export class ConversationRewind {
     assertEditableHumanInput(page.items[0]!, id, raw)
     const preCtx = await conversation.context(BACKGROUND_CONTEXT)
     if (!preCtx.entries.some((e) => Number(e.id) === raw)) {
-      throw new HelmError(
+      throw new HelmxError(
         'entry_before_context_head',
         `entry ${raw} precedes the latest reset or compaction and cannot be overwritten in place; use fork instead`,
         409,
@@ -107,7 +107,7 @@ export class ConversationRewind {
       return interval !== undefined && raw >= interval.from && raw <= interval.through
     })
     if (rewound) {
-      throw new HelmError('entry_already_rewound', `entry ${raw} has already been overwritten`, 409, {
+      throw new HelmxError('entry_already_rewound', `entry ${raw} has already been overwritten`, 409, {
         conversationId: id,
         entryId: raw,
       })
@@ -123,13 +123,13 @@ export class ConversationRewind {
   ): Promise<void> {
     const current = await conversation.context(BACKGROUND_CONTEXT)
     if (!current.entries.some((entry) => Number(entry.id) === targetId)) {
-      throw new HelmError('entry_before_context_head', 'edit target is no longer in current context; please re-select message', 409)
+      throw new HelmxError('entry_before_context_head', 'edit target is no longer in current context; please re-select message', 409)
     }
     if (current.entries.some((entry) => {
       const cut = rewindIntervalOf(entry)
       return cut !== undefined && targetId >= cut.from && targetId <= cut.through
     })) {
-      throw new HelmError('entry_already_rewound', `entry ${targetId} has already been overwritten`, 409)
+      throw new HelmxError('entry_already_rewound', `entry ${targetId} has already been overwritten`, 409)
     }
   }
 
@@ -142,7 +142,7 @@ export class ConversationRewind {
     for (;;) {
       const page = await conversation.entries({ order: 'ascending' }, 100, cursor, BACKGROUND_CONTEXT)
       for (const raw of page.items) {
-        if (raw.kind !== 'helm.rewind') continue
+        if (raw.kind !== 'helmx.rewind') continue
         const interval = rewindIntervalOf(raw)
         if (interval !== undefined) intervals.push(interval)
       }
@@ -160,7 +160,7 @@ export class ConversationRewind {
    * 3. Post-transaction cleanup: delete exact overwritten FTS keys and await flush/error broadcast, invalidate
    *    lastAssistant cache within covered range, and advance stateChangeSeq.
    *
-   * Interval contract: helm.rewind.data declares a closed interval [fromEntryId, throughEntryId], where throughEntryId
+   * Interval contract: helmx.rewind.data declares a closed interval [fromEntryId, throughEntryId], where throughEntryId
    * is the tail before this transaction (PRE_TRANSACTION_TAIL_ID); the new input gets a strictly larger ID and is never
    * accidentally touched by its own interval. Existing rewind markers and the baseline pi.system are kept (not omitted);
    * model message omission relies on SDK-native `edits`.
@@ -213,7 +213,7 @@ export class ConversationRewind {
     const tailEntries = await this.scanTailEntries(tx, id, replaceFromEntryId)
     const target = tailEntries.find((e) => Number(e.id) === replaceFromEntryId)
     if (target === undefined) {
-      throw new HelmError('not_found', `entry ${replaceFromEntryId} does not exist in conversation ${id}`, 404, {
+      throw new HelmxError('not_found', `entry ${replaceFromEntryId} does not exist in conversation ${id}`, 404, {
         conversationId: id,
         entryId: replaceFromEntryId,
       })
@@ -225,7 +225,7 @@ export class ConversationRewind {
       return interval !== undefined && replaceFromEntryId >= interval.from && replaceFromEntryId <= interval.through
     })
     if (rewound) {
-      throw new HelmError('entry_already_rewound', `entry ${replaceFromEntryId} has already been overwritten`, 409, {
+      throw new HelmxError('entry_already_rewound', `entry ${replaceFromEntryId} has already been overwritten`, 409, {
         conversationId: id,
         entryId: replaceFromEntryId,
       })
@@ -239,7 +239,7 @@ export class ConversationRewind {
     // is strictly > tailId and will never be omitted by its own edits.
     const edits = omittedEntryIds.map((target2) => ({ target: asEntryId(target2), action: 'omit' as const }))
     await tx.appendEntry(asConversationId(id), {
-      kind: 'helm.rewind',
+      kind: 'helmx.rewind',
       data: copyJson(
         {
           fromEntryId: replaceFromEntryId,
@@ -268,7 +268,7 @@ export class ConversationRewind {
     const convId = asConversationId(id)
     const live = await tx.doc(LiveDoc, convId)
     if (live.run !== undefined) {
-      throw new HelmError(
+      throw new HelmxError(
         'conversation_busy',
         `conversation ${id} has an active turn; refusing in-place overwrite & resend (no queuing)`,
         409,
@@ -276,7 +276,7 @@ export class ConversationRewind {
       )
     }
     if ((live.compactions?.length ?? 0) > 0) {
-      throw new HelmError(
+      throw new HelmxError(
         'conversation_busy',
         `conversation ${id} has a compaction in progress; refusing in-place overwrite & resend`,
         409,
@@ -285,7 +285,7 @@ export class ConversationRewind {
     }
     const inbox = await tx.doc(InboxDoc, convId)
     if (inbox.items.length > 0) {
-      throw new HelmError(
+      throw new HelmxError(
         'conversation_busy',
         `conversation ${id} has ${inbox.items.length} queued submission(s); refusing in-place overwrite & resend (no queuing)`,
         409,
@@ -295,21 +295,21 @@ export class ConversationRewind {
     const headMarker = await tx.latestHeadMarker(convId)
     const latestIdRaw = await tx.latestEntryId(convId)
     if (latestIdRaw === undefined) {
-      throw new HelmError('not_found', `entry ${replaceFromEntryId} does not exist in conversation ${id}`, 404, {
+      throw new HelmxError('not_found', `entry ${replaceFromEntryId} does not exist in conversation ${id}`, 404, {
         conversationId: id,
         entryId: replaceFromEntryId,
       })
     }
     const tailId = Number(latestIdRaw)
     if (replaceFromEntryId > tailId) {
-      throw new HelmError('not_found', `entry ${replaceFromEntryId} does not exist in conversation ${id}`, 404, {
+      throw new HelmxError('not_found', `entry ${replaceFromEntryId} does not exist in conversation ${id}`, 404, {
         conversationId: id,
         entryId: replaceFromEntryId,
       })
     }
     const headLowerBound = headMarker !== undefined ? Number(headMarker.head) : 0
     if (replaceFromEntryId < headLowerBound) {
-      throw new HelmError(
+      throw new HelmxError(
         'entry_before_context_head',
         `entry ${replaceFromEntryId} precedes the latest reset or compaction and cannot be overwritten in place; use fork instead`,
         409,
@@ -386,7 +386,7 @@ export class ConversationRewind {
       // Collect exact FTS keys across the overwritten interval (including retained baseline system and rewind marker
       // entries—they contain no indexed text anyway, and uniform collection avoids parallel lists).
       ftsKeys.push(`entry:${String(e.id)}`)
-      if (e.kind === 'helm.input') {
+      if (e.kind === 'helmx.input') {
         const inputId = (e.data as { id?: unknown } | undefined)?.id
         if (typeof inputId === 'string' && inputId !== '') {
           ftsKeys.push(`input:${inputId}`)
@@ -394,14 +394,14 @@ export class ConversationRewind {
         }
       }
       // Target entry itself must be omitted (inclusive [from, through] interval); keep existing rewind markers and baseline pi.system.
-      if (e.kind === 'helm.rewind') continue
+      if (e.kind === 'helmx.rewind') continue
       if (numericId === baselineSystemNumericId) continue
       omittedEntryIds.push(numericId)
     }
     return { omittedEntryIds, omittedInputIds, ftsKeys }
   }
 
-  /** Submit replacement input inside rewind transaction (whenBusy='reject'; helm.input entry persisted fully redacted). */
+  /** Submit replacement input inside rewind transaction (whenBusy='reject'; helmx.input entry persisted fully redacted). */
   private async submitRewoundInput(
     conversation: NonNullable<Awaited<ReturnType<Harness['conversation']>>>,
     tx: Tx,
@@ -412,7 +412,7 @@ export class ConversationRewind {
       content: newInput.content,
       whenBusy: 'reject' as const,
       entry: {
-        kind: 'helm.input',
+        kind: 'helmx.input',
         data: copyJson(
           {
             id: newInput.finalInput.id,
@@ -449,7 +449,7 @@ export class ConversationRewind {
   /** Post-transaction cleanup: delete exact stale FTS keys, invalidate lastAssistant cache, and advance stateChangeSeq. */
   private cleanupRewindSideEffects(id: number, covered: { from: number; through: number }, ftsKeys: string[]): void {
     // Delete only exact stale FTS keys from the overwritten interval (entry:<id> / input:<requestId>) so observer
-    // indices for new inputs/answers remain untouched (reverse scan stops at helm.rewind to never re-burn old answers);
+    // indices for new inputs/answers remain untouched (reverse scan stops at helmx.rewind to never re-burn old answers);
     // errors propagate through the tail queue (flushPublic / search read paths).
     // Invalidate lastAssistant cache only within the overwritten interval so failed resends never return stale answers.
     this.host.store.removeFtsEntries(id, ftsKeys)

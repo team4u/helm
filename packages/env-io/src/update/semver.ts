@@ -1,11 +1,11 @@
 /**
  * Strict SemVer entry points for the update engine.
  *
- * Parsing and precedence comparison live only in `@helm/protocol` (the repo's single
+ * Parsing and precedence comparison live only in `@helmx/protocol` (the repo's single
  * implementation); this module keeps the update-specific rejection envelope
  * (`UpgradeRejectedError`) so callers can distinguish invalid input from I/O failure.
  */
-import { compareStrictSemver, isStrictSemver, stripSemverVPrefix } from '@helm/protocol';
+import { compareStrictSemver, isStrictSemver, stripSemverVPrefix } from '@helmx/protocol';
 import { UpgradeRejectedError } from './errors.js';
 
 function requireStrictVersion(input: string, label: string): void {

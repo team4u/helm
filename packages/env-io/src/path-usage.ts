@@ -1,10 +1,10 @@
 /**
  * Pure process-usage scanner for a target path (Linux `/proc` semantics; pre-deletion diagnostics).
  *
- * Architecture: lives in `@helm/env-io` (shared between `@helm/kernel` and `@helm/node`) with an
+ * Architecture: lives in `@helmx/env-io` (shared between `@helmx/kernel` and `@helmx/node`) with an
  * injectable `PathUsageIo` interface so tests and non-Node hosts can supply fixtures, while real
  * Node.js environments use `createNodePathUsageIo()`. RPC types (`NodePathUsage` /
- * `NodePathUsageProcess`) are sourced from `@helm/protocol`.
+ * `NodePathUsageProcess`) are sourced from `@helmx/protocol`.
  *
  * Fail-closed discipline:
  * - Non-Linux platforms (no `/proc`) fail explicitly with `not_supported` rather than fabricating data;
@@ -23,7 +23,7 @@
  * checked so symlink aliases are caught.
  */
 
-import type { NodePathUsage, NodePathUsageProcess } from '@helm/protocol'
+import type { NodePathUsage, NodePathUsageProcess } from '@helmx/protocol'
 
 /** Injectable read-only filesystem interface (browser-safe; Node adapters wrap `node:fs/promises`). */
 export interface PathUsageIo {

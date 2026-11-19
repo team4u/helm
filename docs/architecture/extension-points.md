@@ -62,7 +62,7 @@ export type HookName =
 
 ## 前端：全界面扩展点（client.tsx 单轨）
 
-视图类扩展点统一采用 `client.tsx` React 组件单轨：`UiSpecBase` 只接受 `client: ClientComponentRef`（模块相对路径 + 具名导出），不接受声明式 JSON Spec——JSON 渲染能力由 `builtin:json-render` 插件经 `markdownCodeBlock` 提供。组件与宿主共享同一份 React 运行时（`@helm/plugin-client` 虚拟化为全局命名空间，不打包第二份 React）。运行时元数据（`profileRuntime`）与输入补全（`composerCompleter`）是纯数据声明，不涉及组件。
+视图类扩展点统一采用 `client.tsx` React 组件单轨：`UiSpecBase` 只接受 `client: ClientComponentRef`（模块相对路径 + 具名导出），不接受声明式 JSON Spec——JSON 渲染能力由 `builtin:json-render` 插件经 `markdownCodeBlock` 提供。组件与宿主共享同一份 React 运行时（`@helmx/plugin-client` 虚拟化为全局命名空间，不打包第二份 React）。运行时元数据（`profileRuntime`）与输入补全（`composerCompleter`）是纯数据声明，不涉及组件。
 
 `ctx.ui` 全部 16 个注册方法（与 `PLUGIN_UI_METHOD_NAMES` 双向锁定）：
 
@@ -128,15 +128,15 @@ export interface ComposerController {
 
 ### 插件间组合
 
-插件视图可从 `@helm/plugin-client` 导入 `<PluginSlot name="cards" />`，其他插件用 `ctx.ui.slot({ id, target: 'owner-plugin/cards', ... })` 注入；短名相对当前插件，全限定名显式指定。`mode="list"` 渲染全部命中贡献（priority 降序、order 升序稳定排列），`mode="single"` 只取第一项；每个子项重新绑定贡献者插件上下文并有独立错误边界；循环引用与过深嵌套显示错误提示，不继续递归。
+插件视图可从 `@helmx/plugin-client` 导入 `<PluginSlot name="cards" />`，其他插件用 `ctx.ui.slot({ id, target: 'owner-plugin/cards', ... })` 注入；短名相对当前插件，全限定名显式指定。`mode="list"` 渲染全部命中贡献（priority 降序、order 升序稳定排列），`mode="single"` 只取第一项；每个子项重新绑定贡献者插件上下文并有独立错误边界；循环引用与过深嵌套显示错误提示，不继续递归。
 
 ## client.tsx 单轨渲染机制
 
-组件经 `ClientComponentRef { module, export }` 声明：`module` 是相对插件 `clientRoot` 的源文件路径（禁止绝对路径与 `../` 越根），`export` 是具名导出名。编译由宿主注入的插件构建端口（契约在 `@helm/protocol`；产品在 hub 注入 `@helm/plugin-build` 默认实现）按源内容 hash（含本地依赖）编译缓存；未注入端口的宿主对带 client 引用的声明在注册边界显式拒绝，不静默丢 UI。插件定义未声明 `clientRoot` 时，一切 client 引用在注册边界拒绝——不存在无法编译的悬空引用。
+组件经 `ClientComponentRef { module, export }` 声明：`module` 是相对插件 `clientRoot` 的源文件路径（禁止绝对路径与 `../` 越根），`export` 是具名导出名。编译由宿主注入的插件构建端口（契约在 `@helmx/protocol`；产品在 hub 注入 `@helmx/plugin-build` 默认实现）按源内容 hash（含本地依赖）编译缓存；未注入端口的宿主对带 client 引用的声明在注册边界显式拒绝，不静默丢 UI。插件定义未声明 `clientRoot` 时，一切 client 引用在注册边界拒绝——不存在无法编译的悬空引用。
 
-受控 npm 依赖统一经 `npmDependencies`（说明符 → 解析根）声明：内置插件指向 `@helm/plugins` 包根；外部插件在清单声明 `clientDependencies`（plugin.json 或 package.json `helm.clientDependencies`），宿主归一映射到插件自身目录并走同一编译链，编译器逐文件 containment 校验并随依赖 hash 复查——未声明的裸依赖显式拒绝，已声明未安装给出可诊断错误。
+受控 npm 依赖统一经 `npmDependencies`（说明符 → 解析根）声明：内置插件指向 `@helmx/plugins` 包根；外部插件在清单声明 `clientDependencies`（plugin.json 或 package.json `helmx.clientDependencies`），宿主归一映射到插件自身目录并走同一编译链，编译器逐文件 containment 校验并随依赖 hash 复查——未声明的裸依赖显式拒绝，已声明未安装给出可诊断错误。
 
-插件自有样式的托管链：本地 CSS 及根内 `@import` 由 esbuild 合并，通过保留导出 `__helmClientCss` 内联为插件 JS 文本数据；宿主确认模块导入成功且加载仍有效后注入 `<style data-helm-plugin-css>`，停用/卸载或登出时回收。资源 URL 支持 `data:` 与显式 HTTP(S) 地址，本地资源 URL 与远程 `@import` 显式拒绝。编译、导出校验或加载失败时宿主显示明确错误与重试入口，不把空白静默冒充加载成功。
+插件自有样式的托管链：本地 CSS 及根内 `@import` 由 esbuild 合并，通过保留导出 `__helmxClientCss` 内联为插件 JS 文本数据；宿主确认模块导入成功且加载仍有效后注入 `<style data-helmx-plugin-css>`，停用/卸载或登出时回收。资源 URL 支持 `data:` 与显式 HTTP(S) 地址，本地资源 URL 与远程 `@import` 显式拒绝。编译、导出校验或加载失败时宿主显示明确错误与重试入口，不把空白静默冒充加载成功。
 
 `builtin:json-render` 与 `builtin:mermaid` 是扩展点之上的普通消费者：前者承载 JSON DSL 与界面原语，停用后宿主不再解析插件 JSON Spec；后者经 `ctx.ui.markdownCodeBlock({ id, languages: ['mermaid'], client })` 接管 ```mermaid 围栏，停用后回退普通代码块。两者停用时动作、工具与 UI 贡献即时消失，无宿主内置替代渲染。
 
@@ -154,11 +154,11 @@ HTTP 与 CLI 同权访问会话文档：
 
 ```bash
 # 一次读取
-pnpm helm plugins doc builtin:workflow runs --conversation 42 --json
-pnpm helm plugins doc builtin:workflow runs --current --json        # 从 HELM_CONVERSATION_ID 解析
+pnpm helmx plugins doc builtin:workflow runs --conversation 42 --json
+pnpm helmx plugins doc builtin:workflow runs --current --json        # 从 HELMX_CONVERSATION_ID 解析
 
 # 持续订阅（专用 SSE：GET /api/plugins/:id/docs/:name/events?conversationId=N）
-pnpm helm plugins doc builtin:workflow runs --current --watch --json
+pnpm helmx plugins doc builtin:workflow runs --current --watch --json
 ```
 
 `builtin:workflow` 是这一投影模型的基准用例：完整运行摘要放入会话文档 `runs`（每会话只写自己的 run）；全局 `workflow.updated` 事件仅含 `id / conversationId / status` 提示，不旁路广播完整摘要；摘要无变化时不重复发布。这样全局首帧与广播通道免于运行详情的写放大，而 `runs` 明细按需订阅。

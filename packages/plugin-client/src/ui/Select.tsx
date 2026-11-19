@@ -1,6 +1,6 @@
 import React, { useEffect, useId, useMemo, useState } from 'react'
 import * as RadixSelect from '@radix-ui/react-select'
-import { HelmIcon } from '../icons.js'
+import { HelmxIcon } from '../icons.js'
 import { usePluginTranslator } from '../i18n.js'
 import { uiCopy } from '../ui-copy.js'
 import { Checkbox } from './Checkbox.js'
@@ -29,7 +29,7 @@ export interface BaseSelectProps<T extends string = string> {
   open?: boolean
   onOpenChange?: (open: boolean) => void
   inline?: boolean
-  /** Extra class name for the dropdown overlay (e.g. helm-select-popover-wide widens long model-ID panels). */
+  /** Extra class name for the dropdown overlay (e.g. helmx-select-popover-wide widens long model-ID panels). */
   popoverClassName?: string
 }
 
@@ -124,14 +124,14 @@ function SingleSelectInner<T extends string = string>({
   const layeredPopoverStyle = useOverlayChildStyle()
 
   const displayedLabel = (
-    <span className={`helm-select-label${selectedOption ? '' : ' helm-select-placeholder'}`}>
+    <span className={`helmx-select-label${selectedOption ? '' : ' helmx-select-placeholder'}`}>
       {selectedOption ? selectedOption.label : resolvedPlaceholder}
     </span>
   )
 
   return (
     <div
-      className={['helm-select', size ? `helm-select-${size}` : '', className].filter(Boolean).join(' ')}
+      className={['helmx-select', size ? `helmx-select-${size}` : '', className].filter(Boolean).join(' ')}
       style={style}
     >
       <RadixSelect.Root
@@ -148,20 +148,20 @@ function SingleSelectInner<T extends string = string>({
       >
         <RadixSelect.Trigger
           id={selectId}
-          className="helm-select-trigger"
+          className="helmx-select-trigger"
           disabled={disabled}
           aria-label={ariaLabel}
           aria-haspopup="listbox"
         >
-          {prefixIcon ? <HelmIcon name={prefixIcon} size={12} className="helm-select-prefix" /> : null}
+          {prefixIcon ? <HelmxIcon name={prefixIcon} size={12} className="helmx-select-prefix" /> : null}
           <RadixSelect.Value placeholder={displayedLabel}>
             {displayedLabel}
           </RadixSelect.Value>
           <RadixSelect.Icon asChild>
-            <HelmIcon
+            <HelmxIcon
               name="chevron-down"
               size={12}
-              className={`helm-select-chevron${isOpen ? ' helm-select-chevron-open' : ''}`}
+              className={`helmx-select-chevron${isOpen ? ' helmx-select-chevron-open' : ''}`}
             />
           </RadixSelect.Icon>
         </RadixSelect.Trigger>
@@ -173,10 +173,10 @@ function SingleSelectInner<T extends string = string>({
               side={popperSide}
               sideOffset={4}
               avoidCollisions
-              className={`helm-select-popover dropdown-panel${popoverClassName ? ` ${popoverClassName}` : ''}`}
+              className={`helmx-select-popover dropdown-panel${popoverClassName ? ` ${popoverClassName}` : ''}`}
               style={layeredPopoverStyle}
             >
-              <RadixSelect.Viewport className="helm-select-viewport">
+              <RadixSelect.Viewport className="helmx-select-viewport">
                 {options.map((opt) => {
                   const isSelected = opt.value === value
                   return (
@@ -185,17 +185,17 @@ function SingleSelectInner<T extends string = string>({
                       value={opt.value}
                       disabled={opt.disabled}
                       textValue={typeof opt.label === 'string' ? opt.label : String(opt.value)}
-                      className={`helm-select-option${isSelected ? ' selected' : ''}`}
+                      className={`helmx-select-option${isSelected ? ' selected' : ''}`}
                     >
-                      {opt.icon ? <HelmIcon name={opt.icon} size={12} className="helm-select-option-icon" /> : null}
+                      {opt.icon ? <HelmxIcon name={opt.icon} size={12} className="helmx-select-option-icon" /> : null}
                       <RadixSelect.ItemText asChild>
-                        <span className="helm-select-option-label" title={typeof opt.label === 'string' ? opt.label : undefined}>
+                        <span className="helmx-select-option-label" title={typeof opt.label === 'string' ? opt.label : undefined}>
                           {opt.label}
                         </span>
                       </RadixSelect.ItemText>
-                      {opt.meta ? <span className="helm-select-option-meta">{opt.meta}</span> : null}
+                      {opt.meta ? <span className="helmx-select-option-meta">{opt.meta}</span> : null}
                       <RadixSelect.ItemIndicator asChild>
-                        <HelmIcon name="check" size={12} className="helm-select-check" />
+                        <HelmxIcon name="check" size={12} className="helmx-select-check" />
                       </RadixSelect.ItemIndicator>
                     </RadixSelect.Item>
                   )
@@ -313,27 +313,27 @@ function MultiSelectInner<T extends string = string>({
     }
     if (selectedValues.length === 0) {
       return (
-        <span className="helm-select-label helm-select-placeholder">{resolvedPlaceholder}</span>
+        <span className="helmx-select-label helmx-select-placeholder">{resolvedPlaceholder}</span>
       )
     }
     if (selectedValues.length === 1) {
       const match = options.find((opt) => opt.value === selectedValues[0])
-      return <span className="helm-select-label">{match ? match.label : selectedValues[0]}</span>
+      return <span className="helmx-select-label">{match ? match.label : selectedValues[0]}</span>
     }
     const allCount = options.filter((opt) => !opt.disabled).length
     if (selectedValues.length === allCount && allCount > 0) {
-      return <span className="helm-select-label">{t({ en: `All selected (${selectedValues.length})`, 'zh-CN': `已全选 (${selectedValues.length})` })}</span>
+      return <span className="helmx-select-label">{t({ en: `All selected (${selectedValues.length})`, 'zh-CN': `已全选 (${selectedValues.length})` })}</span>
     }
     return (
-      <span className="helm-select-label">{t({ en: `${selectedValues.length} selected`, 'zh-CN': `已选择 ${selectedValues.length} 项` })}</span>
+      <span className="helmx-select-label">{t({ en: `${selectedValues.length} selected`, 'zh-CN': `已选择 ${selectedValues.length} 项` })}</span>
     )
   }, [renderTriggerLabel, selectedValues, options, resolvedPlaceholder, t])
 
   const contentNode = (
-    <div className="helm-select-viewport" style={{ maxHeight: 280, overflowY: 'auto' }}>
+    <div className="helmx-select-viewport" style={{ maxHeight: 280, overflowY: 'auto' }}>
       {/* Search box */}
       {searchable && options.length > 4 && (
-        <div className="helm-select-search" onClick={(e) => e.stopPropagation()}>
+        <div className="helmx-select-search" onClick={(e) => e.stopPropagation()}>
           <input
             type="text"
             value={searchTerm}
@@ -346,10 +346,10 @@ function MultiSelectInner<T extends string = string>({
 
       {/* Quick select-all / clear action bar */}
       {showActions && (
-        <div className="helm-select-actions" onClick={(e) => e.stopPropagation()}>
+        <div className="helmx-select-actions" onClick={(e) => e.stopPropagation()}>
           <button
             type="button"
-            className="btn btn-ghost btn-xs helm-select-action-btn"
+            className="btn btn-ghost btn-xs helmx-select-action-btn"
             onClick={handleSelectAll}
             disabled={disabled}
           >
@@ -357,7 +357,7 @@ function MultiSelectInner<T extends string = string>({
           </button>
           <button
             type="button"
-            className="btn btn-ghost btn-xs helm-select-action-btn"
+            className="btn btn-ghost btn-xs helmx-select-action-btn"
             onClick={handleClearAll}
             disabled={disabled || selectedValues.length === 0}
           >
@@ -380,7 +380,7 @@ function MultiSelectInner<T extends string = string>({
               role="option"
               aria-selected={isSelected}
               aria-disabled={opt.disabled}
-              className={`helm-select-option helm-select-multi-option${isSelected ? ' selected' : ''}${opt.disabled ? ' is-disabled' : ''}`}
+              className={`helmx-select-option helmx-select-multi-option${isSelected ? ' selected' : ''}${opt.disabled ? ' is-disabled' : ''}`}
               onClick={(e) => {
                 e.preventDefault()
                 if (!opt.disabled) toggleValue(opt.value)
@@ -394,9 +394,9 @@ function MultiSelectInner<T extends string = string>({
                 }}
                 aria-label={typeof opt.label === 'string' ? opt.label : String(opt.value)}
               />
-              {opt.icon ? <HelmIcon name={opt.icon} size={12} className="helm-select-option-icon" /> : null}
-              <span className="helm-select-option-label" title={typeof opt.label === 'string' ? opt.label : undefined}>{opt.label}</span>
-              {opt.meta ? <span className="helm-select-option-meta">{opt.meta}</span> : null}
+              {opt.icon ? <HelmxIcon name={opt.icon} size={12} className="helmx-select-option-icon" /> : null}
+              <span className="helmx-select-option-label" title={typeof opt.label === 'string' ? opt.label : undefined}>{opt.label}</span>
+              {opt.meta ? <span className="helmx-select-option-meta">{opt.meta}</span> : null}
             </div>
           )
         })
@@ -406,7 +406,7 @@ function MultiSelectInner<T extends string = string>({
 
   return (
     <div
-      className={['helm-select', 'helm-select-multi', size ? `helm-select-${size}` : '', className]
+      className={['helmx-select', 'helmx-select-multi', size ? `helmx-select-${size}` : '', className]
         .filter(Boolean)
         .join(' ')}
       style={style}
@@ -416,25 +416,25 @@ function MultiSelectInner<T extends string = string>({
           <button
             type="button"
             id={selectId}
-            className="helm-select-trigger"
+            className="helmx-select-trigger"
             disabled={disabled}
             aria-label={ariaLabel}
             aria-haspopup="listbox"
             aria-expanded={isOpen}
           >
-            {prefixIcon ? <HelmIcon name={prefixIcon} size={12} className="helm-select-prefix" /> : null}
+            {prefixIcon ? <HelmxIcon name={prefixIcon} size={12} className="helmx-select-prefix" /> : null}
             {triggerLabel}
-            <HelmIcon
+            <HelmxIcon
               name="chevron-down"
               size={12}
-              className={`helm-select-chevron${isOpen ? ' helm-select-chevron-open' : ''}`}
+              className={`helmx-select-chevron${isOpen ? ' helmx-select-chevron-open' : ''}`}
             />
           </button>
         </PopoverTrigger>
 
         {inline ? (
           <div
-            className={`helm-select-popover dropdown-panel${popoverClassName ? ` ${popoverClassName}` : ''}`}
+            className={`helmx-select-popover dropdown-panel${popoverClassName ? ` ${popoverClassName}` : ''}`}
             style={{ position: 'relative', marginTop: 4, ...layeredPopoverStyle }}
           >
             {contentNode}
@@ -444,7 +444,7 @@ function MultiSelectInner<T extends string = string>({
             side={popperSide}
             sideOffset={4}
             avoidCollisions
-            className={`helm-select-popover dropdown-panel${popoverClassName ? ` ${popoverClassName}` : ''}`}
+            className={`helmx-select-popover dropdown-panel${popoverClassName ? ` ${popoverClassName}` : ''}`}
           >
             {contentNode}
           </PopoverContent>
@@ -456,7 +456,7 @@ function MultiSelectInner<T extends string = string>({
 
 /**
  * Generic dropdown selector (single and multiple selection, in the restrained
- * Helm style):
+ * Helmx style):
  * - Default single mode: wraps @radix-ui/react-select with full keyboard
  *   navigation and Typeahead Search;
  * - multiple={true} mode: built on Popover + Checkbox with quick select-all /

@@ -8,16 +8,16 @@
     "jsx": "react-jsx",
     "baseUrl": ".",
     "paths": {
-      "@helm/kernel": [
+      "@helmx/kernel": [
         "packages/kernel/src/index.ts"
       ],
-      "@helm/plugins": [
+      "@helmx/plugins": [
         "packages/plugins/src/index.ts"
       ],
-      "@helm/plugins/*": [
+      "@helmx/plugins/*": [
         "packages/plugins/src/*"
       ],
-      "@helm/plugin-build": [
+      "@helmx/plugin-build": [
         "packages/plugin-build/src/index.ts"
       ]
     }

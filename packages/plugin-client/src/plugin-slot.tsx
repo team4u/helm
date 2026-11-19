@@ -16,8 +16,8 @@
  */
 import { createContext, useContext } from 'react'
 import type { ReactNode } from 'react'
-import type { ComposerController } from '@helm/protocol/browser'
-import { HelmIcon } from './icons.js'
+import type { ComposerController } from '@helmx/protocol/browser'
+import { HelmxIcon } from './icons.js'
 import { usePluginClientHost } from './host-port.js'
 import { PluginClientContext } from './plugin-context.js'
 
@@ -62,7 +62,7 @@ export function PluginSlot(props: PluginSlotProps): ReactNode {
   if (owner === undefined) {
     return (
       <div className="callout callout--warning">
-        <HelmIcon name="alert-triangle" size={13} />
+        <HelmxIcon name="alert-triangle" size={13} />
         <span>PluginSlot has no host plugin context (use it inside PluginUiView or pass ownerPluginId explicitly)</span>
       </div>
     )
@@ -77,7 +77,7 @@ export function PluginSlot(props: PluginSlotProps): ReactNode {
   if (ancestry.depth >= MAX_SLOT_DEPTH) {
     return (
       <div className="callout callout--warning" role="alert">
-        <HelmIcon name="alert-triangle" size={13} />
+        <HelmxIcon name="alert-triangle" size={13} />
         <span>Plugin slot nesting exceeded the maximum depth of {MAX_SLOT_DEPTH}; rendering aborted</span>
       </div>
     )
@@ -90,7 +90,7 @@ export function PluginSlot(props: PluginSlotProps): ReactNode {
         if (ancestry.chain.some(([pid, cid]) => pid === item.pluginId && cid === item.contributionId)) {
           return (
             <div className="callout callout--warning" role="alert" key={key}>
-              <HelmIcon name="alert-triangle" size={13} />
+              <HelmxIcon name="alert-triangle" size={13} />
               <span>Plugin slot cycle detected ({key}); recursion aborted</span>
             </div>
           )

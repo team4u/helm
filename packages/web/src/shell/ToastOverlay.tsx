@@ -1,4 +1,4 @@
-import { HelmIcon } from '@helm/plugin-client'
+import { HelmxIcon } from '@helmx/plugin-client'
 import { useNotices, useStoreActions } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 
@@ -26,7 +26,7 @@ export function ToastOverlay() {
           >
             <div className="toast-content">
               <div className="toast-title">
-                <HelmIcon
+                <HelmxIcon
                   name={
                     n.level === 'error'
                       ? 'alert-circle'
@@ -61,7 +61,7 @@ export function ToastOverlay() {
               className="btn btn-ghost btn-sm btn-icon-xs"
               onClick={() => dismissNotice(n.id)}
             >
-              <HelmIcon name="x" size={12} />
+              <HelmxIcon name="x" size={12} />
             </button>
           </div>
         )

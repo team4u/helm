@@ -19,8 +19,8 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { useTempDir, sanitizedHostEnv } from '@helm/test-kit/node';
-import { readBlockedRelease, readCurrentRelease } from '@helm/env-io';
+import { useTempDir, sanitizedHostEnv } from '@helmx/test-kit/node';
+import { readBlockedRelease, readCurrentRelease } from '@helmx/env-io';
 import { readPidRecord } from '../../src/launcher/records.js';
 import { startHub, stopHub } from '../../src/launcher/process.js';
 import { runSupervised } from '../../src/launcher/run.js';
@@ -66,7 +66,7 @@ function newShutdown(): { promise: Promise<void>; request: () => void } {
 async function setupRun(t: import('node:test').TestContext, root: string, latest = '1.0.0'): Promise<RunHarness> {
   const spec = { pkgName: PKG, latest, payloads: new Map<string, string>() };
   const core = createFakeCore(spec);
-  const captured = captureIo(sanitizedHostEnv({ HELM_PAYLOAD_PACKAGE: PKG }));
+  const captured = captureIo(sanitizedHostEnv({ HELMX_PAYLOAD_PACKAGE: PKG }));
   const port = await freePort();
   const harness: RunHarness = {
     root,
@@ -137,7 +137,7 @@ async function waitForVersion(port: number, version: string, timeoutMs = 20_000)
 }
 
 test('run installs, starts, keeps up to date, and shuts its own hub down cleanly', { timeout: 60_000 }, async (t) => {
-  const h = await setupRun(t, useTempDir(t, 'helm-launcher-run-'));
+  const h = await setupRun(t, useTempDir(t, 'helmx-launcher-run-'));
   await h.addPayload('1.0.0');
   const shutdown = newShutdown();
 
@@ -160,7 +160,7 @@ test('run installs, starts, keeps up to date, and shuts its own hub down cleanly
 });
 
 test('a flipped registry latest restarts the hub onto the new version across ticks', { timeout: 60_000 }, async (t) => {
-  const h = await setupRun(t, useTempDir(t, 'helm-launcher-runflip-'));
+  const h = await setupRun(t, useTempDir(t, 'helmx-launcher-runflip-'));
   await h.addPayload('1.0.0');
   await h.addPayload('1.1.0');
   const shutdown = newShutdown();
@@ -188,7 +188,7 @@ test('a flipped registry latest restarts the hub onto the new version across tic
 });
 
 test('a beta dist-tag switches versions while `latest` stays unchanged (and vice versa)', { timeout: 60_000 }, async (t) => {
-  const root = useTempDir(t, 'helm-launcher-runbeta-');
+  const root = useTempDir(t, 'helmx-launcher-runbeta-');
   const spec = {
     pkgName: PKG,
     latest: '1.0.0',
@@ -196,7 +196,7 @@ test('a beta dist-tag switches versions while `latest` stays unchanged (and vice
     latestByTag: {} as Record<string, string>,
   };
   const core = createFakeCore(spec);
-  const captured = captureIo(sanitizedHostEnv({ HELM_PAYLOAD_PACKAGE: PKG }));
+  const captured = captureIo(sanitizedHostEnv({ HELMX_PAYLOAD_PACKAGE: PKG }));
   const port = await freePort();
   const dataDir = path.join(path.dirname(root), `${path.basename(root)}-user-data`);
   await writeFakePayload({ dir: path.join(root, 'payload-1.0.0'), pkgName: PKG, version: '1.0.0' });
@@ -260,7 +260,7 @@ test('a beta dist-tag switches versions while `latest` stays unchanged (and vice
 });
 
 test('an external verified stop of the supervised hub ends the run with exit 1 (no fight)', { timeout: 60_000 }, async (t) => {
-  const h = await setupRun(t, useTempDir(t, 'helm-launcher-runext-'));
+  const h = await setupRun(t, useTempDir(t, 'helmx-launcher-runext-'));
   await h.addPayload('1.0.0');
 
   const done = runSupervised(h.options());
@@ -277,7 +277,7 @@ test('an external verified stop of the supervised hub ends the run with exit 1 (
 });
 
 test('failing update checks keep the previous hub serving and the loop alive', { timeout: 60_000 }, async (t) => {
-  const h = await setupRun(t, useTempDir(t, 'helm-launcher-runfail-'));
+  const h = await setupRun(t, useTempDir(t, 'helmx-launcher-runfail-'));
   await h.addPayload('1.0.0');
   const shutdown = newShutdown();
 
@@ -298,7 +298,7 @@ test('failing update checks keep the previous hub serving and the loop alive', {
 });
 
 test('a bad candidate rolls back inside the run loop and keeps the old hub serving', { timeout: 60_000 }, async (t) => {
-  const h = await setupRun(t, useTempDir(t, 'helm-launcher-runrb-'));
+  const h = await setupRun(t, useTempDir(t, 'helmx-launcher-runrb-'));
   await h.addPayload('1.0.0');
   await h.addPayload('1.1.0', 'never-ready');
   const shutdown = newShutdown();
@@ -344,7 +344,7 @@ test('a bad candidate rolls back inside the run loop and keeps the old hub servi
 });
 
 test('run refuses to adopt a hub it did not start', { timeout: 60_000 }, async (t) => {
-  const h = await setupRun(t, useTempDir(t, 'helm-launcher-runadopt-'));
+  const h = await setupRun(t, useTempDir(t, 'helmx-launcher-runadopt-'));
   await h.addPayload('1.0.0');
   const { performHubUpdate } = await import('../../src/launcher/update.js');
   await performHubUpdate({
@@ -373,7 +373,7 @@ test('run refuses to adopt a hub it did not start', { timeout: 60_000 }, async (
 });
 
 test('an unexpected supervised-hub death ends the launcher with exit 1 and the log pointer', { timeout: 60_000 }, async (t) => {
-  const h = await setupRun(t, useTempDir(t, 'helm-launcher-rundie-'));
+  const h = await setupRun(t, useTempDir(t, 'helmx-launcher-rundie-'));
   await h.addPayload('1.0.0');
 
   const done = runSupervised(h.options());
@@ -397,7 +397,7 @@ test('e2e: real CLI run against a local HTTP registry switches versions and stop
     ? 'signal-mediated shutdown semantics are POSIX (Windows cannot deliver test signals to the spawned CLI)'
     : false,
 }, async (t) => {
-  const root = useTempDir(t, 'helm-launcher-rune2e-');
+  const root = useTempDir(t, 'helmx-launcher-rune2e-');
   const dataDir = path.join(path.dirname(root), `${path.basename(root)}-user-data`);
   const hubPort = await freePort();
   const registryPort = await freePort();
@@ -487,7 +487,7 @@ test('e2e: real CLI run against a local HTTP registry switches versions and stop
       '30000',
     ],
     {
-      env: sanitizedHostEnv({ HELM_HUB_INSTALL_ROOT: root, HELM_PAYLOAD_PACKAGE: PKG }),
+      env: sanitizedHostEnv({ HELMX_HUB_INSTALL_ROOT: root, HELMX_PAYLOAD_PACKAGE: PKG }),
       stdio: ['ignore', 'pipe', 'pipe'],
     },
   );

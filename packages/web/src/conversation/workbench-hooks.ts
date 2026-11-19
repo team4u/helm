@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from 'react'
-import type { ConversationSummary } from '@helm/protocol/browser'
+import type { ConversationSummary } from '@helmx/protocol/browser'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import {
   useAuthenticated,

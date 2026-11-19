@@ -13,13 +13,13 @@
  */
 
 import {
-  HelmError,
+  HelmxError,
   type ConversationEntry,
   type ConversationLive,
   type ConversationLiveGeneration,
   type ConversationLiveMessage,
   type QueuedConversationInput,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 
 /** Subset of SDK EntryRecord shape (avoids coupling to SDK concrete types; easy to fake in tests). */
 export interface EntryRecordLike {
@@ -35,16 +35,16 @@ function assertJsonUsable(value: unknown, path: string, seen: WeakSet<object>): 
   if (value === null || typeof value === 'string' || typeof value === 'boolean') return
   if (typeof value === 'number') {
     if (!Number.isFinite(value)) {
-      throw new HelmError('invalid_json_value', `entry.${path} contains a non-finite number and cannot be published as a JSON event`, 500)
+      throw new HelmxError('invalid_json_value', `entry.${path} contains a non-finite number and cannot be published as a JSON event`, 500)
     }
     return
   }
   if (typeof value !== 'object') {
-    throw new HelmError('invalid_json_value', `entry.${path} contains a non-JSON value (${typeof value})`, 500)
+    throw new HelmxError('invalid_json_value', `entry.${path} contains a non-JSON value (${typeof value})`, 500)
   }
   const obj = value as object
   if (seen.has(obj)) {
-    throw new HelmError('invalid_json_value', `entry.${path} contains a circular reference`, 500)
+    throw new HelmxError('invalid_json_value', `entry.${path} contains a circular reference`, 500)
   }
   seen.add(obj)
   try {
@@ -54,11 +54,11 @@ function assertJsonUsable(value: unknown, path: string, seen: WeakSet<object>): 
     }
     const proto = Object.getPrototypeOf(obj)
     if (proto !== Object.prototype && proto !== null) {
-      throw new HelmError('invalid_json_value', `entry.${path} contains a non-JSON object (${proto.constructor?.name ?? 'unknown'})`, 500)
+      throw new HelmxError('invalid_json_value', `entry.${path} contains a non-JSON object (${proto.constructor?.name ?? 'unknown'})`, 500)
     }
     for (const [key, item] of Object.entries(obj)) {
       if (item === undefined) {
-        throw new HelmError('invalid_json_value', `entry.${path}.${key} contains undefined`, 500)
+        throw new HelmxError('invalid_json_value', `entry.${path}.${key} contains undefined`, 500)
       }
       assertJsonUsable(item, `${path}.${key}`, seen)
     }
@@ -72,14 +72,14 @@ function assertJsonUsable(value: unknown, path: string, seen: WeakSet<object>): 
  * - Normalizes id to string (protocol contract);
  * - Preserves kind/data/model verbatim (model holds context message arrays including assistant text);
  * - taskId: mapped from positive integer byTaskId (generating task; omitted when unowned such as scheduler context, never fabricated);
- * - Boundary JSON validation: throws HelmError on non-JSON values with no silent fallback or truncation.
+ * - Boundary JSON validation: throws HelmxError on non-JSON values with no silent fallback or truncation.
  */
 export function toConversationEntry(record: EntryRecordLike): ConversationEntry {
   if (typeof record.id !== 'number' && typeof record.id !== 'string') {
-    throw new HelmError('invalid_json_value', `entry.id must be number|string, got ${typeof record.id}`, 500)
+    throw new HelmxError('invalid_json_value', `entry.id must be number|string, got ${typeof record.id}`, 500)
   }
   if (typeof record.kind !== 'string') {
-    throw new HelmError('invalid_json_value', `entry.kind must be string, got ${typeof record.kind}`, 500)
+    throw new HelmxError('invalid_json_value', `entry.kind must be string, got ${typeof record.kind}`, 500)
   }
   const taskId =
     typeof record.byTaskId === 'number' && Number.isInteger(record.byTaskId) && record.byTaskId > 0
@@ -201,10 +201,10 @@ export interface InboxItemLike {
   readonly entry?: { kind?: string; data?: unknown }
 }
 
-/** Inbox queued item -> QueuedConversationInput; returns undefined for non-helm.input or invalid payloads. */
+/** Inbox queued item -> QueuedConversationInput; returns undefined for non-helmx.input or invalid payloads. */
 function queuedInputOf(item: InboxItemLike, fallbackCreatedAt: number): QueuedConversationInput | undefined {
   if (item.mode !== 'steer' && item.mode !== 'followUp') return undefined
-  if (item.entry?.kind !== 'helm.input') return undefined
+  if (item.entry?.kind !== 'helmx.input') return undefined
   const data = item.entry.data
   if (data === null || typeof data !== 'object' || Array.isArray(data)) return undefined
   const d = data as Record<string, unknown>

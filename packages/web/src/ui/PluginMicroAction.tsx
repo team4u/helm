@@ -11,9 +11,9 @@
  */
 import { useState } from 'react'
 import type { ReactNode } from 'react'
-import type { UiActionSpec } from '@helm/protocol/browser'
-import { resolveLocalizedText } from '@helm/protocol/browser'
-import { HelmIcon } from '@helm/plugin-client'
+import type { UiActionSpec } from '@helmx/protocol/browser'
+import { resolveLocalizedText } from '@helmx/protocol/browser'
+import { HelmxIcon } from '@helmx/plugin-client'
 import { useStoreActions } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import type { QualifiedUiSpec } from '../lib/types.js'
@@ -108,7 +108,7 @@ export function PluginMicroAction({
         }}
       >
         <span className="pane-more-item-label">
-          <HelmIcon name={pending ? 'loader' : (spec.icon ?? 'zap')} size={13} className={pending ? 'spin-slow' : undefined} />
+          <HelmxIcon name={pending ? 'loader' : (spec.icon ?? 'zap')} size={13} className={pending ? 'spin-slow' : undefined} />
           {label}
         </span>
       </DropdownMenuItem>
@@ -128,7 +128,7 @@ export function PluginMicroAction({
         }}
       >
         <span className="pane-more-item-label">
-          <HelmIcon name={pending ? 'loader' : (spec.icon ?? 'zap')} size={13} className={pending ? 'spin-slow' : undefined} />
+          <HelmxIcon name={pending ? 'loader' : (spec.icon ?? 'zap')} size={13} className={pending ? 'spin-slow' : undefined} />
           {label}
         </span>
       </button>
@@ -147,7 +147,7 @@ export function PluginMicroAction({
         void run()
       }}
     >
-      <HelmIcon name={pending ? 'loader' : (spec.icon ?? 'zap')} size={12} className={pending ? 'spin-slow' : undefined} />
+      <HelmxIcon name={pending ? 'loader' : (spec.icon ?? 'zap')} size={12} className={pending ? 'spin-slow' : undefined} />
       {variant === 'toolbar' ? <span className="pane-action-label">{label}</span> : null}
     </button>
   )

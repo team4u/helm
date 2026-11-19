@@ -1,5 +1,5 @@
 /**
- * End-to-end integration tests for `@helm/node` without mocking the modules under test:
+ * End-to-end integration tests for `@helmx/node` without mocking the modules under test:
  * - `NodeEnvRpcServer`: real files, directories, readers, command execution, and Unix Socket IPC bridge;
  * - Identity persistence: real temp directories, `0600` permissions, token rotation, and cross-nodeId conflict rejection;
  * - `createNodeDaemon`: real local `http.Server` + `WebSocketServer` + `birpc` Hub stub testing
@@ -13,8 +13,8 @@ import path from 'node:path';
 import http from 'node:http';
 import net from 'node:net';
 import process from 'node:process';
-import { sleep as delay } from '@helm/test-kit';
-import { makeTempDir as tempDir, waitFor as kitWaitFor } from '@helm/test-kit/node';
+import { sleep as delay } from '@helmx/test-kit';
+import { makeTempDir as tempDir, waitFor as kitWaitFor } from '@helmx/test-kit/node';
 import { WebSocket, WebSocketServer } from 'ws';
 import { createBirpc, type BirpcReturn } from 'birpc';
 import type {
@@ -25,7 +25,7 @@ import type {
   NodeIpcEvent,
   NodeRegisterInput,
   NodeRegisterResult,
-} from '@helm/protocol';
+} from '@helmx/protocol';
 import { createNodeEnvRpcServer, type NodeEnvRpcServer } from '../src/daemon/env-rpc-server.js';
 import {
   bindIdentityFromJoinToken,
@@ -40,16 +40,16 @@ import { sanitizedHostEnv } from './helpers/sanitized-env.js';
 import { fileURLToPath } from 'node:url';
 
 // ---------------------------------------------------------------------------
-// 0. Minimal dependency guard: keep @helm/node runtime dependencies bounded
+// 0. Minimal dependency guard: keep @helmx/node runtime dependencies bounded
 // ---------------------------------------------------------------------------
 
-test('@helm/node runtime dependencies stay minimal and explicit', { timeout: 60_000 }, async () => {
+test('@helmx/node runtime dependencies stay minimal and explicit', { timeout: 60_000 }, async () => {
   const packageJsonPath = fileURLToPath(new URL('../package.json', import.meta.url));
   const pkg = JSON.parse(await fs.readFile(packageJsonPath, 'utf8')) as { dependencies?: Record<string, string> };
   assert.deepEqual(
     Object.keys(pkg.dependencies ?? {}).sort(),
-    ['@earendil-works/chord', '@earendil-works/pi-durable', '@helm/env-io', '@helm/protocol', 'birpc', 'ws'],
-    '@helm/node dependencies must stay limited to @earendil-works/chord, @earendil-works/pi-durable, @helm/env-io, @helm/protocol, birpc, and ws',
+    ['@earendil-works/chord', '@earendil-works/pi-durable', '@helmx/env-io', '@helmx/protocol', 'birpc', 'ws'],
+    '@helmx/node dependencies must stay limited to @earendil-works/chord, @earendil-works/pi-durable, @helmx/env-io, @helmx/protocol, birpc, and ws',
   );
 });
 
@@ -63,19 +63,19 @@ const waitFor = (condition: () => boolean | Promise<boolean>, timeoutMs: number,
 // ---------------------------------------------------------------------------
 
 test('env file read/write and directory listing', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-node-env-');
+  const dir = await tempDir('helmx-node-env-');
   const server = createNodeEnvRpcServer({ defaultCwd: dir });
   try {
-    const write = await server.envWriteFile({ path: 'a.txt', content: 'hello helm' });
+    const write = await server.envWriteFile({ path: 'a.txt', content: 'hello helmx' });
     assert.equal(write.ok, true);
     const read = await server.envReadTextFile({ path: 'a.txt' });
     assert.equal(read.ok, true);
-    assert.equal(read.ok && read.value, 'hello helm');
+    assert.equal(read.ok && read.value, 'hello helmx');
 
     const append = await server.envAppendFile({ path: 'a.txt', content: '!' });
     assert.equal(append.ok, true);
     const read2 = await server.envReadTextFile({ path: 'a.txt' });
-    assert.equal(read2.ok && read2.value, 'hello helm!');
+    assert.equal(read2.ok && read2.value, 'hello helmx!');
 
     // base64 binary read/write
     const bytes = Buffer.from([0, 1, 2, 255]);
@@ -109,7 +109,7 @@ test('env file read/write and directory listing', { timeout: 60_000 }, async () 
 });
 
 test('Text/Binary/Dir Reader lifecycle and dispose cleanup', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-node-readers-');
+  const dir = await tempDir('helmx-node-readers-');
   await fs.writeFile(path.join(dir, 'lines.txt'), 'one\ntwo\nthree\n');
   await fs.writeFile(path.join(dir, 'data.bin'), Buffer.from([0x41, 0x0a, 0x43, 0x44])); // "A\nCD": 1 newline
   await fs.mkdir(path.join(dir, 'd'));
@@ -168,18 +168,18 @@ test('Text/Binary/Dir Reader lifecycle and dispose cleanup', { timeout: 60_000 }
 });
 
 test('envExec streams output and envAbortExec terminates child process tree immediately', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-node-exec-');
+  const dir = await tempDir('helmx-node-exec-');
   const chunks: EnvExecOutputEvent[] = [];
   const server = createNodeEnvRpcServer({
     defaultCwd: dir,
     onExecOutput: (event) => chunks.push(event),
-    shellEnv: { HELM_TEST_MARKER: 'from-shell-env' },
+    shellEnv: { HELMX_TEST_MARKER: 'from-shell-env' },
   });
   try {
     // Real command: stdout streaming
     const ok = await server.envExec({
       execId: 'e1',
-      command: 'echo hello-from-exec && echo marker=$HELM_TEST_MARKER 1>&2',
+      command: 'echo hello-from-exec && echo marker=$HELMX_TEST_MARKER 1>&2',
       timeout: 30,
     });
     assert.equal(ok.ok, true);
@@ -246,7 +246,7 @@ function isIpcDisconnectError(error: unknown): boolean {
 async function startHerdrLikeServer(
   handler: (line: string, socket: net.Socket) => void,
 ): Promise<IpcTestServer> {
-  const dir = await tempDir('helm-node-ipc-');
+  const dir = await tempDir('helmx-node-ipc-');
   const sockPath = path.join(dir, 'herdr.sock');
   const sockets = new Set<net.Socket>();
   /** non- connect level error:fixture itself fault must in close() expose, cannot by for end disconnect mask. */
@@ -295,7 +295,7 @@ test('ipcCall request/response and timeout', { timeout: 60_000 }, async (t) => {
   t.after(async () => {
     await srv.close();
   });
-  const dir = await tempDir('helm-node-ipc-client-');
+  const dir = await tempDir('helmx-node-ipc-client-');
   const server = createNodeEnvRpcServer({ defaultCwd: dir });
   t.after(async () => {
     await server.dispose();
@@ -340,7 +340,7 @@ test('ipcAbortCall cancels blocking waits immediately', { timeout: 60_000 }, asy
   t.after(async () => {
     await srv.close();
   });
-  const dir = await tempDir('helm-node-ipc-abort-');
+  const dir = await tempDir('helmx-node-ipc-abort-');
   const server = createNodeEnvRpcServer({ defaultCwd: dir });
   t.after(async () => {
     await server.dispose();
@@ -386,7 +386,7 @@ test('ipcSubscribe streams events and ipcUnsubscribe closes cleanly', { timeout:
   t.after(async () => {
     await srv.close();
   });
-  const dir = await tempDir('helm-node-ipc-sub-');
+  const dir = await tempDir('helmx-node-ipc-sub-');
   const server = createNodeEnvRpcServer({
     defaultCwd: dir,
     onIpcEvent: (e) => events.push(e),
@@ -530,7 +530,7 @@ test('parseJoinToken valid and invalid tokens', { timeout: 60_000 }, () => {
 });
 
 test('bindIdentityFromJoinToken: initial write 0600, same nodeId rotation, cross-nodeId rejection', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-node-identity-');
+  const dir = await tempDir('helmx-node-identity-');
   try {
     // First-time bind
     const first = await bindIdentityFromJoinToken(dir, 'workstation-1:secret-1', 'http://127.0.0.1:3202');
@@ -701,7 +701,7 @@ async function startHubFixture(options: {
 }
 
 test('createNodeDaemon: register + heartbeat + reverse envExec/envReadTextFile/ipcCall', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-node-daemon-');
+  const dir = await tempDir('helmx-node-daemon-');
   const execOutputs: EnvExecOutputEvent[] = [];
   const ipcEvents: NodeIpcEvent[] = [];
   const ipcClosed: NodeIpcClosedEvent[] = [];
@@ -801,7 +801,7 @@ test('createNodeDaemon: register + heartbeat + reverse envExec/envReadTextFile/i
 });
 
 test('createNodeDaemon: disconnect disposes old generation and reconnects cleanly', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-node-daemon-reconnect-');
+  const dir = await tempDir('helmx-node-daemon-reconnect-');
   const execOutputs: EnvExecOutputEvent[] = [];
   const token = 'work-b:secret-b';
   const hub = await startHubFixture({ expectedToken: token, heartbeatMs: 15_000, execOutputs });
@@ -847,7 +847,7 @@ test('createNodeDaemon: disconnect disposes old generation and reconnects cleanl
 });
 
 test('createNodeDaemon: auth rejection (4003) does not report connected', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-node-daemon-auth-');
+  const dir = await tempDir('helmx-node-daemon-auth-');
   const execOutputs: EnvExecOutputEvent[] = [];
   const hub = await startHubFixture({ expectedToken: 'right:secret', reject: true, execOutputs });
   const daemon = await createNodeDaemon({
@@ -882,7 +882,7 @@ async function runCli(argv: string[], env: NodeJS.ProcessEnv = {}): Promise<Capt
   let out = '';
   let err = '';
   const code = await runNodeCli(argv, {
-    // Strip host-managed HELM_* variables so CLI startup reflects only explicit test argv/env.
+    // Strip host-managed HELMX_* variables so CLI startup reflects only explicit test argv/env.
     env: { ...sanitizedHostEnv(), ...env },
     out: (t) => (out += t),
     err: (t) => (err += t),
@@ -893,7 +893,7 @@ async function runCli(argv: string[], env: NodeJS.ProcessEnv = {}): Promise<Capt
 test('runNodeCli --help, unknown command/option, and error envelope', { timeout: 60_000 }, async () => {
   const help = await runCli(['--help']);
   assert.equal(help.code, 0);
-  assert.match(help.out, /helm-node/);
+  assert.match(help.out, /helmx-node/);
   assert.match(help.out, /connect/);
   assert.match(help.out, /service install/);
 
@@ -928,7 +928,7 @@ test('runNodeCli --help, unknown command/option, and error envelope', { timeout:
 });
 
 test('runNodeCli status --json: unbound/bound/stale pid and zero secret leakage', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-node-cli-status-');
+  const dir = await tempDir('helmx-node-cli-status-');
   try {
     // Unbound
     const none = await runCli(['status', '--data-dir', dir, '--json']);
@@ -984,7 +984,7 @@ test('runNodeCli status --json: unbound/bound/stale pid and zero secret leakage'
 });
 
 test('runNodeCli stop: explicit error without pid, cleans stale pid, rejects corrupt pid file', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-node-cli-stop-');
+  const dir = await tempDir('helmx-node-cli-stop-');
   try {
     // Missing pid file: fails explicitly instead of reporting silent success
     const none = await runCli(['stop', '--data-dir', dir, '--json']);
@@ -1020,12 +1020,12 @@ test('runNodeCli stop: explicit error without pid, cleans stale pid, rejects cor
 });
 
 test('service template rendering: darwin/linux/win32 (spaces, Unicode paths, special character escaping)', { timeout: 60_000 }, () => {
-  const dataDir = '/opt/helm data';
+  const dataDir = '/opt/helmx data';
   const cliEntry = '/opt/hélm node/dist/cli.js';
 
   const darwin = renderServiceSpec({ platform: 'darwin', nodePath: '/usr/local/bin/node', cliEntryPath: cliEntry, dataDir, hubUrl: 'http://hub:3202' });
   assert.equal(darwin.platform, 'darwin');
-  assert.match(darwin.content, /ai\.helm\.node/);
+  assert.match(darwin.content, /ai\.helmx\.node/);
   assert.match(darwin.content, /RunAtLoad/);
   assert.match(darwin.content, /KeepAlive/);
   assert.match(darwin.content, /\/usr\/local\/bin\/node/);
@@ -1033,13 +1033,13 @@ test('service template rendering: darwin/linux/win32 (spaces, Unicode paths, spe
   assert.equal(darwin.installCmd[0], 'launchctl');
   assert.equal(darwin.uninstallCmd[0], 'launchctl');
   // plist XML escaping preserves spaces while escaping <>&"'
-  assert.ok(darwin.content.includes('/opt/helm data'));
+  assert.ok(darwin.content.includes('/opt/helmx data'));
 
   const linux = renderServiceSpec({ platform: 'linux', nodePath: '/usr/bin/node', cliEntryPath: cliEntry, dataDir });
   assert.equal(linux.platform, 'linux');
   assert.match(linux.content, /\[Unit\]/);
-  assert.ok(linux.configPath.endsWith('helm-node.service'));
-  assert.ok(linux.targetPath?.endsWith('helm-node.service'));
+  assert.ok(linux.configPath.endsWith('helmx-node.service'));
+  assert.ok(linux.targetPath?.endsWith('helmx-node.service'));
   assert.match(linux.content, /ExecStart=/);
   assert.match(linux.content, /WantedBy=default\.target/);
   assert.equal(linux.installCmd[0], 'systemctl');
@@ -1052,11 +1052,11 @@ test('service template rendering: darwin/linux/win32 (spaces, Unicode paths, spe
   const tricky = renderServiceSpec({
     platform: 'linux',
     nodePath: '/usr/bin/node',
-    cliEntryPath: '/opt/helm %n $MAIN/dist/cli.js',
+    cliEntryPath: '/opt/helmx %n $MAIN/dist/cli.js',
     dataDir: '/opt/data%-dir',
   });
   const trickyLine = tricky.content.split('\n').find((l) => l.startsWith('ExecStart='))!;
-  assert.ok(trickyLine.includes('"/opt/helm %%n $$MAIN/dist/cli.js"'), `%/$ must be escaped literally: ${trickyLine}`);
+  assert.ok(trickyLine.includes('"/opt/helmx %%n $$MAIN/dist/cli.js"'), `%/$ must be escaped literally: ${trickyLine}`);
   assert.ok(trickyLine.includes('"/opt/data%%-dir"'), `% specifier must be escaped literally: ${trickyLine}`);
   // Inner double quotes and backslashes escaped cleanly
   const quoted = renderServiceSpec({
@@ -1068,13 +1068,13 @@ test('service template rendering: darwin/linux/win32 (spaces, Unicode paths, spe
   const quotedLine = quoted.content.split('\n').find((l) => l.startsWith('ExecStart='))!;
   assert.ok(quotedLine.includes('\\"') && quotedLine.includes('\\\\'), `inner quotes/backslashes must be escaped: ${quotedLine}`);
 
-  const win = renderServiceSpec({ platform: 'win32', nodePath: 'C:\\node\\node.exe', cliEntryPath: 'C:\\helm\\cli.js', dataDir });
+  const win = renderServiceSpec({ platform: 'win32', nodePath: 'C:\\node\\node.exe', cliEntryPath: 'C:\\helmx\\cli.js', dataDir });
   assert.equal(win.platform, 'win32');
-  assert.match(win.configPath, /HelmNode\.xml$/);
-  assert.deepEqual(win.installCmd, ['schtasks', '/Create', '/F', '/TN', 'HelmNode', '/XML', win.targetPath]);
+  assert.match(win.configPath, /HelmxNode\.xml$/);
+  assert.deepEqual(win.installCmd, ['schtasks', '/Create', '/F', '/TN', 'HelmxNode', '/XML', win.targetPath]);
   assert.match(win.content, /<Task version="1\.2"/);
-  assert.ok(win.content.includes('&quot;/opt/helm data&quot;'), 'task arguments are quoted literally inside XML');
-  assert.deepEqual(win.uninstallCmd, ['schtasks', '/Delete', '/F', '/TN', 'HelmNode']);
+  assert.ok(win.content.includes('&quot;/opt/helmx data&quot;'), 'task arguments are quoted literally inside XML');
+  assert.deepEqual(win.uninstallCmd, ['schtasks', '/Delete', '/F', '/TN', 'HelmxNode']);
   // Valid XML escaping: after stripping declaration/comments/tags/entities, no unescaped special chars remain
   const xmlText = win.content
     .replace(/<!--[\s\S]*?-->/g, '')
@@ -1083,14 +1083,14 @@ test('service template rendering: darwin/linux/win32 (spaces, Unicode paths, spe
     .replace(/<[a-zA-Z][^>]*>/g, '')
     .replace(/&(lt|gt|amp|apos|quot);/g, '');
   assert.ok(!/[<>&]/.test(xmlText), `XML text must have no unescaped special chars: ${JSON.stringify(xmlText)}`);
-  assert.ok(win.content.includes('/opt/helm data'));
+  assert.ok(win.content.includes('/opt/helmx data'));
 
   // Unsupported platform throws explicitly instead of defaulting to Linux
   assert.throws(() => renderServiceSpec({ platform: 'freebsd', cliEntryPath: cliEntry, dataDir }), /unsupported platform/);
 });
 
 test('runNodeCli service status (mocked execCommand without side effects)', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-node-cli-service-');
+  const dir = await tempDir('helmx-node-cli-service-');
   try {
     // Not installed (failed exec truthfully reports unknown running state)
     const failExec = {
@@ -1106,7 +1106,7 @@ test('runNodeCli service status (mocked execCommand without side effects)', { ti
 });
 
 test('runNodeCli connect --once --json registers once with real Hub and exits', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-node-cli-connect-');
+  const dir = await tempDir('helmx-node-cli-connect-');
   const execOutputs: EnvExecOutputEvent[] = [];
   const hub = await startHubFixture({ expectedToken: 'cli-1:sec', heartbeatMs: 15_000, execOutputs });
   try {
@@ -1131,7 +1131,7 @@ test('runNodeCli connect --once --json registers once with real Hub and exits', 
 });
 
 test('runNodeCli start errors without identity and reports state=registered when Hub is reachable', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-node-cli-start-');
+  const dir = await tempDir('helmx-node-cli-start-');
   let hub: Awaited<ReturnType<typeof startHubFixture>> | undefined;
   try {
     const noIdentity = await runCli(['start', '-d', '--data-dir', dir, '--json']);

@@ -95,7 +95,7 @@ export interface IndexEntryProbeDeps {
  *  (per spec a different URL is a different cache entry), but custom WebView
  *  shells/proxies may still interfere; unverified on real devices, residual
  *  risk noted in the task report. */
-const INDEX_PROBE_CACHE_PARAM = 'helmv'
+const INDEX_PROBE_CACHE_PARAM = 'helmxv'
 
 /** Default nonce: timestamp + in-process sequence, so even two probes within the same millisecond differ. */
 let probeNonceSeq = 0
@@ -293,7 +293,7 @@ export function versionDeferHint(
 // ---------------------------------------------------------------------------
 
 /** sessionStorage marker key: this tab has consumed its preloadError-evidence auto-retry budget. */
-export const PRELOAD_RELOAD_GUARD_KEY = 'helm:version-preload-reload'
+export const PRELOAD_RELOAD_GUARD_KEY = 'helmx:version-preload-reload'
 
 /**
  * Try to claim the preloadError-evidence auto-refresh budget (once per tab).
@@ -339,7 +339,7 @@ export interface VersionReloadLocation extends VersionReloadUrlSource {
  * parameter lives only in the query (the hash is app routing and stays
  * untouched), and every build first strips the old value — never accumulating.
  */
-export const RELOAD_CACHE_BUSTER_PARAM = 'helm_reload'
+export const RELOAD_CACHE_BUSTER_PARAM = 'helmx_reload'
 
 /**
  * Build the refresh-navigation URL: keep the current pathname, existing query
@@ -363,7 +363,7 @@ export function buildVersionReloadUrl(loc: VersionReloadUrlSource, nonce: string
  *  auto refresh. It must be sessionStorage (a per-tab budget): a cross-tab
  *  shared localStorage would let concurrently open tabs eat each other's loop
  *  guard and hurt normal upgrades. */
-export const FINGERPRINT_RELOAD_GUARD_KEY = 'helm:version-fingerprint-reload'
+export const FINGERPRINT_RELOAD_GUARD_KEY = 'helmx:version-fingerprint-reload'
 
 /**
  * Fingerprint-driven auto-refresh cross-page loop guard: the same target entry

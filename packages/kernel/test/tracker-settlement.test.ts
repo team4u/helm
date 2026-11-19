@@ -24,16 +24,16 @@ import { join } from 'node:path'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { Harness, createRegistry } from '@earendil-works/pi-durable'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
-import { HelmError } from '@helm/protocol'
+import { HelmxError } from '@helmx/protocol'
 import { ConversationTracker, isContinuedRun, type TrackerEvents } from '../src/runtime/conversations.js'
-import { openHelmDatabase } from '../src/runtime/sqlite.js'
-import { HelmStore, type ConvMeta } from '../src/runtime/store.js'
+import { openHelmxDatabase } from '../src/runtime/sqlite.js'
+import { HelmxStore, type ConvMeta } from '../src/runtime/store.js'
 import { cleanupDir, makeFauxModels, makeTempDir, waitFor } from './helpers.js'
 
 let root = ''
 
 before(async () => {
-  root = await makeTempDir('helm-tracker-settlement-')
+  root = await makeTempDir('helmx-tracker-settlement-')
 })
 
 after(async () => {
@@ -74,8 +74,8 @@ async function openTracker(): Promise<{
   close: () => Promise<void>
 }> {
   const dir = join(root, `t-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
-  const database = await openHelmDatabase(dir)
-  const store = new HelmStore(database)
+  const database = await openHelmxDatabase(dir)
+  const store = new HelmxStore(database)
   await store.load()
   const { models, faux } = makeFauxModels()
   const harness = await Harness.open(
@@ -116,7 +116,7 @@ async function openTracker(): Promise<{
       await harness.close(BACKGROUND_CONTEXT)
       const err = await store.close()
       await database.close()
-      if (err !== undefined) throw new HelmError('store_flush_failed', String(err), 500)
+      if (err !== undefined) throw new HelmxError('store_flush_failed', String(err), 500)
     },
   }
 }

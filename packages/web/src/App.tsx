@@ -11,7 +11,7 @@ import {
   type ExoticComponent,
   type ReactNode,
 } from 'react'
-import { HelmIcon } from '@helm/plugin-client'
+import { HelmxIcon } from '@helmx/plugin-client'
 import { ModalFocusScope } from './shell/ModalFocusScope.js'
 import { ConversationPane } from './conversation/ConversationPane.js'
 import { ConversationWindowStage } from './conversation/ConversationWindowStage.js'
@@ -19,7 +19,7 @@ import { AgentStandbyPane } from './conversation/AgentStandbyPane.js'
 import { standbyDraftKey } from './conversation/standby-model.js'
 import { ConversationDrawer } from './conversation/ConversationDrawer.js'
 import { useWebLocale } from './i18n/use-web-locale.js'
-import { HelmStoreProvider } from './lib/HelmStoreProvider.js'
+import { HelmxStoreProvider } from './lib/HelmxStoreProvider.js'
 import {
   useActiveModal,
   useAuthConnection,
@@ -78,7 +78,7 @@ class LazyLoadBoundary extends Component<LazyLoadBoundaryProps, LazyLoadBoundary
     return (
       <div className={this.props.overlay ? 'lazy-load-error lazy-load-error-overlay' : 'lazy-load-error'} role="alert">
         <div className="callout callout-warn">
-          <HelmIcon name="alert-triangle" size={14} />
+          <HelmxIcon name="alert-triangle" size={14} />
           <div className="lazy-load-error-body">
             <strong>{labels.title}</strong>
             <p>{this.state.error}</p>
@@ -175,7 +175,7 @@ function QuietNotifierMount() {
   return null
 }
 
-function HelmShellInner() {
+function HelmxShellInner() {
   const { authReady, authError, authenticated, sseConnected, connectionError } = useAuthConnection()
   const { assetsLoaded } = useProfilesSlice()
   const { primaryTarget, splitTarget, focusedPanel } = useLocationTargets()
@@ -277,7 +277,7 @@ function HelmShellInner() {
   return (
     <LazyRetryContext.Provider value={versionWatch.clearPreloadError}>
       <div
-        className={`helm-shell${sidebarOpen ? ' sidebar-open' : ''}${sidebarCollapsed ? ' sidebar-collapsed' : ''}`}
+        className={`helmx-shell${sidebarOpen ? ' sidebar-open' : ''}${sidebarCollapsed ? ' sidebar-collapsed' : ''}`}
         onClick={(event) => {
           const target = event.target as HTMLElement
           if (target.closest('.nav-item')) {
@@ -291,7 +291,7 @@ function HelmShellInner() {
           aria-label={t('shell.nav.toggleNav')}
           onClick={() => setSidebarOpen((open) => !open)}
         >
-          <HelmIcon name="menu" />
+          <HelmxIcon name="menu" />
         </button>
         {sidebarOpen && (
           <button
@@ -303,7 +303,7 @@ function HelmShellInner() {
         )}
         <Sidebar onClose={() => setSidebarOpen(false)} />
 
-        <main className="helm-main-stage">
+        <main className="helmx-main-stage">
           {showConnectionBanner && !sseConnected && (
             <div className="connection-banner" role="status">
               <span>{connectionError ?? t('shell.connection.syncing')}</span>
@@ -312,7 +312,7 @@ function HelmShellInner() {
           )}
           {versionWatch.updateAvailable && (
             <div className="version-banner" role="status">
-              <HelmIcon name="refresh-cw" size={13} />
+              <HelmxIcon name="refresh-cw" size={13} />
               <span className="version-banner-text">
                 {versionWatch.deferReason !== null
                   ? t('shell.version.bannerWithHint', { hint: versionDeferHint(versionWatch.deferReason, t) })
@@ -323,11 +323,11 @@ function HelmShellInner() {
               </button>
             </div>
           )}
-          <div className="helm-panes">
+          <div className="helmx-panes">
             <div
-              className="helm-primary-pane"
-              data-helm-panel="primary"
-              data-helm-panel-focused={splitTarget !== null && focusedPanel === 'primary' ? 'true' : undefined}
+              className="helmx-primary-pane"
+              data-helmx-panel="primary"
+              data-helmx-panel-focused={splitTarget !== null && focusedPanel === 'primary' ? 'true' : undefined}
               onPointerDownCapture={focusPrimary}
               onFocusCapture={focusPrimary}
             >
@@ -379,9 +379,9 @@ function HelmShellInner() {
 
             {splitTarget && (
               <div
-                className="helm-split-pane"
-                data-helm-panel="split"
-                data-helm-panel-focused={focusedPanel === 'split' ? 'true' : undefined}
+                className="helmx-split-pane"
+                data-helmx-panel="split"
+                data-helmx-panel-focused={focusedPanel === 'split' ? 'true' : undefined}
                 onPointerDownCapture={focusSplit}
                 onFocusCapture={focusSplit}
               >
@@ -474,11 +474,11 @@ function HelmShellInner() {
 
 export function App() {
   return (
-    <HelmStoreProvider>
+    <HelmxStoreProvider>
       <TooltipProvider delayDuration={300}>
         <QuietNotifierMount />
-        <HelmShellInner />
+        <HelmxShellInner />
       </TooltipProvider>
-    </HelmStoreProvider>
+    </HelmxStoreProvider>
   )
 }

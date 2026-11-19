@@ -8,8 +8,8 @@
  * Component & type exports only (Fast Refresh compliant).
  */
 import type { ReactNode } from 'react'
-import type { TimelineRendererProps } from '@helm/protocol'
-import { HelmIcon, resolveLocalizedText, usePluginContext, usePluginLocale } from '@helm/plugin-client'
+import type { TimelineRendererProps } from '@helmx/protocol'
+import { HelmxIcon, resolveLocalizedText, usePluginContext, usePluginLocale } from '@helmx/plugin-client'
 import { parseBoardReportMeta, parseBoardWakeupMeta } from './board-model.ts'
 import { SWARM_WORKBENCH_PANEL_TARGET } from './models.ts'
 import {
@@ -33,7 +33,7 @@ export function SwarmBoardReportPill(props: TimelineRendererProps): ReactNode {
   return (
     <div className="sw-receipt-pill">
       <span className="badge badge-accent">
-        <HelmIcon name="network" size={11} />
+        <HelmxIcon name="network" size={11} />
         <span>{resolveLocalizedText(SW_BOARD_REPORT_PILL, locale)}</span>
       </span>
       {seqLabel !== undefined ? (
@@ -51,7 +51,7 @@ export function SwarmBoardReportPill(props: TimelineRendererProps): ReactNode {
         title={resolveLocalizedText(SW_PILL_OPEN_WORKBENCH, locale)}
         onClick={() => ctx.openWorkbench(SWARM_WORKBENCH_PANEL_TARGET)}
       >
-        <HelmIcon name="chevron-right" size={11} />
+        <HelmxIcon name="chevron-right" size={11} />
       </button>
     </div>
   )
@@ -65,7 +65,7 @@ export function SwarmBoardWakeupPill(props: TimelineRendererProps): ReactNode {
   return (
     <div className="sw-receipt-pill">
       <span className="badge badge-neutral">
-        <HelmIcon name="bell" size={11} />
+        <HelmxIcon name="bell" size={11} />
         <span>{resolveLocalizedText(SW_BOARD_WAKEUP_PILL, locale)}</span>
       </span>
       {meta.workerName !== undefined && meta.workerName !== '' ? (
@@ -83,7 +83,7 @@ export function SwarmBoardWakeupPill(props: TimelineRendererProps): ReactNode {
         title={resolveLocalizedText(SW_PILL_OPEN_WORKBENCH, locale)}
         onClick={() => ctx.openWorkbench(SWARM_WORKBENCH_PANEL_TARGET)}
       >
-        <HelmIcon name="chevron-right" size={11} />
+        <HelmxIcon name="chevron-right" size={11} />
       </button>
     </div>
   )

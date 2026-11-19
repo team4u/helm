@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import type { ConversationSummary } from '@helm/protocol/browser'
+import type { ConversationSummary } from '@helmx/protocol/browser'
 import { assetsApi, conversationsApi } from '../lib/api.js'
-import { HelmIcon, Popover, PopoverContent, PopoverPortal, PopoverTrigger } from '@helm/plugin-client'
+import { HelmxIcon, Popover, PopoverContent, PopoverPortal, PopoverTrigger } from '@helmx/plugin-client'
 import { useModels, useOptionalModels, useOptionalStoreActions, useStoreActions } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { ThinkingLevelControl } from '../ui/ThinkingLevelControl.js'
@@ -12,7 +12,7 @@ import {
   resolveEffectiveThinkingLevel,
   stepActiveIndex,
   usePanelShortcut,
-  type HelmPanel,
+  type HelmxPanel,
 } from './keybindings-model.js'
 
 // ---------------------------------------------------------------------------
@@ -29,8 +29,8 @@ export interface ModelPickerControlProps {
   selectedModel: string | undefined
   /** Current thinking level (converged against the model's supported list). */
   activeThinkingLevel: string
-  /** Panel fallback when no `[data-helm-panel]` ancestor exists. */
-  fallbackPanel?: HelmPanel
+  /** Panel fallback when no `[data-helmx-panel]` ancestor exists. */
+  fallbackPanel?: HelmxPanel
   /** Copy for the clear-override button (label and title). */
   resetLabel: string
   resetTitle: string
@@ -205,10 +205,10 @@ export function ModelPickerControl({
             }
             title={buttonTitle}
           >
-            {pending ? <HelmIcon name="loader" size={12} className="spin-slow" /> : null}
+            {pending ? <HelmxIcon name="loader" size={12} className="spin-slow" /> : null}
             <span className="composer-model-label">{shortName}</span>
             {showLevel ? <span className="composer-model-level">· {effectiveLevel}</span> : null}
-            <HelmIcon name="chevron-down" size={12} />
+            <HelmxIcon name="chevron-down" size={12} />
           </button>
         </PopoverTrigger>
         <PopoverPortal>
@@ -253,7 +253,7 @@ export function ModelPickerControl({
             </button>
             <div className="composer-model-search-bar">
               <div className="search-box composer-model-search-input">
-                <HelmIcon name="search" size={13} />
+                <HelmxIcon name="search" size={13} />
                 <input
                   ref={searchInputRef}
                   aria-label={t('composer.model.searchAria')}
@@ -291,7 +291,7 @@ export function ModelPickerControl({
                     void refreshCatalog()
                   }}
                 >
-                  <HelmIcon name="rotate-cw" size={13} className={refreshing ? 'spin-slow' : undefined} />
+                  <HelmxIcon name="rotate-cw" size={13} className={refreshing ? 'spin-slow' : undefined} />
                 </button>
               </Tooltip>
             </div>

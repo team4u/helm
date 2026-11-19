@@ -4,7 +4,7 @@
  */
 
 /** Error response body (the inner shape of `ApiErrorBody['error']`). */
-export interface HelmErrorDetail {
+export interface HelmxErrorDetail {
   code: string
   message: string
   details?: unknown
@@ -15,7 +15,7 @@ export interface HelmErrorDetail {
  * `code` is stable (e.g. 'validation_error', 'not_found',
  * 'plugin_has_live_tasks'); `message` is human-facing; `details` carries extra diagnostics.
  */
-export class HelmError extends Error {
+export class HelmxError extends Error {
   readonly code: string
   /** HTTP status code, defaults to 400. */
   readonly status: number
@@ -23,7 +23,7 @@ export class HelmError extends Error {
 
   constructor(code: string, message: string, status = 400, details?: unknown) {
     super(message)
-    this.name = 'HelmError'
+    this.name = 'HelmxError'
     this.code = code
     this.status = status
     if (details !== undefined) this.details = details

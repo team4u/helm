@@ -13,7 +13,7 @@ import { readHostStyles } from './helpers/host-styles.js'
 import { fileURLToPath } from 'node:url'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import type { ConversationEntry, ConversationSummary, InputOrigin, Profile } from '@helm/protocol'
+import type { ConversationEntry, ConversationSummary, InputOrigin, Profile } from '@helmx/protocol'
 import {
   startersToDrafts,
   validateStarterDraft,
@@ -229,7 +229,7 @@ test('ConversationTimeline: nothing renders with earlier pages/working/sending i
   // Non-empty history
   const nonEmpty = renderTimeline({
     starters: sampleStarters,
-    entries: [{ id: 'e1', kind: 'helm.input', data: { id: 'i1', text: 'hello', origin: 'human', createdAt: 1 } }],
+    entries: [{ id: 'e1', kind: 'helmx.input', data: { id: 'i1', text: 'hello', origin: 'human', createdAt: 1 } }],
   })
   assert.doesNotMatch(nonEmpty.html, /timeline-starters/)
   assert.doesNotMatch(nonEmpty.html, /timeline-center-slot/, 'non-empty history without preamble states must not render an empty timeline-center-slot placeholder')
@@ -237,7 +237,7 @@ test('ConversationTimeline: nothing renders with earlier pages/working/sending i
   const nonEmptyPaged = renderTimeline({
     starters: sampleStarters,
     nextCursor: '{"after":2}',
-    entries: [{ id: 'e1', kind: 'helm.input', data: { id: 'i1', text: 'hello', origin: 'human', createdAt: 1 } }],
+    entries: [{ id: 'e1', kind: 'helmx.input', data: { id: 'i1', text: 'hello', origin: 'human', createdAt: 1 } }],
   })
   const nonEmptyPagedSlot = extractCenterSlot(nonEmptyPaged.html)
   assert.ok(nonEmptyPagedSlot !== null)
@@ -250,7 +250,7 @@ test('ConversationTimeline: nothing renders with earlier pages/working/sending i
   assert.match(loadingSlot.html, /timeline-loading-state/)
 
   const errState = renderTimeline({
-    entries: [{ id: 'e1', kind: 'helm.input', data: { id: 'i1', text: 'hello', origin: 'human', createdAt: 1 } }],
+    entries: [{ id: 'e1', kind: 'helmx.input', data: { id: 'i1', text: 'hello', origin: 'human', createdAt: 1 } }],
     loadErrors: { 'history:7': '历史加载失败' },
   })
   const errSlot = extractCenterSlot(errState.html)

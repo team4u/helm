@@ -2,7 +2,7 @@
  * builtin:apps app center launchpad (client.tsx, component exports only to
  * keep the Fast Refresh contract).
  *
- * All data comes from @helm/plugin-client shared hooks (usePlugins /
+ * All data comes from @helmx/plugin-client shared hooks (usePlugins /
  * usePluginDoc), no polling:
  * - app list: left join of host plugins + screens (non-builtin external
  *   plugin with at least one Screen);
@@ -24,7 +24,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import './styles.css'
 import type { ReactNode } from 'react'
-import type { ScreenProps } from '@helm/protocol'
+import type { ScreenProps } from '@helmx/protocol'
 import {
   Dialog,
   DialogClose,
@@ -32,14 +32,14 @@ import {
   DialogOverlay,
   DialogPortal,
   DialogTitle,
-  HelmIcon,
+  HelmxIcon,
   StatusLight,
   usePluginContext,
   usePluginDoc,
   usePluginLocale,
   usePluginTranslator,
   usePlugins,
-} from '@helm/plugin-client'
+} from '@helmx/plugin-client'
 import {
   appScreenTarget,
   filterAppItems,
@@ -158,7 +158,7 @@ function AppCard({
     >
       <div className="app-card-header">
         <div className="app-card-icon-wrap">
-          <HelmIcon name={iconName} size={16} />
+          <HelmxIcon name={iconName} size={16} />
         </div>
         <div className="app-card-meta">
           <div className="app-card-title-row">
@@ -216,7 +216,7 @@ function AppCard({
                 onOpenSplit(target)
               }}
             >
-              <HelmIcon name="columns" size={11} />
+              <HelmxIcon name="columns" size={11} />
             </button>
           ) : (
             <button
@@ -228,7 +228,7 @@ function AppCard({
                 onEnableInPluginCenter()
               }}
             >
-              <HelmIcon name="settings" size={10} />
+              <HelmxIcon name="settings" size={10} />
               <span>{t(APP_ENABLE_LABEL)}</span>
             </button>
           )}
@@ -242,7 +242,7 @@ function AppCard({
               onShowDetail()
             }}
           >
-            <HelmIcon name="more" size={11} />
+            <HelmxIcon name="more" size={11} />
           </button>
         </div>
       </div>
@@ -322,7 +322,7 @@ function AppDetailDrawer({
           <div className="primary-drawer-header">
             <div className="primary-drawer-header-left">
               <div className="primary-drawer-icon-wrap">
-                <HelmIcon name={catalog?.icon ?? 'layout-grid'} size={18} />
+                <HelmxIcon name={catalog?.icon ?? 'layout-grid'} size={18} />
               </div>
               <div className="primary-drawer-title-col">
                 <div className="primary-drawer-title-row">
@@ -349,7 +349,7 @@ function AppDetailDrawer({
             </div>
             <DialogClose asChild>
               <button type="button" className="btn btn-ghost btn-sm" aria-label={t(APP_CLOSE)} title={t(APP_CLOSE)}>
-                <HelmIcon name="x" size={14} />
+                <HelmxIcon name="x" size={14} />
               </button>
             </DialogClose>
           </div>
@@ -408,7 +408,7 @@ function AppDetailDrawer({
                     title={appOriginJumpTitle(originConversationId, locale)}
                     onClick={() => ctx.openScreen(`conversation:${originConversationId}`)}
                   >
-                    <HelmIcon name="message-square" size={11} />
+                    <HelmxIcon name="message-square" size={11} />
                     <span>#{originConversationId}</span>
                   </button>
                 </div>
@@ -418,7 +418,7 @@ function AppDetailDrawer({
             {screens.length > 0 && (
               <div className="app-detail-section">
                 <h4 className="app-detail-section-title">
-                  <HelmIcon name="monitor" size={13} />
+                  <HelmxIcon name="monitor" size={13} />
                   <span>{appViewsSectionTitle(screens.length, locale)}</span>
                 </h4>
                 {screens.map((screen) => {
@@ -426,7 +426,7 @@ function AppDetailDrawer({
                   return (
                     <div key={screen.screenId} className="app-detail-screen-row">
                       <span className="app-detail-screen-label" title={`${screen.pluginId}/${screen.screenId}`}>
-                        <HelmIcon name="layout" size={13} />
+                        <HelmxIcon name="layout" size={13} />
                         <span>{resolveAppScreenLabel(screen, locale)}</span>
                       </span>
                       <div className="app-detail-screen-actions">
@@ -436,7 +436,7 @@ function AppDetailDrawer({
                           title={t(APP_OPEN_VIEW_TITLE)}
                           onClick={() => ctx.openScreen(target)}
                         >
-                          <HelmIcon name="play" size={11} />
+                          <HelmxIcon name="play" size={11} />
                           <span>{t(APP_OPEN_VIEW_LABEL)}</span>
                         </button>
                         <button
@@ -446,7 +446,7 @@ function AppDetailDrawer({
                           aria-label={t(APP_OPEN_VIEW_SPLIT_LABEL)}
                           onClick={() => ctx.openSplitScreen(target)}
                         >
-                          <HelmIcon name="columns" size={11} />
+                          <HelmxIcon name="columns" size={11} />
                         </button>
                       </div>
                     </div>
@@ -458,7 +458,7 @@ function AppDetailDrawer({
             {(plugin.actions?.length ?? 0) > 0 && (
               <div className="app-detail-section">
                 <h4 className="app-detail-section-title">
-                  <HelmIcon name="zap" size={13} />
+                  <HelmxIcon name="zap" size={13} />
                   <span>{appActionsSectionTitle(plugin.actions?.length ?? 0, locale)}</span>
                 </h4>
                 <div className="plugin-capability-tags" style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
@@ -497,7 +497,7 @@ function AppDetailDrawer({
                   disabled={deleting}
                   onClick={handleDelete}
                 >
-                  <HelmIcon name="trash-2" size={12} />
+                  <HelmxIcon name="trash-2" size={12} />
                   <span>{deleting ? t(APP_DELETING) : t(APP_DELETE_CONFIRM_LABEL)}</span>
                 </button>
               </div>
@@ -521,7 +521,7 @@ function AppDetailDrawer({
                   }
                   onClick={handleIterate}
                 >
-                  <HelmIcon name="message-square" size={12} />
+                  <HelmxIcon name="message-square" size={12} />
                   <span>{t(APP_ITERATE)}</span>
                 </button>
                 <button
@@ -531,7 +531,7 @@ function AppDetailDrawer({
                   aria-label={t(APP_UNINSTALL_LABEL)}
                   onClick={() => setConfirmDelete(true)}
                 >
-                  <HelmIcon name="trash-2" size={12} />
+                  <HelmxIcon name="trash-2" size={12} />
                   <span>{t(APP_UNINSTALL)}</span>
                 </button>
               </>
@@ -585,7 +585,7 @@ export function AppCenterScreen(props: AppCenterScreenProps): ReactNode {
       <div className="apps-center-topbar">
         <div className="apps-center-title-wrap">
           <div className="apps-center-title">
-            <HelmIcon name="layout-grid" size={16} />
+            <HelmxIcon name="layout-grid" size={16} />
             <span>{t(APP_CENTER_TITLE)}</span>
           </div>
           <span className="apps-center-subtitle text-subtle">
@@ -601,7 +601,7 @@ export function AppCenterScreen(props: AppCenterScreenProps): ReactNode {
 
       <div className="apps-center-toolbar">
         <div className="primary-search-box">
-          <HelmIcon name="search" size={14} />
+          <HelmxIcon name="search" size={14} />
           <input
             type="text"
             placeholder={t(APP_SEARCH_PLACEHOLDER)}
@@ -617,7 +617,7 @@ export function AppCenterScreen(props: AppCenterScreenProps): ReactNode {
               aria-label={t(APP_SEARCH_CLEAR)}
               onClick={() => setQuery('')}
             >
-              <HelmIcon name="x" size={12} />
+              <HelmxIcon name="x" size={12} />
             </button>
           )}
         </div>
@@ -660,7 +660,7 @@ export function AppCenterScreen(props: AppCenterScreenProps): ReactNode {
         </div>
       ) : (
         <div className="apps-empty">
-          <HelmIcon name="layout-grid" size={26} />
+          <HelmxIcon name="layout-grid" size={26} />
           <div className="apps-empty-title">
             {items.length === 0 ? t(APP_EMPTY_NO_APPS) : t(APP_EMPTY_NO_MATCH)}
           </div>
@@ -676,7 +676,7 @@ export function AppCenterScreen(props: AppCenterScreenProps): ReactNode {
                 setTab('all')
               }}
             >
-              <HelmIcon name="rotate-ccw" size={11} />
+              <HelmxIcon name="rotate-ccw" size={11} />
               <span>{t(APP_RESET_FILTERS)}</span>
             </button>
           )}

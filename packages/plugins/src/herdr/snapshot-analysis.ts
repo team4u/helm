@@ -15,7 +15,7 @@
  *     diagnostic (only the error code and a short reason; no model response or terminal snapshot text).
  */
 
-import { HelmError } from '@helm/protocol'
+import { HelmxError } from '@helmx/protocol'
 import { parseAiSnapshotAnalysisText, type BlockedSnapshotAnalysis } from './prompt-options.js'
 
 /** Generic text-completion port (the composition layer injects KernelRuntime.completeConversationText). */
@@ -57,7 +57,7 @@ const SNAPSHOT_TAIL_CHARS = 1_500
  * contain raw response / snapshots / tokens); unknown errors are uniformly "request failed".
  */
 function shortDiagnostic(error: unknown): string {
-  if (error instanceof HelmError) {
+  if (error instanceof HelmxError) {
     switch (error.code) {
       case 'model_not_configured':
         return 'model_not_configured: the conversation has no effective model configured'
@@ -127,7 +127,7 @@ export function createBlockedSnapshotAnalyzer(
         onExternalAbort?.(
           input.signal?.reason instanceof Error
             ? input.signal.reason
-            : new HelmError('aborted', 'blocked-snapshot AI parsing cancelled externally', 499),
+            : new HelmxError('aborted', 'blocked-snapshot AI parsing cancelled externally', 499),
         )
       }
       if (input.signal !== undefined) {

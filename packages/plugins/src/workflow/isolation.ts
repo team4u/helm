@@ -6,7 +6,7 @@
  * - `aroundSpawn` 编排新建 / resume / reattach / 外部运行时回填；
  * - `pruneConversation` 在会话删除时裁剪绑定与已 `removed` 记录（保留 `active` 记录与租约）。
  */
-import { HelmError, type AgentExecutionInfo, type AgentSpawnRequest, type NodePathUsage } from '@helm/protocol'
+import { HelmxError, type AgentExecutionInfo, type AgentSpawnRequest, type NodePathUsage } from '@helmx/protocol'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { FileError, type ExecutionEnv, type Result } from '@earendil-works/pi-durable/env'
 import { WorktreeAllocator, type ManagedWorktreeRecord } from './worktree.js'
@@ -153,12 +153,12 @@ export class WorktreeIsolation {
     next: (finalRequest: AgentSpawnRequest) => Promise<unknown>,
   ): Promise<unknown> {
     if (request.fork !== undefined && typeof request.fork !== 'boolean') {
-      throw new HelmError('validation_error', `fork 必须为 boolean（收到 ${typeof request.fork}）`, 400, {
+      throw new HelmxError('validation_error', `fork 必须为 boolean（收到 ${typeof request.fork}）`, 400, {
         fork: request.fork,
       })
     }
     if (request.fork === true && request.resume !== undefined) {
-      throw new HelmError(
+      throw new HelmxError(
         'validation_error',
         'fork 与 resume 互斥：不能同时从父会话分叉并续接既有子会话',
         400,
@@ -182,7 +182,7 @@ export class WorktreeIsolation {
         return resumeWithWorktree(this.spawnCtx(), request, resumeChildId, existing, next)
       }
       if (request.isolation === 'worktree') {
-        throw new HelmError(
+        throw new HelmxError(
           'resume_cwd_conflict',
           `子会话 ${request.resume} 创建时未启用 worktree 隔离，不支持在 resume 时中途切换为 worktree 隔离`,
           409,
@@ -193,7 +193,7 @@ export class WorktreeIsolation {
     if (request.isolation === 'worktree') {
       if (isExternalRuntimeAgentType(request.agentType)) {
         if (request.fork === true) {
-          throw new HelmError(
+          throw new HelmxError(
             'unsupported_runtime',
             `fork 仅支持原生 Profile 子会话，不支持外部运行时 '${request.agentType}'`,
             400,
@@ -211,7 +211,7 @@ export class WorktreeIsolation {
         const profile = await this.deps.host.profiles.get(targetProfileId)
         if (profile?.runtime !== undefined) {
           if (request.fork === true) {
-            throw new HelmError(
+            throw new HelmxError(
               'unsupported_runtime',
               `Profile '${targetProfileId}' 声明外部运行时，fork 仅支持原生 Profile 子会话`,
               400,
@@ -265,23 +265,23 @@ export class WorktreeIsolation {
    */
   async acquireWorktree(input: AcquireWorktreeInput, signal?: AbortSignal): Promise<AcquireWorktreeResult> {
     if (!Number.isSafeInteger(input.conversationId) || input.conversationId < 1) {
-      throw new HelmError('validation_error', 'conversationId 必须为正整数', 400, {
+      throw new HelmxError('validation_error', 'conversationId 必须为正整数', 400, {
         conversationId: input.conversationId,
       })
     }
     if (!Number.isSafeInteger(input.parentConversationId) || input.parentConversationId < 1) {
-      throw new HelmError('validation_error', 'parentConversationId 必须为正整数', 400, {
+      throw new HelmxError('validation_error', 'parentConversationId 必须为正整数', 400, {
         parentConversationId: input.parentConversationId,
       })
     }
     if (input.profileId !== undefined && (typeof input.profileId !== 'string' || input.profileId.trim() === '')) {
-      throw new HelmError('validation_error', 'profileId 必须为非空字符串', 400, { profileId: input.profileId })
+      throw new HelmxError('validation_error', 'profileId 必须为非空字符串', 400, { profileId: input.profileId })
     }
     if (input.requestCwd !== undefined && (typeof input.requestCwd !== 'string' || input.requestCwd.trim() === '')) {
-      throw new HelmError('validation_error', 'requestCwd 必须为非空字符串', 400, { requestCwd: input.requestCwd })
+      throw new HelmxError('validation_error', 'requestCwd 必须为非空字符串', 400, { requestCwd: input.requestCwd })
     }
     if (input.fork !== undefined && typeof input.fork !== 'boolean') {
-      throw new HelmError('validation_error', `fork 必须为 boolean（收到 ${typeof input.fork}）`, 400, {
+      throw new HelmxError('validation_error', `fork 必须为 boolean（收到 ${typeof input.fork}）`, 400, {
         fork: input.fork,
       })
     }

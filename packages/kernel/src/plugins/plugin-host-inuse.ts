@@ -1,7 +1,7 @@
 /**
  * Pre-disable persistent resource usage probe: service self-declared items, dependents, and profile/conversation references.
  */
-import { HelmError } from '@helm/protocol';
+import { HelmxError } from '@helmx/protocol';
 import { collectServiceInUse } from './service-coordinator.js';
 import { collectDependents } from './plugin-host-deps.js';
 import type { UiRegistry } from './ui-registry.js';
@@ -59,7 +59,7 @@ export async function collectPluginInUse(
     try {
       profiles = (await deps.host.profiles.list()) as typeof profiles;
     } catch (err) {
-      if (!(err instanceof HelmError && err.code === 'unsupported')) throw err;
+      if (!(err instanceof HelmxError && err.code === 'unsupported')) throw err;
     }
   }
   for (const profile of profiles) {
@@ -88,7 +88,7 @@ export async function collectPluginInUse(
     try {
       conversations = deps.host.listConversations() as typeof conversations;
     } catch (err) {
-      if (!(err instanceof HelmError && err.code === 'unsupported')) throw err;
+      if (!(err instanceof HelmxError && err.code === 'unsupported')) throw err;
     }
     for (const conv of conversations) {
       if (

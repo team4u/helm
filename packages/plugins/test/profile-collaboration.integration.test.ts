@@ -11,11 +11,11 @@
  *    （不派生会话、零模型调用）、显式校验真实会话（不存在 404）、
  *    外层 body.conversationId 存在时优先作为可信上下文（不接受 input
  *    伪造目标会话）。
- * 3. 真 runCli 动态命令 helm profile list_mentionable（manifest 经真 HTTP
- *    拉取，不 mock 服务端响应）：--current（读 HELM_CONVERSATION_ID）与
+ * 3. 真 runCli 动态命令 helmx profile list_mentionable（manifest 经真 HTTP
+ *    拉取，不 mock 服务端响应）：--current（读 HELMX_CONVERSATION_ID）与
  *    无上下文 --input 显式 conversationId 均正确；空查询命中完整目录排除
  *    规则（当前 Profile / humanSelectable:false / 停用插件托管角色）；
- *    --current 存在时优先使用 HELM_CONVERSATION_ID，不接受 input 冒充目标。
+ *    --current 存在时优先使用 HELMX_CONVERSATION_ID，不接受 input 冒充目标。
  * 4. 父会话输入「让 @reviewer 审查」→ faux 脚本显式调用
  *    subagent({agentType:'reviewer'}) → 真子会话（parentConversationId 与
  *    profileId 如实落库，携带 parentToolCallId）→ 父收尾轮模型上下文含
@@ -44,9 +44,9 @@ import {
   type FauxResponseStep,
 } from '@earendil-works/pi-ai/providers/faux'
 
-import { createHelm } from '../../hub/src/app.js'
+import { createHelmx } from '../../hub/src/app.js'
 import { startHub } from '../../kernel/src/http/index.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { makeFauxProvider, type FauxProviderHandle } from './helpers/plugin-test-env.js'
 
 import assert from 'node:assert/strict'
@@ -69,7 +69,7 @@ interface CapturedRequest {
 interface CollabEnv {
   dataDir: string
   faux: FauxProviderHandle
-  app: Awaited<ReturnType<typeof createHelm>>
+  app: Awaited<ReturnType<typeof createHelmx>>
   /** 每次模型请求的 system sections 与用户文本（faux TranscriptContext 捕获）。 */
   requests: CapturedRequest[]
   /** 首次启动播种的 assistant 入口会话 ID（点名协作的父会话）。 */
@@ -83,10 +83,10 @@ interface CollabEnv {
 }
 
 async function makeCollabEnv(): Promise<CollabEnv> {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-profile-collab-'))
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-profile-collab-'))
   const faux = makeFauxProvider()
   // 真实组合入口：真 SQLite + 真 PluginHost + 真 builtin:profile/workflow/memory。
-  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider] })
+  const app = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider] })
   const kernel = app.kernel
 
   // 委派目标与被排除角色（save 的 system 字段原子同步至 SYSTEM.md）。
@@ -328,18 +328,18 @@ test('协作2: HTTP list_mentionable——query 过滤/insertText 尾随空格/�
 // 3. 真 CLI 动态命令：--current / 无上下文 --input / 目录排除 / 冲突
 // ---------------------------------------------------------------------------
 
-test('协作3: CLI 动态命令 helm profile list_mentionable——--current/无上下文 --input/目录排除规则/上下文身份优先', { timeout: 60_000 }, async () => {
+test('协作3: CLI 动态命令 helmx profile list_mentionable——--current/无上下文 --input/目录排除规则/上下文身份优先', { timeout: 60_000 }, async () => {
   const env = await makeCollabHttpEnv()
   const { runCli } = await import('../../cli/src/index.js')
   const run = async (argv: string[], extraEnv: NodeJS.ProcessEnv = {}): Promise<{ code: number; out: string; err: string }> => {
     let out = ''
     let err = ''
     const code = await runCli(argv, {
-      // 不继承 process.env：HELM_CONVERSATION_ID 只在显式给定时存在。
+      // 不继承 process.env：HELMX_CONVERSATION_ID 只在显式给定时存在。
       env: {
-        HELM_HUB_URL: env.hub.url,
-        HELM_DATA_DIR: env.dataDir,
-        HELM_TOKEN: env.token,
+        HELMX_HUB_URL: env.hub.url,
+        HELMX_DATA_DIR: env.dataDir,
+        HELMX_TOKEN: env.token,
         PATH: process.env.PATH,
         ...extraEnv,
       },
@@ -349,10 +349,10 @@ test('协作3: CLI 动态命令 helm profile list_mentionable——--current/无
     return { code, out, err }
   }
   try {
-    // --- --current（HELM_CONVERSATION_ID 真实解析）+ --query 动态旗标
+    // --- --current（HELMX_CONVERSATION_ID 真实解析）+ --query 动态旗标
     const current = await run(
       ['profile', 'list_mentionable', '--query', 'review', '--current', '--json'],
-      { HELM_CONVERSATION_ID: String(env.rootId) },
+      { HELMX_CONVERSATION_ID: String(env.rootId) },
     )
     assert.equal(current.code, 0, current.err)
     const currentItems = parseItems(current.out)
@@ -390,7 +390,7 @@ test('协作3: CLI 动态命令 helm profile list_mentionable——--current/无
         'profile', 'list_mentionable', '--current', '--json',
         '--input', JSON.stringify({ query: 'review', conversationId: env.secondConvId }),
       ],
-      { HELM_CONVERSATION_ID: String(env.rootId) },
+      { HELMX_CONVERSATION_ID: String(env.rootId) },
     )
     assert.equal(contextWins.code, 0, contextWins.err)
     assert.deepEqual(parseItems(contextWins.out).map((i) => i.id), ['reviewer'])

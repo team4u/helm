@@ -3,7 +3,7 @@
  * prints either human-readable text or a JSON object (`--json`) and returns a process exit code.
  * Errors carry a stable `code` (UsageError) surfaced in the JSON error envelope by the CLI layer.
  */
-import { readCurrentRelease, readBlockedRelease } from '@helm/env-io';
+import { readCurrentRelease, readBlockedRelease } from '@helmx/env-io';
 import { assertDistTag, pathsOf, resolvePayloadPackageName, resolveRegistryUrl, resolveUpdateIntervalMs, resolveUpdateTag } from './layout.js';
 import { readLaunchConfig, resolveEffectiveLaunchConfig } from './records.js';
 import { readRunningHub, stopHub } from './process.js';
@@ -41,15 +41,15 @@ function payloadPackageNameOf(ctx: CommandContext): string {
   return resolvePayloadPackageName(ctx.io.env);
 }
 
-/** Registry URL honoring the `--registry` flag and the `HELM_NPM_REGISTRY` environment alike. */
+/** Registry URL honoring the `--registry` flag and the `HELMX_NPM_REGISTRY` environment alike. */
 function registryUrlOf(ctx: CommandContext, flags: CommandFlags): string {
   return resolveRegistryUrl(ctx.io.env, flags.registry);
 }
 
 function tagOf(flags: CommandFlags, env: NodeJS.ProcessEnv): string | undefined {
   if (flags.tag !== undefined) return assertDistTag(flags.tag);
-  if (env.HELM_HUB_UPDATE_TAG !== undefined && env.HELM_HUB_UPDATE_TAG !== '') {
-    return assertDistTag(env.HELM_HUB_UPDATE_TAG);
+  if (env.HELMX_HUB_UPDATE_TAG !== undefined && env.HELMX_HUB_UPDATE_TAG !== '') {
+    return assertDistTag(env.HELMX_HUB_UPDATE_TAG);
   }
   return undefined;
 }
@@ -138,7 +138,7 @@ export async function cmdUpdate(ctx: CommandContext, flags: CommandFlags): Promi
   const lines = [`updated: ${outcome.previousVersion ?? '(none)'} -> ${outcome.targetVersion}`];
   if (outcome.restarted) lines.push(`hub restarted (pid ${outcome.pid}, ${outcome.url})`);
   else if (outcome.started) lines.push(`hub started (pid ${outcome.pid}, ${outcome.url})`);
-  else lines.push('hub is not running; use helm update --watch');
+  else lines.push('hub is not running; use helmx update --watch');
   ctx.io.out(`${lines.join('\n')}\n`);
   return 0;
 }

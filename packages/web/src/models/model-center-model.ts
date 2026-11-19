@@ -16,7 +16,7 @@
  * constant-table labels and therefore resolved through `t` by the
  * `buildDefaultProviders` builder instead of living as raw literals.
  */
-import type { CredentialSummary, ModelProviderSummary, ProviderConfig } from '@helm/protocol/browser'
+import type { CredentialSummary, ModelProviderSummary, ProviderConfig } from '@helmx/protocol/browser'
 import type { ModelDescriptor } from '../lib/api.js'
 import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 import { formatTokens } from '../lib/format.js'

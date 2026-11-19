@@ -10,7 +10,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { after, before, describe, it, test } from 'node:test';
-import type { HubActivityCounts, HubActivityFile } from '@helm/protocol';
+import type { HubActivityCounts, HubActivityFile } from '@helmx/protocol';
 import { hubActivityFilePath, startActivityHeartbeat, type ActivityHeartbeat } from '../src/runtime/activity-heartbeat.js';
 import { cleanupDir, makeTempDir, waitFor } from './helpers.js';
 
@@ -25,7 +25,7 @@ describe('activity heartbeat writer', { timeout: 60_000 }, () => {
   let hearts: ActivityHeartbeat[] = [];
 
   before(async () => {
-    root = await makeTempDir('helm-activity-hb-');
+    root = await makeTempDir('helmx-activity-hb-');
   });
   after(async () => {
     for (const heart of hearts) await heart.stop().catch(() => undefined);

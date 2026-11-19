@@ -8,7 +8,7 @@
  * the build implementation package; this module contains only types and pure functions,
  * keeping protocol free of heavy runtime dependencies and browser-safe.
  */
-import { HelmError } from './error.js';
+import { HelmxError } from './error.js';
 
 /**
  * Controlled npm dependency declaration: `specifiers` are the allowed exact bare
@@ -24,7 +24,7 @@ export interface PluginClientNpmRoot {
 
 /** client.tsx build output (single entry). */
 export interface PluginClientBundle {
-  /** Output JS text (self-contained browser ESM; shared dependencies resolve at runtime via globalThis.__helm_shared_*). */
+  /** Output JS text (self-contained browser ESM; shared dependencies resolve at runtime via globalThis.__helmx_shared_*). */
   code: string;
   /** Content hash (entry + all local/controlled npm dependency content sha256 + compile options). */
   contentHash: string;
@@ -94,7 +94,7 @@ export function assertModuleRefShape(pluginId: string, moduleRef: string): void 
     moduleRef.split('/').includes('..') ||
     !MODULE_REF_PATTERN.test(moduleRef)
   ) {
-    throw new HelmError(
+    throw new HelmxError(
       'invalid_client_module',
       `client module reference of plugin ${pluginId} is invalid (must be a relative .ts/.tsx path inside clientRoot; absolute paths / .. root escapes / backslashes forbidden): ${String(moduleRef)}`,
       400,
@@ -146,7 +146,7 @@ export interface PrebuiltClientModuleEntry {
   entryFile: string;
   /** Deterministic content hash of the compiled entry module and its dependencies. */
   contentHash: string;
-  /** Named exports of the entry module (including `__helmClientCss` when CSS was bundled). */
+  /** Named exports of the entry module (including `__helmxClientCss` when CSS was bundled). */
   exports: string[];
   /** Async/shared chunk filenames emitted for this entry (when code splitting occurred). */
   chunks?: string[];
@@ -159,7 +159,7 @@ export interface PrebuiltClientManifest {
   modules: Record<string, PrebuiltClientModuleEntry>;
 }
 
-/** Options accepted by `@helm/plugin-build`'s `buildPluginClientBundleDir`. */
+/** Options accepted by `@helmx/plugin-build`'s `buildPluginClientBundleDir`. */
 export interface BuildPluginClientBundleDirOptions {
   pluginId: string;
   clientRoot: string;
@@ -188,7 +188,7 @@ export function assertPrebuiltChunkName(pluginId: string, chunk: string): void {
     !PREBUILT_CHUNK_NAME_PATTERN.test(chunk) ||
     chunk.includes('..')
   ) {
-    throw new HelmError(
+    throw new HelmxError(
       'invalid_client_module',
       `plugin ${pluginId} invalid chunk module name (must match /^[A-Za-z0-9._-]+\\.js$/ and exclude ..): ${String(chunk)}`,
       400,
@@ -216,7 +216,7 @@ export function assertPrebuiltRelativeFile(prebuiltDir: string, relPath: unknown
     !PREBUILT_REL_FILE_PATTERN.test(relPath) ||
     relPath.split('/').some((seg) => seg === '.' || seg === '..')
   ) {
-    throw new HelmError(
+    throw new HelmxError(
       'prebuilt_client_invalid',
       `Prebuilt client ${label} in ${prebuiltDir} must be a safe relative path without '..' or absolute prefixes: ${String(relPath)}`,
       400,
@@ -233,7 +233,7 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 /** Validates and normalizes a parsed `dist-client/manifest.json` structure (pure, zero I/O). */
 export function assertPrebuiltClientManifest(raw: unknown, prebuiltDir: string): PrebuiltClientManifest {
   if (!isPlainRecord(raw)) {
-    throw new HelmError(
+    throw new HelmxError(
       'prebuilt_client_invalid',
       `Prebuilt client manifest in ${prebuiltDir} must be a JSON object`,
       400,
@@ -241,7 +241,7 @@ export function assertPrebuiltClientManifest(raw: unknown, prebuiltDir: string):
     );
   }
   if (raw['version'] !== PREBUILT_CLIENT_MANIFEST_VERSION) {
-    throw new HelmError(
+    throw new HelmxError(
       'prebuilt_client_invalid',
       `Prebuilt client manifest in ${prebuiltDir} has unsupported version ${String(raw['version'])} (expected ${PREBUILT_CLIENT_MANIFEST_VERSION})`,
       400,
@@ -250,7 +250,7 @@ export function assertPrebuiltClientManifest(raw: unknown, prebuiltDir: string):
   }
   const rawModules = raw['modules'];
   if (!isPlainRecord(rawModules)) {
-    throw new HelmError(
+    throw new HelmxError(
       'prebuilt_client_invalid',
       `Prebuilt client manifest in ${prebuiltDir} must declare a modules object`,
       400,
@@ -262,7 +262,7 @@ export function assertPrebuiltClientManifest(raw: unknown, prebuiltDir: string):
   for (const [moduleRef, rawEntry] of Object.entries(rawModules)) {
     assertModuleRefShape('prebuilt', moduleRef);
     if (!isPlainRecord(rawEntry)) {
-      throw new HelmError(
+      throw new HelmxError(
         'prebuilt_client_invalid',
         `Prebuilt client manifest entry for ${moduleRef} in ${prebuiltDir} must be an object`,
         400,
@@ -272,7 +272,7 @@ export function assertPrebuiltClientManifest(raw: unknown, prebuiltDir: string):
     const entryFile = assertPrebuiltRelativeFile(prebuiltDir, rawEntry['entryFile'], `modules[${moduleRef}].entryFile`);
     const contentHash = rawEntry['contentHash'];
     if (typeof contentHash !== 'string' || contentHash.trim().length === 0 || /[\s/\\]/.test(contentHash)) {
-      throw new HelmError(
+      throw new HelmxError(
         'prebuilt_client_invalid',
         `Prebuilt client manifest entry for ${moduleRef} in ${prebuiltDir} has invalid contentHash`,
         400,
@@ -281,7 +281,7 @@ export function assertPrebuiltClientManifest(raw: unknown, prebuiltDir: string):
     }
     const rawExports = rawEntry['exports'];
     if (!Array.isArray(rawExports) || rawExports.some((e) => typeof e !== 'string' || e.length === 0)) {
-      throw new HelmError(
+      throw new HelmxError(
         'prebuilt_client_invalid',
         `Prebuilt client manifest entry for ${moduleRef} in ${prebuiltDir} must declare exports as a string array`,
         400,
@@ -292,7 +292,7 @@ export function assertPrebuiltClientManifest(raw: unknown, prebuiltDir: string):
     let chunks: string[] | undefined;
     if (rawChunks !== undefined) {
       if (!Array.isArray(rawChunks)) {
-        throw new HelmError(
+        throw new HelmxError(
           'prebuilt_client_invalid',
           `Prebuilt client manifest entry for ${moduleRef} in ${prebuiltDir} must declare chunks as an array`,
           400,
@@ -304,7 +304,7 @@ export function assertPrebuiltClientManifest(raw: unknown, prebuiltDir: string):
       for (const chunkName of rawChunks) {
         assertPrebuiltChunkName('prebuilt', chunkName as string);
         if (seenChunks.has(chunkName as string)) {
-          throw new HelmError(
+          throw new HelmxError(
             'prebuilt_client_invalid',
             `Prebuilt client manifest entry for ${moduleRef} in ${prebuiltDir} contains duplicate chunk: ${String(chunkName)}`,
             400,

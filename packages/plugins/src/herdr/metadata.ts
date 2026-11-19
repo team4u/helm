@@ -1,5 +1,5 @@
 /**
- * $helm status token projector (pane.report_metadata).
+ * $helmx status token projector (pane.report_metadata).
  *
  * Anti self-excitation loop (from a real incident): report_metadata itself produces pane.updated events;
  * unconditionally re-projecting after every event would loop forever. Therefore:
@@ -13,7 +13,7 @@
 import type { HerdrTarget } from './contracts.js'
 import { assertOkResult } from './rpc.js'
 
-const SOURCE = 'helm'
+const SOURCE = 'helmx'
 const TOKEN_TTL_MS = 30_000
 /** Refresh at half the TTL (the renewal heartbeat before the sidebar token expires). */
 const REFRESH_AFTER_MS = Math.floor(TOKEN_TTL_MS / 2)
@@ -81,7 +81,7 @@ export class MetadataProjector {
       const result = await this.call(target, 'pane.report_metadata', {
         pane_id: paneId,
         source: SOURCE,
-        tokens: { helm: token },
+        tokens: { helmx: token },
         seq: cur.lastSeq,
         ttl_ms: TOKEN_TTL_MS,
       })

@@ -35,7 +35,7 @@
  *   Anthropic 持续上报；OpenAI 兼容网关常只在终值）。优先用其增量；无推进
  *   时退回 chars/4 估算。
  */
-import type { ConversationLiveMessage } from '@helm/protocol'
+import type { ConversationLiveMessage } from '@helmx/protocol'
 import { contentCharsOfBlocks, type TokenSpeedSource, type TokenSpeedStatus } from './contracts.js'
 
 /** 窗口事件：一次内容增长帧（时间戳 + 增量 tokens + 所属段 id）。 */

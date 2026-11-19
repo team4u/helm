@@ -1,6 +1,6 @@
 /**
  * End-to-end tests for plugin uninstall cleanup (purgePluginPersistentData):
- * Real HelmStore (temporary SQLite) + real PluginHost with injected production-level
+ * Real HelmxStore (temporary SQLite) + real PluginHost with injected production-level
  * doc/sessionDoc stores (createGlobalDocumentStore / createPluginSessionDocStore), verifying:
  * - uninstall purge deletes all persisted docs for that plugin from SQLite (global docs + all
  *   conversation session docs), and restarts never resurrect them;
@@ -16,23 +16,23 @@ import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-import { HelmError, type ConversationSummary } from '@helm/protocol'
+import { HelmxError, type ConversationSummary } from '@helmx/protocol'
 import { PluginHost } from '../src/plugins/plugin-host.js'
 import { PluginPackageManager } from '../src/plugins/package-manager.js'
 import { PluginPackageManagerStore } from '../src/plugins/package-store.js'
 import { ConfigService } from '../src/services/config.js'
-import { openHelmDatabase } from '../src/runtime/sqlite.js'
-import { HelmStore } from '../src/runtime/store.js'
+import { openHelmxDatabase } from '../src/runtime/sqlite.js'
+import { HelmxStore } from '../src/runtime/store.js'
 import {
   createGlobalDocumentStore,
   createPluginSessionDocStore,
 } from '../src/runtime/runtime-host-backend.js'
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { cleanupDir, makeConversationSummary, makeTempDir } from './helpers.js'
 
 interface StoreHandle {
-  store: HelmStore
+  store: HelmxStore
   /**
    * One-shot SQL fault injection: rejects the first db.run matching substr (injects failure only,
    * never mocks data); passes unmatched statements through and restores original impl after hitting.
@@ -42,8 +42,8 @@ interface StoreHandle {
 }
 
 async function openStore(dir: string): Promise<StoreHandle> {
-  const database = await openHelmDatabase(dir)
-  const store = new HelmStore(database)
+  const database = await openHelmxDatabase(dir)
+  const store = new HelmxStore(database)
   await store.load()
   return {
     store,
@@ -71,7 +71,7 @@ function makeHost(handle: StoreHandle, dataDir: string): PluginHost {
     emitEvent: () => {},
     getConversation: (id: number): ConversationSummary => {
       if (id !== 1) {
-        throw new HelmError('not_found', `conversation not found: ${id}`, 404)
+        throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
       }
       return makeConversationSummary({ id, title: 'conv-1', profileId: 'default' })
     },
@@ -85,7 +85,7 @@ function makeHost(handle: StoreHandle, dataDir: string): PluginHost {
 }
 
 test('purgePluginPersistentData: clears all global and session docs from SQLite without collateral deletion or restart resurrection', { timeout: 60_000 }, async () => {
-  const base = await makeTempDir('helm-purge-e2e-')
+  const base = await makeTempDir('helmx-purge-e2e-')
   try {
     const handle = await openStore(base)
     const host = makeHost(handle, join(base, 'plugins'))
@@ -167,7 +167,7 @@ async function seedManagedInstall(
 }
 
 test('PluginPackageManager.remove: removes directory and install record only after purge succeeds (no resurrection on reopen)', { timeout: 60_000 }, async () => {
-  const base = await makeTempDir('helm-purge-rm-')
+  const base = await makeTempDir('helmx-purge-rm-')
   try {
     const handle = await openStore(base)
     const host = makeHost(handle, join(base, 'plugins'))
@@ -204,7 +204,7 @@ test('PluginPackageManager.remove: removes directory and install record only aft
 })
 
 test('purge DELETE failure: remove rejects explicitly keeping directory/record intact and retries cleanly after recovery', { timeout: 60_000 }, async () => {
-  const base = await makeTempDir('helm-purge-fail-')
+  const base = await makeTempDir('helmx-purge-fail-')
   try {
     const handle = await openStore(base)
     const host = makeHost(handle, join(base, 'plugins'))
@@ -225,10 +225,10 @@ test('purge DELETE failure: remove rejects explicitly keeping directory/record i
     await handle.store.flushPublic()
 
     // Inject global doc DELETE failure: remove must reject without continuing to delete directory/record.
-    handle.failNextRun('DELETE FROM helm_plugin_docs')
+    handle.failNextRun('DELETE FROM helmx_plugin_docs')
     await assert.rejects(
       manager.remove('demo'),
-      (err: unknown) => err instanceof HelmError && err.code === 'store_flush_failed',
+      (err: unknown) => err instanceof HelmxError && err.code === 'store_flush_failed',
     )
     assert.ok(existsSync(managed), 'managed directory must remain intact on purge failure')
     assert.ok(pkgStore.getRecord('demo'), 'install record must remain intact on purge failure (for retry)')
@@ -265,7 +265,7 @@ test('purge DELETE failure: remove rejects explicitly keeping directory/record i
 })
 
 test('disable leaves durable data intact: doc/sessionDoc survive disable and read back after re-enable', { timeout: 60_000 }, async () => {
-  const base = await makeTempDir('helm-purge-disable-')
+  const base = await makeTempDir('helmx-purge-disable-')
   try {
     const handle = await openStore(base)
     const host = makeHost(handle, join(base, 'plugins'))

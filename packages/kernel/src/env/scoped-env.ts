@@ -4,8 +4,8 @@
  * conversation's snapshot (preventing cross-conversation leakage of managed tokens / SecretStash secrets).
  *
  * Binding semantics (fail-closed):
- * - Keys returned by `composer` are **bound identities** (`HELM_CONVERSATION_ID`, `HELM_HUB_URL`,
- *   `HELM_TOKEN`, `HELM_SECRET_*`, etc.): per-call `options.env` cannot override keys of the same name
+ * - Keys returned by `composer` are **bound identities** (`HELMX_CONVERSATION_ID`, `HELMX_HUB_URL`,
+ *   `HELMX_TOKEN`, `HELMX_SECRET_*`, etc.): per-call `options.env` cannot override keys of the same name
  *   (prevents forging scope), while all other keys are patched normally from per-call `env`;
  * - Without `conversationId` (`envFor` path): injects no secrets—no trusted scope means fail-closed,
  *   never borrowing another conversation's credentials;
@@ -13,17 +13,17 @@
  *   with each command's `env` composed in isolation at `exec` time.
  *
  * Local env composition (this file is the single source of truth; `tools.ts` has no second copy):
- * - Inherits host `process.env` (real PATH/HOME toolchain), stripping all managed `HELM_*` variables
+ * - Inherits host `process.env` (real PATH/HOME toolchain), stripping all managed `HELMX_*` variables
  *   (including case variants) fail-closed;
- * - Prepends `cliBinDir` (helm CLI wrapper dir) to `PATH` using `path.delimiter`;
- * - Merges per-call `env` and composer-bound keys last; if composer omits `HELM_TOKEN`, every
+ * - Prepends `cliBinDir` (helmx CLI wrapper dir) to `PATH` using `path.delimiter`;
+ * - Merges per-call `env` and composer-bound keys last; if composer omits `HELMX_TOKEN`, every
  *   case variant from any source (host inheritance or per-call injection) is stripped.
  */
 
 import type { ExecutionEnv, Result, ShellExecOptions, ShellExecResult } from '@earendil-works/pi-durable/env'
 import type { ExecutionError } from '@earendil-works/pi-durable/env'
 import type { Context } from '@earendil-works/chord/context'
-import { prependEnvPath, setEnvEntry } from '@helm/env-io'
+import { prependEnvPath, setEnvEntry } from '@helmx/env-io'
 import type { EnvOptionsComposer } from './fabric.js'
 
 /** Execution target: conversation + node + working directory (resolved Profile × node product). */
@@ -39,26 +39,26 @@ export interface ScopedExecutionEnv extends ExecutionEnv {
 }
 
 interface ScopedExecutionEnvOptions {
-  /** helm CLI wrapper directory (prepended to PATH for local exec). */
+  /** helmx CLI wrapper directory (prepended to PATH for local exec). */
   cliBinDir?: () => string | undefined
 }
 
 /**
- * Managed variable names (stripped case-insensitively—Windows env semantics strip `helm_token`, `Helm_Token`,
+ * Managed variable names (stripped case-insensitively—Windows env semantics strip `helmx_token`, `Helmx_Token`,
  * etc. alike, and the final value is determined strictly by the composer as the single source of truth).
- * `HELM_EXECUTION_SCOPE` is the execution-context scope anchor (`helm-<first 24 hex of sha256>`, see
+ * `HELMX_EXECUTION_SCOPE` is the execution-context scope anchor (`helmx-<first 24 hex of sha256>`, see
  * `executionScopeHash` in `tools.ts`): non-secret, only provides a stable resource naming hint for tools
  * that opt in (not an OS sandbox), and is managed alongside other bound identity variables.
  */
 export const MANAGED_EXEC_ENV_VARS = [
-  'HELM_ENV',
-  'HELM_HUB_URL',
-  'HELM_CONVERSATION_ID',
-  'HELM_CWD',
-  'HELM_DATA_DIR',
-  'HELM_NODE_ID',
-  'HELM_EXECUTION_SCOPE',
-  'HELM_TOKEN',
+  'HELMX_ENV',
+  'HELMX_HUB_URL',
+  'HELMX_CONVERSATION_ID',
+  'HELMX_CWD',
+  'HELMX_DATA_DIR',
+  'HELMX_NODE_ID',
+  'HELMX_EXECUTION_SCOPE',
+  'HELMX_TOKEN',
 ] as const
 
 const MANAGED_ENV_NAMES = new Set<string>(MANAGED_EXEC_ENV_VARS)

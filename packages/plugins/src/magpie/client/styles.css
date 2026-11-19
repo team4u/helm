@@ -1,6 +1,6 @@
 /**
  * builtin:magpie plugin styles.
  *
- * Generic structure reuses host design-system primitives (.screen-container / .helm-table-wrap /
- * .helm-table / .kv-list / .callout / .loading-state, etc.); this plugin ships no private generic styles.
+ * Generic structure reuses host design-system primitives (.screen-container / .helmx-table-wrap /
+ * .helmx-table / .kv-list / .callout / .loading-state, etc.); this plugin ships no private generic styles.
  */

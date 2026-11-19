@@ -13,8 +13,8 @@
  *   pass through unchanged inside a localized prefix, mirroring the other
  *   plugin clients.
  */
-import type { HelmLocale, LocalizedText } from '@helm/plugin-client'
-import { resolveLocalizedText } from '@helm/plugin-client'
+import type { HelmxLocale, LocalizedText } from '@helmx/plugin-client'
+import { resolveLocalizedText } from '@helmx/plugin-client'
 
 // ---------------------------------------------------------------------------
 // Card chrome (index.tsx)
@@ -33,7 +33,7 @@ export const JSON_RENDER_INVALID_SPEC_TITLE: LocalizedText = {
 export const JSON_RENDER_UNKNOWN_REASON: LocalizedText = { en: 'unknown reason', 'zh-CN': '未知原因' }
 
 /** Toast prefix when a declared action fails validation. */
-export function jsonRenderInvalidActionNotify(message: string, locale: HelmLocale): string {
+export function jsonRenderInvalidActionNotify(message: string, locale: HelmxLocale): string {
   return resolveLocalizedText(
     { en: `Invalid declarative action: ${message}`, 'zh-CN': `声明式动作无效：${message}` },
     locale,
@@ -41,7 +41,7 @@ export function jsonRenderInvalidActionNotify(message: string, locale: HelmLocal
 }
 
 /** Toast after an action request is submitted to its plugin. */
-export function jsonRenderActionSubmittedNotify(actionId: string, locale: HelmLocale): string {
+export function jsonRenderActionSubmittedNotify(actionId: string, locale: HelmxLocale): string {
   return resolveLocalizedText(
     { en: `Action request submitted: ${actionId}`, 'zh-CN': `动作请求已提交：${actionId}` },
     locale,
@@ -49,7 +49,7 @@ export function jsonRenderActionSubmittedNotify(actionId: string, locale: HelmLo
 }
 
 /** Toast after a card command is sent to the current conversation. */
-export function jsonRenderSentCommandNotify(text: string, locale: HelmLocale): string {
+export function jsonRenderSentCommandNotify(text: string, locale: HelmxLocale): string {
   return resolveLocalizedText(
     { en: `Card command sent: ${text}`, 'zh-CN': `已发送卡片指令：${text}` },
     locale,
@@ -57,7 +57,7 @@ export function jsonRenderSentCommandNotify(text: string, locale: HelmLocale): s
 }
 
 /** Toast after text is sent to another conversation. */
-export function jsonRenderSentToNotify(conversationId: number, locale: HelmLocale): string {
+export function jsonRenderSentToNotify(conversationId: number, locale: HelmxLocale): string {
   return resolveLocalizedText(
     { en: `Sent to conversation #${conversationId}`, 'zh-CN': `已发送到会话 #${conversationId}` },
     locale,
@@ -65,7 +65,7 @@ export function jsonRenderSentToNotify(conversationId: number, locale: HelmLocal
 }
 
 /** Toast when an action request fails (host error detail passes through). */
-export function jsonRenderActionFailedNotify(actionId: string, error: string, locale: HelmLocale): string {
+export function jsonRenderActionFailedNotify(actionId: string, error: string, locale: HelmxLocale): string {
   return resolveLocalizedText(
     { en: `Action ${actionId} failed: ${error}`, 'zh-CN': `动作 ${actionId} 执行失败：${error}` },
     locale,
@@ -73,7 +73,7 @@ export function jsonRenderActionFailedNotify(actionId: string, error: string, lo
 }
 
 /** Toast when sending to a conversation fails (host error detail passes through). */
-export function jsonRenderSendFailedNotify(conversationId: number, error: string, locale: HelmLocale): string {
+export function jsonRenderSendFailedNotify(conversationId: number, error: string, locale: HelmxLocale): string {
   return resolveLocalizedText(
     {
       en: `Failed to send to conversation #${conversationId}: ${error}`,
@@ -84,7 +84,7 @@ export function jsonRenderSendFailedNotify(conversationId: number, error: string
 }
 
 /** Toast when opening a screen / artifact target fails (detail passes through). */
-export function jsonRenderOpenFailedNotify(error: string, locale: HelmLocale): string {
+export function jsonRenderOpenFailedNotify(error: string, locale: HelmxLocale): string {
   return resolveLocalizedText(
     { en: `Failed to open target: ${error}`, 'zh-CN': `打开目标失败：${error}` },
     locale,
@@ -95,14 +95,14 @@ export function jsonRenderOpenFailedNotify(error: string, locale: HelmLocale): s
 // Degraded-spec reasons (spec-normalize.ts; rendered in the degraded callout)
 // ---------------------------------------------------------------------------
 
-export function jsonRenderSpecNotObject(locale: HelmLocale): string {
+export function jsonRenderSpecNotObject(locale: HelmxLocale): string {
   return resolveLocalizedText(
     { en: 'Spec is empty or not an object; cannot render', 'zh-CN': 'Spec 为空或不是对象，无法渲染' },
     locale,
   )
 }
 
-export function jsonRenderElementReused(id: string, locale: HelmLocale): string {
+export function jsonRenderElementReused(id: string, locale: HelmxLocale): string {
   return resolveLocalizedText(
     {
       en: `Element ${id} is referenced more than once (not allowed outside a DAG)`,
@@ -112,21 +112,21 @@ export function jsonRenderElementReused(id: string, locale: HelmLocale): string 
   )
 }
 
-export function jsonRenderElementCycle(id: string, locale: HelmLocale): string {
+export function jsonRenderElementCycle(id: string, locale: HelmxLocale): string {
   return resolveLocalizedText(
     { en: `Element ${id} has a circular reference`, 'zh-CN': `元素 ${id} 存在循环引用` },
     locale,
   )
 }
 
-export function jsonRenderFlatRootMissing(rootId: string, locale: HelmLocale): string {
+export function jsonRenderFlatRootMissing(rootId: string, locale: HelmxLocale): string {
   return resolveLocalizedText(
     { en: `Flat spec root element '${rootId}' is missing or invalid`, 'zh-CN': `扁平 Spec 的根元素 '${rootId}' 缺失或非法` },
     locale,
   )
 }
 
-export function jsonRenderMissingComponentField(locale: HelmLocale): string {
+export function jsonRenderMissingComponentField(locale: HelmxLocale): string {
   return resolveLocalizedText(
     {
       en: 'Spec is missing the component/type field (neither the tree shorthand nor the flat form)',
@@ -136,7 +136,7 @@ export function jsonRenderMissingComponentField(locale: HelmLocale): string {
   )
 }
 
-export function jsonRenderRootNormalizeFailed(locale: HelmLocale): string {
+export function jsonRenderRootNormalizeFailed(locale: HelmxLocale): string {
   return resolveLocalizedText(
     { en: 'Failed to normalize the spec root node', 'zh-CN': 'Spec 根节点归一化失败' },
     locale,
@@ -147,75 +147,75 @@ export function jsonRenderRootNormalizeFailed(locale: HelmLocale): string {
 // Declarative-action validation messages (spec-action.ts; surfaced via notify)
 // ---------------------------------------------------------------------------
 
-export function jsonRenderActionNotObject(locale: HelmLocale): string {
+export function jsonRenderActionNotObject(locale: HelmxLocale): string {
   return resolveLocalizedText(
     { en: 'action is not an object', 'zh-CN': 'action 不是对象' },
     locale,
   )
 }
 
-export function jsonRenderActionMissingActionId(locale: HelmLocale): string {
+export function jsonRenderActionMissingActionId(locale: HelmxLocale): string {
   return resolveLocalizedText(
-    { en: 'helm:action is missing actionId', 'zh-CN': 'helm:action 缺少 actionId' },
+    { en: 'helmx:action is missing actionId', 'zh-CN': 'helmx:action 缺少 actionId' },
     locale,
   )
 }
 
-export function jsonRenderOpenTargetEmpty(locale: HelmLocale): string {
+export function jsonRenderOpenTargetEmpty(locale: HelmxLocale): string {
   return resolveLocalizedText(
-    { en: 'helm:open target evaluated to an empty value', 'zh-CN': 'helm:open 求值后 target 为空' },
+    { en: 'helmx:open target evaluated to an empty value', 'zh-CN': 'helmx:open 求值后 target 为空' },
     locale,
   )
 }
 
-export function jsonRenderSendNoTargetNoDefault(locale: HelmLocale): string {
+export function jsonRenderSendNoTargetNoDefault(locale: HelmxLocale): string {
   return resolveLocalizedText(
     {
-      en: 'helm:send has no target and the current view has no default conversation; specify conversation:<id> explicitly',
-      'zh-CN': 'helm:send 缺少 target 且当前视图无默认会话：请显式指定 conversation:<id>',
+      en: 'helmx:send has no target and the current view has no default conversation; specify conversation:<id> explicitly',
+      'zh-CN': 'helmx:send 缺少 target 且当前视图无默认会话：请显式指定 conversation:<id>',
     },
     locale,
   )
 }
 
-export function jsonRenderSendTargetEvaluatedInvalid(value: string, locale: HelmLocale): string {
+export function jsonRenderSendTargetEvaluatedInvalid(value: string, locale: HelmxLocale): string {
   return resolveLocalizedText(
     {
-      en: `helm:send target is invalid after evaluation (${value}, usually a missing template path); expected conversation:<id> or a positive integer`,
-      'zh-CN': `helm:send target 求值后无效（${value}，通常为模板路径缺失）：应为 conversation:<id> 或正整数`,
+      en: `helmx:send target is invalid after evaluation (${value}, usually a missing template path); expected conversation:<id> or a positive integer`,
+      'zh-CN': `helmx:send target 求值后无效（${value}，通常为模板路径缺失）：应为 conversation:<id> 或正整数`,
     },
     locale,
   )
 }
 
-export function jsonRenderSendTargetInvalid(locale: HelmLocale): string {
+export function jsonRenderSendTargetInvalid(locale: HelmxLocale): string {
   return resolveLocalizedText(
     {
-      en: 'helm:send target is invalid; expected conversation:<id>, a positive integer, or an explicit current',
-      'zh-CN': 'helm:send target 无效：应为 conversation:<id>、正整数或显式 current',
+      en: 'helmx:send target is invalid; expected conversation:<id>, a positive integer, or an explicit current',
+      'zh-CN': 'helmx:send target 无效：应为 conversation:<id>、正整数或显式 current',
     },
     locale,
   )
 }
 
-export function jsonRenderSendTextEmpty(locale: HelmLocale): string {
+export function jsonRenderSendTextEmpty(locale: HelmxLocale): string {
   return resolveLocalizedText(
-    { en: 'helm:send text evaluated to an empty value', 'zh-CN': 'helm:send 求值后 text 为空' },
+    { en: 'helmx:send text evaluated to an empty value', 'zh-CN': 'helmx:send 求值后 text 为空' },
     locale,
   )
 }
 
-export function jsonRenderSendWhenBusyInvalid(raw: string, locale: HelmLocale): string {
+export function jsonRenderSendWhenBusyInvalid(raw: string, locale: HelmxLocale): string {
   return resolveLocalizedText(
     {
-      en: `helm:send whenBusy is invalid: ${raw} (expected steer | followUp | reject)`,
-      'zh-CN': `helm:send whenBusy 无效：${raw}（应为 steer | followUp | reject）`,
+      en: `helmx:send whenBusy is invalid: ${raw} (expected steer | followUp | reject)`,
+      'zh-CN': `helmx:send whenBusy 无效：${raw}（应为 steer | followUp | reject）`,
     },
     locale,
   )
 }
 
-export function jsonRenderUnknownActionType(type: string, locale: HelmLocale): string {
+export function jsonRenderUnknownActionType(type: string, locale: HelmxLocale): string {
   return resolveLocalizedText(
     { en: `Unknown action type: ${type}`, 'zh-CN': `未知的动作类型: ${type}` },
     locale,
@@ -261,17 +261,17 @@ export const JSON_RENDER_SLOT_NO_HOST: LocalizedText = {
 }
 
 /** Fallback title of a Steps item without a declared title/label. */
-export function jsonRenderStepFallbackTitle(index: number, locale: HelmLocale): string {
+export function jsonRenderStepFallbackTitle(index: number, locale: HelmxLocale): string {
   return resolveLocalizedText({ en: `Step ${index}`, 'zh-CN': `步骤 ${index}` }, locale)
 }
 
 /** Fallback title of a Tabs item without a declared label/title. */
-export function jsonRenderTabFallbackTitle(index: number, locale: HelmLocale): string {
+export function jsonRenderTabFallbackTitle(index: number, locale: HelmxLocale): string {
   return resolveLocalizedText({ en: `Tab ${index}`, 'zh-CN': `标签页 ${index}` }, locale)
 }
 
 /** Notice for a spec node whose component name has no registered primitive. */
-export function jsonRenderUnknownComponent(component: string, locale: HelmLocale): string {
+export function jsonRenderUnknownComponent(component: string, locale: HelmxLocale): string {
   return resolveLocalizedText(
     { en: `Unregistered component: ${component}`, 'zh-CN': `未注册的组件: ${component}` },
     locale,

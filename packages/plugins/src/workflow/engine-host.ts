@@ -1,7 +1,7 @@
 /**
  * builtin:workflow 引擎宿主适配（自 workflow.ts 入口拆出）。
  *
- * 职责：把 HelmHostApi 受信端口适配为 WorkflowServiceHost（引擎的唯一宿主
+ * 职责：把 HelmxHostApi 受信端口适配为 WorkflowServiceHost（引擎的唯一宿主
  * 形状），并承载两条安全纪律：
  * - 守卫式子会话中止（abortConversationGuarded 适配器）：现读归属与权威
  *   水位作守卫事实，经内核原子复核；human 红线由内核在串行域内兜底拒绝；
@@ -9,15 +9,15 @@
  *   notification），绝不逃逸为 unhandledRejection——run 终态以 records
  *   持久层为准。
  */
-import { HelmError, type HelmHostApi } from '@helm/protocol'
+import { HelmxError, type HelmxHostApi } from '@helmx/protocol'
 import type { WorkflowRunSummary } from '../contracts.js'
-import type { AgentExecutionInfo } from '@helm/protocol'
+import type { AgentExecutionInfo } from '@helmx/protocol'
 import type { WorkflowServiceHost } from './engine/service.js'
 import type { RunsProjection } from './projection.js'
 
 /** 引擎适配所需宿主端口（全部经 ctx.host 受信通道注入）。 */
 type EngineHostPorts = Pick<
-  HelmHostApi,
+  HelmxHostApi,
   | 'spawnAgent'
   | 'invokeAction'
   | 'prepareAction'
@@ -64,7 +64,7 @@ export function createWorkflowEngineHost(deps: WorkflowEngineHostDeps): Workflow
     // ——内核仍拒 human，绝不因此回退普通 abortConversation；守卫拒绝
     // （归属翻转/水位推进/目标删除）确定性放弃并诊断，不重试不掩盖。
     abortConversationGuarded: async (id) => {
-      let guard: { expectedOwnership?: 'bot' | 'helm'; expectedStateSeq?: number } = {}
+      let guard: { expectedOwnership?: 'bot' | 'helmx'; expectedStateSeq?: number } = {}
       try {
         const ownership = host.getConversationOwnership(id)
         guard =
@@ -75,7 +75,7 @@ export function createWorkflowEngineHost(deps: WorkflowEngineHostDeps): Workflow
                 expectedStateSeq: host.getConversation(id).stateChangeSeq,
               }
       } catch (error) {
-        if (error instanceof HelmError && error.code === 'not_found') return
+        if (error instanceof HelmxError && error.code === 'not_found') return
         // 事实读取不可用：空守卫仍经内核原子复核（human 仍被拒）。
         guard = {}
       }

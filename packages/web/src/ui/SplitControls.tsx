@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { HelmIcon } from '@helm/plugin-client'
+import { HelmxIcon } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { Tooltip } from './Tooltip.js'
 
@@ -29,7 +29,7 @@ export function CloseSplitButton({
         title={t('ui.split.closeThisView')}
         onClick={onCloseSplit}
       >
-        <HelmIcon name="x" size={13} />
+        <HelmxIcon name="x" size={13} />
         <span className="pane-action-label">{effectiveLabel}</span>
       </button>
     </Tooltip>
@@ -63,7 +63,7 @@ export function SplitToggleButton({
         title={t('ui.split.toggleTitle')}
         onClick={onToggleSplit}
       >
-        <HelmIcon name="columns" size={12} />
+        <HelmxIcon name="columns" size={12} />
       </button>
     </Tooltip>
   )

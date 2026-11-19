@@ -8,8 +8,8 @@
  * overexposed) and appear naturally once assets arrive.
  */
 
-import type { Profile, SkillSummary } from '@helm/protocol/browser'
-import { isSkillAvailable } from '@helm/protocol/browser'
+import type { Profile, SkillSummary } from '@helmx/protocol/browser'
+import { isSkillAvailable } from '@helmx/protocol/browser'
 
 /**
  * Skills eligible for the '/' slash menu in the current conversation:

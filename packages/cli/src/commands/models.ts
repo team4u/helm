@@ -1,5 +1,5 @@
 /** Model commands: models list / default / providers / refresh / filter. */
-import type { ModelCatalog, ModelProviderSummary, ModelProvidersRefreshResult, SetModelFilterBody } from '@helm/protocol'
+import type { ModelCatalog, ModelProviderSummary, ModelProvidersRefreshResult, SetModelFilterBody } from '@helmx/protocol'
 import { parseFlags, type FlagSpec } from '../args.js'
 import { CliError } from '../errors.js'
 import { assertNoExtraPositionals, printResult } from './shared.js'

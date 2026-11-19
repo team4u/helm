@@ -8,7 +8,7 @@
  * 2. Registration parses the persisted enabled state before acquiring any assets: when `getEnabled`
  *    throws (preserving the original error) or returns a non-boolean value (explicitly rejected),
  *    registry, hooks, managed assets, and plugin data directory have zero leftover state.
- * 3. `HelmPluginConfigStore` read-modify-write runs entirely inside the `ConfigService.update`
+ * 3. `HelmxPluginConfigStore` read-modify-write runs entirely inside the `ConfigService.update`
  *    file-lock callback: it mutates only its own nested key without clobbering keys updated
  *    concurrently by other modules (verified deterministically by interposing writes at `updateBy`
  *    entry — waiting outside the lock and performing no second read inside, avoiding deadlock);
@@ -22,8 +22,8 @@ import assert from 'node:assert/strict';
 import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { ConfigService, CredentialService } from '../src/services/index.js';
-import { HelmPluginConfigStore } from '../src/runtime/plugin-config-store.js';
-import { HelmError, type PluginDefinition } from '@helm/protocol';
+import { HelmxPluginConfigStore } from '../src/runtime/plugin-config-store.js';
+import { HelmxError, type PluginDefinition } from '@helmx/protocol';
 import {
   PluginHost,
   type PluginConfigStore,
@@ -31,7 +31,7 @@ import {
 } from '../src/plugins/index.js';
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js';
 import { pluginDataDirName } from '../src/plugins/plugin-dir-name.js';
-import { createPluginBuildProvider } from '@helm/plugin-build';
+import { createPluginBuildProvider } from '@helmx/plugin-build';
 import {
   MemoryDocStore,
   assertRejectsCode,
@@ -68,12 +68,12 @@ function makeHostApi(events: string[]): PluginHostBackend {
     registerAskSeqResolver: () => () => {},
     onEvent: () => () => {},
     abortConversation: async () => {},
-    getConversationOwnership(): 'helm' | 'bot' | 'human' {
+    getConversationOwnership(): 'helmx' | 'bot' | 'human' {
       return 'human'
     },
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
-    execEnv: async () => { throw new HelmError('unsupported', 'this fixture does not execute node commands', 501) },
+    execEnv: async () => { throw new HelmxError('unsupported', 'this fixture does not execute node commands', 501) },
     withFileMutationQueue(): Promise<never> { throw new Error('this fixture does not support file mutation queue') },
     emitEvent: (type) => {
       events.push(`event:${type}`);
@@ -167,7 +167,7 @@ function makeHost(configOrOpts?: PluginConfigStore | MakeHostOpts): PluginHost {
 }
 
 beforeEach(async () => {
-  dataDir = await makeTempDir('helm-plugin-races-test-');
+  dataDir = await makeTempDir('helmx-plugin-races-test-');
   docs = new MemoryDocStore();
   events = [];
 });
@@ -254,7 +254,7 @@ test('enable persistence failure: stays unavailable in window, rolls back cleanl
   assert.ok(windowHeld);
   rejectPersist(new Error('network disconnected'));
 
-  const err = (await assertRejectsCode(() => enabling, 'plugin_enabled_persist_failed')) as HelmError;
+  const err = (await assertRejectsCode(() => enabling, 'plugin_enabled_persist_failed')) as HelmxError;
   assert.match(err.message, /network disconnected/);
 
   // Rollback: disabled, service stopped, managed asset released, schema retained, zero active tasks
@@ -284,7 +284,7 @@ test('getEnabled throws: register leaves zero leftovers (registry / dataDir / ho
     },
     set() {},
     getEnabled() {
-      throw new HelmError('io_broken', 'store read crash', 500);
+      throw new HelmxError('io_broken', 'store read crash', 500);
     },
     setEnabled() {},
   });
@@ -296,7 +296,7 @@ test('getEnabled throws: register leaves zero leftovers (registry / dataDir / ho
   const r = await host.runHook('trigger', triggerPayload());
   assert.equal(r.action, 'continue', 'zero leftovers in hook pipeline');
 
-  // Non-HelmError exceptions: wrapped as plugin_registration_failed while preserving original message
+  // Non-HelmxError exceptions: wrapped as plugin_registration_failed while preserving original message
   const host2 = makeHost({
     get() {
       return {};
@@ -307,7 +307,7 @@ test('getEnabled throws: register leaves zero leftovers (registry / dataDir / ho
     },
     setEnabled() {},
   });
-  const wrapped = (await assertRejectsCode(() => host2.register(fullPlugin('p:boom2', [])), 'plugin_registration_failed')) as HelmError;
+  const wrapped = (await assertRejectsCode(() => host2.register(fullPlugin('p:boom2', [])), 'plugin_registration_failed')) as HelmxError;
   assert.match(wrapped.message, /underlying I\/O timeout/);
   assert.equal(host2.list().length, 0);
 
@@ -328,7 +328,7 @@ test('getEnabled returns non-boolean value: rejected explicitly (no truthy coerc
     },
     setEnabled() {},
   });
-  const err = (await assertRejectsCode(() => host.register(fullPlugin('p:lie', [])), 'plugin_enabled_state_invalid')) as HelmError;
+  const err = (await assertRejectsCode(() => host.register(fullPlugin('p:lie', [])), 'plugin_enabled_state_invalid')) as HelmxError;
   assert.equal(err.status, 500);
   assert.equal(host.list().length, 0);
   assert.equal(existsSync(join(dataDir, 'plugins', pluginDataDirName('p:lie'))), false);
@@ -336,7 +336,7 @@ test('getEnabled returns non-boolean value: rejected explicitly (no truthy coerc
 });
 
 // ---------------------------------------------------------------------------
-// 3. ConfigService callback form + HelmPluginConfigStore in-lock read-modify-write
+// 3. ConfigService callback form + HelmxPluginConfigStore in-lock read-modify-write
 // ---------------------------------------------------------------------------
 
 /**
@@ -358,8 +358,8 @@ class InterposingConfigService extends ConfigService {
   }
 }
 
-function makeRealStore(config: ConfigService, credentials: CredentialService): HelmPluginConfigStore {
-  return new HelmPluginConfigStore({ config, credentials });
+function makeRealStore(config: ConfigService, credentials: CredentialService): HelmxPluginConfigStore {
+  return new HelmxPluginConfigStore({ config, credentials });
 }
 
 test('ConfigService callback form reads latest in-lock value while preserving object-patch semantics', { timeout: 60_000 }, async () => {

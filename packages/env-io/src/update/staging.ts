@@ -21,7 +21,7 @@ import process from 'node:process';
 import { randomUUID } from 'node:crypto';
 import { atomicWriteJson } from '../atomic-write.js';
 import { UpgradeRejectedError } from './errors.js';
-import { isStrictSemver } from '@helm/protocol';
+import { isStrictSemver } from '@helmx/protocol';
 import { downloadVerifiedTarball, resolveRegistryUrl } from './registry.js';
 import { runNpm } from './npm-runner.js';
 
@@ -283,7 +283,7 @@ async function stageViaNpm(
 
   await fs.writeFile(
     path.join(stagingDir, 'package.json'),
-    JSON.stringify({ name: 'helm-update-staging', private: true }, null, 2) + '\n',
+    JSON.stringify({ name: 'helmx-update-staging', private: true }, null, 2) + '\n',
     'utf8',
   );
   await runNpm(

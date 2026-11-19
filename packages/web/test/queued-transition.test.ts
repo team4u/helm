@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import * as React from 'react'
 import { renderToString } from 'react-dom/server'
-import type { ConversationEntry, ConversationLive, ConversationSummary } from '@helm/protocol'
+import type { ConversationEntry, ConversationLive, ConversationSummary } from '@helmx/protocol'
 import { buildTimelineItems } from '../src/conversation/timeline-model.js'
 import { HostStoreProviders } from './helpers/host-store.js'
 import { makeTestStore } from './helpers/store.js'
@@ -12,7 +12,7 @@ const { ConversationTimeline } = await import('../src/conversation/ConversationT
 const queued: NonNullable<ConversationLive['queuedInputs']>[number] = {
   id: 'queued-1', submissionId: '10', text: '补充说明', mode: 'followUp', origin: 'human', createdAt: 1,
 }
-const entry: ConversationEntry = { id: '11', kind: 'helm.input', data: { ...queued } }
+const entry: ConversationEntry = { id: '11', kind: 'helmx.input', data: { ...queued } }
 
 function render(live: ConversationLive): string {
   const conversation: ConversationSummary = {
@@ -43,7 +43,7 @@ test('只有排队项尚无正文时仍显示一次执行等待', { timeout: 60_
 test('输入被插件时间线接管后，同身份队列快照不重复显示', { timeout: 60_000 }, () => {
   const items = buildTimelineItems([entry], {
     live: { conversationId: 1, text: '', tools: [], queuedInputs: [queued], updatedAt: 1 },
-    timelineRenderers: [{ pluginId: 'test:render', spec: { id: 'input-card', kinds: ['helm.input'], client: { module: 'index.tsx', export: 'InputCard' } } }],
+    timelineRenderers: [{ pluginId: 'test:render', spec: { id: 'input-card', kinds: ['helmx.input'], client: { module: 'index.tsx', export: 'InputCard' } } }],
   })
   assert.equal(items.filter((item) => item.kind === 'plugin-card').length, 1)
   assert.equal(items.filter((item) => item.kind === 'human').length, 0)

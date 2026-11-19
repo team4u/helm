@@ -1,6 +1,6 @@
 # Web 前端设计系统与开发约定
 
-本文是 `@helm/web` 与所有插件 `client.tsx` 前端代码的可执行贡献指南：编写或重构 Web 界面、新增主舞台/视图/弹窗/抽屉，或排查移动端样式与字号问题前，必须先阅读并遵守本文。五条硬铁律（零 Emoji、视图形态三级、Radix 唯一原语、唯一 Hash 导航、Fast Refresh）在仓库根 [AGENTS.md](../../AGENTS.md) 同步声明；导航与深链契约见[Web 导航与 URL Hash 约定](web-navigation.md)。
+本文是 `@helmx/web` 与所有插件 `client.tsx` 前端代码的可执行贡献指南：编写或重构 Web 界面、新增主舞台/视图/弹窗/抽屉，或排查移动端样式与字号问题前，必须先阅读并遵守本文。五条硬铁律（零 Emoji、视图形态三级、Radix 唯一原语、唯一 Hash 导航、Fast Refresh）在仓库根 [AGENTS.md](../../AGENTS.md) 同步声明；导航与深链契约见[Web 导航与 URL Hash 约定](web-navigation.md)。
 
 ## 当前状态
 
@@ -20,7 +20,7 @@ Web 主控台基于 React 19 + Vite 6（`packages/web`），交互原语统一 R
 
 - 适用：主舞台卡片点击后的深层详情、能力透视（Tools / Actions / Hooks 清单）、动态配置表单与设置面板扩展；
 - 尺寸：桌面端固定宽度 520px~560px 贴右侧全高；移动端（≤680px）自适应 100% 全宽；
-- 实现：基于 `@helm/plugin-client` 的 Radix `Dialog` 原语封装，支持 Escape 退出、点击遮罩关闭与受管焦点圈定。
+- 实现：基于 `@helmx/plugin-client` 的 Radix `Dialog` 原语封装，支持 Escape 退出、点击遮罩关闭与受管焦点圈定。
 
 ### 轻量居中模态（Centered Modal）
 
@@ -30,13 +30,13 @@ Web 主控台基于 React 19 + Vite 6（`packages/web`），交互原语统一 R
 ## 设计系统原语与 CSS 架构
 
 - **严禁大面积内联样式**（`style={{ ... }}`）：除极少数动态计算的尺寸/坐标外，排版、间距与颜色一律使用设计系统原语类与 CSS 变量；
-- 常用通用类速查：分栏 `.modal-body-split` / `.modal-sidebar`；列表行 `.list-item-btn`；平坦分节 `.section-flat` 系列；表单 `.form-grid` / `.form-grid-label`；空状态 `.empty-state`；表格 `.helm-table-wrap` / `.helm-table`（统一内边距、12.5px 字体、表头 `var(--bg-subtle)`、`tr:hover`）；插件页面 `.screen-container` / `.screen-header` / `.screen-section`；键值 `.kv-grid` / `.kv-list`；提示横幅 `.callout`（`.callout-warn/-error/-ok`）；加载态 `.loading-state`；
-- **插件布局原语组件**（`@helm/plugin-client` 导出，优先复用不要手写 div+className）：`Screen`（页面容器+页头）、`ScreenSection`（分节）、`DataTable`（统一 loading/empty 的表格外壳）、`KvGrid`（键值概览）；
+- 常用通用类速查：分栏 `.modal-body-split` / `.modal-sidebar`；列表行 `.list-item-btn`；平坦分节 `.section-flat` 系列；表单 `.form-grid` / `.form-grid-label`；空状态 `.empty-state`；表格 `.helmx-table-wrap` / `.helmx-table`（统一内边距、12.5px 字体、表头 `var(--bg-subtle)`、`tr:hover`）；插件页面 `.screen-container` / `.screen-header` / `.screen-section`；键值 `.kv-grid` / `.kv-list`；提示横幅 `.callout`（`.callout-warn/-error/-ok`）；加载态 `.loading-state`；
+- **插件布局原语组件**（`@helmx/plugin-client` 导出，优先复用不要手写 div+className）：`Screen`（页面容器+页头）、`ScreenSection`（分节）、`DataTable`（统一 loading/empty 的表格外壳）、`KvGrid`（键值概览）；
 - **强制样式复用铁律**：全仓所有插件必须优先复用主框架设计系统原语，严禁在插件内复制通用表格、页面布局、键值列表或提示条样式；插件本地 `.css` 只写业务特异结构（如 Mermaid 缩放画布、Workflow DAG 卡片、Apps 启动台网格）。
 
 ### Radix UI 唯一无头交互原语底座
 
-凡涉及浮层、对话框、下拉选择、标签页、气泡提示等复杂交互，**必须使用已有 Radix 封装**。共享实现位于 `packages/plugin-client/src/ui/`，经 `@helm/plugin-client` 公开；Web 专有组件位于 `packages/web/src/ui/`。严禁原生控件或第三方重量级 UI 库：
+凡涉及浮层、对话框、下拉选择、标签页、气泡提示等复杂交互，**必须使用已有 Radix 封装**。共享实现位于 `packages/plugin-client/src/ui/`，经 `@helmx/plugin-client` 公开；Web 专有组件位于 `packages/web/src/ui/`。严禁原生控件或第三方重量级 UI 库：
 
 | 场景 | 用什么 |
 | :--- | :--- |
@@ -46,7 +46,7 @@ Web 主控台基于 React 19 + Vite 6（`packages/web`），交互原语统一 R
 | 标签页与分段 | SDK `Tabs` / `SegmentedControl` |
 | 轻量提示 / 开关勾选 | Web `Tooltip`；SDK `Switch` / `Checkbox` |
 
-SDK 不导入 Web store、路由或渲染实现。`HelmStoreProvider` 经 `PluginClientHostContext` 注入真实数据与宿主能力；插件与宿主共享同一 SDK 上下文实例。
+SDK 不导入 Web store、路由或渲染实现。`HelmxStoreProvider` 经 `PluginClientHostContext` 注入真实数据与宿主能力；插件与宿主共享同一 SDK 上下文实例。
 
 **严禁手写简陋交互浮层**：不得用原生 `div` + `position: absolute` + 随意 `onClick` 拼凑浮层，杜绝缺乏 WAI-ARIA、Focus Trap 焦点逃逸、Escape 无法退出与遮罩穿透。
 
@@ -77,7 +77,7 @@ SDK 不导入 Web store、路由或渲染实现。`HelmStoreProvider` 经 `Plugi
 
 ## 零 Emoji 铁律
 
-界面文案、导航、标题、按钮、徽章、卡片**严禁任何 Emoji**。图标统一 `lucide-react` 线性矢量图标（经 `HelmIcon` 组件）或纯文本排版。
+界面文案、导航、标题、按钮、徽章、卡片**严禁任何 Emoji**。图标统一 `lucide-react` 线性矢量图标（经 `HelmxIcon` 组件）或纯文本排版。
 
 ## Fast Refresh 与数据加载
 
@@ -88,7 +88,7 @@ SDK 不导入 Web store、路由或渲染实现。`HelmStoreProvider` 经 `Plugi
 
 - 常规工具保留 26px 单行轨迹与 `StepGroup` 折叠；专属展开体按工具语义呈现（`edit` 展示变更、`bash` 展示命令与输出尾部），提供原始数据入口；
 - 待执行、成功、失败与未知状态必须如实区分：`oldText / newText` 只是片段对比不代表已落盘；成功后的差异只消费内核实际执行结果，禁止重读当前文件冒充历史快照；失败态不承诺「未写入」；
-- `edit` 结果遵循 `@helm/protocol` 的 `EditToolResult` 与 `EDIT_TOOL_RESULT_SCHEMA`，Web 在消费边界校验；
+- `edit` 结果遵循 `@helmx/protocol` 的 `EditToolResult` 与 `EDIT_TOOL_RESULT_SCHEMA`，Web 在消费边界校验；
 - 内容折叠与数据截断须分清：折叠可展开已有全文，截断明确说明部分数据未传回，不提供虚假「展开全部」；脱敏影响行号映射时省略差异正文并明确标记。
 
 ## 表单真实性与整体替换保存契约

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { copyToClipboard } from './clipboard.js'
-import { HelmIcon } from './icons.js'
+import { HelmxIcon } from './icons.js'
 import { usePluginTranslator } from './i18n.js'
 import { uiCopy } from './ui-copy.js'
 
@@ -45,7 +45,7 @@ export function CopyButton({ text, label, className = 'btn btn-ghost btn-sm' }: 
       title={copied ? t(uiCopy.copied) : failed ? t(uiCopy.copyFailureHint) : t(uiCopy.copy)}
       aria-label={copied ? t(uiCopy.copied) : failed ? t(uiCopy.copyFailed) : (label ?? t(uiCopy.copy))}
     >
-      <HelmIcon name={copied ? 'check' : failed ? 'alert-circle' : 'copy'} size={12} />
+      <HelmxIcon name={copied ? 'check' : failed ? 'alert-circle' : 'copy'} size={12} />
       {label !== undefined ? <span>{copied ? t(uiCopy.copied) : failed ? t(uiCopy.copyFailed) : label}</span> : null}
     </button>
   )

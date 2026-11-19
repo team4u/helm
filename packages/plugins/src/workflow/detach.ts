@@ -15,21 +15,21 @@
  * 2. caller 侧：携带会话上下文的调用（run_action / workflow / Web）必须是
  *    run 发起会话的自身或祖先（与 steer 同款血统证明）；人工 HTTP/CLI
  *    无会话上下文不受限；
- * 3. 归属红线：run 发起会话必须 human-owned——自动化会话（bot/helm）的
+ * 3. 归属红线：run 发起会话必须 human-owned——自动化会话（bot/helmx）的
  *    同步 run 缺省等待终态是防早结算的既定策略，detach 等于把后台句柄
  *    提前塞给自动化调用方，一律拒绝。
  *
  * 本模块零引擎依赖（不 import engine/），宿主端口与引擎 detach 入口经
  * 参数注入，供 workflow.ts 动作注册与确定性单测共用。
  */
-import { HelmError, type ConversationSummary } from '@helm/protocol'
+import { HelmxError, type ConversationSummary } from '@helmx/protocol'
 import type { WorkflowRunSummary } from '../contracts.js'
 import { isAncestorOrSelf } from '../lineage.js'
 
 /** detach 所需宿主端口（ctx.host 子集；注入确定性 fake 即可全覆盖测试）。 */
 export interface DetachHostPorts {
   getConversation(id: number): ConversationSummary
-  getConversationOwnership(id: number): 'helm' | 'bot' | 'human'
+  getConversationOwnership(id: number): 'helmx' | 'bot' | 'human'
 }
 
 /** 引擎 detach 入口（WorkflowService.detachForegroundRun 子集）。 */
@@ -54,12 +54,12 @@ interface DetachActionOutput {
   run: WorkflowRunSummary
 }
 
-function detachError(code: string, message: string, status: number, details?: Record<string, unknown>): HelmError {
-  return new HelmError(code, message, status, details)
+function detachError(code: string, message: string, status: number, details?: Record<string, unknown>): HelmxError {
+  return new HelmxError(code, message, status, details)
 }
 
 /**
- * 前台同步 run 转后台主入口。任何不支持情况显式抛 HelmError（错误码稳定）；
+ * 前台同步 run 转后台主入口。任何不支持情况显式抛 HelmxError（错误码稳定）；
  * 授权判定在本模块，权威状态判定与原子置位在引擎（竞态安全；detach 端口
  * 为 async——临界段后等待状态存储 flush，失败如实上抛）。
  */
@@ -113,7 +113,7 @@ function parentOfVia(ports: DetachHostPorts): (id: number) => number | undefined
     try {
       return ports.getConversation(id).parentConversationId
     } catch (error) {
-      if (error instanceof HelmError && error.code === 'not_found') return undefined
+      if (error instanceof HelmxError && error.code === 'not_found') return undefined
       throw error
     }
   }

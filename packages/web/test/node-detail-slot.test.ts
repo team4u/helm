@@ -20,13 +20,13 @@ import { fileURLToPath } from 'node:url'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
-import type { PluginUiContribution } from '@helm/protocol'
-import { NODE_DETAIL_SECTION_SLOT } from '@helm/protocol'
+import type { PluginUiContribution } from '@helmx/protocol'
+import { NODE_DETAIL_SECTION_SLOT } from '@helmx/protocol'
 import { NodeDetailDrawer } from '../src/nodes/NodeDetailDrawer.js'
-import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
+import { groupUiContributions, type HelmxStoreValue } from '../src/lib/types.js'
 import { seedPluginClientModule } from '../src/lib/plugin-client.js'
 import { makeTestStore } from './helpers/store.js'
-import type { HelmExternalStore } from '../src/lib/helm-store.js'
+import type { HelmxExternalStore } from '../src/lib/helmx-store.js'
 import { HostStoreProviders } from './helpers/host-store.js'
 
 GlobalRegistrator.register()
@@ -51,7 +51,7 @@ function remoteNode(overrides: Partial<NodeInfo> = {}): NodeInfo {
     os: 'linux',
     version: '0.2.1',
     hostname: 'gpu-server-01',
-    cwd: '/opt/helm-worker',
+    cwd: '/opt/helmx-worker',
     hubUrl: 'http://192.168.1.100:3202',
     tools: ['bash', 'read', 'write', 'edit'],
     ...overrides,
@@ -68,14 +68,14 @@ const slotContribution = (
   spec: { id, target: NODE_DETAIL_SECTION_SLOT, ...extra },
 })
 
-function storeWith(contributions: PluginUiContribution[], overrides: Partial<HelmStoreValue> = {}): HelmExternalStore {
+function storeWith(contributions: PluginUiContribution[], overrides: Partial<HelmxStoreValue> = {}): HelmxExternalStore {
   return makeTestStore({
     uiContributions: contributions,
     ...overrides,
   })
 }
 
-function renderDrawer(store: HelmExternalStore, props: { node: NodeInfo | null; isNew?: boolean }): string {
+function renderDrawer(store: HelmxExternalStore, props: { node: NodeInfo | null; isNew?: boolean }): string {
   return renderToStaticMarkup(
     e(
       HostStoreProviders,

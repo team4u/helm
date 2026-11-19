@@ -15,7 +15,7 @@
  *    （失败可重试、不白屏不伪造运行中），完整记录展开按需 board_read；
  * 5. 单行回执胶囊点击打开协同工作台面板；
  * 6. swarm/client 全目录静态铁律：零 Emoji、零原生 select/checkbox、零 history.*、
- *    零本地 .status-dot/.helm-status-light 样式定义、客户端导出仅含 PascalCase 组件。
+ *    零本地 .status-dot/.helmx-status-light 样式定义、客户端导出仅含 PascalCase 组件。
  */
 import assert from 'node:assert/strict'
 import { readdirSync, readFileSync } from 'node:fs'
@@ -29,13 +29,13 @@ import {
   parseNonEmptyLocalizedText,
   type CallActionOptions,
   type ConversationSummary,
-  type HelmPluginContext,
+  type HelmxPluginContext,
   type LocalizedText,
   type PluginClientContext as PluginClientContextType,
   type TimelineRendererProps,
   type ToolViewProps,
-} from '@helm/protocol'
-import type { PluginClientHostPort, PluginSessionDocKey } from '@helm/plugin-client'
+} from '@helmx/protocol'
+import type { PluginClientHostPort, PluginSessionDocKey } from '@helmx/plugin-client'
 import {
   boardProgressOf,
   isMemberDelivered,
@@ -51,7 +51,7 @@ import { ensureHappyDom } from './helpers/dom-harness.js'
 ensureHappyDom()
 
 const { createRoot } = await import('react-dom/client')
-const { PluginClientContext, PluginClientHostContext, resolveLocalizedText } = await import('@helm/plugin-client')
+const { PluginClientContext, PluginClientHostContext, resolveLocalizedText } = await import('@helmx/plugin-client')
 const { importBuiltinClientModule, mountSharedPluginNamespaces } = await import('./helpers/builtin-clients.js')
 
 const e = React.createElement
@@ -392,7 +392,7 @@ function boardViewFixture(overrides: Record<string, unknown> = {}): Record<strin
         body: 'Token refresh implemented, ready for review.',
         worktreeSnapshot: {
           worktreeId: 'wt-author-1',
-          branch: 'helm/author',
+          branch: 'helmx/author',
           commitsAhead: 2,
           dirtyCount: 1,
           changedFilesPreview: ['src/auth.ts'],
@@ -431,7 +431,7 @@ test('UI 注册契约：toolView/slot/workbenchPanel/回执/补全源，零 scre
       },
     },
   )
-  registerSwarmUi({ ui: uiProxy } as unknown as HelmPluginContext)
+  registerSwarmUi({ ui: uiProxy } as unknown as HelmxPluginContext)
 
   const toolViews = recorded.filter((r) => r.method === 'toolView')
   assert.equal(toolViews.length, 1, '仅注册一个统一 toolView')
@@ -507,9 +507,9 @@ test('UI 注册契约：toolView/slot/workbenchPanel/回执/补全源，零 scre
     }
   }
 
-  // Fast Refresh：编译产物模块除 __helmClientCss 外全部为大写开头的组件函数
+  // Fast Refresh：编译产物模块除 __helmxClientCss 外全部为大写开头的组件函数
   for (const [exportName, value] of Object.entries(rawModule)) {
-    if (exportName === '__helmClientCss') continue
+    if (exportName === '__helmxClientCss') continue
     assert.match(exportName, /^[A-Z]/, `client 入口导出必须为 PascalCase 组件：${exportName}`)
     assert.equal(typeof value, 'function', `导出 ${exportName} 必须为组件函数`)
   }
@@ -619,7 +619,7 @@ test('SwarmToolView：错误态如实展示错误首行与状态灯，zh-CN 显�
     assert.match(text, /Close swarm group/)
     assert.match(text, /swarm_worktree_unmerged: author worktree has 3 unmerged commits/, '错误首行原样呈现')
     assert.equal(errMount.host.querySelector('.trace-row-error') !== null, true, '错误行样式')
-    assert.equal(errMount.host.querySelectorAll('.helm-status-light').length, 1, '主状态灯唯一')
+    assert.equal(errMount.host.querySelectorAll('.helmx-status-light').length, 1, '主状态灯唯一')
   } finally {
     errMount.unmount()
   }
@@ -804,7 +804,7 @@ test('SwarmWorkbenchPanel：实时 board-view 编排卡（成员行开抽屉、�
     assert.match(text, /零回归完成鉴权改造/, '协同目标')
     assert.match(text, /In progress/, '自然状态标签')
     assert.match(text, /Handoff/, '动态 kind 自然语言')
-    assert.match(text, /helm\/author/, 'worktree 分支事实')
+    assert.match(text, /helmx\/author/, 'worktree 分支事实')
     assert.match(text, /#2/, '#seq 辅助信息')
     assert.equal(mountPanel.host.querySelector('.sw-panel-fallback-note') !== null, false, '实时模式不标注快照来源')
 
@@ -866,7 +866,7 @@ test('SwarmWorkbenchPanel：无实时投影时显式 board_status 回退（含�
   const closedBoard = boardViewFixture()
   ;((closedBoard.group as { status: string })).status = 'closed'
   ;(closedBoard.group as { retainedWorktrees?: unknown[] }).retainedWorktrees = [
-    { memberName: 'author', worktreeId: 'wt-author-1', branch: 'helm/author', path: '/repo-wt/author', commitsAhead: 2 },
+    { memberName: 'author', worktreeId: 'wt-author-1', branch: 'helmx/author', path: '/repo-wt/author', commitsAhead: 2 },
   ]
   setStubState({ docs: { index: closedIndex, 'board-badges': { byConversation: {} } } })
 
@@ -890,7 +890,7 @@ test('SwarmWorkbenchPanel：无实时投影时显式 board_status 回退（含�
     const text = panel.host.textContent ?? ''
     assert.match(text, /Completed/, '结单自然状态')
     assert.match(text, /snapshot/i, '标注一次性快照来源')
-    assert.match(text, /helm\/author/, '保留待合入分支清单')
+    assert.match(text, /helmx\/author/, '保留待合入分支清单')
     assert.deepEqual(
       spy.actionCalls.map((c) => c.actionId).concat(actionLog),
       ['board_status'],
@@ -961,7 +961,7 @@ test('单行回执胶囊：展示计数/动态/成员，点击打开协同工作
       conversationId: 50,
       entry: {
         id: 'e-10',
-        kind: 'helm.input',
+        kind: 'helmx.input',
         data: {
           meta: {
             renderer: 'swarm:board-report',
@@ -996,7 +996,7 @@ test('单行回执胶囊：展示计数/动态/成员，点击打开协同工作
       conversationId: 51,
       entry: {
         id: 'e-11',
-        kind: 'helm.input',
+        kind: 'helmx.input',
         data: {
           meta: {
             renderer: 'swarm:board-wakeup',
@@ -1154,7 +1154,7 @@ test('纯模型抽查：严格边界解析、正交交付进度、SwarmToolView/
   )
   try {
     assert.match(archWorkerPanel.host.textContent ?? '', /Completed/)
-    assert.match(archWorkerPanel.host.textContent ?? '', /helm\/author/)
+    assert.match(archWorkerPanel.host.textContent ?? '', /helmx\/author/)
     assert.deepEqual(calls, [{ actionId: 'board_status', input: {} }])
     await act(async () => {
       archWorkerPanel.host.querySelector<HTMLButtonElement>('.sw-panel-history-toggle')!.click()
@@ -1183,7 +1183,7 @@ test('静态铁律检查：swarm/client 全目录零 Emoji / 原生控件 / hist
         `状态灯样式归属宿主，插件不得本地定义：${file}`,
       )
       assert.equal(
-        /(^|\n)\.helm-status-light\b/.test(content),
+        /(^|\n)\.helmx-status-light\b/.test(content),
         false,
         `状态灯样式归属宿主，插件不得本地定义：${file}`,
       )

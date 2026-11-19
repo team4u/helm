@@ -165,7 +165,7 @@
   color: var(--err);
 }
 
-/* 通用状态灯词汇（宿主公共设计系统，供侧栏会话行与 @helm/plugin-client StatusLight 共用）：
+/* 通用状态灯词汇（宿主公共设计系统，供侧栏会话行与 @helmx/plugin-client StatusLight 共用）：
    基础圆点 + working/blocked/done/error 色调与呼吸动效 + 后台在途空心环；
    aborted 菱形与 pending 空心环见下方统一状态灯段。 */
 .status-dot {
@@ -244,7 +244,7 @@
    这里补充 aborted 菱形（非灰色、与 blocked 实心圆区分）与 pending 空心中性环；
    语义除颜色外还有形状（呼吸/空心/菱形），可访问名称走 role=img + aria-label
    与屏幕阅读器专用文本，绝不只靠颜色表达；label 不再占据可见宽度（移动端友好）。 */
-.helm-status-light {
+.helmx-status-light {
   display: inline-flex;
   align-items: center;
   gap: 0;
@@ -255,13 +255,13 @@
   line-height: 1;
   vertical-align: middle;
 }
-.helm-status-light .status-dot {
+.helmx-status-light .status-dot {
   width: 8px;
   height: 8px;
 }
 
 /* 屏幕阅读器专用文本：视觉隐藏但不依赖 title/hover */
-.helm-sr-only {
+.helmx-sr-only {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -527,7 +527,7 @@
  * 杜绝每个插件自立门户重复拷贝表格样式
  * ========================================================================== */
 
-.helm-table-wrap,
+.helmx-table-wrap,
 .table-wrap {
   width: 100%;
   overflow-x: auto;
@@ -538,7 +538,7 @@
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
 }
 
-.helm-table,
+.helmx-table,
 .table-wrap > table {
   width: 100%;
   border-collapse: collapse;
@@ -548,7 +548,7 @@
   table-layout: auto;
 }
 
-.helm-table th,
+.helmx-table th,
 .table-wrap th {
   text-align: left;
   padding: 8px 10px;
@@ -561,7 +561,7 @@
   user-select: none;
 }
 
-.helm-table td,
+.helmx-table td,
 .table-wrap td {
   padding: 8px 10px;
   border-bottom: 1px solid var(--border-subtle, var(--border));
@@ -570,12 +570,12 @@
   font-size: 12.5px;
 }
 
-.helm-table tr:last-child td,
+.helmx-table tr:last-child td,
 .table-wrap tr:last-child td {
   border-bottom: none;
 }
 
-.helm-table tr:hover td,
+.helmx-table tr:hover td,
 .table-wrap tr:hover td {
   background: var(--bg-hover);
 }
@@ -768,7 +768,7 @@
  * 通用键值对概览原语 (Key-Value Grid Primitives)
  * ========================================================================== */
 
-.helm-kv-grid,
+.helmx-kv-grid,
 .kv-grid,
 .kv-list {
   display: grid;

@@ -4,17 +4,17 @@
  * - fake npm payloads: a self-contained `start.mjs` mirroring the real payload contract
  *   (`check` self-verification, `start` verifying then serving `/api/auth/status`) with injectable
  *   failure modes. On a successful listen it prints the real Hub startup banner —
- *   `Helm Hub: http://<host>:<port>` — which the launcher's readiness gate scans for;
+ *   `Helmx Hub: http://<host>:<port>` — which the launcher's readiness gate scans for;
  * - a port-shaped fake `UpdateCore`: the registry (`fetchLatestVersion`) and npm (`runNpm`)
  *   seams are stubbed (no network, no npm), while immutable staging delegates to the REAL
- *   `@helm/env-io` update engine so launcher tests cannot drift from the generic semantics. The fake
+ *   `@helmx/env-io` update engine so launcher tests cannot drift from the generic semantics. The fake
  *   registry download serves a REAL `package/`-rooted tarball of the fixture payload (packed
  *   in-process with the `tar` library), because the production staging unpacks it for real;
  * - a fake registry `fetch` serving real `npm pack` tarballs with correct sha512 SRI metadata,
  *   for golden-path staging through the full production extractor (real download verification +
  *   real unpack + real npm install + real self-check);
  * - every fixture payload carries one inner `file:./fixture-inner-dep.tgz` dependency (the real
- *   payload ships `@helm/*` exactly this way): `start.mjs check` imports it, so every staging
+ *   payload ships `@helmx/*` exactly this way): `start.mjs check` imports it, so every staging
  *   path — fake or golden — proves the unpack-then-install ordering actually completed the
  *   dependency closure (a direct `npm install <outer.tgz>` fails with ENOENT on real artifacts).
  */
@@ -24,7 +24,7 @@ import { readdirSync } from 'node:fs';
 import fsp from 'node:fs/promises';
 import net from 'node:net';
 import path from 'node:path';
-import { killProcessTree } from '@helm/env-io';
+import { killProcessTree } from '@helmx/env-io';
 import * as tar from 'tar';
 import { defaultUpdateCore, type UpdateCore } from '../../src/launcher/update-core.js';
 import type { LauncherIo } from '../../src/launcher/io.js';
@@ -54,7 +54,7 @@ if (command === 'check') {
     await new Promise(() => {}); // park forever (top-level await; never falls through)
   }
   // The inner file: dependency must resolve — proves the candidate's npm install completed
-  // inside the unpacked payload root (the real payload ships @helm/* the same way).
+  // inside the unpacked payload root (the real payload ships @helmx/* the same way).
   try {
     const dep = await import('fixture-inner-dep');
     if (dep.marker !== 'inner-dep') throw new Error('bad marker');
@@ -70,18 +70,18 @@ if (mode === 'crash') { console.error('[fake-payload] crashing on start'); proce
 if (mode === 'never-ready') { console.log('[fake-payload] never becoming ready'); setInterval(() => {}, 1 << 30); }
 else {
   if (mode === 'ignore-signal') { process.on('SIGTERM', () => console.log('[fake-payload] ignoring SIGTERM')); process.on('SIGINT', () => {}); }
-  const port = Number(process.env.HELM_PORT ?? '3202');
-  const host = process.env.HELM_HOST ?? '127.0.0.1';
+  const port = Number(process.env.HELMX_PORT ?? '3202');
+  const host = process.env.HELMX_HOST ?? '127.0.0.1';
   const displayHost = host === '0.0.0.0' || host === '::' ? '127.0.0.1' : host;
   const bannerPort = mode === 'wrong-port-banner' ? (port === 1 ? 2 : 1) : port;
 
-  // ---- activity heartbeat writer (mirrors the real hub's @helm/kernel activity-heartbeat) ----
-  // Enabled only when a data directory is resolvable (HELM_DATA_DIR): the launcher's update
+  // ---- activity heartbeat writer (mirrors the real hub's @helmx/kernel activity-heartbeat) ----
+  // Enabled only when a data directory is resolvable (HELMX_DATA_DIR): the launcher's update
   // busy-gate binds this record to hub.pid's wrapper identity. The state file (optional) is
   // re-read every tick so tests can flip busy/idle/stale/missing/garbage at runtime.
-  const activityFile = process.env.HELM_FIXTURE_ACTIVITY_FILE ??
-    (process.env.HELM_DATA_DIR ? path.join(process.env.HELM_DATA_DIR, 'hub-activity.json') : null);
-  const stateFile = process.env.HELM_FIXTURE_ACTIVITY_STATE ?? null;
+  const activityFile = process.env.HELMX_FIXTURE_ACTIVITY_FILE ??
+    (process.env.HELMX_DATA_DIR ? path.join(process.env.HELMX_DATA_DIR, 'hub-activity.json') : null);
+  const stateFile = process.env.HELMX_FIXTURE_ACTIVITY_STATE ?? null;
   const startTimeSelf = (() => {
     try {
       const stat = readFileSync('/proc/self/stat', 'utf8');
@@ -105,7 +105,7 @@ else {
     try { mkdirSync(path.dirname(activityFile), { recursive: true }); } catch {}
     if (state.mode === 'garbage') { try { writeFileSync(activityFile, '{not-json', { flag: 'w' }); } catch {} return; }
     const updatedAt = state.mode === 'stale' ? Date.now() - 3_600_000 : Date.now();
-    const record = { schema: 1, launchId: process.env.HELM_HUB_ACTIVITY_LAUNCH_ID ?? null, pid: process.pid, ppid: process.ppid, port, startTime: startTimeSelf, updatedAt, counts: state.counts };
+    const record = { schema: 1, launchId: process.env.HELMX_HUB_ACTIVITY_LAUNCH_ID ?? null, pid: process.pid, ppid: process.ppid, port, startTime: startTimeSelf, updatedAt, counts: state.counts };
     const tmp = activityFile + '.tmp';
     try { writeFileSync(tmp, JSON.stringify(record) + '\\n', { mode: 0o600 }); renameSync(tmp, activityFile); } catch {}
   };
@@ -129,7 +129,7 @@ else {
   });
   server.listen(port, host, () => {
     writeActivity(); // write before the banner: readiness implies a bound heartbeat record
-    console.log(\`Helm Hub: http://\${displayHost}:\${bannerPort}\`);
+    console.log(\`Helmx Hub: http://\${displayHost}:\${bannerPort}\`);
   });
   if (activityFile !== null && mode !== 'ignore-signal') setInterval(writeActivity, 300).unref?.();
   if (mode !== 'ignore-signal') {
@@ -154,7 +154,7 @@ export interface FakePayloadOptions {
 /**
  * Materialize a fake payload package directory (package.json + manifest.json + start.mjs + mode).
  * A real inner `file:./fixture-inner-dep.tgz` archive is always bundled (mirroring the real
- * payload's `@helm/*: file:./<pkg>.tgz` layout) so every staging path exercises the
+ * payload's `@helmx/*: file:./<pkg>.tgz` layout) so every staging path exercises the
  * unpack-then-install ordering; `dependencies` adds extra entries (golden nested-dep fixtures).
  */
 export async function writeFakePayload(options: FakePayloadOptions): Promise<string> {

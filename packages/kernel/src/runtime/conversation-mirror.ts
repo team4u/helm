@@ -16,7 +16,7 @@
  *   see context-usage-refresh.ts.
  */
 
-import type { ConversationInput, ConversationLive, InputOrigin, WhenBusy } from '@helm/protocol'
+import type { ConversationInput, ConversationLive, InputOrigin, WhenBusy } from '@helmx/protocol'
 import type { LiveCompactionFailureShape, LiveCompactionShape } from './context-usage.js'
 
 /** Subset of SDK pi.live document structure (observed shape used by tracker). */
@@ -39,8 +39,8 @@ export interface InboxItemShape {
   entry?: { kind?: string; data?: unknown }
 }
 
-/** Payload shape for helm.input entries / inbox item metadata. */
-export interface HelmInputMeta {
+/** Payload shape for helmx.input entries / inbox item metadata. */
+export interface HelmxInputMeta {
   id?: string
   text?: string
   origin?: InputOrigin
@@ -68,7 +68,7 @@ export interface ConversationMirror {
    * submission query; cleared on settlement or withdrawal. */
   submissionIndex: Map<number, string>
   /** Lower-bound entry ID for input reconstruction (monotonically non-decreasing: new runs advance to run.first
-   * and run end leaves it untouched so settled helm.input entries in the window never resurrect on the next snapshot). */
+   * and run end leaves it untouched so settled helmx.input entries in the window never resurrect on the next snapshot). */
   runFirstEntry: number | undefined
   /** Set of requestIds consumed during this turn (accumulated across the active run, including generation
    * handOver rounds; reset only when a new logical run starts). */
@@ -137,8 +137,8 @@ export function createConversationMirror(): ConversationMirror {
   }
 }
 
-/** Reconstruct a ConversationInput from a helm.input entry / inbox payload without fabricating missing fields. */
-export function inputFromMeta(meta: HelmInputMeta): ConversationInput {
+/** Reconstruct a ConversationInput from a helmx.input entry / inbox payload without fabricating missing fields. */
+export function inputFromMeta(meta: HelmxInputMeta): ConversationInput {
   return {
     id: meta.id!,
     text: meta.text!,

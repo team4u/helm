@@ -40,9 +40,9 @@ action 字段是三种指令对象之一，仅由用户显式点击或提交触�
 
 | 指令 | 形态 | 说明 |
 | :--- | :--- | :--- |
-| `helm:action` | `{ "type": "helm:action", "pluginId", "actionId", "input" }` | 调用插件动作；actionId 先查动作清单与 Schema |
-| `helm:open` | `{ "type": "helm:open", "target", "split" }` | 打开会话（`conversation:<id>`）、Screen（`screen:<pluginId>/<screenId>`）或产物（`artifact:<id>`）；`split: true` 分屏 |
-| `helm:send` | `{ "type": "helm:send", "target": "current", "text" }` | 以 human 来源向会话提交输入 |
+| `helmx:action` | `{ "type": "helmx:action", "pluginId", "actionId", "input" }` | 调用插件动作；actionId 先查动作清单与 Schema |
+| `helmx:open` | `{ "type": "helmx:open", "target", "split" }` | 打开会话（`conversation:<id>`）、Screen（`screen:<pluginId>/<screenId>`）或产物（`artifact:<id>`）；`split: true` 分屏 |
+| `helmx:send` | `{ "type": "helmx:send", "target": "current", "text" }` | 以 human 来源向会话提交输入 |
 
 完整契约随技能下钻：`load_skill({ skillId: "generative-ui", path: "references/actions.md" })`。
 

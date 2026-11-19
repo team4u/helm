@@ -6,7 +6,7 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { withTimeout } from '@helm/test-kit'
+import { withTimeout } from '@helmx/test-kit'
 import { handleApi } from '../src/http/routes.js'
 import type { KernelRuntimeLike } from '../src/http/contracts.js'
 import type { NodeForwardEvent, NodeForwardSession } from '../src/env/forward.js'
@@ -24,7 +24,7 @@ function makeKernel(over: {
     async issueNodeToken() { throw new Error('unused') },
     async removeNode() { throw new Error('unused') },
     async execEnv() { throw new Error('unused') },
-    dataDir: '/tmp/helm-forward-http-test',
+    dataDir: '/tmp/helmx-forward-http-test',
     auth: { status: async () => ({ configured: false }), verifyToken: async () => false, setup: async () => ({ token: 'x' }), login: async () => ({ token: 'x' }) } as never,
     async startNodeForward(nodeId: string, input: { listenHost: string; listenPort: number; targetHost?: string; targetPort: number }) {
       const forwardId = 'fwd-11111111-2222-3333-4444-555555555555'
@@ -71,7 +71,7 @@ const post = async (kernel: KernelRuntimeLike, path: string, body?: unknown): Pr
     }), kernel)
     return { status: response.status, json: await response.json().catch(() => undefined) }
   } catch (error) {
-    // ValidationError (HelmError subclass) is thrown directly (mapped to 400 uniformly by hub.ts).
+    // ValidationError (HelmxError subclass) is thrown directly (mapped to 400 uniformly by hub.ts).
     if (error instanceof Error && 'status' in error) {
       return { status: (error as { status: number }).status, json: undefined }
     }

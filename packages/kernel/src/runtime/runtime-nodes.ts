@@ -15,7 +15,7 @@ import type {
   NodeUpgradeCheckInput,
   NodeUpgradeCheckResult,
   NodeUpgradeResult,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 import type { EnvFabric } from '../env/index.js'
 import type { EventHub } from './events.js'
 import type { NodeManager } from './node-manager.js'
@@ -33,7 +33,7 @@ export class RuntimeNodeOperations {
    * Bind underlying node connection change events:
    * - Node connects/disconnects -> publish node.changed SSE event (real-time Web/CLI awareness);
    * - When removeNode severs a connection, it clears the index first so the offline callback is skipped;
-   * - If a newly connected node lags behind Hub version and HELM_AUTO_UPGRADE_NODES=1 is set, trigger auto-upgrade asynchronously.
+   * - If a newly connected node lags behind Hub version and HELMX_AUTO_UPGRADE_NODES=1 is set, trigger auto-upgrade asynchronously.
    */
   bindEvents(): void {
     this.deps.envFabric.registry.onNodeChanged((nodeId, online) => {
@@ -52,7 +52,7 @@ export class RuntimeNodeOperations {
   /**
    * Initialize node substrate prerequisites:
    * 1. Load config.json node token registry;
-   * 2. Generate helm CLI wrapper script;
+   * 2. Generate helmx CLI wrapper script;
    * 3. Warm up local disk stats cache.
    */
   async initialize(): Promise<void> {

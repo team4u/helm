@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import type { ConversationDetail, ConversationLive, ConversationSummary, HelmSnapshot } from '@helm/protocol'
+import type { ConversationDetail, ConversationLive, ConversationSummary, HelmxSnapshot } from '@helmx/protocol'
 import { applyConversationEntry, applyEventFrame, applyResumedFrame, applySnapshot, applyTransientLiveFrame, emptyLiveState, entryMatchesReference, mergeConversationDetail, sortNodes, sseClientTimings, SseParser } from '../src/lib/live-state.js'
 import { normalizeModelCatalogInfo } from '../src/lib/api.js'
-import type { NodeInfo } from '@helm/protocol'
+import type { NodeInfo } from '@helmx/protocol'
 
 const conv: ConversationSummary = { id: 1, title: '助理', profileId: 'assistant', cwd: '/tmp', model: '', thinkingLevel: '', status: 'idle', tags: [], stateChangeSeq: 1, completionSeq: 0, unread: false, pinned: true, pendingAskCount: 0, createdAt: 0, updatedAt: 0 }
-const snapshot: HelmSnapshot = { bootId: 'test-boot', seq: 10, conversations: [conv], pendingAsks: [], plugins: [], ui: [] }
+const snapshot: HelmxSnapshot = { bootId: 'test-boot', seq: 10, conversations: [conv], pendingAsks: [], plugins: [], ui: [] }
 
 test('SSE 分段 CRLF、多 data 行与注释不能丢帧', { timeout: 60_000 }, () => {
   const messages: Array<{ event: string; data: string }> = []
@@ -21,7 +21,7 @@ test('SSE 分段 CRLF、多 data 行与注释不能丢帧', { timeout: 60_000 },
 test('重连快照 SWR 保活存在会话的详情并清理已删会话与过时插件文档，重复帧忽略而缺帧要求重新同步', { timeout: 60_000 }, () => {
   const existingDetail: ConversationDetail = {
     ...conv,
-    entries: [{ id: '1', kind: 'helm.input', data: { text: 'hi' } }],
+    entries: [{ id: '1', kind: 'helmx.input', data: { text: 'hi' } }],
     nextCursor: 'cur-1',
     contextUsage: { tokens: 1200, contextWindow: 8000 },
   }
@@ -61,23 +61,23 @@ test('快照 pluginDocs 直投写入 pluginDocs 映射，非法形状显式拒�
     'builtin:workflow/runs': { runs: [] },
     'p2/index': 42,
   })
-  assert.throws(() => applySnapshot(emptyLiveState(), { ...snapshot, pluginDocs: 'bad' as unknown as HelmSnapshot['pluginDocs'] }), /[Ii]nvalid/)
+  assert.throws(() => applySnapshot(emptyLiveState(), { ...snapshot, pluginDocs: 'bad' as unknown as HelmxSnapshot['pluginDocs'] }), /[Ii]nvalid/)
   assert.throws(
-    () => applySnapshot(emptyLiveState(), { ...snapshot, pluginDocs: [{ pluginId: 1, name: 'x', value: null } as unknown as NonNullable<HelmSnapshot['pluginDocs']>[number]] }),
+    () => applySnapshot(emptyLiveState(), { ...snapshot, pluginDocs: [{ pluginId: 1, name: 'x', value: null } as unknown as NonNullable<HelmxSnapshot['pluginDocs']>[number]] }),
     /[Ii]nvalid/,
   )
 })
 
 test('HTTP 详情返回时不得覆盖已收到的 SSE 新消息与摘要，历史游标能耗尽', { timeout: 60_000 }, () => {
   let state = applySnapshot(emptyLiveState(), snapshot)
-  const detail: ConversationDetail = { ...conv, entries: [{ id: '2', kind: 'helm.input' }], nextCursor: 'older' }
+  const detail: ConversationDetail = { ...conv, entries: [{ id: '2', kind: 'helmx.input' }], nextCursor: 'older' }
   state = mergeConversationDetail(state, detail)
   state = applyEventFrame(state, { seq: 11, event: { type: 'conversation.entry', conversationId: 1, entry: { id: '3', kind: 'pi.assistant' } } })
   state = applyEventFrame(state, { seq: 12, event: { type: 'conversation.upsert', conversation: { ...conv, title: '新标题' } } })
   state = mergeConversationDetail(state, detail)
   assert.deepEqual(state.conversationDetails[1]?.entries.map((entry) => entry.id), ['2', '3'])
   assert.equal(state.conversationDetails[1]?.title, '新标题')
-  state = mergeConversationDetail(state, { ...conv, entries: [{ id: '1', kind: 'helm.input' }] }, true)
+  state = mergeConversationDetail(state, { ...conv, entries: [{ id: '1', kind: 'helmx.input' }] }, true)
   assert.deepEqual(state.conversationDetails[1]?.entries.map((entry) => entry.id), ['1', '2', '3'])
   assert.equal(state.conversationDetails[1]?.nextCursor, undefined)
 })
@@ -98,7 +98,7 @@ test('同一批到达的 ask.upsert/resolved 记录准确，插件停用清除�
 test('SSE 消息先于首次 HTTP 详情返回时，补齐详情后仍保留新回复', { timeout: 60_000 }, () => {
   let state = applySnapshot(emptyLiveState(), snapshot)
   state = applyEventFrame(state, { seq: 11, event: { type: 'conversation.entry', conversationId: 1, entry: { id: '5', kind: 'pi.assistant' } } })
-  state = mergeConversationDetail(state, { ...conv, entries: [{ id: '4', kind: 'helm.input' }] })
+  state = mergeConversationDetail(state, { ...conv, entries: [{ id: '4', kind: 'helmx.input' }] })
   assert.deepEqual(state.conversationDetails[1]?.entries.map((entry) => entry.id), ['4', '5'])
   assert.deepEqual(state.pendingEntries, {})
 })
@@ -122,9 +122,9 @@ test('列表摘要已有 contextUsage 时保留 SSE 权威值，旧 HTTP 详情�
 })
 
 test('FTS input:/entry: 引用映射到真实时间线 entryId', { timeout: 60_000 }, () => {
-  assert.equal(entryMatchesReference({ id: '4', kind: 'helm.input', data: { id: 'submission-1' } }, 'input:submission-1'), true)
+  assert.equal(entryMatchesReference({ id: '4', kind: 'helmx.input', data: { id: 'submission-1' } }, 'input:submission-1'), true)
   assert.equal(entryMatchesReference({ id: '5', kind: 'pi.assistant' }, 'entry:5'), true)
-  assert.equal(entryMatchesReference({ id: '4', kind: 'helm.input', data: { id: 'other' } }, 'input:submission-1'), false)
+  assert.equal(entryMatchesReference({ id: '4', kind: 'helmx.input', data: { id: 'other' } }, 'input:submission-1'), false)
 })
 
 test('模型菜单按真实 /api/models 契约组成 provider/model，思考档位缺省为 off', { timeout: 60_000 }, () => {
@@ -183,7 +183,7 @@ test('模型目录窗口字段：真实已知正数透传，未知省略，非�
 const localNode: NodeInfo = { id: 'local', kind: 'local', online: true }
 const gpuNode: NodeInfo = { id: 'gpu-box', kind: 'byom', online: false }
 
-const nodesSnapshot: HelmSnapshot = {
+const nodesSnapshot: HelmxSnapshot = {
   ...snapshot,
   nodes: [gpuNode, localNode],
 }

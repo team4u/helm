@@ -17,7 +17,7 @@
  *   the .tsx Fast Refresh rule.
  */
 import { useCallback, useMemo, useRef } from 'react'
-import type { ComposerController, WhenBusy } from '@helm/protocol/browser'
+import type { ComposerController, WhenBusy } from '@helmx/protocol/browser'
 
 export interface ComposerControllerBindings {
   /** Current draft text (React state, read during render). */

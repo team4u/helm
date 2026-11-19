@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import React, { act } from 'react'
 import { renderToString } from 'react-dom/server'
-import type { PluginSummary } from '@helm/protocol'
+import type { PluginSummary } from '@helmx/protocol'
 import { ensureHappyDom } from './helpers/dom-harness.js'
 import { ApiClientError, pluginsApi, type PluginConfigResponse } from '../src/lib/api.js'
 import {

@@ -6,20 +6,20 @@
  *   serialized by real path within the same Hub process, atomically flushed;
  * - Every write path enforces a uniform 64_000-character cap on the **merged** final content inside the file lock:
  *   concurrent calls cannot each "pre-read the old value + pass the check" and stack past the cap;
- *   over the limit it throws HelmError('memory_limit_exceeded', 400) explicitly, never writing half a file.
+ *   over the limit it throws HelmxError('memory_limit_exceeded', 400) explicitly, never writing half a file.
  */
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { HelmError, type HelmHostApi } from '@helm/protocol'
+import { HelmxError, type HelmxHostApi } from '@helmx/protocol'
 
-type MemoryFileHost = Pick<HelmHostApi, 'profiles' | 'withFileLock' | 'atomicWriteFile'>
+type MemoryFileHost = Pick<HelmxHostApi, 'profiles' | 'withFileLock' | 'atomicWriteFile'>
 
 async function readMemoryFile(path: string): Promise<string> {
   try {
     return await readFile(path, 'utf8')
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      throw new HelmError('not_found', `memory file does not exist: ${path}`, 404, { path })
+      throw new HelmxError('not_found', `memory file does not exist: ${path}`, 404, { path })
     }
     throw error
   }
@@ -43,8 +43,8 @@ function memoryLimitError(
   wouldBe: number,
   mode: 'append' | 'replace',
   inputLength: number,
-): HelmError {
-  return new HelmError(
+): HelmxError {
+  return new HelmxError(
     'memory_limit_exceeded',
     `MEMORY.md would reach ${wouldBe} chars after the write, over the cap of ${MAX_MEMORY_CHARS}; please trim before writing (use a full replace to consolidate long-term memory)`,
     400,
@@ -67,7 +67,7 @@ export class MemoryStore {
     const path = await this.memoryPath(profileId)
     return this.host.withFileLock(path, async () => {
       const current = await readMemoryFile(path).catch((err: unknown) => {
-        if (err instanceof HelmError && err.code === 'not_found') return undefined
+        if (err instanceof HelmxError && err.code === 'not_found') return undefined
         throw err
       })
       if (current !== undefined) return current
@@ -102,7 +102,7 @@ export class MemoryStore {
         try {
           current = await readMemoryFile(path)
         } catch (err) {
-          if (!(err instanceof HelmError && err.code === 'not_found')) throw err
+          if (!(err instanceof HelmxError && err.code === 'not_found')) throw err
           // When MEMORY.md is missing, append starts from empty (the next write self-heals it).
         }
         next = current.endsWith('\n') || current === '' ? current + text : current + '\n' + text

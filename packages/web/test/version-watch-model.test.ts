@@ -68,7 +68,7 @@ function reportComposerDirty(key: string, snapshot: ComposerDirtySnapshot, conve
 
 /** An index.html in the real Vite build shape (a unique module script in head + an inline theme script + a css link). */
 const builtIndexHtml = (src: string): string =>
-  `<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8" /><title>Helm</title>` +
+  `<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8" /><title>Helmx</title>` +
   `<script>(function () { try { localStorage.getItem('x') } catch (_) {} })()</script>` +
   `<script type="module" crossorigin src="${src}"></script>` +
   `<link rel="stylesheet" crossorigin href="/assets/index-CssHash.css" /></head>` +
@@ -169,10 +169,10 @@ test('probe success: fetches /index.html with a uniquified URL, no-store + Accep
   const entry = await probeLatestIndexEntry({ ...stub.deps, nonce: () => 'n-1' })
   assert.equal(entry, '/assets/index-NEW.js')
   assert.equal(stub.calls.length, 1)
-  assert.equal(stub.calls[0]!.url, '/index.html?helmv=n-1', 'the URL carries a cache-busting unique param (for cache layers that may ignore no-store)')
+  assert.equal(stub.calls[0]!.url, '/index.html?helmxv=n-1', 'the URL carries a cache-busting unique param (for cache layers that may ignore no-store)')
   assert.equal(stub.calls[0]!.init.cache, 'no-store')
   assert.deepEqual(stub.calls[0]!.init.headers, { accept: 'text/html' })
-  assert.equal(buildIndexProbeUrl('zzz'), '/index.html?helmv=zzz')
+  assert.equal(buildIndexProbeUrl('zzz'), '/index.html?helmxv=zzz')
 })
 
 test('the default probe nonce auto-increments: two probes within the same millisecond still differ', { timeout: 60_000 }, async () => {

@@ -10,7 +10,7 @@
 <Hub 数据目录>/plugins/builtin%3Aworkflow/artifacts/<conversationId>/workflow-<runId>.jsonl
 ```
 
-默认数据目录下示例：`~/.helm/plugins/builtin%3Aworkflow/artifacts/42/workflow-wf_1a2b3c4d5e6f.jsonl`（`runId` 形如 `wf_<12 位十六进制>`）。运行索引（轻量字段：`id`、`conversationId`、`status`、`createdAt`、`updatedAt`、`notifyParentOnSettle`、`autoResumeCount`、`resumedByRunId`）持久化在插件私有 `records` 文档（Hub 的 `state.sqlite` 插件文档表）；每个 run 的完整记录经原子写（`.tmp` + `fsync` + `rename`）存为 `<插件数据目录>/artifacts/<conversationId>/workflow-<runId>.record.json`。Web 界面摘要经按会话分片的 `runs` 投影订阅；进度树中节点的 `prompt`、`gate.output` 与 `error` 只保留最多 1024 字符的截断预览，完整内容以子会话与账本为准。经 `workflow()` 嵌套的整棵工作流树共用同一份账本与本次运行的全局审计序号；恢复身份按各工作流的稳定 scope 路径与局部调用序号区分。
+默认数据目录下示例：`~/.helmx/plugins/builtin%3Aworkflow/artifacts/42/workflow-wf_1a2b3c4d5e6f.jsonl`（`runId` 形如 `wf_<12 位十六进制>`）。运行索引（轻量字段：`id`、`conversationId`、`status`、`createdAt`、`updatedAt`、`notifyParentOnSettle`、`autoResumeCount`、`resumedByRunId`）持久化在插件私有 `records` 文档（Hub 的 `state.sqlite` 插件文档表）；每个 run 的完整记录经原子写（`.tmp` + `fsync` + `rename`）存为 `<插件数据目录>/artifacts/<conversationId>/workflow-<runId>.record.json`。Web 界面摘要经按会话分片的 `runs` 投影订阅；进度树中节点的 `prompt`、`gate.output` 与 `error` 只保留最多 1024 字符的截断预览，完整内容以子会话与账本为准。经 `workflow()` 嵌套的整棵工作流树共用同一份账本与本次运行的全局审计序号；恢复身份按各工作流的稳定 scope 路径与局部调用序号区分。
 
 每行一个 JSON 对象，三类事件行：
 
@@ -84,7 +84,7 @@ flowchart TD
 
 ## Hub 重启恢复
 
-默认开启重启无感原位恢复（配置 `autoRecoverOnRestart`，默认 `true`；`false` 或环境变量 `HELM_AUTO_RECOVER=0` 时回退中止收敛模式）：
+默认开启重启无感原位恢复（配置 `autoRecoverOnRestart`，默认 `true`；`false` 或环境变量 `HELMX_AUTO_RECOVER=0` 时回退中止收敛模式）：
 
 **优雅关停（`ctx.host.isClosing === true && effectiveAutoRecover`）**：引擎调用 `workflows.suspend()`——终止进程内 Worker 与本地等待句柄，**不**调用 `abortConversationGuarded`、**不**改写终态、**不**触发 `onRunSettled` / 父会话通知，对在途 `RunRecord` 落盘 `suspendedCleanly: true`（保持 `status: 'running'`）并维持 Worktree `running` 租约 fail-closed 保留。单插件停用（`ctx.host.isClosing === false`）或关闭自动恢复时完整保留既有 `close()` 中止落盘 `aborted` 语义。
 
@@ -103,11 +103,11 @@ flowchart TD
 
 ```bash
 # 从单条 failed/aborted 工作流或具句柄的单子代理恢复
-pnpm helm workflows run ./pipeline.js --resume-from-run-id wf_1a2b3c4d5e6f --wait
+pnpm helmx workflows run ./pipeline.js --resume-from-run-id wf_1a2b3c4d5e6f --wait
 
 # 批量续接当前会话或全局全部可恢复的失败工作流与后台单子代理（不可恢复项记入 skipped）
-pnpm helm workflows resume-failed --current
-pnpm helm workflows resume-failed --all
+pnpm helmx workflows resume-failed --current
+pnpm helmx workflows resume-failed --all
 ```
 
 恢复执行继承原 run 的 `args`（显式传入可覆盖），已成功前缀的智能体调用零 Token 瞬间返回，自中断点起实时接续。

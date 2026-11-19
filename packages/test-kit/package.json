@@ -1,5 +1,5 @@
 {
-  "name": "@helm/test-kit",
+  "name": "@helmx/test-kit",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -25,7 +25,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "devDependencies": {
-    "@helm/protocol": "workspace:*",
+    "@helmx/protocol": "workspace:*",
     "@types/node": "^24.0.0",
     "typescript": "^5.9.0"
   }

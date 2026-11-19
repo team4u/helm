@@ -7,8 +7,8 @@
  * upgrade process restarts and replaces the old connection). Bounded in-memory promise: settled by cancel,
  * timeout, `registry.close`, or matching commit, never dangling. Matches the pre-split inline implementation.
  */
-import { HelmError } from '@helm/protocol'
-import type { NodeUpgradeResult } from '@helm/protocol'
+import { HelmxError } from '@helmx/protocol'
+import type { NodeUpgradeResult } from '@helmx/protocol'
 
 /** Upgrade waiter: bounded in-memory promise resolved only by a matching heartbeat commit. */
 interface UpgradeWaiter {
@@ -30,11 +30,11 @@ export interface UpgradeWaiterHandle {
 }
 
 /** Concurrent upgrade waiter rejected on the same node (caller maps to 409). */
-export class HelmUpgradeBusyError extends Error {}
+export class HelmxUpgradeBusyError extends Error {}
 /** Upgrade wait timed out (no matching commit received). */
-export class HelmUpgradeTimeoutError extends Error {}
+export class HelmxUpgradeTimeoutError extends Error {}
 /** Upgrade wait was explicitly cancelled. */
-export class HelmUpgradeCancelledError extends Error {}
+export class HelmxUpgradeCancelledError extends Error {}
 
 /**
  * Upgrade waiter set. The registry layer handles close gating and forwarding; this class is unaware of the connection pool.
@@ -45,14 +45,14 @@ export class UpgradeWaiterSet {
   /**
    * Create an upgrade waiter: resolves only on a matching heartbeat `upgradeCommit`;
    * rejects on timeout or `cancel()` (disconnecting the old socket does not settle the waiter because
-   * the upgrade itself restarts and replaces the old connection). Rejects concurrent upgrade waiters on the same node (`HelmUpgradeBusyError`).
+   * the upgrade itself restarts and replaces the old connection). Rejects concurrent upgrade waiters on the same node (`HelmxUpgradeBusyError`).
    */
   begin(
     nodeId: string,
     params: { attemptId: string; targetVersion: string; previousVersion: string; timeoutMs: number },
   ): UpgradeWaiterHandle {
     if (this.#waiters.has(nodeId)) {
-      throw new HelmUpgradeBusyError(`node ${nodeId} already has an in-flight upgrade waiter`)
+      throw new HelmxUpgradeBusyError(`node ${nodeId} already has an in-flight upgrade waiter`)
     }
     let waiter: UpgradeWaiter | undefined
     const result = new Promise<NodeUpgradeResult>((resolve, reject) => {
@@ -67,7 +67,7 @@ export class UpgradeWaiterSet {
           const w = this.#waiters.get(nodeId)
           if (w !== undefined && w.attemptId === params.attemptId) {
             this.#waiters.delete(nodeId)
-            w.reject(new HelmUpgradeTimeoutError(
+            w.reject(new HelmxUpgradeTimeoutError(
               `node ${nodeId} upgrade to ${params.targetVersion} was not confirmed within ${params.timeoutMs}ms`,
             ))
           }
@@ -85,7 +85,7 @@ export class UpgradeWaiterSet {
         if (w === undefined || w.attemptId !== params.attemptId) return
         clearTimeout(w.timer)
         this.#waiters.delete(nodeId)
-        w.reject(reason ?? new HelmUpgradeCancelledError(`node ${nodeId} upgrade wait cancelled`))
+        w.reject(reason ?? new HelmxUpgradeCancelledError(`node ${nodeId} upgrade wait cancelled`))
       },
     }
   }

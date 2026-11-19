@@ -11,11 +11,11 @@
 
 import type {
   BeforeTurnHookPayload,
-  HelmPluginContext,
+  HelmxPluginContext,
   ToolCallHookPayload,
   TurnSettledPayload,
-} from '@helm/protocol'
-import { HelmError } from '@helm/protocol'
+} from '@helmx/protocol'
+import { HelmxError } from '@helmx/protocol'
 import type { SuperAgentWatchdogRuntime } from './contracts.js'
 import type { ConversationActivityTracker } from './watchdog-activity.js'
 import {
@@ -48,12 +48,12 @@ export function isProtectedTarget(runtime: SuperAgentWatchdogRuntime, conversati
  * 一律以 ctx.host.getConversationOwnership 现读为准（未标记一律 human）。
  */
 export function assertOwnedTarget(
-  ctx: HelmPluginContext,
+  ctx: HelmxPluginContext,
   runtime: SuperAgentWatchdogRuntime,
   conversationId: number,
 ): void {
   if (isProtectedTarget(runtime, conversationId)) {
-    throw new HelmError(
+    throw new HelmxError(
       'watchdog_target_protected',
       `会话 ${conversationId} 受保护（中枢/巡检自身），拒绝 Watchdog 自动处置`,
       403,
@@ -62,7 +62,7 @@ export function assertOwnedTarget(
   }
   const ownedBy = ctx.host.getConversationOwnership(conversationId)
   if (ownedBy === 'human') {
-    throw new HelmError(
+    throw new HelmxError(
       'watchdog_target_human',
       `会话 ${conversationId} 归属人类（ownedBy=human），仅允许只读诊断与通知`,
       403,
@@ -81,7 +81,7 @@ interface WatchdogGuardDeps {
  * 白名单）、tool_call（未知/越权工具阻断）。#1 与普通 Bot 不受影响。
  */
 export function registerWatchdogSessionGuards(
-  ctx: HelmPluginContext,
+  ctx: HelmxPluginContext,
   runtime: SuperAgentWatchdogRuntime,
   deps: WatchdogGuardDeps,
 ): void {

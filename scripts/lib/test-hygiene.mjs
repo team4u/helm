@@ -9,8 +9,8 @@
  *   skip-without-reason   skip must carry a reason string ({ skip: true }, bare test.skip,
  *                         and skip conditions whose reason cannot be statically confirmed
  *                         are all violations);
- *   suite-timeout-env     assigning to process.env.HELM_TEST_SUITE_TIMEOUT_MS is forbidden
- *                         (kernel env-registry-races relies on host HELM_* being stripped;
+ *   suite-timeout-env     assigning to process.env.HELMX_TEST_SUITE_TIMEOUT_MS is forbidden
+ *                         (kernel env-registry-races relies on host HELMX_* being stripped;
  *                         injecting it causes false positives);
  *   unsafe-dom-assert     calling assert.equal / strictEqual / deepEqual / deepStrictEqual /
  *                         notDeepEqual / notDeepStrictEqual on DOM nodes / Window is
@@ -33,7 +33,7 @@
 import { readdirSync } from 'node:fs';
 import path from 'node:path';
 
-const ENV_VAR = 'HELM_TEST_SUITE_TIMEOUT_MS';
+const ENV_VAR = 'HELMX_TEST_SUITE_TIMEOUT_MS';
 const TEST_SUFFIXES = ['.test.ts', '.test.tsx'];
 
 /**
@@ -501,7 +501,7 @@ export function analyzeTestSource(ts, filePath, source) {
         file: filePath,
         line: lineOf(node),
         rule: 'suite-timeout-env',
-        message: `assigning to process.env.${ENV_VAR} is forbidden (kernel env-registry-races relies on host HELM_* being stripped; injecting it causes false positives)`,
+        message: `assigning to process.env.${ENV_VAR} is forbidden (kernel env-registry-races relies on host HELMX_* being stripped; injecting it causes false positives)`,
       });
     }
     if (isScopeNode(node)) {

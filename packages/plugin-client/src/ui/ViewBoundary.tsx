@@ -1,6 +1,6 @@
 import { Component, type ReactNode } from 'react'
-import type { LocaleTranslator } from '@helm/protocol/browser'
-import { HelmIcon } from '../icons.js'
+import type { LocaleTranslator } from '@helmx/protocol/browser'
+import { HelmxIcon } from '../icons.js'
 import { usePluginTranslator } from '../i18n.js'
 import { uiCopy } from '../ui-copy.js'
 
@@ -20,7 +20,7 @@ class RenderBoundary extends Component<ViewBoundaryProps & { translate: LocaleTr
     const t = this.props.translate
     const label = this.props.label ?? t(uiCopy.view)
     return <div className="callout callout--error" role="alert">
-      <HelmIcon name="alert-triangle" />
+      <HelmxIcon name="alert-triangle" />
       <div>
         <strong>{t({ en: `${label} failed to render`, 'zh-CN': `${label}渲染失败` })}</strong>
         <p className="selectable">{this.state.message}</p>

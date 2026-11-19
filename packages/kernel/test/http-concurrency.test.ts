@@ -15,21 +15,21 @@ import assert from 'node:assert/strict'
 import { test, before, after } from 'node:test'
 import { join } from 'node:path'
 import { stat, writeFile } from 'node:fs/promises'
-import { HelmError, type PluginSummary, type HelmPluginContext } from '@helm/protocol'
-import type { ConversationSummary, NodeForwardEvent, NodeForwardSession } from '@helm/protocol'
+import { HelmxError, type PluginSummary, type HelmxPluginContext } from '@helmx/protocol'
+import type { ConversationSummary, NodeForwardEvent, NodeForwardSession } from '@helmx/protocol'
 import { ArtifactService, InMemoryArtifactRepository, ProfileService } from '../src/services/index.js'
 import { PluginHost } from '../src/plugins/index.js'
 import { hostBackendStub } from './helpers/host-backend-stub.js'
 import { handleApi } from '../src/http/routes.js'
 import type { KernelRuntimeLike } from '../src/http/contracts.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { MemoryDocStore, cleanupDir, makeConversationSummary, makeTempDir, sleep as delay } from './helpers.js'
 
 let dataDir: string
 let host: PluginHost
 
 before(async () => {
-  dataDir = await makeTempDir('helm-http-conc-')
+  dataDir = await makeTempDir('helmx-http-conc-')
   host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: hostBackendStub(), docs: new MemoryDocStore() })
 })
 
@@ -48,7 +48,7 @@ test('plugin route handler execution counts as liveTasks: disabling mid-flight r
     {
       id: 'builtin:probe-route',
       name: 'probe-route',
-      async definePlugin(ctx: HelmPluginContext) {
+      async definePlugin(ctx: HelmxPluginContext) {
         ctx.route({
           method: 'GET',
           path: '/slow',
@@ -71,7 +71,7 @@ test('plugin route handler execution counts as liveTasks: disabling mid-flight r
   assert.equal(host.activeTaskCount('builtin:probe-route'), 1, 'liveTasks increments during handler execution')
   await assert.rejects(
     host.disable('builtin:probe-route'),
-    (err: unknown) => err instanceof HelmError && err.code === 'plugin_has_live_tasks' && err.status === 409,
+    (err: unknown) => err instanceof HelmxError && err.code === 'plugin_has_live_tasks' && err.status === 409,
     'disable gate must observe the in-flight route request and fail 409 rather than tearing down mid-execution',
   )
   releaseHandler!()
@@ -122,7 +122,7 @@ test('pre-dispatch summary re-check: rejects 409 when listRoutes snapshot includ
   } as unknown as KernelRuntimeLike
   await assert.rejects(
     handleApi(new Request('http://hub/api/plugins/stale-plugin/routes/thing'), kernel),
-    (err: unknown) => err instanceof HelmError && err.code === 'plugin_disabled' && err.status === 409,
+    (err: unknown) => err instanceof HelmxError && err.code === 'plugin_disabled' && err.status === 409,
     'dispatching to disabled plugin route must reject with 409',
   )
   assert.equal(handlerCalled, false, 'handler must not execute mid-teardown')
@@ -173,7 +173,7 @@ function forwardKernel(over: ForwardFixture): KernelRuntimeLike {
     async issueNodeToken() { throw new Error('unused') },
     async removeNode() { throw new Error('unused') },
     async execEnv() { throw new Error('unused') },
-    dataDir: '/tmp/helm-forward-conc-test',
+    dataDir: '/tmp/helmx-forward-conc-test',
     auth: { status: async () => ({ configured: false }), verifyToken: async () => false, setup: async () => ({ token: 'x' }), login: async () => ({ token: 'x' }) } as never,
     getNodeForward: (id: string) => over.sessions.get(id),
     listNodeForwards: () => [...over.sessions.values()],
@@ -255,14 +255,14 @@ test('monitor stream explicit client cancel also releases lease idempotently', {
 // ---------------------------------------------------------------------------
 
 test('ProfileService.delete service re-check: returns 409 and preserves directory when isProfileInUse is true', { timeout: 60_000 }, async () => {
-  const dir = await makeTempDir('helm-profile-del-')
+  const dir = await makeTempDir('helmx-profile-del-')
   try {
     const profiles = new ProfileService(dir)
     await profiles.save({ id: 'bound-profile', name: 'bound' })
     await writeFile(join(dir, 'profiles', 'bound-profile', 'SYSTEM.md'), '# sys')
     await assert.rejects(
       profiles.delete('bound-profile', { isProfileInUse: async () => true }),
-      (err: unknown) => err instanceof HelmError && err.code === 'profile_in_use' && err.status === 409,
+      (err: unknown) => err instanceof HelmxError && err.code === 'profile_in_use' && err.status === 409,
     )
     assert.notEqual(await profiles.get('bound-profile'), undefined, 'profile stays intact when deletion is rejected')
     // Re-check false: deletion proceeds.
@@ -274,7 +274,7 @@ test('ProfileService.delete service re-check: returns 409 and preserves director
 })
 
 test('DELETE /api/profiles/:id TOCTOU: concurrent binding after fast path is caught by service re-check', { timeout: 60_000 }, async () => {
-  const dir = await makeTempDir('helm-profile-tou-')
+  const dir = await makeTempDir('helmx-profile-tou-')
   try {
     const profiles = new ProfileService(dir)
     await profiles.save({ id: 'race-profile', name: 'race' })
@@ -293,7 +293,7 @@ test('DELETE /api/profiles/:id TOCTOU: concurrent binding after fast path is cau
     } as unknown as KernelRuntimeLike
     await assert.rejects(
       handleApi(new Request('http://hub/api/profiles/race-profile', { method: 'DELETE' }), kernel),
-      (err: unknown) => err instanceof HelmError && err.code === 'profile_in_use' && err.status === 409,
+      (err: unknown) => err instanceof HelmxError && err.code === 'profile_in_use' && err.status === 409,
       'service layer re-check must catch bindings added during the race window',
     )
     assert.equal(listCalls, 2, 'fast path and service layer re-check each inspect once')
@@ -308,7 +308,7 @@ test('DELETE /api/profiles/:id TOCTOU: concurrent binding after fast path is cau
 // ---------------------------------------------------------------------------
 
 test('writeUploaded service re-check: returns 404 without orphan dir when conversation is missing', { timeout: 60_000 }, async () => {
-  const dir = await makeTempDir('helm-artifact-del-')
+  const dir = await makeTempDir('helmx-artifact-del-')
   try {
     const artifacts = new ArtifactService(dir, new InMemoryArtifactRepository())
     await assert.rejects(
@@ -317,7 +317,7 @@ test('writeUploaded service re-check: returns 404 without orphan dir when conver
         { name: 'orphan.bin', bytes: new Uint8Array([1, 2, 3]) },
         { conversationExists: async () => false },
       ),
-      (err: unknown) => err instanceof HelmError && err.code === 'not_found' && err.status === 404,
+      (err: unknown) => err instanceof HelmxError && err.code === 'not_found' && err.status === 404,
     )
     await assert.rejects(
       () => stat(join(dir, 'artifacts', '99')),
@@ -338,7 +338,7 @@ test('writeUploaded service re-check: returns 404 without orphan dir when conver
 })
 
 test('POST /api/conversations/:id/artifacts TOCTOU: conversation deleted after entry check is rejected 404 pre-write', { timeout: 60_000 }, async () => {
-  const dir = await makeTempDir('helm-artifact-tou-')
+  const dir = await makeTempDir('helmx-artifact-tou-')
   try {
     const artifacts = new ArtifactService(dir, new InMemoryArtifactRepository())
     // First getConversationDetail (route fast path) succeeds; second (service re-check) throws not_found --
@@ -351,10 +351,10 @@ test('POST /api/conversations/:id/artifacts TOCTOU: conversation deleted after e
       getConversationDetail: async (id: number) => {
         detailCalls += 1
         if (detailCalls === 1) return { ...summaryOf(id), entries: [] }
-        throw new HelmError('not_found', `conversation not found: ${id}`, 404)
+        throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
       },
       getConversationEntry: async (id: number, entryId: number) => {
-        throw new HelmError('not_found', `entry ${entryId} not found in conversation ${id}`, 404)
+        throw new HelmxError('not_found', `entry ${entryId} not found in conversation ${id}`, 404)
       },
     } as unknown as KernelRuntimeLike
     await assert.rejects(
@@ -366,7 +366,7 @@ test('POST /api/conversations/:id/artifacts TOCTOU: conversation deleted after e
         }),
         kernel,
       ),
-      (err: unknown) => err instanceof HelmError && err.code === 'not_found' && err.status === 404,
+      (err: unknown) => err instanceof HelmxError && err.code === 'not_found' && err.status === 404,
       'pre-write re-check must block uploads for concurrently deleted conversations',
     )
     assert.equal(detailCalls, 2, 'entry validation and service layer re-check each inspect once')

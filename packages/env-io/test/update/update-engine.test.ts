@@ -1,6 +1,6 @@
 /**
  * Tests for the shared self-update engine (env-io `update/` subtree, re-exported from
- * the `@helm/env-io` root — the import below exercises exactly that public surface):
+ * the `@helmx/env-io` root — the import below exercises exactly that public surface):
  * semver wrappers, atomic state records, registry allowlist + latest check,
  * immutable staging (extractor + npm paths, .complete cache revalidation, layout
  * descriptor validation), the update transaction (drain gate, commit ordering,
@@ -17,8 +17,8 @@ import rawFs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { createHash } from 'node:crypto';
-import { sleep as delay } from '@helm/test-kit';
-import { makeTempDir as tempDir } from '@helm/test-kit/node';
+import { sleep as delay } from '@helmx/test-kit';
+import { makeTempDir as tempDir } from '@helmx/test-kit/node';
 import { atomicWriteJson } from '../../src/atomic-write.js';
 import {
   UpgradeRejectedError,
@@ -50,17 +50,17 @@ import {
 // Fixtures: a Node-shaped dual-package layout (demonstrates the generic descriptor)
 // ---------------------------------------------------------------------------
 
-const NODE_PACKAGE = '@helm/node';
-const CLI_PACKAGE = '@helm/cli';
+const NODE_PACKAGE = '@helmx/node';
+const CLI_PACKAGE = '@helmx/cli';
 
 /** Node's dual-package layout: daemon entry + CLI bin dir, expressed through the generic descriptor. */
 const NODE_LAYOUT: ReleaseLayout = {
   packages: [
     { name: NODE_PACKAGE, requiredFiles: ['dist/cli.js'] },
-    { name: CLI_PACKAGE, requiredFiles: ['dist/index.js'], requiredBins: ['helm'] },
+    { name: CLI_PACKAGE, requiredFiles: ['dist/index.js'], requiredBins: ['helmx'] },
   ],
   resolveEntries: () => ({
-    entryPath: path.join('node_modules', '@helm', 'node', 'dist', 'cli.js'),
+    entryPath: path.join('node_modules', '@helmx', 'node', 'dist', 'cli.js'),
     cliBinDir: 'node_modules/.bin',
   }),
 };
@@ -69,15 +69,15 @@ const NODE_SPEC: UpdateSpec = { packageName: NODE_PACKAGE, layout: NODE_LAYOUT }
 
 /** stageExtractor fixture: create a fake dual-package layout inside stagingDir. */
 async function fakeExtractor(stagingDir: string, _version: string): Promise<Record<string, string>> {
-  await fs.mkdir(path.join(stagingDir, 'node_modules', '@helm', 'node', 'dist'), { recursive: true });
+  await fs.mkdir(path.join(stagingDir, 'node_modules', '@helmx', 'node', 'dist'), { recursive: true });
   await fs.mkdir(path.join(stagingDir, 'node_modules', '.bin'), { recursive: true });
-  await fs.writeFile(path.join(stagingDir, 'node_modules', '@helm', 'node', 'dist', 'cli.js'), '#!/usr/bin/env node\n', 'utf8');
+  await fs.writeFile(path.join(stagingDir, 'node_modules', '@helmx', 'node', 'dist', 'cli.js'), '#!/usr/bin/env node\n', 'utf8');
   await fs.writeFile(
-    path.join(stagingDir, 'node_modules', '@helm', 'node', 'package.json'),
+    path.join(stagingDir, 'node_modules', '@helmx', 'node', 'package.json'),
     JSON.stringify({ name: NODE_PACKAGE, version: _version }),
     'utf8',
   );
-  return { entryPath: path.join('node_modules', '@helm', 'node', 'dist', 'cli.js'), cliBinDir: 'node_modules/.bin' };
+  return { entryPath: path.join('node_modules', '@helmx', 'node', 'dist', 'cli.js'), cliBinDir: 'node_modules/.bin' };
 }
 
 function makeReplacement(pid: number, opts?: { commitError?: Error; abortError?: Error }) {
@@ -122,8 +122,8 @@ interface NpmCacheFixtureOptions {
 async function makeNpmReleaseCache(dir: string, version: string, opts?: NpmCacheFixtureOptions) {
   const versionRoot = path.join(dir, 'releases', version);
   const candidateDir = path.join(versionRoot, '11111111-2222-3333-4444-555555555555');
-  const nodePkgDir = path.join(candidateDir, 'node_modules', '@helm', 'node');
-  const cliPkgDir = path.join(candidateDir, 'node_modules', '@helm', 'cli');
+  const nodePkgDir = path.join(candidateDir, 'node_modules', '@helmx', 'node');
+  const cliPkgDir = path.join(candidateDir, 'node_modules', '@helmx', 'cli');
   await fs.mkdir(path.join(nodePkgDir, 'dist'), { recursive: true });
   await fs.mkdir(path.join(cliPkgDir, 'dist'), { recursive: true });
   await fs.mkdir(path.join(candidateDir, 'node_modules', '.bin'), { recursive: true });
@@ -137,7 +137,7 @@ async function makeNpmReleaseCache(dir: string, version: string, opts?: NpmCache
     JSON.stringify({
       name: CLI_PACKAGE,
       version: opts?.cliVersion ?? version,
-      ...(opts?.cliBin === null ? {} : { bin: opts?.cliBin ?? { helm: './dist/index.js' } }),
+      ...(opts?.cliBin === null ? {} : { bin: opts?.cliBin ?? { helmx: './dist/index.js' } }),
     }),
     'utf8',
   );
@@ -198,7 +198,7 @@ test('normalizeTargetVersion: trims whitespace, strips single v prefix, and vali
 // ---------------------------------------------------------------------------
 
 test('record read/write: ENOENT returns null, atomic 0600 writes, idempotent delete/clear', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-update-');
+  const dir = await tempDir('helmx-update-');
   assert.equal(await readCurrentRelease(dir), null);
   assert.equal(await readBlockedRelease(dir), null);
 
@@ -230,7 +230,7 @@ test('record read/write: ENOENT returns null, atomic 0600 writes, idempotent del
 });
 
 test('record corruption: non-JSON, missing fields, and bad entries throw explicitly rather than returning null', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-update-');
+  const dir = await tempDir('helmx-update-');
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(path.join(dir, 'current.json'), '{ not json', 'utf8');
   await assert.rejects(() => readCurrentRelease(dir), /corrupt/);
@@ -253,19 +253,19 @@ test('record corruption: non-JSON, missing fields, and bad entries throw explici
 // 3. filterRpcRegistryUrl allowlist
 // ---------------------------------------------------------------------------
 
-test('filterRpcRegistryUrl: allows only official npm and HELM_NPM_REGISTRY, rejecting other origins', { timeout: 60_000 }, () => {
+test('filterRpcRegistryUrl: allows only official npm and HELMX_NPM_REGISTRY, rejecting other origins', { timeout: 60_000 }, () => {
   assert.equal(filterRpcRegistryUrl(undefined), undefined);
   assert.equal(filterRpcRegistryUrl(''), undefined);
   assert.equal(filterRpcRegistryUrl('https://registry.npmjs.org/'), 'https://registry.npmjs.org');
   assert.throws(() => filterRpcRegistryUrl('https://evil.example.com'), UpgradeRejectedError);
-  const prev = process.env.HELM_NPM_REGISTRY;
-  process.env.HELM_NPM_REGISTRY = 'https://mirror.internal.example/npm/';
+  const prev = process.env.HELMX_NPM_REGISTRY;
+  process.env.HELMX_NPM_REGISTRY = 'https://mirror.internal.example/npm/';
   try {
     assert.equal(filterRpcRegistryUrl('https://mirror.internal.example/npm'), 'https://mirror.internal.example/npm');
     assert.throws(() => filterRpcRegistryUrl('https://registry.npmjs.org.evil.io'), UpgradeRejectedError);
   } finally {
-    if (prev === undefined) delete process.env.HELM_NPM_REGISTRY;
-    else process.env.HELM_NPM_REGISTRY = prev;
+    if (prev === undefined) delete process.env.HELMX_NPM_REGISTRY;
+    else process.env.HELMX_NPM_REGISTRY = prev;
   }
 });
 
@@ -274,7 +274,7 @@ test('filterRpcRegistryUrl: allows only official npm and HELM_NPM_REGISTRY, reje
 // ---------------------------------------------------------------------------
 
 test('checkForUpdate: queries the spec package latest, compares semver, and passes through blocked record', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-update-');
+  const dir = await tempDir('helmx-update-');
   await writeBlockedRelease(dir, { version: '1.5.0', reason: 'boom', at: new Date().toISOString() });
   const { fetchFn, urls } = makeRegistryFetch('1.2.0');
   const result = await checkForUpdate(dir, NODE_SPEC, { currentVersion: '1.0.0', fetchFn });
@@ -282,7 +282,7 @@ test('checkForUpdate: queries the spec package latest, compares semver, and pass
   assert.equal(result.latestVersion, '1.2.0');
   assert.equal(result.updateAvailable, true);
   assert.equal(result.blocked?.version, '1.5.0');
-  assert.match(urls[0]!, /@helm%2Fnode\/latest|@helm\/node\/latest/);
+  assert.match(urls[0]!, /@helmx%2Fnode\/latest|@helmx\/node\/latest/);
 
   // current.json takes precedence when currentVersion is omitted
   await writeCurrentRelease(dir, { version: '1.1.0', updatedAt: new Date().toISOString(), entries: { entryPath: '/a' } });
@@ -290,7 +290,7 @@ test('checkForUpdate: queries the spec package latest, compares semver, and pass
   assert.equal(fromState.currentVersion, '1.1.0');
 
   // getFallbackVersion is consulted only when state and explicit input are both absent
-  const dir2 = await tempDir('helm-update-');
+  const dir2 = await tempDir('helmx-update-');
   const withFallback = await checkForUpdate(dir2, { ...NODE_SPEC, getFallbackVersion: () => '0.0.1' }, { fetchFn: makeRegistryFetch('0.0.1').fetchFn });
   assert.equal(withFallback.currentVersion, '0.0.1');
   assert.equal(withFallback.updateAvailable, false);
@@ -306,7 +306,7 @@ test('checkForUpdate: queries the spec package latest, compares semver, and pass
 });
 
 test('checkForUpdate: HTTP errors and timeouts throw explicitly', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-update-');
+  const dir = await tempDir('helmx-update-');
   const fail: typeof fetch = async () => new Response('nope', { status: 404, statusText: 'Not Found' });
   await assert.rejects(() => checkForUpdate(dir, NODE_SPEC, { currentVersion: '1.0.0', fetchFn: fail }), /404/);
   const timeout_: typeof fetch = async () => {
@@ -353,11 +353,11 @@ test('fetchLatestVersion: default tag queries /latest; tag parameter queries the
   const registry = 'https://registry.example.com';
   const latest = makeVerifiedRegistryFetch({ version: '1.0.0' });
   assert.equal(await fetchLatestVersion(registry, NODE_PACKAGE, latest.fetchFn), '1.0.0');
-  assert.match(latest.urls[0]!, /@helm\/node\/latest$/);
+  assert.match(latest.urls[0]!, /@helmx\/node\/latest$/);
 
   const beta = makeVerifiedRegistryFetch({ version: '2.0.0-beta.1' });
   assert.equal(await fetchLatestVersion(registry, NODE_PACKAGE, beta.fetchFn, 'beta'), '2.0.0-beta.1');
-  assert.match(beta.urls[0]!, /@helm\/node\/beta$/);
+  assert.match(beta.urls[0]!, /@helmx\/node\/beta$/);
 
   for (const bad of ['', '..', '../x', 'foo/bar', 'a b', '^1.0.0', '.hidden', '_internal', '1.2.3']) {
     await assert.rejects(() => fetchLatestVersion(registry, NODE_PACKAGE, latest.fetchFn, bad), UpgradeRejectedError);
@@ -367,12 +367,12 @@ test('fetchLatestVersion: default tag queries /latest; tag parameter queries the
 });
 
 test('checkForUpdate/performUpdate: tag option threads through to the dist-tag URL', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-update-');
+  const dir = await tempDir('helmx-update-');
   const beta = makeVerifiedRegistryFetch({ version: '2.0.0-beta.1' });
   const check = await checkForUpdate(dir, { ...NODE_SPEC, getFallbackVersion: () => '1.0.0' }, { fetchFn: beta.fetchFn, tag: 'beta' });
   assert.equal(check.latestVersion, '2.0.0-beta.1');
   assert.equal(check.updateAvailable, true);
-  assert.match(beta.urls[0]!, /@helm\/node\/beta$/);
+  assert.match(beta.urls[0]!, /@helmx\/node\/beta$/);
 
   // performUpdate resolves its default target from the same dist-tag channel
   const { replacement } = makeReplacement(81);
@@ -389,7 +389,7 @@ test('checkForUpdate/performUpdate: tag option threads through to the dist-tag U
 });
 
 test('downloadVerifiedTarball: fetches manifest, downloads, and verifies SHA-512 integrity', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-update-');
+  const dir = await tempDir('helmx-update-');
   const dest = path.join(dir, 'pkg-1.0.0.tgz');
   const good = makeVerifiedRegistryFetch({ version: '1.0.0' });
   await downloadVerifiedTarball('https://registry.example.com', NODE_PACKAGE, '1.0.0', dest, good.fetchFn);
@@ -429,7 +429,7 @@ test('downloadVerifiedTarball: fetches manifest, downloads, and verifies SHA-512
 // ---------------------------------------------------------------------------
 
 test('stageRelease: stageExtractor builds immutable candidate dir and writes .complete; subsequent call reuses cache', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-update-');
+  const dir = await tempDir('helmx-update-');
   const staged = await stageRelease(dir, '1.2.3', undefined, { stageExtractor: fakeExtractor });
   assert.equal(staged.version, '1.2.3');
   assert.ok(staged.releaseDir.startsWith(path.join(dir, 'releases', '1.2.3') + path.sep));
@@ -446,7 +446,7 @@ test('stageRelease: stageExtractor builds immutable candidate dir and writes .co
 });
 
 test('stageRelease: rejects escaping or absolute stageExtractor paths without leaving staging dirs behind', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-update-');
+  const dir = await tempDir('helmx-update-');
   await assert.rejects(
     () =>
       stageRelease(dir, '1.0.0', undefined, {
@@ -467,7 +467,7 @@ test('stageRelease: rejects escaping or absolute stageExtractor paths without le
 });
 
 test('stageRelease: layout resolveEntries is held to the same relative-inside-root contract', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-update-');
+  const dir = await tempDir('helmx-update-');
   // A valid npm-origin cache plus a layout whose resolveEntries escapes the release dir:
   // revalidation resolves entries through the layout and must reject the escape.
   await makeNpmReleaseCache(dir, '4.3.0');
@@ -483,13 +483,13 @@ test('stageRelease: layout resolveEntries is held to the same relative-inside-ro
 });
 
 test('stageRelease: rejects calls with neither a layout nor a stageExtractor', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-update-');
+  const dir = await tempDir('helmx-update-');
   await assert.rejects(() => stageRelease(dir, '1.0.0', undefined, {}), UpgradeRejectedError);
   await fs.rm(dir, { recursive: true, force: true });
 });
 
 test('stageRelease (npm path): rejects metadata name mismatch, tampered integrity, missing integrity, and version mismatch', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-update-');
+  const dir = await tempDir('helmx-update-');
 
   // a) Metadata package name mismatch
   const wrongMeta: typeof fetch = async (input) => {
@@ -535,7 +535,7 @@ test('stageRelease (npm path): rejects metadata name mismatch, tampered integrit
 });
 
 test('stageRelease: force bypasses cache and creates a new candidate while preserving the previous one', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-update-');
+  const dir = await tempDir('helmx-update-');
   const first = await stageRelease(dir, '2.0.0', undefined, { stageExtractor: fakeExtractor });
   let extractorRuns = 0;
   const countingExtractor: typeof fakeExtractor = async (stagingDir, version) => {
@@ -562,7 +562,7 @@ test('stageRelease: force bypasses cache and creates a new candidate while prese
 });
 
 test('stageRelease: rejects .complete paths escaping version or candidate dir without deleting old candidate', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-update-');
+  const dir = await tempDir('helmx-update-');
   const staged = await stageRelease(dir, '3.0.0', undefined, { stageExtractor: fakeExtractor });
   const completePath = path.join(dir, 'releases', '3.0.0', '.complete');
   const outside = JSON.parse(await fs.readFile(completePath, 'utf8'));
@@ -588,7 +588,7 @@ test('stageRelease: rejects .complete paths escaping version or candidate dir wi
 });
 
 test('stageRelease: npm-origin cache reuse revalidates installed packages without touching the network', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-update-');
+  const dir = await tempDir('helmx-update-');
   const fixture = await makeNpmReleaseCache(dir, '4.0.0');
   const staged = await stageRelease(dir, '4.0.0', NODE_LAYOUT, { fetchFn: offlineFetch });
   assert.equal(staged.releaseDir, fixture.candidateDir);
@@ -597,42 +597,42 @@ test('stageRelease: npm-origin cache reuse revalidates installed packages withou
 });
 
 test('stageRelease: npm cache revalidation checks installed package.json versions of every layout package', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-update-');
-  // @helm/cli package.json carries a mismatched version -> reuse rejected
+  const dir = await tempDir('helmx-update-');
+  // @helmx/cli package.json carries a mismatched version -> reuse rejected
   await makeNpmReleaseCache(dir, '4.0.0', { cliVersion: '3.9.9' });
   await assert.rejects(
     () => stageRelease(dir, '4.0.0', NODE_LAYOUT, { stageExtractor: fakeExtractor }),
-    /installed package name\/version mismatch.*@helm\/cli/,
+    /installed package name\/version mismatch.*@helmx\/cli/,
   );
   await fs.rm(dir, { recursive: true, force: true });
 });
 
 test('stageRelease: npm cache revalidation enforces requiredFiles and requiredBins from the layout', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-update-');
-  // a) required file missing (@helm/cli dist/index.js)
+  const dir = await tempDir('helmx-update-');
+  // a) required file missing (@helmx/cli dist/index.js)
   await makeNpmReleaseCache(dir, '4.1.0', { omitCliEntry: true });
   await assert.rejects(() => stageRelease(dir, '4.1.0', NODE_LAYOUT, { fetchFn: offlineFetch }), /required file dist\/index\.js/);
   await fs.rm(dir, { recursive: true, force: true });
 
   // b) bin declaration missing entirely
-  const dir2 = await tempDir('helm-update-');
+  const dir2 = await tempDir('helmx-update-');
   await makeNpmReleaseCache(dir2, '4.1.0', { cliBin: null });
-  await assert.rejects(() => stageRelease(dir2, '4.1.0', NODE_LAYOUT, { fetchFn: offlineFetch }), /missing bin declaration for "helm"/);
+  await assert.rejects(() => stageRelease(dir2, '4.1.0', NODE_LAYOUT, { fetchFn: offlineFetch }), /missing bin declaration for "helmx"/);
   await fs.rm(dir2, { recursive: true, force: true });
 
   // c) bin declared but target file missing
-  const dir3 = await tempDir('helm-update-');
-  await makeNpmReleaseCache(dir3, '4.1.0', { cliBin: { helm: './dist/missing.js' } });
+  const dir3 = await tempDir('helmx-update-');
+  await makeNpmReleaseCache(dir3, '4.1.0', { cliBin: { helmx: './dist/missing.js' } });
   await assert.rejects(() => stageRelease(dir3, '4.1.0', NODE_LAYOUT, { fetchFn: offlineFetch }), /bin target file missing/);
   await fs.rm(dir3, { recursive: true, force: true });
 });
 
 test('stageRelease: npm cache reuse rejects marker entries that disagree with layout resolution', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-update-');
+  const dir = await tempDir('helmx-update-');
   const candidateDir = path.join(dir, 'releases', '4.2.0', '11111111-2222-3333-4444-555555555555');
   // Record an entry pointing at a different (existing) file inside the candidate dir:
   // disk checks pass, but the fresh layout resolution disagrees with the marker.
-  const decoyEntry = path.join(candidateDir, 'node_modules', '@helm', 'other', 'dist', 'cli.js');
+  const decoyEntry = path.join(candidateDir, 'node_modules', '@helmx', 'other', 'dist', 'cli.js');
   await makeNpmReleaseCache(dir, '4.2.0', {
     markerEntries: { entryPath: decoyEntry, cliBinDir: path.join(candidateDir, 'node_modules', '.bin') },
   });
@@ -661,13 +661,13 @@ function makeHooks(log: UpgradeLog) {
 }
 
 test('performUpdate: rejects explicitly when prepareReplacement is omitted (never fabricates a PID)', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-update-');
+  const dir = await tempDir('helmx-update-');
   await assert.rejects(() => performUpdate(dir, NODE_SPEC, {}), /prepareReplacement/);
   await fs.rm(dir, { recursive: true, force: true });
 });
 
 test('performUpdate: success path runs prepare -> commit -> onScheduleShutdown(pid), updates current, clears blocked', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-update-');
+  const dir = await tempDir('helmx-update-');
   await writeBlockedRelease(dir, { version: '2.0.0', reason: 'old failed', at: new Date().toISOString() });
   const log: UpgradeLog = { draining: [], execCount: { value: 0 }, shutdownPids: [] };
   const { replacement, calls } = makeReplacement(4242);
@@ -703,7 +703,7 @@ test('performUpdate: success path runs prepare -> commit -> onScheduleShutdown(p
 });
 
 test('performUpdate: normalizes targetVersion (v prefix/whitespace) for directory names and results', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-update-');
+  const dir = await tempDir('helmx-update-');
   const { replacement } = makeReplacement(100);
   const result = await performUpdate(dir, NODE_SPEC, {
     targetVersion: ' v2.0.1 ',
@@ -718,7 +718,7 @@ test('performUpdate: normalizes targetVersion (v prefix/whitespace) for director
 });
 
 test('performUpdate: no-op on same version unless force is set (no staging or draining)', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-update-');
+  const dir = await tempDir('helmx-update-');
   const log: UpgradeLog = { draining: [], execCount: { value: 0 }, shutdownPids: [] };
   let staged = 0;
   const result = await performUpdate(dir, NODE_SPEC, {
@@ -738,7 +738,7 @@ test('performUpdate: no-op on same version unless force is set (no staging or dr
 });
 
 test('performUpdate: rejects downgrades unless force=true', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-update-');
+  const dir = await tempDir('helmx-update-');
   await assert.rejects(
     () =>
       performUpdate(dir, NODE_SPEC, {
@@ -762,7 +762,7 @@ test('performUpdate: rejects downgrades unless force=true', { timeout: 60_000 },
 });
 
 test('performUpdate: rejects failed version during cooldown unless force=true or cooldown expired', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-update-');
+  const dir = await tempDir('helmx-update-');
   await writeBlockedRelease(dir, { version: '1.5.0', reason: 'canary crashed', at: new Date().toISOString() });
   await assert.rejects(
     () =>
@@ -785,7 +785,7 @@ test('performUpdate: rejects failed version during cooldown unless force=true or
   assert.equal(result.upgraded, true);
 
   // Once cooldown expires (record older than 31 minutes), retry succeeds without force
-  const dir2 = await tempDir('helm-update-');
+  const dir2 = await tempDir('helmx-update-');
   await writeBlockedRelease(dir2, {
     version: '1.5.0',
     reason: 'old failure',
@@ -803,7 +803,7 @@ test('performUpdate: rejects failed version during cooldown unless force=true or
 });
 
 test('performUpdate: drain gate allows upgrade once in-flight exec count drops to zero before timeout', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-update-');
+  const dir = await tempDir('helmx-update-');
   const log: UpgradeLog = { draining: [], execCount: { value: 2 }, shutdownPids: [] };
   setTimeout(() => {
     log.execCount.value = 0;
@@ -823,7 +823,7 @@ test('performUpdate: drain gate allows upgrade once in-flight exec count drops t
 });
 
 test('performUpdate: drain timeout aborts upgrade, releases drain gate, and leaves state untouched', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-update-');
+  const dir = await tempDir('helmx-update-');
   await writeCurrentRelease(dir, {
     version: '1.0.0',
     updatedAt: new Date().toISOString(),
@@ -853,7 +853,7 @@ test('performUpdate: drain timeout aborts upgrade, releases drain gate, and leav
 });
 
 test('performUpdate: commit failure aborts replacement, restores current, writes blocked, and releases drain gate', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-update-');
+  const dir = await tempDir('helmx-update-');
   const originalCurrent = {
     version: '1.0.0',
     updatedAt: '2026-01-01T00:00:00.000Z',
@@ -897,7 +897,7 @@ test('performUpdate: commit failure aborts replacement, restores current, writes
 });
 
 test('performUpdate: when prepareReplacement throws, current remains unchanged, blocked is written, and drain gate is released', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-update-');
+  const dir = await tempDir('helmx-update-');
   await writeCurrentRelease(dir, { version: '1.0.0', updatedAt: new Date().toISOString(), entries: { entryPath: '/old/dist/cli.js' } });
   const log: UpgradeLog = { draining: [], execCount: { value: 0 }, shutdownPids: [] };
   await assert.rejects(
@@ -921,7 +921,7 @@ test('performUpdate: when prepareReplacement throws, current remains unchanged, 
 });
 
 test('performUpdate: defaults target version to latest when omitted', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-update-');
+  const dir = await tempDir('helmx-update-');
   const { fetchFn } = makeRegistryFetch('1.9.0');
   const result = await performUpdate(dir, NODE_SPEC, {
     currentVersion: '1.0.0',
@@ -935,7 +935,7 @@ test('performUpdate: defaults target version to latest when omitted', { timeout:
 });
 
 test('performUpdate: enforces cross-process upgrade lock exclusion', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-update-');
+  const dir = await tempDir('helmx-update-');
   let unblock: (() => void) | undefined;
   const gate = new Promise<void>((resolve) => {
     unblock = resolve;
@@ -979,7 +979,7 @@ test('performUpdate: enforces cross-process upgrade lock exclusion', { timeout: 
 });
 
 test('performUpdate: failure in clearBlockedRelease before commit aborts without calling commit and releases drain gate', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-update-');
+  const dir = await tempDir('helmx-update-');
   await writeCurrentRelease(dir, { version: '1.0.0', updatedAt: new Date().toISOString(), entries: { entryPath: '/old/dist/cli.js' } });
   const log: UpgradeLog = { draining: [], execCount: { value: 0 }, shutdownPids: [] };
   const { replacement, calls } = makeReplacement(888);
@@ -1012,7 +1012,7 @@ test('performUpdate: failure in clearBlockedRelease before commit aborts without
 });
 
 test('performUpdate: no fallible fs operations after commit succeed so blocked cleanup never causes false failures', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-update-');
+  const dir = await tempDir('helmx-update-');
   const log: UpgradeLog = { draining: [], execCount: { value: 0 }, shutdownPids: [] };
   const { replacement, calls } = makeReplacement(889);
   const result = await performUpdate(dir, NODE_SPEC, {
@@ -1031,7 +1031,7 @@ test('performUpdate: no fallible fs operations after commit succeed so blocked c
 });
 
 test('performUpdate: corrupt current.json throws explicitly and never triggers draining or fakes success', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-update-');
+  const dir = await tempDir('helmx-update-');
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(path.join(dir, 'current.json'), '{corrupted', 'utf8');
   const log: UpgradeLog = { draining: [], execCount: { value: 0 }, shutdownPids: [] };
@@ -1050,7 +1050,7 @@ test('performUpdate: corrupt current.json throws explicitly and never triggers d
 });
 
 test('performUpdate: always releases drain gate in finally even if getActiveExecCount throws', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-update-');
+  const dir = await tempDir('helmx-update-');
   const log: UpgradeLog = { draining: [], execCount: { value: 0 }, shutdownPids: [] };
   await assert.rejects(
     () =>
@@ -1074,7 +1074,7 @@ test('performUpdate: always releases drain gate in finally even if getActiveExec
 });
 
 test('performUpdate: surfaces both prepare failure and blocked-write failure together', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-update-');
+  const dir = await tempDir('helmx-update-');
   const log: UpgradeLog = { draining: [], execCount: { value: 0 }, shutdownPids: [] };
   await assert.rejects(
     () =>
@@ -1101,7 +1101,7 @@ test('performUpdate: surfaces both prepare failure and blocked-write failure tog
 });
 
 test('performUpdate: propagates force to staging so same-version update reinstalls', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-update-');
+  const dir = await tempDir('helmx-update-');
   const first = await stageRelease(dir, '1.0.0', undefined, { stageExtractor: fakeExtractor });
   let extractorRuns = 0;
   const result = await performUpdate(dir, NODE_SPEC, {
@@ -1123,7 +1123,7 @@ test('performUpdate: propagates force to staging so same-version update reinstal
 });
 
 test('performUpdate: UpgradeCommitUnconfirmedError skips abort/rollback/blocked and leaves current and drain gate active', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-update-');
+  const dir = await tempDir('helmx-update-');
   const oldCurrent = { version: '1.0.0', updatedAt: '2026-01-01T00:00:00.000Z', entries: { entryPath: '/old/dist/cli.js' } };
   await writeCurrentRelease(dir, oldCurrent);
   const log: UpgradeLog = { draining: [], execCount: { value: 0 }, shutdownPids: [] };
@@ -1160,7 +1160,7 @@ test('performUpdate: UpgradeCommitUnconfirmedError skips abort/rollback/blocked 
 });
 
 test('performUpdate: ordinary commit error still performs full rollback (contrast with unconfirmed branch)', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-update-');
+  const dir = await tempDir('helmx-update-');
   const oldCurrent = { version: '1.0.0', updatedAt: '2026-01-01T00:00:00.000Z', entries: { entryPath: '/old/dist/cli.js' } };
   await writeCurrentRelease(dir, oldCurrent);
   const log: UpgradeLog = { draining: [], execCount: { value: 0 }, shutdownPids: [] };
@@ -1248,7 +1248,7 @@ function makeFlatCodec() {
 }
 
 test('UpdateStateOps codec: performUpdate reads, commits, and rolls back through the injected disk format', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-update-');
+  const dir = await tempDir('helmx-update-');
   const codec = makeFlatCodec();
   const spec: UpdateSpec = { ...NODE_SPEC, stateOps: codec.ops };
 
@@ -1279,7 +1279,7 @@ test('UpdateStateOps codec: performUpdate reads, commits, and rolls back through
   await assert.rejects(() => readCurrentRelease(dir), /entries/);
 
   // Commit failure rolls back through the codec, restoring the exact previous flat record
-  const dir2 = await tempDir('helm-update-');
+  const dir2 = await tempDir('helmx-update-');
   await atomicWriteJson(
     path.join(dir2, 'current.json'),
     { version: '1.0.0', entryPath: '/old/dist/cli.js', updatedAt: '2026-01-01T00:00:00.000Z' },

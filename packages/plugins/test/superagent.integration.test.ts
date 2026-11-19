@@ -1,7 +1,7 @@
 /**
  * builtin:superagent 跨模块整链验收测试（本文件独占；只写测试不改实现）。
  *
- * 被测对象：createHelm 组合层应注册的 builtin:superagent 插件（默认停用）。
+ * 被测对象：createHelmx 组合层应注册的 builtin:superagent 插件（默认停用）。
  * 启用后应自举两个专属常驻会话——「SuperAgent 中枢」（profileId: 'superagent'）
  * 与「巡检看门狗」（profileId: 'watchdog'），动态 ID 持久化于 SuperAgentIndexDoc，
  * 不打角色 tags。公开 Doc 名称：index / subscriptions / recall-graph。
@@ -20,7 +20,7 @@
  *   ownedBy: 'human' 会话 403（归属权红线）。
  * - 插件配置：routerMode / mutedSources / watchdogEnabled / stalledAfterMs /
  *   abortAfterMs / errorThreshold（经 plugins config 读写）。
- * - dispatch 为非阻塞驻留会话原语：Worker 带 tags ['worker']、ownedBy 'helm'、
+ * - dispatch 为非阻塞驻留会话原语：Worker 带 tags ['worker']、ownedBy 'helmx'、
  *   parentConversationId 指向中枢；agent/trigger 回合结束后写 RecallGraph 并向
  *   中枢投递 meta.renderer=superagent:worker-report；纯 human 回合只写图。
  *
@@ -48,10 +48,10 @@ import {
 } from '@earendil-works/pi-ai/providers/faux'
 import { getCurrentTools } from '@earendil-works/pi-ai/utils/transcript'
 
-import { HelmError } from '@helm/protocol'
-import { createHelm } from '../../hub/src/app.js'
+import { HelmxError } from '@helmx/protocol'
+import { createHelmx } from '../../hub/src/app.js'
 import { startHub } from '../../kernel/src/http/index.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 import type { RecallGraphDoc } from '../src/superagent/contracts.js'
 import { deferred, makeFauxProvider, waitFor as testWaitFor, type Deferred, type FauxProviderHandle } from './helpers/plugin-test-env.js'
 
@@ -79,23 +79,23 @@ async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs = 
 }
 
 // ---------------------------------------------------------------------------
-// 基建：真实 createHelm 组合环境（真 SQLite + 真 PluginHost + faux provider）
+// 基建：真实 createHelmx 组合环境（真 SQLite + 真 PluginHost + faux provider）
 // ---------------------------------------------------------------------------
 
 interface SuperAgentEnv {
   dataDir: string
   faux: FauxProviderHandle
-  app: Awaited<ReturnType<typeof createHelm>>
+  app: Awaited<ReturnType<typeof createHelmx>>
   /** 每次模型请求捕获（工具声明回放 + system sections + user 文本）。 */
   requests: Array<{ toolNames: string[]; sections: string[]; userTexts: string[] }>
   close(): Promise<void>
 }
 
 async function makeEnv(dataDir?: string): Promise<SuperAgentEnv> {
-  const dir = dataDir ?? mkdtempSync(join(tmpdir(), 'helm-superagent-'))
+  const dir = dataDir ?? mkdtempSync(join(tmpdir(), 'helmx-superagent-'))
   const faux = makeFauxProvider()
 
-  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
+  const app = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
 
   const requests: SuperAgentEnv['requests'] = []
   faux.setResponses([])
@@ -322,7 +322,7 @@ function sseDataJson<T>(frame: string): T | undefined {
 async function enableAndGetIds(env: SuperAgentEnv): Promise<{ routerId: number; watchdogId: number }> {
   const host = env.app.kernel.plugins
   const registered = host.list().find((p) => p.id === SUPERAGENT_ID)
-  assert.ok(registered, `${SUPERAGENT_ID} 应经 createHelm 注册（默认停用）`)
+  assert.ok(registered, `${SUPERAGENT_ID} 应经 createHelmx 注册（默认停用）`)
   if (!registered.enabled) await host.enable(SUPERAGENT_ID)
   const doc = host.getPublicDoc(SUPERAGENT_ID, DOC_INDEX) as { value: IndexDocShape }
   const routerId = doc.value.routerConversationId
@@ -341,7 +341,7 @@ function writeProfile(dataDir: string, id: string): void {
   writeFileSync(join(dir, 'MEMORY.md'), '# Memory\n')
 }
 
-/** 会话的 helm.input entries（data.text / data.origin / data.meta）。 */
+/** 会话的 helmx.input entries（data.text / data.origin / data.meta）。 */
 interface InputEntryData {
   id?: string
   text?: string
@@ -355,7 +355,7 @@ async function inputEntriesOf(
 ): Promise<InputEntryData[]> {
   const detail = await kernel.getConversationDetail(conversationId, { limit: 200 })
   return detail.entries
-    .filter((e) => e.kind === 'helm.input')
+    .filter((e) => e.kind === 'helmx.input')
     .map((e) => (e.data ?? {}) as InputEntryData)
 }
 
@@ -376,7 +376,7 @@ async function workerReportCount(
 // ---------------------------------------------------------------------------
 
 test('SA1: 默认停用不建业务会话/Profile/Doc；HTTP 启用后动态 ID 可读、常驻删除 409、初始会话可删、重启同 ID、停用释放保护', { timeout: 60_000 }, async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-sa1-'))
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-sa1-'))
   const first = await makeEnv(dataDir)
   let hub: Awaited<ReturnType<typeof startHub>> | undefined
   try {
@@ -384,7 +384,7 @@ test('SA1: 默认停用不建业务会话/Profile/Doc；HTTP 启用后动态 ID 
 
     // 默认停用：注册项存在、enabled false、无业务会话/Profile
     const summary = host.list().find((p) => p.id === SUPERAGENT_ID)
-    assert.ok(summary, `${SUPERAGENT_ID} 应注册（createHelm 内置声明）`)
+    assert.ok(summary, `${SUPERAGENT_ID} 应注册（createHelmx 内置声明）`)
     assert.equal(summary.enabled, false, '默认应停用注册')
     assert.equal(summary.actions.length, 0, '停用时不应暴露动作')
     const profiledBefore = first.app.kernel
@@ -483,7 +483,7 @@ test('SA1: 默认停用不建业务会话/Profile/Doc；HTTP 启用后动态 ID 
       // 停用后公共 Doc 404（同步抛出，async 包装以满足 assert.rejects 签名）
       await assert.rejects(
         async () => host2.getPublicDoc(SUPERAGENT_ID, DOC_INDEX),
-        (err: unknown) => err instanceof HelmError && err.code === 'plugin_doc_not_found',
+        (err: unknown) => err instanceof HelmxError && err.code === 'plugin_doc_not_found',
         '停用后公共 Doc 应 404',
       )
     } finally {
@@ -571,12 +571,12 @@ test('SA2: 中枢模型请求剥离 bash/subagent 等并保留派工短名；#1 
     const humanConv = await kernel.createConversation({ title: '人类直连', profileId: 'assistant' })
     await assert.rejects(
       () => host.invokeAction(SUPERAGENT_ID, 'watchdog_abort', { conversationId: humanConv.id }),
-      (err: unknown) => err instanceof HelmError && err.status === 403,
+      (err: unknown) => err instanceof HelmxError && err.status === 403,
       'watchdog_abort 对 ownedBy human 会话必须 403（归属权红线）',
     )
     await assert.rejects(
       () => host.invokeAction(SUPERAGENT_ID, 'watchdog_recover', { conversationId: humanConv.id, hint: '尝试恢复' }),
-      (err: unknown) => err instanceof HelmError && err.status === 403,
+      (err: unknown) => err instanceof HelmxError && err.status === 403,
       'watchdog_recover 对 ownedBy human 会话必须 403',
     )
     // 只读诊断不受红线限制
@@ -587,7 +587,7 @@ test('SA2: 中枢模型请求剥离 bash/subagent 等并保留派工短名；#1 
     for (const bad of [0, -1, 1.5, 'three', null]) {
       await assert.rejects(
         () => host.invokeAction(SUPERAGENT_ID, 'watchdog_abort', { conversationId: bad }),
-        (err: unknown) => err instanceof HelmError && (err.code === 'validation_error' || err.status === 400),
+        (err: unknown) => err instanceof HelmxError && (err.code === 'validation_error' || err.status === 400),
         `watchdog 非法 conversationId ${JSON.stringify(bad)} 应被 Schema 拒绝`,
       )
     }
@@ -635,7 +635,7 @@ test('SA3: dispatch 在 Worker 完成前返回（gate 握手非 sleep）；busy 
     // busy 期间 disable 409（Worker 在途是插件活任务）
     await assert.rejects(
       () => host.disable(SUPERAGENT_ID),
-      (err: unknown) => err instanceof HelmError && err.code === 'plugin_has_live_tasks',
+      (err: unknown) => err instanceof HelmxError && err.code === 'plugin_has_live_tasks',
       'Worker 在途时 disable superagent 应 409 plugin_has_live_tasks',
     )
 
@@ -770,7 +770,7 @@ test('SA4: threadKey 事件直投 Worker 不经 router；归档拒绝 busy、解
         threadKey: THREAD_KEY,
         createdAt: Date.now(),
       }),
-      (err: unknown) => err instanceof HelmError && err.code === 'not_found' && err.status === 404,
+      (err: unknown) => err instanceof HelmxError && err.code === 'not_found' && err.status === 404,
     )
     assert.equal(
       (await inputEntriesOf(kernel, workerId)).length,
@@ -814,7 +814,7 @@ test('SA4: threadKey 事件直投 Worker 不经 router；归档拒绝 busy、解
     await waitFor(() => kernel.getConversation(busyWorkerId).status === 'working', 10_000)
     await assert.rejects(
       () => host.invokeAction(SUPERAGENT_ID, 'archive_worker', { workerConversationId: busyWorkerId }),
-      (err: unknown) => err instanceof HelmError && (err.code === 'worker_busy' || err.status === 409),
+      (err: unknown) => err instanceof HelmxError && (err.code === 'worker_busy' || err.status === 409),
       '归档 busy Worker 应显式拒绝（409 族）',
     )
     busyGate.resolve()
@@ -884,10 +884,10 @@ test('SA4: threadKey 事件直投 Worker 不经 router；归档拒绝 busy、解
 // ---------------------------------------------------------------------------
 
 test('SA5: HTTP 动作与真实 CLI 子进程 --json 见同一结果；非法参数 Schema 拒绝；set_router_mode 经 plugins config 持久生效', { timeout: 60_000 }, async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-sa5-'))
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-sa5-'))
   const env = await makeEnv(dataDir)
   let hub: Awaited<ReturnType<typeof startHub>> | undefined
-  const cliDataDir = mkdtempSync(join(tmpdir(), 'helm-sa5-cli-'))
+  const cliDataDir = mkdtempSync(join(tmpdir(), 'helmx-sa5-cli-'))
   try {
     writeProfile(env.dataDir, 'finance')
     const kernel = env.app.kernel
@@ -898,9 +898,9 @@ test('SA5: HTTP 动作与真实 CLI 子进程 --json 见同一结果；非法参
     const token = (JSON.parse(setup.body) as { token: string }).token
     const cliEnv = {
       ...process.env,
-      HELM_HUB_URL: base,
-      HELM_DATA_DIR: cliDataDir,
-      HELM_TOKEN: token,
+      HELMX_HUB_URL: base,
+      HELMX_DATA_DIR: cliDataDir,
+      HELMX_TOKEN: token,
     }
 
     // 启用（HTTP）
@@ -932,7 +932,7 @@ test('SA5: HTTP 动作与真实 CLI 子进程 --json 见同一结果；非法参
     assert.ok(Number.isInteger(workerId) && workerId > 0)
     await kernel.waitForIdle(workerId)
 
-    // ---- 真实 CLI 子进程：动态动作命令（默认路径 helm superagent <action>）同结果
+    // ---- 真实 CLI 子进程：动态动作命令（默认路径 helmx superagent <action>）同结果
     const cliInspect = await runCliChild([
       'superagent', 'inspect_worker',
       '--input', JSON.stringify({ workerConversationId: workerId }),
@@ -1145,7 +1145,7 @@ test('真实事件链路：内核会话事件桥接到插件 onEvent；watchdog 
     const kernel = env.app.kernel
 
     // 采集插件：验证内核桥接（conversation.live/upsert/turn.settled 到达插件
-    // ctx.host.onEvent，载荷为 HelmEvent 信封形状）+ 捕获 watchdog 巡检探针。
+    // ctx.host.onEvent，载荷为 HelmxEvent 信封形状）+ 捕获 watchdog 巡检探针。
     const liveFrames: Array<{ conversationId: number; updatedAt: number }> = []
     const workingUpserts: number[] = []
     const settledOutcomes: string[] = []
@@ -1273,7 +1273,7 @@ test('真实组合：编辑 Worker 历史输入经 SDK 事件清理对应召回�
     const oldNodes = nodes()
     assert.equal(oldNodes.length, 3)
     const detail = await kernel.getConversationDetail(id)
-    const oldInput = detail.entries.find((entry) => entry.kind === 'helm.input'
+    const oldInput = detail.entries.find((entry) => entry.kind === 'helmx.input'
       && (entry.data as { text?: string }).text === '应失效的第二轮旧提问')
     assert.ok(oldInput)
     const inputId = (oldInput.data as { id: string }).id

@@ -18,7 +18,7 @@ let env: HubHttpTestEnv
 
 before(async () => {
   env = await openHubHttpEnv({
-    prefix: 'helm-models-filter-',
+    prefix: 'helmx-models-filter-',
     fauxOptions: { models: [{ id: 'faux-1' }, { id: 'faux-2' }, { id: 'nested/model' }] },
   })
 }, { timeout: 60_000 })
@@ -182,7 +182,7 @@ test('禁用模型执行门禁：会话创建/更新/提交、默认模型、Pro
 
 test('多 provider 隔离与清空全部、重启恢复生效及 config.json 坏形状显式 config_corrupt', { timeout: 60_000 }, async (t) => {
   // 1. 多 provider 互不干扰 + 缺省 provider 空数组清空全部
-  const multiDir = join(useTempDir(t, 'helm-models-multi-'), 'hub')
+  const multiDir = join(useTempDir(t, 'helmx-models-multi-'), 'hub')
   const fauxA = fauxProvider({ models: [{ id: 'faux-1' }, { id: 'faux-2' }] })
   const fauxB = fauxProvider({ provider: 'faux-b', models: [{ id: 'other-1' }] })
   const multiEnv = await openHubHttpEnv({ dataDir: multiDir, cwd: multiDir, providers: [fauxA.provider, fauxB.provider] })
@@ -220,7 +220,7 @@ test('多 provider 隔离与清空全部、重启恢复生效及 config.json 坏
   }
 
   // 3. config.json.disabledModels 坏形状启动显式 config_corrupt
-  const corruptDir = useTempDir(t, 'helm-models-corrupt-')
+  const corruptDir = useTempDir(t, 'helmx-models-corrupt-')
   writeFileSync(join(corruptDir, 'config.json'), JSON.stringify({ disabledModels: { faux: 'not-an-array' } }))
   await assert.rejects(
     () => createHubTestApp({ dataDir: corruptDir, cwd: corruptDir }),
@@ -230,7 +230,7 @@ test('多 provider 隔离与清空全部、重启恢复生效及 config.json 坏
 })
 
 test('KernelRuntimeOptions.providers coexists with builtin:magpie and rejects simultaneous models', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-models-providers-mutex-')
+  const dir = useTempDir(t, 'helmx-models-providers-mutex-')
   const { models, faux } = makeFauxModels()
   await assert.rejects(
     () => createHubTestApp({ dataDir: dir, cwd: dir, models, providers: [faux.provider] }),

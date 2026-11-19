@@ -17,8 +17,8 @@
  * 6. HTTP 层可见故障（createHubHandler + 真 AuthService 进程 token）：
  *    GET /api/workflows/runs 返回 500 workflow_index_corrupt 错误信封，
  *    绝非 200 少项数组；
- * 7. CLI 层非零退出（真 createHelm + port 0 Hub + tsx 子进程真 CLI）：
- *    helm workflows runs 在索引损坏时 exitCode !== 0 且 stderr 带错误码，
+ * 7. CLI 层非零退出（真 createHelmx + port 0 Hub + tsx 子进程真 CLI）：
+ *    helmx workflows runs 在索引损坏时 exitCode !== 0 且 stderr 带错误码，
  *    不打印伪列表。
  *
  * runner: tsx --test；每项显式 timeout: 60_000。
@@ -32,16 +32,16 @@ import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
 
-import { HelmError } from '@helm/protocol'
+import { HelmxError } from '@helmx/protocol'
 import { WorkflowService, type WorkflowServiceHost, type WorkflowStateStore } from '../src/workflow/engine/service.js'
 import { createHubHandler, startHub } from '../../kernel/src/http/index.js'
 import { AuthService } from '../../kernel/src/services/index.js'
 import type { EventHub, KernelRuntimeLike } from '../../kernel/src/http/index.js'
-import { createHelm } from '../../hub/src/app.js'
+import { createHelmx } from '../../hub/src/app.js'
 import { createWorkflowPlugin } from '../src/workflow.js'
 import { PluginHost, type PluginHostBackend, type PluginSessionDocStore } from '../../kernel/src/plugins/index.js'
 import { createPluginHostBackendFixture } from '../../kernel/test/helpers/plugin-host-backend.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { deferred, makeFauxProvider } from './helpers/plugin-test-env.js'
 
 const timeout = { timeout: 60_000 } as const
@@ -242,7 +242,7 @@ describe('WorkflowService listRuns integrity', () => {
     assert.throws(
       () => revived.getRun('wf_nosuchrun0000'),
       (error: unknown) => {
-        assert.ok(error instanceof HelmError)
+        assert.ok(error instanceof HelmxError)
         assert.equal(error.code, 'not_found')
         assert.equal(error.status, 404)
         return true
@@ -305,7 +305,7 @@ describe('WorkflowService listRuns integrity', () => {
       assert.throws(
         () => service.listRuns(),
         (error: unknown) => {
-          assert.ok(error instanceof HelmError, `[${c.name}] expect HelmError, got: ${String(error)}`)
+          assert.ok(error instanceof HelmxError, `[${c.name}] expect HelmxError, got: ${String(error)}`)
           assert.equal(error.code, 'workflow_index_corrupt', c.name)
           assert.equal(error.status, 500, c.name)
           const details = error.details as { key?: string; runId?: string }
@@ -382,7 +382,7 @@ describe('WorkflowService listRuns integrity', () => {
     assert.throws(
       () => service.getRun(victim),
       (error: unknown) => {
-        assert.ok(error instanceof HelmError)
+        assert.ok(error instanceof HelmxError)
         assert.equal(error.code, 'workflow_record_corrupt')
         return true
       },
@@ -392,7 +392,7 @@ describe('WorkflowService listRuns integrity', () => {
     assert.throws(
       () => service.getRun(victim),
       (error: unknown) => {
-        assert.ok(error instanceof HelmError)
+        assert.ok(error instanceof HelmxError)
         assert.equal(error.code, 'workflow_record_corrupt')
         assert.ok(error.message.includes('not an object structure'), error.message)
         return true
@@ -402,7 +402,7 @@ describe('WorkflowService listRuns integrity', () => {
     assert.throws(
       () => service.getRun('wf_nosuchrun0000'),
       (error: unknown) => {
-        assert.ok(error instanceof HelmError)
+        assert.ok(error instanceof HelmxError)
         assert.equal(error.code, 'not_found')
         assert.equal(error.status, 404)
         return true
@@ -422,10 +422,10 @@ describe('WorkflowService listRuns integrity', () => {
     assert.throws(
       () => service.listRuns(),
       (error: unknown) => {
-        assert.ok(error instanceof HelmError, `expect HelmError, got: ${String(error)}`)
+        assert.ok(error instanceof HelmxError, `expect HelmxError, got: ${String(error)}`)
         assert.equal(error.code, 'workflow_record_corrupt')
         assert.equal(error.status, 500)
-        assert.equal((error as HelmError).details && (error.details as { runId?: string }).runId, victim)
+        assert.equal((error as HelmxError).details && (error.details as { runId?: string }).runId, victim)
         assert.ok(error.message.includes(victim), 'diagnostic names the runId')
         return true
       },
@@ -445,7 +445,7 @@ describe('WorkflowService listRuns integrity', () => {
     assert.throws(
       () => service.listRuns(),
       (error: unknown) => {
-        assert.ok(error instanceof HelmError)
+        assert.ok(error instanceof HelmxError)
         assert.equal(error.code, 'workflow_record_corrupt')
         assert.equal((error.details as { runId?: string }).runId, victim)
         return true
@@ -454,7 +454,7 @@ describe('WorkflowService listRuns integrity', () => {
     assert.throws(
       () => service.getRun(victim),
       (error: unknown) => {
-        assert.ok(error instanceof HelmError)
+        assert.ok(error instanceof HelmxError)
         assert.equal(error.code, 'workflow_record_corrupt')
         return true
       },
@@ -474,7 +474,7 @@ describe('WorkflowService listRuns integrity', () => {
     assert.throws(
       () => service.getRun(victim),
       (error: unknown) => {
-        assert.ok(error instanceof HelmError)
+        assert.ok(error instanceof HelmxError)
         assert.equal(error.code, 'workflow_record_corrupt')
         assert.equal(error.status, 500)
         assert.ok(error.message.includes('syncForeground'), `message should name the problem: ${error.message}`)
@@ -487,7 +487,7 @@ describe('WorkflowService listRuns integrity', () => {
     assert.throws(
       () => service.listRuns(),
       (error: unknown) => {
-        assert.ok(error instanceof HelmError)
+        assert.ok(error instanceof HelmxError)
         assert.equal(error.code, 'workflow_record_corrupt')
         assert.equal((error.details as { runId?: string }).runId, victim)
         return true
@@ -504,7 +504,7 @@ describe('WorkflowService listRuns integrity', () => {
     writeRecordFile(dataDir, { ...record, errorCode: 123 })
     assert.throws(
       () => service.getRun(victim),
-      (error: unknown) => error instanceof HelmError && error.code === 'workflow_record_corrupt',
+      (error: unknown) => error instanceof HelmxError && error.code === 'workflow_record_corrupt',
     )
     writeRecordFile(dataDir, { ...record, status: 'failed', error: '[gate_failed] bad', errorCode: 'gate_failed' })
     const failedSummary = service.getRun(victim)
@@ -538,7 +538,7 @@ describe('WorkflowService listRuns integrity', () => {
     assert.throws(
       () => service.getRun(victim),
       (error: unknown) => {
-        assert.ok(error instanceof HelmError)
+        assert.ok(error instanceof HelmxError)
         assert.equal(error.code, 'workflow_record_corrupt')
         assert.equal(error.status, 500)
         assert.ok(error.message.includes('status'), `message should name the problem: ${error.message}`)
@@ -548,7 +548,7 @@ describe('WorkflowService listRuns integrity', () => {
     assert.throws(
       () => service.listRuns(),
       (error: unknown) => {
-        assert.ok(error instanceof HelmError)
+        assert.ok(error instanceof HelmxError)
         assert.equal(error.code, 'workflow_record_corrupt')
         assert.equal((error.details as { runId?: string }).runId, victim)
         return true
@@ -562,7 +562,7 @@ describe('WorkflowService listRuns integrity', () => {
     assert.throws(
       () => service.listRuns(),
       (error: unknown) => {
-        assert.ok(error instanceof HelmError)
+        assert.ok(error instanceof HelmxError)
         assert.equal(error.code, 'workflow_record_corrupt')
         return true
       },
@@ -583,7 +583,7 @@ describe('WorkflowService listRuns integrity', () => {
     assert.throws(
       () => failingService.listRuns(),
       (error: unknown) => {
-        assert.ok(error instanceof HelmError)
+        assert.ok(error instanceof HelmxError)
         assert.equal(error.code, 'workflow_index_corrupt', 'listRuns 索引读失败以索引级 corrupt 信封透传')
         assert.ok(error.message.includes('simulated store read failure'), `cause surfaced: ${error.message}`)
         return true
@@ -595,7 +595,7 @@ describe('WorkflowService listRuns integrity', () => {
     assert.throws(
       () => failingService.getRun(victim),
       (error: unknown) => {
-        assert.ok(error instanceof HelmError)
+        assert.ok(error instanceof HelmxError)
         assert.equal(error.code, 'workflow_index_corrupt')
         assert.equal((error.details as { runId?: string }).runId, victim)
         return true
@@ -614,7 +614,7 @@ describe('WorkflowService listRuns integrity', () => {
     unlinkSync(recordFileOf(dataDir, victim))
     const revived = new WorkflowService({ dataDir, host: makeServiceHost(), state })
     await assert.rejects(() => revived.init(), (error: unknown) => {
-      assert.ok(error instanceof HelmError)
+      assert.ok(error instanceof HelmxError)
       assert.equal(error.code, 'workflow_record_corrupt')
       return true
     })
@@ -650,7 +650,7 @@ function makeBackend(): PluginHostBackend {
     getConversationOwnership: () => 'human' as const,
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
-    execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
+    execEnv: async () => { throw new HelmxError('unsupported', '本 fixture 不执行节点命令', 501) },
     manageConversation: () => () => {},
     markConversationOwnership: () => {},
     createAsk: async () => ({}) as never,
@@ -787,7 +787,7 @@ describe('workflow listRuns failure visibility over HTTP (plugin actions)', () =
 })
 
 // ---------------------------------------------------------------------------
-// CLI 层：真 createHelm + port 0 Hub + tsx 子进程真 CLI，非零退出可见
+// CLI 层：真 createHelmx + port 0 Hub + tsx 子进程真 CLI，非零退出可见
 // ---------------------------------------------------------------------------
 
 const testDir = fileURLToPath(new URL('.', import.meta.url))
@@ -815,10 +815,10 @@ function runCliChild(args: string[], env: NodeJS.ProcessEnv, timeoutMs = 30_000)
   })
 }
 
-test('CLI: helm workflows runs 在索引损坏时非零退出并显示错误码（真 Hub + 真 CLI 子进程）', timeout, async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-wf-cli-int-'))
+test('CLI: helmx workflows runs 在索引损坏时非零退出并显示错误码（真 Hub + 真 CLI 子进程）', timeout, async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-wf-cli-int-'))
   const faux = makeFauxProvider()
-  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider] })
+  const app = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider] })
   const plugins = app.kernel.plugins
   let hub: Awaited<ReturnType<typeof startHub>> | undefined
   try {
@@ -838,9 +838,9 @@ test('CLI: helm workflows runs 在索引损坏时非零退出并显示错误码�
     // 先验证健康路径：CLI 列出全部 run。
     const healthy = await runCliChild(['workflows', 'runs', '--json'], {
       ...process.env,
-      HELM_HUB_URL: hub.url,
-      HELM_DATA_DIR: join(dataDir, 'cli-home'),
-      HELM_TOKEN: userToken,
+      HELMX_HUB_URL: hub.url,
+      HELMX_DATA_DIR: join(dataDir, 'cli-home'),
+      HELMX_TOKEN: userToken,
     })
     assert.equal(healthy.code, 0, `healthy list should exit 0: ${healthy.err}`)
     assert.equal((JSON.parse(healthy.out) as { runs: unknown[] }).runs.length, 2)
@@ -871,9 +871,9 @@ test('CLI: helm workflows runs 在索引损坏时非零退出并显示错误码�
 
     const broken = await runCliChild(['workflows', 'runs', '--json'], {
       ...process.env,
-      HELM_HUB_URL: hub.url,
-      HELM_DATA_DIR: join(dataDir, 'cli-home'),
-      HELM_TOKEN: userToken,
+      HELMX_HUB_URL: hub.url,
+      HELMX_DATA_DIR: join(dataDir, 'cli-home'),
+      HELMX_TOKEN: userToken,
     })
     assert.notEqual(broken.code, 0, 'corrupt record must make CLI exit non-zero')
     assert.ok(broken.err.includes('workflow_record_corrupt'), `stderr should carry the error code: ${broken.err}`)

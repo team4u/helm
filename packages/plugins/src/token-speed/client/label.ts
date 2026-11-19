@@ -22,7 +22,7 @@
  * parameter (defaults to the en locale so existing English assertions stay
  * valid); execution-facing payloads never change with locale.
  */
-import { DEFAULT_HELM_LOCALE, type HelmLocale } from '@helm/plugin-client'
+import { DEFAULT_HELMX_LOCALE, type HelmxLocale } from '@helmx/plugin-client'
 import {
   tokenSpeedLiveTitle,
   tokenSpeedSettledTitle,
@@ -55,7 +55,7 @@ export function tokenSpeedLabelOf(
     ttftMs?: number
     windowMs: number
   },
-  locale: HelmLocale = DEFAULT_HELM_LOCALE,
+  locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
 ): SpeedLabel | null {
   const tps = status.tps
   if (typeof tps !== 'number' || !Number.isFinite(tps) || tps <= 0) return null

@@ -4,7 +4,7 @@
  * across clientRoots). Component & type exports only (Fast Refresh compliant).
  */
 import { useMemo, useState } from 'react'
-import { resolveLocalizedText, usePluginContext, usePluginLocale } from '@helm/plugin-client'
+import { resolveLocalizedText, usePluginContext, usePluginLocale } from '@helmx/plugin-client'
 import {
   TRACE_DETAILS_INPUT,
   TRACE_DETAILS_OUTPUT,

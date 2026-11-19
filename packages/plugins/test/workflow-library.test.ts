@@ -21,7 +21,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { HelmError } from '@helm/protocol'
+import { HelmxError } from '@helmx/protocol'
 import { WorkflowService, type WorkflowServiceHost, type WorkflowStateStore } from '../src/workflow/engine/service.js'
 
 const timeout = { timeout: 60_000 } as const
@@ -81,19 +81,19 @@ function runRecord(over: Record<string, unknown> = {}): Record<string, unknown> 
 let root: string
 
 before(async () => {
-  root = mkdtempSync(join(tmpdir(), 'helm-wf-library-'))
+  root = mkdtempSync(join(tmpdir(), 'helmx-wf-library-'))
 })
 
 after(async () => {
   rmSync(root, { recursive: true, force: true })
 })
 
-/** 断言 HelmError（code + 可选 message 正则）。 */
-function assertHelmError(fn: () => unknown, code: string, messageRe?: RegExp): HelmError {
+/** 断言 HelmxError（code + 可选 message 正则）。 */
+function assertHelmxError(fn: () => unknown, code: string, messageRe?: RegExp): HelmxError {
   try {
     fn()
   } catch (error) {
-    assert.ok(error instanceof HelmError, `应抛 HelmError（实得 ${String(error)}）`)
+    assert.ok(error instanceof HelmxError, `应抛 HelmxError（实得 ${String(error)}）`)
     assert.equal(error.code, code)
     if (messageRe !== undefined) assert.match(error.message, messageRe)
     return error
@@ -127,7 +127,7 @@ describe('WorkflowService.save：script 源', { timeout: 60_000 }, () => {
     const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
     try {
       service.save({ script: GOOD_SCRIPT })
-      assertHelmError(
+      assertHelmxError(
         () => service.save({ script: GOOD_SCRIPT }),
         'workflow_already_exists',
         /overwrite/,
@@ -149,7 +149,7 @@ describe('WorkflowService.save：script 源', { timeout: 60_000 }, () => {
       const first = service.save({ script: GOOD_SCRIPT })
       assert.equal(first.created, true)
       // 二次创建：存在检查命中即 409（并发窗口内则由 link EEXIST 映射同一错误码）。
-      assertHelmError(() => service.save({ script: GOOD_SCRIPT }), 'workflow_already_exists')
+      assertHelmxError(() => service.save({ script: GOOD_SCRIPT }), 'workflow_already_exists')
       assert.equal(service.list().length, 1)
       const entries = service.list()
       assert.equal(entries[0]!.name, 'release')
@@ -166,14 +166,14 @@ describe('WorkflowService.save：script 源', { timeout: 60_000 }, () => {
     const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
     try {
       // 缺 meta 声明。
-      assertHelmError(() => service.save({ script: 'return 1' }), 'workflow_script_invalid', /meta/)
+      assertHelmxError(() => service.save({ script: 'return 1' }), 'workflow_script_invalid', /meta/)
       // meta 模板插值（非纯字面量）。
-      assertHelmError(
+      assertHelmxError(
         () => service.save({ script: 'const v = "x"\nexport const meta = { name: "a", description: `d-${v}` }\nreturn 1' }),
         'workflow_script_invalid',
       )
       // 语法错误（meta 合法、脚本体不闭合括号）。
-      assertHelmError(
+      assertHelmxError(
         () => service.save({ script: 'export const meta = { name: "bad", description: "d" }\nconst x = (' }),
         'workflow_script_invalid',
         /syntax/i,
@@ -188,7 +188,7 @@ describe('WorkflowService.save：script 源', { timeout: 60_000 }, () => {
     const dataDir = join(root, 'save-name')
     const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
     try {
-      assertHelmError(
+      assertHelmxError(
         () => service.save({ script: GOOD_SCRIPT, name: 'other' }),
         'validation_error',
         /meta\.name/,
@@ -204,10 +204,10 @@ describe('WorkflowService.save：script 源', { timeout: 60_000 }, () => {
     const dataDir = join(root, 'save-safe')
     const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
     try {
-      assertHelmError(() => service.save({ script: GOOD_SCRIPT, name: '../escape' }), 'validation_error', /invalid/)
-      assertHelmError(() => service.save({ script: GOOD_SCRIPT, name: 'a/b' }), 'validation_error')
-      assertHelmError(() => service.save({ script: GOOD_SCRIPT, fromRunId: 'wf_x' }), 'validation_error', /exactly one of/)
-      assertHelmError(() => service.save({}), 'validation_error', /exactly one of/)
+      assertHelmxError(() => service.save({ script: GOOD_SCRIPT, name: '../escape' }), 'validation_error', /invalid/)
+      assertHelmxError(() => service.save({ script: GOOD_SCRIPT, name: 'a/b' }), 'validation_error')
+      assertHelmxError(() => service.save({ script: GOOD_SCRIPT, fromRunId: 'wf_x' }), 'validation_error', /exactly one of/)
+      assertHelmxError(() => service.save({}), 'validation_error', /exactly one of/)
     } finally {
       await service.close()
     }
@@ -224,10 +224,10 @@ describe('WorkflowService.save：script 源', { timeout: 60_000 }, () => {
     try {
       // 既有越界 symlink：名称与 meta 一致时仍被 realpath 校验拒绝（不读不写）。
       const hijackScript = 'export const meta = { name: "hijack", description: "d" }\nreturn 1'
-      assertHelmError(() => service.save({ script: hijackScript, name: 'hijack', overwrite: true }), 'validation_error', /symlink/)
+      assertHelmxError(() => service.save({ script: hijackScript, name: 'hijack', overwrite: true }), 'validation_error', /symlink/)
       // list 层：越界 symlink 因 meta 可读仍会出现（list 只拒绝名称非法）；此处验证不崩溃且事实如实。
       // get 层同样拒绝。
-      assertHelmError(() => service.get('hijack'), 'validation_error', /symlink/)
+      assertHelmxError(() => service.get('hijack'), 'validation_error', /symlink/)
     } finally {
       await service.close()
     }
@@ -269,7 +269,7 @@ describe('WorkflowService.save：fromRunId 源', { timeout: 60_000 }, () => {
     try {
       const result = service.save({ fromRunId: 'wf_seed1' })
       assert.equal(result.workflow.name, 'release')
-      assertHelmError(() => service.save({ fromRunId: 'wf_seed1', name: 'renamed' }), 'validation_error', /meta\.name/)
+      assertHelmxError(() => service.save({ fromRunId: 'wf_seed1', name: 'renamed' }), 'validation_error', /meta\.name/)
     } finally {
       await service.close()
     }
@@ -278,19 +278,19 @@ describe('WorkflowService.save：fromRunId 源', { timeout: 60_000 }, () => {
   it('subagent run 拒绝；无脚本源拒绝；不存在 run 404', timeout, async () => {
     const service = seededService('fromrun-subagent', { kind: 'subagent' })
     try {
-      assertHelmError(() => service.save({ fromRunId: 'wf_seed1' }), 'validation_error', /subagent/)
+      assertHelmxError(() => service.save({ fromRunId: 'wf_seed1' }), 'validation_error', /subagent/)
     } finally {
       await service.close()
     }
     const noSource = seededService('fromrun-nosource', {})
     try {
-      assertHelmError(() => noSource.save({ fromRunId: 'wf_seed1' }), 'validation_error', /script source/)
+      assertHelmxError(() => noSource.save({ fromRunId: 'wf_seed1' }), 'validation_error', /script source/)
     } finally {
       await noSource.close()
     }
     const missing = new WorkflowService({ dataDir: join(root, 'fromrun-missing'), host, state: makeStateStore() })
     try {
-      assertHelmError(() => missing.save({ fromRunId: 'wf_nope' }), 'not_found')
+      assertHelmxError(() => missing.save({ fromRunId: 'wf_nope' }), 'not_found')
     } finally {
       await missing.close()
     }
@@ -310,8 +310,8 @@ describe('WorkflowService.get / delete / list', { timeout: 60_000 }, () => {
       assert.equal(detail.description, '发布流程')
       assert.ok(detail.size > 0)
       assert.ok(detail.updatedAt > 0)
-      assertHelmError(() => service.get('nope'), 'not_found')
-      assertHelmError(() => service.get('../x'), 'validation_error')
+      assertHelmxError(() => service.get('nope'), 'not_found')
+      assertHelmxError(() => service.get('../x'), 'validation_error')
     } finally {
       await service.close()
     }
@@ -333,11 +333,11 @@ describe('WorkflowService.get / delete / list', { timeout: 60_000 }, () => {
       assert.equal(result.name, 'release')
       assert.equal(result.path, join(workflows, 'release.js'))
       // 再删 404。
-      assertHelmError(() => service.delete('release'), 'not_found')
+      assertHelmxError(() => service.delete('release'), 'not_found')
       // 目录条目拒绝。
-      assertHelmError(() => service.delete('dir'), 'validation_error', /regular file/)
+      assertHelmxError(() => service.delete('dir'), 'validation_error', /regular file/)
       // 越界符号链接拒绝（不删目标也不删链接）。
-      assertHelmError(() => service.delete('linked'), 'validation_error', /symlink/)
+      assertHelmxError(() => service.delete('linked'), 'validation_error', /symlink/)
       assert.ok(readFileSync(outside, 'utf-8') === GOOD_SCRIPT, '符号链接目标不得被删除')
     } finally {
       await service.close()

@@ -5,7 +5,7 @@
  *    CSS 含 @media (max-width: 680px) 与 @container herdr-overview (max-width: 680px) 切换规则；
  * 3. 严守 AGENTS.md §3 看门狗归属权红线：ownedBy === 'human' 窗格无论 pendingAsk / focused /
  *    blocked 状态如何，在桌面表格操作列与移动端卡片上均绝不渲染任何交互控件（只读诊断徽章）。
- * 4. 仅 ownedBy === 'helm' 受管窗格开放聚焦 / 快照 / 关联会话动作，零原生 <select>，零 Emoji。
+ * 4. 仅 ownedBy === 'helmx' 受管窗格开放聚焦 / 快照 / 关联会话动作，零原生 <select>，零 Emoji。
  */
 import assert from 'node:assert/strict'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
@@ -15,8 +15,8 @@ import { dirname, join, resolve } from 'node:path'
 import { after, before, describe, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
-import { CLIENT_SHARED_GLOBALS, compilePluginClientModule } from '@helm/plugin-build'
-import { PLUGIN_CLIENT_CSS_EXPORT } from '@helm/protocol'
+import { CLIENT_SHARED_GLOBALS, compilePluginClientModule } from '@helmx/plugin-build'
+import { PLUGIN_CLIENT_CSS_EXPORT } from '@helmx/protocol'
 import type { OverviewDoc } from '../src/herdr/client/models.js'
 
 GlobalRegistrator.register()
@@ -39,7 +39,7 @@ g[CLIENT_SHARED_GLOBALS['react-dom']!] = ReactDOM
 g[CLIENT_SHARED_GLOBALS['react-dom/client']!] = ReactDOMClient
 g[CLIENT_SHARED_GLOBALS['react/jsx-runtime']!] = ReactJsxRuntime
 g[CLIENT_SHARED_GLOBALS['lucide-react']!] = LucideReact
-g[CLIENT_SHARED_GLOBALS['@helm/plugin-client']!] = SDK
+g[CLIENT_SHARED_GLOBALS['@helmx/plugin-client']!] = SDK
 
 const e = React.createElement
 const { act } = React
@@ -57,7 +57,7 @@ let tempDir: string
 let mod: HerdrClientModule
 
 before(async () => {
-  tempDir = await mkdtemp(join(tmpdir(), 'helm-herdr-client-'))
+  tempDir = await mkdtemp(join(tmpdir(), 'helmx-herdr-client-'))
   const bundle = await compilePluginClientModule('builtin:herdr', HERDR_CLIENT_DIR, 'index.tsx', tempDir)
   const url = `data:text/javascript;base64,${Buffer.from(bundle.code, 'utf8').toString('base64')}`
   mod = (await import(url)) as HerdrClientModule
@@ -152,7 +152,7 @@ function mountHerdrOverview(doc: OverviewDoc, locale?: 'en' | 'zh-CN') {
 }
 
 describe('HerdrOverviewScreen 双端适配与 human 只读红线', () => {
-  test('human 直连窗格在桌面表格与移动卡片均严格只读，零控制按钮；helm 受管窗格开放合规动作', { timeout: 60_000 }, async () => {
+  test('human 直连窗格在桌面表格与移动卡片均严格只读，零控制按钮；helmx 受管窗格开放合规动作', { timeout: 60_000 }, async () => {
     const doc: OverviewDoc = {
       version: 2,
       updatedAt: 1_700_000_050_000,
@@ -177,7 +177,7 @@ describe('HerdrOverviewScreen 双端适配与 human 只读红线', () => {
           paneId: '%10',
           tabId: 'tab-2',
           workspaceId: 'ws-1',
-          ownedBy: 'helm',
+          ownedBy: 'helmx',
           agentStatus: 'blocked',
           agentName: 'codex',
           title: '受管后台窗格',
@@ -206,7 +206,7 @@ describe('HerdrOverviewScreen 双端适配与 human 只读红线', () => {
       }
       const desktopStatusCell = desktopRows[0]!.querySelector('td:nth-child(5)')
       assert.ok(desktopStatusCell?.querySelector('.badge') !== null, 'Status 列为徽章而非仅指示灯')
-      const mobileLight = mounted.container.querySelector('.herdr-mobile-cards .helm-status-light')
+      const mobileLight = mounted.container.querySelector('.herdr-mobile-cards .helmx-status-light')
       assert.ok(mobileLight !== null && (mobileLight.textContent ?? '').length > 0, '移动卡状态为纯灯（可访问名称）')
       const humanDesktopRow = desktopRows.find((tr) => tr.textContent?.includes('%1') && !tr.textContent?.includes('%10'))!
       assert.equal(humanDesktopRow.querySelectorAll('button').length, 0, 'human 桌面行严禁渲染任何操作按钮')
@@ -218,11 +218,11 @@ describe('HerdrOverviewScreen 双端适配与 human 只读红线', () => {
       assert.equal(humanMobileCard.querySelectorAll('button').length, 0, 'human 移动卡片严禁渲染发送/中止/聚焦/快照等交互控件')
       assert.ok(humanMobileCard.textContent?.includes('Read-only'))
 
-      // 4. helm 受管窗格：开放聚焦与快照动作，点击快照弹出 Radix Dialog 展示文本
-      const helmMobileCard = mounted.container.querySelector('.herdr-mobile-cards article[data-owned-by="helm"]')
-      assert.ok(helmMobileCard !== null)
-      const snapshotBtn = [...helmMobileCard.querySelectorAll('button')].find((b) => b.textContent?.includes('Snapshot'))
-      assert.ok(snapshotBtn !== undefined, 'helm 受管窗格应渲染快照按钮')
+      // 4. helmx 受管窗格：开放聚焦与快照动作，点击快照弹出 Radix Dialog 展示文本
+      const helmxMobileCard = mounted.container.querySelector('.herdr-mobile-cards article[data-owned-by="helmx"]')
+      assert.ok(helmxMobileCard !== null)
+      const snapshotBtn = [...helmxMobileCard.querySelectorAll('button')].find((b) => b.textContent?.includes('Snapshot'))
+      assert.ok(snapshotBtn !== undefined, 'helmx 受管窗格应渲染快照按钮')
       await act(async () => {
         snapshotBtn.click()
       })
@@ -255,7 +255,7 @@ describe('HerdrOverviewScreen 双端适配与 human 只读红线', () => {
           paneId: '%10',
           tabId: 'tab-2',
           workspaceId: 'ws-1',
-          ownedBy: 'helm',
+          ownedBy: 'helmx',
           agentStatus: 'working',
           agentName: 'codex',
           cwd: '/root/code/helm',
@@ -270,10 +270,10 @@ describe('HerdrOverviewScreen 双端适配与 human 只读红线', () => {
       assert.ok(humanMobileCard !== null)
       assert.ok(humanMobileCard.textContent?.includes('只读'))
       assert.ok(!humanMobileCard.textContent?.includes('Read-only'))
-      // helm 受管：中文「快照」按钮
-      const helmMobileCard = mounted.container.querySelector('.herdr-mobile-cards article[data-owned-by="helm"]')
-      assert.ok(helmMobileCard !== null)
-      const snapshotBtn = [...helmMobileCard.querySelectorAll('button')].find((b) => b.textContent?.includes('快照'))
+      // helmx 受管：中文「快照」按钮
+      const helmxMobileCard = mounted.container.querySelector('.herdr-mobile-cards article[data-owned-by="helmx"]')
+      assert.ok(helmxMobileCard !== null)
+      const snapshotBtn = [...helmxMobileCard.querySelectorAll('button')].find((b) => b.textContent?.includes('快照'))
       assert.ok(snapshotBtn !== undefined, 'zh-CN 下快照按钮应渲染中文文案')
     } finally {
       mounted.unmount()

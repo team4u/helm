@@ -1,5 +1,5 @@
 /** Cross-node command execution; JSON and human output share the same success and exit semantics. */
-import type { EnvExecRequest, EnvExecResponse, EnvExecStreamFrame } from '@helm/protocol'
+import type { EnvExecRequest, EnvExecResponse, EnvExecStreamFrame } from '@helmx/protocol'
 import { CliError } from '../errors.js'
 import { flagValue, parseFlags } from '../args.js'
 import type { CommandContext, CommandSpec } from './shared.js'
@@ -10,7 +10,7 @@ const ENV_EXEC_FLAGS = [
   { name: 'cwd', type: 'string', help: 'working directory on the target node (absolute path)' },
   { name: 'timeout', type: 'number', help: 'command timeout in milliseconds (positive integer, max 600000)' },
   { name: 'stream', type: 'boolean', help: 'stream stdout/stderr and terminal exit frames incrementally' },
-  { name: 'current', type: 'boolean', help: 'use HELM_CONVERSATION_ID as the conversation context' },
+  { name: 'current', type: 'boolean', help: 'use HELMX_CONVERSATION_ID as the conversation context' },
 ] as const
 
 /** Matches backend POST /api/env/exec validation (timeoutMs <= 600_000); reject out-of-range values early on the CLI side. */

@@ -6,8 +6,8 @@
  *   系统默认占位图标（DEFAULT_PLUGIN_ICON: 'puzzle'）；
  * - 不按插件 ID 硬编码任何业务特判——属性是插件自己的事，前端只负责展示。
  */
-import type { HelmLocale, PluginSummary, ScreenSpec } from '@helm/protocol/browser'
-import { resolveLocalizedText } from '@helm/protocol/browser'
+import type { HelmxLocale, PluginSummary, ScreenSpec } from '@helmx/protocol/browser'
+import { resolveLocalizedText } from '@helmx/protocol/browser'
 import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 import type { GroupedUiSpecs } from '../lib/types.js'
 
@@ -29,7 +29,7 @@ export function resolvePluginIcon(plugin?: Pick<PluginSummary, 'icon'> | null): 
 
 export function getPluginDescription(
   plugin: PluginSummary,
-  locale: HelmLocale,
+  locale: HelmxLocale,
   t: WebMessageTranslator = englishWebTranslator,
 ): string {
   const declared = plugin.description !== undefined ? resolveLocalizedText(plugin.description, locale) : ''

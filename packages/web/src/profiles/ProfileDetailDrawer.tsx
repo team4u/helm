@@ -12,13 +12,13 @@ import {
   validateStarterDraft,
   validateStarterDrafts,
 } from './profile-center-model.js'
-import { HelmIcon, Checkbox, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle, PluginSlot, Select, type SelectOption, Switch } from '@helm/plugin-client'
+import { HelmxIcon, Checkbox, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle, PluginSlot, Select, type SelectOption, Switch } from '@helmx/plugin-client'
 import { useModels, useNodes, useSkills } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { nodeOptionLabel } from '../modals/nodes-modal-model.js'
 import { ConfirmDialog } from '../ui/AlertDialog.js'
 import { ThinkingLevelControl } from '../ui/ThinkingLevelControl.js'
-import { PROFILE_DETAIL_SECTION_SLOT, PROFILE_STARTERS_MAX_ITEMS } from '@helm/protocol/browser'
+import { PROFILE_DETAIL_SECTION_SLOT, PROFILE_STARTERS_MAX_ITEMS } from '@helmx/protocol/browser'
 
 export interface ProfileDetailDrawerProps {
   profile: Profile | null
@@ -379,7 +379,7 @@ export function ProfileDetailDrawer({
                   </DialogTitle>
                   {isSystem && (
                     <span className="badge badge-warn" title={t('profiles.drawer.systemPillTitle')}>
-                      <HelmIcon name="lock" size={10} />
+                      <HelmxIcon name="lock" size={10} />
                       <span>{t('profiles.card.systemPill')}</span>
                     </span>
                   )}
@@ -397,7 +397,7 @@ export function ProfileDetailDrawer({
                 title={t('common.close')}
                 onClick={handleRequestClose}
               >
-                <HelmIcon name="x" size={14} />
+                <HelmxIcon name="x" size={14} />
               </button>
             </DialogClose>
           </div>
@@ -406,7 +406,7 @@ export function ProfileDetailDrawer({
           <div className="primary-drawer-body">
             {error && (
               <div className="callout callout-error" role="alert">
-                <HelmIcon name="alert-circle" size={14} />
+                <HelmxIcon name="alert-circle" size={14} />
                 <span className="callout-text">{error}</span>
               </div>
             )}
@@ -487,7 +487,7 @@ export function ProfileDetailDrawer({
                     id="profile-form-model"
                     value={form.model}
                     options={modelOptions}
-                    popoverClassName="helm-select-popover-wide"
+                    popoverClassName="helmx-select-popover-wide"
                     className="w-full mono"
                     onChange={(e) =>
                       setForm((prev) => {
@@ -532,7 +532,7 @@ export function ProfileDetailDrawer({
                   )}
                   {profileThinkingLevelUnsupported && (
                     <div className="callout callout-warn" role="status">
-                      <HelmIcon name="alert-triangle" size={13} />
+                      <HelmxIcon name="alert-triangle" size={13} />
                       <span className="callout-text">
                         {t('profiles.drawer.thinking.unsupportedLevel', { level: form.thinkingLevel })}
                       </span>
@@ -548,7 +548,7 @@ export function ProfileDetailDrawer({
                     id="profile-form-node"
                     value={form.nodeId}
                     options={nodeOptions}
-                    popoverClassName="helm-select-popover-wide"
+                    popoverClassName="helmx-select-popover-wide"
                     className="w-full mono"
                     inline={inline}
                     placeholder={t('profiles.drawer.unboundNode')}
@@ -699,7 +699,7 @@ export function ProfileDetailDrawer({
                             }))
                           }
                         >
-                          <HelmIcon name="trash-2" size={12} />
+                          <HelmxIcon name="trash-2" size={12} />
                         </button>
                       </div>
                     )
@@ -717,7 +717,7 @@ export function ProfileDetailDrawer({
                   }))
                 }
               >
-                <HelmIcon name="plus" size={12} />
+                <HelmxIcon name="plus" size={12} />
                 <span>{t('profiles.drawer.starters.add')}</span>
               </button>
             </section>
@@ -780,7 +780,7 @@ export function ProfileDetailDrawer({
                   disabled={isSaving || isDeleting}
                   onClick={() => setShowDeleteConfirm(true)}
                 >
-                  <HelmIcon name="trash" size={13} />
+                  <HelmxIcon name="trash" size={13} />
                   <span>{t('profiles.drawer.delete')}</span>
                 </button>
               )}
@@ -806,7 +806,7 @@ export function ProfileDetailDrawer({
               }
                 onClick={() => void handleSave()}
               >
-                <HelmIcon name={isSaving ? 'loader' : 'check'} size={13} />
+                <HelmxIcon name={isSaving ? 'loader' : 'check'} size={13} />
                 <span>{isSaving ? t('profiles.drawer.saving') : t('profiles.drawer.save')}</span>
               </button>
             </div>

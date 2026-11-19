@@ -3,7 +3,7 @@
  *
  * Bug background (fixed and locked by this file):
  * - After a model/API request failed, sidebar status showed error, but the message stream had no response -- SDK failure
- *   details were stored in pi.live.runFailure (reason/detail), yet helm only forwarded errors to plugin
+ *   details were stored in pi.live.runFailure (reason/detail), yet helmx only forwarded errors to plugin
  *   turn_settled hooks without passing them to ConversationSummary, leaving the frontend unable to render a reason.
  *
  * Current contract:
@@ -20,7 +20,7 @@
 import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
-import type { ConversationSummary, HelmEventFrame } from '@helm/protocol'
+import type { ConversationSummary, HelmxEventFrame } from '@helmx/protocol'
 import { KernelRuntime } from '../src/runtime/index.js'
 import { cleanupDir, makeFauxModels, makeTempDir, waitFor } from './helpers.js'
 
@@ -45,7 +45,7 @@ async function makeEnv(prefix: string): Promise<Env> {
     models,
   })
   const upserts: ConversationSummary[] = []
-  const stopRecording = kernel.events.subscribe((frame: HelmEventFrame) => {
+  const stopRecording = kernel.events.subscribe((frame: HelmxEventFrame) => {
     if (frame.event.type !== 'conversation.upsert') return
     const conversation = (frame.event as { conversation?: ConversationSummary }).conversation
     if (conversation?.id === 1) upserts.push(conversation)
@@ -68,7 +68,7 @@ async function makeEnv(prefix: string): Promise<Env> {
 }
 
 test('failed terminal state: lastError passes through to getConversation and conversation.upsert; clears on next succeeded turn', { timeout: 60_000 }, async () => {
-  const env = await makeEnv('helm-last-error-basic-')
+  const env = await makeEnv('helmx-last-error-basic-')
   try {
     // First turn fails: faux returns stopReason=error + errorMessage.
     env.faux.setResponses([
@@ -118,7 +118,7 @@ test('failed terminal state: lastError passes through to getConversation and con
 })
 
 test('failure durability: lastError stays visible across process restart (authoritative state in pi.live)', { timeout: 60_000 }, async () => {
-  const dataDir = await makeTempDir('helm-last-error-restart-')
+  const dataDir = await makeTempDir('helmx-last-error-restart-')
   const { models, faux } = makeFauxModels()
   const kernel = await KernelRuntime.open({ dataDir, cwd: dataDir, model: 'faux/faux-1', models })
   try {
@@ -150,9 +150,9 @@ test('failure durability: lastError stays visible across process restart (author
 })
 
 test('redaction: when error detail echoes a registered stash secret, lastError shows only placeholder', { timeout: 60_000 }, async () => {
-  const env = await makeEnv('helm-last-error-redact-')
+  const env = await makeEnv('helmx-last-error-redact-')
   try {
-    const secretValue = 'sk-helm-test-9f3ab2c7deadbeef'
+    const secretValue = 'sk-helmx-test-9f3ab2c7deadbeef'
     const conversation = await env.kernel.createConversation()
     const placeholder = env.kernel.stash.put(conversation.id, 'API_KEY', secretValue)
     assert.ok(placeholder.startsWith('[REDACTED:stash:'))
@@ -181,7 +181,7 @@ test('redaction: when error detail echoes a registered stash secret, lastError s
 })
 
 test('semantic equality granularity: same error status with changed error content emits summary update', { timeout: 60_000 }, async () => {
-  const env = await makeEnv('helm-last-error-dedup-')
+  const env = await makeEnv('helmx-last-error-dedup-')
   try {
     // First failure.
     env.faux.setResponses([

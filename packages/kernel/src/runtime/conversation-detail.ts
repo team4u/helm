@@ -2,14 +2,14 @@
  * Conversation detail pagination, cursor codec, and FTS index maintenance.
  *
  * Responsibilities:
- * - Detail timeline retrieval, filtering out entries covered by closed helm.rewind intervals while preserving marker entries;
+ * - Detail timeline retrieval, filtering out entries covered by closed helmx.rewind intervals while preserving marker entries;
  * - Pagination cursor base64url validation and encoding/decoding;
  * - Full FTS index rebuild (filtering rewound entries).
  */
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { Harness } from '@earendil-works/pi-durable'
-import type { ConversationDetail, ConversationEntry, ConversationSummary } from '@helm/protocol'
-import { HelmError } from '@helm/protocol'
+import type { ConversationDetail, ConversationEntry, ConversationSummary } from '@helmx/protocol'
+import { HelmxError } from '@helmx/protocol'
 import type { SecretStash } from '../services/index.js'
 import { toConversationEntry } from './entries.js'
 import { projectDetailEntry, stripEntrySignatures } from './entry-projection.js'
@@ -19,14 +19,14 @@ import {
   rewindIntervalOf,
   type RewindInterval,
 } from './runtime-helpers.js'
-import type { HelmStore } from './store.js'
+import type { HelmxStore } from './store.js'
 
 /** Maximum encoded pagination cursor length (base64url; rejects oversized cursors to prevent abuse). */
 const DETAIL_CURSOR_MAX_LENGTH = 2048
 
 interface ConversationDetailHost {
   readonly harness: Harness
-  readonly store: HelmStore
+  readonly store: HelmxStore
   readonly stash: SecretStash
   readonly getConversation: (id: number) => ConversationSummary
   readonly collectRewindIntervals: (
@@ -43,8 +43,8 @@ export class ConversationDetailService {
 
   /**
    * Fetch conversation details (summary + paginated timeline):
-   * - Server uniformly filters out historical entries covered by closed helm.rewind intervals ([fromEntryId, throughEntryId])
-   *   while retaining the helm.rewind marker entries themselves (matching frontend SSE interval deduplication);
+   * - Server uniformly filters out historical entries covered by closed helmx.rewind intervals ([fromEntryId, throughEntryId])
+   *   while retaining the helmx.rewind marker entries themselves (matching frontend SSE interval deduplication);
    * - Aggregates rewind intervals on each detail read (simple implementation with no extra durable cache/tables),
    *   then paginates backwards via SDK raw cursors while filtering covered entries until `limit` is filled or no more remain;
    * - Cursors are base64url(JSON {conversationId, cursor: SDK next}): bound to the conversation, checked for length and
@@ -78,12 +78,12 @@ export class ConversationDetailService {
     const summary = this.host.getConversation(id)
     const limit = options?.limit ?? 100
     if (!Number.isInteger(limit) || limit < 1 || limit > 500) {
-      throw new HelmError('validation_error', `limit must be an integer between 1 and 500 (received ${limit})`, 400, {
+      throw new HelmxError('validation_error', `limit must be an integer between 1 and 500 (received ${limit})`, 400, {
         limit,
       })
     }
     const conversation = await this.host.harness.conversation(id as never, BACKGROUND_CONTEXT)
-    if (!conversation) throw new HelmError('not_found', `conversation not found: ${id}`, 404)
+    if (!conversation) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
 
     let sdkCursor: unknown = undefined
     if (options?.cursor !== undefined) {
@@ -109,20 +109,20 @@ export class ConversationDetailService {
   /**
    * Single timeline entry (GET /api/conversations/:id/entries/:entryId):
    * - Exact lookup (min=max=entryId limit 1, never scans pages); validates both conversationId and entryId strictly;
-   * - Same rewind visibility as detail pagination: entries covered by helm.rewind or internal pi.system records
-   *   return 404 (helm.rewind marker entries remain visible, matching pagination);
+   * - Same rewind visibility as detail pagination: entries covered by helmx.rewind or internal pi.system records
+   *   return 404 (helmx.rewind marker entries remain visible, matching pagination);
    * - Untruncated yet redacted: strips opaque signatures without truncating payload text; original DB data untouched.
    */
   async getConversationEntry(id: number, entryId: number): Promise<ConversationEntry> {
     if (!Number.isSafeInteger(entryId) || entryId <= 0) {
-      throw new HelmError('validation_error', `entryId must be a positive safe integer (received ${String(entryId)})`, 400, {
+      throw new HelmxError('validation_error', `entryId must be a positive safe integer (received ${String(entryId)})`, 400, {
         conversationId: id,
         entryId,
       })
     }
     this.host.getConversation(id)
     const conversation = await this.host.harness.conversation(id as never, BACKGROUND_CONTEXT)
-    if (!conversation) throw new HelmError('not_found', `conversation not found: ${id}`, 404)
+    if (!conversation) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
     const page = await conversation.entries(
       { minEntryId: entryId as never, maxEntryId: entryId as never, order: 'ascending' },
       1,
@@ -131,7 +131,7 @@ export class ConversationDetailService {
     )
     const raw = page.items[0] as { id: number | string; kind: string } | undefined
     if (raw === undefined || Number(raw.id) !== entryId) {
-      throw new HelmError('not_found', `entry ${entryId} does not exist in conversation ${id}`, 404, {
+      throw new HelmxError('not_found', `entry ${entryId} does not exist in conversation ${id}`, 404, {
         conversationId: id,
         entryId,
       })
@@ -139,14 +139,14 @@ export class ConversationDetailService {
     // Identical visibility to detail pagination: rewound entries and pi.system model records remain invisible
     // even when queried directly by ID.
     if (raw.kind === 'pi.system') {
-      throw new HelmError('not_found', `entry ${entryId} is an internal model record (pi.system) and not visible`, 404, {
+      throw new HelmxError('not_found', `entry ${entryId} is an internal model record (pi.system) and not visible`, 404, {
         conversationId: id,
         entryId,
       })
     }
     const rewindCuts = await this.host.collectRewindIntervals(conversation)
-    if (raw.kind !== 'helm.rewind' && coveredByRewind(entryId, rewindCuts)) {
-      throw new HelmError('not_found', `entry ${entryId} was hidden by in-place overwrite & resend`, 404, {
+    if (raw.kind !== 'helmx.rewind' && coveredByRewind(entryId, rewindCuts)) {
+      throw new HelmxError('not_found', `entry ${entryId} was hidden by in-place overwrite & resend`, 404, {
         conversationId: id,
         entryId,
       })
@@ -184,11 +184,11 @@ export class ConversationDetailService {
         model?: readonly unknown[]
         data?: unknown
       }>) {
-        // Keep helm.rewind markers (for SSE consistency and frontend interval deduplication), hide older entries
+        // Keep helmx.rewind markers (for SSE consistency and frontend interval deduplication), hide older entries
         // inside closed rewind intervals, and hide internal pi.system records from detail timelines.
         const numericId = Number(raw.id)
         if (raw.kind === 'pi.system') continue
-        if (raw.kind !== 'helm.rewind' && coveredByRewind(numericId, rewindCuts)) continue
+        if (raw.kind !== 'helmx.rewind' && coveredByRewind(numericId, rewindCuts)) continue
         collected.push(raw)
       }
       if (page.next === undefined) {
@@ -214,13 +214,13 @@ export class ConversationDetailService {
   /** Decode and validate pagination cursor: verifies conversation ownership, max length, and JSON structure. */
   decodeDetailCursor(conversationId: number, encoded: string): unknown {
     if (encoded.length > DETAIL_CURSOR_MAX_LENGTH) {
-      throw new HelmError('validation_error', 'cursor exceeds maximum length', 400)
+      throw new HelmxError('validation_error', 'cursor exceeds maximum length', 400)
     }
     let decoded: unknown
     try {
       decoded = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'))
     } catch {
-      throw new HelmError('validation_error', 'cursor is not valid base64url JSON', 400)
+      throw new HelmxError('validation_error', 'cursor is not valid base64url JSON', 400)
     }
     const shape = decoded as { conversationId?: unknown; cursor?: unknown }
     if (
@@ -230,7 +230,7 @@ export class ConversationDetailService {
       typeof shape.cursor !== 'object' ||
       shape.cursor === null
     ) {
-      throw new HelmError(
+      throw new HelmxError(
         'validation_error',
         `cursor does not belong to conversation ${conversationId} or has invalid structure`,
         400,
@@ -245,7 +245,7 @@ export class ConversationDetailService {
       for (const conv of listConversationIds()) {
         const conversation = await this.host.harness.conversation(conv.id as never, BACKGROUND_CONTEXT)
         if (!conversation) continue
-        // Filter covered entries across all closed helm.rewind [from, through] intervals after full scan so superseded
+        // Filter covered entries across all closed helmx.rewind [from, through] intervals after full scan so superseded
         // entries are never re-indexed (shares identical interval rules with collectRewindIntervals and detail projection).
         const rewindCuts: RewindInterval[] = []
         const indexed: Array<{ id: number; text: string }> = []
@@ -259,7 +259,7 @@ export class ConversationDetailService {
           )
           for (const entry of page.items) {
             const record = entry as { id: number; kind: string; data?: unknown }
-            if (record.kind === 'helm.rewind') {
+            if (record.kind === 'helmx.rewind') {
               const interval = rewindIntervalOf(record)
               if (interval !== undefined) rewindCuts.push(interval)
               continue

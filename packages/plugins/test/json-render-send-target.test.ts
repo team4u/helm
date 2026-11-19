@@ -1,5 +1,5 @@
 /**
- * helm:send 目标解析与非法回退测试（spec-action；自 packages/web/test/queued-pill 迁入）。
+ * helmx:send 目标解析与非法回退测试（spec-action；自 packages/web/test/queued-pill 迁入）。
  */
 import assert from 'node:assert/strict'
 import test from 'node:test'
@@ -32,19 +32,19 @@ test('parseSendTarget: 仅缺省与显式 current 使用默认会话；空串/�
   assert.equal(parseSendTarget(Number.MAX_SAFE_INTEGER, undefined), Number.MAX_SAFE_INTEGER)
 })
 
-test('resolveSpecAction: helm:send 省略 target 默认当前会话；whenBusy 透传', { timeout: 60_000 }, () => {
-  const omitted = resolveSpecAction({ type: 'helm:send', text: '巡检一下' }, {}, 33)
+test('resolveSpecAction: helmx:send 省略 target 默认当前会话；whenBusy 透传', { timeout: 60_000 }, () => {
+  const omitted = resolveSpecAction({ type: 'helmx:send', text: '巡检一下' }, {}, 33)
   assert.equal(omitted.kind, 'send')
   if (omitted.kind === 'send') {
     assert.equal(omitted.conversationId, 33)
     assert.equal(omitted.text, '巡检一下')
     assert.equal(omitted.whenBusy, undefined)
   }
-  const current = resolveSpecAction({ type: 'helm:send', target: 'current', text: '再来一轮' }, {}, 33)
+  const current = resolveSpecAction({ type: 'helmx:send', target: 'current', text: '再来一轮' }, {}, 33)
   assert.equal(current.kind, 'send')
   if (current.kind === 'send') assert.equal(current.conversationId, 33)
   const busy = resolveSpecAction(
-    { type: 'helm:send', target: 'current', text: '插话', whenBusy: 'steer' },
+    { type: 'helmx:send', target: 'current', text: '插话', whenBusy: 'steer' },
     {},
     33,
   )
@@ -52,19 +52,19 @@ test('resolveSpecAction: helm:send 省略 target 默认当前会话；whenBusy �
   if (busy.kind === 'send') assert.equal(busy.whenBusy, 'steer')
   // 显式 target 仍优先生效；非法 whenBusy 显式 invalid（拼写错误不静默丢弃）。
   const explicit = resolveSpecAction(
-    { type: 'helm:send', target: 'conversation:9', text: 'x', whenBusy: 'later' },
+    { type: 'helmx:send', target: 'conversation:9', text: 'x', whenBusy: 'later' },
     {},
     33,
   )
   assert.equal(explicit.kind, 'invalid')
   if (explicit.kind === 'invalid') assert.match(explicit.message, /whenBusy is invalid/)
-  const legalExplicit = resolveSpecAction({ type: 'helm:send', target: 'conversation:9', text: 'x' }, {}, 33)
+  const legalExplicit = resolveSpecAction({ type: 'helmx:send', target: 'conversation:9', text: 'x' }, {}, 33)
   assert.equal(legalExplicit.kind, 'send')
   if (legalExplicit.kind === 'send') assert.equal(legalExplicit.whenBusy, undefined)
   // 模板求值产生空串 target（如 'conversation:{$row.missing}' 求值后路径缺失）：
   // 显式 invalid，绝不静默路由到默认会话（发错会话风险）。
   const blankTarget = resolveSpecAction(
-    { type: 'helm:send', target: 'conversation:{$row.missing}', text: 'x' },
+    { type: 'helmx:send', target: 'conversation:{$row.missing}', text: 'x' },
     {},
     33,
   )
@@ -73,18 +73,18 @@ test('resolveSpecAction: helm:send 省略 target 默认当前会话；whenBusy �
   // 整串模板表达式路径缺失（求值出 undefined）：声明里明确提供了 target，
   // 不得当作省略回退默认会话（浏览器实测 bug：会发错会话）。
   const undefinedTarget = resolveSpecAction(
-    { type: 'helm:send', target: '{$row.missing}', text: 'x' },
+    { type: 'helmx:send', target: '{$row.missing}', text: 'x' },
     {},
     33,
   )
   assert.equal(undefinedTarget.kind, 'invalid')
   if (undefinedTarget.kind === 'invalid') assert.match(undefinedTarget.message, /is invalid after evaluation/)
   // 无默认会话且 target 省略：显式 invalid（不猜测 #1）。
-  const invalid = resolveSpecAction({ type: 'helm:send', text: 'x' }, {})
+  const invalid = resolveSpecAction({ type: 'helmx:send', text: 'x' }, {})
   assert.equal(invalid.kind, 'invalid')
   if (invalid.kind === 'invalid') assert.match(invalid.message, /no default conversation/)
   // 显式 zh-CN：invalid 文案走中文口径（显示文案跟随宿主 locale，默认 en）。
-  const zhBlank = resolveSpecAction({ type: 'helm:send', target: '', text: 'x' }, {}, 33, 'zh-CN')
+  const zhBlank = resolveSpecAction({ type: 'helmx:send', target: '', text: 'x' }, {}, 33, 'zh-CN')
   assert.equal(zhBlank.kind, 'invalid')
   if (zhBlank.kind === 'invalid') {
     assert.match(zhBlank.message, /target 求值后无效/)
@@ -92,12 +92,12 @@ test('resolveSpecAction: helm:send 省略 target 默认当前会话；whenBusy �
   }
 })
 
-test('helm:send 显式提供 target 求值失败时绝不回退默认会话（浏览器实测回归）', { timeout: 60_000 }, () => {
+test('helmx:send 显式提供 target 求值失败时绝不回退默认会话（浏览器实测回归）', { timeout: 60_000 }, () => {
   // 场景：卡片声明写了 target: '{$data.missing}'，$data 中无该路径，
   // evaluateSpecValue 整串表达式求值出 undefined。旧实现把它当字段省略
   // 回退 defaultConversationId，导致「不可发送」的消息发到了当前 #7。
   const bug = resolveSpecAction(
-    { type: 'helm:send', target: '{$data.missing}', text: '不可发送' },
+    { type: 'helmx:send', target: '{$data.missing}', text: '不可发送' },
     {},
     7,
   )
@@ -107,18 +107,18 @@ test('helm:send 显式提供 target 求值失败时绝不回退默认会话（�
     assert.match(bug.message, /undefined/)
   }
   // 同类变体：显式 target 为 null / 空串 / 空白串 / 非法字符串，一律 invalid。
-  assert.equal(resolveSpecAction({ type: 'helm:send', target: null, text: 'x' }, {}, 7).kind, 'invalid')
-  assert.equal(resolveSpecAction({ type: 'helm:send', target: '', text: 'x' }, {}, 7).kind, 'invalid')
-  assert.equal(resolveSpecAction({ type: 'helm:send', target: '   ', text: 'x' }, {}, 7).kind, 'invalid')
-  assert.equal(resolveSpecAction({ type: 'helm:send', target: 'conversation:', text: 'x' }, {}, 7).kind, 'invalid')
+  assert.equal(resolveSpecAction({ type: 'helmx:send', target: null, text: 'x' }, {}, 7).kind, 'invalid')
+  assert.equal(resolveSpecAction({ type: 'helmx:send', target: '', text: 'x' }, {}, 7).kind, 'invalid')
+  assert.equal(resolveSpecAction({ type: 'helmx:send', target: '   ', text: 'x' }, {}, 7).kind, 'invalid')
+  assert.equal(resolveSpecAction({ type: 'helmx:send', target: 'conversation:', text: 'x' }, {}, 7).kind, 'invalid')
   // 对比：字段真正省略与显式 current 仍回退默认会话。
-  assert.equal(resolveSpecAction({ type: 'helm:send', text: 'x' }, {}, 7).kind, 'send')
-  const cur = resolveSpecAction({ type: 'helm:send', target: 'current', text: 'x' }, {}, 7)
+  assert.equal(resolveSpecAction({ type: 'helmx:send', text: 'x' }, {}, 7).kind, 'send')
+  const cur = resolveSpecAction({ type: 'helmx:send', target: 'current', text: 'x' }, {}, 7)
   assert.equal(cur.kind, 'send')
   if (cur.kind === 'send') assert.equal(cur.conversationId, 7)
   // 求值成功的模板（路径存在，值为正整数）仍正常定向。
   const ok = resolveSpecAction(
-    { type: 'helm:send', target: '{$data.targetId}', text: 'x' },
+    { type: 'helmx:send', target: '{$data.targetId}', text: 'x' },
     { $data: { targetId: 9 } },
     7,
   )

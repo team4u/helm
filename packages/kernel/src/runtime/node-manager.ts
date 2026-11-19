@@ -10,15 +10,15 @@ import { hostname, loadavg, freemem, totalmem, uptime } from 'node:os'
 import { access, chmod, mkdir, readFile, statfs, writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { HelmError, type EnvExecRequest, type EnvExecResponse, type NodeEnvRpcFunctions, type NodeHealthSnapshot, type NodeInfo, type NodeIssuedToken, type NodeUpgradeCheckInput, type NodeUpgradeCheckResult, type NodeUpgradeResult, type RpcResult } from '@helm/protocol'
+import { HelmxError, type EnvExecRequest, type EnvExecResponse, type NodeEnvRpcFunctions, type NodeHealthSnapshot, type NodeInfo, type NodeIssuedToken, type NodeUpgradeCheckInput, type NodeUpgradeCheckResult, type NodeUpgradeResult, type RpcResult } from '@helmx/protocol'
 import { sha256hex, type EnvFabric } from '../env/index.js'
 import type { ConfigService } from '../services/index.js'
 import type { SecretStash } from '../services/index.js'
 import { isAbsoluteTargetPath, runShell } from './tools.js'
 import { invalidPathText, normalizePathForTarget, targetPlatformForNode } from './target-platform.js'
 import { buildPosixHostShim, buildWindowsCmdWrapper, buildWindowsPosixShim, type CliShimPlan } from './cli-shim.js'
-import type { HelmToolDeps } from './tool-deps.js'
-import { compareStrictSemVer, hubVersion, isStrictSemVer, normalizeExplicitVersion, rpcFailureToHelmError, safeJson, unwrapUpgradeCheckRpc, unwrapUpgradeRpc, validateUpgradeCheckResult, validateUpgradeResult } from './semver.js'
+import type { HelmxToolDeps } from './tool-deps.js'
+import { compareStrictSemVer, hubVersion, isStrictSemVer, normalizeExplicitVersion, rpcFailureToHelmxError, safeJson, unwrapUpgradeCheckRpc, unwrapUpgradeRpc, validateUpgradeCheckResult, validateUpgradeResult } from './semver.js'
 
 /** Background refresh interval for local disk stats (unref timer, never blocks process exit). */
 const LOCAL_DISK_REFRESH_MS = 30_000
@@ -28,7 +28,7 @@ interface NodeManagerOptions {
   readonly envFabric: EnvFabric
   readonly configSvc: ConfigService
   readonly stash: SecretStash
-  readonly toolDeps: HelmToolDeps
+  readonly toolDeps: HelmxToolDeps
   readonly events: { publish(type: 'notification', payload: unknown): void; publish(type: 'node.changed', payload: unknown): void }
   /** Node upgrade confirmation timeout in milliseconds (default 120000). */
   readonly nodeUpgradeTimeoutMs: number
@@ -46,12 +46,12 @@ export class NodeManager {
   readonly envFabric: EnvFabric
   private readonly configSvc: ConfigService
   private readonly stash: SecretStash
-  private readonly toolDeps: HelmToolDeps
+  private readonly toolDeps: HelmxToolDeps
   private readonly events: NodeManagerOptions['events']
   readonly NODE_UPGRADE_TIMEOUT_MS: number
   /** Node token index registered in config.json (nodeId -> sha256(token)). */
   private readonly nodeTokenIndex = new Map<string, string>()
-  /** helm CLI wrapper script directory (populated after ensureCliBinDir completes). */
+  /** helmx CLI wrapper script directory (populated after ensureCliBinDir completes). */
   private cliBinDirValue: string | undefined = undefined
   /** Cached local node disk stats (collected asynchronously via fs.statfs; reused by synchronous snapshots). */
   private localDiskStats: { diskFreeBytes: number; diskTotalBytes: number } | undefined
@@ -76,9 +76,9 @@ export class NodeManager {
     this.convOf = options.convOf
   }
 
-  /** Auto-upgrade runs only when HELM_AUTO_UPGRADE_NODES=1 is explicitly enabled (disabled by default). */
+  /** Auto-upgrade runs only when HELMX_AUTO_UPGRADE_NODES=1 is explicitly enabled (disabled by default). */
   private get autoUpgradeEnabled(): boolean {
-    return process.env['HELM_AUTO_UPGRADE_NODES'] === '1'
+    return process.env['HELMX_AUTO_UPGRADE_NODES'] === '1'
   }
 
   get cliBinDir(): string | undefined {
@@ -96,11 +96,11 @@ export class NodeManager {
     this.nodeTokenIndex.clear()
     if (nodes === undefined) return
     if (typeof nodes !== 'object' || nodes === null || Array.isArray(nodes)) {
-      throw new HelmError('config_corrupt', 'config.json.nodes must be an object (nodeId -> sha256(token))', 500)
+      throw new HelmxError('config_corrupt', 'config.json.nodes must be an object (nodeId -> sha256(token))', 500)
     }
     for (const [nodeId, digest] of Object.entries(nodes as Record<string, unknown>)) {
       if (typeof digest !== 'string' || digest === '') {
-        throw new HelmError('config_corrupt', `config.json.nodes['${nodeId}'] must be a non-empty digest string`, 500)
+        throw new HelmxError('config_corrupt', `config.json.nodes['${nodeId}'] must be a non-empty digest string`, 500)
       }
       this.nodeTokenIndex.set(nodeId, digest)
     }
@@ -125,10 +125,10 @@ export class NodeManager {
   /** Issue a node access token: plaintext token is returned only this once; the server retains only sha256. */
   async issueNodeToken(nodeId: string): Promise<NodeIssuedToken> {
     if (nodeId === 'local') {
-      throw new HelmError('cannot_issue_local', 'local is a built-in node and does not need an access token', 400, { nodeId })
+      throw new HelmxError('cannot_issue_local', 'local is a built-in node and does not need an access token', 400, { nodeId })
     }
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(nodeId)) {
-      throw new HelmError(
+      throw new HelmxError(
         'validation_error',
         'nodeId must match /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/ ' +
           '(must start with an alphanumeric character, may contain . _ -, max length 128)',
@@ -153,10 +153,10 @@ export class NodeManager {
   /** Remove a node: deletes from token table and immediately severs any in-flight WS connection. */
   async removeNode(nodeId: string): Promise<void> {
     if (nodeId === 'local') {
-      throw new HelmError('cannot_remove_local_node', 'local is a built-in node and cannot be removed', 400, { nodeId })
+      throw new HelmxError('cannot_remove_local_node', 'local is a built-in node and cannot be removed', 400, { nodeId })
     }
     if (!this.nodeTokenIndex.has(nodeId)) {
-      throw new HelmError('not_found', `node not found: ${nodeId}`, 404, { nodeId })
+      throw new HelmxError('not_found', `node not found: ${nodeId}`, 404, { nodeId })
     }
     this.nodeTokenIndex.delete(nodeId)
     await this.persistNodeTokens()
@@ -175,10 +175,10 @@ export class NodeManager {
   // ------------------------------------------------------------------
 
   /**
-   * Generate `<dataDir>/bin` wrapper scripts so managed child processes can run `helm` directly via PATH
+   * Generate `<dataDir>/bin` wrapper scripts so managed child processes can run `helmx` directly via PATH
    * with `--current` semantics working out of the box:
-   * - POSIX host: `helm` = `#!/bin/sh` exec shim (cli-shim.buildPosixHostShim);
-   * - win32 host: `helm.cmd` = cmd.exe wrapper (preserves existing behavior); `helm` = POSIX shim for
+   * - POSIX host: `helmx` = `#!/bin/sh` exec shim (cli-shim.buildPosixHostShim);
+   * - win32 host: `helmx.cmd` = cmd.exe wrapper (preserves existing behavior); `helmx` = POSIX shim for
    *   WSL / Git Bash—resolves via wslpath/cygpath to a binary runnable by node.exe while keeping the Windows entry path,
    *   emitting an explicit diagnostic and exiting 127 on resolution failure rather than falling back to Linux node (cli-shim.buildWindowsPosixShim).
    * Idempotent: overwrites only when contents change, always chmods 0o755. Defaults platform/execPath to current process
@@ -190,11 +190,11 @@ export class NodeManager {
     const platform = override.platform ?? process.platform
     const execPath = override.execPath ?? process.execPath
     const binDir = join(this.dataDir, 'bin')
-    const helmPath = join(binDir, 'helm')
+    const helmxPath = join(binDir, 'helmx')
     let plan: CliShimPlan
     // Explicit CLI entry (packaged payload layouts have no packages/cli directory, so upward lookup would find nothing).
     // Accepts only a single entry file path.
-    const explicitEntry = process.env.HELM_CLI_ENTRY
+    const explicitEntry = process.env.HELMX_CLI_ENTRY
     if (explicitEntry) {
       plan = { execPath, entryArgs: [explicitEntry] }
     } else {
@@ -217,13 +217,13 @@ export class NodeManager {
       platform === 'win32' ? buildWindowsPosixShim(plan) : buildPosixHostShim(plan)
     try {
       await mkdir(binDir, { recursive: true })
-      const existing = await readFile(helmPath, 'utf8').catch(() => undefined)
+      const existing = await readFile(helmxPath, 'utf8').catch(() => undefined)
       if (existing !== script) {
-        await writeFile(helmPath, script, 'utf8')
+        await writeFile(helmxPath, script, 'utf8')
       }
-      await chmod(helmPath, 0o755)
+      await chmod(helmxPath, 0o755)
       if (platform === 'win32') {
-        await writeFile(join(binDir, 'helm.cmd'), buildWindowsCmdWrapper(plan), 'utf8')
+        await writeFile(join(binDir, 'helmx.cmd'), buildWindowsCmdWrapper(plan), 'utf8')
       }
       this.cliBinDirValue = binDir
     } catch (error) {
@@ -231,7 +231,7 @@ export class NodeManager {
       // but always notify explicitly rather than swallowing silently.
       this.events.publish('notification', {
         level: 'warning',
-        title: 'Failed to generate helm CLI wrapper script',
+        title: 'Failed to generate helmx CLI wrapper script',
         body: String(error instanceof Error ? error.message : error),
       })
     }
@@ -345,14 +345,14 @@ export class NodeManager {
   /** Upgrade preflight: reject local, 404 unknown, 409 offline; returns current online connection. */
   private requireUpgradableConnection(nodeId: string): { version?: string; rpc: NodeEnvRpcFunctions } {
     if (nodeId === 'local') {
-      throw new HelmError('cannot_upgrade_local', 'local runs in-process with Hub; upgrade Hub to upgrade local', 400, { nodeId })
+      throw new HelmxError('cannot_upgrade_local', 'local runs in-process with Hub; upgrade Hub to upgrade local', 400, { nodeId })
     }
     if (!this.nodeTokenIndex.has(nodeId)) {
-      throw new HelmError('not_found', `node not found: ${nodeId}`, 404, { nodeId })
+      throw new HelmxError('not_found', `node not found: ${nodeId}`, 404, { nodeId })
     }
     const conn = this.envFabric.registry.get(nodeId)
     if (conn === undefined) {
-      throw new HelmError('node_offline', `node offline: ${nodeId}`, 409, { nodeId })
+      throw new HelmxError('node_offline', `node offline: ${nodeId}`, 409, { nodeId })
     }
     return conn
   }
@@ -366,13 +366,13 @@ export class NodeManager {
   async checkNodeUpgrade(nodeId: string, input: NodeUpgradeCheckInput = {}): Promise<NodeUpgradeCheckResult> {
     const conn = this.requireUpgradableConnection(nodeId)
     if (conn.rpc.nodeCheckUpgrade === undefined) {
-      throw new HelmError('node_upgrade_not_supported', `node ${nodeId} does not support upgrades (outdated @helm/node)`, 501, { nodeId })
+      throw new HelmxError('node_upgrade_not_supported', `node ${nodeId} does not support upgrades (outdated @helmx/node)`, 501, { nodeId })
     }
     let result: UpgradeRpcCheck
     try {
       result = await conn.rpc.nodeCheckUpgrade(input)
     } catch (error) {
-      throw new HelmError(
+      throw new HelmxError(
         'node_upgrade_unavailable',
         `node ${nodeId} upgrade check call failed: ${error instanceof Error ? error.message : String(error)}`,
         502,
@@ -401,7 +401,7 @@ export class NodeManager {
   ): Promise<NodeUpgradeResult> {
     const conn = this.requireUpgradableConnection(nodeId)
     if (conn.rpc.nodeUpgrade === undefined) {
-      throw new HelmError('node_upgrade_not_supported', `node ${nodeId} does not support upgrades (outdated @helm/node)`, 501, { nodeId })
+      throw new HelmxError('node_upgrade_not_supported', `node ${nodeId} does not support upgrades (outdated @helmx/node)`, 501, { nodeId })
     }
     const { targetVersion, previousVersion } = await this.resolveUpgradeVersions(nodeId, conn.version, input)
     const attemptId = randomBytes(16).toString('hex')
@@ -413,7 +413,7 @@ export class NodeManager {
     })
     // Ensure non-commit exit paths always clean up the waiter so future upgrades do not stay locked.
     const finallyCancel = (): void => {
-      waiter.cancel(new HelmError('node_upgrade_cancelled', `upgrade waiter for node ${nodeId} terminated`, 502))
+      waiter.cancel(new HelmxError('node_upgrade_cancelled', `upgrade waiter for node ${nodeId} terminated`, 502))
     }
     try {
       return await this.settleUpgradeAttempt(nodeId, conn, {
@@ -523,9 +523,9 @@ export class NodeManager {
   }
 
   /** Construct unified unconfirmed-result error (502; attaches attemptId and targetVersion diagnostics). */
-  private unconfirmedError(nodeId: string, targetVersion: string, attemptId: string, cause: unknown, lead: string): HelmError {
+  private unconfirmedError(nodeId: string, targetVersion: string, attemptId: string, cause: unknown, lead: string): HelmxError {
     const message = cause instanceof Error ? cause.message : String(cause)
-    return new HelmError(
+    return new HelmxError(
       'node_upgrade_unconfirmed',
       `node ${nodeId} upgrade to ${targetVersion} ${lead}: ${message}`,
       502,
@@ -543,7 +543,7 @@ export class NodeManager {
     const { targetVersion, attemptId, input } = plan
     // Validate RpcResult envelope first (object / boolean ok / valid value or error.code+message); invalid shapes fail with 502.
     if (!isRpcResultEnvelope(rpcResult)) {
-      throw new HelmError(
+      throw new HelmxError(
         'node_upgrade_invalid_result',
         `node ${nodeId} upgrade returned invalid RpcResult (non-object or malformed ok/error): ${safeJson(rpcResult)}`,
         502,
@@ -552,11 +552,11 @@ export class NodeManager {
     }
     if (rpcResult.ok !== true) {
       // Node returned a structured rejection (not_supported / invalid / ...): fail explicitly.
-      throw rpcFailureToHelmError(nodeId, 'upgrade', rpcResult.error as { code: string; message: string })
+      throw rpcFailureToHelmxError(nodeId, 'upgrade', rpcResult.error as { code: string; message: string })
     }
     const value = validateUpgradeResult(nodeId, rpcResult.value as NodeUpgradeResult)
     if (!value.ok) {
-      throw new HelmError('node_upgrade_failed', `node ${nodeId} reported upgrade incomplete`, 502, { nodeId, attemptId, targetVersion })
+      throw new HelmxError('node_upgrade_failed', `node ${nodeId} reported upgrade incomplete`, 502, { nodeId, attemptId, targetVersion })
     }
     if (value.upgraded === false) {
       return this.settleNoOpReply(nodeId, plan, value)
@@ -579,7 +579,7 @@ export class NodeManager {
     // matching the pinned target (never trust mismatched reports); under force there is no valid no-op
     // (force reinstall must produce an upgrade), so reject unconditionally with 502.
     if (input.force === true) {
-      throw new HelmError(
+      throw new HelmxError(
         'node_upgrade_invalid_result',
         `node ${nodeId} returned a no-op result for a forced upgrade (force does not accept no-op): ${safeJson(value)}`,
         502,
@@ -587,7 +587,7 @@ export class NodeManager {
       )
     }
     if (value.previousVersion !== targetVersion || value.targetVersion !== targetVersion) {
-      throw new HelmError(
+      throw new HelmxError(
         'node_upgrade_invalid_result',
         `node ${nodeId} upgrade no-op result does not match pinned target (expected previous/target=${targetVersion}, got previous=${value.previousVersion}, target=${value.targetVersion})`,
         502,
@@ -598,7 +598,7 @@ export class NodeManager {
   }
 
   /**
-   * Auto-upgrade eligible nodes when HELM_AUTO_UPGRADE_NODES=1: triggers only when strict SemVer lags behind Hub;
+   * Auto-upgrade eligible nodes when HELMX_AUTO_UPGRADE_NODES=1: triggers only when strict SemVer lags behind Hub;
    * deduplicated (once per node); failures emit a warning notification without blocking registration.
    */
   async autoUpgradeIfEligible(nodeId: string, version: string | undefined): Promise<void> {
@@ -634,7 +634,7 @@ export class NodeManager {
     signal?: AbortSignal,
   ): Promise<EnvExecResponse> {
     if (typeof req.command !== 'string' && !Array.isArray(req.command)) {
-      throw new HelmError('validation_error', 'command must be a string or string array', 400)
+      throw new HelmxError('validation_error', 'command must be a string or string array', 400)
     }
     const { nodeId, cwd } = this.resolveExecTarget(req)
     const result = await runShell(this.toolDeps, req.command as string, {
@@ -677,7 +677,7 @@ export class NodeManager {
     nodeId = nodeId ?? 'local'
     if (cwd === undefined) cwd = nodeId === 'local' ? this.toolDeps.defaultCwd : undefined
     if (cwd !== undefined && (typeof cwd !== 'string' || !isAbsoluteTargetPath(cwd))) {
-      throw new HelmError(
+      throw new HelmxError(
         'validation_error',
         `cwd must be an absolute path (starting with POSIX / or Windows drive/UNC; drive-relative and relative paths are rejected; got ${String(cwd)})`,
         400,
@@ -692,7 +692,7 @@ export class NodeManager {
     if (cwd !== undefined) {
       const cwdNorm = normalizePathForTarget(cwd, platformInfo)
       if (!cwdNorm.ok) {
-        throw new HelmError(
+        throw new HelmxError(
           'validation_error',
           `cwd cannot be normalized for target node platform: ${cwdNorm.reason}`,
           400,
@@ -704,7 +704,7 @@ export class NodeManager {
     // Remote target with unset cwd: forbid blind execution (node daemon dataDir is not the user's intended workspace;
     // security invariant: default parameters must never silently run on Hub or an arbitrary directory).
     if (nodeId !== 'local' && cwd === undefined) {
-      throw new HelmError(
+      throw new HelmxError(
         'validation_error',
         `executing on remote node ${nodeId} requires an explicit cwd or bound conversation (blind execution in node default directory is rejected)`,
         400,
@@ -712,7 +712,7 @@ export class NodeManager {
       )
     }
     if (nodeId !== 'local' && !this.envFabric.isOnline(nodeId)) {
-      throw new HelmError('node_offline', `node ${nodeId} is offline or unreachable; execution rejected (never falls back to local)`, 409, {
+      throw new HelmxError('node_offline', `node ${nodeId} is offline or unreachable; execution rejected (never falls back to local)`, 409, {
         nodeId,
       })
     }

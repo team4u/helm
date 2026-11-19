@@ -1,8 +1,8 @@
 /**
- * 后端插件 TS 即时转译加载与越界防护专项测试（共享单实例 createHelm + 纯 node 子进程校验）。
+ * 后端插件 TS 即时转译加载与越界防护专项测试（共享单实例 createHelmx + 纯 node 子进程校验）。
  */
-import { createPluginBuildProvider } from '@helm/plugin-build'
-import { HelmError as HostHelmError } from '@helm/protocol'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
+import { HelmxError as HostHelmxError } from '@helmx/protocol'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
@@ -19,7 +19,7 @@ import {
   type HubTestApp,
 } from './helpers/hub-test-env.js'
 
-void HostHelmError
+void HostHelmxError
 
 function globalFlag(name: string): unknown {
   return (globalThis as Record<string, unknown>)[name]
@@ -43,17 +43,17 @@ function writeTsPlugin(pluginsDir: string, dir = 'ts-demo'): { dirPath: string; 
   writeFileSync(join(dirPath, 'lib', 'shapes', 'index.ts'), 'export const shape = (): string => "circle"\n')
   writeFileSync(join(dirPath, 'lib', 'lazy.ts'), 'export const lazyValue = "lazy-ok"\n')
   writeFileSync(join(dirPath, 'config.json'), JSON.stringify({ tag: 'json-ok' }))
-  writeFileSync(join(dirPath, 'assets', 'banner.txt'), 'helm-ts-plugin-asset\n')
+  writeFileSync(join(dirPath, 'assets', 'banner.txt'), 'helmx-ts-plugin-asset\n')
   writeFileSync(
     join(dirPath, 'lib', 'host-marker.ts'),
-    "import { HelmError } from '@helm/protocol'\nexport const marker = new HelmError('marker', 'marker')\nexport const ctor = HelmError\n",
+    "import { HelmxError } from '@helmx/protocol'\nexport const marker = new HelmxError('marker', 'marker')\nexport const ctor = HelmxError\n",
   )
   writeFileSync(
     join(dirPath, 'index.ts'),
     `import { readFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { depName } from 'demo-dep'
-import { HelmError } from '@helm/protocol'
+import { HelmxError } from '@helmx/protocol'
 import { addTen } from './lib/math.js'
 import { greet } from './lib/greet'
 import { shape } from './lib/shapes/index.js'
@@ -92,12 +92,12 @@ async function definePlugin(ctx: any) {
       return {
         builtinOk: createHash('sha256').update('x').digest('hex').length === 64,
         npmDep: depName,
-        hostClassSame: hostCtor === HelmError && Object.getPrototypeOf(hostMarker) === HelmError.prototype && hostMarker instanceof HelmError,
+        hostClassSame: hostCtor === HelmxError && Object.getPrototypeOf(hostMarker) === HelmxError.prototype && hostMarker instanceof HelmxError,
         metaUrl,
         lazyValue: mod.lazyValue,
         assetSha: createHash('sha256').update(asset).digest('hex').slice(0, 8),
         addTen: addTen(32),
-        greet: greet('helm'),
+        greet: greet('helmx'),
         shape: shape(),
         jsonTag: cfg.tag,
       }
@@ -120,8 +120,8 @@ let cycleCounter = ''
 let cleanDirPath = ''
 
 before(async () => {
-  sharedDataDir = await makeTempDir('helm-ext-ts-')
-  outsideDir = await makeTempDir('helm-ext-ts-out-')
+  sharedDataDir = await makeTempDir('helmx-ext-ts-')
+  outsideDir = await makeTempDir('helmx-ext-ts-out-')
   const pluginsDir = join(sharedDataDir, 'plugins')
 
   demoCounter = writeTsPlugin(pluginsDir, 'ts-demo').counterName
@@ -241,7 +241,7 @@ after(async () => {
   await cleanupDir(outsideDir)
 }, { timeout: 60_000 })
 
-test('TS/TSX 外部插件全链路：依赖闭包、内置/npm 模块、@helm 同构类、json、import.meta.url、别名/动静态同一性与无磁盘中间产物', { timeout: 60_000 }, async () => {
+test('TS/TSX 外部插件全链路：依赖闭包、内置/npm 模块、@helmx 同构类、json、import.meta.url、别名/动静态同一性与无磁盘中间产物', { timeout: 60_000 }, async () => {
   const plugins = sharedApp.kernel.plugins
   const summary = plugins.list().find((p) => p.id === 'ts-demo')!
   assert.equal(summary.enabled, false)
@@ -253,13 +253,13 @@ test('TS/TSX 外部插件全链路：依赖闭包、内置/npm 模块、@helm �
   assert.equal(r.hostClassSame, true)
   assert.equal(r.lazyValue, 'lazy-ok')
   assert.equal(r.addTen, 42)
-  assert.equal(r.greet, 'hi-helm')
+  assert.equal(r.greet, 'hi-helmx')
   assert.equal(r.shape, 'circle')
   assert.equal(r.jsonTag, 'json-ok')
   const metaUrl = r.metaUrl as string
   assert.ok(metaUrl.startsWith('file://') && !metaUrl.includes('?'))
   assert.ok(fileURLToPath(metaUrl).endsWith(join('ts-demo', 'index.ts')))
-  assert.equal(r.assetSha, '83877507')
+  assert.equal(r.assetSha, 'be39b0e2')
   assert.equal(globalFlag(demoCounter), 1)
 
   // .tsx manifest 入口
@@ -350,8 +350,8 @@ test('ID 冲突失败后释放 TS 根并支持改 ID 重载，以及 loadExterna
 })
 
 test('TS 根释放、引用计数与 fallback 映射（纯 node 子进程生产保真验证）', { timeout: 60_000 }, async (t) => {
-  const dirPath = useTempDir(t, 'helm-ext-rootrel-')
-  const out = useTempDir(t, 'helm-ext-rootout-')
+  const dirPath = useTempDir(t, 'helmx-ext-rootrel-')
+  const out = useTempDir(t, 'helmx-ext-rootout-')
   writeFileSync(join(dirPath, 'mapped.ts'), 'export const v = 42\n')
   writeFileSync(join(dirPath, 'greet.ts'), 'export const g = 7\n')
   symlinkSync(join(dirPath, 'mapped.ts'), join(dirPath, 'alias.ts'))
@@ -363,7 +363,7 @@ test('TS 根释放、引用计数与 fallback 映射（纯 node 子进程生产�
   const escapeSpec = relative(dirPath, join(out, 'evil.ts')).split(sep).join('/').replace(/evil\.ts$/, 'evil.js')
   writeFileSync(join(dirPath, 'escape.ts'), `import { e } from '${escapeSpec}'\nexport const t = e\n`)
 
-  const providerUrl = import.meta.resolve('@helm/plugin-build')
+  const providerUrl = import.meta.resolve('@helmx/plugin-build')
   const childSrc = `
 const { registerPluginTsRoot } = await import(${JSON.stringify(pathToFileURL(loaderSrc).href)});
 const { createPluginBuildProvider } = await import(${JSON.stringify(providerUrl)});
@@ -383,7 +383,7 @@ console.log('CHILD_OK');
   assert.ok(result.includes('CHILD_OK'))
 
   // 引用计数合并与归零重注册
-  const refDir = useTempDir(t, 'helm-ext-refcnt-')
+  const refDir = useTempDir(t, 'helmx-ext-refcnt-')
   writeFileSync(join(refDir, 'still.ts'), 'export const v = 1\n')
   const transform = createPluginBuildProvider().transformBackendTs
   const r1 = registerPluginTsRoot(refDir, { transform })

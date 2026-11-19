@@ -146,7 +146,7 @@ export function normalizeWorkflowArgs(raw: unknown): unknown {
  * Never stringify-then-replace wholesale -- secrets nested deep must be treated equally.
  * Values outside the boundary-safe set (plain objects/arrays/scalars) are returned as-is.
  *
- * Semantics differ from @helm/protocol's redactJsonValue (the strict version, which rejects
+ * Semantics differ from @helmx/protocol's redactJsonValue (the strict version, which rejects
  * cycles/sparse/non-plain objects and redacts key names): this function targets the engine's
  * already-trusted internal persistent face, does not redact key names, and returns non-plain objects as-is.
  * Named distinctly to avoid misuse.

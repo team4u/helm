@@ -29,7 +29,7 @@ const EXISTING_WORKER = {
 }
 
 test('profiles create --skills: writes allowlist to body; [] disables all skills', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-profiles-skills-')
+  const dir = useTempDir(t, 'helmx-cli-profiles-skills-')
   const hub = await startMockHub({ 'POST /api/profiles': (body) => ({ body }) }, { autoRegisterCleanup: t })
   const env = makeCliEnv(hub.url, dir)
 
@@ -46,7 +46,7 @@ test('profiles create --skills: writes allowlist to body; [] disables all skills
 })
 
 test('profiles update --skills: GET-merges and replaces only skills while keeping nodeId/cwd/runtime/tags', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-profiles-skills-')
+  const dir = useTempDir(t, 'helmx-cli-profiles-skills-')
   const hub = await startMockHub(
     {
       'GET /api/profiles/worker': () => ({ body: { ...EXISTING_WORKER } }),
@@ -74,7 +74,7 @@ test('profiles update --skills: GET-merges and replaces only skills while keepin
 })
 
 test('profiles update --skills "[]": passes empty array through (disables all without dropping key)', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-profiles-skills-')
+  const dir = useTempDir(t, 'helmx-cli-profiles-skills-')
   const hub = await startMockHub(
     {
       'GET /api/profiles/worker': () => ({ body: { ...EXISTING_WORKER } }),
@@ -92,7 +92,7 @@ test('profiles update --skills "[]": passes empty array through (disables all wi
 })
 
 test('profiles update --all-skills: deletes merged skills key to restore all available skills', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-profiles-skills-')
+  const dir = useTempDir(t, 'helmx-cli-profiles-skills-')
   const hub = await startMockHub(
     {
       'GET /api/profiles/worker': () => ({ body: { ...EXISTING_WORKER } }),
@@ -112,7 +112,7 @@ test('profiles update --all-skills: deletes merged skills key to restore all ava
 })
 
 test('--skills and --all-skills mutual exclusion: create/update reject locally with conflicting_flags', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-profiles-skills-')
+  const dir = useTempDir(t, 'helmx-cli-profiles-skills-')
   const hub = await startMockHub({ 'POST /api/profiles': (body) => ({ body }) }, { autoRegisterCleanup: t })
   const env = makeCliEnv(hub.url, dir)
 
@@ -127,7 +127,7 @@ test('--skills and --all-skills mutual exclusion: create/update reject locally w
 })
 
 test('invalid --skills list rejected locally: non-string array / non-array JSON', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-profiles-skills-')
+  const dir = useTempDir(t, 'helmx-cli-profiles-skills-')
   const hub = await startMockHub({}, { autoRegisterCleanup: t })
   const env = makeCliEnv(hub.url, dir)
 
@@ -149,7 +149,7 @@ test('invalid --skills list rejected locally: non-string array / non-array JSON'
 })
 
 test('--input preserves full-replacement semantics; semantic flags override matching fields when combined', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-profiles-skills-')
+  const dir = useTempDir(t, 'helmx-cli-profiles-skills-')
   const hub = await startMockHub({ 'PUT /api/profiles/solo': (body) => ({ body }) }, { autoRegisterCleanup: t })
 
   // --input alone: full replacement, skills passed as-is (omitting skills keeps it undefined)
@@ -190,7 +190,7 @@ test('--input preserves full-replacement semantics; semantic flags override matc
 })
 
 test('--help and --json output: help shows --skills/--all-skills, --json echoes Hub response', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-profiles-skills-')
+  const dir = useTempDir(t, 'helmx-cli-profiles-skills-')
   const hub = await startMockHub({ 'POST /api/profiles': (body) => ({ body }) }, { autoRegisterCleanup: t })
   const env = makeCliEnv(hub.url, dir)
 
@@ -212,7 +212,7 @@ test('--help and --json output: help shows --skills/--all-skills, --json echoes 
 })
 
 test('profiles --restrict-to-cwd: create writes the guardrail; update merges and preserves other bindings', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-profiles-restrict-')
+  const dir = useTempDir(t, 'helmx-cli-profiles-restrict-')
   const hub = await startMockHub(
     {
       'GET /api/profiles/worker': () => ({ body: { ...EXISTING_WORKER } }),

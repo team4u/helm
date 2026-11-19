@@ -1,12 +1,12 @@
 /**
  * Reactive state hooks for theme, background browser notifications and the UI
  * locale. Backing storage and system theme resolution live in
- * theme-preferences.ts; locale normalization lives in @helm/protocol
+ * theme-preferences.ts; locale normalization lives in @helmx/protocol
  * (normalizeLocaleTag).
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import type { HelmLocale, LocalizedText } from '@helm/protocol/browser'
-import { resolveLocalizedText } from '@helm/protocol/browser'
+import type { HelmxLocale, LocalizedText } from '@helmx/protocol/browser'
+import { resolveLocalizedText } from '@helmx/protocol/browser'
 import { requestBrowserNotificationPermission } from './browser-notification.js'
 import {
   applyDocumentLocale,
@@ -29,7 +29,7 @@ export interface UseThemePreferencesResult {
   themePreference: ThemePreference
   quietNotifyEnabled: boolean
   /** Current UI locale (resolved from localePreference; browser-derived default zh-* -> zh-CN, others -> en). */
-  locale: HelmLocale
+  locale: HelmxLocale
   /** Stored UI locale preference ('auto' follows browser language; explicit locale overrides). */
   localePreference: LocalePreference
   /**
@@ -42,7 +42,7 @@ export interface UseThemePreferencesResult {
   setThemePreference: (pref: ThemePreference) => void
   toggleTheme: () => void
   setQuietNotify: (on: boolean) => Promise<void>
-  setLocale: (next: HelmLocale) => void
+  setLocale: (next: HelmxLocale) => void
   setLocalePreference: (next: LocalePreference) => void
 }
 
@@ -55,7 +55,7 @@ export function useThemePreferences(
   // Persisted locale preference wins over the browser-derived default; the
   // state initializer is deliberately lazy so SSR/hydration reads storage once.
   const [localePreference, setLocalePreferenceState] = useState<LocalePreference>(getStoredLocalePreference)
-  const [locale, setLocaleState] = useState<HelmLocale>(() => resolveLocale(getStoredLocalePreference()))
+  const [locale, setLocaleState] = useState<HelmxLocale>(() => resolveLocale(getStoredLocalePreference()))
   // Locale mirror for stable callbacks: kept fresh in a layout effect so a
   // discarded concurrent render never leaks an uncommitted locale, while every
   // post-commit callback (permission requests, timers) reads the live value.
@@ -94,7 +94,7 @@ export function useThemePreferences(
     persistLocalePreference(next)
   }, [])
 
-  const setLocale = useCallback((next: HelmLocale) => setLocalePreference(next), [setLocalePreference])
+  const setLocale = useCallback((next: HelmxLocale) => setLocalePreference(next), [setLocalePreference])
 
   // Keep <html lang> in sync with the effective locale (covers the initial mount too).
   useEffect(() => {

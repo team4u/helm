@@ -1,5 +1,5 @@
 import { join } from 'node:path'
-import { HelmError, assertProfileId, type HelmHostApi } from '@helm/protocol'
+import { HelmxError, assertProfileId, type HelmxHostApi } from '@helmx/protocol'
 import { atomicWriteFile, FileNotFoundError } from '../../src/services/atomic-file.js'
 import { withFileLock } from '../../src/services/file-lock.js'
 import { assertSkillId, ProfileService, SkillService } from '../../src/services/profiles-skills.js'
@@ -8,16 +8,16 @@ function validateId(id: string): void {
   try {
     assertProfileId(id)
   } catch (error) {
-    throw new HelmError('validation_error', error instanceof Error ? error.message : String(error), 400, { profileId: id })
+    throw new HelmxError('validation_error', error instanceof Error ? error.message : String(error), 400, { profileId: id })
   }
 }
 
-/** Align skill id validation boundary (mirrors kernel skillDirectory: invalid id -> HelmError 400). */
+/** Align skill id validation boundary (mirrors kernel skillDirectory: invalid id -> HelmxError 400). */
 function validateSkillId(id: string): void {
   try {
     assertSkillId(id)
   } catch (error) {
-    throw new HelmError('validation_error', `Invalid skill id: ${error instanceof Error ? error.message : String(error)}`, 400, { skillId: id })
+    throw new HelmxError('validation_error', `Invalid skill id: ${error instanceof Error ? error.message : String(error)}`, 400, { skillId: id })
   }
 }
 
@@ -25,7 +25,7 @@ function validateSkillId(id: string): void {
 export function createProfileFileHost(
   dataDir: string,
   profiles = new ProfileService(dataDir),
-): Pick<HelmHostApi, 'profiles' | 'skills' | 'atomicWriteFile' | 'withFileLock'> {
+): Pick<HelmxHostApi, 'profiles' | 'skills' | 'atomicWriteFile' | 'withFileLock'> {
   const skills = new SkillService(dataDir)
   return {
     profiles: {
@@ -40,7 +40,7 @@ export function createProfileFileHost(
           return await profiles.getSystem(id)
         } catch (error) {
           if (error instanceof FileNotFoundError) {
-            throw new HelmError('not_found', error.message, 404)
+            throw new HelmxError('not_found', error.message, 404)
           }
           throw error
         }

@@ -10,7 +10,7 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { HelmError, type ExternalTriggerEnvelope } from '@helm/protocol'
+import { HelmxError, type ExternalTriggerEnvelope } from '@helmx/protocol'
 import { RuntimeTriggerDispatcher } from '../src/runtime/runtime-triggers.js'
 
 interface ConvMeta {
@@ -63,7 +63,7 @@ test('default target TOCTOU: target deleted between resolve and submit triggers 
   const { dispatcher, calls } = makeDispatcher({
     listConvs: () => convs,
     getConversation: (id) => {
-      if (id !== 9) throw new HelmError('not_found', `conversation not found: ${id}`, 404)
+      if (id !== 9) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
       return { id: 9 }
     },
     createConversation: async () => {
@@ -74,7 +74,7 @@ test('default target TOCTOU: target deleted between resolve and submit triggers 
     submitInput: async (id) => {
       if (id === 5) {
         convs = [] // #5 deleted after resolve, before submit
-        throw new HelmError('not_found', 'conversation not found: 5', 404)
+        throw new HelmxError('not_found', 'conversation not found: 5', 404)
       }
       submitted.push(id)
     },
@@ -103,11 +103,11 @@ test('default target still fails after re-resolve: rethrows not_found without un
     },
     submitInput: async () => {
       convs = [] // newly created target deleted before submit in extreme race window
-      throw new HelmError('not_found', 'conversation not found: 9', 404)
+      throw new HelmxError('not_found', 'conversation not found: 9', 404)
     },
   })
   await assert.rejects(dispatcher.dispatchTrigger(envelope()), (err: unknown) => {
-    assert.ok(err instanceof HelmError && err.code === 'not_found')
+    assert.ok(err instanceof HelmxError && err.code === 'not_found')
     return true
   })
 })
@@ -118,16 +118,16 @@ test('explicit target expired by submit time: rethrows not_found without masking
     listConvs: () => [{ id: 5, profileId: 'assistant', updatedAt: 1 }],
     getConversation: () => ({ id: 5 }), // pre-validation (pre-hook) passes
     createConversation: async () => {
-      throw new HelmError('unsupported', 'explicit target path must not create a new conversation', 501)
+      throw new HelmxError('unsupported', 'explicit target path must not create a new conversation', 501)
     },
     submitInput: async (id) => {
       submitted.push(id)
-      throw new HelmError('not_found', `conversation not found: ${id}`, 404)
+      throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
     },
   })
   await assert.rejects(
     dispatcher.dispatchTrigger(envelope({ targetConversationId: 5 })),
-    (err: unknown) => err instanceof HelmError && err.code === 'not_found',
+    (err: unknown) => err instanceof HelmxError && err.code === 'not_found',
   )
   assert.deepEqual(submitted, [5], 'only tries the explicit target once')
   // Busy policy: explicit-target delivery also defaults to steer.

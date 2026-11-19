@@ -1,6 +1,6 @@
 /**
  * builtin:workflow background settlement reports (timeline.renderer precisely
- * taking over helm.input):
+ * taking over helmx.input):
  * - collapsed by default into a 26px single-line receipt sharing the host's
  *   `.trace-row` structure; failed/aborted/corrupted payloads default to
  *   expanded;
@@ -11,8 +11,8 @@
  */
 import { useId, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { TimelineRendererProps } from '@helm/protocol'
-import { CopyButton, MarkdownText, StatusLight, formatCompactTimestamp, usePluginContext, usePluginLocale, usePluginTranslator } from '@helm/plugin-client'
+import type { TimelineRendererProps } from '@helmx/protocol'
+import { CopyButton, MarkdownText, StatusLight, formatCompactTimestamp, usePluginContext, usePluginLocale, usePluginTranslator } from '@helmx/plugin-client'
 import {
   REPORT_INVALID_BADGE,
   REPORT_INVALID_CALLOUT,

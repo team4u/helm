@@ -6,7 +6,7 @@
  * Follows the web Fast Refresh rule: pure functions, constants and data
  * models live here, never mixed into components.
  */
-import type { SkillSummary } from '@helm/protocol/browser'
+import type { SkillSummary } from '@helmx/protocol/browser'
 import { assetsApi } from '../lib/api.js'
 import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 

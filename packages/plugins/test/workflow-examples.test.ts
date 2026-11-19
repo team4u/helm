@@ -22,7 +22,7 @@ import { strict as assert } from 'node:assert'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { describe, it } from 'node:test'
-import type { AgentExecutionInfo } from '@helm/protocol'
+import type { AgentExecutionInfo } from '@helmx/protocol'
 import type { WorkflowActionEntry, WorkflowAgentEntry, WorkflowEntry } from '../src/workflow/engine/progress.js'
 import {
   precheckScriptSyntax,
@@ -198,7 +198,7 @@ const cleanupResult = (input: Record<string, unknown>) => ({
   removed: true,
   worktreeId: input.worktreeId,
   path: '/repo/wt/leaf',
-  branch: 'helm/task',
+  branch: 'helmx/task',
   nodeId: 'local',
   branchDeleted: true,
 })
@@ -357,7 +357,7 @@ const MOD_ARGS = {
   gateCmd: 'pnpm test --filter auth',
 }
 
-const MOD_WT = { id: 'wt-mod', path: '/repo/wt/auth', branch: 'helm/mod-auth' }
+const MOD_WT = { id: 'wt-mod', path: '/repo/wt/auth', branch: 'helmx/mod-auth' }
 
 const TASK_T1 = {
   id: 't1',
@@ -376,8 +376,8 @@ const TASK_T2 = {
 }
 
 const taskAgents = {
-  'task-t1': () => withGate(withWorktree(agentOk('task t1 done'), { id: 'wt-t1', path: '/repo/wt/auth-t1', branch: 'helm/task-t1' }), true),
-  'task-t2': () => withGate(withWorktree(agentOk('task t2 done'), { id: 'wt-t2', path: '/repo/wt/auth-t2', branch: 'helm/task-t2' }), true),
+  'task-t1': () => withGate(withWorktree(agentOk('task t1 done'), { id: 'wt-t1', path: '/repo/wt/auth-t1', branch: 'helmx/task-t1' }), true),
+  'task-t2': () => withGate(withWorktree(agentOk('task t2 done'), { id: 'wt-t2', path: '/repo/wt/auth-t2', branch: 'helmx/task-t2' }), true),
 }
 
 describe('module-dev example', () => {
@@ -391,7 +391,7 @@ describe('module-dev example', () => {
     })
     const result = await runWorkflow({ script: example('module-dev'), args: MOD_ARGS, host })
     assert.equal(result.status, 'completed', result.error)
-    assert.deepEqual(result.value, { moduleName: 'auth', branch: 'helm/mod-auth', worktreeId: 'wt-mod' })
+    assert.deepEqual(result.value, { moduleName: 'auth', branch: 'helmx/mod-auth', worktreeId: 'wt-mod' })
 
     // 子任务 goal：从模块工作树切子级 worktree，深度按任务设置，超时齐备。
     const t1 = agentCalls.find((call) => call.label === 'task-t1')!
@@ -413,16 +413,16 @@ describe('module-dev example', () => {
       assert.equal(merge.input.allowFailure, true)
       assert.equal(merge.input.cwd, MOD_WT.path)
     }
-    assert.ok(merges.some((merge) => String(merge.input.command).includes('"helm/task-t1"')))
-    assert.ok(merges.some((merge) => String(merge.input.command).includes('"helm/task-t2"')))
+    assert.ok(merges.some((merge) => String(merge.input.command).includes('"helmx/task-t1"')))
+    assert.ok(merges.some((merge) => String(merge.input.command).includes('"helmx/task-t2"')))
 
     // 子工作树清理：带 mergedInto=模块分支，无需 force。
     const cleanups = actionCalls.filter((call) => call.actionId === 'builtin:workflow.cleanup_worktree')
     assert.deepEqual(
       cleanups.map((call) => call.input),
       [
-        { worktreeId: 'wt-t1', mergedInto: 'helm/mod-auth', deleteBranch: true },
-        { worktreeId: 'wt-t2', mergedInto: 'helm/mod-auth', deleteBranch: true },
+        { worktreeId: 'wt-t1', mergedInto: 'helmx/mod-auth', deleteBranch: true },
+        { worktreeId: 'wt-t2', mergedInto: 'helmx/mod-auth', deleteBranch: true },
       ],
     )
 
@@ -568,7 +568,7 @@ describe('arch-master example', () => {
     const merge = actionCalls.find(
       (call) => call.actionId === 'env.exec' && String(call.input.command).includes('merge-base --is-ancestor'),
     )!
-    assert.ok(String(merge.input.command).includes('"helm/mod-auth"'))
+    assert.ok(String(merge.input.command).includes('"helmx/mod-auth"'))
     const cleanup = actionCalls.find((call) => call.actionId === 'builtin:workflow.cleanup_worktree')!
     assert.deepEqual(cleanup.input, { worktreeId: 'wt-mod', mergedInto: 'HEAD', deleteBranch: true })
   })

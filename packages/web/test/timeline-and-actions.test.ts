@@ -16,7 +16,7 @@ import type {
   PluginUiContribution,
   SettingsPanelSpec,
   UiActionSpec,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 import { ensureHappyDom } from './helpers/dom-harness.js'
 
 ensureHappyDom()
@@ -42,8 +42,8 @@ const {
   sortByPriorityDescStable,
 } = await import('../src/conversation/timeline-model.js')
 const { makeTestStore } = await import('./helpers/store.js')
-type HelmExternalStoreT = import('../src/lib/helm-store.js').HelmExternalStore
-type HelmStoreActionsT = HelmExternalStoreT['actions']
+type HelmxExternalStoreT = import('../src/lib/helmx-store.js').HelmxExternalStore
+type HelmxStoreActionsT = HelmxExternalStoreT['actions']
 const { HostStoreProviders } = await import('./helpers/host-store.js')
 const { seedPluginClientModule } = await import('../src/lib/plugin-client.js')
 const { pluginsApi } = await import('../src/lib/api.js')
@@ -109,8 +109,8 @@ const entryBadgeAction = (id: string, label: string, extra: Record<string, unkno
 })
 
 /** 在 actions 包上替换具名动作（挂载前替换；调用契约断言需要捕获入参/受控失败）。 */
-function spyAction<K extends keyof HelmStoreActionsT>(store: HelmExternalStoreT, key: K, impl: HelmStoreActionsT[K]): void {
-  ;(store.actions as unknown as Record<K, HelmStoreActionsT[K]>)[key] = impl
+function spyAction<K extends keyof HelmxStoreActionsT>(store: HelmxExternalStoreT, key: K, impl: HelmxStoreActionsT[K]): void {
+  ;(store.actions as unknown as Record<K, HelmxStoreActionsT[K]>)[key] = impl
 }
 
 const headerActionContribution = (spec: Omit<UiActionSpec, 'target'>): PluginUiContribution => ({
@@ -192,7 +192,7 @@ test('matchTimelineRenderer：priority 降序 + kinds/matchMeta 组合裁决', {
     { pluginId: 'high', spec: { id: 'r1', matchMeta: { renderer: 'x' }, priority: 5 } },
   ]
   assert.equal(
-    matchTimelineRenderer(entry('1', 'helm.input', { data: { meta: { renderer: 'x' } } }), renderers)?.pluginId,
+    matchTimelineRenderer(entry('1', 'helmx.input', { data: { meta: { renderer: 'x' } } }), renderers)?.pluginId,
     'high',
   )
   const narrowed = [
@@ -200,10 +200,10 @@ test('matchTimelineRenderer：priority 降序 + kinds/matchMeta 组合裁决', {
     { pluginId: 'high', spec: { id: 'r1', kinds: ['pi.user'], matchMeta: { renderer: 'x' }, priority: 5 } },
   ]
   assert.equal(
-    matchTimelineRenderer(entry('2', 'helm.input', { data: { meta: { renderer: 'x' } } }), narrowed)?.pluginId,
+    matchTimelineRenderer(entry('2', 'helmx.input', { data: { meta: { renderer: 'x' } } }), narrowed)?.pluginId,
     'low',
   )
-  assert.equal(matchTimelineRenderer(entry('3', 'helm.input', { data: { text: '普通' } }), renderers), undefined)
+  assert.equal(matchTimelineRenderer(entry('3', 'helmx.input', { data: { text: '普通' } }), renderers), undefined)
 })
 
 // ---------------------------------------------------------------------------
@@ -211,7 +211,7 @@ test('matchTimelineRenderer：priority 降序 + kinds/matchMeta 组合裁决', {
 // ---------------------------------------------------------------------------
 
 test('timelineEntryActionContextOf：真实 kind + 文本条目附角色，其余无角色', { timeout: 60_000 }, () => {
-  assert.deepEqual(timelineEntryActionContextOf({ id: '1', kind: 'helm.input' }), { kind: 'helm.input', role: 'user' })
+  assert.deepEqual(timelineEntryActionContextOf({ id: '1', kind: 'helmx.input' }), { kind: 'helmx.input', role: 'user' })
   assert.deepEqual(timelineEntryActionContextOf({ id: '1', kind: 'pi.user' }), { kind: 'pi.user', role: 'user' })
   assert.deepEqual(timelineEntryActionContextOf({ id: '1', kind: 'pi.assistant' }), { kind: 'pi.assistant', role: 'assistant' })
   assert.deepEqual(timelineEntryActionContextOf({ id: '9', kind: 'superagent:worker-report' }), { kind: 'superagent:worker-report' })
@@ -246,12 +246,12 @@ test('matchTimelineEntryActions：kinds / roles 过滤正确', { timeout: 60_000
   const actions = [
     { pluginId: 'p1', target: 'timeline:entry', spec: { id: 'e1', label: '仅用户消息', actionId: 'a', roles: ['user'] } },
     { pluginId: 'p2', target: 'timeline:entry', spec: { id: 'e2', label: '仅助手消息', actionId: 'a', roles: ['assistant'] } },
-    { pluginId: 'p3', target: 'timeline:entry', spec: { id: 'e3', label: '仅 helm.input kind', actionId: 'a', kinds: ['helm.input'] } },
+    { pluginId: 'p3', target: 'timeline:entry', spec: { id: 'e3', label: '仅 helmx.input kind', actionId: 'a', kinds: ['helmx.input'] } },
     { pluginId: 'p4', target: 'timeline:entry', spec: { id: 'e4', label: '任意条目', actionId: 'a' } },
     { pluginId: 'p5', target: 'timeline:entry', spec: { id: 'e5', label: 'scope 过滤', actionId: 'a', scope: { tags: ['worker'] } } },
   ] as Array<{ pluginId: string; target: 'timeline:entry'; spec: UiActionSpec }>
 
-  const userMsg = matchTimelineEntryActions(actions, humanConv, { kind: 'helm.input', role: 'user' })
+  const userMsg = matchTimelineEntryActions(actions, humanConv, { kind: 'helmx.input', role: 'user' })
   assert.deepEqual(userMsg.map((a) => a.spec.id), ['e1', 'e3', 'e4'])
   const aiMsg = matchTimelineEntryActions(actions, humanConv, { kind: 'pi.assistant', role: 'assistant' })
   assert.deepEqual(aiMsg.map((a) => a.spec.id), ['e2', 'e4'])
@@ -259,7 +259,7 @@ test('matchTimelineEntryActions：kinds / roles 过滤正确', { timeout: 60_000
   assert.deepEqual(fallbackUser.map((a) => a.spec.id), ['e1', 'e4'])
   const noRole = matchTimelineEntryActions(actions, humanConv, { kind: 'pi.reset' })
   assert.deepEqual(noRole.map((a) => a.spec.id), ['e4'])
-  const scoped = matchTimelineEntryActions(actions, workerConv, { kind: 'helm.input', role: 'user' })
+  const scoped = matchTimelineEntryActions(actions, workerConv, { kind: 'helmx.input', role: 'user' })
   assert.deepEqual(scoped.map((a) => a.spec.id), ['e1', 'e3', 'e4', 'e5'])
   assert.deepEqual(matchTimelineEntryActions(actions, undefined, { kind: 'pi.user' }), [])
 })
@@ -288,8 +288,8 @@ test('isActionOnlyActionSpec：仅 actionId 且无 client', { timeout: 60_000 },
   assert.equal(isActionOnlyActionSpec({ id: 'a', target: 'conversation:header', label: 'x', actionId: 'act', client: { module: 'index.tsx', export: 'C' } }), false)
 })
 
-test('humanItemEntryKind：helm.input 归一化优先，兜底 pi.user', { timeout: 60_000 }, () => {
-  assert.equal(humanItemEntryKind({ kind: 'human', key: 'k', entryId: '1', text: 't', origin: 'human', fallback: false }), 'helm.input')
+test('humanItemEntryKind：helmx.input 归一化优先，兜底 pi.user', { timeout: 60_000 }, () => {
+  assert.equal(humanItemEntryKind({ kind: 'human', key: 'k', entryId: '1', text: 't', origin: 'human', fallback: false }), 'helmx.input')
   assert.equal(humanItemEntryKind({ kind: 'human', key: 'k', entryId: '1', text: 't', origin: 'human', fallback: true }), 'pi.user')
 })
 
@@ -490,7 +490,7 @@ test('PluginMicroAction 声明 client：内联 PluginUiView 渲染组件内容�
   seedPluginClientModule('p', 'card.tsx', { CardAction: () => e('div', null, '面板内容 XYZ') })
   const origFetch = globalThis.fetch
   globalThis.fetch = (async () =>
-    new Response('// seeded cache hit', { status: 200, headers: { 'x-helm-client-hash': 'seeded' } })) as typeof fetch
+    new Response('// seeded cache hit', { status: 200, headers: { 'x-helmx-client-hash': 'seeded' } })) as typeof fetch
   const store = makeTestStore()
   const action = {
     pluginId: 'p',
@@ -535,7 +535,7 @@ test('ConversationTimeline：timeline.entry.action 仅在匹配 kind/role 的消
   ]
   const html = renderTimelineHtml(
     [
-      { id: '1', kind: 'helm.input', data: { text: '帮我检查', origin: 'human' } },
+      { id: '1', kind: 'helmx.input', data: { text: '帮我检查', origin: 'human' } },
       { id: '2', kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: '检查完成' }] }] },
     ],
     contributions,
@@ -611,28 +611,28 @@ test('groupedUi 微插槽分组：surface 正确归组并按 order 排序', { ti
 
 test('人类消息 entry action：读到真实 entry.data（非占位拼合）', { timeout: 60_000 }, () => {
   const html = renderTimelineHtml(
-    [{ id: '5', kind: 'helm.input', data: { text: '帮我检查', origin: 'human', ref: 'REF-HUMAN-5' } }],
+    [{ id: '5', kind: 'helmx.input', data: { text: '帮我检查', origin: 'human', ref: 'REF-HUMAN-5' } }],
     [entryBadgeAction('quote', '引用')],
   )
-  assert.match(html, /5:helm\.input:REF-HUMAN-5/)
+  assert.match(html, /5:helmx\.input:REF-HUMAN-5/)
 })
 
 test('kind 精确过滤：声明 kinds 不含真实 kind 的动作不渲染', { timeout: 60_000 }, () => {
   const entries: ConversationEntry[] = [
-    { id: '5', kind: 'helm.input', data: { text: '帮我检查', origin: 'human', ref: 'R5' } },
+    { id: '5', kind: 'helmx.input', data: { text: '帮我检查', origin: 'human', ref: 'R5' } },
   ]
-  const hit = renderTimelineHtml(entries, [entryBadgeAction('hit', '命中', { kinds: ['helm.input'] })])
-  assert.match(hit, /5:helm\.input:R5/)
+  const hit = renderTimelineHtml(entries, [entryBadgeAction('hit', '命中', { kinds: ['helmx.input'] })])
+  assert.match(hit, /5:helmx\.input:R5/)
   const miss = renderTimelineHtml(entries, [entryBadgeAction('miss', '不命中', { kinds: ['pi.assistant'] })])
   assert.doesNotMatch(miss, /R5/)
   const bareEntries: ConversationEntry[] = [{ id: '6', kind: 'pi.user', model: [{ role: 'user', content: '裸输入' }], data: { ref: 'R6' } }]
   assert.match(renderTimelineHtml(bareEntries, [entryBadgeAction('u', '用户兜底', { kinds: ['pi.user'] })]), /6:pi\.user:R6/)
-  assert.doesNotMatch(renderTimelineHtml(bareEntries, [entryBadgeAction('h', '错 kind', { kinds: ['helm.input'] })]), /R6/)
+  assert.doesNotMatch(renderTimelineHtml(bareEntries, [entryBadgeAction('h', '错 kind', { kinds: ['helmx.input'] })]), /R6/)
 })
 
 test('queued 人类消息（无持久锚点）不渲染 entry action', { timeout: 60_000 }, () => {
   const html = renderTimelineHtml(
-    [{ id: '1', kind: 'helm.input', data: { text: '第一问', origin: 'human' } }],
+    [{ id: '1', kind: 'helmx.input', data: { text: '第一问', origin: 'human' } }],
     [entryBadgeAction('quote', '引用')],
     humanConv,
     {
@@ -645,11 +645,11 @@ test('queued 人类消息（无持久锚点）不渲染 entry action', { timeout
       ],
     },
   )
-  assert.match(html, /1:helm\.input:/)
+  assert.match(html, /1:helmx\.input:/)
   const queuedWrap = html.split('data-entry-id="queued:sub-1"')[1] ?? ''
   const queuedHover = queuedWrap.split('</span></div></div>')[0] ?? ''
   assert.doesNotMatch(queuedHover, /引用/)
-  assert.doesNotMatch(queuedHover, /:helm\.input:/)
+  assert.doesNotMatch(queuedHover, /:helmx\.input:/)
   assert.doesNotMatch(queuedHover, /:queued:/)
   assert.match(html, /Queued · sent after the current turn ends/)
 })
@@ -657,7 +657,7 @@ test('queued 人类消息（无持久锚点）不渲染 entry action', { timeout
 test('assistant 回合 entry action：锚点是带 assistant 正文的真实条目，非 tool-result', { timeout: 60_000 }, () => {
   const html = renderTimelineHtml(
     [
-      { id: '1', kind: 'helm.input', data: { text: '查一下', origin: 'human' } },
+      { id: '1', kind: 'helmx.input', data: { text: '查一下', origin: 'human' } },
       {
         id: '2',
         kind: 'pi.assistant',
@@ -698,7 +698,7 @@ test('live 回合无持久锚点：不渲染 entry action，宿主分叉按钮�
   const working = conv({ id: 11, status: 'working' })
   const html = renderTimelineHtml(
     [
-      { id: '1', kind: 'helm.input', data: { text: '跑起来', origin: 'human' } },
+      { id: '1', kind: 'helmx.input', data: { text: '跑起来', origin: 'human' } },
       {
         id: '2',
         kind: 'pi.assistant',
@@ -709,7 +709,7 @@ test('live 回合无持久锚点：不渲染 entry action，宿主分叉按钮�
     working,
     { conversationId: 11, text: '流式输出中', tools: [{ callId: 'c1', toolName: 'bash', status: 'running' }], updatedAt: 9 },
   )
-  assert.match(html, /1:helm\.input:/)
+  assert.match(html, /1:helmx\.input:/)
   assert.doesNotMatch(html, /引用回复/)
   assert.doesNotMatch(html, /Fork a new conversation from here/)
 })
@@ -718,7 +718,7 @@ test('live 快照合并进已有持久 pi.assistant 回合：busy 期间不渲�
   const working = conv({ id: 11, status: 'working' })
   const html = renderTimelineHtml(
     [
-      { id: '1', kind: 'helm.input', data: { text: '继续', origin: 'human' } },
+      { id: '1', kind: 'helmx.input', data: { text: '继续', origin: 'human' } },
       {
         id: '2',
         kind: 'pi.assistant',
@@ -743,7 +743,7 @@ test('插件 timeline.renderer 自定义条目：entry action 按真实 kind 过
     },
     entryBadgeAction('generic', '卡片操作'),
     entryBadgeAction('kind-limited', '限kind', { kinds: ['superagent:worker-report'] }),
-    entryBadgeAction('kind-miss', '错kind', { kinds: ['helm.input'] }),
+    entryBadgeAction('kind-miss', '错kind', { kinds: ['helmx.input'] }),
     entryBadgeAction('role-limited', '限角色', { roles: ['user'] }),
   ]
   const html = renderTimelineHtml(
@@ -763,7 +763,7 @@ test('action-only entry action 点击：载荷 entryId 为真实 entry.id，kind
       {
         pluginId: 'p',
         surface: 'timeline.entry.action',
-        spec: { target: 'timeline:entry', id: 'pin', label: '置顶该消息', actionId: 'pin_entry', kinds: ['helm.input'] } satisfies UiActionSpec,
+        spec: { target: 'timeline:entry', id: 'pin', label: '置顶该消息', actionId: 'pin_entry', kinds: ['helmx.input'] } satisfies UiActionSpec,
       },
       {
         pluginId: 'p',
@@ -788,7 +788,7 @@ test('action-only entry action 点击：载荷 entryId 为真实 entry.id，kind
           { value: store },
           e(ConversationTimeline, {
             conversation: humanConv,
-            detailEntries: [{ id: '42', kind: 'helm.input', data: { text: '真实锚点', origin: 'human' } }],
+            detailEntries: [{ id: '42', kind: 'helmx.input', data: { text: '真实锚点', origin: 'human' } }],
             onRequestEdit: () => {},
           }),
         ),
@@ -815,15 +815,15 @@ test('action-only entry action 点击：载荷 entryId 为真实 entry.id，kind
 test('rewind 覆盖的人类条目不渲染 entry action（不复活已覆盖锚点）', { timeout: 60_000 }, () => {
   const html = renderTimelineHtml(
     [
-      { id: '1', kind: 'helm.input', data: { text: '旧问题', origin: 'human', ref: 'OLD' } },
+      { id: '1', kind: 'helmx.input', data: { text: '旧问题', origin: 'human', ref: 'OLD' } },
       { id: '2', kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: '旧回答' }] }] },
-      { id: '3', kind: 'helm.rewind', data: { fromEntryId: 1, throughEntryId: 2 } },
-      { id: '4', kind: 'helm.input', data: { text: '新问题', origin: 'human', ref: 'NEW' } },
+      { id: '3', kind: 'helmx.rewind', data: { fromEntryId: 1, throughEntryId: 2 } },
+      { id: '4', kind: 'helmx.input', data: { text: '新问题', origin: 'human', ref: 'NEW' } },
     ],
     [entryBadgeAction('quote', '引用')],
   )
   assert.doesNotMatch(html, /OLD/)
-  assert.match(html, /4:helm\.input:NEW/)
+  assert.match(html, /4:helmx\.input:NEW/)
 })
 
 test('ConversationRowActionsMenu and PluginMicroAction localize copy in zh-CN', { timeout: 60_000 }, async () => {

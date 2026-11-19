@@ -1,5 +1,5 @@
 /**
- * Shared test utilities for kernel tests: delegates to `@helm/test-kit` for temp dirs, polling waits, DTO builders, and in-memory stores.
+ * Shared test utilities for kernel tests: delegates to `@helmx/test-kit` for temp dirs, polling waits, DTO builders, and in-memory stores.
  * Stays in-memory (avoiding direct `node:fs` / `node:child_process` imports) so pure unit tests remain shardable.
  */
 import assert from 'node:assert/strict'
@@ -12,7 +12,7 @@ import {
   makeProfile,
   sleep,
   type Deferred,
-} from '@helm/test-kit'
+} from '@helmx/test-kit'
 import {
   assertRejectsCode,
   cleanupDir,
@@ -21,11 +21,11 @@ import {
   waitFor as kitWaitFor,
   type CleanupRegistrar,
   type WaitForOptions,
-} from '@helm/test-kit/node'
+} from '@helmx/test-kit/node'
 import type { PluginConfigStore, PluginDocStore } from '../src/plugins/index.js'
 
 /** Creates an isolated temporary data directory for each test suite (for real filesystem tests). */
-export async function makeTempDir(prefix = 'helm-services-test-'): Promise<string> {
+export async function makeTempDir(prefix = 'helmx-services-test-'): Promise<string> {
   return kitMakeTempDir(prefix)
 }
 

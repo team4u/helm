@@ -1,19 +1,19 @@
 /**
  * Pure functions for global single-key shortcuts, split-focus routing, desktop
  * sidebar-collapse persistence and command-palette ordering. Zero React / DOM
- * mount side effects; shared by HelmStoreProvider / CommandPaletteModal / Sidebar.
+ * mount side effects; shared by HelmxStoreProvider / CommandPaletteModal / Sidebar.
  */
-import type { ConversationSummary } from '@helm/protocol/browser'
+import type { ConversationSummary } from '@helmx/protocol/browser'
 import { isConversationArchived } from '../conversation/archive-model.js'
 import type { ActiveModal, FocusedPanel, ResolvedTarget } from '../lib/types.js'
 
-export const SIDEBAR_COLLAPSED_STORAGE_KEY = 'helm:sidebar-collapsed'
+export const SIDEBAR_COLLAPSED_STORAGE_KEY = 'helmx:sidebar-collapsed'
 export const ESC_ABORT_WINDOW_MS = 1500
 
-export type HelmShortcutAction = 'toggle-model-picker' | 'toggle-process-groups'
+export type HelmxShortcutAction = 'toggle-model-picker' | 'toggle-process-groups'
 
-export interface HelmShortcutDetail {
-  action: HelmShortcutAction
+export interface HelmxShortcutDetail {
+  action: HelmxShortcutAction
   panel: FocusedPanel
 }
 
@@ -22,9 +22,9 @@ const OVERLAY_SELECTOR = [
   '[role="alertdialog"]',
   '[role="menu"]',
   '[role="listbox"]',
-  '.helm-popover-content',
-  '.helm-dropdown-content',
-  '.helm-select-popover',
+  '.helmx-popover-content',
+  '.helmx-dropdown-content',
+  '.helmx-select-popover',
   '.pane-more-popover',
   '.conversation-outline-popover',
   '.composer-popover',
@@ -32,7 +32,7 @@ const OVERLAY_SELECTOR = [
 ].join(', ')
 
 const DIALOG_SELECTOR = '[role="dialog"], [role="alertdialog"]'
-const NON_WORKBENCH_DIALOG_SELECTOR = '[role="alertdialog"], [role="dialog"]:not(.helm-workbench)'
+const NON_WORKBENCH_DIALOG_SELECTOR = '[role="alertdialog"], [role="dialog"]:not(.helmx-workbench)'
 const NON_MODEL_PICKER_DIALOG_SELECTOR = '[role="alertdialog"], [role="dialog"]:not(.composer-model-popover)'
 
 export function getStoredSidebarCollapsed(): boolean {

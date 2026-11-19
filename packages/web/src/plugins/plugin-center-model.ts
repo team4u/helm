@@ -4,8 +4,8 @@
  * 提供多维检索（名称/ID/工具/动作）、状态筛选及指标统计。
  * 遵循前端规范：纯属性驱动，零 ID 硬编码猜测。
  */
-import type { HelmLocale, PluginSummary } from '@helm/protocol/browser'
-import { resolveLocalizedText } from '@helm/protocol/browser'
+import type { HelmxLocale, PluginSummary } from '@helmx/protocol/browser'
+import { resolveLocalizedText } from '@helmx/protocol/browser'
 import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 
 export type PluginStatusFilter = 'all' | 'enabled' | 'disabled'
@@ -56,7 +56,7 @@ export function isPluginFailed(plugin: PluginSummary): boolean {
 export function filterPlugins(
   plugins: PluginSummary[],
   filter: PluginFilterState,
-  locale: HelmLocale,
+  locale: HelmxLocale,
 ): PluginSummary[] {
   if (!Array.isArray(plugins)) return []
   const query = filter.query?.trim().toLowerCase() ?? ''

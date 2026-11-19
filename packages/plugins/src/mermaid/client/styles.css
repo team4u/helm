@@ -1,5 +1,5 @@
 /*
- * builtin:mermaid plugin styles (compiled into the preserved __helmClientCss export; the host manages injection and reclamation).
+ * builtin:mermaid plugin styles (compiled into the preserved __helmxClientCss export; the host manages injection and reclamation).
  * Reuses host design tokens and generic modal classes (.modal/.modal-fullscreen, etc.); keeps only Mermaid-diagram-specific rules.
  */
 

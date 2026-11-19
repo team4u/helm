@@ -4,9 +4,9 @@ import * as React from 'react'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
-import type { ConversationSummary } from '@helm/protocol'
+import type { ConversationSummary } from '@helmx/protocol'
 import type { ActiveModal } from '../src/lib/types.js'
-import type { HelmExternalStore } from '../src/lib/helm-store.js'
+import type { HelmxExternalStore } from '../src/lib/helmx-store.js'
 import { setStoredToken } from '../src/lib/api.js'
 
 GlobalRegistrator.register()
@@ -94,7 +94,7 @@ function mount(element: React.ReactElement): { host: HTMLElement; root: Root; un
 }
 
 /** 记录真实 setActiveModal 调用序列（委托真实动作）。 */
-function spyActiveModal(store: HelmExternalStore, opened: ActiveModal[]): void {
+function spyActiveModal(store: HelmxExternalStore, opened: ActiveModal[]): void {
   const real = store.actions.setActiveModal
   ;(store.actions as unknown as { setActiveModal: (modal: ActiveModal) => void }).setActiveModal = (modal) => {
     opened.push(modal)

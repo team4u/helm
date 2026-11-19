@@ -6,7 +6,7 @@
  */
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import { safeResultText } from '@helm/protocol'
+import { safeResultText } from '@helmx/protocol'
 
 describe('safeResultText', () => {
   it('strings pass through redaction as-is; undefined becomes the empty string', { timeout: 60_000 }, () => {

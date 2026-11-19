@@ -46,7 +46,7 @@ export function formatDiagnosticError(error: unknown): string {
 }
 
 export const defaultDiagnosticSink: KernelDiagnosticSink = (event) => {
-  const prefix = `[helm] [${event.source}]`
+  const prefix = `[helmx] [${event.source}]`
   const conv = event.conversationId !== undefined ? ` (conversation ${event.conversationId})` : ''
   if (event.error !== undefined) {
     console.error(`${prefix}${conv} ${event.message}:`, event.error)

@@ -1,6 +1,6 @@
 /**
- * Atomic file writes: the single shared implementation for `@helm/kernel`, `@helm/node`, and
- * `@helm/plugin-build` (formerly three private copies with drifting semantics).
+ * Atomic file writes: the single shared implementation for `@helmx/kernel`, `@helmx/node`, and
+ * `@helmx/plugin-build` (formerly three private copies with drifting semantics).
  *
  * Unified semantics — the strongest defense of every legacy implementation:
  * - sibling temp file `.<uuid>.tmp` in the target directory (same filesystem => rename is atomic,

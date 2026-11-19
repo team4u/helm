@@ -12,10 +12,10 @@
  *   （防瞬时探针缺失把危险动作去重标记清掉造成重放）；活跃目标绝不淘汰。
  */
 
-import { HelmError, type HelmPluginContext, type PluginDocHandle } from '@helm/protocol'
+import { HelmxError, type HelmxPluginContext, type PluginDocHandle } from '@helmx/protocol'
 import type { WatchdogProbe } from '../diagnostics.js'
 import { parseTargetKey, targetKey, type WatchdogNotify } from './watchdog-core.js'
-import { isJsonObject } from '@helm/protocol'
+import { isJsonObject } from '@helmx/protocol'
 
 /** 去重文档允许的动作类别（私有 Doc 只信本模块写出的形状）。 */
 const DEDUP_ACTIONS: ReadonlySet<string> = new Set(['notify', 'wake', 'abort', 'bridge'])
@@ -78,8 +78,8 @@ function sanitizeDedupDoc(raw: unknown): WatchdogDedupDoc {
   return { version: 1, fired }
 }
 
-function corruptDedupDoc(detail: string): HelmError {
-  return new HelmError(
+function corruptDedupDoc(detail: string): HelmxError {
+  return new HelmxError(
     'superagent_doc_corrupt',
     `Watchdog 去重文档损坏（${detail}）——拒绝继续巡检以防已处理动作重放；请人工核查插件 doc watchdog-dedup`,
     500,
@@ -110,7 +110,7 @@ export class WatchdogDedupStore {
 
   constructor(
     private readonly doc: PluginDocHandle<WatchdogDedupDoc>,
-    private readonly ctx: HelmPluginContext,
+    private readonly ctx: HelmxPluginContext,
     private readonly deps: WatchdogDedupStoreDeps,
   ) {}
 
@@ -184,7 +184,7 @@ export class WatchdogDedupStore {
         try {
           this.ctx.host.getConversation(id)
         } catch (err) {
-          if (err instanceof HelmError && err.code === 'not_found') {
+          if (err instanceof HelmxError && err.code === 'not_found') {
             delete doc.fired[key]
             mutated = true
           }

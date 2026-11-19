@@ -2,8 +2,8 @@
  * Integration tests for graceful Hub restart retention and tool replay recovery.
  *
  * Core invariants covered:
- * 1. openHelmDatabase shared connection proxy: storage.close() does not close the underlying db early
- *    while HelmStore shares it; initialization catch closes the db cleanly to avoid FD leaks;
+ * 1. openHelmxDatabase shared connection proxy: storage.close() does not close the underlying db early
+ *    while HelmxStore shares it; initialization catch closes the db cleanly to avoid FD leaks;
  * 2. KernelRuntime.close() during human conversation streaming generation shuts down gracefully:
  *    harness.close() runs before pluginHost/store/database, returning GenerationTask to pending
  *    (restarts === undefined, never forcibly aborted by closeAborts); on restart, generation resumes
@@ -32,9 +32,9 @@ import { createModels } from '@earendil-works/pi-ai/models'
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { TranscriptContext } from '@earendil-works/pi-ai'
 import { Harness, createRegistry } from '@earendil-works/pi-durable'
-import type { HelmEventFrame } from '@helm/protocol'
+import type { HelmxEventFrame } from '@helmx/protocol'
 import { KernelRuntime } from '../src/runtime/index.js'
-import { openHelmDatabase } from '../src/runtime/sqlite.js'
+import { openHelmxDatabase } from '../src/runtime/sqlite.js'
 
 const require = createRequire(import.meta.url)
 const KERNEL_DIR = new URL('../', import.meta.url).pathname
@@ -53,7 +53,7 @@ function createFaux(opts?: Parameters<typeof fauxProvider>[0]) {
 async function inspectHarnessTasks(dataDir: string): Promise<
   Array<{ kind: string; conversationId: number; status: string; abortRequested: boolean; restarts: number | undefined }>
 > {
-  const db = await openHelmDatabase(dataDir)
+  const db = await openHelmxDatabase(dataDir)
   try {
     const probe = await Harness.open(
       db.storage,
@@ -107,7 +107,7 @@ async function runSeederUntilSigkill(
     env: {
       PATH: process.env.PATH ?? '',
       HOME: seedDir,
-      HELM_DATA_DIR: dataDir,
+      HELMX_DATA_DIR: dataDir,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
@@ -155,33 +155,33 @@ async function runSeederUntilSigkill(
   }
 }
 
-test('openHelmDatabase: storage.close() preserves shared db; init failure closes db in catch to avoid FD leaks', { timeout: 60_000 }, async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), 'helm-sqlite-proxy-'))
+test('openHelmxDatabase: storage.close() preserves shared db; init failure closes db in catch to avoid FD leaks', { timeout: 60_000 }, async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'helmx-sqlite-proxy-'))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
 
-  const db = await openHelmDatabase(dir)
+  const db = await openHelmxDatabase(dir)
   await db.storage.close(BACKGROUND_CONTEXT)
   const rows = await db.db.all<{ ok: number }>('SELECT 1 AS ok')
   assert.equal(rows.length, 1)
   assert.equal(rows[0]?.ok, 1, 'underlying db remains readable and writable after storage.close() until database.close()')
   await db.close()
 
-  // Seed partial broken schema: openNodeSqliteDatabase succeeds, then HELM_SCHEMA index creation on helm_artifacts(conversation_id) fails.
-  const failDir = mkdtempSync(join(tmpdir(), 'helm-sqlite-fail-'))
+  // Seed partial broken schema: openNodeSqliteDatabase succeeds, then HELMX_SCHEMA index creation on helmx_artifacts(conversation_id) fails.
+  const failDir = mkdtempSync(join(tmpdir(), 'helmx-sqlite-fail-'))
   t.after(() => rmSync(failDir, { recursive: true, force: true }))
   const seeded = await openNodeSqliteDatabase(join(failDir, 'state.sqlite'))
-  await seeded.exec('CREATE TABLE helm_artifacts (id TEXT PRIMARY KEY);')
+  await seeded.exec('CREATE TABLE helmx_artifacts (id TEXT PRIMARY KEY);')
   await seeded.close()
 
-  await assert.rejects(() => openHelmDatabase(failDir))
+  await assert.rejects(() => openHelmxDatabase(failDir))
   // If catch failed to close db, removing and reopening at the same path would fail with stale FD/lock; verify clean reopen.
   rmSync(join(failDir, 'state.sqlite'), { force: true })
-  const recovered = await openHelmDatabase(failDir)
+  const recovered = await openHelmxDatabase(failDir)
   await recovered.close()
 })
 
 test('runtime.close() during streaming preserves continuity: GenerationTask returns to pending without restarts, resumes automatically, and dispatches runtime.started in order', { timeout: 60_000 }, async (t) => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-graceful-gen-'))
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-graceful-gen-'))
   t.after(() => rmSync(dataDir, { recursive: true, force: true }))
 
   const { models: models1, faux: faux1 } = createFaux({ tokensPerSecond: 2, tokenSize: { min: 1, max: 1 } })
@@ -196,7 +196,7 @@ test('runtime.close() during streaming preserves continuity: GenerationTask retu
 
   const lifecycleOrder: string[] = []
   const leakedToEvents: string[] = []
-  const unsubscribe = runtime1.events.subscribe((frame: HelmEventFrame) => {
+  const unsubscribe = runtime1.events.subscribe((frame: HelmxEventFrame) => {
     const ev = frame.event as { type?: string }
     if (ev.type === 'runtime.started') leakedToEvents.push(ev.type)
   })
@@ -261,7 +261,7 @@ test('runtime.close() during streaming preserves continuity: GenerationTask retu
 })
 
 test('replay: safe read-only tools read and read_artifact automatically replay to finish turn after runtime.close()', { timeout: 60_000 }, async (t) => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-safe-replay-close-'))
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-safe-replay-close-'))
   t.after(() => rmSync(dataDir, { recursive: true, force: true }))
   writeFileSync(join(dataDir, 'note.txt'), 'READ_REPLAY_OK_CONTENT\n', 'utf8')
 
@@ -381,8 +381,8 @@ test('replay: safe read-only tools read and read_artifact automatically replay t
 
 test('real SIGKILL crash: read replays automatically and succeeds; bash never replays and settles as interrupted for model recovery', { timeout: 60_000 }, async (t) => {
   // ---- A) read replays automatically after SIGKILL crash in child process ----
-  const readDir = mkdtempSync(join(tmpdir(), 'helm-sigkill-read-'))
-  const readSeedDir = mkdtempSync(join(tmpdir(), 'helm-sigkill-read-seed-'))
+  const readDir = mkdtempSync(join(tmpdir(), 'helmx-sigkill-read-'))
+  const readSeedDir = mkdtempSync(join(tmpdir(), 'helmx-sigkill-read-seed-'))
   t.after(() => {
     rmSync(readSeedDir, { recursive: true, force: true })
     rmSync(readDir, { recursive: true, force: true })
@@ -395,7 +395,7 @@ test('real SIGKILL crash: read replays automatically and succeeds; bash never re
 import { KernelRuntime } from ${JSON.stringify(KERNEL_RUNTIME_SRC)}
 import { createModels } from ${JSON.stringify(PI_AI_MODELS_URL)}
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from ${JSON.stringify(PI_AI_FAUX_URL)}
-const dataDir = process.env.HELM_DATA_DIR
+const dataDir = process.env.HELMX_DATA_DIR
 const faux = fauxProvider()
 const models = createModels()
 models.setProvider(faux.provider)
@@ -442,8 +442,8 @@ await new Promise(() => {})
   }
 
   // ---- B) bash never replays after SIGKILL crash in child process and converges as interrupted ----
-  const bashDir = mkdtempSync(join(tmpdir(), 'helm-sigkill-bash-'))
-  const bashSeedDir = mkdtempSync(join(tmpdir(), 'helm-sigkill-bash-seed-'))
+  const bashDir = mkdtempSync(join(tmpdir(), 'helmx-sigkill-bash-'))
+  const bashSeedDir = mkdtempSync(join(tmpdir(), 'helmx-sigkill-bash-seed-'))
   t.after(() => {
     rmSync(bashSeedDir, { recursive: true, force: true })
     rmSync(bashDir, { recursive: true, force: true })
@@ -456,7 +456,7 @@ await new Promise(() => {})
 import { KernelRuntime } from ${JSON.stringify(KERNEL_RUNTIME_SRC)}
 import { createModels } from ${JSON.stringify(PI_AI_MODELS_URL)}
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from ${JSON.stringify(PI_AI_FAUX_URL)}
-const dataDir = process.env.HELM_DATA_DIR
+const dataDir = process.env.HELMX_DATA_DIR
 const faux = fauxProvider()
 const models = createModels()
 models.setProvider(faux.provider)

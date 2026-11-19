@@ -1,7 +1,7 @@
 /**
  * Hub health probing over the kernel's public `GET /api/auth/status` endpoint (no token needed;
  * any 200 response means the HTTP layer is serving). This is auxiliary-only in the launcher: the
- * readiness gate is the candidate's own `Helm Hub: ` listen line (process.ts); this probe backs
+ * readiness gate is the candidate's own `Helmx Hub: ` listen line (process.ts); this probe backs
  * identity confirmation before signalling a recorded pid and the read-only `status` snapshot.
  */
 import { DEFAULTS } from './layout.js';

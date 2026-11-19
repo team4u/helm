@@ -1,6 +1,6 @@
 /**
  * 插件 client 模块样式生命周期测试：
- * - 编译产物仅携带样式文本导出（__helmClientCss），模块求值绝不写 DOM；
+ * - 编译产物仅携带样式文本导出（__helmxClientCss），模块求值绝不写 DOM；
  *   样式注入/更新/回收全部由 loader 在有效性与 entry 身份校验后统一完成。
  * - node 测试将 Blob URL 转为独一 data URL（模块真实求值）；确定性 gate（模块顶层
  *   await）暂停 import，验证停用/reset 后迟到完成显式失效且零残留、不碰新 epoch 样式。
@@ -25,7 +25,7 @@ GlobalRegistrator.register()
 const originalFetch = globalThis.fetch
 const originalCreateObjectURL = URL.createObjectURL
 const originalRevokeObjectURL = URL.revokeObjectURL
-const CSS_PLUGIN_SELECTOR = 'style[data-helm-plugin-css-plugin]'
+const CSS_PLUGIN_SELECTOR = 'style[data-helmx-plugin-css-plugin]'
 
 afterEach(() => {
   globalThis.fetch = originalFetch
@@ -42,7 +42,7 @@ let nextHash = ''
 let objectUrlCalls = 0
 
 function installDataUrlModuleServing(): void {
-  globalThis.fetch = async () => new Response(nextCode, { headers: { 'x-helm-client-hash': nextHash } })
+  globalThis.fetch = async () => new Response(nextCode, { headers: { 'x-helmx-client-hash': nextHash } })
   URL.createObjectURL = (() => {
     objectUrlCalls++
     const url = nextDataUrl
@@ -56,31 +56,31 @@ function installDataUrlModuleServing(): void {
 function serveModule(code: string, hash: string): void {
   nextHash = hash
   nextCode = code
-  nextDataUrl = `data:text/javascript;charset=utf-8,${encodeURIComponent(`/*helm-css-${++moduleSeq}*/\n${code}`)}`
+  nextDataUrl = `data:text/javascript;charset=utf-8,${encodeURIComponent(`/*helmx-css-${++moduleSeq}*/\n${code}`)}`
 }
 
-const cssExport = (css: string): string => `export const __helmClientCss = ${JSON.stringify(css)}\n`
+const cssExport = (css: string): string => `export const __helmxClientCss = ${JSON.stringify(css)}\n`
 const PANEL_EXPORT = 'export function Panel() { return "panel" }\n'
 /** 顶层 await gate：模块求值暂停，直到测试显式放行（模拟 import 在途的确定窗口）；必须是纯 JS（data URL 不经转译）。 */
-const GATED = 'await new Promise((resolve) => { globalThis.__helmCssGate = resolve })\n'
+const GATED = 'await new Promise((resolve) => { globalThis.__helmxCssGate = resolve })\n'
 
-const gateSlot = globalThis as unknown as { __helmCssGate?: () => void }
+const gateSlot = globalThis as unknown as { __helmxCssGate?: () => void }
 
 async function waitForGate(timeoutMs = 5000): Promise<() => void> {
   const deadline = Date.now() + timeoutMs
-  while (gateSlot.__helmCssGate === undefined) {
+  while (gateSlot.__helmxCssGate === undefined) {
     if (Date.now() > deadline) throw new Error('等待模块求值 gate 超时')
     await new Promise((resolve) => setTimeout(resolve, 10))
   }
-  const resume = gateSlot.__helmCssGate
-  delete gateSlot.__helmCssGate
+  const resume = gateSlot.__helmxCssGate
+  delete gateSlot.__helmxCssGate
   return resume
 }
 
 const styleKey = (pluginId: string, moduleRef: string): string => `${pluginId}::${moduleRef}`
 
 function pluginStyle(pluginId: string, moduleRef: string): HTMLStyleElement | null {
-  return document.querySelector(`style[data-helm-plugin-css="${styleKey(pluginId, moduleRef)}"]`)
+  return document.querySelector(`style[data-helmx-plugin-css="${styleKey(pluginId, moduleRef)}"]`)
 }
 
 function allPluginStyles(): NodeListOf<HTMLStyleElement> {
@@ -100,12 +100,12 @@ test('样式装载成功：单入口单 style 节点，属性齐全，模块命�
   serveModule(`${cssExport('.a { color: red }')}${PANEL_EXPORT}`, 'h1')
   const loaded = await loadPluginClientModule('p', 'index.tsx')
   assert.equal(loaded.contentHash, 'h1')
-  assert.equal(loaded.module.__helmClientCss, '.a { color: red }')
+  assert.equal(loaded.module.__helmxClientCss, '.a { color: red }')
   assert.equal(typeof loaded.module.Panel, 'function')
   const style = pluginStyle('p', 'index.tsx')
   assert.ok(style instanceof HTMLStyleElement, '模块装载成功后必须注入样式节点')
-  assert.equal(style.getAttribute('data-helm-plugin-css-plugin'), 'p')
-  assert.equal(style.getAttribute('data-helm-plugin-css-hash'), 'h1')
+  assert.equal(style.getAttribute('data-helmx-plugin-css-plugin'), 'p')
+  assert.equal(style.getAttribute('data-helmx-plugin-css-hash'), 'h1')
   assert.equal(style.textContent, '.a { color: red }')
   assert.ok(style.isConnected && document.head.contains(style), '样式节点应挂载在 head')
   // resolved 缓存发布不晚于样式装载：同步命中时样式必已在页面上
@@ -145,7 +145,7 @@ test('同入口换 hash 原位更新；无样式导出与空字符串均移除�
   assert.ok(v2 === v1, '同入口更新复用同一节点')
   assert.ok(v2 !== null)
   assert.equal(v2.textContent, '.v2 { color: blue }')
-  assert.equal(v2.getAttribute('data-helm-plugin-css-hash'), 'h2')
+  assert.equal(v2.getAttribute('data-helmx-plugin-css-hash'), 'h2')
 
   serveModule(PANEL_EXPORT, 'h3')
   await loadPluginClientModule('p', 'index.tsx')
@@ -216,7 +216,7 @@ test('旧 epoch 在途 import 完成不得改写或重建新 epoch 已装载的�
   await assertInvalidated(stale)
   assert.ok(pluginStyle('p', 'index.tsx') === fresh, '旧 epoch 完成不得拆除新 epoch 的样式节点')
   assert.equal(fresh?.textContent, '.new { color: blue }', '旧 epoch 完成不得改写新 epoch 的样式文本')
-  assert.equal(fresh?.getAttribute('data-helm-plugin-css-hash'), 'h2')
+  assert.equal(fresh?.getAttribute('data-helmx-plugin-css-hash'), 'h2')
   assert.equal(allPluginStyles().length, 1)
 
   // 场景二：停用已回收样式后，同 hash 旧 import 迟到完成不得重新创建样式
@@ -242,13 +242,13 @@ test('import 抛错不装样式；同 hash 修复后可重试并装载', { timeo
 
   serveModule(`${cssExport('.fixed { color: green }')}${PANEL_EXPORT}`, 'same')
   const retried = await loadPluginClientModule('p', 'index.tsx')
-  assert.equal(retried.module.__helmClientCss, '.fixed { color: green }')
+  assert.equal(retried.module.__helmxClientCss, '.fixed { color: green }')
   assert.equal(pluginStyle('p', 'index.tsx')?.textContent, '.fixed { color: green }', '同 hash 重试成功后正常装载')
 })
 
 test('保留导出非字符串属非法契约：显式报错、不装样式、缓存可重试', { timeout: 60_000 }, async () => {
   installDataUrlModuleServing()
-  serveModule(`export const __helmClientCss = 42\n${PANEL_EXPORT}`, 'h1')
+  serveModule(`export const __helmxClientCss = 42\n${PANEL_EXPORT}`, 'h1')
   await assert.rejects(
     loadPluginClientModule('p', 'index.tsx'),
     (err: unknown) =>
@@ -264,21 +264,21 @@ test('保留导出非字符串属非法契约：显式报错、不装样式、�
 })
 
 test('requireClientExport 的可用导出清单隐藏保留 CSS 字段', { timeout: 60_000 }, () => {
-  const module = { Panel() {}, __helmClientCss: '.a { color: red }' }
+  const module = { Panel() {}, __helmxClientCss: '.a { color: red }' }
   assert.equal(requireClientExport('p', 'index.tsx', 'Panel', module), module.Panel)
   assert.throws(
     () => requireClientExport('p', 'index.tsx', 'Missing', module),
-    (err: unknown) => err instanceof PluginClientError && err.message.includes('Panel') && !err.message.includes('__helmClientCss'),
+    (err: unknown) => err instanceof PluginClientError && err.message.includes('Panel') && !err.message.includes('__helmxClientCss'),
   )
 })
 
 test('seedPluginClientModule 遵循同一样式契约：装载、按新种子更新、非法类型显式报错', { timeout: 60_000 }, () => {
   const panel = () => null
-  seedPluginClientModule('p', 'index.tsx', { Panel: panel, __helmClientCss: '.seed1 { color: red }' })
+  seedPluginClientModule('p', 'index.tsx', { Panel: panel, __helmxClientCss: '.seed1 { color: red }' })
   assert.equal(pluginStyle('p', 'index.tsx')?.textContent, '.seed1 { color: red }')
-  assert.equal(pluginStyle('p', 'index.tsx')?.getAttribute('data-helm-plugin-css-hash'), 'seeded')
+  assert.equal(pluginStyle('p', 'index.tsx')?.getAttribute('data-helmx-plugin-css-hash'), 'seeded')
   const node = pluginStyle('p', 'index.tsx')
-  seedPluginClientModule('p', 'index.tsx', { Panel: panel, __helmClientCss: '.reseeded { color: green }' })
+  seedPluginClientModule('p', 'index.tsx', { Panel: panel, __helmxClientCss: '.reseeded { color: green }' })
   assert.ok(pluginStyle('p', 'index.tsx') === node, '默认 seeded hash 相同也应按新命名空间原位更新')
   assert.equal(node?.textContent, '.reseeded { color: green }')
 
@@ -286,11 +286,11 @@ test('seedPluginClientModule 遵循同一样式契约：装载、按新种子更
   seedPluginClientModule('p', 'index.tsx', { Panel: panel }, 'seed2')
   assert.ok(pluginStyle('p', 'index.tsx') === null)
 
-  seedPluginClientModule('p', 'index.tsx', { Panel: panel, __helmClientCss: '.seed3 { color: blue }' }, 'seed3')
+  seedPluginClientModule('p', 'index.tsx', { Panel: panel, __helmxClientCss: '.seed3 { color: blue }' }, 'seed3')
   assert.equal(pluginStyle('p', 'index.tsx')?.textContent, '.seed3 { color: blue }')
 
   assert.throws(
-    () => seedPluginClientModule('p', 'other.tsx', { Panel: panel, __helmClientCss: [] }),
+    () => seedPluginClientModule('p', 'other.tsx', { Panel: panel, __helmxClientCss: [] }),
     (err: unknown) => err instanceof PluginClientError && err.code === 'client_module_css_invalid' && err.message.includes('object'),
   )
   assert.equal(getCachedClientComponent('p', 'other.tsx', 'Panel'), undefined, '非法 seed 不得写入缓存')
@@ -304,10 +304,10 @@ test('SSR 无 document：合法跳过样式注入且不报错，缓存照常发�
     delete (globalThis as { document?: Document }).document
     serveModule(`${cssExport('.ssr { color: red }')}${PANEL_EXPORT}`, 'h1')
     const loaded = await loadPluginClientModule('p', 'index.tsx')
-    assert.equal(loaded.module.__helmClientCss, '.ssr { color: red }')
+    assert.equal(loaded.module.__helmxClientCss, '.ssr { color: red }')
     assert.equal(getCachedClientComponent('p', 'index.tsx', 'Panel'), loaded.module.Panel, 'SSR 下 resolved 照常发布')
-    seedPluginClientModule('q', 'index.tsx', { Panel: () => null, __helmClientCss: '.q { color: red }' })
-    serveModule(`export const __helmClientCss = 42\n${PANEL_EXPORT}`, 'invalid-ssr')
+    seedPluginClientModule('q', 'index.tsx', { Panel: () => null, __helmxClientCss: '.q { color: red }' })
+    serveModule(`export const __helmxClientCss = 42\n${PANEL_EXPORT}`, 'invalid-ssr')
     await assert.rejects(
       loadPluginClientModule('bad-ssr', 'index.tsx'),
       (error: unknown) => error instanceof PluginClientError && error.code === 'client_module_css_invalid',
@@ -315,7 +315,7 @@ test('SSR 无 document：合法跳过样式注入且不报错，缓存照常发�
     )
     assert.equal(getCachedClientComponent('bad-ssr', 'index.tsx', 'Panel'), undefined)
     assert.throws(
-      () => seedPluginClientModule('bad-seed', 'index.tsx', { Panel: () => null, __helmClientCss: 42 }),
+      () => seedPluginClientModule('bad-seed', 'index.tsx', { Panel: () => null, __helmxClientCss: 42 }),
       (error: unknown) => error instanceof PluginClientError && error.code === 'client_module_css_invalid',
     )
   } finally {

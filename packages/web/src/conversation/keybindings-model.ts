@@ -3,8 +3,8 @@
  * / standby pane (single-key muscle memory, zero multi-key aliases).
  *
  * Strictly one function per shortcut:
- * - Ctrl+L: dispatched globally through the host HelmStoreProvider as a
- *   helm:shortcut (toggle-model-picker) event; matches data-helm-panel and
+ * - Ctrl+L: dispatched globally through the host HelmxStoreProvider as a
+ *   helmx:shortcut (toggle-model-picker) event; matches data-helmx-panel and
  *   toggles the corresponding panel's ModelPicker;
  * - Shift+Tab: preventDefault() immediately and cycle the thinking level (no
  *   Ctrl+T alias);
@@ -21,17 +21,17 @@
  * hook (no components), honoring the .tsx Fast Refresh rule.
  */
 import { useEffect, useRef } from 'react'
-import type { QueuedConversationInput } from '@helm/protocol/browser'
+import type { QueuedConversationInput } from '@helmx/protocol/browser'
 
-export type HelmPanel = 'primary' | 'split'
+export type HelmxPanel = 'primary' | 'split'
 
-export const HELM_SHORTCUT_EVENT = 'helm:shortcut' as const
+export const HELMX_SHORTCUT_EVENT = 'helmx:shortcut' as const
 
-export type HelmShortcutAction = 'toggle-model-picker' | 'toggle-process-groups'
+export type HelmxShortcutAction = 'toggle-model-picker' | 'toggle-process-groups'
 
-export interface HelmShortcutEventDetail {
-  action: HelmShortcutAction | string
-  panel: HelmPanel
+export interface HelmxShortcutEventDetail {
+  action: HelmxShortcutAction | string
+  panel: HelmxPanel
 }
 
 /** Display labels for the one-shortcut-per-function map (for desktop .kbd-hint
@@ -162,43 +162,43 @@ export function stepActiveIndex(current: number, length: number, delta: 1 | -1):
   return (current + delta + length) % length
 }
 
-/** Read the owning panel from a DOM ancestor `[data-helm-panel]`, falling back
+/** Read the owning panel from a DOM ancestor `[data-helmx-panel]`, falling back
  * to `fallback` (default `'primary'`). */
 export function resolveElementPanel(
   el: Element | null | undefined,
-  fallback: HelmPanel = 'primary',
-): HelmPanel {
-  const attr = el?.closest?.('[data-helm-panel]')?.getAttribute('data-helm-panel')
+  fallback: HelmxPanel = 'primary',
+): HelmxPanel {
+  const attr = el?.closest?.('[data-helmx-panel]')?.getAttribute('data-helmx-panel')
   if (attr === 'primary' || attr === 'split') return attr
   return fallback
 }
 
-/** Whether the current component should answer a `helm:shortcut` event for the
+/** Whether the current component should answer a `helmx:shortcut` event for the
  * target panel (a child-conversation drawer must not mis-answer main-panel
  * shortcuts). */
 export function isShortcutPanelMatch(
   el: Element | null | undefined,
   targetPanel: unknown,
-  fallback: HelmPanel = 'primary',
+  fallback: HelmxPanel = 'primary',
 ): boolean {
   if (targetPanel !== 'primary' && targetPanel !== 'split') return false
-  if (el?.closest?.('.conversation-drawer') && !el?.closest?.('[data-helm-panel]')) {
+  if (el?.closest?.('.conversation-drawer') && !el?.closest?.('[data-helmx-panel]')) {
     return false
   }
   return resolveElementPanel(el, fallback) === targetPanel
 }
 
 /**
- * Listen for window `helm:shortcut` custom events; the callback fires only
- * when `detail.action` matches and the current DOM's `[data-helm-panel]` panel
+ * Listen for window `helmx:shortcut` custom events; the callback fires only
+ * when `detail.action` matches and the current DOM's `[data-helmx-panel]` panel
  * matches the event (split views never mis-trigger each other, and nothing is
  * intercepted twice).
  */
 export function usePanelShortcut(
   rootRef: { current: Element | null },
-  action: HelmShortcutAction | string,
+  action: HelmxShortcutAction | string,
   handler: () => void,
-  fallback: HelmPanel = 'primary',
+  fallback: HelmxPanel = 'primary',
 ): void {
   const handlerRef = useRef(handler)
   handlerRef.current = handler
@@ -206,12 +206,12 @@ export function usePanelShortcut(
   useEffect(() => {
     if (typeof window === 'undefined') return
     const onShortcut = (event: Event): void => {
-      const detail = (event as CustomEvent<Partial<HelmShortcutEventDetail> | undefined>).detail
+      const detail = (event as CustomEvent<Partial<HelmxShortcutEventDetail> | undefined>).detail
       if (detail === undefined || detail === null || detail.action !== action) return
       if (!isShortcutPanelMatch(rootRef.current, detail.panel, fallback)) return
       handlerRef.current()
     }
-    window.addEventListener(HELM_SHORTCUT_EVENT, onShortcut)
-    return () => window.removeEventListener(HELM_SHORTCUT_EVENT, onShortcut)
+    window.addEventListener(HELMX_SHORTCUT_EVENT, onShortcut)
+    return () => window.removeEventListener(HELMX_SHORTCUT_EVENT, onShortcut)
   }, [rootRef, action, fallback])
 }

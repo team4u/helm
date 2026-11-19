@@ -1,7 +1,7 @@
 /**
  * builtin:herdr plugin-local styles (local CSS inside the clientRoot).
  *
- * Generic structure reuses host design-system primitives (.helm-table-wrap / .helm-table / .callout /
+ * Generic structure reuses host design-system primitives (.helmx-table-wrap / .helmx-table / .callout /
  * .stack-row / the Callout component, etc.); this file keeps only the Herdr overview dual-endpoint responsive layout and container breakpoint adaptation.
  */
 .herdr-overview {
@@ -59,7 +59,7 @@
 }
 
 /* Filter dropdown width contract (host Select defaults to width: 100%; the wrapper controls the width) */
-.herdr-filter-select .helm-select-trigger {
+.herdr-filter-select .helmx-select-trigger {
   width: 100%;
 }
 

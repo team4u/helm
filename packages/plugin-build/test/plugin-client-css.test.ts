@@ -1,5 +1,5 @@
 /**
- * Plugin CSS compiler tests (v3: esbuild native CSS bundling + the reserved named export __helmClientCss).
+ * Plugin CSS compiler tests (v3: esbuild native CSS bundling + the reserved named export __helmxClientCss).
  *
  * Coverage (really executes the compiled artifact, not just string includes):
  * - two CSS dependencies merge in dependency order and the artifact is executable and readable via import;
@@ -20,7 +20,7 @@ import { join, dirname } from 'node:path'
 import { readFile, writeFile as writeFileCb } from 'node:fs'
 import { promisify } from 'node:util'
 import { compilePluginClientModule } from '../src/index.js'
-import { HelmError, PLUGIN_CLIENT_CSS_EXPORT } from '@helm/protocol'
+import { HelmxError, PLUGIN_CLIENT_CSS_EXPORT } from '@helmx/protocol'
 
 const writeFileP = promisify(writeFileCb)
 const readFileP = promisify(readFile)
@@ -28,7 +28,7 @@ const readFileP = promisify(readFile)
 let dataDir: string
 
 before(async () => {
-  dataDir = await mkdtemp(join(tmpdir(), 'helm-plugin-css-'))
+  dataDir = await mkdtemp(join(tmpdir(), 'helmx-plugin-css-'))
 })
 
 after(async () => {
@@ -152,7 +152,7 @@ test('local relative / root-relative / fragment asset URLs are explicitly reject
     await assert.rejects(
       () => compilePluginClientModule(`test:css-bad-${label}`, root, 'index.tsx', dataDir),
       (err: unknown) =>
-        err instanceof HelmError &&
+        err instanceof HelmxError &&
         err.code === 'client_compile_failed' &&
         /asset reference/.test(err.message) &&
         /rejected/.test(err.message) &&
@@ -168,12 +168,12 @@ test('nested @import in inline CSS also passes through the asset boundary and ca
   await writePluginSource(root, { 'styles.css': `@import "${nested}";\n.local { color: blue }` }, ["'./styles.css'"])
   await assert.rejects(
     () => compilePluginClientModule('test:css-inline-import', root, 'index.tsx', dataDir),
-    (error: unknown) => error instanceof HelmError && error.code === 'client_compile_failed' && /remote @import/.test(error.message),
+    (error: unknown) => error instanceof HelmxError && error.code === 'client_compile_failed' && /remote @import/.test(error.message),
   )
 })
 
 test('CSS symlink escape rejected: an in-root symlink pointing at an out-of-root stylesheet', { timeout: 60_000 }, async () => {
-  const outsideDir = await mkdtemp(join(tmpdir(), 'helm-plugin-css-outside-'))
+  const outsideDir = await mkdtemp(join(tmpdir(), 'helmx-plugin-css-outside-'))
   try {
     await writeFile(join(outsideDir, 'evil.css'), '.evil { color: red }')
     const root = join(dataDir, 'symlink-src')
@@ -183,7 +183,7 @@ test('CSS symlink escape rejected: an in-root symlink pointing at an out-of-root
     await assert.rejects(
       () => compilePluginClientModule('test:css-symlink', root, 'index.tsx', dataDir),
       (err: unknown) =>
-        err instanceof HelmError && err.code === 'client_compile_failed' && /out of bounds/.test(err.message),
+        err instanceof HelmxError && err.code === 'client_compile_failed' && /out of bounds/.test(err.message),
     )
   } finally {
     await rm(outsideDir, { recursive: true, force: true })
@@ -202,7 +202,7 @@ test('CSS @import out-of-root rejected: ../ referencing a stylesheet outside the
   await assert.rejects(
     () => compilePluginClientModule('test:css-import-escape', root, 'index.tsx', dataDir),
     (err: unknown) =>
-      err instanceof HelmError && err.code === 'client_compile_failed' && /out of bounds/.test(err.message),
+      err instanceof HelmxError && err.code === 'client_compile_failed' && /out of bounds/.test(err.message),
   )
 })
 
@@ -215,17 +215,17 @@ test('no reserved export is wrongly produced when there is no CSS', { timeout: 6
   assert.equal(typeof mod.Widget, 'function')
 })
 
-test('reserved export conflict: a plugin occupying __helmClientCss itself fails loudly', { timeout: 60_000 }, async () => {
+test('reserved export conflict: a plugin occupying __helmxClientCss itself fails loudly', { timeout: 60_000 }, async () => {
   const root = join(dataDir, 'conflict-src')
   await writePluginSource(root, { 'styles.css': '.c { color: red }' }, ["'./styles.css'"])
   await writeFile(
     join(root, 'index.tsx'),
-    "import './styles.css'\nexport const __helmClientCss = 'mine'\nexport function Widget() { return 'w' }\n",
+    "import './styles.css'\nexport const __helmxClientCss = 'mine'\nexport function Widget() { return 'w' }\n",
   )
   await assert.rejects(
     () => compilePluginClientModule('test:css-conflict', root, 'index.tsx', dataDir),
     (err: unknown) =>
-      err instanceof HelmError &&
+      err instanceof HelmxError &&
       err.code === 'client_compile_failed' &&
       /reserved compiler export name/.test(err.message) &&
       err.message.includes(PLUGIN_CLIENT_CSS_EXPORT),
@@ -244,13 +244,13 @@ test('reserved-export validation uses module metadata: neither no-CSS nor a trai
     ].join('\n'))
     await assert.rejects(
       () => compilePluginClientModule(`test:css-reserved-${withCss}`, root, 'index.tsx', dataDir),
-      (error: unknown) => error instanceof HelmError && error.code === 'client_compile_failed' && error.message.includes(PLUGIN_CLIENT_CSS_EXPORT),
+      (error: unknown) => error instanceof HelmxError && error.code === 'client_compile_failed' && error.message.includes(PLUGIN_CLIENT_CSS_EXPORT),
       `withCss=${withCss} must both reject the reserved export name at the compile boundary`,
     )
   }
 })
 
-test('an unexported same-named local variable does not collide: const __helmClientCss inside the entry still compiles and evaluates while referenced by the component', { timeout: 60_000 }, async () => {
+test('an unexported same-named local variable does not collide: const __helmxClientCss inside the entry still compiles and evaluates while referenced by the component', { timeout: 60_000 }, async () => {
   const root = join(dataDir, 'shadow-src')
   await writePluginSource(root, { 'styles.css': '.shadow { color: red }' }, ["'./styles.css'"])
   await writeFile(
@@ -259,10 +259,10 @@ test('an unexported same-named local variable does not collide: const __helmClie
       "import './styles.css'",
       // an unexported local same-named variable survives in the bundle (metafile exports can't detect it):
       // the compiler-attached CSS binding must avoid it and never form a duplicate declaration
-      "const __helmClientCss = 'plugin-local-value'",
-      "export function Widget() { return typeof __helmClientCss + ':' + __helmClientCss }",
-      "export const __helmCssText = 'also-local'",
-      "export function ShadowWidget() { return __helmCssText }",
+      "const __helmxClientCss = 'plugin-local-value'",
+      "export function Widget() { return typeof __helmxClientCss + ':' + __helmxClientCss }",
+      "export const __helmxCssText = 'also-local'",
+      "export function ShadowWidget() { return __helmxCssText }",
     ].join('\n'),
   )
   const result = await compilePluginClientModule('test:css-shadow', root, 'index.tsx', dataDir)
@@ -270,7 +270,7 @@ test('an unexported same-named local variable does not collide: const __helmClie
   const mod = await evalModule(result.code)
   assert.equal(typeof mod.Widget, 'function')
   assert.equal((mod.Widget as () => string)(), 'string:plugin-local-value', 'local variable semantics are unaffected')
-  assert.equal((mod.__helmCssText as unknown), 'also-local')
+  assert.equal((mod.__helmxCssText as unknown), 'also-local')
   assert.equal((mod.ShadowWidget as () => string)(), 'also-local')
   // the reserved export returns the compiler-merged styles, not the local variable
   const css = mod[PLUGIN_CLIENT_CSS_EXPORT] as string

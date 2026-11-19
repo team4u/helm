@@ -1,12 +1,12 @@
 /**
  * useQuietNotifier 真实 React 装配测试（createRoot + act，happy-dom，真实
  * 计时器以 quietNotifyTimings.settleMs / blockedSettleMs 缩短驱动；stub 全局 Notification）：
- * - 多根树并行隔离：树 A 仍在 working/后台跑，树 B 独立结算（tag: helm-conv-B）；
- *   树 A 后续结束亦以 helm-conv-A 通知，互不阻滞也不互相覆盖；
+ * - 多根树并行隔离：树 A 仍在 working/后台跑，树 B 独立结算（tag: helmx-conv-B）；
+ *   树 A 后续结束亦以 helmx-conv-A 通知，互不阻滞也不互相覆盖；
  * - badge doc 自洽发现：未知期间阻止任何树误报「已完成」，ensure 加载后在途
  *   accent 角标阻止完成通知，归零后才结算（blocked 通道不受未知门控阻滞）；
  * - 同树多阶段收尾与子代理归并：防抖窗口内子代理唤醒父会话取消并保留累计，
- *   存在 error 参与者时诚实报「Helm 会话已结束」并标注「有失败」；
+ *   存在 error 参与者时诚实报「Helmx 会话已结束」并标注「有失败」；
  * - blocked 独立立即通道：树内有其他后台任务或 badgeUnknown 时仍经 blockedSettleMs
  *   立即通知；挂载/开启即 blocked 基线不误报；同水位不重复、推进再弹、前台已处理
  *   切后台不滞后补弹；短于防抖取消不误报；blocked 结算后取消不误报完成，人类回答
@@ -19,12 +19,12 @@ import { test } from 'node:test'
 import * as React from 'react'
 import { act } from 'react'
 import type { Root } from 'react-dom/client'
-import type { ConversationSummary, HelmLocale, PluginUiContribution, WorkbenchPanelSpec } from '@helm/protocol'
-import { createLocaleTranslator } from '@helm/protocol'
+import type { ConversationSummary, HelmxLocale, PluginUiContribution, WorkbenchPanelSpec } from '@helmx/protocol'
+import { createLocaleTranslator } from '@helmx/protocol'
 import { ensureHappyDom, waitForCondition } from './helpers/dom-harness.js'
-import type { HelmExternalStore } from '../src/lib/helm-store.js'
+import type { HelmxExternalStore } from '../src/lib/helmx-store.js'
 import type { ResolvedTarget } from '../src/lib/types.js'
-import { makeTestStore, HelmExternalStoreContext } from './helpers/store.js'
+import { makeTestStore, HelmxExternalStoreContext } from './helpers/store.js'
 import {
   registerBrowserNotificationServiceWorker,
   resetBrowserNotificationServiceWorkerForTest,
@@ -95,7 +95,7 @@ interface HarnessOptions {
   authenticated?: boolean
   quietNotifyEnabled?: boolean
   sseConnected?: boolean
-  locale?: HelmLocale
+  locale?: HelmxLocale
   conversations: ConversationSummary[]
   pluginDocs?: Record<string, unknown>
 }
@@ -103,7 +103,7 @@ interface HarnessOptions {
 interface Harness {
   rerender: (options: HarnessOptions) => void
   unmount: () => void
-  store: () => HelmExternalStore
+  store: () => HelmxExternalStore
 }
 
 function Probe(): React.ReactNode {
@@ -112,7 +112,7 @@ function Probe(): React.ReactNode {
 }
 
 function mountHarness(options: HarnessOptions): Harness {
-  const buildStore = (next: HarnessOptions): HelmExternalStore =>
+  const buildStore = (next: HarnessOptions): HelmxExternalStore =>
     makeTestStore({
       authenticated: next.authenticated ?? true,
       quietNotifyEnabled: next.quietNotifyEnabled ?? true,
@@ -126,7 +126,7 @@ function mountHarness(options: HarnessOptions): Harness {
   const host = document.createElement('div')
   document.body.appendChild(host)
   let root: Root | undefined
-  const renderTree = (): React.ReactElement => e(HelmExternalStoreContext.Provider, { value: currentStore }, e(Probe))
+  const renderTree = (): React.ReactElement => e(HelmxExternalStoreContext.Provider, { value: currentStore }, e(Probe))
   act(() => {
     root = createRoot(host)
     root.render(renderTree())
@@ -181,7 +181,7 @@ function installGrantedNotification(): { notifications: CapturedNotification[]; 
 }
 
 /** 点击通知后的主屏导航落点（经真实 openTarget 推进）。 */
-const primaryTargetOf = (store: HelmExternalStore): ResolvedTarget => store.getPrimaryTarget()
+const primaryTargetOf = (store: HelmxExternalStore): ResolvedTarget => store.getPrimaryTarget()
 
 /** 缩短完成/blocked 防抖窗口（真实计时器）：返回恢复函数。 */
 function shrinkTimings(settleMs: number, blockedSettleMs = settleMs): () => void {
@@ -195,7 +195,7 @@ function shrinkTimings(settleMs: number, blockedSettleMs = settleMs): () => void
   }
 }
 
-test('主回合忙碌 → 完成：防抖满窗投递一次（tag=helm-conv-5），点击聚焦并跳转根会话', { timeout: 60_000 }, async () => {
+test('主回合忙碌 → 完成：防抖满窗投递一次（tag=helmx-conv-5），点击聚焦并跳转根会话', { timeout: 60_000 }, async () => {
   const focus = setPageFocus(false)
   const { notifications, restore } = installGrantedNotification()
   const restoreTimings = shrinkTimings(15, 10)
@@ -215,7 +215,7 @@ test('主回合忙碌 → 完成：防抖满窗投递一次（tag=helm-conv-5）
     assert.equal(notifications.length, 1)
     assert.equal(notifications[0]!.title, COMPLETED_NOTIFICATION_TITLE)
     assert.equal(notifications[0]!.options.body, '#5 修复构建失败')
-    assert.equal(notifications[0]!.options.tag, 'helm-conv-5')
+    assert.equal(notifications[0]!.options.tag, 'helmx-conv-5')
     notifications[0]!.onclick?.({} as Event)
     assert.deepEqual(focusedSpy, [true])
     assert.deepEqual(primaryTargetOf(harness.store()), { kind: 'conversation', conversationId: 5 })
@@ -254,7 +254,7 @@ test('多根树并行隔离：树 A 仍在 working / 后台跑，树 B 结束后
     assert.equal(notifications.length, 1, '树 A/C 在途不得阻塞树 B 结算完成通知')
     assert.equal(notifications[0]!.title, COMPLETED_NOTIFICATION_TITLE)
     assert.equal(notifications[0]!.options.body, '#2 短任务 B')
-    assert.equal(notifications[0]!.options.tag, 'helm-conv-2')
+    assert.equal(notifications[0]!.options.tag, 'helmx-conv-2')
 
     // 树 A 随后完成（失败结束），树 C 仍在后台跑
     harness.rerender({
@@ -269,7 +269,7 @@ test('多根树并行隔离：树 A 仍在 working / 后台跑，树 B 结束后
     assert.equal(notifications.length, 2)
     assert.equal(notifications[1]!.title, ENDED_NOTIFICATION_TITLE)
     assert.equal(notifications[1]!.options.body, '#1 长任务 A · Has failures')
-    assert.equal(notifications[1]!.options.tag, 'helm-conv-1')
+    assert.equal(notifications[1]!.options.tag, 'helmx-conv-1')
 
     // 树 C 后台归零
     harness.rerender({
@@ -282,7 +282,7 @@ test('多根树并行隔离：树 A 仍在 working / 后台跑，树 B 结束后
     })
     await waitForCondition(() => notifications.length === 3)
     assert.equal(notifications.length, 3)
-    assert.equal(notifications[2]!.options.tag, 'helm-conv-3')
+    assert.equal(notifications[2]!.options.tag, 'helmx-conv-3')
     harness.unmount()
   } finally {
     restoreTimings()
@@ -308,7 +308,7 @@ test('后台在途结束（父会话全程 idle，accent 角标归零）同样�
     assert.equal(notifications.length, 1)
     assert.equal(notifications[0]!.title, COMPLETED_NOTIFICATION_TITLE)
     assert.equal(notifications[0]!.options.body, '#7 大规模重构')
-    assert.equal(notifications[0]!.options.tag, 'helm-conv-7')
+    assert.equal(notifications[0]!.options.tag, 'helmx-conv-7')
     harness.unmount()
   } finally {
     restoreTimings()
@@ -334,7 +334,7 @@ test('防抖窗口内同树活动恢复即取消；再次安静重新计窗投�
     harness.rerender({ conversations: [conv({ id: 5, status: 'done', updatedAt: 3_000 })], pluginDocs: { [BADGE_DOC_KEY]: IDLE_BADGE_DOC } })
     await waitForCondition(() => notifications.length === 1)
     assert.equal(notifications.length, 1)
-    assert.equal(notifications[0]!.options.tag, 'helm-conv-5')
+    assert.equal(notifications[0]!.options.tag, 'helmx-conv-5')
     harness.unmount()
   } finally {
     restoreTimings()
@@ -385,7 +385,7 @@ test('同树多阶段收尾：子代理唤醒父会话取消防抖并保留早�
     assert.equal(notifications.length, 1)
     assert.equal(notifications[0]!.title, ENDED_NOTIFICATION_TITLE)
     assert.equal(notifications[0]!.options.body, '#5 主控会话 · Has failures')
-    assert.equal(notifications[0]!.options.tag, 'helm-conv-5')
+    assert.equal(notifications[0]!.options.tag, 'helmx-conv-5')
     harness.unmount()
   } finally {
     restoreTimings()
@@ -419,7 +419,7 @@ test('派生子会话归并：子会话活动不污染正文、不抢跳转，�
     assert.equal(notifications.length, 1)
     assert.equal(notifications[0]!.title, COMPLETED_NOTIFICATION_TITLE)
     assert.equal(notifications[0]!.options.body, '#5 大规模重构', '两个子代理归并为唯一根会话条目')
-    assert.equal(notifications[0]!.options.tag, 'helm-conv-5')
+    assert.equal(notifications[0]!.options.tag, 'helmx-conv-5')
     notifications[0]!.onclick?.({} as Event)
     assert.deepEqual(primaryTargetOf(harness.store()), { kind: 'conversation', conversationId: 5 }, '跳转根会话而非子代理会话')
     harness.unmount()
@@ -430,7 +430,7 @@ test('派生子会话归并：子会话活动不污染正文、不抢跳转，�
   }
 })
 
-test('新进入 blocked：经 blockedSettleMs 投递「等待你的处理」（tag=helm-conv-3）并跳转该会话', { timeout: 60_000 }, async () => {
+test('新进入 blocked：经 blockedSettleMs 投递「等待你的处理」（tag=helmx-conv-3）并跳转该会话', { timeout: 60_000 }, async () => {
   const focus = setPageFocus(false)
   const { notifications, restore } = installGrantedNotification()
   const restoreTimings = shrinkTimings(60, 15)
@@ -447,7 +447,7 @@ test('新进入 blocked：经 blockedSettleMs 投递「等待你的处理」（t
     assert.equal(notifications.length, 1, 'blocked 短防抖到期即通知，无需等待完成长防抖')
     assert.equal(notifications[0]!.title, WAITING_NOTIFICATION_TITLE)
     assert.equal(notifications[0]!.options.body, 'Pending input/approvals: #3 部署检查')
-    assert.equal(notifications[0]!.options.tag, 'helm-conv-3')
+    assert.equal(notifications[0]!.options.tag, 'helmx-conv-3')
     notifications[0]!.onclick?.({} as Event)
     assert.deepEqual(primaryTargetOf(harness.store()), { kind: 'conversation', conversationId: 3 })
     harness.unmount()
@@ -483,7 +483,7 @@ test('同树仍有并行后台任务且 badge doc 未知时，子会话 blocked 
     assert.equal(notifications.length, 1)
     assert.equal(notifications[0]!.title, WAITING_NOTIFICATION_TITLE)
     assert.equal(notifications[0]!.options.body, 'Pending input/approvals: #5 多代理工作流')
-    assert.equal(notifications[0]!.options.tag, 'helm-conv-5')
+    assert.equal(notifications[0]!.options.tag, 'helmx-conv-5')
     notifications[0]!.onclick?.({} as Event)
     assert.deepEqual(primaryTargetOf(harness.store()), { kind: 'conversation', conversationId: 51 }, '点击跳转具体的 blocked 子会话')
     harness.unmount()
@@ -528,8 +528,8 @@ test('同树完成防抖窗口内新出现 blocked：取消完成计时改发「
     })
     await waitForCondition(() => notifications.length === 2)
     assert.equal(notifications.length, 2)
-    const conv5Notif = notifications.find((n) => n.options.tag === 'helm-conv-5')
-    const conv1Notif = notifications.find((n) => n.options.tag === 'helm-conv-1')
+    const conv5Notif = notifications.find((n) => n.options.tag === 'helmx-conv-5')
+    const conv1Notif = notifications.find((n) => n.options.tag === 'helmx-conv-1')
     assert.ok(conv5Notif)
     assert.equal(conv5Notif.title, WAITING_NOTIFICATION_TITLE)
     assert.equal(conv5Notif.options.body, 'Pending input/approvals: #5 树五')
@@ -672,7 +672,7 @@ test('blocked 结算后清空完成累计：直接取消不误报完成；人类
     await sleep(40)
     assert.equal(notifications.length, 1, 'blocked 停下并直接取消不得误报已完成')
 
-    // 场景二：重新发起新一轮 working -> done：正常发完成通知，tag 同为 helm-conv-8
+    // 场景二：重新发起新一轮 working -> done：正常发完成通知，tag 同为 helmx-conv-8
     harness.rerender({
       conversations: [conv({ id: 8, title: '人工审批任务', status: 'working', stateChangeSeq: 4 })],
       pluginDocs: { [BADGE_DOC_KEY]: IDLE_BADGE_DOC },
@@ -684,7 +684,7 @@ test('blocked 结算后清空完成累计：直接取消不误报完成；人类
     await waitForCondition(() => notifications.length === 2)
     assert.equal(notifications.length, 2)
     assert.equal(notifications[1]!.title, COMPLETED_NOTIFICATION_TITLE)
-    assert.equal(notifications[1]!.options.tag, 'helm-conv-8')
+    assert.equal(notifications[1]!.options.tag, 'helmx-conv-8')
     harness.unmount()
   } finally {
     restoreTimings()
@@ -784,7 +784,7 @@ test('blocked 断流挂起：到期时断流不投递，重连仍 blocked 补发
     await waitForCondition(() => notifications.length === 1)
     assert.equal(notifications.length, 1, '重连仍 blocked 应立即补发一次')
     assert.equal(notifications[0]!.title, WAITING_NOTIFICATION_TITLE)
-    assert.equal(notifications[0]!.options.tag, 'helm-conv-9')
+    assert.equal(notifications[0]!.options.tag, 'helmx-conv-9')
     await sleep(45)
     assert.equal(notifications.length, 1, '不重复补发')
     hold.unmount()
@@ -813,7 +813,7 @@ test('blocked 断流挂起：到期时断流不投递，重连仍 blocked 补发
     await waitForCondition(() => notifications.length === 2)
     assert.equal(notifications.length, 2)
     assert.equal(notifications[1]!.title, COMPLETED_NOTIFICATION_TITLE)
-    assert.equal(notifications[1]!.options.tag, 'helm-conv-10')
+    assert.equal(notifications[1]!.options.tag, 'helmx-conv-10')
     resolvedOffline.unmount()
   } finally {
     restoreTimings()
@@ -866,7 +866,7 @@ test('断流挂起期间同树活动恢复：丢弃待结算、周期继续，�
     assert.equal(notifications.length, 1)
     assert.equal(notifications[0]!.title, ENDED_NOTIFICATION_TITLE)
     assert.equal(notifications[0]!.options.body, '#1 主任务 · Has failures')
-    assert.equal(notifications[0]!.options.tag, 'helm-conv-1')
+    assert.equal(notifications[0]!.options.tag, 'helmx-conv-1')
     harness.unmount()
   } finally {
     restoreTimings()
@@ -960,7 +960,7 @@ test('插件热重载清空已加载 badge doc 时重新保持未知，直到新
     assert.equal(notifications.length, 1)
     assert.equal(notifications[0]!.title, COMPLETED_NOTIFICATION_TITLE)
     assert.equal(notifications[0]!.options.body, '#7 插件重载期间')
-    assert.equal(notifications[0]!.options.tag, 'helm-conv-7')
+    assert.equal(notifications[0]!.options.tag, 'helmx-conv-7')
     harness.unmount()
   } finally {
     restoreTimings()
@@ -1022,7 +1022,7 @@ test('SW 激活时 completion 与 blocked 通知透传目标会话 url（/#/c/<i
     assert.equal(shown[0]!.options.badge, '/notification-badge-96.png')
     assert.equal(shown[0]!.options.data?.url, '/#/c/51')
     for (const fn of listeners) {
-      fn({ data: { type: 'helm:notification-click', url: '/#/c/51', clickId: shown[0]!.options.data?.clickId } } as MessageEvent)
+      fn({ data: { type: 'helmx:notification-click', url: '/#/c/51', clickId: shown[0]!.options.data?.clickId } } as MessageEvent)
     }
     assert.deepEqual(primaryTargetOf(harness.store()), { kind: 'conversation', conversationId: 51 })
 
@@ -1037,7 +1037,7 @@ test('SW 激活时 completion 与 blocked 通知透传目标会话 url（/#/c/<i
     await waitForCondition(() => shown.length === 2)
     assert.equal(shown[1]!.options.data?.url, '/#/c/5')
     for (const fn of listeners) {
-      fn({ data: { type: 'helm:notification-click', url: '/#/c/5', clickId: shown[1]!.options.data?.clickId } } as MessageEvent)
+      fn({ data: { type: 'helmx:notification-click', url: '/#/c/5', clickId: shown[1]!.options.data?.clickId } } as MessageEvent)
     }
     // 两次点击都经 openTarget 主屏导航：51 后被根会话 5 原位取代（同一导航机制，无分屏副作用）
     assert.deepEqual(primaryTargetOf(harness.store()), { kind: 'conversation', conversationId: 5 })
@@ -1064,10 +1064,10 @@ const enTranslate = createLocaleTranslator('en')
 
 test('通知文案纯函数：标题恒等映射双语、未知标题透传；正文片段翻译且会话标签原样保留', { timeout: 60_000 }, () => {
   // 标题：三个规范常量双语映射，en 原样，未知标题（模型未定义形态）原样透传不猜
-  assert.equal(localizeQuietNotificationTitle(COMPLETED_NOTIFICATION_TITLE, enTranslate), 'Helm conversation completed')
-  assert.equal(localizeQuietNotificationTitle(COMPLETED_NOTIFICATION_TITLE, zhTranslate), 'Helm 会话已完成')
-  assert.equal(localizeQuietNotificationTitle(ENDED_NOTIFICATION_TITLE, zhTranslate), 'Helm 会话已结束')
-  assert.equal(localizeQuietNotificationTitle(WAITING_NOTIFICATION_TITLE, zhTranslate), 'Helm 等待你的处理')
+  assert.equal(localizeQuietNotificationTitle(COMPLETED_NOTIFICATION_TITLE, enTranslate), 'Helmx conversation completed')
+  assert.equal(localizeQuietNotificationTitle(COMPLETED_NOTIFICATION_TITLE, zhTranslate), 'Helmx 会话已完成')
+  assert.equal(localizeQuietNotificationTitle(ENDED_NOTIFICATION_TITLE, zhTranslate), 'Helmx 会话已结束')
+  assert.equal(localizeQuietNotificationTitle(WAITING_NOTIFICATION_TITLE, zhTranslate), 'Helmx 等待你的处理')
   assert.equal(localizeQuietNotificationTitle('#5 自定义标题', zhTranslate), '#5 自定义标题')
 
   // 正文：根会话已删的整句常量
@@ -1110,7 +1110,7 @@ test('通知投递双语：zh-CN locale 下完成/失败/等待处理的 title �
       pluginDocs: { [BADGE_DOC_KEY]: IDLE_BADGE_DOC },
     })
     await waitForCondition(() => notifications.length === 1)
-    assert.equal(notifications[0]!.title, 'Helm 会话已完成')
+    assert.equal(notifications[0]!.title, 'Helmx 会话已完成')
     assert.equal(notifications[0]!.options.body, '#5 修复构建失败')
 
     // 失败收尾：如实报「已结束」并标注「有失败」
@@ -1125,7 +1125,7 @@ test('通知投递双语：zh-CN locale 下完成/失败/等待处理的 title �
       pluginDocs: { [BADGE_DOC_KEY]: IDLE_BADGE_DOC },
     })
     await waitForCondition(() => notifications.length === 2)
-    assert.equal(notifications[1]!.title, 'Helm 会话已结束')
+    assert.equal(notifications[1]!.title, 'Helmx 会话已结束')
     assert.equal(notifications[1]!.options.body, '#6 迁移脚本 · 有失败')
 
     // 等待处理（blocked）：独立通道同样随 locale
@@ -1138,7 +1138,7 @@ test('通知投递双语：zh-CN locale 下完成/失败/等待处理的 title �
       pluginDocs: { [BADGE_DOC_KEY]: IDLE_BADGE_DOC },
     })
     await waitForCondition(() => notifications.length === 3)
-    assert.equal(notifications[2]!.title, 'Helm 等待你的处理')
+    assert.equal(notifications[2]!.title, 'Helmx 等待你的处理')
     assert.equal(notifications[2]!.options.body, '待处理输入/审批: #7 部署审批')
     harness.unmount()
   } finally {
@@ -1165,7 +1165,7 @@ test('通知投递无陈旧闭包：活动开始后切换语言，防抖到期�
       pluginDocs: { [BADGE_DOC_KEY]: IDLE_BADGE_DOC },
     })
     await waitForCondition(() => notifications.length === 1)
-    assert.equal(notifications[0]!.title, 'Helm 会话已完成')
+    assert.equal(notifications[0]!.title, 'Helmx 会话已完成')
     assert.equal(notifications[0]!.options.body, '#8 长任务')
     harness.unmount()
   } finally {

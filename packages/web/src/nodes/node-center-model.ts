@@ -13,7 +13,7 @@
 import type {
   NodeHealthSnapshot as ProtocolNodeHealthSnapshot,
   NodeInfo as ProtocolNodeInfo,
-} from '@helm/protocol/browser'
+} from '@helmx/protocol/browser'
 import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 
 /** Node category pill tab type. */

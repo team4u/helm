@@ -30,7 +30,7 @@
  */
 
 import { setTimeout as delay } from 'node:timers/promises'
-import { HelmError, targetPlatformOf, type AgentExecutionInfo, type AgentSpawnRequest, type TargetPlatform } from '@helm/protocol'
+import { HelmxError, targetPlatformOf, type AgentExecutionInfo, type AgentSpawnRequest, type TargetPlatform } from '@helmx/protocol'
 import { parseWorkflowSpawnMeta, workflowExecutionMeta } from '../contracts.js'
 import type { CreateAskResultLike, CreateAskSpecLike, HerdrPluginDependencies, HerdrTarget } from './contracts.js'
 import { targetNodeId } from './contracts.js'
@@ -68,7 +68,7 @@ import { HERDR_STEER_CONTROLS } from './contracts.js'
  * Managed keys pinned authoritatively by the baseline in the pane env (MANAGED_ENV_KEYS + call-home/node identity):
  * After applyPaneSecrets overlays grants, baseline values are re-asserted; grant names must not hijack them.
  */
-const PANE_MANAGED_LOCK_KEYS: readonly string[] = [...MANAGED_ENV_KEYS, 'HELM_HUB_URL', 'HELM_NODE_ID']
+const PANE_MANAGED_LOCK_KEYS: readonly string[] = [...MANAGED_ENV_KEYS, 'HELMX_HUB_URL', 'HELMX_NODE_ID']
 
 /** Uppercased managed-key set: case variants of granted values (stash keys hit by secretNames) must not hijack either. */
 const PANE_MANAGED_LOCK_UPPER: ReadonlySet<string> = new Set(
@@ -78,7 +78,7 @@ const PANE_MANAGED_LOCK_UPPER: ReadonlySet<string> = new Set(
 /**
  * Merge granted env with the baseline managed lockdown (pure function, the single implementation behind applyPaneSecrets):
  * - granted values overlay the baseline (same-name overwrites);
- * - managed keys (including case-variant aliases like helm_execution_scope / Helm_Cwd) are stripped
+ * - managed keys (including case-variant aliases like helmx_execution_scope / Helmx_Cwd) are stripped
  *   then the baseline canonical value is re-asserted -- Windows env names are case-insensitive, aliases could
  *   hijack call-home/identity/scope variables when read by the child process (isomorphic to the kernel's buildManagedEnv fixed override).
  */
@@ -155,7 +155,7 @@ export class HerdrExecutor {
   private readonly activeCloses = new Map<string, Promise<void>>()
 
   /**
-   * pane scopeKey -> pane env baseline (managed HELM_* + Profile merge, **contains no stash
+   * pane scopeKey -> pane env baseline (managed HELMX_* + Profile merge, **contains no stash
    * secrets**). Memory only; Gate/resume start from the baseline every time and re-authorize values
    * from the current stash per request secretNames -- secret plaintext is never cached for reuse by later child
    * processes (stale values are not injected after TTL/turn end).
@@ -304,7 +304,7 @@ export class HerdrExecutor {
    * - node selection: explicit herdr:kind@node (incl. @local) > Profile.runtime.nodeId >
    *   Profile.nodeId > parent conversation's bound node > local. An explicit 'local' overrides a remote parent node
    *   without collapsing it away; when explicit/Profile differs from the parent node, the higher priority wins (a legal switch).
-   * - attachments: when the remote machine has no reachable HELM_HUB_URL, explicitly reject before creating any pane
+   * - attachments: when the remote machine has no reachable HELMX_HUB_URL, explicitly reject before creating any pane
    *   (remote_hub_unreachable_for_artifacts, zero remote side effects);
    * - gateTimeoutMs: explicitly rejected only once the request is identified as a Herdr-handled path (herdr-runtime new spawn / registered
    *   resume); native passthrough is unaffected.
@@ -323,7 +323,7 @@ export class HerdrExecutor {
         if (routing === undefined) return { action: 'continue' }
         this.assertNoFork(request)
         this.assertNoGateTimeout(request)
-        throw new HelmError(
+        throw new HelmxError(
           'not_found',
           `resume ref '${request.resume}' does not exist (not a herdr agentId/paneId registered by this plugin)`,
           404,
@@ -342,7 +342,7 @@ export class HerdrExecutor {
     this.assertNoGateTimeout(request)
     assertNoUnsupportedOverrides(request.model, request.effort)
     if (request.signal?.aborted) {
-      throw new HelmError('aborted', 'herdr spawn request was cancelled before creation', 409)
+      throw new HelmxError('aborted', 'herdr spawn request was cancelled before creation', 409)
     }
     const target = this.resolveSpawnTarget(request, routing)
     this.assertAttachmentsReachable(request, target, routing)
@@ -376,7 +376,7 @@ export class HerdrExecutor {
         pane = this.registry.get(parentNodeId, executionId)
       }
       if (pane === undefined) {
-        throw new HelmError(
+        throw new HelmxError(
           'herdr_reattach_missing',
           `重挂目标 executionId '${executionId}' 存在多节点同名窗格，无法根据父会话唯一确定`,
           409,
@@ -391,7 +391,7 @@ export class HerdrExecutor {
     const target = this.resolveSpawnTarget(request, routing)
     const pane = this.registry.get(targetNodeId(target), executionId as string)
     if (pane === undefined) {
-      throw new HelmError(
+      throw new HelmxError(
         'herdr_reattach_missing',
         `无法重挂窗格 ${String(executionId)}@${targetNodeId(target) ?? 'local'}：受管窗格记录不存在`,
         404,
@@ -404,32 +404,32 @@ export class HerdrExecutor {
   private assertReattachRequestValid(request: AgentSpawnRequest, requireExecutionId: boolean): void {
     const reattach = request.reattach
     if (typeof reattach !== 'object' || reattach === null || Array.isArray(reattach)) {
-      throw new HelmError('validation_error', 'reattach 必须是对象', 400)
+      throw new HelmxError('validation_error', 'reattach 必须是对象', 400)
     }
     if (request.resume !== undefined) {
-      throw new HelmError('validation_error', 'reattach 与 resume 互斥：不能同时重挂并续接', 400, {
+      throw new HelmxError('validation_error', 'reattach 与 resume 互斥：不能同时重挂并续接', 400, {
         resume: request.resume,
       })
     }
     if (request.fork !== undefined && request.fork !== false) {
       if (typeof request.fork !== 'boolean') {
-        throw new HelmError('validation_error', `fork 必须为 boolean（收到 ${typeof request.fork}）`, 400, {
+        throw new HelmxError('validation_error', `fork 必须为 boolean（收到 ${typeof request.fork}）`, 400, {
           fork: request.fork,
         })
       }
-      throw new HelmError('validation_error', 'reattach 与 fork 互斥：不能同时重挂并分叉派生', 400)
+      throw new HelmxError('validation_error', 'reattach 与 fork 互斥：不能同时重挂并分叉派生', 400)
     }
     if (reattach.conversationId !== undefined) {
-      throw new HelmError('validation_error', 'Herdr 外部运行时重挂不支持 conversationId', 400, {
+      throw new HelmxError('validation_error', 'Herdr 外部运行时重挂不支持 conversationId', 400, {
         conversationId: reattach.conversationId,
       })
     }
     if (reattach.executionId === undefined) {
       if (requireExecutionId) {
-        throw new HelmError('herdr_reattach_missing', 'Herdr 重挂请求缺少 executionId', 400)
+        throw new HelmxError('herdr_reattach_missing', 'Herdr 重挂请求缺少 executionId', 400)
       }
     } else if (typeof reattach.executionId !== 'string' || reattach.executionId.trim() === '') {
-      throw new HelmError('validation_error', 'reattach.executionId 必须是非空字符串', 400)
+      throw new HelmxError('validation_error', 'reattach.executionId 必须是非空字符串', 400)
     }
     this.assertNoGateTimeout(request)
     assertNoUnsupportedOverrides(request.model, request.effort)
@@ -443,11 +443,11 @@ export class HerdrExecutor {
   private assertNoFork(request: AgentSpawnRequest): void {
     if (request.fork === undefined || request.fork === false) return
     if (typeof request.fork !== 'boolean') {
-      throw new HelmError('validation_error', `fork must be a boolean (got ${typeof request.fork})`, 400, {
+      throw new HelmxError('validation_error', `fork must be a boolean (got ${typeof request.fork})`, 400, {
         fork: request.fork,
       })
     }
-    throw new HelmError(
+    throw new HelmxError(
       'unsupported_runtime',
       'fork is not supported for Herdr external runtimes (context-fork derivation only supports native Profile sub-conversations); remove fork or use a native Profile instead',
       400,
@@ -465,7 +465,7 @@ export class HerdrExecutor {
    */
   private assertNoGateTimeout(request: AgentSpawnRequest): void {
     if (request.gateTimeoutMs === undefined) return
-    throw new HelmError(
+    throw new HelmxError(
       'unsupported_runtime',
       'gateTimeoutMs is not supported for Herdr runtimes (neither the local dependency contract runLocalGate nor the remote transport.runGate exposes a gate timeout parameter, so timeout semantics cannot be honored honestly); implement the timeout inside the gate command yourself (e.g. wrap the command with timeout) or remove the option',
       400,
@@ -488,7 +488,7 @@ export class HerdrExecutor {
 
   /**
    * Attachment honesty gate (before any pane-creation side effect):
-   * For a remote node with no reachable HELM_HUB_URL from either Profile config or the node channel, the remote pane
+   * For a remote node with no reachable HELMX_HUB_URL from either Profile config or the node channel, the remote pane
    * cannot fetch artifacts (the local artifacts directory is not on the remote filesystem); reject explicitly instead of silently truncating.
    */
   private assertAttachmentsReachable(
@@ -499,15 +499,15 @@ export class HerdrExecutor {
     if (request.attachments === undefined || request.attachments.length === 0) return
     const nodeId = targetNodeId(target)
     if (nodeId === undefined) return // Local pane: read local artifacts directly.
-    const base = this.deps.buildSpawnEnv(request.parentConversationId, '/tmp/helm-attachment-gate', nodeId)
+    const base = this.deps.buildSpawnEnv(request.parentConversationId, '/tmp/helmx-attachment-gate', nodeId)
     const { hubUrlOverridden } = buildSpawnPaneEnv(base, routing.profileEnv, {
       remote: true,
       nodeHubUrl: this.deps.nodeChannel?.getNodeHubUrl?.(nodeId),
     })
-    if (hubUrlOverridden) return // Remote already has a reachable HELM_HUB_URL (Profile or node channel): fetch via CLI.
-    throw new HelmError(
+    if (hubUrlOverridden) return // Remote already has a reachable HELMX_HUB_URL (Profile or node channel): fetch via CLI.
+    throw new HelmxError(
       'remote_hub_unreachable_for_artifacts',
-      `remote node '${nodeId}' has no reachable HELM_HUB_URL configured, cannot deliver attachments (${request.attachments.join(', ')}); configure a remotely reachable http(s) address in Profile runtime.env.HELM_HUB_URL, or have the node report its hubUrl by joining via helm-node`,
+      `remote node '${nodeId}' has no reachable HELMX_HUB_URL configured, cannot deliver attachments (${request.attachments.join(', ')}); configure a remotely reachable http(s) address in Profile runtime.env.HELMX_HUB_URL, or have the node report its hubUrl by joining via helmx-node`,
       400,
       { nodeId, attachments: request.attachments },
     )
@@ -526,7 +526,7 @@ export class HerdrExecutor {
       const parentCwd = this.parentCwdOrThrow(request.parentConversationId)
       const cwd = resolveCwd(request.cwd, routing, parentCwd, this.platformOfTarget(target))
       if (cwd === '') {
-        throw new HelmError(
+        throw new HelmxError(
           'validation_error',
           `cannot resolve the herdr pane working directory (none of request.cwd / profile.workspace / parent conversation ${request.parentConversationId} cwd provides an absolute path); specify cwd explicitly in the spawn request or bind a real working directory to the parent conversation/Profile`,
           400,
@@ -547,7 +547,7 @@ export class HerdrExecutor {
   private parentCwdOrThrow(parentConversationId: number): string {
     const cwd = this.host.parentCwdOf(parentConversationId)
     if (cwd === undefined) {
-      throw new HelmError(
+      throw new HelmxError(
         'not_found',
         `parent conversation ${parentConversationId} does not exist or has no cwd; cannot resolve the herdr pane working directory`,
         404,
@@ -639,7 +639,7 @@ export class HerdrExecutor {
         effectiveCwd: cwd,
       }
     }
-    const branch = `helm/wf-${HashShort.of(`${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)}`
+    const branch = `helmx/wf-${HashShort.of(`${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)}`
     const created = parseWorktreeCreated(
       await this.transport.call(
         target,
@@ -738,7 +738,7 @@ export class HerdrExecutor {
         if (code === 'agent_pane_busy') {
           const remaining = shellDeadline - Date.now()
           if (remaining <= 0) {
-            throw new HelmError('herdr_startup_timeout', `pane ${paneId} : shell not ready within the startup deadline (agent_pane_busy)`, 504)
+            throw new HelmxError('herdr_startup_timeout', `pane ${paneId} : shell not ready within the startup deadline (agent_pane_busy)`, 504)
           }
           await delay(Math.min(this.pollIntervalMs, remaining), undefined, { signal })
           continue
@@ -770,7 +770,7 @@ export class HerdrExecutor {
     const deadline = Date.now() + this.host.startupTimeoutMs()
     let info = initial
     while (info.agentStatus !== 'blocked' && !(info.interactiveReady && (info.agentStatus === 'idle' || info.agentStatus === 'done'))) {
-      if (Date.now() >= deadline) throw new HelmError('herdr_startup_timeout', `pane ${paneId} did not reach interactive_ready within the startup deadline`, 504)
+      if (Date.now() >= deadline) throw new HelmxError('herdr_startup_timeout', `pane ${paneId} did not reach interactive_ready within the startup deadline`, 504)
       await delay(this.pollIntervalMs, undefined, { signal })
       info = await this.agentGet(target, paneId, signal)
     }
@@ -787,10 +787,10 @@ export class HerdrExecutor {
   }
 
   /**
-   * Pane env baseline: buildSpawnEnv (managed HELM_*, the exact target node, **zero stash secrets**)
+   * Pane env baseline: buildSpawnEnv (managed HELMX_*, the exact target node, **zero stash secrets**)
    * + buildSpawnPaneEnv (Profile merge, remote call-home semantics). Shared by pane creation, Gate and resume;
-   * managed HELM_* is authoritative from the kernel (Profile cannot override); remote strips local call-home variables
-   * (unless the Profile sets an explicitly valid reachable HELM_HUB_URL or the node channel provides hubUrl).
+   * managed HELMX_* is authoritative from the kernel (Profile cannot override); remote strips local call-home variables
+   * (unless the Profile sets an explicitly valid reachable HELMX_HUB_URL or the node channel provides hubUrl).
    * buildSpawnEnv's third argument always gets the exact nodeId ('local' or the remote ID) -- never let the kernel
    * inherit from the parent conversation (a parent bound to a remote node would mis-configure local panes onto the remote).
    */
@@ -809,7 +809,7 @@ export class HerdrExecutor {
     if (stripped.length > 0) {
       this.host.notify(
         'Remote pane stripped local call-home variables',
-        `node ${nodeId}  has no reachable HELM_HUB_URL; stripped: ${stripped.join(', ')}`,
+        `node ${nodeId}  has no reachable HELMX_HUB_URL; stripped: ${stripped.join(', ')}`,
         'info',
       )
     }
@@ -836,7 +836,7 @@ export class HerdrExecutor {
 
   /**
    * Overlay freshly re-authorized values from the current stash onto the baseline: fetched right before each actual use (pane creation/Gate/resume),
-   * through no cache; missing/expired/settled names get an explicit 404 at the kernel boundary. The managed HELM_* baseline is
+   * through no cache; missing/expired/settled names get an explicit 404 at the kernel boundary. The managed HELMX_* baseline is
    * authoritative: granted names must not hijack call-home/identity variables (isomorphic to the kernel's buildManagedEnv fixed override).
    */
   private applyPaneSecrets(
@@ -891,16 +891,16 @@ export class HerdrExecutor {
       request.schema !== undefined
         ? [
             '',
-            '--- helm handoff contract (must follow) ---',
-            `When the task completes, write the final structured result to the file ${pane.effectiveCwd}/.helm/${fileName},`,
+            '--- helmx handoff contract (must follow) ---',
+            `When the task completes, write the final structured result to the file ${pane.effectiveCwd}/.helmx/${fileName},`,
             'The content must be a single JSON value satisfying the JSON Schema below (no text wrapping it outside a Markdown code block).',
             `JSON Schema: ${redactSchemaText(request.schema, this.deps.redact)}`,
             'Writing the file is the only way to deliver your result; not writing it counts as task failure.',
           ].join('\n')
         : [
             '',
-            '--- helm handoff contract (must follow) ---',
-            `When the task completes, write the final result (full Markdown) to the file ${pane.effectiveCwd}/.helm/${fileName}.`,
+            '--- helmx handoff contract (must follow) ---',
+            `When the task completes, write the final result (full Markdown) to the file ${pane.effectiveCwd}/.helmx/${fileName}.`,
             'Writing the file is the only way to deliver your result; not writing it counts as task failure.',
           ].join('\n')
     return `${prompt}${attachmentBlock}\n${handoff}`
@@ -908,8 +908,8 @@ export class HerdrExecutor {
 
   /**
    * Attachment guidance block (between the task body and the handoff contract):
-   * - local pane: local absolute path + the helm artifacts get fetch command;
-   * - remote pane: only id/name and the fetch command (fetched via CLI against the remotely reachable HELM_HUB_URL).
+   * - local pane: local absolute path + the helmx artifacts get fetch command;
+   * - remote pane: only id/name and the fetch command (fetched via CLI against the remotely reachable HELMX_HUB_URL).
    * When deps.getArtifact is not injected, fall back to bare IDs (unit-test environments; no fabricated metadata).
    */
   private buildAttachmentBlock(request: AgentSpawnRequest, pane: ManagedPane): string {
@@ -920,10 +920,10 @@ export class HerdrExecutor {
       const meta = this.attachmentMetaCache.get(id)
       if (isRemote || meta === undefined) {
         const nameSuffix = meta !== undefined ? ` name=${meta.name} mime=${meta.mimeType} size=${meta.size} bytes` : ''
-        lines.push(`- id=${id}${nameSuffix}; fetch: helm artifacts get ${id} --output ./<name>`)
+        lines.push(`- id=${id}${nameSuffix}; fetch: helmx artifacts get ${id} --output ./<name>`)
       } else {
         lines.push(
-          `- ${meta.name} (id=${id}, mime=${meta.mimeType}, size=${meta.size} bytes, path=${meta.absPath}); fetch: helm artifacts get ${id} --output ./${meta.name}`,
+          `- ${meta.name} (id=${id}, mime=${meta.mimeType}, size=${meta.size} bytes, path=${meta.absPath}); fetch: helmx artifacts get ${id} --output ./${meta.name}`,
         )
       }
     }
@@ -990,7 +990,7 @@ export class HerdrExecutor {
   ): Promise<unknown> {
     const taskKey = this.paneKey(pane)
     if (this.activeTasks.has(taskKey)) {
-      throw new HelmError('pane_busy', `pane ${pane.paneId} 正在被另一个执行占用`, 409, { paneId: pane.paneId })
+      throw new HelmxError('pane_busy', `pane ${pane.paneId} 正在被另一个执行占用`, 409, { paneId: pane.paneId })
     }
     const connectionSignal = this.host.connectionSignal
     const effectiveSignal =
@@ -1006,20 +1006,20 @@ export class HerdrExecutor {
     const aborted = new Promise<never>((_, reject) => { rejectAbort = reject })
     const onAbort = () => {
       if (this.host.isClosing?.() === true) {
-        rejectAbort(new HelmError('aborted', `pane ${pane.paneId} 因宿主关闭断连保活`, 499))
+        rejectAbort(new HelmxError('aborted', `pane ${pane.paneId} 因宿主关闭断连保活`, 499))
         return
       }
       if (connectionSignal?.aborted && !request.signal?.aborted) {
-        rejectAbort(new HelmError('aborted', `pane ${pane.paneId} 服务连接已断开`, 499))
+        rejectAbort(new HelmxError('aborted', `pane ${pane.paneId} 服务连接已断开`, 499))
         return
       }
       if (isTimeoutSignal(request.signal)) {
-        rejectAbort(new HelmError('agent_timeout', `pane ${pane.paneId} execution timed out; pane and diagnostics kept (the underlying CLI state will be authoritatively confirmed before resume)`, 408))
+        rejectAbort(new HelmxError('agent_timeout', `pane ${pane.paneId} execution timed out; pane and diagnostics kept (the underlying CLI state will be authoritatively confirmed before resume)`, 408))
         return
       }
       cleanup ??= this.closePane(pane, 'cancelled')
       void cleanup.catch(() => {})
-      rejectAbort(new HelmError('aborted', `pane ${pane.paneId} execution cancelled`, 499))
+      rejectAbort(new HelmxError('aborted', `pane ${pane.paneId} execution cancelled`, 499))
     }
     effectiveSignal?.addEventListener('abort', onAbort, { once: true })
     if (effectiveSignal?.aborted) onAbort()
@@ -1028,19 +1028,19 @@ export class HerdrExecutor {
     } catch (error) {
       if (this.host.isClosing?.() === true) {
         // 宿主优雅关停：保活断连，绝不关窗、绝不改写 outcome='failed'/'settled'。
-        throw error instanceof HelmError
+        throw error instanceof HelmxError
           ? error
-          : new HelmError('aborted', `pane ${pane.paneId} 因宿主关闭断连保活`, 499)
+          : new HelmxError('aborted', `pane ${pane.paneId} 因宿主关闭断连保活`, 499)
       }
       if (connectionSignal?.aborted && !request.signal?.aborted) {
-        throw error instanceof HelmError
+        throw error instanceof HelmxError
           ? error
-          : new HelmError('aborted', `pane ${pane.paneId} 服务连接已断开`, 499)
+          : new HelmxError('aborted', `pane ${pane.paneId} 服务连接已断开`, 499)
       }
       if (isTimeoutSignal(request.signal)) {
         await this.markFailed(pane, error instanceof Error ? error.message : 'execution timed out')
         const snapshot = await this.paneHandoff.readDiagnostic(pane)
-        throw new HelmError(
+        throw new HelmxError(
           'agent_timeout',
           `pane ${pane.paneId} execution timed out; pane kept (the underlying CLI may still be running; authoritatively confirmed before resume, only idle/done may continue, never sending abort keystrokes on your behalf)\nLast 40 terminal lines (redacted):\n${snapshot}`,
           408,
@@ -1053,21 +1053,21 @@ export class HerdrExecutor {
         catch (cleanupError) {
           const note = this.deps.redact(cleanupError instanceof Error ? cleanupError.message : String(cleanupError))
           await this.markFailed(pane, note)
-          throw new HelmError('herdr_abort_cleanup_failed', `task cancelled, but closing our own pane failed: ${note}`, 502)
+          throw new HelmxError('herdr_abort_cleanup_failed', `task cancelled, but closing our own pane failed: ${note}`, 502)
         }
-        throw new HelmError('aborted', `pane ${pane.paneId} execution cancelled`, 499)
+        throw new HelmxError('aborted', `pane ${pane.paneId} execution cancelled`, 499)
       }
       await this.markFailed(pane, error instanceof Error ? error.message : String(error))
-      if (error instanceof HelmError && error.code === 'herdr_ownership_lost') {
+      if (error instanceof HelmxError && error.code === 'herdr_ownership_lost') {
         // 归属已变（可能为人类接管）：不调 agent.read 窥视终端。
         throw error
       }
       const snapshot = await this.paneHandoff.readDiagnostic(pane)
       const failure = error as { code?: unknown; status?: unknown }
-      throw new HelmError(
+      throw new HelmxError(
         typeof failure?.code === 'string' ? failure.code : 'herdr_execution_failed',
         `${this.deps.redact(error instanceof Error ? error.message : String(error))}\nLast 40 terminal lines (redacted):\n${snapshot}`,
-        error instanceof HelmError ? error.status : 502,
+        error instanceof HelmxError ? error.status : 502,
         { paneId: pane.paneId, snapshot },
       )
     } finally {
@@ -1091,7 +1091,7 @@ export class HerdrExecutor {
     //(never reuse the initial snapshot and misread the old path).
     const latest = this.registry.get(nodeIdOf(pane), pane.paneId)
     if (latest?.outputFileName === undefined) {
-      throw new HelmError('herdr_context_unavailable', `pane ${pane.paneId} : handoff context is no longer valid`, 409)
+      throw new HelmxError('herdr_context_unavailable', `pane ${pane.paneId} : handoff context is no longer valid`, 409)
     }
     return this.finishHandoffAndGate(request, latest)
   }
@@ -1143,19 +1143,19 @@ export class HerdrExecutor {
             this.asks.reopenUnresolved(nodeIdOf(pane), pane.paneId, info.stateChangeSeq)
             attempts = 0
             if (!await this.bridgeBlocked(request, pane, info)) {
-              throw new HelmError('aborted', `human cancelled the approval for pane ${pane.paneId}`, 409)
+              throw new HelmxError('aborted', `human cancelled the approval for pane ${pane.paneId}`, 409)
             }
           } else {
             await backoffForDuplicateBlocked(signalOf(request), ++attempts, this.deps.blockedBackoffBaseMs, this.deps.blockedBackoffCapMs)
           }
         } else {
           if (!await this.bridgeBlocked(request, pane, info)) {
-            throw new HelmError('aborted', `human cancelled the approval for pane ${pane.paneId}`, 409)
+            throw new HelmxError('aborted', `human cancelled the approval for pane ${pane.paneId}`, 409)
           }
           attempts = 0
         }
       } else if (info.agentStatus === 'unknown') {
-        throw new HelmError('herdr_agent_unsettled', `pane ${pane.paneId}  state unknown; completion cannot be confirmed`, 502)
+        throw new HelmxError('herdr_agent_unsettled', `pane ${pane.paneId}  state unknown; completion cannot be confirmed`, 502)
       }
       info = parseAgentResult(await this.transport.call(
         pane.target, 'agent.wait', { target: pane.paneId, until: ['idle', 'done', 'blocked'] }, { signal: request.signal },
@@ -1336,7 +1336,7 @@ export class HerdrExecutor {
   /**
    * Executor-side resource alignment for external settle paths (pane.closed event / startup reconciliation / probe ownership mismatch):
    * once the registry is settled, closePane early-exits idempotently, so the env baseline paneEnvs
-   * (incl. managed HELM_TOKEN, no stash secrets) and the not-started markers must be released here explicitly, keeping the lifecycle
+   * (incl. managed HELMX_TOKEN, no stash secrets) and the not-started markers must be released here explicitly, keeping the lifecycle
    * aligned with the registry outcome instead of lingering one by one until the disable rebuild. In-flight steer
    * phase/task registrations are voided in sync (their tail-read recheck will deterministically reject).
    */
@@ -1354,7 +1354,7 @@ export class HerdrExecutor {
       await this.host.cancelAsk(askId, reason)
     } catch (error) {
       if (
-        error instanceof HelmError &&
+        error instanceof HelmxError &&
         (error.status === 404 ||
           error.code === 'ask_already_settled' ||
           error.code === 'plugin_host_disposed' ||

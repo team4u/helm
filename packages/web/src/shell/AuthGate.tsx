@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react'
 import { authApi } from '../lib/api.js'
-import { HelmIcon } from '@helm/plugin-client'
+import { HelmxIcon } from '@helmx/plugin-client'
 import { useAuthConnection, useStoreActions, useThemePreferencesState } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { LocaleMenuButton } from '../ui/LocaleMenuButton.js'
@@ -50,7 +50,7 @@ export function AuthGate() {
       >
         <div className="auth-gate-header">
           <div className="auth-gate-brand">
-            <HelmIcon name="sparkles" size={18} />
+            <HelmxIcon name="sparkles" size={18} />
             <span className="auth-gate-title">{t('shell.auth.consoleTitle')}</span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -75,7 +75,7 @@ export function AuthGate() {
                     : t('shell.auth.themeDark')
               }
             >
-              <HelmIcon
+              <HelmxIcon
                 name={
                   themePreference === 'system'
                     ? 'monitor'
@@ -95,7 +95,7 @@ export function AuthGate() {
 
         {error && (
           <div className="callout callout-error" role="alert">
-            <HelmIcon name="alert-circle" size={14} />
+            <HelmxIcon name="alert-circle" size={14} />
             <span>{error}</span>
           </div>
         )}
@@ -132,7 +132,7 @@ export function AuthGate() {
         )}
 
         <button type="submit" className="btn btn-primary" disabled={submitting}>
-          <HelmIcon name="lock" size={13} />
+          <HelmxIcon name="lock" size={13} />
           <span>{submitting ? t('shell.auth.verifying') : isSetup ? t('shell.auth.initialize') : t('shell.auth.unlock')}</span>
         </button>
       </form>

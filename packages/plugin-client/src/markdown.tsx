@@ -1,7 +1,7 @@
 /**
  * Plain Markdown text rendering primitive shared by plugins (react-markdown +
  * GFM from the same instance as the host).
- * Exported by @helm/plugin-client (e.g. the Markdown primitive of
+ * Exported by @helmx/plugin-client (e.g. the Markdown primitive of
  * builtin:json-render); it contains no host conversation-specific logic such
  * as artifact links — those live in the host MarkdownView.
  */

@@ -1,8 +1,8 @@
 /**
- * helm 工作流端到端集成验收（app-workflow 组合链路，不修改实现）。
+ * helmx 工作流端到端集成验收（app-workflow 组合链路，不修改实现）。
  *
  * 与 core.integration.test.ts 的分工：本文件专注 WorkflowService 经
- * builtin:workflow 插件（createHelm 组合）后的两条真链路：
+ * builtin:workflow 插件（createHelmx 组合）后的两条真链路：
  * 1. workflow.run(script agent(...,{schema,gate})) -> agent_spawn 管道 -> 原生
  *    subagent（真子会话 + faux register_structured_output 工具自愈）-> gate
  *    真实 shell 只执行一次（sentinel 文件计数）-> wait 返回 Schema 校验对象；
@@ -30,10 +30,10 @@ import {
   fauxToolCall,
 } from '@earendil-works/pi-ai/providers/faux'
 
-import { HelmError, type PluginDefinition } from '@helm/protocol'
-import { createHelm } from '../../hub/src/app.js'
+import { HelmxError, type PluginDefinition } from '@helmx/protocol'
+import { createHelmx } from '../../hub/src/app.js'
 import { startHub } from '../../kernel/src/http/index.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { makeFauxProvider, type FauxProviderHandle } from './helpers/plugin-test-env.js'
 
 import assert from 'node:assert/strict'
@@ -47,13 +47,13 @@ function dirnameOf(u: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// 环境：真 createHelm + 探针插件（echo action 供 workflow action() 调用）
+// 环境：真 createHelmx + 探针插件（echo action 供 workflow action() 调用）
 // ---------------------------------------------------------------------------
 
 interface WfEnv {
   dataDir: string
   faux: FauxProviderHandle
-  app: Awaited<ReturnType<typeof createHelm>>
+  app: Awaited<ReturnType<typeof createHelmx>>
   /** echo action handler 执行计数（副作用哨兵）。 */
   echoCalls: string[]
   /** 引擎经 builtin:workflow 插件动作总线驱动（与 HTTP/CLI/模型工具同链路）。 */
@@ -63,9 +63,9 @@ interface WfEnv {
 }
 
 async function makeWfEnv(): Promise<WfEnv> {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-wf-e2e-'))
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-wf-e2e-'))
   const faux = makeFauxProvider()
-  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider] })
+  const app = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider] })
 
   const echoCalls: string[] = []
   await app.kernel.plugins!.register({
@@ -234,9 +234,9 @@ test('工作流2: action() 经 PluginHost 动作总线共享 Schema 校验——
 
 test('工作流3: turn_settled 钩子收集 completed/failed/aborted 三态各一次，inputs origin 精确记录', { timeout: 60_000 }, async () => {
   // aborted 场景需要真实在途流：慢速 token 流（1 tok/s）确保 abort 时回合仍在流式中。
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-wf-e2e-'))
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-wf-e2e-'))
   const faux = makeFauxProvider({ tokensPerSecond: 1, tokenSize: { min: 1, max: 1 } })
-  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider] })
+  const app = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider] })
   try {
     const settled: Array<{ outcome: string; origins: string[]; conversationId: number; error?: string }> = []
     await app.kernel.plugins!.register({

@@ -1,5 +1,5 @@
 /**
- * Read-only node diagnostics (`helm-node doctor`; zero disk writes, zero side effects).
+ * Read-only node diagnostics (`helmx-node doctor`; zero disk writes, zero side effects).
  *
  * Checks:
  * 1. `identity`: `<dataDir>/node.json` exists, parses cleanly, and has `0600` permissions on POSIX;
@@ -93,7 +93,7 @@ async function checkIdentity(dataDir: string): Promise<NodeDoctorCheck & { ident
     return {
       id: 'identity',
       status: 'error',
-      message: `node identity file is unreadable (${error instanceof Error ? error.message : String(error)}); inspect and remove ${file}, then re-bind with helm-node connect <hubUrl> --token <token>`,
+      message: `node identity file is unreadable (${error instanceof Error ? error.message : String(error)}); inspect and remove ${file}, then re-bind with helmx-node connect <hubUrl> --token <token>`,
       identity,
     };
   }
@@ -101,7 +101,7 @@ async function checkIdentity(dataDir: string): Promise<NodeDoctorCheck & { ident
     return {
       id: 'identity',
       status: 'error',
-      message: `node identity file not found at ${file}; bind a JOIN token first with helm-node connect <hubUrl> --token <token>`,
+      message: `node identity file not found at ${file}; bind a JOIN token first with helmx-node connect <hubUrl> --token <token>`,
       identity,
     };
   }
@@ -270,7 +270,7 @@ async function checkHerdrIpc(env: NodeJS.ProcessEnv): Promise<NodeDoctorCheck> {
 
 /**
  * Run read-only diagnostics and return a report (`ok` is true iff no check has status `'error'`).
- * `hubUrl` precedence: explicit option -> `env.HELM_HUB_URL` -> `identity.hubUrl`.
+ * `hubUrl` precedence: explicit option -> `env.HELMX_HUB_URL` -> `identity.hubUrl`.
  */
 export async function runNodeDoctor(options: NodeDoctorOptions = {}): Promise<NodeDoctorReport> {
   const env = options.env ?? process.env;
@@ -288,7 +288,7 @@ export async function runNodeDoctor(options: NodeDoctorOptions = {}): Promise<No
   checks.push(await checkPrivilege(env, options.checkPrivilege));
 
   const explicitHub = options.hubUrl !== undefined && options.hubUrl !== '' ? options.hubUrl : undefined;
-  const envHub = env['HELM_HUB_URL'] !== undefined && env['HELM_HUB_URL'] !== '' ? env['HELM_HUB_URL'] : undefined;
+  const envHub = env['HELMX_HUB_URL'] !== undefined && env['HELMX_HUB_URL'] !== '' ? env['HELMX_HUB_URL'] : undefined;
   const hubUrl = explicitHub ?? envHub ?? identity?.hubUrl;
   if (identity === null || hubUrl === undefined || hubUrl === '') {
     checks.push({
@@ -297,7 +297,7 @@ export async function runNodeDoctor(options: NodeDoctorOptions = {}): Promise<No
       message:
         identity === null
           ? 'identity invalid; skipping Hub reachability probe'
-          : 'Hub URL not configured (pass --hub, set HELM_HUB_URL, or bind via helm-node connect)',
+          : 'Hub URL not configured (pass --hub, set HELMX_HUB_URL, or bind via helmx-node connect)',
     });
   } else {
     checks.push(await checkHub(hubUrl, identity.nodeId, connectTimeoutMs));

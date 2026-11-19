@@ -1,5 +1,5 @@
 /**
- * 宿主端口适配器：把真实 HelmStoreValue 适配为 @helm/plugin-client 的
+ * 宿主端口适配器：把真实 HelmxStoreValue 适配为 @helmx/plugin-client 的
  * PluginClientHostPort（SDK 唯一宿主注入面；SDK 不反向依赖任何 web 实现）。
  *
  * - 数据切片与具名函数直接转发真实 store（引用与 SSE 节奏一致，无拷贝无 mock）；
@@ -9,15 +9,15 @@
  *   流式分块），SDK 侧 MarkdownView/CodeBlockView 仅做端口转发。
  */
 import { createElement } from 'react'
-import type { PluginClientHostPort, PluginSlotPortItem } from '@helm/plugin-client'
+import type { PluginClientHostPort, PluginSlotPortItem } from '@helmx/plugin-client'
 import { conversationsApi } from './api.js'
 import { MarkdownView, CodeBlockView } from '../conversation/MarkdownView.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
 import { collectSlotItems } from '../ui/plugin-slot-model.js'
-import { matchesUiScope, type HelmStoreValue } from './types.js'
+import { matchesUiScope, type HelmxStoreValue } from './types.js'
 
 export type PluginClientHostStoreInput = Pick<
-  HelmStoreValue,
+  HelmxStoreValue,
   | 'authenticated'
   | 'theme'
   | 'conversations'

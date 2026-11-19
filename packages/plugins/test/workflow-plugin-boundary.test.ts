@@ -8,12 +8,12 @@ import assert from 'node:assert/strict'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { HelmError, type ConversationSummary, type MaybePromise, type PluginDefinition, type PluginToolContext } from '@helm/protocol'
+import { HelmxError, type ConversationSummary, type MaybePromise, type PluginDefinition, type PluginToolContext } from '@helmx/protocol'
 import { WORKFLOW_PLUGIN_ID } from '../src/contracts.js'
 import { PluginHost } from '../../kernel/src/plugins/index.js'
 import { PluginHostBackendFixtureBase } from '../../kernel/test/helpers/plugin-host-backend.js'
 import { pluginToolResult } from '../../kernel/src/runtime/runtime-helpers.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { MemoryDocStore, makeConversationSummary } from './helpers/plugin-test-env.js'
 
 // ---------------------------------------------------------------------------
@@ -47,7 +47,7 @@ class FakeBackend extends PluginHostBackendFixtureBase {
   }
   getConversation(id: number): ConversationSummary {
     const found = this.conversations.get(id)
-    if (found === undefined) throw new HelmError('not_found', `会话不存在: ${id}`, 404)
+    if (found === undefined) throw new HelmxError('not_found', `会话不存在: ${id}`, 404)
     return found
   }
   updateConversation(id: number): Promise<ConversationSummary> {
@@ -59,7 +59,7 @@ class FakeBackend extends PluginHostBackendFixtureBase {
   getConversationActivity(): { consecutiveErrors: number } {
     return { consecutiveErrors: 0 }
   }
-  getConversationOwnership(): 'helm' | 'bot' | 'human' {
+  getConversationOwnership(): 'helmx' | 'bot' | 'human' {
     return 'human'
   }
   spawnAgent(): Promise<unknown> {
@@ -69,7 +69,7 @@ class FakeBackend extends PluginHostBackendFixtureBase {
     return Promise.resolve({ ok: true, output: '' })
   }
   // 供 cleanup_worktree 真实插件路径驱动：execEnv 返回失败 git 输出（不执行真实命令）。
-  execEnv(): Promise<import('@helm/protocol').EnvExecResponse> {
+  execEnv(): Promise<import('@helmx/protocol').EnvExecResponse> {
     return Promise.resolve({ ok: false, exitCode: 128, output: 'fatal: not a git repository', timedOut: false })
   }
   listActiveSpawnExecutions(): never[] {
@@ -87,7 +87,7 @@ class FakeBackend extends PluginHostBackendFixtureBase {
     } as unknown as import('@earendil-works/pi-durable/env').ExecutionEnv
   }
   /** 进程占用快照：fixture 固定返回完整空快照（本文件不调 cleanup，仅满足端口形状）。 */
-  inspectNodePathUsage(input: { nodeId: string; path: string }): Promise<import('@helm/protocol').NodePathUsage> {
+  inspectNodePathUsage(input: { nodeId: string; path: string }): Promise<import('@helmx/protocol').NodePathUsage> {
     return Promise.resolve({
       path: input.path,
       processes: [],
@@ -113,7 +113,7 @@ class FakeBackend extends PluginHostBackendFixtureBase {
   }
   markConversationOwnership(): void {}
   createAsk(): Promise<never> {
-    return Promise.reject(new HelmError('unsupported', '测试后端不提供 ask', 501))
+    return Promise.reject(new HelmxError('unsupported', '测试后端不提供 ask', 501))
   }
   cancelAsk(): Promise<void> {
     return Promise.resolve()
@@ -214,7 +214,7 @@ function toolContext(over: Partial<PluginToolContext> = {}): PluginToolContext {
 }
 
 beforeEach(() => {
-  dataDir = mkdtempSync(join(tmpdir(), 'helm-plugin-barrier-'))
+  dataDir = mkdtempSync(join(tmpdir(), 'helmx-plugin-barrier-'))
   backend = new FakeBackend()
   docs = new MemoryDocStore()
   sessionDocs = new MemorySessionDocStore()
@@ -297,7 +297,7 @@ test('deferServices：任一 prepare 失败则零 start 且可重试', { timeout
       ctx.service({
         id: 'svc',
         async prepare() {
-          if (fail) throw new HelmError('prepare_boom', 'prepare 阶段失败', 500)
+          if (fail) throw new HelmxError('prepare_boom', 'prepare 阶段失败', 500)
           log.push('test:bad:prepare')
         },
         async start() {
@@ -307,7 +307,7 @@ test('deferServices：任一 prepare 失败则零 start 且可重试', { timeout
       })
     },
   })
-  await assert.rejects(() => host.start(), (err: unknown) => err instanceof HelmError && err.code === 'prepare_boom')
+  await assert.rejects(() => host.start(), (err: unknown) => err instanceof HelmxError && err.code === 'prepare_boom')
   assert.equal(log.filter((e: string) => e.endsWith(':start')).length, 0, `prepare 失败：任何 start 不得执行（实际 ${JSON.stringify(log)}）`)
   fail = false
   await host.start()
@@ -393,7 +393,7 @@ test('pluginToolResult：无信封字段的业务对象走文本通道；output 
   // output 为非法类型（数字）：出现信封字段即按信封严格校验，显式拒绝。
   assert.throws(
     () => pluginToolResult({ output: 42, count: 3 }, identity, { toolName: 't' }),
-    (err: unknown) => err instanceof HelmError && err.code === 'invalid_tool_result' && err.message.includes('output'),
+    (err: unknown) => err instanceof HelmxError && err.code === 'invalid_tool_result' && err.message.includes('output'),
   )
 })
 
@@ -434,7 +434,7 @@ test('pluginToolResult：未声明 schema 却返回 structuredOutput 显式拒�
         { toolName: 'subagent', callId: 'call-42' },
       ),
     (err: unknown) =>
-      err instanceof HelmError &&
+      err instanceof HelmxError &&
       err.code === 'invalid_tool_result' &&
       err.message.includes('callId=call-42') &&
       err.message.includes('structuredOutputSchema'),
@@ -445,11 +445,11 @@ test('pluginToolResult：isError 非 boolean 显式拒绝（不静默忽略）',
   const identity = (text: string) => text
   assert.throws(
     () => pluginToolResult({ output: 'text', isError: 'yes' }, identity, { toolName: 't' }),
-    (err: unknown) => err instanceof HelmError && err.code === 'invalid_tool_result' && err.message.includes('isError'),
+    (err: unknown) => err instanceof HelmxError && err.code === 'invalid_tool_result' && err.message.includes('isError'),
   )
   assert.throws(
     () => pluginToolResult({ output: 42 }, identity, { toolName: 't' }),
-    (err: unknown) => err instanceof HelmError && err.code === 'invalid_tool_result' && err.message.includes('output'),
+    (err: unknown) => err instanceof HelmxError && err.code === 'invalid_tool_result' && err.message.includes('output'),
   )
 })
 
@@ -486,7 +486,7 @@ test('addUi 校验：tool.view replaceRow 非布尔拒绝；toolNames 非法拒�
           } as never)
         },
       }),
-    (err: unknown) => err instanceof HelmError && err.code === 'invalid_ui_spec' && err.message.includes('replaceRow'),
+    (err: unknown) => err instanceof HelmxError && err.code === 'invalid_ui_spec' && err.message.includes('replaceRow'),
   )
   await assert.rejects(
     () =>
@@ -498,7 +498,7 @@ test('addUi 校验：tool.view replaceRow 非布尔拒绝；toolNames 非法拒�
           ctx.ui.toolView({ id: 'v2', toolNames: [], client: { module: 'index.tsx', export: 'X' } } as never)
         },
       }),
-    (err: unknown) => err instanceof HelmError && err.code === 'invalid_ui_spec' && err.message.includes('toolNames'),
+    (err: unknown) => err instanceof HelmxError && err.code === 'invalid_ui_spec' && err.message.includes('toolNames'),
   )
   await host.dispose()
 })
@@ -527,7 +527,7 @@ test('addUi 校验：workbench badge 形状非法拒绝（未知字段/doc 非 s
             } as never)
           },
         }),
-      (err: unknown) => err instanceof HelmError && err.code === 'invalid_ui_spec' && err.message.includes('badge'),
+      (err: unknown) => err instanceof HelmxError && err.code === 'invalid_ui_spec' && err.message.includes('badge'),
     )
   }
   await host.dispose()
@@ -551,7 +551,7 @@ test('workflow run 动作：input.conversationId 与调用上下文冲突显式�
             context.conversationId !== undefined &&
             conversationId !== context.conversationId
           ) {
-            throw new HelmError(
+            throw new HelmxError(
               'validation_error',
               `conversationId 冲突：输入指定 ${conversationId} 与调用上下文 ${context.conversationId} 不一致`,
               400,
@@ -564,7 +564,7 @@ test('workflow run 动作：input.conversationId 与调用上下文冲突显式�
   })
   await assert.rejects(
     () => host.invokeAction('test:x', 'probe', {}, toolContext({ conversationId: 1 })),
-    (err: unknown) => err instanceof HelmError && err.code === 'unknown_plugin',
+    (err: unknown) => err instanceof HelmxError && err.code === 'unknown_plugin',
   )
   await host.dispose()
 })
@@ -579,7 +579,7 @@ function seedManagedWorktree(docStore: MemoryDocStore): void {
     'runtime/worktrees': {
       version: 1,
       records: [{
-        id: 'local:/wt/x', nodeId: 'local', repoRoot: '/repo', path: '/wt/x', branch: 'helm/spawn-x',
+        id: 'local:/wt/x', nodeId: 'local', repoRoot: '/repo', path: '/wt/x', branch: 'helmx/spawn-x',
         baseCommit: 'a1b2c3', dirtySource: false, parentConversationId: 1, conversationId: 1,
         origin: 'native', status: 'active', createdAt: 1,
       }],
@@ -716,7 +716,7 @@ test('工作流库动作注册：get/save/delete 三动作登记且 CLI 映射�
   await host.dispose()
 })
 
-test('detach 动作注册：CLI 映射 helm workflows detach <runId>，输入 schema 收紧 additionalProperties', { timeout: 60_000 }, async () => {
+test('detach 动作注册：CLI 映射 helmx workflows detach <runId>，输入 schema 收紧 additionalProperties', { timeout: 60_000 }, async () => {
   const host = makeHost()
   const { createWorkflowPlugin } = await import('../src/workflow.js')
   await host.register(createWorkflowPlugin())
@@ -732,12 +732,12 @@ test('detach 动作注册：CLI 映射 helm workflows detach <runId>，输入 sc
     // 边界：未知字段显式拒绝（validation_error），绝不静默丢弃。
     await assert.rejects(
       () => host.invokeAction(WORKFLOW_PLUGIN_ID, 'detach', { runId: 'wf_x', bogus: 1 }),
-      (err: unknown) => err instanceof HelmError && err.code === 'validation_error',
+      (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',
     )
     // 未知 run 404 透传（真实 WorkflowService 无该记录）。
     await assert.rejects(
       () => host.invokeAction(WORKFLOW_PLUGIN_ID, 'detach', { runId: 'wf_nonexistent' }),
-      (err: unknown) => err instanceof HelmError && err.code === 'not_found' && err.status === 404,
+      (err: unknown) => err instanceof HelmxError && err.code === 'not_found' && err.status === 404,
     )
   } finally {
     await host.dispose()
@@ -763,13 +763,13 @@ test('工作流库动作全链路：save 真实写入 → list 携带文件事�
     // 重复保存：动作边界透传 409 workflow_already_exists。
     await assert.rejects(
       () => host.invokeAction(WORKFLOW_PLUGIN_ID, 'save', { script }),
-      (err: unknown) => err instanceof HelmError && err.code === 'workflow_already_exists',
+      (err: unknown) => err instanceof HelmxError && err.code === 'workflow_already_exists',
     )
 
     // inputSchema 边界：未知字段拒绝（additionalProperties: false）。
     await assert.rejects(
       () => host.invokeAction(WORKFLOW_PLUGIN_ID, 'save', { script, bogus: 1 }),
-      (err: unknown) => err instanceof HelmError && err.code === 'validation_error',
+      (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',
     )
 
     // list：文件事实进入摘要。
@@ -789,7 +789,7 @@ test('工作流库动作全链路：save 真实写入 → list 携带文件事�
 
     await assert.rejects(
       () => host.invokeAction(WORKFLOW_PLUGIN_ID, 'get', { name: 'nope' }),
-      (err: unknown) => err instanceof HelmError && err.code === 'not_found',
+      (err: unknown) => err instanceof HelmxError && err.code === 'not_found',
     )
 
     // delete：删除定义；再删 404；list 回空。
@@ -801,7 +801,7 @@ test('工作流库动作全链路：save 真实写入 → list 携带文件事�
     assert.equal(removed.name, 'release')
     await assert.rejects(
       () => host.invokeAction(WORKFLOW_PLUGIN_ID, 'delete', { name: 'release' }),
-      (err: unknown) => err instanceof HelmError && err.code === 'not_found',
+      (err: unknown) => err instanceof HelmxError && err.code === 'not_found',
     )
     const after = (await host.invokeAction(WORKFLOW_PLUGIN_ID, 'list', {})) as { workflows: unknown[] }
     assert.deepEqual(after.workflows, [])

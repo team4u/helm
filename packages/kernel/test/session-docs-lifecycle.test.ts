@@ -13,9 +13,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createModels } from '@earendil-works/pi-ai/models'
 import { KernelRuntime } from '../src/runtime/runtime.js'
-import { openHelmDatabase } from '../src/runtime/sqlite.js'
+import { openHelmxDatabase } from '../src/runtime/sqlite.js'
 import { startHub } from '../src/http/index.js'
-import type { PluginSessionDocHandle } from '@helm/protocol'
+import type { PluginSessionDocHandle } from '@helmx/protocol'
 import type { KernelRuntime as KernelRuntimeType } from '../src/runtime/runtime.js'
 
 interface App {
@@ -27,7 +27,7 @@ interface App {
 }
 
 async function openApp(): Promise<App> {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-sd-lifecycle-'))
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-sd-lifecycle-'))
   const models = createModels()
   const kernel = await KernelRuntime.open({
     dataDir,
@@ -183,10 +183,10 @@ test('transient sessionDoc (durable: false): HTTP GET + dedicated SSE + conversa
 
     // Flush & check SQLite: zero rows ever written for p:transient-http.
     await transient.flush()
-    const db = await openHelmDatabase(app.kernel.dataDir)
+    const db = await openHelmxDatabase(app.kernel.dataDir)
     try {
       const rows = await db.db.all<{ conversation_id: number }>(
-        'SELECT conversation_id FROM helm_plugin_session_docs WHERE plugin_id = ?',
+        'SELECT conversation_id FROM helmx_plugin_session_docs WHERE plugin_id = ?',
         'p:transient-http',
       )
       assert.equal(rows.length, 0)

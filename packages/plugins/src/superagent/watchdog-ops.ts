@@ -12,11 +12,11 @@
  */
 
 import {
-  HelmError,
+  HelmxError,
   type AskResult,
-  type HelmPluginContext,
+  type HelmxPluginContext,
   escapeXml,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 import type { SuperAgentWatchdogRuntime } from './contracts.js'
 import type { WatchdogDedupStore } from './watchdog-dedup.js'
 import {
@@ -33,7 +33,7 @@ import {
 import { isProtectedTarget } from './watchdog-guards.js'
 
 interface WatchdogOpsDeps {
-  ctx: HelmPluginContext
+  ctx: HelmxPluginContext
   runtime: SuperAgentWatchdogRuntime
   dedup: WatchdogDedupStore
   notify: WatchdogNotify
@@ -187,7 +187,7 @@ export class WatchdogOpsExecutor {
           try {
             return ctx.host.getConversationOwnership(id) !== 'human' && ctx.host.getConversation(id).stateChangeSeq === finding.stateChangeSeq
           } catch (error) {
-            if (error instanceof HelmError && error.code === 'not_found') return false
+            if (error instanceof HelmxError && error.code === 'not_found') return false
             throw error
           }
         })
@@ -226,7 +226,7 @@ export class WatchdogOpsExecutor {
     return [
       'Watchdog 巡检告警：以下是本轮自动巡检发现的异常事实（0-Token 层处置见 autoDisposition）。',
       '处置铁律：',
-      '1) 仅允许对 ownedBy=helm/bot 且 targetKind=conversation 的目标使用 watchdog_recover / watchdog_abort；执行层会再次现查归属，human 归属一律拒绝。',
+      '1) 仅允许对 ownedBy=helmx/bot 且 targetKind=conversation 的目标使用 watchdog_recover / watchdog_abort；执行层会再次现查归属，human 归属一律拒绝。',
       '2) ownedBy=human 会话与一切外部终端窗格（targetKind=external）绝对只读：只能 watchdog_inspect 诊断并通知人类，严禁任何按键、恢复注入或直接中止。',
       '3) 中止外部窗格只能先核对 facts.parentConversationId 指向的 owned 原生工作会话，再对该会话 watchdog_abort，由 Herdr 原取消链清理。',
       '4) 外部探针 stalledBasis=since-last-state-change：stalledMs 只是状态翻转间隔，不是工作停滞证据，不得据此中止。',
@@ -406,7 +406,7 @@ export class WatchdogOpsExecutor {
       settled = await created
     } catch (err) {
       inFlightBridges.delete(guardKey)
-      if (err instanceof HelmError && err.code === 'ask_id_conflict') {
+      if (err instanceof HelmxError && err.code === 'ask_id_conflict') {
         // 同 ID 已存在（含已结算）：视为已桥接，占坑防重复创建。
         dedup.markFired(guardKey, 'bridge', seq)
         return

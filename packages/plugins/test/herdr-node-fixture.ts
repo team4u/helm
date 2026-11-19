@@ -38,10 +38,10 @@ export interface NodeFixture {
 export async function nodeFixture(
   t: TestContext,
   respond: (request: Record<string, unknown>, socket: Socket) => void = (_req, socket) => {
-    socket.end(`${JSON.stringify({ id: 'helm-remote-1', result: { type: 'ok' } })}\n`)
+    socket.end(`${JSON.stringify({ id: 'helmx-remote-1', result: { type: 'ok' } })}\n`)
   },
 ): Promise<NodeFixture> {
-  const root = await mkdtemp(join(tmpdir(), 'helm-node-channel-'))
+  const root = await mkdtemp(join(tmpdir(), 'helmx-node-channel-'))
   t.after(() => rm(root, { recursive: true, force: true }))
   const socketPath = join(root, 'herdr.sock')
   const requests: Array<{ id: string; method: string; params: Record<string, unknown> }> = []
@@ -135,11 +135,11 @@ export function relabelChannel(local: HerdrNodeChannel, nodeId: string): HerdrNo
   }
 }
 
-/** 临时目录（含 .helm）。 */
+/** 临时目录（含 .helmx）。 */
 export async function tempRoot(t: TestContext, prefix: string): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), prefix))
   t.after(() => rm(root, { recursive: true, force: true }))
-  await mkdir(join(root, '.helm'), { recursive: true })
+  await mkdir(join(root, '.helmx'), { recursive: true })
   return root
 }
 

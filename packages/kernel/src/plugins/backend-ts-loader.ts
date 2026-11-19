@@ -4,7 +4,7 @@
  * - Transpiles `.ts`/`.tsx`/`.mts`/`.cts` source files inside registered plugin roots (via realpath)
  *   using Node `module.registerHooks` + the host build port's `transformBackendTs`;
  * - Preserves real source URLs so `import.meta.url` points to real files, and ESM cache keeps
- *   `@helm/*` singleton identity consistent with the host;
+ *   `@helmx/*` singleton identity consistent with the host;
  * - Resolves TS-style relative imports (`.js -> .ts/.tsx`, extensionless -> `.ts/.tsx/index.ts`)
  *   and patches ESM `.json` imports with `type: 'json'`;
  * - Rejects symlink/relative escapes outside registered roots;
@@ -14,7 +14,7 @@ import { registerHooks, type ModuleHooks } from 'node:module';
 import { readFileSync, realpathSync, statSync } from 'node:fs';
 import { isAbsolute, join, relative, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { HelmError, type PluginBuildProvider } from '@helm/protocol';
+import { HelmxError, type PluginBuildProvider } from '@helmx/protocol';
 
 /** Transpilation function signature (`PluginBuildProvider.transformBackendTs`). */
 export type BackendTsTransformFn = PluginBuildProvider['transformBackendTs'];
@@ -35,19 +35,19 @@ const rootRefCounts = new Map<string, TsRootEntry>();
 
 /**
  * Module generation counter (for controlled hot reload): root `realpath` -> next generation number.
- * On reload, appending `?helmgen=<n>` to the entry URL makes Node's ESM cache re-initialize the
+ * On reload, appending `?helmxgen=<n>` to the entry URL makes Node's ESM cache re-initialize the
  * plugin module graph under a fresh URL; the `resolve` hook propagates this tag across relative
- * imports within the plugin root, while bare specifiers (`@helm/*`, npm packages, `node:` builtins)
+ * imports within the plugin root, while bare specifiers (`@helmx/*`, npm packages, `node:` builtins)
  * resolve normally without the tag and stay shared with the host—isolating generation reloads
  * strictly inside the plugin root.
  */
 const rootGenerations = new Map<string, number>();
 
 /** Reserved generation query parameter prefix (excluding `=` and value). */
-const GENERATION_QUERY_PREFIX = 'helmgen=';
+const GENERATION_QUERY_PREFIX = 'helmxgen=';
 
 /**
- * Extracts the `helmgen` generation number from a URL (or `undefined` when absent).
+ * Extracts the `helmxgen` generation number from a URL (or `undefined` when absent).
  * Only appears along propagated relative-import chains inside a plugin root, seeded by reload/doctor.
  */
 function generationOfUrl(url: string): number | undefined {
@@ -62,7 +62,7 @@ function generationOfUrl(url: string): number | undefined {
   return undefined;
 }
 
-/** Appends a `helmgen` generation tag to a file URL unless one is already present. */
+/** Appends a `helmxgen` generation tag to a file URL unless one is already present. */
 function withGenerationQuery(url: string, generation: number): string {
   if (generationOfUrl(url) !== undefined) return url;
   return `${url}?${GENERATION_QUERY_PREFIX}${generation}`;
@@ -70,7 +70,7 @@ function withGenerationQuery(url: string, generation: number): string {
 
 /**
  * Reserves and returns the next monotonically increasing generation number for a plugin root.
- * Callers (`doctor` / `reload`) attach `?helmgen=<n>` to the entry URL so a new module graph
+ * Callers (`doctor` / `reload`) attach `?helmxgen=<n>` to the entry URL so a new module graph
  * initializes independently while previous generation modules remain usable in the ESM cache
  * and bare-specifier dependencies stay shared with the host.
  */
@@ -156,8 +156,8 @@ function isFile(path: string): boolean {
 }
 
 /** Reject `.js`-style specifiers that resolve to TypeScript sources outside the plugin root. */
-function rootEscapeError(specifier: string, candidate: string, real: string): HelmError {
-  return new HelmError(
+function rootEscapeError(specifier: string, candidate: string, real: string): HelmxError {
+  return new HelmxError(
     'plugin_load_failed',
     `external plugin relative dependency ${specifier} resolved to TypeScript source outside plugin directory ${candidate} (real path ${real}), reject transpile; if an external module is truly required, reference its actual extension explicitly`,
     500,
@@ -176,7 +176,7 @@ function ensureHooks(): void {
       }
       if (specifier.startsWith('./') || specifier.startsWith('../')) {
         // Propagate generation tag from parent across internal relative imports so reloads get a fresh
-        // isolated module graph, while leaving bare specifiers (@helm/* / npm / node:) shared.
+        // isolated module graph, while leaving bare specifiers (@helmx/* / npm / node:) shared.
         const parentGeneration = generationOfUrl(parent);
         /** Append generation tag only to URLs inside plugin roots so shared modules are not duplicated. */
         const settle = (url: string): { url: string; shortCircuit?: boolean } =>
@@ -246,8 +246,8 @@ function ensureHooks(): void {
         }
         return resolved;
       }
-      // Host shared contract packages (`@helm/*`): resolve from host so plugins share singletons without double bundling.
-      if (specifier.startsWith('@helm/')) {
+      // Host shared contract packages (`@helmx/*`): resolve from host so plugins share singletons without double bundling.
+      if (specifier.startsWith('@helmx/')) {
         try {
           const url = hostMetaResolve(specifier);
           if (typeof url === 'string' && url.startsWith('file:')) {
@@ -263,7 +263,7 @@ function ensureHooks(): void {
       if (!isInsideAnyRoot(url)) {
         return nextLoad(url, context);
       }
-      // Compute extension from the path without query parameters (generation URLs carry `?helmgen=N`).
+      // Compute extension from the path without query parameters (generation URLs carry `?helmxgen=N`).
       const ext = fileExtension(fileURLToPath(url));
       // Rewrite relative `.json` imports to include `type: 'json'` since esbuild strips ESM import attributes.
       if (ext === '.json') {
@@ -286,7 +286,7 @@ function ensureHooks(): void {
       // Transpiler must be injected by the build port; never silently fall back.
       const transform = transformOfRoot(url);
       if (transform === undefined) {
-        throw new HelmError(
+        throw new HelmxError(
           'unsupported_backend_ts_build',
           `Host has not wired plugin build port (PluginHostOptions.buildProvider.transformBackendTs): cannot transpile external plugin TS source ${file}`,
           501,
@@ -301,7 +301,7 @@ function ensureHooks(): void {
           kind: ext === '.tsx' ? 'tsx' : 'ts',
         });
       } catch (err) {
-        if (err instanceof HelmError) throw err;
+        if (err instanceof HelmxError) throw err;
         throw transpileError(file, err);
       }
       return { format: 'module', source: code, shortCircuit: true };
@@ -310,12 +310,12 @@ function ensureHooks(): void {
 }
 
 /** Wraps an esbuild transpilation failure with file and line/column diagnostics. */
-function transpileError(file: string, err: unknown): HelmError {
+function transpileError(file: string, err: unknown): HelmxError {
   const first = (err as { errors?: Array<{ text?: string; location?: { line: number; column: number } }> }).errors?.[0];
   const location = first?.location;
   const position = location ? `${location.line}:${location.column}` : '';
   const detail = first?.text ?? (err instanceof Error ? err.message : String(err));
-  return new HelmError(
+  return new HelmxError(
     'plugin_load_failed',
     `External plugin TypeScript transpilation failed: ${file}${position ? `:${position}` : ''} (${detail})`,
     500,

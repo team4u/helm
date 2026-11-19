@@ -12,7 +12,7 @@ import {
   fauxAssistantMessage,
   fauxToolCall,
 } from '@earendil-works/pi-ai/providers/faux'
-import { HelmError, type TurnSettledPayload } from '@helm/protocol'
+import { HelmxError, type TurnSettledPayload } from '@helmx/protocol'
 import { writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { after, before, describe, it } from 'node:test'
@@ -20,7 +20,7 @@ import assert from 'node:assert/strict'
 import { KernelRuntime } from '../src/runtime/index.js'
 import { assertSpawnRequestTitle, normalizeSpawnTitle } from '../src/runtime/spawn.js'
 import { buildToolEnv } from '../src/runtime/tools.js'
-import type { ConversationSummary, HelmEventFrame, HelmSnapshot, HelmTransientLiveFrame } from '@helm/protocol'
+import type { ConversationSummary, HelmxEventFrame, HelmxSnapshot, HelmxTransientLiveFrame } from '@helmx/protocol'
 import { cleanupDir, deferred, makeFauxModels, makeTempDir, waitFor } from './helpers.js'
 
 /**
@@ -59,7 +59,7 @@ async function assertThrowsSync(fn: () => unknown, code: string): Promise<void> 
   try {
     fn()
   } catch (err) {
-    assert.ok(err instanceof HelmError && err.code === code, `expected ${code}, got ${String(err)}`)
+    assert.ok(err instanceof HelmxError && err.code === code, `expected ${code}, got ${String(err)}`)
     return
   }
   assert.fail(`expected synchronous throw ${code}, but did not throw`)
@@ -68,7 +68,7 @@ async function assertThrowsSync(fn: () => unknown, code: string): Promise<void> 
 let root: string
 
 before(async () => {
-  root = await makeTempDir('helm-runtime-')
+  root = await makeTempDir('helmx-runtime-')
 })
 
 after(async () => {
@@ -252,7 +252,7 @@ describe('SSE snapshot + seq race', { timeout: 60_000 }, () => {
   it('initial subscribe emits snapshot frame first followed strictly by deltas with seq > snapshot.seq', { timeout: 60_000 }, async () => {
     const kernel = await openRuntime(join(root, 't7'))
     try {
-      const frames: Array<HelmSnapshot | HelmEventFrame> = []
+      const frames: Array<HelmxSnapshot | HelmxEventFrame> = []
       // Inject race between publish and subscribe handoff by publishing from inside the subscribe callback.
       kernel.events.sseStream((frame) => {
         frames.push(frame)
@@ -267,9 +267,9 @@ describe('SSE snapshot + seq race', { timeout: 60_000 }, () => {
       await new Promise((r) => setTimeout(r, 100))
       const snapshot = frames[0]
       assert.ok(snapshot && 'conversations' in snapshot)
-      const eventFrames = frames.filter((f) => 'event' in f) as HelmEventFrame[]
+      const eventFrames = frames.filter((f) => 'event' in f) as HelmxEventFrame[]
       assert.ok(eventFrames.length >= 1)
-      assert.ok(eventFrames.every((f) => f.seq > (snapshot as HelmSnapshot).seq))
+      assert.ok(eventFrames.every((f) => f.seq > (snapshot as HelmxSnapshot).seq))
       const last = eventFrames[eventFrames.length - 1]
       assert.ok(last)
       assert.equal(last.event.type, 'notification')
@@ -406,7 +406,7 @@ describe('real tool execution', { timeout: 60_000 }, () => {
             prompt: 'work',
             gate: 'exit 1',
           }),
-        (err: unknown) => err instanceof HelmError && err.code === 'gate_failed',
+        (err: unknown) => err instanceof HelmxError && err.code === 'gate_failed',
       )
     } finally {
       await kernel.close()
@@ -429,7 +429,7 @@ describe('real tool execution', { timeout: 60_000 }, () => {
             onGateResult: (result) => reported.push({ ...result }),
           }),
         (err: unknown) => {
-          assert.ok(err instanceof HelmError, `should be HelmError, got ${err}`)
+          assert.ok(err instanceof HelmxError, `should be HelmxError, got ${err}`)
           assert.equal(err.code, 'gate_failed')
           const details = err.details as { exitCode?: number | null; timedOut?: boolean; output?: string }
           assert.equal(details.exitCode, null, 'no exit code on timeout; exitCode=null')
@@ -465,7 +465,7 @@ describe('real tool execution', { timeout: 60_000 }, () => {
             onGateResult: (result) => reported.push({ ...result }),
           }),
         (err: unknown) => {
-          assert.ok(err instanceof HelmError, `should be HelmError, got ${err}`)
+          assert.ok(err instanceof HelmxError, `should be HelmxError, got ${err}`)
           assert.equal(err.code, 'gate_failed')
           const details = err.details as { exitCode?: number | null; timedOut?: boolean; output?: string }
           assert.equal(details.exitCode, 3)
@@ -496,7 +496,7 @@ describe('real tool execution', { timeout: 60_000 }, () => {
               gateTimeoutMs: bad,
             }),
           (err: unknown) =>
-            err instanceof HelmError && err.code === 'validation_error' && err.message.includes('gateTimeoutMs'),
+            err instanceof HelmxError && err.code === 'validation_error' && err.message.includes('gateTimeoutMs'),
           `gateTimeoutMs=${bad} should reject explicitly`,
         )
       }
@@ -551,7 +551,7 @@ describe('native subagent', { timeout: 60_000 }, () => {
             prompt: 'return JSON',
             schema: { type: 'object', properties: { a: { type: 'number' } }, required: ['a'] },
           }),
-        (err: unknown) => err instanceof HelmError && err.code === 'schema_validation_failed',
+        (err: unknown) => err instanceof HelmxError && err.code === 'schema_validation_failed',
       )
       await assert.rejects(
         () =>
@@ -560,7 +560,7 @@ describe('native subagent', { timeout: 60_000 }, () => {
             prompt: 'x',
             agentType: 'herdr:agy',
           }),
-        (err: unknown) => err instanceof HelmError && err.code === 'unsupported_runtime',
+        (err: unknown) => err instanceof HelmxError && err.code === 'unsupported_runtime',
       )
     } finally {
       await kernel.close()
@@ -590,7 +590,7 @@ describe('native subagent', { timeout: 60_000 }, () => {
             prompt: 'x',
             isolation: 'worktree',
           }),
-        (err: unknown) => err instanceof HelmError && err.code === 'unsupported_runtime',
+        (err: unknown) => err instanceof HelmxError && err.code === 'unsupported_runtime',
       )
     } finally {
       await kernel.close()
@@ -615,7 +615,7 @@ describe('native subagent', { timeout: 60_000 }, () => {
               prompt: 'bad title type',
               title: badTitle as never,
             }),
-          (err: unknown) => err instanceof HelmError && err.code === 'validation_error' && err.status === 400,
+          (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
         )
       }
 
@@ -631,7 +631,7 @@ describe('native subagent', { timeout: 60_000 }, () => {
               prompt: 'control char title',
               title: ctrlTitle,
             }),
-          (err: unknown) => err instanceof HelmError && err.code === 'validation_error' && err.status === 400,
+          (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
         )
       }
 
@@ -649,7 +649,7 @@ describe('native subagent', { timeout: 60_000 }, () => {
             prompt: 'hook bad title',
             title: 'clean request title',
           }),
-        (err: unknown) => err instanceof HelmError && err.code === 'validation_error' && err.status === 400,
+        (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
       )
 
       assert.equal(kernel.listConversations().length, convCountBefore, 'rejected titles must never create conversations')
@@ -747,25 +747,25 @@ describe('native subagent', { timeout: 60_000 }, () => {
 })
 
 describe('triggers and cascading deletion', { timeout: 60_000 }, () => {
-  it('dispatchTrigger defaults to human-owned assistant entry without preemption by newer bot/helm conversations', { timeout: 60_000 }, async () => {
+  it('dispatchTrigger defaults to human-owned assistant entry without preemption by newer bot/helmx conversations', { timeout: 60_000 }, async () => {
     const kernel = await openRuntime(join(root, 'trigger-ownership'))
     try {
       const humanId = 1
       const bot = await kernel.createConversation({ title: 'newer Bot', profileId: 'assistant' })
-      const helm = await kernel.createConversation({ title: 'newer Helm', profileId: 'assistant' })
+      const helmx = await kernel.createConversation({ title: 'newer Helmx', profileId: 'assistant' })
       kernel.markConversationOwnership(bot.id, 'bot')
-      kernel.markConversationOwnership(helm.id, 'helm')
+      kernel.markConversationOwnership(helmx.id, 'helmx')
       kernel.__faux.setResponses([fauxAssistantMessage('event handled')])
 
       await kernel.dispatchTrigger({ id: 'evt-human-owner', source: 'cron', text: 'only deliver to human', createdAt: Date.now() })
       await kernel.waitForIdle(humanId)
 
       const humanInputs = (await kernel.getConversationDetail(humanId, { limit: 100 })).entries
-        .filter((entry) => entry.kind === 'helm.input')
+        .filter((entry) => entry.kind === 'helmx.input')
       assert.ok(humanInputs.some((entry) => JSON.stringify(entry.data).includes('only deliver to human')))
-      for (const id of [bot.id, helm.id]) {
+      for (const id of [bot.id, helmx.id]) {
         const inputs = (await kernel.getConversationDetail(id, { limit: 100 })).entries
-          .filter((entry) => entry.kind === 'helm.input')
+          .filter((entry) => entry.kind === 'helmx.input')
         assert.equal(inputs.length, 0, `assistant conversation ${id} with non-human ownedBy must not preempt human entry`)
       }
     } finally {
@@ -792,7 +792,7 @@ describe('triggers and cascading deletion', { timeout: 60_000 }, () => {
       assert.ok(target)
       await kernel.waitForIdle(target.id)
       const targetInputs = (await kernel.getConversationDetail(target.id, { limit: 100 })).entries
-        .filter((entry) => entry.kind === 'helm.input')
+        .filter((entry) => entry.kind === 'helmx.input')
       assert.equal(targetInputs.length, 4)
 
       const explicit = await kernel.createConversation({ title: 'explicit target', profileId: 'assistant' })
@@ -806,7 +806,7 @@ describe('triggers and cascading deletion', { timeout: 60_000 }, () => {
       })
       await kernel.waitForIdle(explicit.id)
       const explicitInputs = (await kernel.getConversationDetail(explicit.id, { limit: 100 })).entries
-        .filter((entry) => entry.kind === 'helm.input')
+        .filter((entry) => entry.kind === 'helmx.input')
       assert.ok(explicitInputs.some((entry) => JSON.stringify(entry.data).includes('explicit delivery')))
 
       await kernel.deleteConversation(target.id)
@@ -827,13 +827,13 @@ describe('triggers and cascading deletion', { timeout: 60_000 }, () => {
     try {
       await kernel.deleteConversation(1)
       const service = (kernel as unknown as {
-        conversations: { createConversation(init: Record<string, unknown>): Promise<import('@helm/protocol').ConversationSummary> }
+        conversations: { createConversation(init: Record<string, unknown>): Promise<import('@helmx/protocol').ConversationSummary> }
       }).conversations
       const originalCreate = service.createConversation.bind(service)
       let attempts = 0
       const mocked = t.mock.method(service, 'createConversation', async (init: Record<string, unknown>) => {
         attempts += 1
-        if (attempts === 1) throw new HelmError('create_failed', 'create fault probe needle', 500)
+        if (attempts === 1) throw new HelmxError('create_failed', 'create fault probe needle', 500)
         return originalCreate(init)
       })
       const envelope = { id: 'evt-create-retry', source: 'cron', text: 'retry', createdAt: Date.now() }
@@ -943,7 +943,7 @@ describe('model resolution chain and mirrors: explicit override > profile.model 
       // Submitting fails explicitly (never fakes an answer).
       await assert.rejects(
         () => kernel.submitInput(conv.id, 'question'),
-        (err: unknown) => err instanceof HelmError && err.code === 'model_not_configured',
+        (err: unknown) => err instanceof HelmxError && err.code === 'model_not_configured',
       )
       // Once profile.model is configured, same conversation (with no override) can submit (inheritance active).
       writeProfile(dir, 'late', { name: 'L', model: 'faux/faux-1' })
@@ -1342,7 +1342,7 @@ describe('real PluginHost integration', { timeout: 60_000 }, () => {
     }
   })
 
-  it('watchdog ownership: spawn auto-marks child conversation helm; human/unmarked stays human', { timeout: 60_000 }, async () => {
+  it('watchdog ownership: spawn auto-marks child conversation helmx; human/unmarked stays human', { timeout: 60_000 }, async () => {
     const kernel = await openRuntime(join(root, 'p9'))
     try {
       kernel.__faux.setResponses([fauxAssistantMessage('worker done')])
@@ -1355,9 +1355,9 @@ describe('real PluginHost integration', { timeout: 60_000 }, () => {
         },
       })
       assert.ok(childId !== undefined)
-      // Native spawn automatically grants helm ownership (never inferred from tags/parent; no manual registration needed);
+      // Native spawn automatically grants helmx ownership (never inferred from tags/parent; no manual registration needed);
       // getConversationOwnership reads through the same port as watchdog probes.
-      assert.equal(kernel.getConversationOwnership(childId), 'helm')
+      assert.equal(kernel.getConversationOwnership(childId), 'helmx')
       assert.equal(kernel.getConversationOwnership(1), 'human')
       // Direct user conversations (unmarked) stay human even if carrying worker tags.
       const manual = await kernel.createConversation({ tags: ['worker'] })
@@ -1483,7 +1483,7 @@ describe('conversation management protection and ownership', { timeout: 60_000 }
       await assert.rejects(
         () => kernel.deleteConversation(conv.id),
         (err: unknown) =>
-          err instanceof HelmError &&
+          err instanceof HelmxError &&
           err.code === 'conversation_managed_by_plugin' &&
           Array.isArray((err.details as { owners?: string[] })?.owners) &&
           (err.details as { owners: string[] }).owners.includes('test:owner-a'),
@@ -1495,7 +1495,7 @@ describe('conversation management protection and ownership', { timeout: 60_000 }
       const releaseRoot = kernel.manageConversation(1, 'test:owner-root')
       await assert.rejects(
         () => kernel.deleteConversation(1),
-        (err: unknown) => err instanceof HelmError && err.code === 'conversation_managed_by_plugin',
+        (err: unknown) => err instanceof HelmxError && err.code === 'conversation_managed_by_plugin',
       )
       releaseRoot()
       // Deletable immediately after release (no hardcoded root 403).
@@ -1506,7 +1506,7 @@ describe('conversation management protection and ownership', { timeout: 60_000 }
     }
   })
 
-  it('markConversationOwnership: generic marking; child spawn automatically defaults to helm', { timeout: 60_000 }, async () => {
+  it('markConversationOwnership: generic marking; child spawn automatically defaults to helmx', { timeout: 60_000 }, async () => {
     const dir = join(root, 'o2')
     const kernel = await openRuntime(dir, { model: 'faux/faux-1' })
     try {
@@ -1522,8 +1522,8 @@ describe('conversation management protection and ownership', { timeout: 60_000 }
         },
       })
       assert.ok(childId !== undefined)
-      // Native spawn grants helm ownership automatically (getConversationOwnership reads same source as watchdog probes).
-      assert.equal(kernel.getConversationOwnership(childId), 'helm')
+      // Native spawn grants helmx ownership automatically (getConversationOwnership reads same source as watchdog probes).
+      assert.equal(kernel.getConversationOwnership(childId), 'helmx')
       // User-created conversations default to human.
       const manual = await kernel.createConversation({})
       assert.equal(kernel.getConversationOwnership(manual.id), 'human')
@@ -1558,7 +1558,7 @@ describe('conversation management protection and ownership', { timeout: 60_000 }
 // ---------------------------------------------------------------------------
 
 describe('end-to-end submitInput opts.meta', { timeout: 60_000 }, () => {
-  it('meta persists in helm.input entry via API and surfaces in turn_settled inputs', { timeout: 60_000 }, async () => {
+  it('meta persists in helmx.input entry via API and surfaces in turn_settled inputs', { timeout: 60_000 }, async () => {
     const dir = join(root, 'meta1')
     const kernel = await openRuntime(dir, { model: 'faux/faux-1' })
     try {
@@ -1579,11 +1579,11 @@ describe('end-to-end submitInput opts.meta', { timeout: 60_000 }, () => {
       await kernel.waitForIdle(1)
       assert.equal(settled.length, 1)
       assert.equal(settled[0]?.inputs[0]?.meta?.['source'], 'cli')
-      // meta also persists to helm.input entry (visible via detail query).
+      // meta also persists to helmx.input entry (visible via detail query).
       const detail = await kernel.getConversationDetail(1, { limit: 50 })
       const inputEntry = [...detail.entries]
         .reverse()
-        .find((e) => e.kind === 'helm.input')
+        .find((e) => e.kind === 'helmx.input')
       assert.ok(inputEntry)
       const data = inputEntry.data as { meta?: Record<string, unknown> } | undefined
       assert.equal(data?.meta?.['attempt'], 1)
@@ -1602,7 +1602,7 @@ describe('end-to-end submitInput opts.meta', { timeout: 60_000 }, () => {
       await kernel.submitInput(1, 'metadata carrying token', { meta: { secretEcho: token } })
       await kernel.waitForIdle(1)
       const detail = await kernel.getConversationDetail(1, { limit: 50 })
-      const inputEntry = [...detail.entries].reverse().find((e) => e.kind === 'helm.input')
+      const inputEntry = [...detail.entries].reverse().find((e) => e.kind === 'helmx.input')
       const data = inputEntry?.data as { meta?: Record<string, unknown> } | undefined
       const stored = String(data?.meta?.['secretEcho'] ?? '')
       assert.ok(!stored.includes(token), 'managed token plaintext must never be persisted')
@@ -1618,7 +1618,7 @@ describe('end-to-end submitInput opts.meta', { timeout: 60_000 }, () => {
 // ---------------------------------------------------------------------------
 
 describe('managed process token', { timeout: 60_000 }, () => {
-  it('buildToolEnv injects managed token and strips inherited HELM_TOKEN when deps.processToken is unset', { timeout: 60_000 }, () => {
+  it('buildToolEnv injects managed token and strips inherited HELMX_TOKEN when deps.processToken is unset', { timeout: 60_000 }, () => {
     const deps = {
       dataDir: '/tmp/x',
       defaultCwd: '/tmp',
@@ -1628,9 +1628,9 @@ describe('managed process token', { timeout: 60_000 }, () => {
       artifacts: {} as never,
     }
     const env = buildToolEnv(deps, '/tmp')
-    assert.equal(env['HELM_TOKEN'], undefined)
+    assert.equal(env['HELMX_TOKEN'], undefined)
     const withToken = buildToolEnv({ ...deps, processToken: () => 'managed-tok' }, '/tmp')
-    assert.equal(withToken['HELM_TOKEN'], 'managed-tok')
+    assert.equal(withToken['HELMX_TOKEN'], 'managed-tok')
   })
 
   it('global redaction for managed token: redacted everywhere; verifyToken rejects after disposal', { timeout: 60_000 }, async () => {
@@ -1652,9 +1652,9 @@ describe('managed process token', { timeout: 60_000 }, () => {
     const kernel = await openRuntime(dir, { model: 'faux/faux-1' })
     try {
       kernel.setHubUrl('http://127.0.0.1:39999')
-      // Verify env injection via real bash tool (never echo token; print HELM_HUB_URL only).
+      // Verify env injection via real bash tool (never echo token; print HELMX_HUB_URL only).
       kernel.__faux.setResponses([
-        fauxAssistantMessage([fauxToolCall('bash', { command: 'echo "$HELM_HUB_URL"' })], { stopReason: 'toolUse' }),
+        fauxAssistantMessage([fauxToolCall('bash', { command: 'echo "$HELMX_HUB_URL"' })], { stopReason: 'toolUse' }),
         fauxAssistantMessage('done'),
       ])
       await kernel.submitInput(1, 'print hub url')
@@ -1713,8 +1713,8 @@ describe('snapshot and public plugin docs', { timeout: 60_000 }, () => {
         definePlugin(ctx) {
           ctx.host.onEvent('test.settled', (raw) => {
             if (disposed) return
-            // Broadcast listeners receive validated + redacted HelmEvent envelopes (unknown types
-            // come as CustomHelmEvent {type, payload}; matches protocol onEvent contract).
+            // Broadcast listeners receive validated + redacted HelmxEvent envelopes (unknown types
+            // come as CustomHelmxEvent {type, payload}; matches protocol onEvent contract).
             const run = (raw as { payload?: { id?: string } }).payload
             if (run?.id !== undefined) seen.push(run.id)
           })
@@ -1777,15 +1777,15 @@ describe('getConversationDetail pagination', { timeout: 60_000 }, () => {
       const other = await kernel.createConversation({})
       await assert.rejects(
         () => kernel.getConversationDetail(other.id, { cursor: page1.nextCursor }),
-        (err: unknown) => err instanceof HelmError && err.code === 'validation_error',
+        (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',
       )
       await assert.rejects(
         () => kernel.getConversationDetail(1, { cursor: '!!!not-base64!!!' }),
-        (err: unknown) => err instanceof HelmError && err.code === 'validation_error',
+        (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',
       )
       await assert.rejects(
         () => kernel.getConversationDetail(1, { cursor: 'x'.repeat(3000) }),
-        (err: unknown) => err instanceof HelmError && err.code === 'validation_error',
+        (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',
       )
       // Limit boundaries.
       await assert.rejects(() => kernel.getConversationDetail(1, { limit: 0 }))
@@ -1823,14 +1823,14 @@ describe('waitForInput targeted wait', { timeout: 60_000 }, () => {
       const failed = await kernel.submitInput(1, 'will fail')
       await assert.rejects(
         () => kernel.waitForInput(1, failed.submissionId),
-        (err: unknown) => err instanceof HelmError && (err.code === 'turn_failed' || err.code === 'turn_aborted'),
+        (err: unknown) => err instanceof HelmxError && (err.code === 'turn_failed' || err.code === 'turn_aborted'),
       )
 
       // Ownership mismatch: rejects across conversations.
       const other = await kernel.createConversation({})
       await assert.rejects(
         () => kernel.waitForInput(other.id, submissionId),
-        (err: unknown) => err instanceof HelmError && err.code === 'not_found',
+        (err: unknown) => err instanceof HelmxError && err.code === 'not_found',
       )
     } finally {
       await kernel.close()
@@ -1851,7 +1851,7 @@ describe('waitForInput targeted wait', { timeout: 60_000 }, () => {
       assert.ok(submissionId.startsWith('handled:'))
       await assert.rejects(
         () => kernel.waitForInput(1, submissionId),
-        (err: unknown) => err instanceof HelmError && err.code === 'wait_not_applicable',
+        (err: unknown) => err instanceof HelmxError && err.code === 'wait_not_applicable',
       )
     } finally {
       await kernel.close()
@@ -1872,8 +1872,8 @@ describe('conversation.entry / live event', { timeout: 60_000 }, () => {
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
     let readLoop: Promise<void> | undefined
     try {
-      const durableFrames: HelmEventFrame[] = []
-      const transientFrames: HelmTransientLiveFrame[] = []
+      const durableFrames: HelmxEventFrame[] = []
+      const transientFrames: HelmxTransientLiveFrame[] = []
       const pluginLiveEvents: unknown[] = []
       kernel.events.subscribe((f) => durableFrames.push(f))
       kernel.events.subscribeTransientLive((f) => transientFrames.push(f))
@@ -1967,7 +1967,7 @@ describe('conversation.entry / live event', { timeout: 60_000 }, () => {
       )
 
       // 2. Rewind via replaceFromEntryId advances lastEntryId to post-rewind visible entry (never hidden range).
-      const targetInput = detailAfterTurns.entries.find((e) => e.kind === 'helm.input')!
+      const targetInput = detailAfterTurns.entries.find((e) => e.kind === 'helmx.input')!
       kernel.__faux.setResponses([fauxAssistantMessage('rewound reply')])
       await kernel.submitInput(cid, `${big} rw1`, { replaceFromEntryId: Number(targetInput.id) })
       await kernel.waitForIdle(cid)

@@ -22,7 +22,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readdirSync, readFil
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { HelmError, type PluginPackageRecord } from '@helm/protocol'
+import { HelmxError, type PluginPackageRecord } from '@helmx/protocol'
 import { parsePluginSource } from '../src/plugins/package-source.js'
 import { PluginPackageManager, type PackageManagerHost, type PackageRunner } from '../src/plugins/package-manager.js'
 import { PluginPackageManagerStore } from '../src/plugins/package-store.js'
@@ -34,16 +34,16 @@ import { assertRejectsCode } from './helpers.js'
 // ---------------------------------------------------------------------------
 
 test('parsePluginSource: npm normalization and rejection', { timeout: 60_000 }, () => {
-  const npm = parsePluginSource('npm:helm-plugin-foo@^1.2.0', '/wd')
+  const npm = parsePluginSource('npm:helmx-plugin-foo@^1.2.0', '/wd')
   assert.equal(npm.kind, 'npm')
   assert.ok(npm.kind === 'npm')
-  assert.equal(npm.spec, 'helm-plugin-foo@^1.2.0')
-  assert.equal(npm.raw, 'npm:helm-plugin-foo@^1.2.0')
+  assert.equal(npm.spec, 'helmx-plugin-foo@^1.2.0')
+  assert.equal(npm.raw, 'npm:helmx-plugin-foo@^1.2.0')
   const bare = parsePluginSource('npm:@scope/pkg', '/wd')
   assert.ok(bare.kind === 'npm' && bare.spec === '@scope/pkg')
 
   for (const bad of ['npm:', 'npm: ', 'npm:builtin:evil', 'builtin:profile', 'builtin%3Aprofile', '', '  ', 'file:///tmp/x', 'http://github.com/u/r', 'git+https://x.example/r', 'ftp://x/r', 'my-unknown-proto:foo', 'bare-name']) {
-    assert.throws(() => parsePluginSource(bad, '/wd'), (err: unknown) => err instanceof HelmError && err.status === 400, `should reject: ${bad}`)
+    assert.throws(() => parsePluginSource(bad, '/wd'), (err: unknown) => err instanceof HelmxError && err.status === 400, `should reject: ${bad}`)
   }
 })
 
@@ -88,7 +88,7 @@ test('parsePluginSource: git shorthand / SCP / https with @ref / #subdirectory',
   assert.equal(gitSub.subdirectory, 'sub/dir')
 
   for (const bad of ['git:', 'git:repo@', 'git:repo#', 'git:repo#sub#more', 'git:repo#../escape', 'https://', 'https://github.com/user/repo#sub#more#extra', 'git:repo@ref#sub#x']) {
-    assert.throws(() => parsePluginSource(bad, '/wd'), (err: unknown) => err instanceof HelmError, `should reject: ${bad}`)
+    assert.throws(() => parsePluginSource(bad, '/wd'), (err: unknown) => err instanceof HelmxError, `should reject: ${bad}`)
   }
 })
 
@@ -102,7 +102,7 @@ test('parsePluginSource: strict git repo validation (rejects path traversal and 
   for (const bad of ['git:../evil', 'git:..\\..\\evil', 'git:repo/../../evil', 'git:/abs/path', 'git:C:\\repo', 'git:\\\\srv\\share', 'git:http://plain.example/r', 'git:file:///tmp/r', 'git:ssh://git@host:22/path', 'git:repo with space', 'git:local-dir', 'git:./relative']) {
     assert.throws(
       () => parsePluginSource(bad, '/wd'),
-      (err: unknown) => err instanceof HelmError && err.status === 400,
+      (err: unknown) => err instanceof HelmxError && err.status === 400,
       `should reject: ${bad}`,
     )
   }
@@ -176,8 +176,8 @@ interface TestEnv {
 }
 
 function makeEnv(runner?: PackageRunner): TestEnv {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-pkg-mgr-'))
-  const cwd = mkdtempSync(join(tmpdir(), 'helm-pkg-cwd-'))
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-pkg-mgr-'))
+  const cwd = mkdtempSync(join(tmpdir(), 'helmx-pkg-cwd-'))
   const store = new FaultInjectingStore(new ConfigService(dataDir))
   const hostCalls: string[] = []
   const registered = new Map<string, { enabled: boolean }>()
@@ -191,7 +191,7 @@ function makeEnv(runner?: PackageRunner): TestEnv {
       hostCalls.push(`register:${dir}`)
       const id = readPluginIdFromDir(dir)
       if (registerFailIds.has(id)) {
-        throw new HelmError('plugin_register_failed_simulated', `simulated register failed: ${id}`, 500, { pluginId: id })
+        throw new HelmxError('plugin_register_failed_simulated', `simulated register failed: ${id}`, 500, { pluginId: id })
       }
       registered.set(id, { enabled: false })
       summaries.set(id, { id, version: readPluginVersionFromDir(dir), enabled: false })
@@ -200,9 +200,9 @@ function makeEnv(runner?: PackageRunner): TestEnv {
     async enableManagedPlugin(pluginId: string) {
       hostCalls.push(`enable:${pluginId}`)
       const entry = registered.get(pluginId)
-      if (!entry) throw new HelmError('unknown_plugin', `plugin not registered: ${pluginId}`, 404, { pluginId })
+      if (!entry) throw new HelmxError('unknown_plugin', `plugin not registered: ${pluginId}`, 404, { pluginId })
       if (enableFailIds.has(pluginId)) {
-        throw new HelmError('plugin_enable_failed_simulated', `simulated enable failed: ${pluginId}`, 500, { pluginId })
+        throw new HelmxError('plugin_enable_failed_simulated', `simulated enable failed: ${pluginId}`, 500, { pluginId })
       }
       entry.enabled = true
       summaries.set(pluginId, { ...(summaries.get(pluginId) ?? { id: pluginId }), enabled: true })
@@ -211,7 +211,7 @@ function makeEnv(runner?: PackageRunner): TestEnv {
     async updateManagedPlugin(pluginId: string) {
       hostCalls.push(`update:${pluginId}`)
       const entry = registered.get(pluginId)
-      if (!entry) throw new HelmError('unknown_plugin', `plugin not registered: ${pluginId}`, 404, { pluginId })
+      if (!entry) throw new HelmxError('unknown_plugin', `plugin not registered: ${pluginId}`, 404, { pluginId })
       // Real adapter reloads from disk; mirror current manifest from managed directory here
       summaries.set(pluginId, { id: pluginId, version: readPluginVersionFromDir(join(dataDir, 'plugins', pluginId)), enabled: entry.enabled })
       return { summary: toSummary(summaries, pluginId) }
@@ -219,9 +219,9 @@ function makeEnv(runner?: PackageRunner): TestEnv {
     assertManagedPluginUpdateSafe(pluginId: string) {
       hostCalls.push(`assert-safe:${pluginId}`)
       const entry = registered.get(pluginId)
-      if (!entry) throw new HelmError('unknown_plugin', `plugin not registered: ${pluginId}`, 404, { pluginId })
+      if (!entry) throw new HelmxError('unknown_plugin', `plugin not registered: ${pluginId}`, 404, { pluginId })
       if (updateBlockedIds.has(pluginId)) {
-        throw new HelmError('plugin_has_live_tasks', `plugin ${pluginId} has active tasks; update swap rejected`, 409, { pluginId })
+        throw new HelmxError('plugin_has_live_tasks', `plugin ${pluginId} has active tasks; update swap rejected`, 409, { pluginId })
       }
     },
     async removeManagedPlugin(pluginId: string) {
@@ -235,7 +235,7 @@ function makeEnv(runner?: PackageRunner): TestEnv {
     async purgePluginPersistentData(pluginId: string) {
       hostCalls.push(`purge:${pluginId}`)
       if (purgeFailIds.has(pluginId)) {
-        throw new HelmError('store_flush_failed_simulated', `simulated purge failed: ${pluginId}`, 500, { pluginId })
+        throw new HelmxError('store_flush_failed_simulated', `simulated purge failed: ${pluginId}`, 500, { pluginId })
       }
     },
     listSummaries: () => [...summaries.values()].map((s) => toSummary(summaries, s.id)),
@@ -336,7 +336,7 @@ const FAIL_RUNNER: PackageRunner = async (_cmd, _args) => ({
 test('local install copies into managed directory (non-symlink), persists record, and remove keeps user source intact', { timeout: 60_000 }, async () => {
   const env = makeEnv()
   try {
-    const userSrcParent = mkdtempSync(join(tmpdir(), 'helm-pkg-usersrc-'))
+    const userSrcParent = mkdtempSync(join(tmpdir(), 'helmx-pkg-usersrc-'))
     const userSrc = writeLocalPlugin(userSrcParent, 'demo-local')
     writeFileSync(join(userSrc, 'user-notes.md'), 'user-owned file')
 
@@ -379,7 +379,7 @@ test('staging failure cleanup leaves zero artifacts after failed git clone', { t
   try {
     await assert.rejects(
       env.manager.install('git:github.com/user/broken-repo'),
-      (err: unknown) => err instanceof HelmError,
+      (err: unknown) => err instanceof HelmxError,
     )
     const staging = join(env.dataDir, 'plugins', '.staging')
     if (existsSync(staging)) {
@@ -394,14 +394,14 @@ test('staging failure cleanup leaves zero artifacts after failed git clone', { t
 test('doctor failure prevents corrupt plugin from entering managed directory and cleans staging', { timeout: 60_000 }, async () => {
   const env = makeEnv()
   try {
-    const badParent = mkdtempSync(join(tmpdir(), 'helm-pkg-bad-'))
+    const badParent = mkdtempSync(join(tmpdir(), 'helmx-pkg-bad-'))
     const badDir = join(badParent, 'bad-plugin')
     mkdirSync(badDir, { recursive: true })
     writeFileSync(join(badDir, 'plugin.json'), JSON.stringify({ id: 'bad-plugin', main: 'index.ts' }))
     writeFileSync(join(badDir, 'index.ts'), 'export default { id: "bad-plugin", definePlugin() { throw new Error("boom") } }\n')
     await assert.rejects(
       env.manager.install(badDir),
-      (err: unknown) => err instanceof HelmError && err.code === 'plugin_package_doctor_failed',
+      (err: unknown) => err instanceof HelmxError && err.code === 'plugin_package_doctor_failed',
     )
     assert.ok(!existsSync(join(env.dataDir, 'plugins', 'bad-plugin')), 'broken plugin must not enter managed directory')
     const staging = join(env.dataDir, 'plugins', '.staging')
@@ -447,7 +447,7 @@ test('update returns 404 without record and resyncs updated version from local s
   try {
     await assert.rejects(
       env.manager.update('never-installed'),
-      (err: unknown) => err instanceof HelmError && err.status === 404,
+      (err: unknown) => err instanceof HelmxError && err.status === 404,
     )
     const userSrc = writeLocalPlugin(env.cwd, 'up-plugin', '1.0.0')
     const installed = await env.manager.install(userSrc)
@@ -478,7 +478,7 @@ test('remove rejects explicitly when purge fails while keeping directory and rec
     env.purgeFailIds.add('purge-fail-plugin')
     await assert.rejects(
       env.manager.remove('purge-fail-plugin'),
-      (err: unknown) => err instanceof HelmError && err.code === 'store_flush_failed_simulated',
+      (err: unknown) => err instanceof HelmxError && err.code === 'store_flush_failed_simulated',
     )
     assert.ok(existsSync(managed), 'managed directory must be preserved when purge fails')
     assert.ok(env.store.getRecord('purge-fail-plugin'), 'install record must be preserved when purge fails')
@@ -502,11 +502,11 @@ test('remove protects builtins with 403 and rejects unmanaged plugins with 404',
   try {
     await assert.rejects(
       env.manager.remove('builtin:profile'),
-      (err: unknown) => err instanceof HelmError && err.status === 403,
+      (err: unknown) => err instanceof HelmxError && err.status === 403,
     )
     await assert.rejects(
       env.manager.remove('hand-placed'),
-      (err: unknown) => err instanceof HelmError && err.status === 404,
+      (err: unknown) => err instanceof HelmxError && err.status === 404,
     )
   } finally {
     env.close()
@@ -522,7 +522,7 @@ test('path security rejects local self-install targeting inside the managed tree
     writeFileSync(join(inside, 'index.mjs'), PLUGIN_SRC('inside-plugin'))
     await assert.rejects(
       env.manager.install(inside),
-      (err: unknown) => err instanceof HelmError && err.status === 400,
+      (err: unknown) => err instanceof HelmxError && err.status === 400,
     )
   } finally {
     env.close()
@@ -542,7 +542,7 @@ test('update safety preflight rejects 409 on active tasks without modifying exis
     env.updateBlockedIds.add('busy-plugin')
     await assert.rejects(
       env.manager.update('busy-plugin'),
-      (err: unknown) => err instanceof HelmError && err.status === 409,
+      (err: unknown) => err instanceof HelmxError && err.status === 409,
     )
     assert.ok(env.hostCalls.includes('assert-safe:busy-plugin'), 'should run safety preflight')
     assert.equal(readFileSync(join(managed, 'plugin.json'), 'utf8'), manifestBefore, 'old directory contents must remain completely unchanged')
@@ -569,7 +569,7 @@ test('runtime dependencies install in staging before doctor passes for local plu
   }
   const env = makeEnv(runner)
   try {
-    const srcParent = mkdtempSync(join(tmpdir(), 'helm-pkg-deps-'))
+    const srcParent = mkdtempSync(join(tmpdir(), 'helmx-pkg-deps-'))
     const src = join(srcParent, 'deps-plugin')
     mkdirSync(src, { recursive: true })
     writeFileSync(join(src, 'plugin.json'), JSON.stringify({ id: 'deps-plugin', version: '0.1.0', main: 'index.mjs' }))
@@ -597,7 +597,7 @@ test('install transaction rolls back and deletes newly copied target directory w
     await assert.rejects(
       env.manager.install(src),
       (err: unknown) =>
-        err instanceof HelmError &&
+        err instanceof HelmxError &&
         err.code === 'plugin_package_install_failed' &&
         (err.details as { rolledBack?: boolean } | undefined)?.rolledBack === true,
     )
@@ -620,7 +620,7 @@ test('honest update rollback: failed restore reload no longer falsely reports ol
   env.host.updateManagedPlugin = async (pluginId: string) => {
     updateCalls += 1
     // Both reloads fail: new version switch fails + restore reload fails (instance left unregistered)
-    throw new HelmError('plugin_reload_failed_simulated', `simulated reload failed #${updateCalls}`, 500, { pluginId })
+    throw new HelmxError('plugin_reload_failed_simulated', `simulated reload failed #${updateCalls}`, 500, { pluginId })
   }
   try {
     const userSrc = writeLocalPlugin(env.cwd, 'honest-rollback', '1.0.0')
@@ -628,7 +628,7 @@ test('honest update rollback: failed restore reload no longer falsely reports ol
     writeFileSync(join(userSrc, 'plugin.json'), JSON.stringify({ id: 'honest-rollback', version: '2.0.0', main: 'index.mjs' }, null, 2))
     writeFileSync(join(userSrc, 'index.mjs'), PLUGIN_SRC('honest-rollback', '2.0.0'))
 
-    const err = (await assertRejectsCode(() => env.manager.update('honest-rollback'), 'plugin_package_update_failed', 500)) as HelmError
+    const err = (await assertRejectsCode(() => env.manager.update('honest-rollback'), 'plugin_package_update_failed', 500)) as HelmxError
     const details = err.details as { rolledBack?: boolean; rollbackError?: { message: string } }
     assert.equal(details.rolledBack, false, 'failed restore reload must report rolledBack:false')
     assert.match(err.message, /old directory already restore, but old instance reload failed/, 'error message must clarify directory restored while instance did not')
@@ -647,7 +647,7 @@ test('successful update rollback path: restore reload success still reports roll
   let calls = 0
   env.host.updateManagedPlugin = async (pluginId: string, dir: string, options: { keepEnabled: boolean }) => {
     calls += 1
-    if (calls === 1) throw new HelmError('plugin_reload_failed_simulated', 'first reload failed', 500, { pluginId })
+    if (calls === 1) throw new HelmxError('plugin_reload_failed_simulated', 'first reload failed', 500, { pluginId })
     return original(pluginId, dir, options)
   }
   try {
@@ -655,7 +655,7 @@ test('successful update rollback path: restore reload success still reports roll
     await env.manager.install(userSrc)
     writeFileSync(join(userSrc, 'plugin.json'), JSON.stringify({ id: 'ok-rollback', version: '2.0.0', main: 'index.mjs' }, null, 2))
     writeFileSync(join(userSrc, 'index.mjs'), PLUGIN_SRC('ok-rollback', '2.0.0'))
-    const err = (await assertRejectsCode(() => env.manager.update('ok-rollback'), 'plugin_package_update_failed', 500)) as HelmError
+    const err = (await assertRejectsCode(() => env.manager.update('ok-rollback'), 'plugin_package_update_failed', 500)) as HelmxError
     assert.equal((err.details as { rolledBack?: boolean }).rolledBack, true)
     assert.match(err.message, /already rollback to update before directory and instance/)
   } finally {
@@ -667,12 +667,12 @@ test('install record save fails and rollback deregister fails: keeps directory a
   const env = makeEnv()
   env.host.removeManagedPlugin = async () => {
     // Simulate live task blocking unregister with 409: instance stays registered and running
-    throw new HelmError('plugin_has_live_tasks', 'simulated live task blocks removal', 409, { pluginId: 'keep-dir' })
+    throw new HelmxError('plugin_has_live_tasks', 'simulated live task blocks removal', 409, { pluginId: 'keep-dir' })
   }
   try {
     const userSrc = writeLocalPlugin(env.cwd, 'keep-dir', '1.0.0')
     env.store.failNextSave = true
-    const err = (await assertRejectsCode(() => env.manager.install(userSrc, { enable: true }), 'plugin_package_install_failed', 500)) as HelmError
+    const err = (await assertRejectsCode(() => env.manager.install(userSrc, { enable: true }), 'plugin_package_install_failed', 500)) as HelmxError
     const details = err.details as { rolledBack?: boolean; rollbackError?: { message: string } }
     assert.equal(details.rolledBack, false, 'failed rollback deregister must report rolledBack:false')
     assert.match(err.message, /directory and instance already keep/, 'error message must warn that state remains preserved for manual handling')
@@ -691,7 +691,7 @@ test('install register fails due to concurrent same-name instance: preserves dir
     const manifest = JSON.parse(readFileSync(join(dir, 'plugin.json'), 'utf8')) as { id: string }
     // Simulate concurrent rescan winning registration from the same directory (409), after which listSummaries sees it
     registerAttempted = true
-    throw new HelmError('plugin_already_registered', `plugin already registered: ${manifest.id}`, 409, { pluginId: manifest.id })
+    throw new HelmxError('plugin_already_registered', `plugin already registered: ${manifest.id}`, 409, { pluginId: manifest.id })
   }
   const originalList = env.host.listSummaries.bind(env.host)
   env.host.listSummaries = () => {
@@ -702,7 +702,7 @@ test('install register fails due to concurrent same-name instance: preserves dir
   }
   try {
     const userSrc = writeLocalPlugin(env.cwd, 'raced-plugin', '1.0.0')
-    const err = (await assertRejectsCode(() => env.manager.install(userSrc), 'plugin_package_install_failed', 500)) as HelmError
+    const err = (await assertRejectsCode(() => env.manager.install(userSrc), 'plugin_package_install_failed', 500)) as HelmxError
     const details = err.details as { rolledBack?: boolean }
     assert.equal(details.rolledBack, false)
     assert.match(err.message, /same name plugin registered/)
@@ -721,13 +721,13 @@ test('install duplicate guards return 409 for existing managed record, registere
     // Duplicate install from same source: managed record already exists
     await assert.rejects(
       env.manager.install(src),
-      (err: unknown) => err instanceof HelmError && err.code === 'plugin_package_already_installed' && err.status === 409,
+      (err: unknown) => err instanceof HelmxError && err.code === 'plugin_package_already_installed' && err.status === 409,
     )
     // Different source with same id: still rejected
     const src2 = writeLocalPlugin(join(env.cwd, 'alt'), 'dup-plugin')
     await assert.rejects(
       env.manager.install(src2),
-      (err: unknown) => err instanceof HelmError && err.code === 'plugin_package_already_installed',
+      (err: unknown) => err instanceof HelmxError && err.code === 'plugin_package_already_installed',
     )
     // Target directory occupied manually (no record and not registered)
     const occupied = join(env.dataDir, 'plugins', 'occupied-plugin')
@@ -736,7 +736,7 @@ test('install duplicate guards return 409 for existing managed record, registere
     const src3 = writeLocalPlugin(env.cwd, 'occupied-plugin')
     await assert.rejects(
       env.manager.install(src3),
-      (err: unknown) => err instanceof HelmError && err.code === 'plugin_package_target_occupied' && err.status === 409,
+      (err: unknown) => err instanceof HelmxError && err.code === 'plugin_package_target_occupied' && err.status === 409,
     )
     assert.equal(readFileSync(join(occupied, 'stale.txt'), 'utf8'), 'residue', 'pre-existing directory must not be deleted')
   } finally {
@@ -765,7 +765,7 @@ test('install when enable fails keeps plugin disabled, reports enableError, and 
     env.enableFailIds.delete('enablefail-plugin')
     await assert.rejects(
       env.manager.install(src),
-      (err: unknown) => err instanceof HelmError && err.code === 'plugin_package_already_installed',
+      (err: unknown) => err instanceof HelmxError && err.code === 'plugin_package_already_installed',
     )
   } finally {
     env.close()
@@ -777,11 +777,11 @@ test('install when enable fails keeps plugin disabled, reports enableError, and 
 // ---------------------------------------------------------------------------
 
 test('store: corrupt pluginPackages throws config_corrupt explicitly; update save preserves existing id', { timeout: 60_000 }, async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-pkg-store-'))
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-pkg-store-'))
   try {
     writeFileSync(join(dataDir, 'config.json'), JSON.stringify({ pluginPackages: 'not-an-object' }))
     const store = new PluginPackageManagerStore(new ConfigService(dataDir))
-    await assert.rejects(store.load(), (err: unknown) => err instanceof HelmError && err.code === 'config_corrupt')
+    await assert.rejects(store.load(), (err: unknown) => err instanceof HelmxError && err.code === 'config_corrupt')
 
     rmSync(join(dataDir, 'config.json'))
     writeFileSync(join(dataDir, 'config.json'), JSON.stringify({ pluginPackages: { 'p-1': { id: 'plugpkg-p-1', pluginId: 'p-1', source: { kind: 'local', raw: '/x', path: '/x' }, installPath: '/data/plugins/p-1', version: '1.0.0', installedAt: 1, updatedAt: 1 } } }))

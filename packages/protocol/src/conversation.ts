@@ -15,7 +15,7 @@ export type ConversationStatus =
   | 'idle' // idle and read
   | 'error' // the latest round terminated on an uncaught exception
 
-/** Input origin, attached to every submitted `helm.input` entry. */
+/** Input origin, attached to every submitted `helmx.input` entry. */
 export type InputOrigin = 'human' | 'agent' | 'trigger'
 
 /** Policy for new input while the conversation is busy; the kernel defaults to steer (steering interjection) when omitted. */
@@ -55,8 +55,8 @@ export interface ConversationSummary {
   parentConversationId?: number
   /** Parent-conversation tool call ID that derived this sub-conversation or most recently resumed it (lets the frontend link the sub-conversation immediately while the subagent runs). */
   parentToolCallId?: string
-  /** Conversation ownership (default 'human'; resident/background conversations created by plugins or the kernel are marked 'helm' | 'bot'). */
-  ownedBy?: 'human' | 'helm' | 'bot'
+  /** Conversation ownership (default 'human'; resident/background conversations created by plugins or the kernel are marked 'helmx' | 'bot'). */
+  ownedBy?: 'human' | 'helmx' | 'bot'
   /** Bound compute node ID (defaults to 'local'). */
   nodeId?: string
   /** Absolute working directory path from the target node's perspective. */
@@ -81,7 +81,7 @@ export interface ConversationSummary {
    * Latest visible timeline entry ID (`ConversationEntry.id` as a non-negative
    * integer; `0` when the conversation has no visible entries, excluding hidden
    * `pi.system` entries). Advances strictly on every newly visible entry —
-   * including `helm.rewind`, `pi.compaction`, and `pi.reset` markers — enabling
+   * including `helmx.rewind`, `pi.compaction`, and `pi.reset` markers — enabling
    * reconnect `snapshot` SWR validation to skip detail fetches for unchanged conversations.
    */
   lastEntryId?: number
@@ -148,7 +148,7 @@ export interface ConversationInput {
   createdAt: number
   /** Free-form metadata already validated/redacted at the boundary; travels from CLI --meta / HTTP all the way to turn_settled. */
   meta?: Record<string, unknown>
-  /** Artifact pointers attached to the input (written into the helm.input entry after authorization checks; lightweight metadata only, no bytes). */
+  /** Artifact pointers attached to the input (written into the helmx.input entry after authorization checks; lightweight metadata only, no bytes). */
   attachments?: ConversationAttachmentRef[]
 }
 

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import React, { act } from 'react'
 import { renderToString } from 'react-dom/server'
-import type { PluginSummary } from '@helm/protocol'
+import type { PluginSummary } from '@helmx/protocol'
 import { ensureHappyDom } from './helpers/dom-harness.js'
 
 ensureHappyDom()
@@ -18,7 +18,7 @@ const {
   DEFAULT_PLUGIN_ICON,
 } = await import('../src/plugins/plugin-card-model.js')
 const { createWebTranslator } = await import('../src/i18n/catalog.js')
-const { HelmExternalStoreContext, makeTestStore } = await import('./helpers/store.js')
+const { HelmxExternalStoreContext, makeTestStore } = await import('./helpers/store.js')
 
 // ---------------------------------------------------------------------------
 // 辅助 Mock 插件数据
@@ -372,7 +372,7 @@ test('PluginCard：status === failed 时渲染异常徽章与错误摘要并标�
   assert.match(html, /class="[^"]*plugin-card[^"]*is-failed[^"]*"/)
 
   // 2. 标题行渲染异常状态灯（failed 实心红点 + 可见 Error 文案）
-  assert.match(html, /helm-status-light-failed[\s\S]*?status-dot-error[\s\S]*?Error/)
+  assert.match(html, /helmx-status-light-failed[\s\S]*?status-dot-error[\s\S]*?Error/)
   // 3. 描述区域附带错误摘要
   assert.match(html, /plugin-card-error-summary/)
   assert.match(html, /入口文件 index\.ts 缺失/, '错误摘要保留在卡片正文（不依赖 hover）')
@@ -536,7 +536,7 @@ test('PluginCard：插件名与描述按 store locale 解析，切换 en -> zh-C
     act(() => {
       root.render(
         e(
-          HelmExternalStoreContext.Provider,
+          HelmxExternalStoreContext.Provider,
           { value: store },
           e(PluginCard, { plugin, selected: false, onSelect: () => {}, onToggle: () => {} }),
         ),
@@ -603,7 +603,7 @@ test('plugin-card-model & PluginCard：en / zh-CN 双语描述、故障阶段标
 
   const zhStore = makeTestStore({ locale: 'zh-CN' })
   const zhHtml = renderToString(
-    e(HelmExternalStoreContext.Provider, { value: zhStore },
+    e(HelmxExternalStoreContext.Provider, { value: zhStore },
       e(PluginCard, { plugin, selected: false, onSelect: () => {}, onToggle: () => {} }),
     ),
   )

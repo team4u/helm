@@ -3,7 +3,7 @@ node_modules
 **/dist
 **/dist-cli
 .git
-.helm
+.helmx
 .actiondock
 .planning
 .claude

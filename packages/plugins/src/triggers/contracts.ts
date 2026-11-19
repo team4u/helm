@@ -7,10 +7,10 @@
  *   pluginSecrets['builtin:triggers']['webhook:<id>'] (0600, bound to this plugin's ID via
  *   ctx.host.secrets) and is globally redacted via secrets.addRedaction;
  * - Zero dependency injection at the composition layer: secrets / profiles / isClosing all consume
- *   the ctx.host public ports (HelmHostApi) directly; no injected factory parameters.
+ *   the ctx.host public ports (HelmxHostApi) directly; no injected factory parameters.
  */
-import { HelmError, isJsonObject } from '@helm/protocol'
-import type { ConversationSummary } from '@helm/protocol'
+import { HelmxError, isJsonObject } from '@helmx/protocol'
+import type { ConversationSummary } from '@helmx/protocol'
 
 export const TRIGGERS_PLUGIN_ID = 'builtin:triggers'
 
@@ -22,14 +22,14 @@ export function webhookSecretKey(id: string): string {
 /** Secret boundary validation: non-empty, length-capped, no control characters (an HMAC shared secret needs none). */
 export function assertWebhookSecret(secret: string): string {
   if (typeof secret !== 'string' || secret.length === 0) {
-    throw new HelmError('validation_error', 'the webhook secret must not be empty', 400, {})
+    throw new HelmxError('validation_error', 'the webhook secret must not be empty', 400, {})
   }
   if (secret.length > 512) {
-    throw new HelmError('validation_error', `webhook secret too long (<=512 chars, got ${secret.length})`, 400, {})
+    throw new HelmxError('validation_error', `webhook secret too long (<=512 chars, got ${secret.length})`, 400, {})
   }
   // eslint-disable-next-line no-control-regex
   if (/[\u0000-\u001f\u007f]/.test(secret)) {
-    throw new HelmError('validation_error', 'the webhook secret must not contain control characters', 400, {})
+    throw new HelmxError('validation_error', 'the webhook secret must not contain control characters', 400, {})
   }
   return secret
 }
@@ -37,7 +37,7 @@ export function assertWebhookSecret(secret: string): string {
 /** Trigger id: non-empty, length-capped, url-safe (shared by cron/webhook; allows a-z A-Z 0-9 _ -). */
 export function assertTriggerId(kind: 'cron' | 'webhook', id: string): string {
   if (typeof id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(id)) {
-    throw new HelmError(
+    throw new HelmxError(
       'validation_error',
       `invalid ${kind} id (1..64 chars; only alphanumeric _ - allowed; got: ${JSON.stringify(id)})`,
       400,
@@ -50,7 +50,7 @@ export function assertTriggerId(kind: 'cron' | 'webhook', id: string): string {
 /** threadKey: 1..200 chars (consistent with the superagent subscription constraint). */
 export function assertThreadKey(key: string): string {
   if (key.length === 0 || key.length > 200) {
-    throw new HelmError('validation_error', `invalid threadKey (1..200 chars, got ${key.length})`, 400, {})
+    throw new HelmxError('validation_error', `invalid threadKey (1..200 chars, got ${key.length})`, 400, {})
   }
   return key
 }
@@ -60,7 +60,7 @@ export const MAX_DESCRIPTION = 500
 
 export function assertDescription(description: string): string {
   if (description.length > MAX_DESCRIPTION) {
-    throw new HelmError('validation_error', `description too long (<=${MAX_DESCRIPTION} chars)`, 400, {})
+    throw new HelmxError('validation_error', `description too long (<=${MAX_DESCRIPTION} chars)`, 400, {})
   }
   return description
 }
@@ -97,8 +97,8 @@ function isFiniteTime(v: unknown): v is number {
   return typeof v === 'number' && Number.isFinite(v) && v >= 0
 }
 
-const docCorrupt = (detail: string): HelmError =>
-  new HelmError('triggers_doc_corrupt', `plugin doc webhooks ${detail}`, 500, { pluginId: TRIGGERS_PLUGIN_ID })
+const docCorrupt = (detail: string): HelmxError =>
+  new HelmxError('triggers_doc_corrupt', `plugin doc webhooks ${detail}`, 500, { pluginId: TRIGGERS_PLUGIN_ID })
 
 function assertWebhookMeta(raw: unknown): void {
   if (!isJsonObject(raw)) throw docCorrupt('contains a non-object entry')

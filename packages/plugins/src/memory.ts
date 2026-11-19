@@ -9,7 +9,7 @@
  * - before_turn: with a Profile's memory off, read no file, inject no section, and strip the
  *   update_memory tool; with it on, inject memory.content / memory.guide / memory.assets-missing by content;
  * - the update_memory tool: the execute entry re-checks the per-Profile switch (off -> 403);
- * - three ctx.actions (get / set / configure) auto-map to HTTP / CLI (helm memory
+ * - three ctx.actions (get / set / configure) auto-map to HTTP / CLI (helmx memory
  *   get|set|configure) / Agent Tool / Web invokeAction -- five ends.
  *
  * Honesty discipline:
@@ -19,7 +19,7 @@
  * - a legal Profile never initialized creates lazily on first memory need (no false missing report);
  * - a blank MEMORY.md is a legal memory.guide state (no missing warning).
  */
-import { HelmError, PROFILE_DETAIL_SECTION_SLOT, type HelmHostProfilesPort, type PluginActionContext, type PluginDefinition } from '@helm/protocol'
+import { HelmxError, PROFILE_DETAIL_SECTION_SLOT, type HelmxHostProfilesPort, type PluginActionContext, type PluginDefinition } from '@helmx/protocol'
 import { resolvePluginClientAssets } from './asset-paths.js'
 import { MEMORY_PLUGIN_ID, MAX_MEMORY_CHARS, MemoryStore } from './memory/store.js'
 
@@ -43,16 +43,16 @@ export function isProfileMemoryEnabled(
 }
 
 /** Truncation note (appended after truncated content at injection time; never truncate silently). */
-const MEMORY_TRUNCATION_NOTE = `\n[ helm note: MEMORY.md exceeds the ${MAX_MEMORY_CHARS}-character cap; the above is the first ${MAX_MEMORY_CHARS} characters; use update_memory(mode='replace') to consolidate and trim memory ]`
+const MEMORY_TRUNCATION_NOTE = `\n[ helmx note: MEMORY.md exceeds the ${MAX_MEMORY_CHARS}-character cap; the above is the first ${MAX_MEMORY_CHARS} characters; use update_memory(mode='replace') to consolidate and trim memory ]`
 
 /** Memory tool usage hint (injected dynamically; SYSTEM.md no longer hardcodes it). */
 const MEMORY_USAGE_NOTE = 'Use `update_memory` to save stable user preferences and conventions.'
 
 /** Public port: validate the ID and read the Profile (no guessing of missing targets). */
-async function requireProfile(profiles: HelmHostProfilesPort, profileId: string): Promise<void> {
+async function requireProfile(profiles: HelmxHostProfilesPort, profileId: string): Promise<void> {
   const found = await profiles.get(profileId)
   if (found === undefined) {
-    throw new HelmError('profile_not_found', `Profile '${profileId}' does not exist`, 404, { profileId })
+    throw new HelmxError('profile_not_found', `Profile '${profileId}' does not exist`, 404, { profileId })
   }
 }
 
@@ -64,7 +64,7 @@ function resolveActionProfileId(
 ): string {
   if (explicitProfileId !== undefined) return explicitProfileId
   if (context.conversationId !== undefined) return getConversation(context.conversationId).profileId
-  throw new HelmError(
+  throw new HelmxError(
     'validation_error',
     'Missing Profile target: provide --profile-id or a conversation context (CLI uses --current)',
     400,
@@ -105,7 +105,7 @@ export function createMemoryPlugin(): PluginDefinition {
       }
 
       // ------------------------------------------------------------------
-      // ctx.actions: get / set / configure (auto-mapped to helm memory ... CLI and HTTP)
+      // ctx.actions: get / set / configure (auto-mapped to helmx memory ... CLI and HTTP)
       // ------------------------------------------------------------------
 
       ctx.action<{ profileId?: string }, { profileId: string; enabled: boolean; content: string; initialized: boolean }>({
@@ -135,7 +135,7 @@ export function createMemoryPlugin(): PluginDefinition {
           try {
             content = await store.getMemory(profileId)
           } catch (err) {
-            if (!(err instanceof HelmError && err.code === 'not_found')) throw err
+            if (!(err instanceof HelmxError && err.code === 'not_found')) throw err
             // File absent: return an empty string honestly (the frontend sees the real state; no fabricated content).
           }
           return {
@@ -175,7 +175,7 @@ export function createMemoryPlugin(): PluginDefinition {
           await requireProfile(profiles, profileId)
           const mode = input.mode ?? 'replace'
           if (!isEnabled(profileId)) {
-            throw new HelmError(
+            throw new HelmxError(
               'memory_disabled_for_profile',
               `Profile '${profileId}' has long-term memory disabled; writing MEMORY.md is forbidden`,
               403,
@@ -219,7 +219,7 @@ export function createMemoryPlugin(): PluginDefinition {
           // Write the text first (if provided) and commit the switch only on success -- no half-config left behind on failure.
           if (input.text !== undefined) {
             if (!isEnabled(profileId) && !input.enabled) {
-              throw new HelmError(
+              throw new HelmxError(
                 'memory_disabled_for_profile',
                 `Profile '${profileId}' has long-term memory disabled; writing MEMORY.md is forbidden`,
                 403,
@@ -275,7 +275,7 @@ export function createMemoryPlugin(): PluginDefinition {
           missingNotified.delete(profileId) // stop once restored; can warn again if missing later
           if (!isInitialized(profileId)) markInitialized(profileId)
         } catch (err) {
-          if (!(err instanceof HelmError && err.code === 'not_found')) throw err
+          if (!(err instanceof HelmxError && err.code === 'not_found')) throw err
           if (!isInitialized(profileId)) {
             // A legal never-initialized Profile needing memory for the first time: lazily create the default file.
             rawMemory = await store.ensureMemory(profileId)
@@ -338,7 +338,7 @@ export function createMemoryPlugin(): PluginDefinition {
           const conversation = ctx.host.getConversation(context.conversationId)
           const profileId = conversation.profileId
           if (!isEnabled(profileId)) {
-            throw new HelmError(
+            throw new HelmxError(
               'memory_disabled_for_profile',
               `Profile '${profileId}' has long-term memory disabled; calling update_memory is forbidden`,
               403,

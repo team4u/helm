@@ -7,13 +7,13 @@
  * - steer：后台子代理安全插话（授权证明与守卫细节见 ./steer.ts）；
  * - detach：前台同步 run 转后台（授权与状态纪律见 ./detach.ts）。
  */
-import { HelmError, type HelmPluginContext } from '@helm/protocol'
+import { HelmxError, type HelmxPluginContext } from '@helmx/protocol'
 import { steerBackgroundSubagent } from './steer.js'
 import { detachForegroundSyncRun } from './detach.js'
 import type { WorkflowActionDeps } from './actions.js'
 
 export function registerWorkflowRunActions(
-  ctx: HelmPluginContext,
+  ctx: HelmxPluginContext,
   deps: Pick<WorkflowActionDeps, 'workflows' | 'assertCanSpawn' | 'syncRunsDoc'>,
 ): void {
   const { workflows, assertCanSpawn, syncRunsDoc } = deps
@@ -50,7 +50,7 @@ export function registerWorkflowRunActions(
     async handler(input, context) {
       const { wait, ...request } = input as { wait?: boolean } & Record<string, unknown>
       if (request.label !== undefined && (typeof request.label !== 'string' || request.label.trim() === '')) {
-        throw new HelmError('validation_error', 'label 必须为非空字符串', 400, { label: request.label })
+        throw new HelmxError('validation_error', 'label 必须为非空字符串', 400, { label: request.label })
       }
       // 显式 input.conversationId 与调用上下文（--current / run_action / workflow）
       // 同时存在且不一致时显式拒绝：静默选边等于在调用方不知情下改投目标。
@@ -59,7 +59,7 @@ export function registerWorkflowRunActions(
         context.conversationId !== undefined &&
         request.conversationId !== context.conversationId
       ) {
-        throw new HelmError(
+        throw new HelmxError(
           'validation_error',
           `conversationId 冲突：输入指定 ${String(request.conversationId)} 与调用上下文 ${context.conversationId} 不一致，请显式统一`,
           400,
@@ -84,7 +84,7 @@ export function registerWorkflowRunActions(
         await workflows.wait(started.id)
         const terminal = workflows.getRun(started.id)
         if (terminal.status === 'failed' || terminal.status === 'aborted') {
-          throw new HelmError(
+          throw new HelmxError(
             `workflow_${terminal.status}`,
             terminal.error ?? `工作流运行 ${started.id} 终态为 ${terminal.status}`,
             500,
@@ -127,7 +127,7 @@ export function registerWorkflowRunActions(
             runId: { type: 'string' },
             targetKind: { type: 'string', const: 'native' },
             conversationId: { type: 'number', description: 'Steered native sub-conversation ID' },
-            ownership: { type: 'string', enum: ['bot', 'helm'] },
+            ownership: { type: 'string', enum: ['bot', 'helmx'] },
             stateChangeSeq: { type: 'number', description: 'Authoritative watermark that passed the recheck at commit' },
             guardLevel: { type: 'string', const: 'cas', description: 'Guard level (kernel CAS recheck)' },
           },
@@ -141,7 +141,7 @@ export function registerWorkflowRunActions(
             targetKind: { type: 'string', const: 'external' },
             executionId: { type: 'string', description: 'Steered external execution identifier' },
             nodeId: { type: 'string', description: 'External execution node' },
-            ownership: { type: 'string', const: 'helm' },
+            ownership: { type: 'string', const: 'helmx' },
             stateChangeSeq: { type: 'number', minimum: 0, description: 'Authoritative watermark observed at the preflight or commit-point recheck' },
             guardLevel: { type: 'string', enum: ['preflight', 'cas'], description: 'Guard level actually applied by the execution plugin' },
           },
@@ -189,7 +189,7 @@ export function registerWorkflowRunActions(
   ctx.action({
     id: 'detach',
     description:
-      'Move a running foreground-sync run (the subagent / SubagentWorkflow synchronous-wait path) into the background: the blocked tool call immediately returns a background handle, the run keeps executing and reports via a steer follow-up on settle. Only runs marked foreground-sync and running can be moved (background-started and already-detached runs are rejected); the initiating conversation must be human-owned — synchronous waiting is the fixed policy for automated (bot/helm) conversations, which are refused; within a conversation only the initiating conversation itself or its ancestors may call.',
+      'Move a running foreground-sync run (the subagent / SubagentWorkflow synchronous-wait path) into the background: the blocked tool call immediately returns a background handle, the run keeps executing and reports via a steer follow-up on settle. Only runs marked foreground-sync and running can be moved (background-started and already-detached runs are rejected); the initiating conversation must be human-owned — synchronous waiting is the fixed policy for automated (bot/helmx) conversations, which are refused; within a conversation only the initiating conversation itself or its ancestors may call.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -284,7 +284,7 @@ export function registerWorkflowRunActions(
         all?: boolean
       }
       if (requestedConvId !== undefined && (!Number.isInteger(requestedConvId) || requestedConvId < 1)) {
-        throw new HelmError(
+        throw new HelmxError(
           'validation_error',
           `conversationId 必须是正整数（收到 ${String(requestedConvId)}）`,
           400,
@@ -292,10 +292,10 @@ export function registerWorkflowRunActions(
         )
       }
       if (all !== undefined && typeof all !== 'boolean') {
-        throw new HelmError('validation_error', `all 必须为 boolean（收到 ${String(all)}）`, 400, { all })
+        throw new HelmxError('validation_error', `all 必须为 boolean（收到 ${String(all)}）`, 400, { all })
       }
       if (requestedConvId !== undefined && all === true) {
-        throw new HelmError('validation_error', 'conversationId 与 all 互斥，请仅指定其一', 400, {
+        throw new HelmxError('validation_error', 'conversationId 与 all 互斥，请仅指定其一', 400, {
           conversationId: requestedConvId,
           all,
         })
@@ -305,7 +305,7 @@ export function registerWorkflowRunActions(
         context.conversationId !== undefined &&
         requestedConvId !== context.conversationId
       ) {
-        throw new HelmError(
+        throw new HelmxError(
           'validation_error',
           `conversationId 冲突：输入指定 ${requestedConvId} 与调用上下文 ${context.conversationId} 不一致，请显式统一`,
           400,
@@ -314,7 +314,7 @@ export function registerWorkflowRunActions(
       }
       const targetConvId = all === true ? undefined : (requestedConvId ?? context.conversationId)
       if (all !== true && targetConvId === undefined) {
-        throw new HelmError(
+        throw new HelmxError(
           'validation_error',
           '缺少目标范围：需要提供 conversationId、all: true 或在 CLI 使用 --current',
           400,

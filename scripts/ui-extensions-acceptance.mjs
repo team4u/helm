@@ -12,7 +12,7 @@
 // failure, not a script defect; do not comment out any registration to work around it (silent
 // degradation is forbidden). After the main agent merges all implementations and runs pnpm build:
 //   node scripts/ui-extensions-acceptance.mjs
-// Output: /tmp/helm-ui-extensions-acceptance-info.json (mode 0600, containing url/token/conversation IDs).
+// Output: /tmp/helmx-ui-extensions-acceptance-info.json (mode 0600, containing url/token/conversation IDs).
 //
 // Differences from scripts/web-acceptance.mjs:
 // - Covers only the UI extension surface (parameterized Screen / composer / micro-actions /
@@ -28,16 +28,16 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const projectRoot = fileURLToPath(new URL('..', import.meta.url))
-const { createHelm } = await import('../packages/hub/dist/app.js')
+const { createHelmx } = await import('../packages/hub/dist/app.js')
 const { startHub } = await import('../packages/kernel/dist/http/index.js')
 
-// 1. Isolated data dir (mkdtemp under the system temp dir; never reads or writes ~/.helm or legacy system data)
-const dataDir = await mkdtemp(join(tmpdir(), 'helm-ui-ext-acceptance-'))
+// 1. Isolated data dir (mkdtemp under the system temp dir; never reads or writes ~/.helmx or legacy system data)
+const dataDir = await mkdtemp(join(tmpdir(), 'helmx-ui-ext-acceptance-'))
 
 // 2. Real kernel: SQLite + PluginHost + the built-in esbuild client compiler all ready.
 //    No models injected: this fixture makes zero model calls (conversation creation and the
 //    UI/action surface do not depend on models).
-const app = await createHelm({ dataDir, cwd: projectRoot })
+const app = await createHelmx({ dataDir, cwd: projectRoot })
 
 // 3. Random test password for auth.setup (a UUID satisfies >=8 chars; the info JSON is written with mode 0600)
 const testPassword = crypto.randomUUID()
@@ -48,7 +48,7 @@ const mainConv = await app.kernel.createConversation({ title: 'UI 扩展验收�
 const auxConv = await app.kernel.createConversation({ title: 'UI 扩展验收辅助会话', tags: ['ui-ext'] })
 
 // 5. Owner plugin clientRoot: a real client.tsx inside the temp dir (esbuild compiles on
-//    demand; react/lucide/@helm/plugin-client are virtualized by the compiler into the host's
+//    demand; react/lucide/@helmx/plugin-client are virtualized by the compiler into the host's
 //    globally shared instances).
 const clientSrcDir = join(dataDir, 'client-src')
 await mkdir(join(clientSrcDir, 'parts'), { recursive: true })
@@ -56,7 +56,7 @@ await writeFile(
   join(clientSrcDir, 'client.tsx'),
   [
     "import { useState } from 'react'",
-    "import { usePluginContext, usePluginDoc, usePluginSessionDoc, PluginSlot } from '@helm/plugin-client'",
+    "import { usePluginContext, usePluginDoc, usePluginSessionDoc, PluginSlot } from '@helmx/plugin-client'",
     "import { Plus, History, Gauge } from 'lucide-react'",
     "import { sessionNote } from './parts/note'",
     '',
@@ -249,7 +249,7 @@ await writeFile(
   join(contributorSrcDir, 'client.tsx'),
   [
     "import { useState } from 'react'",
-    "import { usePluginContext, usePluginDoc } from '@helm/plugin-client'",
+    "import { usePluginContext, usePluginDoc } from '@helmx/plugin-client'",
     "import { Boxes, ArrowRight } from 'lucide-react'",
     '',
     '// Injected into the owner <PluginSlot name="cards" />: contributor context + cross-plugin action / doc',
@@ -321,8 +321,8 @@ await app.kernel.plugins.register({
 //    startHub fail explicitly with web_dist_invalid).
 const hub = await startHub({ kernel: app.kernel, port: 0, webDistDir: join(projectRoot, 'packages/web/dist') })
 
-// 9. Info JSON (mode 0600): default /tmp/helm-ui-extensions-acceptance-info.json
-const infoPath = process.env.HELM_UI_EXT_ACCEPTANCE_INFO ?? '/tmp/helm-ui-extensions-acceptance-info.json'
+// 9. Info JSON (mode 0600): default /tmp/helmx-ui-extensions-acceptance-info.json
+const infoPath = process.env.HELMX_UI_EXT_ACCEPTANCE_INFO ?? '/tmp/helmx-ui-extensions-acceptance-info.json'
 await writeFile(
   infoPath,
   JSON.stringify(

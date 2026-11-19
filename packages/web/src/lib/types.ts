@@ -15,7 +15,7 @@ import type {
   ConversationScope,
   ConversationSummary,
   CredentialSummary,
-  HelmLocale,
+  HelmxLocale,
   NodeInfo,
   NotificationEvent,
   PluginSummary,
@@ -32,8 +32,8 @@ import type {
   TimelineRendererSpec,
   ToolViewSpec,
   WorkbenchPanelSpec,
-} from '@helm/protocol/browser'
-import { matchesConversationScope, parsePluginUiContribution } from '@helm/protocol/browser'
+} from '@helmx/protocol/browser'
+import { matchesConversationScope, parsePluginUiContribution } from '@helmx/protocol/browser'
 import type { ModelDescriptor } from './api.js'
 import type { SessionDocKey } from './session-docs.js'
 
@@ -41,7 +41,7 @@ export type { SessionDocKey }
 
 export type ThemeMode = 'light' | 'dark'
 export type ThemePreference = 'system' | 'light' | 'dark'
-export type LocalePreference = 'auto' | HelmLocale
+export type LocalePreference = 'auto' | HelmxLocale
 export type FocusedPanel = 'primary' | 'split'
 
 /** Screen param key: non-empty, limited to letters/digits/dot/underscore/hyphen (a stable sub-key inside the URL query namespace). */
@@ -414,7 +414,7 @@ export function defaultConversationDetailLimit(): number {
   return isCompactMobileViewport() ? COMPACT_MOBILE_DETAIL_LIMIT : DESKTOP_DETAIL_LIMIT
 }
 
-export interface HelmStoreValue {
+export interface HelmxStoreValue {
   // Auth & connection state
   authReady: boolean
   authConfigured: boolean
@@ -426,7 +426,7 @@ export interface HelmStoreValue {
   theme: ThemeMode
   themePreference: ThemePreference
   /** Current UI locale (resolved from localePreference; browser-derived default zh-* -> zh-CN, others -> en). */
-  locale: HelmLocale
+  locale: HelmxLocale
   /** Stored UI locale preference ('auto' follows navigator.languages; manual value overrides). */
   localePreference: LocalePreference
   /** Background browser notification preference (localStorage persisted; delivered only when permission is granted). */
@@ -482,7 +482,7 @@ export interface HelmStoreValue {
   setThemePreference(pref: ThemePreference): void
   toggleTheme(): void
   /** Sets the UI locale and persists the preference. */
-  setLocale(locale: HelmLocale): void
+  setLocale(locale: HelmxLocale): void
   /** Sets the UI locale preference ('auto' clears storage override and follows the browser). */
   setLocalePreference(pref: LocalePreference): void
   /** When enabling, requests browser notification permission first; on denial stays disabled with a toast notice; disabling takes effect immediately. */

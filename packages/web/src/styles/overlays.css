@@ -89,14 +89,14 @@
  * 视觉规范：1px 发丝边框、--bg-elevated 背景、var(--radius-sm, 7px) 微圆角、极简低饱和
  * ========================================================================== */
 
-/* 高于移动端侧边栏抽屉（.helm-sidebar: 72 / .sidebar-backdrop: 71）与连接横幅（65），
+/* 高于移动端侧边栏抽屉（.helmx-sidebar: 72 / .sidebar-backdrop: 71）与连接横幅（65），
  * 低于 Toast（90）与 Modal（100），确保从侧栏触发的下拉菜单/气泡/提示不被抽屉遮挡。 */
 [data-radix-popper-content-wrapper] {
   z-index: 80;
 }
 
 /* Popover Content */
-.helm-popover-content {
+.helmx-popover-content {
   background: var(--bg-elevated);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm, 7px);
@@ -107,14 +107,14 @@
   max-width: calc(100vw - 16px);
 }
 
-.helm-popover-arrow {
+.helmx-popover-arrow {
   fill: var(--bg-elevated);
   stroke: var(--border-strong);
   stroke-width: 1px;
 }
 
 /* Dropdown Menu Content */
-.helm-dropdown-content {
+.helmx-dropdown-content {
   min-width: 180px;
   background: var(--bg-elevated);
   border: 1px solid var(--border-strong);
@@ -140,13 +140,13 @@
   font-weight: 500;
 }
 
-.helm-dropdown-arrow {
+.helmx-dropdown-arrow {
   fill: var(--bg-elevated);
   stroke: var(--border-strong);
   stroke-width: 1px;
 }
 
-.helm-dropdown-item {
+.helmx-dropdown-item {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -165,36 +165,36 @@
   transition: background 80ms ease, color 80ms ease;
 }
 
-.helm-dropdown-item[data-highlighted],
-.helm-dropdown-item:hover:not([data-disabled]) {
+.helmx-dropdown-item[data-highlighted],
+.helmx-dropdown-item:hover:not([data-disabled]) {
   background: var(--bg-hover);
   color: var(--fg);
   outline: none;
 }
 
-.helm-dropdown-item[data-disabled] {
+.helmx-dropdown-item[data-disabled] {
   opacity: 0.48;
   cursor: not-allowed;
 }
 
-.helm-dropdown-item-danger {
+.helmx-dropdown-item-danger {
   color: var(--err);
 }
 
-.helm-dropdown-item-danger[data-highlighted],
-.helm-dropdown-item-danger:hover:not([data-disabled]) {
+.helmx-dropdown-item-danger[data-highlighted],
+.helmx-dropdown-item-danger:hover:not([data-disabled]) {
   background: var(--err-bg, rgba(224, 75, 59, 0.1));
   color: var(--err);
 }
 
-.helm-dropdown-separator {
+.helmx-dropdown-separator {
   height: 1px;
   margin: 4px 6px;
   background: var(--border);
   flex-shrink: 0;
 }
 
-.helm-dropdown-label {
+.helmx-dropdown-label {
   padding: 4px 8px;
   font-size: 11px;
   color: var(--fg-muted);
@@ -202,7 +202,7 @@
 }
 
 /* Tooltip Content */
-.helm-tooltip-content {
+.helmx-tooltip-content {
   background: var(--bg-elevated);
   color: var(--fg);
   border: 1px solid var(--border-strong);
@@ -220,7 +220,7 @@
   text-overflow: ellipsis;
 }
 
-.helm-tooltip-arrow {
+.helmx-tooltip-arrow {
   fill: var(--bg-elevated);
   stroke: var(--border-strong);
   stroke-width: 1px;
@@ -241,7 +241,7 @@
   border-radius: var(--radius-sm, 7px);
 }
 
-[data-radix-popper-content-wrapper] .helm-select-popover {
+[data-radix-popper-content-wrapper] .helmx-select-popover {
   position: static;
   top: auto;
   bottom: auto;
@@ -253,15 +253,15 @@
 }
 
 /* 加宽下拉面板：长模型 ID（如 anthropic/claude-…）完整可读，溢出省略并保留 title 提示 */
-.helm-select-popover-wide {
+.helmx-select-popover-wide {
   max-width: 520px;
 }
 
-[data-radix-popper-content-wrapper] .helm-select-popover-wide {
+[data-radix-popper-content-wrapper] .helmx-select-popover-wide {
   max-width: var(--radix-select-content-available-width, 520px);
 }
 
-.helm-select-viewport {
+.helmx-select-viewport {
   padding: 0;
   display: flex;
   flex-direction: column;

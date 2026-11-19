@@ -3,13 +3,13 @@
  * preferences plus system color-scheme resolution (zero React dependencies,
  * independently unit-testable).
  */
-import type { HelmLocale } from '@helm/protocol/browser'
-import { normalizeLocaleTag } from '@helm/protocol/browser'
+import type { HelmxLocale } from '@helmx/protocol/browser'
+import { normalizeLocaleTag } from '@helmx/protocol/browser'
 import type { LocalePreference, ThemeMode, ThemePreference } from './types.js'
 
-export const THEME_STORAGE_KEY = 'helm:theme'
-export const QUIET_NOTIFY_STORAGE_KEY = 'helm:quiet-notify'
-export const LOCALE_STORAGE_KEY = 'helm:locale'
+export const THEME_STORAGE_KEY = 'helmx:theme'
+export const QUIET_NOTIFY_STORAGE_KEY = 'helmx:quiet-notify'
+export const LOCALE_STORAGE_KEY = 'helmx:locale'
 
 /** Read the persisted theme preference; falls back to 'system' when storage is unavailable or the value is invalid. */
 export function getStoredPreference(storage?: Pick<Storage, 'getItem'>): ThemePreference {
@@ -47,7 +47,7 @@ export function nextThemePreference(prev: ThemePreference): ThemePreference {
   return 'system'
 }
 
-/** Background browser notification preference (localStorage 'helm:quiet-notify' = '1'). */
+/** Background browser notification preference (localStorage 'helmx:quiet-notify' = '1'). */
 export function getStoredQuietNotify(storage?: Pick<Storage, 'getItem'>): boolean {
   try {
     const store = storage ?? localStorage
@@ -75,7 +75,7 @@ export function persistQuietNotify(
 }
 
 // ---------------------------------------------------------------------------
-// UI locale preference (localStorage 'helm:locale'; browser-derived default)
+// UI locale preference (localStorage 'helmx:locale'; browser-derived default)
 // ---------------------------------------------------------------------------
 
 /** Read the persisted UI locale preference; returns 'auto' when the key is absent. */
@@ -109,8 +109,8 @@ export function persistLocalePreference(
   }
 }
 
-/** Resolve a LocalePreference into the effective HelmLocale. */
-export function resolveLocale(pref: LocalePreference, languages?: readonly string[]): HelmLocale {
+/** Resolve a LocalePreference into the effective HelmxLocale. */
+export function resolveLocale(pref: LocalePreference, languages?: readonly string[]): HelmxLocale {
   return pref === 'auto' ? resolveBrowserLocale(languages) : pref
 }
 
@@ -120,7 +120,7 @@ export function resolveLocale(pref: LocalePreference, languages?: readonly strin
  * 'system' default); stored values are normalized through normalizeLocaleTag
  * (zh-* -> zh-CN, anything invalid/unsupported -> 'en').
  */
-export function getStoredLocale(storage?: Pick<Storage, 'getItem'>): HelmLocale | undefined {
+export function getStoredLocale(storage?: Pick<Storage, 'getItem'>): HelmxLocale | undefined {
   try {
     const store = storage ?? localStorage
     const raw = store.getItem(LOCALE_STORAGE_KEY)
@@ -130,8 +130,8 @@ export function getStoredLocale(storage?: Pick<Storage, 'getItem'>): HelmLocale 
   }
 }
 
-/** Persist the UI locale preference; the value is always a supported HelmLocale. */
-export function persistLocale(locale: HelmLocale, storage?: Pick<Storage, 'setItem' | 'removeItem'>): void {
+/** Persist the UI locale preference; the value is always a supported HelmxLocale. */
+export function persistLocale(locale: HelmxLocale, storage?: Pick<Storage, 'setItem' | 'removeItem'>): void {
   try {
     ;(storage ?? localStorage).setItem(LOCALE_STORAGE_KEY, locale)
   } catch {
@@ -145,7 +145,7 @@ export function persistLocale(locale: HelmLocale, storage?: Pick<Storage, 'setIt
  * — zh-* -> zh-CN, everything else -> 'en'. Defaults to 'en' without a
  * navigator (SSR/tests).
  */
-export function resolveBrowserLocale(languages?: readonly string[]): HelmLocale {
+export function resolveBrowserLocale(languages?: readonly string[]): HelmxLocale {
   let candidates: readonly string[]
   if (languages !== undefined) {
     candidates = languages
@@ -168,12 +168,12 @@ export function resolveBrowserLocale(languages?: readonly string[]): HelmLocale 
 export function resolveInitialLocale(
   storage?: Pick<Storage, 'getItem'>,
   languages?: readonly string[],
-): HelmLocale {
+): HelmxLocale {
   return getStoredLocale(storage) ?? resolveBrowserLocale(languages)
 }
 
 /** Sync the effective locale to the root document lang attribute. */
-export function applyDocumentLocale(locale: HelmLocale): void {
+export function applyDocumentLocale(locale: HelmxLocale): void {
   if (typeof document !== 'undefined') {
     document.documentElement.lang = locale
   }

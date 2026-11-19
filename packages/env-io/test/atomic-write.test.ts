@@ -13,7 +13,7 @@ import {
 const isPosix = process.platform !== 'win32'
 
 function makeTempDir(): string {
-  return fs.mkdtempSync(join(tmpdir(), 'helm-env-io-atomic-'))
+  return fs.mkdtempSync(join(tmpdir(), 'helmx-env-io-atomic-'))
 }
 
 function errnoError(code: string, message = `simulated system error (${code})`): NodeJS.ErrnoException {

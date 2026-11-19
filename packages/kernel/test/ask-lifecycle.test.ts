@@ -16,21 +16,21 @@
  * - Waiters are reclaimed if putAsk throws: never hanging, createAsk rejects explicitly.
  */
 
-import { HelmError } from '@helm/protocol'
-import { withTimeout } from '@helm/test-kit'
+import { HelmxError } from '@helmx/protocol'
+import { withTimeout } from '@helmx/test-kit'
 import { after, before, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { AskService } from '../src/runtime/asks.js'
-import { HelmStore } from '../src/runtime/store.js'
-import { openHelmDatabase, type HelmDatabase } from '../src/runtime/sqlite.js'
+import { HelmxStore } from '../src/runtime/store.js'
+import { openHelmxDatabase, type HelmxDatabase } from '../src/runtime/sqlite.js'
 import { SecretStash } from '../src/services/index.js'
 
 interface TestContext {
   service: AskService
-  store: HelmStore
+  store: HelmxStore
   stash: SecretStash
   events: Array<{ type: string; payload: unknown }>
   pendingChanged: number[]
@@ -41,7 +41,7 @@ interface TestContext {
 let rootDir: string
 
 before(async () => {
-  rootDir = mkdtempSync(join(tmpdir(), 'helm-ask-lifecycle-'))
+  rootDir = mkdtempSync(join(tmpdir(), 'helmx-ask-lifecycle-'))
 })
 
 after(async () => {
@@ -55,8 +55,8 @@ async function openService(
     onError?: (error: unknown) => void
   } = {},
 ): Promise<TestContext> {
-  const db = await openHelmDatabase(join(rootDir, `ask-${Math.random().toString(36).slice(2)}`))
-  const store = new HelmStore(
+  const db = await openHelmxDatabase(join(rootDir, `ask-${Math.random().toString(36).slice(2)}`))
+  const store = new HelmxStore(
     db,
     options.onError !== undefined ? { onError: options.onError } : {},
   )
@@ -211,11 +211,11 @@ describe('Ask three terminal outcomes and error boundaries', { timeout: 60_000 }
     try {
       await assert.rejects(
         () => ctx.service.createAsk({ ...baseSpec, fields: [{ name: '', label: 'empty name', type: 'text' }] }),
-        (err: unknown) => err instanceof HelmError && err.code === 'validation_error',
+        (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',
       )
       await assert.rejects(
         () => ctx.service.createAsk({ ...baseSpec, conversationId: 424242 }),
-        (err: unknown) => err instanceof HelmError && err.code === 'not_found',
+        (err: unknown) => err instanceof HelmxError && err.code === 'not_found',
       )
       // Invalid answer rejected (answerAsk throws); ask remains pending without fabricating a result.
       const pa = ctx.service.createAsk(baseSpec)
@@ -224,7 +224,7 @@ describe('Ask three terminal outcomes and error boundaries', { timeout: 60_000 }
       const ask = ctx.service.listAsks('pending')[0]!
       await assert.rejects(
         () => ctx.service.answerAsk(ask.id, { x: 'v', rogue: 'y' } as never),
-        (err: unknown) => err instanceof HelmError && err.code === 'validation_error',
+        (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',
       )
       assert.equal(ctx.store.getAsk(ask.id)!.status, 'pending')
       await ctx.service.cancelAsk(ask.id)
@@ -240,11 +240,11 @@ describe('Ask three terminal outcomes and error boundaries', { timeout: 60_000 }
       const raw = ctx.store as unknown as { putAsk: (row: unknown) => void }
       const original = raw.putAsk.bind(ctx.store)
       raw.putAsk = () => {
-        throw new HelmError('store_flush_failed', 'simulated persist failure', 500)
+        throw new HelmxError('store_flush_failed', 'simulated persist failure', 500)
       }
       await assert.rejects(
         () => ctx.service.createAsk(baseSpec),
-        (err: unknown) => err instanceof HelmError && err.code === 'store_flush_failed',
+        (err: unknown) => err instanceof HelmxError && err.code === 'store_flush_failed',
       )
       raw.putAsk = original
       // Waiter was reclaimed: recreating and running normally afterward is unpolluted.
@@ -268,7 +268,7 @@ describe('Ask persistence failures (SQL tail chain injection): never return fals
   let reported: unknown[] = []
 
   function patchRun(
-    store: HelmStore,
+    store: HelmxStore,
     shouldFail: (sql: string, params: unknown[]) => boolean,
   ): void {
     const internals = store as unknown as {
@@ -287,17 +287,17 @@ describe('Ask persistence failures (SQL tail chain injection): never return fals
       onError: (error) => reported.push(error),
     })
     try {
-      patchRun(ctx.store, (sql) => sql.includes('INSERT INTO helm_asks'))
+      patchRun(ctx.store, (sql) => sql.includes('INSERT INTO helmx_asks'))
       await assert.rejects(
         () => ctx.service.createAsk(baseSpec),
-        (err: unknown) => err instanceof HelmError && err.code === 'store_flush_failed',
+        (err: unknown) => err instanceof HelmxError && err.code === 'store_flush_failed',
       )
       // Emits no visible system event (side effects are gated on commit, never optimistic false success).
       assert.equal(ctx.events.find((e) => e.type === 'ask.upsert'), undefined)
       // Store enters broken state: subsequent writes reject explicitly instead of pretending queue success.
       await assert.rejects(
         () => ctx.service.createAsk(baseSpec),
-        (err: unknown) => err instanceof HelmError && (err.code === 'store_flush_failed' || err.code === 'store_closed'),
+        (err: unknown) => err instanceof HelmxError && (err.code === 'store_flush_failed' || err.code === 'store_closed'),
       )
       // Error is reported upward (not silently swallowed).
       assert.ok(reported.length >= 1, 'persistence error must be reported')
@@ -313,18 +313,18 @@ describe('Ask persistence failures (SQL tail chain injection): never return fals
     })
     try {
       // Creation INSERT binds settled_at as null; settlement writes a timestamp number -- intercept settlement only.
-      patchRun(ctx.store, (sql, params) => sql.includes('helm_asks') && typeof params[8] === 'number')
+      patchRun(ctx.store, (sql, params) => sql.includes('helmx_asks') && typeof params[8] === 'number')
       const askPromise = ctx.service.createAsk(baseSpec)
       await new Promise((r) => setTimeout(r, 20))
       const ask = ctx.service.listAsks('pending')[0]!
       await assert.rejects(
         () => ctx.service.answerAsk(ask.id, { x: 'real answer' }),
-        (err: unknown) => err instanceof HelmError && err.code === 'store_flush_failed',
+        (err: unknown) => err instanceof HelmxError && err.code === 'store_flush_failed',
       )
       // createAsk must not resolve with a false answer: rejects with the same failure (and does not hang).
       await assert.rejects(
         () => assertSettlesWithin(askPromise, 2_000, 'settlement failure'),
-        (err: unknown) => err instanceof HelmError && err.code === 'store_flush_failed',
+        (err: unknown) => err instanceof HelmxError && err.code === 'store_flush_failed',
       )
       // Terminal event is not published.
       assert.equal(ctx.events.find((e) => e.type === 'ask.resolved'), undefined)
@@ -344,16 +344,16 @@ describe('Ask persistence failures (SQL tail chain injection): never return fals
       const raw = ctx.store as unknown as { putAsk: (row: unknown) => void }
       const original = raw.putAsk.bind(ctx.store)
       raw.putAsk = () => {
-        throw new HelmError('store_closed', 'simulated terminal sync write failure', 409)
+        throw new HelmxError('store_closed', 'simulated terminal sync write failure', 409)
       }
       await assert.rejects(
         () => ctx.service.answerAsk(ask.id, { x: 'v' }),
-        (err: unknown) => err instanceof HelmError && err.code === 'store_closed',
+        (err: unknown) => err instanceof HelmxError && err.code === 'store_closed',
       )
       // createAsk waiter must not hang or receive false terminal outcome: rejects with the same error.
       await assert.rejects(
         () => assertSettlesWithin(askPromise, 2_000, 'terminal sync put failure'),
-        (err: unknown) => err instanceof HelmError && err.code === 'store_closed',
+        (err: unknown) => err instanceof HelmxError && err.code === 'store_closed',
       )
       raw.putAsk = original
       // Cancel path also rejects without hanging (pre-allocate ID for exact lookup away from older pending asks).
@@ -361,15 +361,15 @@ describe('Ask persistence failures (SQL tail chain injection): never return fals
       await new Promise((r) => setTimeout(r, 20))
       assert.equal(ctx.service.listAsks('pending').find((a) => a.id === 'cancel-put-fail') !== undefined, true)
       raw.putAsk = () => {
-        throw new HelmError('store_closed', 'simulated terminal sync write failure', 409)
+        throw new HelmxError('store_closed', 'simulated terminal sync write failure', 409)
       }
       await assert.rejects(
         () => ctx.service.cancelAsk('cancel-put-fail'),
-        (err: unknown) => err instanceof HelmError && err.code === 'store_closed',
+        (err: unknown) => err instanceof HelmxError && err.code === 'store_closed',
       )
       await assert.rejects(
         () => assertSettlesWithin(p2, 2_000, 'cancel sync put failure'),
-        (err: unknown) => err instanceof HelmError && err.code === 'store_closed',
+        (err: unknown) => err instanceof HelmxError && err.code === 'store_closed',
       )
       raw.putAsk = original
     } finally {
@@ -379,8 +379,8 @@ describe('Ask persistence failures (SQL tail chain injection): never return fals
 
   it('ask.resolved publish throws: answer rejects and createAsk waiter rejects with same error without hanging', { timeout: 60_000 }, async () => {
     // Even if DB persisted, an event callback throw must fail cleanly rather than pretending settlement succeeded.
-    const db = await openHelmDatabase(join(rootDir, `ask-${Math.random().toString(36).slice(2)}`))
-    const store = new HelmStore(db)
+    const db = await openHelmxDatabase(join(rootDir, `ask-${Math.random().toString(36).slice(2)}`))
+    const store = new HelmxStore(db)
     await store.load()
     const stash = new SecretStash()
     const events: Array<{ type: string; payload: unknown }> = []
@@ -420,10 +420,10 @@ describe('Ask persistence failures (SQL tail chain injection): never return fals
       const p2 = ctx.service.createAsk({ ...baseSpec, title: 'second' })
       await new Promise((r) => setTimeout(r, 20))
       // Inject settlement UPDATE failure (leave creation INSERT with settled_at=null untouched).
-      patchRun(ctx.store, (sql, params) => sql.includes('helm_asks') && typeof params[8] === 'number')
+      patchRun(ctx.store, (sql, params) => sql.includes('helmx_asks') && typeof params[8] === 'number')
       await assert.rejects(
         () => ctx.service.cancelByConversation(1),
-        (err: unknown) => err instanceof HelmError && err.code === 'store_flush_failed',
+        (err: unknown) => err instanceof HelmxError && err.code === 'store_flush_failed',
       )
       // Failed waiters settle with failure (never left hanging or falsely terminated).
       const outcomes = await Promise.allSettled([p1, p2])
@@ -465,7 +465,7 @@ describe('Ask pre-allocated ID', { timeout: 60_000 }, () => {
       // Reusing an already-settled (answered) ID rejects without overwriting the old decision.
       await assert.rejects(
         () => ctx.service.createAsk({ ...baseSpec, id: 'dup-1' }),
-        (err: unknown) => err instanceof HelmError && err.code === 'ask_id_conflict',
+        (err: unknown) => err instanceof HelmxError && err.code === 'ask_id_conflict',
       )
       assert.equal(ctx.store.getAsk('dup-1')!.status, 'answered')
       assert.equal(JSON.parse(ctx.store.getAsk('dup-1')!.resultJson!).x, 'original answer')
@@ -476,14 +476,14 @@ describe('Ask pre-allocated ID', { timeout: 60_000 }, () => {
       await new Promise((r) => setTimeout(r, 20))
       await assert.rejects(
         () => ctx.service.createAsk({ ...baseSpec, id: 'dup-2' }),
-        (err: unknown) => err instanceof HelmError && err.code === 'ask_id_conflict',
+        (err: unknown) => err instanceof HelmxError && err.code === 'ask_id_conflict',
       )
       await ctx.service.cancelAsk('dup-2')
       await pb
       // Cancelled records still occupy the ID.
       await assert.rejects(
         () => ctx.service.createAsk({ ...baseSpec, id: 'dup-2' }),
-        (err: unknown) => err instanceof HelmError && err.code === 'ask_id_conflict',
+        (err: unknown) => err instanceof HelmxError && err.code === 'ask_id_conflict',
       )
     } finally {
       await ctx.close()
@@ -496,12 +496,12 @@ describe('Ask pre-allocated ID', { timeout: 60_000 }, () => {
       for (const bad of ['', '   ']) {
         await assert.rejects(
           () => ctx.service.createAsk({ ...baseSpec, id: bad }),
-          (err: unknown) => err instanceof HelmError && err.code === 'validation_error',
+          (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',
         )
       }
       await assert.rejects(
         () => ctx.service.createAsk({ ...baseSpec, id: 123 as never }),
-        (err: unknown) => err instanceof HelmError && err.code === 'validation_error',
+        (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',
       )
       assert.equal(ctx.service.listAsks().length, 0)
     } finally {
@@ -522,11 +522,11 @@ describe('Ask CAS semantics preservation', { timeout: 60_000 }, () => {
       const ask = ctx.service.listAsks('pending')[0]!
       await assert.rejects(
         () => ctx.service.answerAsk(ask.id, { x: 'v' }, 9),
-        (err: unknown) => err instanceof HelmError && err.code === 'ask_state_conflict',
+        (err: unknown) => err instanceof HelmxError && err.code === 'ask_state_conflict',
       )
       await assert.rejects(
         () => ctx.service.answerAsk(ask.id, { x: 'v' }),
-        (err: unknown) => err instanceof HelmError && err.code === 'ask_state_unavailable',
+        (err: unknown) => err instanceof HelmxError && err.code === 'ask_state_unavailable',
       )
       // Both rollback (9 < 10) and advance (11 > 10) resolve to superseded and settle createAsk.
       let target = 9
@@ -625,7 +625,7 @@ describe('Ask secret redaction boundary', { timeout: 60_000 }, () => {
               { name: 'dup', label: '2', type: 'text' },
             ],
           }),
-        (err: unknown) => err instanceof HelmError && err.code === 'validation_error',
+        (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',
       )
     } finally {
       await ctx.close()

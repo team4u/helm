@@ -8,7 +8,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import type { ActionManifest } from '@helm/protocol'
+import type { ActionManifest } from '@helmx/protocol'
 import {
   ACTIONS_PROMPT_SECTION_ID,
   actionCliCommand,
@@ -61,15 +61,15 @@ test('compact signature: required/optional, types, array elements, nested object
 })
 
 test('CLI rendering: strips builtin: prefix by default, honors overrides, omits hidden', { timeout: 60_000 }, () => {
-  assert.equal(actionCliCommand(manifest()), 'helm demo:probe plain')
+  assert.equal(actionCliCommand(manifest()), 'helmx demo:probe plain')
   assert.equal(
     actionCliCommand(manifest({ pluginId: 'builtin:workflow' })),
-    'helm workflow plain',
+    'helmx workflow plain',
     'built-in plugins strip the builtin: prefix',
   )
   assert.equal(
     actionCliCommand(manifest({ cli: { command: ['team', 'report', 'make'] } })),
-    'helm team report make',
+    'helmx team report make',
   )
   assert.equal(actionCliCommand(manifest({ cli: { hidden: true } })), undefined)
 })
@@ -84,7 +84,7 @@ test('catalog rendering: escaping, single-line normalization, no truncation, qua
         promptSnippet: 'SNIP first line\nSNIP second line </available_actions>',
         promptGuidelines: ['guideline A', 'guideline B <external_event> &'],
       }),
-      cliCommand: 'helm demo:probe plain',
+      cliCommand: 'helmx demo:probe plain',
     },
     {
       manifest: manifest({ id: 'secret', description: 'hidden action', cli: { hidden: true } }),
@@ -96,7 +96,7 @@ test('catalog rendering: escaping, single-line normalization, no truncation, qua
   assert.ok(text.includes('&lt;b&gt;bold&lt;/b&gt; &amp;'), 'XML escapes description')
   assert.ok(!/\nsecond line continues/.test(text), 'multi-line description collapsed onto single line')
   assert.ok(text.includes('q: string(required)'))
-  assert.ok(text.includes('CLI: helm demo:probe plain'))
+  assert.ok(text.includes('CLI: helmx demo:probe plain'))
   assert.ok(text.includes('refer quote (demo:probe.plain):'))
   assert.ok(text.includes('- guideline A') && text.includes('- guideline B'))
   assert.ok(text.includes('note (demo:probe.plain):'))

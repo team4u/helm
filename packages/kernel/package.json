@@ -1,5 +1,5 @@
 {
-  "name": "@helm/kernel",
+  "name": "@helmx/kernel",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -21,17 +21,17 @@
     "@earendil-works/pi-ai": "1.5.2",
     "@earendil-works/pi-durable": "1.5.2",
     "@earendil-works/pi-schema": "1.5.2",
-    "@helm/protocol": "workspace:*",
-    "@helm/env-io": "workspace:*",
+    "@helmx/protocol": "workspace:*",
+    "@helmx/env-io": "workspace:*",
     "birpc": "^2.9.0",
     "diff": "8.0.4",
     "typebox": "^1.0.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {
-    "@helm/node": "workspace:*",
-    "@helm/plugin-build": "workspace:*",
-    "@helm/test-kit": "workspace:*",
+    "@helmx/node": "workspace:*",
+    "@helmx/plugin-build": "workspace:*",
+    "@helmx/test-kit": "workspace:*",
     "@types/ws": "^8.18.0"
   }
 }

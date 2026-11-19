@@ -6,7 +6,7 @@
  * domain handler matches only segments at or below its own prefix: exact method + path segment matching,
  * exact segment count required, and extra segments always return domain-level 404 (never fall through).
  */
-import { HelmError } from '@helm/protocol'
+import { HelmxError } from '@helmx/protocol'
 import { errorResponse, readBinaryBodyWithLimit, readBody, DEFAULT_MAX_BODY_BYTES, type JsonRedactor } from './http-utils.js'
 import { ValidationError } from './validate.js'
 
@@ -38,7 +38,7 @@ export async function readOptionalJsonBody(request: Request): Promise<unknown> {
   try {
     return JSON.parse(new TextDecoder('utf8', { fatal: true }).decode(raw))
   } catch {
-    throw new HelmError('invalid_input', 'request body is not valid JSON', 400)
+    throw new HelmxError('invalid_input', 'request body is not valid JSON', 400)
   }
 }
 

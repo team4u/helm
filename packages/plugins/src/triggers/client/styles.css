@@ -2,7 +2,7 @@
  * builtin:triggers plugin styles.
  *
  * Generic structure reuses host design-system primitives (Screen / ScreenSection / KvGrid / Dialog /
- * .helm-table / .callout / .loading-state); this file keeps only tg-* specific interactions, the detail code block and
+ * .helmx-table / .callout / .loading-state); this file keeps only tg-* specific interactions, the detail code block and
  * the mobile card fallback layout.
  */
 .tg-note {
@@ -47,31 +47,31 @@
 }
 
 @media (max-width: 680px) {
-  .tg-table-wrap .helm-table-wrap {
+  .tg-table-wrap .helmx-table-wrap {
     border: none;
     background: transparent;
     overflow: visible;
   }
 
-  .tg-table-wrap .helm-table,
-  .tg-table-wrap .helm-table tbody,
-  .tg-table-wrap .helm-table tr {
+  .tg-table-wrap .helmx-table,
+  .tg-table-wrap .helmx-table tbody,
+  .tg-table-wrap .helmx-table tr {
     display: block;
     width: 100%;
     min-width: 0;
   }
 
-  .tg-table-wrap .helm-table thead {
+  .tg-table-wrap .helmx-table thead {
     display: none;
   }
 
-  .tg-table-wrap .helm-table tbody {
+  .tg-table-wrap .helmx-table tbody {
     display: flex;
     flex-direction: column;
     gap: 10px;
   }
 
-  .tg-table-wrap .helm-table tr {
+  .tg-table-wrap .helmx-table tr {
     padding: 10px 12px;
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
@@ -79,7 +79,7 @@
     box-sizing: border-box;
   }
 
-  .tg-table-wrap .helm-table td {
+  .tg-table-wrap .helmx-table td {
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
@@ -93,13 +93,13 @@
     text-align: right;
   }
 
-  .tg-table-wrap .helm-table td[colspan] {
+  .tg-table-wrap .helmx-table td[colspan] {
     display: block;
     text-align: center;
     padding: 12px 4px;
   }
 
-  .tg-table-wrap .helm-table td[data-label]:not([colspan])::before {
+  .tg-table-wrap .helmx-table td[data-label]:not([colspan])::before {
     content: attr(data-label);
     flex-shrink: 0;
     color: var(--fg-subtle);
@@ -107,7 +107,7 @@
     text-align: left;
   }
 
-  .tg-table-wrap .helm-table td.cell-actions {
+  .tg-table-wrap .helmx-table td.cell-actions {
     padding-top: 8px;
     margin-top: 4px;
     border-top: 1px solid var(--border);

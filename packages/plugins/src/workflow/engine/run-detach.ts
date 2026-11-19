@@ -18,14 +18,14 @@
  *   onDetached 同步回调）」同样无 await：登记后 detach 必命中唤醒，绝不悬挂。
  */
 
-import { HelmError } from '@helm/protocol'
+import { HelmxError } from '@helmx/protocol'
 import type { WorkflowRunSummary } from '../../contracts.js'
 import { resolveForegroundWaiters, type ForegroundWaitOutcome } from './active-run.js'
 import { redactSummaryNodes, toSummary } from './run-summary.js'
 import type { WorkflowServiceContext } from './service-context.js'
 
-function detachError(code: string, message: string, status: number, details?: Record<string, unknown>): HelmError {
-  return new HelmError(code, message, status, details)
+function detachError(code: string, message: string, status: number, details?: Record<string, unknown>): HelmxError {
+  return new HelmxError(code, message, status, details)
 }
 
 /** waitForegroundRun 可选钩子（同步工具侧挂起时注册）。 */
@@ -76,7 +76,7 @@ export async function waitForegroundRun(
   const isClosingSuspend = (): boolean =>
     svc.isAutoRecoverOnRestart() && svc.host.isHostClosing?.() === true
   if (hooks?.signal?.aborted && isClosingSuspend()) {
-    throw new HelmError('aborted', `工作流运行 ${runId} 因宿主关停挂起而退出前台等待`, 409)
+    throw new HelmxError('aborted', `工作流运行 ${runId} 因宿主关停挂起而退出前台等待`, 409)
   }
   const outcome = await new Promise<ForegroundWaitOutcome>((resolve, reject) => {
     let settledWait = false
@@ -84,7 +84,7 @@ export async function waitForegroundRun(
       if (settledWait || !isClosingSuspend()) return
       settledWait = true
       activeRun.foregroundWaiters.delete(waiter)
-      reject(new HelmError('aborted', `工作流运行 ${runId} 因宿主关停挂起而退出前台等待`, 409))
+      reject(new HelmxError('aborted', `工作流运行 ${runId} 因宿主关停挂起而退出前台等待`, 409))
     }
     const waiter = {
       resolve: (value: ForegroundWaitOutcome) => {

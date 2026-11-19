@@ -3,8 +3,8 @@
  * withdraw/abort/reset/compact/fork/entries/:entryId/artifacts), /api/asks
  * (approval queue), and /api/search (full-text index search).
  */
-import type { ConversationListFilter, ConversationStatus } from '@helm/protocol'
-import { HelmError } from '@helm/protocol'
+import type { ConversationListFilter, ConversationStatus } from '@helmx/protocol'
+import { HelmxError } from '@helmx/protocol'
 import { buildContentDisposition, errorResponse, jsonOk, readJsonBody, type JsonRedactor } from './http-utils.js'
 import type { KernelRuntimeLike } from './contracts.js'
 import {
@@ -61,7 +61,7 @@ export async function handleConversationsDomain(
   }
   if (third === 'entries' && method === 'GET' && fourth !== undefined && ctx.segments[4] === undefined) {
     if (kernel.getConversationEntry === undefined) {
-      throw new HelmError('not_implemented', 'current runtime does not support reading a single entry', 501)
+      throw new HelmxError('not_implemented', 'current runtime does not support reading a single entry', 501)
     }
     return jsonOk(redactor, await kernel.getConversationEntry(id, parseIdParam(fourth, 'entryId')))
   }
@@ -81,7 +81,7 @@ export async function handleConversationsDomain(
   }
   if (third === 'withdraw' && method === 'POST' && fourth === undefined) {
     if (kernel.withdrawQueuedInput === undefined) {
-      throw new HelmError('not_implemented', 'current runtime does not support withdrawing queued input', 501)
+      throw new HelmxError('not_implemented', 'current runtime does not support withdrawing queued input', 501)
     }
     const body = await readJsonBody(ctx.request)
     const parsed = parseConversationWithdrawBody(body)
@@ -117,7 +117,7 @@ export async function handleConversationsDomain(
     }
     const inline = parseOptionalBooleanFlag(ctx.url, 'inline') === true
     if (kernel.readConversationFile === undefined) {
-      throw new HelmError('not_implemented', 'current runtime does not support reading conversation workspace files', 501)
+      throw new HelmxError('not_implemented', 'current runtime does not support reading conversation workspace files', 501)
     }
     const result = await kernel.readConversationFile(id, rawPath, ctx.request.signal)
     const headers: Record<string, string> = {

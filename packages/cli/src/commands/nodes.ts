@@ -1,6 +1,6 @@
 /**
  * Compute node management commands (Hub side): nodes list / issue / remove / upgrade.
- * Pure control-plane API, separate from `helm-node` (the managed machine daemon).
+ * Pure control-plane API, separate from `helmx-node` (the managed machine daemon).
  */
 import { CliError } from '../errors.js'
 import type {
@@ -9,7 +9,7 @@ import type {
   NodeIssuedToken,
   NodeUpgradeCheckResult,
   NodeUpgradeResult,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 import { flagValue, parseFlags, type FlagSpec } from '../args.js'
 import type { Io } from '../options.js'
 import type { CommandContext, CommandSpec } from './shared.js'
@@ -47,7 +47,7 @@ function printIssuedToken(io: Io, issued: NodeIssuedToken): void {
     '',
     `  ${issued.token}`,
     '',
-    'Run on the managed machine: helm-node connect <hubUrl> --token <token>',
+    'Run on the managed machine: helmx-node connect <hubUrl> --token <token>',
   ].join('\n'))
 }
 
@@ -130,10 +130,10 @@ const UPGRADE_FLAGS: readonly FlagSpec[] = [
   { name: 'version', type: 'string', help: 'target version (strict SemVer, optional v prefix; defaults to latest)' },
   { name: 'registry', type: 'string', help: 'npm registry URL (http/https)' },
   { name: 'force', type: 'boolean', help: 'force upgrade (ignore canary quarantine; mutually exclusive with --check)' },
-  { name: 'current', type: 'boolean', help: 'read HELM_NODE_ID as the target node' },
+  { name: 'current', type: 'boolean', help: 'read HELMX_NODE_ID as the target node' },
 ]
 
-/** Resolve target node: explicit positional nodeId or --current (reads HELM_NODE_ID); mutually exclusive. */
+/** Resolve target node: explicit positional nodeId or --current (reads HELMX_NODE_ID); mutually exclusive. */
 function resolveNodeTarget(flags: Map<string, unknown>, positionalId: string | undefined, env: NodeJS.ProcessEnv): string {
   const current = flags.get('current') === true
   if (positionalId !== undefined && current) {
@@ -144,13 +144,13 @@ function resolveNodeTarget(flags: Map<string, unknown>, positionalId: string | u
     return positionalId
   }
   if (current) {
-    const raw = env['HELM_NODE_ID']
+    const raw = env['HELMX_NODE_ID']
     if (!raw || !raw.trim()) {
-      throw new CliError('--current requires HELM_NODE_ID to be set', 'current_node_missing')
+      throw new CliError('--current requires HELMX_NODE_ID to be set', 'current_node_missing')
     }
     return raw.trim()
   }
-  throw new CliError('missing node target: provide <nodeId> or --current (reads HELM_NODE_ID)', 'missing_node_target')
+  throw new CliError('missing node target: provide <nodeId> or --current (reads HELMX_NODE_ID)', 'missing_node_target')
 }
 
 /** Parse host:port endpoint for nodes forward: [host:]port; host defaults to 127.0.0.1 (only allowed on target end). */
@@ -354,12 +354,12 @@ export function nodesCommands(): CommandSpec[] {
     path: ['nodes', 'forward'],
     description: 'Foreground local TCP port forwarding (POST /api/nodes/:id/forward; press Ctrl-C to exit and close)',
     flags: [
-      { name: 'current', type: 'boolean', help: 'read HELM_NODE_ID as the target node' },
+      { name: 'current', type: 'boolean', help: 'read HELMX_NODE_ID as the target node' },
     ],
     positional: '[<nodeId>] <listenHost:listenPort> [<targetHost>:]<targetPort>',
     async run(ctx: CommandContext) {
       const FORWARD_FLAGS: readonly FlagSpec[] = [
-        { name: 'current', type: 'boolean', help: 'read HELM_NODE_ID as the target node' },
+        { name: 'current', type: 'boolean', help: 'read HELMX_NODE_ID as the target node' },
       ]
       const parsed = parseFlags(FORWARD_FLAGS, ctx.args)
       // Positional layout: [<nodeId>] <listenHost:listenPort> [<targetHost>:]<targetPort>.
@@ -375,10 +375,10 @@ export function nodesCommands(): CommandSpec[] {
         listenIndex = 1
       } else {
         const current = parsed.flags.get('current') === true
-        if (!current) throw new CliError('missing node target: provide <nodeId> or --current (reads HELM_NODE_ID)', 'missing_node_target')
-        const raw = ctx.env['HELM_NODE_ID']
+        if (!current) throw new CliError('missing node target: provide <nodeId> or --current (reads HELMX_NODE_ID)', 'missing_node_target')
+        const raw = ctx.env['HELMX_NODE_ID']
         if (!raw || !raw.trim()) {
-          throw new CliError('--current requires HELM_NODE_ID to be set', 'current_node_missing')
+          throw new CliError('--current requires HELMX_NODE_ID to be set', 'current_node_missing')
         }
         nodeId = raw.trim()
       }

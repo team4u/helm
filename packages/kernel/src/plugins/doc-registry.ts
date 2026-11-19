@@ -11,14 +11,14 @@
  * are rejected) to prevent routing ambiguity on `GET /api/plugins/:id/docs/:name`.
  */
 import {
-  HelmError,
+  HelmxError,
   type PluginDocHandle,
   type PluginDocOptions,
   type PluginSessionDocHandle,
   type PublicPluginDoc,
   type PublicPluginSessionDoc,
-} from '@helm/protocol';
-import { isPlainObject } from '@helm/protocol'
+} from '@helmx/protocol';
+import { isPlainObject } from '@helmx/protocol'
 import { assertValidId, jsonClone } from './shared.js'
 
 export interface PluginDocStore {
@@ -115,7 +115,7 @@ export class PluginDocRegistry {
     try {
       json = JSON.stringify(value);
     } catch (error) {
-      throw new HelmError(
+      throw new HelmxError(
         'invalid_json_value',
         `Plugin ${pluginId} ${kind} ${name} value cannot be serialized to JSON: ${error instanceof Error ? error.message : String(error)}`,
         400,
@@ -124,7 +124,7 @@ export class PluginDocRegistry {
     }
     // Defensive backstop: `jsonClone` already rejects undefined/functions/cycles.
     if (json === undefined) {
-      throw new HelmError(
+      throw new HelmxError(
         'invalid_doc_value',
         `Plugin ${pluginId} ${kind} ${name} value cannot be serialized to JSON (top-level undefined or function)`,
         400,
@@ -133,7 +133,7 @@ export class PluginDocRegistry {
     }
     const bytes = Buffer.byteLength(json, 'utf8');
     if (bytes > maxBytes) {
-      throw new HelmError(
+      throw new HelmxError(
         'plugin_doc_too_large',
         `Plugin ${pluginId} ${kind} ${name} JSON payload is ${bytes} bytes, exceeding limit of ${maxBytes} bytes (write rejected; previous value unchanged)`,
         413,
@@ -194,7 +194,7 @@ export class PluginDocRegistry {
     try {
       assertConversationExists(conversationId);
     } catch (err) {
-      if (err instanceof HelmError && err.status === 404) {
+      if (err instanceof HelmxError && err.status === 404) {
         this.deleteConversation(conversationId);
       }
       throw err;
@@ -210,7 +210,7 @@ export class PluginDocRegistry {
       try {
         assertConversationExists(cid);
       } catch (err) {
-        if (err instanceof HelmError && err.status === 404) {
+        if (err instanceof HelmxError && err.status === 404) {
           this.deleteConversation(cid);
           continue;
         }
@@ -243,11 +243,11 @@ export class PluginDocRegistry {
     }
 
     if (docs.has(name)) {
-      throw new HelmError('duplicate_doc', `Plugin ${pluginId} declared duplicate doc ${name}`, 409);
+      throw new HelmxError('duplicate_doc', `Plugin ${pluginId} declared duplicate doc ${name}`, 409);
     }
     // `doc` and `sessionDoc` share one namespace per plugin to avoid routing ambiguity.
     if (this.sessionDocs.get(pluginId)?.has(name)) {
-      throw new HelmError(
+      throw new HelmxError(
         'duplicate_doc',
         `Plugin ${pluginId} declared duplicate document name ${name} (doc and sessionDoc share one namespace)`,
         409,
@@ -317,7 +317,7 @@ export class PluginDocRegistry {
     const durable = opts?.durable !== false;
     // Durable sessionDoc requires a persistent store; never silently degrade to memory.
     if (durable && !this.options.sessionStore) {
-      throw new HelmError(
+      throw new HelmxError(
         'session_doc_store_unavailable',
         `Plugin ${pluginId} declared durable sessionDoc ${name}, but no sessionDoc durable store is configured (sessionStore missing)`,
         501,
@@ -326,7 +326,7 @@ export class PluginDocRegistry {
     }
     // Never skip conversation existence validation (prevents orphaned writes after deletion).
     if (!this.options.assertConversationExists) {
-      throw new HelmError(
+      throw new HelmxError(
         'session_doc_port_unavailable',
         `Plugin ${pluginId} declared sessionDoc ${name}, but no conversation existence check port is configured (assertConversationExists missing)`,
         501,
@@ -335,7 +335,7 @@ export class PluginDocRegistry {
     }
     // Public docs must have an event emitter port; never silently drop updates.
     if (opts?.public === true && !this.options.emitSessionDocUpdated) {
-      throw new HelmError(
+      throw new HelmxError(
         'session_doc_port_unavailable',
         `Plugin ${pluginId} declared public sessionDoc ${name}, but no public sessionDoc event port is configured (emitSessionDocUpdated missing)`,
         501,
@@ -344,7 +344,7 @@ export class PluginDocRegistry {
     }
     // `doc` and `sessionDoc` share one namespace per plugin to avoid routing ambiguity on GET /api/plugins/:id/docs/:name.
     if (this.pluginDocs.get(pluginId)?.has(name) || this.sessionDocs.get(pluginId)?.has(name)) {
-      throw new HelmError(
+      throw new HelmxError(
         'duplicate_doc',
         `Plugin ${pluginId} declared duplicate document name ${name} (doc and sessionDoc share one namespace)`,
         409,
@@ -398,7 +398,7 @@ export class PluginDocRegistry {
     const emit = (conversationId: number, value: unknown, deleted?: boolean): void => {
       if (!isPublic) return;
       if (!emitSessionDocUpdated) {
-        throw new HelmError(
+        throw new HelmxError(
           'session_doc_port_unavailable',
           `Plugin ${pluginId} public sessionDoc ${name} is missing its event emitter port`,
           501,
@@ -482,7 +482,7 @@ export class PluginDocRegistry {
   /** Validates that `conversationId` is a positive safe integer (`400 invalid_conversation_id`). */
   private assertSessionDocId(conversationId: number): void {
     if (!Number.isSafeInteger(conversationId) || conversationId <= 0) {
-      throw new HelmError(
+      throw new HelmxError(
         'invalid_conversation_id',
         `Session doc conversationId must be a positive safe integer, received: ${String(conversationId)}`,
         400,
@@ -502,21 +502,21 @@ export class PluginDocRegistry {
       opts !== undefined &&
       (!isPlainObject(opts) || Object.keys(opts).some((k) => k !== 'public' && k !== 'durable'))
     ) {
-      throw new HelmError(
+      throw new HelmxError(
         'invalid_doc_spec',
         `Plugin ${pluginId} ${kind} ${name} options may only contain { public?: boolean, durable?: boolean }`,
         400,
       );
     }
     if (opts?.public !== undefined && typeof opts.public !== 'boolean') {
-      throw new HelmError(
+      throw new HelmxError(
         'invalid_doc_spec',
         `Plugin ${pluginId} ${kind} ${name} option 'public' must be a boolean`,
         400,
       );
     }
     if (opts?.durable !== undefined && typeof opts.durable !== 'boolean') {
-      throw new HelmError(
+      throw new HelmxError(
         'invalid_doc_spec',
         `Plugin ${pluginId} ${kind} ${name} option 'durable' must be a boolean`,
         400,
@@ -531,7 +531,7 @@ export class PluginDocRegistry {
    */
   getPublicDoc(pluginId: string, name: string, isPluginActive: boolean): PublicPluginDoc {
     if (!isPluginActive) {
-      throw new HelmError('plugin_doc_not_found', `Plugin ${pluginId} has no public doc ${name}`, 404, {
+      throw new HelmxError('plugin_doc_not_found', `Plugin ${pluginId} has no public doc ${name}`, 404, {
         pluginId,
         name,
       });
@@ -539,14 +539,14 @@ export class PluginDocRegistry {
     const reg = this.pluginDocs.get(pluginId)?.get(name);
     if (!reg || !reg.isPublic) {
       if (this.sessionDocs.get(pluginId)?.get(name)?.isPublic === true) {
-        throw new HelmError(
+        throw new HelmxError(
           'session_doc_requires_conversation',
           `Plugin ${pluginId} document ${name} is a sessionDoc; reading requires a conversationId query parameter`,
           400,
           { pluginId, name },
         );
       }
-      throw new HelmError('plugin_doc_not_found', `Plugin ${pluginId} has no public doc ${name}`, 404, {
+      throw new HelmxError('plugin_doc_not_found', `Plugin ${pluginId} has no public doc ${name}`, 404, {
         pluginId,
         name,
       });
@@ -571,7 +571,7 @@ export class PluginDocRegistry {
   ): PublicPluginSessionDoc {
     this.assertSessionDocId(conversationId);
     if (!isPluginActive) {
-      throw new HelmError(
+      throw new HelmxError(
         'plugin_doc_not_found',
         `Plugin ${pluginId} has no public sessionDoc ${name}`,
         404,
@@ -581,14 +581,14 @@ export class PluginDocRegistry {
     const reg = this.sessionDocs.get(pluginId)?.get(name);
     if (!reg || !reg.isPublic) {
       if (this.pluginDocs.get(pluginId)?.get(name)?.isPublic === true) {
-        throw new HelmError(
+        throw new HelmxError(
           'global_doc_unexpected_conversation',
           `Plugin ${pluginId} document ${name} is a global doc; do not pass conversationId`,
           400,
           { pluginId, name, conversationId },
         );
       }
-      throw new HelmError(
+      throw new HelmxError(
         'plugin_doc_not_found',
         `Plugin ${pluginId} has no public sessionDoc ${name}`,
         404,
@@ -597,7 +597,7 @@ export class PluginDocRegistry {
     }
     const assertConversationExists = this.options.assertConversationExists;
     if (!assertConversationExists) {
-      throw new HelmError(
+      throw new HelmxError(
         'session_doc_port_unavailable',
         `Plugin ${pluginId} sessionDoc ${name} is missing conversation existence check port`,
         501,
@@ -616,7 +616,7 @@ export class PluginDocRegistry {
     }
     const sessionStore = this.options.sessionStore;
     if (!sessionStore) {
-      throw new HelmError(
+      throw new HelmxError(
         'session_doc_store_unavailable',
         `Plugin ${pluginId} durable sessionDoc ${name} is missing durable backing store (sessionStore missing)`,
         501,
@@ -633,7 +633,7 @@ export class PluginDocRegistry {
     };
   }
 
-  /** Lists all public global doc snapshots for active plugins (for `HelmSnapshot.pluginDocs`). */
+  /** Lists all public global doc snapshots for active plugins (for `HelmxSnapshot.pluginDocs`). */
   listPublicDocs(activePluginIds: Iterable<string>): PublicPluginDoc[] {
     const out: PublicPluginDoc[] = [];
     for (const pluginId of activePluginIds) {

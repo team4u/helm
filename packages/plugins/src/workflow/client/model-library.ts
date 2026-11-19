@@ -3,8 +3,8 @@
  * parsing of list/get/save action results, strict args parsing for library
  * runs and the "let the AI edit" request copy; zero React/DOM dependencies).
  */
-import { DEFAULT_HELM_LOCALE, type HelmLocale } from '@helm/plugin-client'
-import type { ConversationSummary } from '@helm/protocol'
+import { DEFAULT_HELMX_LOCALE, type HelmxLocale } from '@helmx/plugin-client'
+import type { ConversationSummary } from '@helmx/protocol'
 import type { WorkflowRunSummary } from '../../contracts.js'
 import { firstLineOf, inspectString } from './model-format.ts'
 import { libArgsInvalidJson, workflowEditDescriptionLine, workflowEditRequestLines } from './copy.ts'
@@ -138,7 +138,7 @@ export function canSaveRunAsWorkflow(run: Pick<WorkflowRunSummary, 'kind' | 'sav
 export function buildWorkflowEditRequest(
   name: string,
   detail?: { description?: string },
-  locale: HelmLocale = DEFAULT_HELM_LOCALE,
+  locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
 ): string {
   const descriptionLine =
     detail?.description !== undefined
@@ -150,7 +150,7 @@ export function buildWorkflowEditRequest(
 /** Strict args parsing for library runs: blank means no args; non-blank must be valid JSON (never silently passed through as a string). */
 export function parseWorkflowArgsInput(
   text: string,
-  locale: HelmLocale = DEFAULT_HELM_LOCALE,
+  locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
 ): { ok: true; args?: unknown } | { ok: false; error: string } {
   const trimmed = text.trim()
   if (trimmed === '') return { ok: true }

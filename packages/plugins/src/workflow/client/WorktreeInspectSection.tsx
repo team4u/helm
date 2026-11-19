@@ -10,7 +10,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { CopyButton, resolveLocalizedText, usePluginContext, usePluginLocale } from '@helm/plugin-client'
+import { CopyButton, resolveLocalizedText, usePluginContext, usePluginLocale } from '@helmx/plugin-client'
 import { Icon } from './WorkflowIcon.tsx'
 import { buildWorktreeReviewRequest, buildWorktreeSelector, parseWorktreeInspectResult } from './model-worktree.ts'
 import type { WorktreeInspectView } from './model-worktree.ts'

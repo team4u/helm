@@ -11,7 +11,7 @@
  *   注入；缺失即链断，不虚构可达）。
  */
 
-import { HelmError } from '@helm/protocol'
+import { HelmxError } from '@helmx/protocol'
 import type { ActiveRun } from './active-run.js'
 
 export interface CancellationTrackerOptions {
@@ -45,10 +45,10 @@ export class CancellationTracker {
     return this.cancellingCounts.has(conversationId)
   }
 
-  /** 取消窗口断言：边界内会话拒绝新 run（HelmError aborted，不静默排队）。 */
+  /** 取消窗口断言：边界内会话拒绝新 run（HelmxError aborted，不静默排队）。 */
   assertNotCancelling(conversationId: number): void {
     if (this.cancellingCounts.has(conversationId)) {
-      throw new HelmError(
+      throw new HelmxError(
         'aborted',
         `会话 ${conversationId} 所在任务树正在取消，拒绝启动新运行`,
         409,

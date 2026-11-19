@@ -8,11 +8,11 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import * as React from 'react'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
-import type { ConversationSummary, PluginUiContribution } from '@helm/protocol'
+import type { ConversationSummary, PluginUiContribution } from '@helmx/protocol'
 import { spaceForTarget, type LocalePreference, type ResolvedTarget, type SidebarSpace } from '../src/lib/types.js'
 import type { LiveState } from '../src/lib/live-state.js'
 import { makeTestStore } from './helpers/store.js'
-import type { HelmExternalStore, HelmStoreActions } from '../src/lib/helm-store.js'
+import type { HelmxExternalStore, HelmxStoreActions } from '../src/lib/helmx-store.js'
 GlobalRegistrator.register()
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 // happy-dom 全局就绪后再加载 react-dom/client 与 SDK Provider 栈（静态导入会捕获注册前的 Node 全局）
@@ -53,7 +53,7 @@ const HERDR_VIEW = {
 } as const satisfies PluginUiContribution
 
 
-function makeStore(): HelmExternalStore {
+function makeStore(): HelmxExternalStore {
   return makeTestStore({
     conversations: [
       conv({ id: 1, title: '个人助理' }),
@@ -99,7 +99,7 @@ const SPACE_REPRESENTATIVE: Record<SidebarSpace, ResolvedTarget> = {
 // 侧栏空间切换直接走真实 store.openSpace（唯一导航机制）：空间高亮由 primaryTarget 推导，
 // Rail 点击到空间切换的完整链路与生产 Provider 一致。
 
-function render(store: HelmExternalStore, element: React.ReactElement): void {
+function render(store: HelmxExternalStore, element: React.ReactElement): void {
   // 先卸载上一棵树：Popover Portal 挂在 body 上，直接重置 innerHTML 会让卸载阶段找不到节点
   if (root) {
     act(() => {
@@ -413,7 +413,7 @@ test('Sidebar 分屏协同展开与焦点高亮：双不同智能体均展开，
 })
 
 test('Sidebar Rail 底部语言按钮紧邻主题按钮：三态菜单（auto/en/zh-CN），切换经真实 setLocalePreference 且展示随 locale', { timeout: 60_000 }, async () => {
-  const prefCalls: Array<Parameters<HelmStoreActions['setLocalePreference']>[0]> = []
+  const prefCalls: Array<Parameters<HelmxStoreActions['setLocalePreference']>[0]> = []
   const store = makeTestStore({
     conversations: [
       conv({ id: 1, title: '个人助理' }),
@@ -493,7 +493,7 @@ test('Sidebar Rail 底部语言按钮紧邻主题按钮：三态菜单（auto/en
 
 test('CommandPaletteModal 与 ScreenHost 双语本地化及语言循环命令（Auto -> English -> 简体中文）', { timeout: 60_000 }, async () => {
   const prefCalls: string[] = []
-  const spyLocalePreference = (store: HelmExternalStore): void => {
+  const spyLocalePreference = (store: HelmxExternalStore): void => {
     const real = store.actions.setLocalePreference
     ;(store.actions as unknown as { setLocalePreference: (pref: LocalePreference) => void }).setLocalePreference = (pref) => {
       prefCalls.push(pref)

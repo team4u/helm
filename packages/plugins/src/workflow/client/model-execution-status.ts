@@ -4,7 +4,7 @@
  * run / run node), bottom-up aggregation and effective card status synthesis
  * (zero React/DOM dependencies).
  */
-import type { ConversationSummary } from '@helm/protocol'
+import type { ConversationSummary } from '@helmx/protocol'
 import type { WorkflowNodeState, WorkflowRunSummary } from '../../contracts.js'
 import { subagentBadge } from './model-subagent-card.ts'
 import type { SubagentCardStatus } from './model-subagent-card.ts'

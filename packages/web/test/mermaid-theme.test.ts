@@ -11,7 +11,7 @@ test('getMermaidConfig: 浅色模式返回 neutral 主题与透明背景', { tim
   assert.equal(config.themeVariables?.darkMode, false)
 })
 
-test('getMermaidConfig: 暗黑模式返回 dark 主题并精确映射 Helm 调色板', { timeout: 60_000 }, () => {
+test('getMermaidConfig: 暗黑模式返回 dark 主题并精确映射 Helmx 调色板', { timeout: 60_000 }, () => {
   const config = getMermaidConfig('dark')
   assert.equal(config.theme, 'dark')
   assert.equal(config.startOnLoad, false)

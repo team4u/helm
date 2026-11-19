@@ -1,8 +1,8 @@
 /**
  * builtin:triggers（cron + webhook 入站连接器）独立验收测试。
  *
- * 组合纪律：真实 createHelm（真 SQLite + 真 PluginHost + 真 assistant）+
- * faux provider；插件由 createHelm 默认启用；HTTP 面经真实 createHubHandler
+ * 组合纪律：真实 createHelmx（真 SQLite + 真 PluginHost + 真 assistant）+
+ * faux provider；插件由 createHelmx 默认启用；HTTP 面经真实 createHubHandler
  * （public 豁免与派发共用 route-match）断言 webhook 验签链。不 mock app、
  * 不 fake host 端口。
  *
@@ -22,11 +22,11 @@ import { DatabaseSync } from 'node:sqlite'
 
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 
-import { HelmError, type ConversationSummary, type ExternalTriggerEnvelope } from '@helm/protocol'
-import { createHelm } from '../../hub/src/app.js'
+import { HelmxError, type ConversationSummary, type ExternalTriggerEnvelope } from '@helmx/protocol'
+import { createHelmx } from '../../hub/src/app.js'
 import { createHubHandler } from '../../kernel/src/http/index.js'
 import { createDeliveryDispatch } from '../src/triggers/delivery.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 import {
   makeFauxProvider,
   useTempDir,
@@ -49,15 +49,15 @@ function assertMode0600(file: string, stat: { mode: number }): void {
 interface TestEnv {
   dataDir: string
   faux: FauxProviderHandle
-  app: Awaited<ReturnType<typeof createHelm>>
+  app: Awaited<ReturnType<typeof createHelmx>>
   handler: (req: Request) => Promise<Response>
   close(): Promise<void>
 }
 
 async function makeEnv(): Promise<TestEnv> {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-triggers-'))
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-triggers-'))
   const faux = makeFauxProvider()
-  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider] })
+  const app = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider] })
   faux.setResponses([])
   const handler = createHubHandler(app.kernel)
   const env: TestEnv = {
@@ -79,18 +79,18 @@ async function makeEnv(): Promise<TestEnv> {
 /** 组合层默认注册并启用插件。 */
 function requireTriggersRegistered(env: TestEnv): void {
   const summary = env.app.kernel.plugins.list().find((p) => p.id === TRIGGERS)
-  assert.ok(summary, `${TRIGGERS} 应由 createHelm 默认注册`)
-  assert.equal(summary.enabled, true, `${TRIGGERS} 应由 createHelm 默认启用`)
+  assert.ok(summary, `${TRIGGERS} 应由 createHelmx 默认注册`)
+  assert.equal(summary.enabled, true, `${TRIGGERS} 应由 createHelmx 默认启用`)
 }
 
 /** 等待谓词成立（轮询，默认 5s 超时）。 */
 const waitFor = (predicate: () => boolean | Promise<boolean>, timeoutMs = 5_000): Promise<void> =>
   baseWaitFor(predicate, { timeoutMs, message: 'waitFor 超时：条件在限定时间内未成立' })
 
-/** 会话末条 helm.input entry 的 data（JSON 字符串化后断言用）。 */
+/** 会话末条 helmx.input entry 的 data（JSON 字符串化后断言用）。 */
 async function lastInputJson(env: TestEnv, conversationId: number): Promise<string> {
   const detail = await env.app.kernel.getConversationDetail(conversationId, { limit: 20 })
-  const input = detail.entries.filter((e) => e.kind === 'helm.input').at(-1)
+  const input = detail.entries.filter((e) => e.kind === 'helmx.input').at(-1)
   return JSON.stringify(input?.data ?? null)
 }
 
@@ -124,7 +124,7 @@ const sign = (secret: string, body: Uint8Array | string): string =>
 // 1. 注册 / 启停 / 动作清单契约
 // ---------------------------------------------------------------------------
 
-test('triggers1: createHelm 默认启用注册；动作、路由、UI 与公开 doc 就绪', { timeout: 60_000 }, async () => {
+test('triggers1: createHelmx 默认启用注册；动作、路由、UI 与公开 doc 就绪', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     requireTriggersRegistered(env)
@@ -182,7 +182,7 @@ test('triggers2: 七个动作注册、schema 边界与 cli.command 声明', { ti
       delete (full as Record<string, unknown>)[missing]
       await assert.rejects(
         () => host.invokeAction(TRIGGERS, 'cron_create', full),
-        (err: unknown) => err instanceof HelmError && err.code === 'validation_error',
+        (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',
         `缺 ${missing} 应显式 400`,
       )
     }
@@ -196,12 +196,12 @@ test('triggers2: 七个动作注册、schema 边界与 cli.command 声明', { ti
           targetConversationId: 1,
           targetProfileId: 'assistant',
         }),
-      (err: unknown) => err instanceof HelmError && err.code === 'validation_error',
+      (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',
     )
     // webhook_create 必填 id/secret
     await assert.rejects(
       () => host.invokeAction(TRIGGERS, 'webhook_create', { id: 'h1' }),
-      (err: unknown) => err instanceof HelmError && err.code === 'validation_error',
+      (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',
     )
   } finally {
     await env.close()
@@ -244,7 +244,7 @@ test('triggers3: cron CRUD 契约——默认值、重复创建拒绝、list/del
           schedule: '* * * * *',
           text: 'dup',
         }),
-      (err: unknown) => err instanceof HelmError && err.status === 409,
+      (err: unknown) => err instanceof HelmxError && err.status === 409,
     )
 
     const list = (await host.invokeAction(TRIGGERS, 'cron_list', {})) as { jobs: Array<{ id: string }> }
@@ -259,7 +259,7 @@ test('triggers3: cron CRUD 契约——默认值、重复创建拒绝、list/del
     // 删除不存在的 id 显式拒绝
     await assert.rejects(
       () => host.invokeAction(TRIGGERS, 'cron_delete', { id: 'no-such' }),
-      (err: unknown) => err instanceof HelmError && err.status === 404,
+      (err: unknown) => err instanceof HelmxError && err.status === 404,
     )
     const deleted = (await host.invokeAction(TRIGGERS, 'cron_delete', { id: 'nightly-report' })) as { deleted: boolean }
     assert.deepEqual(deleted, { deleted: true })
@@ -311,7 +311,7 @@ test('triggers4: cron_trigger 手动触发——信封进入 #1、origin=trigger
     // 不存在的 cron 手动触发 404
     await assert.rejects(
       () => kernel.plugins.invokeAction(TRIGGERS, 'cron_trigger', { id: 'ghost' }),
-      (err: unknown) => err instanceof HelmError && err.status === 404,
+      (err: unknown) => err instanceof HelmxError && err.status === 404,
     )
   } finally {
     await env.close()
@@ -340,7 +340,7 @@ test('triggers5: cron 目标路由——显式会话直投；启用 superagent �
     // 未启用 superagent：#1 不收到该事件
     const rootDetail = await kernel.getConversationDetail(ROOT_CONVERSATION_ID, { limit: 20 })
     assert.equal(
-      rootDetail.entries.filter((e) => e.kind === 'helm.input' && JSON.stringify(e.data).includes('直达目标会话的事件')).length,
+      rootDetail.entries.filter((e) => e.kind === 'helmx.input' && JSON.stringify(e.data).includes('直达目标会话的事件')).length,
       0,
       '显式目标事件不得同时进 #1',
     )
@@ -368,7 +368,7 @@ test('triggers5: cron 目标路由——显式会话直投；启用 superagent �
     // #1 不得收到（superagent transform 改投中枢）
     const rootAfter = await kernel.getConversationDetail(ROOT_CONVERSATION_ID, { limit: 20 })
     assert.equal(
-      rootAfter.entries.filter((e) => e.kind === 'helm.input' && JSON.stringify(e.data).includes('应进中枢的默认事件')).length,
+      rootAfter.entries.filter((e) => e.kind === 'helmx.input' && JSON.stringify(e.data).includes('应进中枢的默认事件')).length,
       0,
       'superagent 启用后默认事件必须进中枢而非 #1',
     )
@@ -388,7 +388,7 @@ test('triggers5: cron 目标路由——显式会话直投；启用 superagent �
     assert.match(await lastInputJson(env, target2.id), /superagent 期间的显式直达/)
     const routerAfter = await kernel.getConversationDetail(routerId, { limit: 30 })
     assert.equal(
-      routerAfter.entries.filter((e) => e.kind === 'helm.input' && JSON.stringify(e.data).includes('superagent 期间的显式直达')).length,
+      routerAfter.entries.filter((e) => e.kind === 'helmx.input' && JSON.stringify(e.data).includes('superagent 期间的显式直达')).length,
       0,
       '显式目标事件不得被改投中枢',
     )
@@ -432,13 +432,13 @@ test('triggers6: webhook CRUD——元数据不含 secret、重复拒绝、公�
     // 重复创建拒绝
     await assert.rejects(
       () => host.invokeAction(TRIGGERS, 'webhook_create', { id: 'ci-hook', secret: 'another' }),
-      (err: unknown) => err instanceof HelmError && err.status === 409,
+      (err: unknown) => err instanceof HelmxError && err.status === 409,
     )
 
     // 删除
     await assert.rejects(
       () => host.invokeAction(TRIGGERS, 'webhook_delete', { id: 'ghost' }),
-      (err: unknown) => err instanceof HelmError && err.status === 404,
+      (err: unknown) => err instanceof HelmxError && err.status === 404,
     )
     const deleted = (await host.invokeAction(TRIGGERS, 'webhook_delete', { id: 'ci-hook' })) as { deleted: boolean }
     assert.deepEqual(deleted, { deleted: true })
@@ -463,7 +463,7 @@ test('triggers7: webhook HTTP 验签——raw 精确字节、成功 202、无签
     const bodyBytes = new TextEncoder().encode(bodyText)
     env.faux.setResponses([fauxAssistantMessage('助理收到 webhook')])
     const ok = await postRaw(env, `${WEBHOOK_BASE}/ci`, bodyBytes, {
-      'x-helm-signature': sign(SECRET, bodyBytes),
+      'x-helmx-signature': sign(SECRET, bodyBytes),
     })
     assert.equal(ok.status, 202, `期望 202，实际 ${ok.status} ${ok.text}`)
     assert.deepEqual(ok.body, { accepted: true })
@@ -481,19 +481,19 @@ test('triggers7: webhook HTTP 验签——raw 精确字节、成功 202、无签
     assert.equal(noSig.status, 401)
     // 错误签名 401（对相同 body 用别的密钥）
     const badSig = await postRaw(env, `${WEBHOOK_BASE}/ci`, plain, {
-      'x-helm-signature': sign('whsec_wrong', plain),
+      'x-helmx-signature': sign('whsec_wrong', plain),
     })
     assert.equal(badSig.status, 401)
     // 签名对但 body 被重新序列化（JSON.stringify 加引号与转义）→ 字节不一致必须拒绝
     const jsonForm = JSON.stringify({ text: bodyText })
     const wrongBytes = await postRaw(env, `${WEBHOOK_BASE}/ci`, jsonForm, {
-      'x-helm-signature': sign(SECRET, bodyText),
+      'x-helmx-signature': sign(SECRET, bodyText),
     })
     assert.equal(wrongBytes.status, 401, '签名必须覆盖原始字节而非语义等价的重序列化')
 
     // 未注册 webhook 404（先于验签）
     const ghost = await postRaw(env, `${WEBHOOK_BASE}/ghost`, 'x', {
-      'x-helm-signature': sign(SECRET, 'x'),
+      'x-helmx-signature': sign(SECRET, 'x'),
     })
     assert.equal(ghost.status, 404)
   } finally {
@@ -513,7 +513,7 @@ test('triggers8: webhook defang 注入防护与 UTF-8 边界', { timeout: 60_000
     const bytes = new TextEncoder().encode(evil)
     env.faux.setResponses([fauxAssistantMessage('助理看到转义后的载荷')])
     const ok = await postRaw(env, `${WEBHOOK_BASE}/evil`, bytes, {
-      'x-helm-signature': sign(SECRET, bytes),
+      'x-helmx-signature': sign(SECRET, bytes),
     })
     assert.equal(ok.status, 202, ok.text)
     await kernel.waitForIdle(ROOT_CONVERSATION_ID)
@@ -586,11 +586,11 @@ test('triggers9: secret 落 credentials.json 0600、不进 docs/SQLite、删除�
 })
 
 test('triggers10: 重启后签名仍生效（secret 从 credentials.json 恢复）；GET 配置不泄漏动态 secret', { timeout: 60_000 }, async (t) => {
-  const dataDir = useTempDir(t, 'helm-triggers-restart-')
+  const dataDir = useTempDir(t, 'helmx-triggers-restart-')
   const SECRET = 'whsec_restart_roundtrip'
   // 第一进程：setup 鉴权 + 启用 + 建 webhook（secret 落 credentials.json）
   const first = makeFauxProvider()
-  const app1 = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [first.provider] })
+  const app1 = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [first.provider] })
   try {
     const { AuthService } = await import('../../kernel/src/services/index.js')
     const auth = new AuthService(dataDir)
@@ -605,7 +605,7 @@ test('triggers10: 重启后签名仍生效（secret 从 credentials.json 恢复�
 
   // 第二进程（同 dataDir 重启）：启用沿用，secret 从凭据文件恢复
   const second = makeFauxProvider()
-  const app2 = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [second.provider] })
+  const app2 = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [second.provider] })
   try {
     const summary = app2.kernel.plugins.list().find((p) => p.id === TRIGGERS)!
     assert.equal(summary.enabled, false, '重启后沿用持久化停用状态')
@@ -632,7 +632,7 @@ test('triggers10: 重启后签名仍生效（secret 从 credentials.json 恢复�
       const res = await handler(
         new Request(`http://127.0.0.1:3202${WEBHOOK_BASE}/persist`, {
           method: 'POST',
-          headers: { 'content-type': 'application/octet-stream', 'x-helm-signature': sig },
+          headers: { 'content-type': 'application/octet-stream', 'x-helmx-signature': sig },
           body,
         }),
       )
@@ -647,7 +647,7 @@ test('triggers10: 重启后签名仍生效（secret 从 credentials.json 恢复�
     assert.equal(await post(payload, sign(SECRET, payload)), 202)
     await app2.kernel.waitForIdle(ROOT_CONVERSATION_ID)
     const detail = await app2.kernel.getConversationDetail(ROOT_CONVERSATION_ID, { limit: 20 })
-    const input = detail.entries.filter((e) => e.kind === 'helm.input').at(-1)
+    const input = detail.entries.filter((e) => e.kind === 'helmx.input').at(-1)
     const json = JSON.stringify(input?.data ?? null)
     assert.match(json, /webhook:persist/)
     assert.match(json, /restart-verify/)
@@ -668,7 +668,7 @@ test('triggers11: disable 后路由撤下、动作拒绝；doc 404', { timeout: 
     // webhook 端点为持久占用：先验证默认 409 拦截，再 force 停用。
     await assert.rejects(
       () => env.app.kernel.plugins.disable(TRIGGERS),
-      (err: unknown) => err instanceof HelmError && err.code === 'plugin_in_use' && err.status === 409,
+      (err: unknown) => err instanceof HelmxError && err.code === 'plugin_in_use' && err.status === 409,
     )
     await env.app.kernel.plugins.disable(TRIGGERS, { force: true })
 
@@ -676,14 +676,14 @@ test('triggers11: disable 后路由撤下、动作拒绝；doc 404', { timeout: 
     assert.deepEqual(host.listRoutes().filter((r) => r.pluginId === TRIGGERS), [])
     await assert.rejects(
       () => host.invokeAction(TRIGGERS, 'cron_list', {}),
-      (err: unknown) => err instanceof HelmError && err.code === 'plugin_disabled',
+      (err: unknown) => err instanceof HelmxError && err.code === 'plugin_disabled',
     )
     assert.throws(
       () => host.getPublicDoc(TRIGGERS, 'crons'),
-      (err: unknown) => err instanceof HelmError && err.code === 'plugin_doc_not_found',
+      (err: unknown) => err instanceof HelmxError && err.code === 'plugin_doc_not_found',
     )
     // 路由撤下后匿名请求回到 Hub 鉴权；携带有效 Token 才观察到路由 404。
-    const anonymous = await postRaw(env, `${WEBHOOK_BASE}/bye`, 'x', { 'x-helm-signature': 'sha256=deadbeef' })
+    const anonymous = await postRaw(env, `${WEBHOOK_BASE}/bye`, 'x', { 'x-helmx-signature': 'sha256=deadbeef' })
     assert.equal(anonymous.status, 401)
     const credential = env.app.kernel.auth.createProcessToken()
     try {
@@ -791,7 +791,7 @@ test('triggers14: 并发触发同一新 Profile 单飞创建一个会话；失�
         filter?.profileId === undefined ? [...conversations] : conversations.filter((c) => c.profileId === filter.profileId),
       getConversation: (id: number) => {
         const found = conversations.find((c) => c.id === id)
-        if (found === undefined) throw new HelmError('not_found', `会话不存在: ${id}`, 404)
+        if (found === undefined) throw new HelmxError('not_found', `会话不存在: ${id}`, 404)
         return found
       },
       createConversation: (init) => createImpl(init),

@@ -11,7 +11,7 @@ import { MutableNodeChannel, nodeFixture, pollUntil, type NodeFixture } from './
  * 节点通道整链（取代历史 ssh+python3 stdin 通道）：
  * - 远端 call 经真实 LocalNodeChannel UDS NDJSON 协议往返；机密只在 JSON 内部；
  * - readOutput / removeOutput / runGate 在真实节点文件系统与命令环境执行；
- * - .helm 父目录软链逃逸拦截（本机与远端节点同一边界）；
+ * - .helmx 父目录软链逃逸拦截（本机与远端节点同一边界）；
  * - 远端端点纪律：只传显式 socketPath/session，绝不携带 Hub 本机解析结果；
  * - 订阅契约：ipcSubscribe Promise resolve 即就绪，onLine 只有事件帧（无二次 ACK）；
  * - Windows 端点/路径规则：interprocess pathcvt 真实规则（源码推导，未实机验证）。
@@ -49,7 +49,7 @@ test('远端节点 call 经通道完成 NDJSON 往返，机密只存在于 JSON 
   const result = await transport.call(target, 'tab.create', { env: { PRIVATE_TOKEN: secret } }, { timeoutMs: 3_000 })
   assert.deepEqual(result, { type: 'ok' })
   assert.equal(fixture.requests.length, 1)
-  assert.equal(fixture.requests[0]!.id, 'helm-remote-1')
+  assert.equal(fixture.requests[0]!.id, 'helmx-remote-1')
   assert.equal(fixture.requests[0]!.method, 'tab.create')
   assert.deepEqual(fixture.requests[0]!.params.env, { PRIVATE_TOKEN: secret })
 })
@@ -93,8 +93,8 @@ test('远端端点纪律：显式 socketPath 与 session 原样传递，缺省�
 test('同一节点通道完成远端文件读取、删除与 Gate 环境注入', { timeout: 60_000 }, async (t) => {
   const fixture = await nodeFixture(t)
   const root = fixture.root
-  await mkdir(join(root, '.helm'), { recursive: true })
-  await writeFile(join(root, '.helm', 'wf-out-pipeline.json'), '{"answer":42}')
+  await mkdir(join(root, '.helmx'), { recursive: true })
+  await writeFile(join(root, '.helmx', 'wf-out-pipeline.json'), '{"answer":42}')
   const secret = 'pipeline-gate-secret'
   const { transport } = transportOf(fixture, { redact: (text) => text.replaceAll(secret, '[REDACTED]') })
   const target = { nodeId: 'node-a' }
@@ -108,23 +108,23 @@ test('同一节点通道完成远端文件读取、删除与 Gate 环境注入',
   assert.equal(gate.output.trim(), '[REDACTED]')
 })
 
-test('Gate 不继承宿主环境：HELM_TOKEN 只能经显式 env 注入', { timeout: 60_000 }, async (t) => {
+test('Gate 不继承宿主环境：HELMX_TOKEN 只能经显式 env 注入', { timeout: 60_000 }, async (t) => {
   const fixture = await nodeFixture(t)
   const root = fixture.root
-  process.env.HELM_TOKEN = 'host-secret-must-not-leak'
+  process.env.HELMX_TOKEN = 'host-secret-must-not-leak'
   try {
     const { transport } = transportOf(fixture)
-    const gate = await transport.runGate({ nodeId: 'node-a' }, 'if [ -n "$HELM_TOKEN" ]; then echo "HOST:$HELM_TOKEN"; else echo CLEAN; fi', root)
+    const gate = await transport.runGate({ nodeId: 'node-a' }, 'if [ -n "$HELMX_TOKEN" ]; then echo "HOST:$HELMX_TOKEN"; else echo CLEAN; fi', root)
     assert.equal(gate.ok, true)
-    assert.equal(gate.output.trim(), 'CLEAN', '宿主 HELM_TOKEN 绝不进入 gate 子进程')
-    const gate2 = await transport.runGate({ nodeId: 'node-a' }, 'echo "MANAGED:$HELM_TOKEN"', root, undefined, { HELM_TOKEN: 'managed' })
+    assert.equal(gate.output.trim(), 'CLEAN', '宿主 HELMX_TOKEN 绝不进入 gate 子进程')
+    const gate2 = await transport.runGate({ nodeId: 'node-a' }, 'echo "MANAGED:$HELMX_TOKEN"', root, undefined, { HELMX_TOKEN: 'managed' })
     assert.equal(gate2.output.trim(), 'MANAGED:managed', '显式 env 提供的 token 正常注入')
   } finally {
-    delete process.env.HELM_TOKEN
+    delete process.env.HELMX_TOKEN
   }
 })
 
-test('本机与远端节点交接文件均拒绝通过 .helm 父目录软链越界', { timeout: 60_000 }, async (t) => {
+test('本机与远端节点交接文件均拒绝通过 .helmx 父目录软链越界', { timeout: 60_000 }, async (t) => {
   const fixture = await nodeFixture(t)
   const root = fixture.root
   const cwd = join(root, 'task')
@@ -132,7 +132,7 @@ test('本机与远端节点交接文件均拒绝通过 .helm 父目录软链越�
   await mkdir(cwd)
   await mkdir(outside)
   await writeFile(join(outside, 'wf-out-parent.json'), '{"private":true}')
-  await symlink(outside, join(cwd, '.helm'))
+  await symlink(outside, join(cwd, '.helmx'))
   const { transport } = transportOf(fixture)
   for (const target of [{}, { nodeId: 'node-a' }]) {
     await assert.rejects(transport.readOutput(target, cwd, 'wf-out-parent.json'), '读取不得越过工作目录')
@@ -175,7 +175,7 @@ test('远端节点 hubUrl 经 getNodeHubUrl 提供时可用于窗格回连注入
 test('远端 call 错误信封经 redact 脱敏后抛出', { timeout: 60_000 }, async (t) => {
   const secret = '{{NODE_ERR_SECRET}}'
   const fixture = await nodeFixture(t, (_req, socket) => {
-    socket.end(`${JSON.stringify({ id: 'helm-remote-1', error: { code: 'agent_blocked', message: `blocked with ${secret}` } })}\n`)
+    socket.end(`${JSON.stringify({ id: 'helmx-remote-1', error: { code: 'agent_blocked', message: `blocked with ${secret}` } })}\n`)
   })
   const { transport, target } = transportOf(fixture)
   await assert.rejects(
@@ -212,9 +212,9 @@ test('远端长 wait 经通道取消立即结算（底层 socket 即刻销毁）
 test('远端节点交接文件超限拒绝（herdr_output_too_large），不静默截断', { timeout: 60_000 }, async (t) => {
   const fixture = await nodeFixture(t)
   const root = fixture.root
-  await mkdir(join(root, '.helm'), { recursive: true })
+  await mkdir(join(root, '.helmx'), { recursive: true })
   const big = 'x'.repeat(33 * 1024 * 1024)
-  await writeFile(join(root, '.helm', 'wf-out-huge.md'), big)
+  await writeFile(join(root, '.helmx', 'wf-out-huge.md'), big)
   const { transport } = transportOf(fixture)
   await assert.rejects(
     transport.readOutput({ nodeId: 'node-a' }, root, 'wf-out-huge.md'),
@@ -225,10 +225,10 @@ test('远端节点交接文件超限拒绝（herdr_output_too_large），不静�
 test('远端节点软链交接文件拒绝（herdr_output_not_file）', { timeout: 60_000 }, async (t) => {
   const fixture = await nodeFixture(t)
   const root = fixture.root
-  await mkdir(join(root, '.helm'), { recursive: true })
+  await mkdir(join(root, '.helmx'), { recursive: true })
   const outside = join(root, 'outside.json')
   await writeFile(outside, '{}')
-  await symlink(outside, join(root, '.helm', 'wf-out-link.json'))
+  await symlink(outside, join(root, '.helmx', 'wf-out-link.json'))
   const { transport } = transportOf(fixture)
   await assert.rejects(
     transport.readOutput({ nodeId: 'node-a' }, root, 'wf-out-link.json'),
@@ -280,12 +280,12 @@ test('跨平台路径纯规则：Windows 形状选 win32，根目录 containment
   assert.equal(isAbsoluteAnyPath('rel'), false)
   // containment：根目录 '/' 时 '/foo' 合法包含（旧实现拼 '//foo' 会误拒）。
   assert.equal(pathContains('/', '/foo'), true)
-  assert.equal(pathContains('/work', '/work/.helm'), true)
+  assert.equal(pathContains('/work', '/work/.helmx'), true)
   assert.equal(pathContains('/work', '/workshop'), false, '前缀相同但非子路径不得包含')
   // Windows 形状同样按 win32 分隔判断。
-  assert.equal(pathContains('C:\\work', 'C:\\work\\.helm'), true)
+  assert.equal(pathContains('C:\\work', 'C:\\work\\.helmx'), true)
   assert.equal(pathContains('C:\\work', 'C:\\workshop'), false)
-  assert.equal(pathContains('\\\\srv\\share', '\\\\srv\\share\\helm'), true)
+  assert.equal(pathContains('\\\\srv\\share', '\\\\srv\\share\\helmx'), true)
 })
 
 test('远端节点订阅：ipcSubscribe resolve 即就绪，onLine 只有事件帧（无二次 ACK）', { timeout: 60_000 }, async (t) => {

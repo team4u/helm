@@ -1,7 +1,7 @@
 /**
  * Lightweight layout primitives shared by plugins (composable, stateless, SSR safe):
  * - All of them reuse the generic design-system classes from the host styles.css
- *   (.screen-container / .screen-header / .helm-table-wrap / .helm-table /
+ *   (.screen-container / .screen-header / .helmx-table-wrap / .helmx-table /
  *   .table-empty / .loading-state / .kv-grid, etc.). No new CSS theme is
  *   introduced and there is no opaque columns/data table — structure and cells
  *   are still expressed as JSX;
@@ -10,7 +10,7 @@
  *   Fast Refresh rule).
  */
 import { Children, Fragment, isValidElement, type ReactElement, type ReactNode } from 'react'
-import { HelmIcon } from './icons.js'
+import { HelmxIcon } from './icons.js'
 import { usePluginTranslator } from './i18n.js'
 import { uiCopy } from './ui-copy.js'
 
@@ -151,7 +151,7 @@ function inferColSpan(columns: number | undefined, children: ReactNode): number 
 }
 
 /**
- * Composable table: the shell reuses the host .helm-table-wrap / .helm-table
+ * Composable table: the shell reuses the host .helmx-table-wrap / .helmx-table
  * primitives and unifies the loading / empty placeholder rows; the header and
  * data cells are fully expressed by children JSX:
  *
@@ -183,14 +183,14 @@ export function DataTable(props: DataTableProps): ReactNode {
   } = props
   const colSpan = inferColSpan(columns, children)
   return (
-    <div className="helm-table-wrap">
-      <table className={joinClass('helm-table', className)} aria-label={label}>
+    <div className="helmx-table-wrap">
+      <table className={joinClass('helmx-table', className)} aria-label={label}>
         {loading ? (
           <tbody>
             <tr>
               <td colSpan={colSpan}>
                 <div className="loading-state" role="status">
-                  <HelmIcon name="loader" size={12} className="spin-slow" />
+                  <HelmxIcon name="loader" size={12} className="spin-slow" />
                   <span>{loadingLabel}</span>
                 </div>
               </td>

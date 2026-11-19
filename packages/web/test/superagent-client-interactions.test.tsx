@@ -18,13 +18,13 @@ import type {
   ScreenProps,
   TimelineRendererProps,
   ToolViewProps,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 import {
   PluginClientContext,
   PluginClientHostContext,
   resolveLocalizedText,
   type PluginClientHostPort,
-} from '@helm/plugin-client'
+} from '@helmx/plugin-client'
 import { importBuiltinClientModule, mountSharedPluginNamespaces, setBuiltinClientStub } from './helpers/builtin-clients.js'
 
 const e = React.createElement
@@ -272,10 +272,10 @@ test('toolView：派工卡为轻量单行回执（状态灯 + 摘要 + worker �
     assert.match(host.textContent ?? '', /Dispatched worker #11/, '派工结果主显 worker 会话')
     assert.match(host.textContent ?? '', /Profile coder/, '输入摘要')
     assert.ok(host.querySelector('.sa-dispatch-receipt') !== null, '单行回执形态')
-    assert.ok(host.querySelector('.helm-status-light-done') !== null, '派发成功为完成灯（可访问名称，无可見状态文字）')
-    const receiptLight = host.querySelector('.sa-dispatch-receipt .helm-status-light') as HTMLElement | null
+    assert.ok(host.querySelector('.helmx-status-light-done') !== null, '派发成功为完成灯（可访问名称，无可見状态文字）')
+    const receiptLight = host.querySelector('.sa-dispatch-receipt .helmx-status-light') as HTMLElement | null
     assert.ok(receiptLight !== null && receiptLight.getAttribute('aria-label') === 'Completed', '灯的可访问名称为短状态词（不与可见回执重复）')
-    assert.equal(host.querySelector('.helm-table') === null, true, '时间线派工卡不再渲染完整 worker 表')
+    assert.equal(host.querySelector('.helmx-table') === null, true, '时间线派工卡不再渲染完整 worker 表')
     const open = [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('Open'))
     assert.ok(open, 'worker 会话入口保留')
     await act(async () => {
@@ -296,9 +296,9 @@ test('toolView：运行中/失败回执分别为执行中灯与错误灯', { tim
     }),
   )
   try {
-    assert.ok(running.host.querySelector('.helm-status-light-working .status-dot-working') !== null, '运行中为执行中灯')
-    assert.equal(running.host.querySelector('.sa-dispatch-receipt .helm-status-light')?.getAttribute('aria-label'), 'Running', '运行中灯可访问名称为短状态词')
-    assert.equal(running.host.querySelector('.helm-status-light-label') === null, true, '无可見状态文字')
+    assert.ok(running.host.querySelector('.helmx-status-light-working .status-dot-working') !== null, '运行中为执行中灯')
+    assert.equal(running.host.querySelector('.sa-dispatch-receipt .helmx-status-light')?.getAttribute('aria-label'), 'Running', '运行中灯可访问名称为短状态词')
+    assert.equal(running.host.querySelector('.helmx-status-light-label') === null, true, '无可見状态文字')
   } finally {
     running.unmount()
   }
@@ -362,7 +362,7 @@ test('timelineRenderer：汇报卡展示摘要/终态/产物并支持分屏打�
     spy,
     e(components.SuperAgentWorkerReportCard, {
       entry: {
-        id: 'entry-1', kind: 'helm.input',
+        id: 'entry-1', kind: 'helmx.input',
         data: {
           meta: {
             renderer: 'superagent:worker-report', workerId: 11, profileId: 'coder',

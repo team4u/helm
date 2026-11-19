@@ -20,7 +20,7 @@
  *    fake-destroy an AskDoc the human is looking at).
  */
 
-import { HelmError } from '@helm/protocol'
+import { HelmxError } from '@helmx/protocol'
 
 type AskPhase = 'creating' | 'pending' | 'sent' | 'settled'
 
@@ -296,7 +296,7 @@ export async function backoffForDuplicateBlocked(signal: AbortSignal, attempt: n
   const ms = Math.min(baseMs * 2 ** Math.min(attempt, 4), capMs)
   await new Promise<void>((resolve, reject) => {
     if (signal.aborted) {
-      reject(new HelmError('aborted', 'cancelled while waiting for terminal progress', 409))
+      reject(new HelmxError('aborted', 'cancelled while waiting for terminal progress', 409))
       return
     }
     const timer = setTimeout(() => {
@@ -305,7 +305,7 @@ export async function backoffForDuplicateBlocked(signal: AbortSignal, attempt: n
     }, ms)
     const onAbort = () => {
       clearTimeout(timer)
-      reject(new HelmError('aborted', 'cancelled while waiting for terminal progress', 409))
+      reject(new HelmxError('aborted', 'cancelled while waiting for terminal progress', 409))
     }
     signal.addEventListener('abort', onAbort, { once: true })
   })

@@ -1,4 +1,4 @@
-import type { AskSpec, ConversationDetail, ConversationEntry, ConversationLive, ConversationSummary, HelmEventFrame, HelmResumedFrame, HelmSnapshot, HelmTransientLiveFrame, NodeInfo, PluginSummary, PluginUiContribution } from '@helm/protocol/browser'
+import type { AskSpec, ConversationDetail, ConversationEntry, ConversationLive, ConversationSummary, HelmxEventFrame, HelmxResumedFrame, HelmxSnapshot, HelmxTransientLiveFrame, NodeInfo, PluginSummary, PluginUiContribution } from '@helmx/protocol/browser'
 
 export interface LiveState {
   seq: number
@@ -56,7 +56,7 @@ function queueOnlyLive(live: ConversationLive): ConversationLive {
  * 应用全量快照并做 SWR 保活：保留仍存在于 snapshot.conversations 中的
  * previous.conversationDetails（合并最新摘要字段），仅清理已删除会话的详情缓存。
  */
-export function applySnapshot(previous: LiveState, snapshot: HelmSnapshot): LiveState {
+export function applySnapshot(previous: LiveState, snapshot: HelmxSnapshot): LiveState {
   if (typeof snapshot.bootId !== 'string' || snapshot.bootId === '' || !Number.isSafeInteger(snapshot.seq) || snapshot.seq < 0 || !Array.isArray(snapshot.conversations) || !Array.isArray(snapshot.pendingAsks) || !Array.isArray(snapshot.plugins) || !Array.isArray(snapshot.ui)) {
     throw new Error('Invalid kernel live snapshot format')
   }
@@ -97,7 +97,7 @@ export function applySnapshot(previous: LiveState, snapshot: HelmSnapshot): Live
 
 export function entryMatchesReference(entry: ConversationEntry, reference: string): boolean {
   if (entry.id === reference || `entry:${entry.id}` === reference) return true
-  if (entry.kind !== 'helm.input' || !reference.startsWith('input:') || entry.data === null || typeof entry.data !== 'object') return false
+  if (entry.kind !== 'helmx.input' || !reference.startsWith('input:') || entry.data === null || typeof entry.data !== 'object') return false
   return 'id' in entry.data && entry.data.id === reference.slice('input:'.length)
 }
 
@@ -180,7 +180,7 @@ export function applyConversationEntry(state: LiveState, conversationId: number,
  * 应用非顺序瞬态 `conversation.live` 帧：不检查也不推进 `seq`，
  * 仅更新对应会话的实时视图。
  */
-export function applyTransientLiveFrame(state: LiveState, frame: HelmTransientLiveFrame): LiveState {
+export function applyTransientLiveFrame(state: LiveState, frame: HelmxTransientLiveFrame): LiveState {
   if (frame === null || typeof frame !== 'object' || !isLiveShape((frame as { live?: unknown }).live)) {
     throw new Error('Invalid transient conversation.live frame format')
   }
@@ -194,7 +194,7 @@ export function applyTransientLiveFrame(state: LiveState, frame: HelmTransientLi
  * 应用 `resumed` 控制帧携带的活跃会话实时视图集合，对账断线期间未进入
  * 持久回放环形缓冲区的瞬态 `conversation.live` 状态。
  */
-export function applyResumedFrame(state: LiveState, frame: HelmResumedFrame): LiveState {
+export function applyResumedFrame(state: LiveState, frame: HelmxResumedFrame): LiveState {
   if (frame === null || typeof frame !== 'object') {
     throw new Error('Invalid kernel live resumed format')
   }
@@ -214,7 +214,7 @@ export function applyResumedFrame(state: LiveState, frame: HelmResumedFrame): Li
 }
 
 /** 任何序号缺口都重连取快照，不能继续显示缺帧的“最新状态”。 */
-export function applyEventFrame(state: LiveState, frame: HelmEventFrame): LiveState {
+export function applyEventFrame(state: LiveState, frame: HelmxEventFrame): LiveState {
   if (!Number.isSafeInteger(frame.seq) || !frame.event || typeof frame.event.type !== 'string') throw new Error('Invalid live event format')
   if (frame.seq <= state.seq) return state
   if (state.seq < 0 || frame.seq !== state.seq + 1) throw new Error('Live event sequence gap; re-syncing')

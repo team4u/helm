@@ -10,16 +10,16 @@
  *   (callAction / submitInput / openScreen / openArtifact / notify) — no
  *   direct host-store access, no eval / arbitrary JS / arbitrary URLs;
  * - primitive styling lives entirely in this plugin's CSS (styles.css,
- *   compiled into __helmClientCss and injected by the host);
+ *   compiled into __helmxClientCss and injected by the host);
  * - display copy resolves from copy.ts against the active host locale
  *   (usePluginLocale / usePluginTranslator; no independent language state);
  *   spec-declared text and host error details pass through unchanged.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import './styles.css'
-import { usePluginContext, usePluginLocale, usePluginTranslator, ViewBoundary, HelmIcon, Callout } from '@helm/plugin-client'
-import type { MarkdownCodeBlockProps } from '@helm/protocol'
-import { CopyButton } from '@helm/plugin-client'
+import { usePluginContext, usePluginLocale, usePluginTranslator, ViewBoundary, HelmxIcon, Callout } from '@helmx/plugin-client'
+import type { MarkdownCodeBlockProps } from '@helmx/protocol'
+import { CopyButton } from '@helmx/plugin-client'
 import { isDegradedNode, normalizeSpec, type NormalizedSpecNode } from './spec-normalize.ts'
 import { resolveSpecAction } from './spec-action.ts'
 import {

@@ -25,13 +25,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { createHelm } from '../../hub/src/app.js'
+import { createHelmx } from '../../hub/src/app.js'
 import { WorkflowService, type WorkflowServiceHost, type WorkflowStateStore } from '../src/workflow/engine/service.js'
 import { KernelRuntime } from '../../kernel/src/runtime/index.js'
-import { openHelmDatabase } from '../../kernel/src/runtime/sqlite.js'
-import { HelmStore } from '../../kernel/src/runtime/store.js'
+import { openHelmxDatabase } from '../../kernel/src/runtime/sqlite.js'
+import { HelmxStore } from '../../kernel/src/runtime/store.js'
 import { EventHub } from '../../kernel/src/runtime/events.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { makeConversationSummary, makeFauxProvider, useTempDir } from './helpers/plugin-test-env.js'
 
 /** 慢速脚本：每个 agent 调用真实 spawn 子会话（faux 子会话脚本慢速流式输出）。 */
@@ -43,9 +43,9 @@ const FAST_SCRIPT =
   'export const meta = { name: "fast-link", description: "t" }\nreturn 7'
 
 test('工具链精确关联：parentToolCallId 经受信 context 注入 run，双并行不串扰，重启保留', { timeout: 60_000 }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'helm-wf-calllink-'))
+  const dir = mkdtempSync(join(tmpdir(), 'helmx-wf-calllink-'))
   const faux = makeFauxProvider()
-  const app = await createHelm({ buildProvider: createPluginBuildProvider(),
+  const app = await createHelmx({ buildProvider: createPluginBuildProvider(),
     dataDir: dir,
     cwd: dir,
     model: 'faux/faux-1',
@@ -113,7 +113,7 @@ test('工具链精确关联：parentToolCallId 经受信 context 注入 run，�
 
   // --- 3. 重启（同 dataDir）：历史 run 的 parentToolCallId 持久保留 ---
   const fauxReopened = makeFauxProvider()
-  const reopened = await createHelm({ buildProvider: createPluginBuildProvider(),
+  const reopened = await createHelmx({ buildProvider: createPluginBuildProvider(),
     dataDir: dir,
     cwd: dir,
     model: 'faux/faux-1',
@@ -136,9 +136,9 @@ test('工具链精确关联：parentToolCallId 经受信 context 注入 run，�
 })
 
 test('run() 无受信 context（HTTP/CLI 路径事实）：run 无 parentToolCallId；HTTP body 字段被拒', { timeout: 60_000 }, async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-wf-nolink-'))
-  const database = await openHelmDatabase(dataDir)
-  const store = new HelmStore(database)
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-wf-nolink-'))
+  const database = await openHelmxDatabase(dataDir)
+  const store = new HelmxStore(database)
   await store.load()
   const state: WorkflowStateStore = (() => {
     const docs = new Map<string, unknown>()
@@ -190,9 +190,9 @@ test('run 动作 inputSchema 不得注入 parentToolCallId（additionalPropertie
   // 编排已剥离为插件动作：run 的 inputSchema 不含 parentToolCallId 且
   // additionalProperties:false——语义冒充在动作边界被拒绝，内部元数据仅
   // 受信工具上下文（PluginToolContext.callId）可注入。
-  const dataDir = useTempDir(t, 'helm-wf-schema-')
+  const dataDir = useTempDir(t, 'helmx-wf-schema-')
   const faux = makeFauxProvider()
-  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider] })
+  const app = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider] })
   try {
     const manifests = app.kernel.plugins.listActions()
     const runManifest = manifests.find((m) => m.pluginId === 'builtin:workflow' && m.id === 'run')

@@ -194,8 +194,8 @@ function sanitizeValue(val, depth = 0, seen = new Map(), disambiguate = null) {
 }
 
 function installSafeTestAssert() {
-  if (globalThis.__helmSafeTestAssertInstalled) return;
-  globalThis.__helmSafeTestAssertInstalled = true;
+  if (globalThis.__helmxSafeTestAssertInstalled) return;
+  globalThis.__helmxSafeTestAssertInstalled = true;
 
   const require = createRequire(import.meta.url);
   const looseAssert = require('node:assert');

@@ -1,13 +1,13 @@
 /**
- * 外部插件生态 DX 闭环与包管理 HTTP 集成测试（合并原 plugin-dx-http / plugin-package-http，共享单实例 createHelm）：
- * - 代际加载器（?helmgen 模块图重初始化与相对依赖闭包传播，纯 node 子进程验证）；
+ * 外部插件生态 DX 闭环与包管理 HTTP 集成测试（合并原 plugin-dx-http / plugin-package-http，共享单实例 createHelmx）：
+ * - 代际加载器（?helmxgen 模块图重初始化与相对依赖闭包传播，纯 node 子进程验证）；
  * - doctorPluginDir（健康摘要、损坏 manifest 提前终止、TS 语法错误文件定位、重复 action 边界、悬空与健康 client 导出）；
  * - PluginHost DX 操作（rescan 增量扫描、reload 热重载/预检失败保活/锁定 403/未知 404/在途 409/停用态保持/冲突回滚、按 id doctor）；
  * - DX HTTP 路由（POST /api/plugins/doctor | rescan | :id/reload 鉴权、body 校验与错误信封穿透）；
  * - 受管包管理 HTTP 路由（POST /api/plugins/install | :id/update | :id/remove、GET /api/plugins managed 映射与跨重启恢复）。
  */
-import { createPluginBuildProvider } from '@helm/plugin-build'
-import { HelmError as HostHelmError, type PluginReloadResult, type PluginRescanResult } from '@helm/protocol'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
+import { HelmxError as HostHelmxError, type PluginReloadResult, type PluginRescanResult } from '@helmx/protocol'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -25,7 +25,7 @@ import {
 let env: HubHandlerTestEnv
 
 before(async () => {
-  env = await openHubHandlerEnv({ prefix: 'helm-plugin-dx-' })
+  env = await openHubHandlerEnv({ prefix: 'helmx-plugin-dx-' })
 }, { timeout: 60_000 })
 
 after(async () => {
@@ -69,10 +69,10 @@ export default { id: '${dir}', name: 'DX plugin ${dir}', version: '0.1.0', defin
   )
   writeFileSync(
     join(dirPath, 'lib', 'shared.ts'),
-    `import { HelmError } from '@helm/protocol'
+    `import { HelmxError } from '@helmx/protocol'
 declare global { var ${counterName}_lib: number | undefined }
 globalThis.${counterName}_lib = (globalThis.${counterName}_lib ?? 0) + 1
-export const sharedDep = (): string => 'shared:' + (HelmError ? 'helm-ok' : 'helm-missing')
+export const sharedDep = (): string => 'shared:' + (HelmxError ? 'helmx-ok' : 'helmx-missing')
 `,
   )
   return { dirPath, counterName }
@@ -102,7 +102,7 @@ export default { id: '${dir}', definePlugin, clientRoot: './client' }
   writeFileSync(
     join(dirPath, 'client', 'client.tsx'),
     `import React from 'react'
-import { usePluginDoc } from '@helm/plugin-client'
+import { usePluginDoc } from '@helmx/plugin-client'
 
 export function ${actualExport}(): React.JSX.Element {
   const state = usePluginDoc<{ n: number }>('state')
@@ -162,13 +162,13 @@ function writeLocalPackage(parent: string, id: string, version = '1.0.0'): strin
 // 1. 代际边界加载（纯 node 子进程）与 doctorPluginDir 四阶段静态自检
 // ---------------------------------------------------------------------------
 
-test('代际边界加载：?helmgen 入口重初始化模块图并向相对依赖闭包传播（纯 node 子进程）', { timeout: 60_000 }, async (t) => {
-  const dataDir = useTempDir(t, 'helm-dx-gen-')
+test('代际边界加载：?helmxgen 入口重初始化模块图并向相对依赖闭包传播（纯 node 子进程）', { timeout: 60_000 }, async (t) => {
+  const dataDir = useTempDir(t, 'helmx-dx-gen-')
   const loaderSrc = fileURLToPath(new URL('../../kernel/src/plugins/backend-ts-loader.ts', import.meta.url))
   const { dirPath, counterName } = writeMinimalPlugin(join(dataDir, 'plugins'), 'dx-gen')
   const childSrc = `
 const { registerPluginTsRoot, nextPluginGeneration } = await import(${JSON.stringify(loaderSrc)})
-const { createPluginBuildProvider } = await import(${JSON.stringify(import.meta.resolve('@helm/plugin-build'))})
+const { createPluginBuildProvider } = await import(${JSON.stringify(import.meta.resolve('@helmx/plugin-build'))})
 const entry = ${JSON.stringify(join(dirPath, 'index.ts'))}
 const release = registerPluginTsRoot(${JSON.stringify(dirPath)}, { transform: createPluginBuildProvider().transformBackendTs })
 const plain = (await import('file://' + entry)).default
@@ -176,11 +176,11 @@ if (plain.id !== 'dx-gen' || globalThis[${JSON.stringify(counterName)}] !== 1 ||
 const again = (await import('file://' + entry)).default
 if (again !== plain || globalThis[${JSON.stringify(counterName)}] !== 1) process.exit(1)
 const g1 = nextPluginGeneration(${JSON.stringify(dirPath)})
-const gen1 = (await import('file://' + entry + '?helmgen=' + g1)).default
+const gen1 = (await import('file://' + entry + '?helmxgen=' + g1)).default
 if (gen1 === plain || globalThis[${JSON.stringify(counterName)}] !== 2 || globalThis[${JSON.stringify(`${counterName}_lib`)}] !== 2) process.exit(1)
 const g2 = nextPluginGeneration(${JSON.stringify(dirPath)})
 if (g2 <= g1) process.exit(1)
-await import('file://' + entry + '?helmgen=' + g2)
+await import('file://' + entry + '?helmxgen=' + g2)
 if (globalThis[${JSON.stringify(counterName)}] !== 3 || globalThis[${JSON.stringify(`${counterName}_lib`)}] !== 3) process.exit(1)
 release()
 console.log('CHILD_OK')
@@ -196,7 +196,7 @@ console.log('CHILD_OK')
 })
 
 test('doctorPluginDir：健康插件与前端组件通过，损坏 manifest / TS 语法 / 重复 action / 悬空 client 导出精确定位', { timeout: 60_000 }, async (t) => {
-  const pluginsDir = join(useTempDir(t, 'helm-dx-doc-'), 'plugins')
+  const pluginsDir = join(useTempDir(t, 'helmx-dx-doc-'), 'plugins')
   const buildProvider = createPluginBuildProvider()
 
   const healthy = await doctorPluginDir(writeMinimalPlugin(pluginsDir, 'dx-healthy').dirPath, { buildProvider })
@@ -293,7 +293,7 @@ test('rescan 与 reload 全路径：增量注册不扰既有、热重载代际�
   await assert.rejects(
     env.kernel.plugins.reloadExternalPlugin('dx-keep'),
     (err: unknown) =>
-      err instanceof HostHelmError &&
+      err instanceof HostHelmxError &&
       err.code === 'plugin_reload_preflight_failed' &&
       err.status === 422 &&
       (err.details as { report?: { ok?: boolean } })?.report?.ok === false,
@@ -303,11 +303,11 @@ test('rescan 与 reload 全路径：增量注册不扰既有、热重载代际�
   // 4. 内置插件 403、未注册 404、在途任务 409、停用态保持停用
   await assert.rejects(
     env.kernel.plugins.reloadExternalPlugin('builtin:profile'),
-    (err: unknown) => err instanceof HostHelmError && err.code === 'plugin_locked' && err.status === 403,
+    (err: unknown) => err instanceof HostHelmxError && err.code === 'plugin_locked' && err.status === 403,
   )
   await assert.rejects(
     env.kernel.plugins.reloadExternalPlugin('dx-never-exists'),
-    (err: unknown) => err instanceof HostHelmError && err.code === 'unknown_plugin',
+    (err: unknown) => err instanceof HostHelmxError && err.code === 'unknown_plugin',
   )
 
   const { dirPath: offDir } = writeMinimalPlugin(pluginsDir, 'dx-off')
@@ -317,7 +317,7 @@ test('rescan 与 reload 全路径：增量注册不扰既有、热重载代际�
   const inFlight = env.kernel.plugins.withTask('dx-first', 'dx-test-busy', async () => busyGate)
   await assert.rejects(
     env.kernel.plugins.reloadExternalPlugin('dx-first'),
-    (err: unknown) => err instanceof HostHelmError && err.code === 'plugin_has_live_tasks' && err.status === 409,
+    (err: unknown) => err instanceof HostHelmxError && err.code === 'plugin_has_live_tasks' && err.status === 409,
   )
   releaseBusy()
   await inFlight
@@ -345,7 +345,7 @@ test('rescan 与 reload 全路径：增量注册不扰既有、热重载代际�
   await assert.rejects(
     env.kernel.plugins.reloadExternalPlugin('dx-a'),
     (err: unknown) =>
-      err instanceof HostHelmError &&
+      err instanceof HostHelmxError &&
       err.code === 'plugin_reload_failed' &&
       (err.details as { rolledBack?: boolean })?.rolledBack === true,
   )
@@ -367,11 +367,11 @@ test('DX HTTP 路由契约：POST /api/plugins/doctor | rescan | :id/reload 鉴�
   assert.ok(byId.dir.endsWith('dx-http-pl'))
   await assert.rejects(
     env.kernel.plugins.doctorExternalPlugin({ id: 'dx-not-registered' }),
-    (err: unknown) => err instanceof HostHelmError && err.code === 'plugin_source_missing',
+    (err: unknown) => err instanceof HostHelmxError && err.code === 'plugin_source_missing',
   )
   await assert.rejects(
     env.kernel.plugins.doctorExternalPlugin({ id: 'dx-http-pl', dir: '/abs' }),
-    (err: unknown) => err instanceof HostHelmError && err.code === 'validation_error',
+    (err: unknown) => err instanceof HostHelmxError && err.code === 'validation_error',
   )
 
   // POST /api/plugins/doctor
@@ -413,7 +413,7 @@ test('DX HTTP 路由契约：POST /api/plugins/doctor | rescan | :id/reload 鉴�
 // ---------------------------------------------------------------------------
 
 test('受管包 HTTP 路由：install（默认停用与 enable:true / body 边界 400）、update、remove 与 managed 映射', { timeout: 60_000 }, async (t) => {
-  const srcParent = useTempDir(t, 'helm-pkg-httpsrc-')
+  const srcParent = useTempDir(t, 'helmx-pkg-httpsrc-')
 
   // install 默认停用 + GET /api/plugins managed 映射 + enable: true
   const src1 = writeLocalPackage(srcParent, 'http-demo')
@@ -469,8 +469,8 @@ test('受管包 HTTP 路由：install（默认停用与 enable:true / body 边�
 })
 
 test('受管包跨重启恢复：config.json.pluginPackages 持久驱动 managed 映射与卸载能力', { timeout: 60_000 }, async (t) => {
-  const dataDir = join(useTempDir(t, 'helm-pkg-restart-'), 'hub')
-  const srcParent = useTempDir(t, 'helm-pkg-restart-src-')
+  const dataDir = join(useTempDir(t, 'helmx-pkg-restart-'), 'hub')
+  const srcParent = useTempDir(t, 'helmx-pkg-restart-src-')
   const src = writeLocalPackage(srcParent, 'restart-demo')
 
   const first = await createHubTestApp({ dataDir, cwd: dataDir })

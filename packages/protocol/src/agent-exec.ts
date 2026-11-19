@@ -10,9 +10,9 @@
  * (business shapes such as worktree / control references are validated at their owner
  * plugin's own boundary with its schema; see the kernel-side shared contract module).
  *
- * This file has zero runtime dependencies (only HelmError); internal and external plugins use it on equal footing.
+ * This file has zero runtime dependencies (only HelmxError); internal and external plugins use it on equal footing.
  */
-import { HelmError } from './error.js'
+import { HelmxError } from './error.js'
 import { sanitizeAgentNamespacedMeta } from './meta.js'
 import type { AgentExecutionInfo, AgentGateResult } from './plugin-dto.js'
 
@@ -25,8 +25,8 @@ export function isAbsoluteAgentPath(p: string): boolean {
   )
 }
 
-function executionInfoError(agentId: string, reason: string): HelmError {
-  return new HelmError(
+function executionInfoError(agentId: string, reason: string): HelmxError {
+  return new HelmxError(
     'execution_info_invalid',
     `onResolved callback from agent '${agentId}' is invalid: ${reason}`,
     502,
@@ -105,7 +105,7 @@ export function sanitizeAgentGateResult(
     typeof source.output !== 'string' ||
     Object.keys(source).some((key) => !(allowed as readonly string[]).includes(key))
   ) {
-    throw new HelmError(
+    throw new HelmxError(
       'gate_result_invalid',
       `onGateResult callback from agent '${context.agentId}' must be ` +
         `{ ok: boolean, output: string, exitCode?: number | null, timedOut?: boolean } ` +
@@ -119,7 +119,7 @@ export function sanitizeAgentGateResult(
     source.exitCode !== null &&
     (typeof source.exitCode !== 'number' || !Number.isInteger(source.exitCode))
   ) {
-    throw new HelmError(
+    throw new HelmxError(
       'gate_result_invalid',
       `onGateResult callback from agent '${context.agentId}' must have exitCode as an integer or null, ` +
         `received ${String(source.exitCode)}`,
@@ -128,7 +128,7 @@ export function sanitizeAgentGateResult(
     )
   }
   if (source.timedOut !== undefined && typeof source.timedOut !== 'boolean') {
-    throw new HelmError(
+    throw new HelmxError(
       'gate_result_invalid',
       `onGateResult callback from agent '${context.agentId}' must have timedOut as a boolean`,
       502,
@@ -146,8 +146,8 @@ export function agentGateResultMissingError(context: {
   agentId: string
   executionId?: string
   command: string
-}): HelmError {
-  return new HelmError(
+}): HelmxError {
+  return new HelmxError(
     'gate_result_missing',
     `external execution environment (executionId='${context.executionId ?? 'unknown'}') did not report the gate result` +
       ` (agent '${context.agentId}', gate command: ${context.command.slice(0, 200)}); ` +

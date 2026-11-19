@@ -14,8 +14,8 @@ import fs from 'node:fs/promises';
 import net from 'node:net';
 import path from 'node:path';
 import { Duplex, PassThrough, type Duplex as DuplexType } from 'node:stream';
-import { sleep as delay } from '@helm/test-kit';
-import { makeTempDir as tempDir } from '@helm/test-kit/node';
+import { sleep as delay } from '@helmx/test-kit';
+import { makeTempDir as tempDir } from '@helmx/test-kit/node';
 import { createNodeEnvRpcServer } from '../src/daemon/env-rpc-server.js';
 
 /** Real duplex pair: data written to `a` reads from `b` (relayed through tunnel stream). */
@@ -61,7 +61,7 @@ async function startBannerEchoServer(banner: string): Promise<{
 }
 
 test('nodeTunnelOpen validates parameters strictly (unknown fields, invalid tunnelId/port/host)', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-node-tunnel-');
+  const dir = await tempDir('helmx-node-tunnel-');
   const server = createNodeEnvRpcServer({ defaultCwd: dir, openTunnelStream: async () => new PassThrough() });
   try {
     for (const bad of [
@@ -93,7 +93,7 @@ test('nodeTunnelOpen validates parameters strictly (unknown fields, invalid tunn
 });
 
 test('nodeTunnelOpen normalizes port refusal to connect_failed without fabricating a tunnel', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-node-tunnel-');
+  const dir = await tempDir('helmx-node-tunnel-');
   // Claim a port then immediately close it so loopback connect fails with ECONNREFUSED.
   const probe = await startBannerEchoServer('x');
   const deadPort = probe.port;
@@ -114,7 +114,7 @@ test('nodeTunnelOpen normalizes port refusal to connect_failed without fabricati
 });
 
 test('nodeTunnelOpen preserves initial banner sent before handshake completes (pause/pipe buffering)', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-node-tunnel-');
+  const dir = await tempDir('helmx-node-tunnel-');
   const banner = 'HELLO-BANNER\r\n';
   const srv = await startBannerEchoServer(banner);
   // Delay peer stream delivery to simulate WS handshake latency; peer represents the Hub end.
@@ -171,7 +171,7 @@ test('nodeTunnelOpen preserves initial banner sent before handshake completes (p
 });
 
 test('nodeTunnelOpen transfers large payloads bidirectionally across the tunnel', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-node-tunnel-');
+  const dir = await tempDir('helmx-node-tunnel-');
   const srv = await startBannerEchoServer('');
   const pending: Array<Promise<DuplexType>> = [];
   const server = createNodeEnvRpcServer({
@@ -218,7 +218,7 @@ test('nodeTunnelOpen transfers large payloads bidirectionally across the tunnel'
 });
 
 test('nodeTunnelOpen flushes complete response under normal end semantics without premature destroy', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-node-tunnel-');
+  const dir = await tempDir('helmx-node-tunnel-');
   // Server writes a large response and calls end(); ensures piped end path flushes completely.
   const response = 'R'.repeat(2 * 1024 * 1024);
   const server = net.createServer((socket) => {
@@ -268,7 +268,7 @@ test('nodeTunnelOpen flushes complete response under normal end semantics withou
 });
 
 test('nodeTunnelOpen settles immediately on dispose during handshake without waiting for timeoutMs', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-node-tunnel-');
+  const dir = await tempDir('helmx-node-tunnel-');
   const srv = await startBannerEchoServer('');
   let resolveStream: ((stream: DuplexType) => void) | undefined;
   const streamSignals: AbortSignal[] = [];
@@ -308,7 +308,7 @@ test('nodeTunnelOpen settles immediately on dispose during handshake without wai
 });
 
 test('nodeTunnelAbort cancels handshake connect immediately and aborts signal without waiting for timeout', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-node-tunnel-');
+  const dir = await tempDir('helmx-node-tunnel-');
   const srv = await startBannerEchoServer('');
   const streamSignals: AbortSignal[] = [];
   const server = createNodeEnvRpcServer({
@@ -342,7 +342,7 @@ test('nodeTunnelAbort cancels handshake connect immediately and aborts signal wi
 });
 
 test('nodeTunnelOpen returns structured error if target service disconnects during handshake', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-node-tunnel-');
+  const dir = await tempDir('helmx-node-tunnel-');
   const srv = await startBannerEchoServer('');
   const server = createNodeEnvRpcServer({
     defaultCwd: dir,
@@ -372,7 +372,7 @@ test('nodeTunnelOpen returns structured error if target service disconnects duri
 });
 
 test('nodeTunnelOpen rejects new tunnels while draining and destroys all on dispose', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-node-tunnel-');
+  const dir = await tempDir('helmx-node-tunnel-');
   const srv = await startBannerEchoServer('');
   const streams: PassThrough[] = [];
   const server = createNodeEnvRpcServer({
@@ -411,7 +411,7 @@ test('nodeTunnelOpen rejects new tunnels while draining and destroys all on disp
 });
 
 test('nodeTunnelOpen passes through explicit host (resolves localhost to connect to target service)', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-node-tunnel-');
+  const dir = await tempDir('helmx-node-tunnel-');
   const srv = await startBannerEchoServer('HOST-BANNER\r\n');
   const pending: Array<Promise<DuplexType>> = [];
   const server = createNodeEnvRpcServer({
@@ -454,7 +454,7 @@ test('nodeTunnelOpen passes through explicit host (resolves localhost to connect
 });
 
 test('nodeTunnelOpen normalizes host connect failures to connect_failed including target host:port', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-node-tunnel-');
+  const dir = await tempDir('helmx-node-tunnel-');
   // Claim a port then immediately close it so loopback connect fails with ECONNREFUSED.
   const probe = await startBannerEchoServer('x');
   const deadPort = probe.port;

@@ -8,10 +8,10 @@
     "declaration": false,
     "sourceMap": false,
     "paths": {
-      "@helm/protocol": [
+      "@helmx/protocol": [
         "../protocol/src/index.ts"
       ],
-      "@helm/protocol/browser": [
+      "@helmx/protocol/browser": [
         "../protocol/src/browser.ts"
       ]
     }

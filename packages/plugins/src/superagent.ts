@@ -12,9 +12,9 @@
  */
 import {
   type ConversationScope,
-  type HelmPluginContext,
+  type HelmxPluginContext,
   type PluginDefinition,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 import { resolvePluginClientAssets } from './asset-paths.js'
 import {
   DEFAULT_CONFIG,
@@ -222,14 +222,14 @@ const TOOL_SPECS: ReadonlyArray<DeclarativeToolSpec> = [
   {
     name: 'watchdog_recover',
     description:
-      'Submit a recovery hint to an owned (helm/bot) native conversation (agent origin, without waiting for a model turn); ownership is atomically rechecked at the effect point via the kernel guarded port; human targets are rejected.',
+      'Submit a recovery hint to an owned (helmx/bot) native conversation (agent origin, without waiting for a model turn); ownership is atomically rechecked at the effect point via the kernel guarded port; human targets are rejected.',
     inputSchema: WATCHDOG_RECOVER_SCHEMA,
     scope: WATCHDOG_SCOPE,
   },
   {
     name: 'watchdog_abort',
     description:
-      'Abort an owned (helm/bot) native conversation; ownership is atomically rechecked at the effect point via the kernel guarded port; human/root/hub/watchdog-itself are rejected. External panes can only be aborted indirectly via their owned parent conversation.',
+      'Abort an owned (helmx/bot) native conversation; ownership is atomically rechecked at the effect point via the kernel guarded port; human/root/hub/watchdog-itself are rejected. External panes can only be aborted indirectly via their owned parent conversation.',
     inputSchema: WATCHDOG_ABORT_SCHEMA,
     scope: WATCHDOG_SCOPE,
   },
@@ -347,7 +347,7 @@ function loadSuperAgentRuntimeModule(): Promise<SuperAgentRuntimeModule> {
 }
 
 function registerDeclarativeCapabilities(
-  ctx: HelmPluginContext,
+  ctx: HelmxPluginContext,
   ensureRuntime: () => Promise<SuperAgentRuntimeController>,
 ): void {
   for (const spec of TOOL_SPECS) {

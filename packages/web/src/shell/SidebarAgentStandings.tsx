@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
 import { conversationsApi } from '../lib/api.js'
-import type { ConversationSummary } from '@helm/protocol/browser'
+import type { ConversationSummary } from '@helmx/protocol/browser'
 import { archiveBatchNotice, patchConversationsArchived } from './archive-ops.js'
-import { HelmIcon, Checkbox } from '@helm/plugin-client'
+import { HelmxIcon, Checkbox } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { Tooltip } from '../ui/Tooltip.js'
 import { ConversationRowActionsMenu } from '../ui/ConversationRowActionsMenu.js'
@@ -61,7 +61,7 @@ function AgentNewConversationButton({
           onCreate(agent.profileId)
         }}
       >
-        <HelmIcon name="plus" size={13} />
+        <HelmxIcon name="plus" size={13} />
       </button>
     </Tooltip>
   )
@@ -194,7 +194,7 @@ function AgentStandingItem({
             {hasStandingLight && standingIndicator !== null ? (
               <StandingStatusDot indicator={standingIndicator} />
             ) : (
-              <HelmIcon
+              <HelmxIcon
                 name={isOpen ? 'chevron-down' : hasSubList ? 'chevron-right' : 'bot'}
                 size={12}
                 className="agent-standing-chevron"
@@ -570,7 +570,7 @@ export function AgentStandingsGroup({
                 }
               }}
             >
-              <HelmIcon name="list-filter" size={12} />
+              <HelmxIcon name="list-filter" size={12} />
             </button>
           </Tooltip>
           <Tooltip content={batchMode ? t('shell.agents.exitBulk') : t('shell.agents.manageBulk')} side="top">
@@ -591,14 +591,14 @@ export function AgentStandingsGroup({
                 })
               }}
             >
-              <HelmIcon name="check-square" size={12} />
+              <HelmxIcon name="check-square" size={12} />
             </button>
           </Tooltip>
         </div>
       </div>
       {filterOpen && (
         <div className="sidebar-search">
-          <HelmIcon name="search" size={12} />
+          <HelmxIcon name="search" size={12} />
           <input
             ref={searchInputRef}
             type="text"
@@ -626,7 +626,7 @@ export function AgentStandingsGroup({
                 searchInputRef.current?.focus()
               }}
             >
-              <HelmIcon name="x" size={11} />
+              <HelmxIcon name="x" size={11} />
             </button>
           )}
         </div>

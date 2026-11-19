@@ -1,6 +1,6 @@
 # EnvFabric 跨平台执行底座
 
-本文面向需要理解或调试跨节点执行的读者：插件开发者（经 `ctx.host.execEnv / runGate / nodeIpc / nodeFetch / openTunnel` 使用底座）、节点运维者（部署 `helm-node`、管理令牌与升级）、以及排查「命令到底在哪台机器上执行」的工程师。EnvFabric 负责会话绑定节点上的命令、文件、产物登记、验收门禁、插件受管执行、文件互斥、本机 IPC 桥与节点透传隧道；Hub 产物读取和插件动作调用保留在 Hub 内，不会伪装成节点执行。会话如何绑定 `(nodeId, cwd)` 见 [pi-durable 集成](pi-durable.md)；工作流如何消费这些端口见 [DSL 手册](../workflows/dsl-guide.md)。
+本文面向需要理解或调试跨节点执行的读者：插件开发者（经 `ctx.host.execEnv / runGate / nodeIpc / nodeFetch / openTunnel` 使用底座）、节点运维者（部署 `helmx-node`、管理令牌与升级）、以及排查「命令到底在哪台机器上执行」的工程师。EnvFabric 负责会话绑定节点上的命令、文件、产物登记、验收门禁、插件受管执行、文件互斥、本机 IPC 桥与节点透传隧道；Hub 产物读取和插件动作调用保留在 Hub 内，不会伪装成节点执行。会话如何绑定 `(nodeId, cwd)` 见 [pi-durable 集成](pi-durable.md)；工作流如何消费这些端口见 [DSL 手册](../workflows/dsl-guide.md)。
 
 ## 架构定位与执行环境分层
 
@@ -8,7 +8,7 @@ EnvFabric 对上以 pi-durable 的 `ExecutionEnv`（FileSystem + Shell）接口�
 
 ```mermaid
 flowchart TD
-    subgraph Kernel["Helm Hub"]
+    subgraph Kernel["Helmx Hub"]
         Fabric["EnvFabric"]
         Registry["NodeRegistry（/ws/node 网关 + 心跳）"]
         Scoped["ScopedExecutionEnv 会话作用域合成"]
@@ -17,7 +17,7 @@ flowchart TD
         NodeEnv["NodeExecutionEnv 零网络开销"]
     end
     subgraph Remote["远端节点"]
-        Daemon["@helm/node 守护进程"]
+        Daemon["@helmx/node 守护进程"]
         NodeFs["真实文件系统与 Shell"]
     end
     Fabric --> Scoped
@@ -31,9 +31,9 @@ flowchart TD
 
 缓存生命周期有明确边界——**有会话靶点**（带 `conversationId` 的 `envForTarget`）按 `(conversationId, nodeId, cwd)` 缓存底座，会话删除或修改 nodeId/cwd 时驱逐（驱逐只移除缓存条目、绝不杀在途命令，在途操作仍持有旧实例引用并自然完成）；**无会话靶点**（herdr 文件交接、gate、无会话 HTTP exec）每次创建全新短生命周期实例，用后即弃，绝不进缓存。未知节点返回 Remote env（操作时等待重连），**绝不静默回落 local**——远端节点离线时操作显式抛 `409 node_offline` 或挂起等待重连（可取消）。
 
-`ScopedExecutionEnv` 负责每条命令的环境变量现场合成（fail-closed）：继承宿主 `process.env` 的真实 `PATH/HOME` 工具链，但受管 `HELM_*` 变量（含 `HELM_HUB_URL / HELM_CONVERSATION_ID / HELM_CWD / HELM_DATA_DIR / HELM_NODE_ID / HELM_TOKEN / HELM_EXECUTION_SCOPE` 等及大小写变体）一律先剥除，再由 `envOptions` 回调注入权威值。机密服务在 fabric 外部，fabric 只消费回调结果，自身不持有机密。`ctx.host.buildSpawnEnv(conversationId, cwd, nodeId, options?)` 把同一受管合成规则暴露给插件的外部 spawn，但外部窗格采用最小授权：缺省不携带任何父会话 stash 机密，仅显式 `options.secretNames` 逐名注入（需现存，缺失显式报错）。
+`ScopedExecutionEnv` 负责每条命令的环境变量现场合成（fail-closed）：继承宿主 `process.env` 的真实 `PATH/HOME` 工具链，但受管 `HELMX_*` 变量（含 `HELMX_HUB_URL / HELMX_CONVERSATION_ID / HELMX_CWD / HELMX_DATA_DIR / HELMX_NODE_ID / HELMX_TOKEN / HELMX_EXECUTION_SCOPE` 等及大小写变体）一律先剥除，再由 `envOptions` 回调注入权威值。机密服务在 fabric 外部，fabric 只消费回调结果，自身不持有机密。`ctx.host.buildSpawnEnv(conversationId, cwd, nodeId, options?)` 把同一受管合成规则暴露给插件的外部 spawn，但外部窗格采用最小授权：缺省不携带任何父会话 stash 机密，仅显式 `options.secretNames` 逐名注入（需现存，缺失显式报错）。
 
-`HELM_EXECUTION_SCOPE` 是由数据目录、会话 ID、节点与工作目录计算的稳定资源命名锚点（不含令牌或机密）：同一坐标下多次命令得到相同值，供外部工具命名会话使用；它不自动配置外部工具，也不承诺隔离其常驻进程。文件工具在结果中返回解析后的绝对路径和实际节点；shell 命令自行 `cd` 不会改写会话绑定目录。
+`HELMX_EXECUTION_SCOPE` 是由数据目录、会话 ID、节点与工作目录计算的稳定资源命名锚点（不含令牌或机密）：同一坐标下多次命令得到相同值，供外部工具命名会话使用；它不自动配置外部工具，也不承诺隔离其常驻进程。文件工具在结果中返回解析后的绝对路径和实际节点；shell 命令自行 `cd` 不会改写会话绑定目录。
 
 ## 内核工具与宿主端口
 
@@ -43,15 +43,15 @@ flowchart TD
 
 ## 零入站 SSH 依赖与反向 WebSocket
 
-传统跨机器编排依赖 SSH 端口开放与公钥分发。Helm 采用全反向连接架构：受控节点主动向 Hub 发起出站 WebSocket（`/ws/node`），NAT 内网或防火墙后的机器无需任何入站端口。单连接经 birpc 多路复用双向 RPC；节点通过心跳定期上报健康快照（负载均值、内存余量、磁盘空间），Hub 据此判定在线状态。
+传统跨机器编排依赖 SSH 端口开放与公钥分发。Helmx 采用全反向连接架构：受控节点主动向 Hub 发起出站 WebSocket（`/ws/node`），NAT 内网或防火墙后的机器无需任何入站端口。单连接经 birpc 多路复用双向 RPC；节点通过心跳定期上报健康快照（负载均值、内存余量、磁盘空间），Hub 据此判定在线状态。
 
 ### Join Token 签发与认证
 
 ```mermaid
 sequenceDiagram
-    participant Admin as 管理员（pnpm helm nodes issue）
+    participant Admin as 管理员（pnpm helmx nodes issue）
     participant Hub as Hub
-    participant Node as helm-node
+    participant Node as helmx-node
 
     Admin->>Hub: POST /api/nodes/issue { nodeId }
     Hub-->>Admin: 明文 token（nodeId:secret，仅此一次）
@@ -65,7 +65,7 @@ sequenceDiagram
 
 认证设计要点：Hub 仅存储令牌的 SHA-256 哈希，明文只在签发响应中返回一次；令牌在 WebSocket 建立后的 RPC 载荷中传输，禁止拼接在 URL 中（防代理与访问日志泄露）；比对使用常量时间算法防时序侧信道。`NodeRegistry` 的安全语义：未提供 authenticate 回调时拒绝一切注册（fail-closed 缺省拒绝）；连接对象完全就绪（鉴权通过 + rpc 绑定）后才登记并唤醒等待者；同 nodeId 新连接顶掉旧连接时真正断开旧 socket 与 rpc（不只删 Map，防半开连接继续发事件）；心跳与输出事件只接受已注册连接，未注册连接不能保活别人的节点或伪造其他节点的输出。
 
-**SSH 边界**：Helm 不在任何节点上部署 SSH 桥接脚本。需要在目标机器上连接本机 Unix Socket 或 Windows Named Pipe 的插件（如 `builtin:herdr`）经下文的 IPC 桥走同一节点通道，跨节点统一拓扑。
+**SSH 边界**：Helmx 不在任何节点上部署 SSH 桥接脚本。需要在目标机器上连接本机 Unix Socket 或 Windows Named Pipe 的插件（如 `builtin:herdr`）经下文的 IPC 桥走同一节点通道，跨节点统一拓扑。
 
 ## 受管 Shell：流式输出、溢出落盘与精准取消
 
@@ -76,7 +76,7 @@ sequenceDiagram
 - **窗口流控（window）**：限制单秒最大字节数与行数，被丢弃的帧在 `skipped` 中如实标注字节数与行数，防止前端与 SSE 通道被刷爆。
 - **精准取消**：`envAbortExec(execId)` 只终止目标在途进程，不影响同节点的其他执行；取消以 `aborted` 错误码返回，与节点升级排空的 `node_draining` 严格区分。
 
-输出出站前统一过全局脱敏（`SecretStash` 登记的明文自动替换 `[REDACTED]`），跨 chunk 拼接的机密不因分片遗漏脱敏。HTTP 侧的对应入口是 `POST /api/env/exec`（CLI `pnpm helm env exec`）：非流式返回 `EnvExecResponse { ok, exitCode, output, timedOut }`；流式返回 NDJSON 帧（`output / exit / error` 三型，必须以终态帧结束）。命令失败时 exitCode 透传为 CLI 退出码——HTTP 层成功但命令非零退出仍是显式失败。
+输出出站前统一过全局脱敏（`SecretStash` 登记的明文自动替换 `[REDACTED]`），跨 chunk 拼接的机密不因分片遗漏脱敏。HTTP 侧的对应入口是 `POST /api/env/exec`（CLI `pnpm helmx env exec`）：非流式返回 `EnvExecResponse { ok, exitCode, output, timedOut }`；流式返回 NDJSON 帧（`output / exit / error` 三型，必须以终态帧结束）。命令失败时 exitCode 透传为 CLI 退出码——HTTP 层成功但命令非零退出仍是显式失败。
 
 ## 文件操作、节点文件互斥与进程占用快照
 
@@ -84,9 +84,9 @@ sequenceDiagram
 
 ### 目标节点进程占用快照
 
-`ctx.host.inspectNodePathUsage({ nodeId, path, signal? })` 查询绝对路径是否被进程 cwd 或打开的文件句柄引用。local 在 Hub 进程内执行，远端经节点 `envPathUsage` RPC 执行；两侧共用 `@helm/env-io` 的扫描实现。结果提供 PID、进程名、引用来源和路径，以及扫描完整性（`complete`）、真实命中进程数（`matchedTotal`）、权限盲区计数（`unobservable`）与报告截断标记。
+`ctx.host.inspectNodePathUsage({ nodeId, path, signal? })` 查询绝对路径是否被进程 cwd 或打开的文件句柄引用。local 在 Hub 进程内执行，远端经节点 `envPathUsage` RPC 执行；两侧共用 `@helmx/env-io` 的扫描实现。结果提供 PID、进程名、引用来源和路径，以及扫描完整性（`complete`）、真实命中进程数（`matchedTotal`）、权限盲区计数（`unobservable`）与报告截断标记。
 
-完整性语义：可观测集合内的非权限类读取异常（如 EIO）或扫描上限触发时 `complete: false`，消费方不能把不完整结果当作零占用；持久的权限拒绝（跨 uid 或 non-dumpable 进程，如 `systemd --user`——属主自己也读不了）计入 `unobservable` 并在诊断中如实呈现，不影响完整性判定——与 Hub 同 uid 的普通可转储进程（helm 派生的子代理/git/shell）永远可观测。旧版守护进程无此方法时显式失败，绝不静默回退本机扫描。当前只支持 Linux 的可见 `/proc` 视图，不读取命令行和环境变量，不自动终止进程；扫描是一次性快照，不是跨进程互斥。`builtin:workflow` 在删除 worktree 前使用该端口，详见[Worktree 清理规则](../workflows/worktree-and-gate.md)。
+完整性语义：可观测集合内的非权限类读取异常（如 EIO）或扫描上限触发时 `complete: false`，消费方不能把不完整结果当作零占用；持久的权限拒绝（跨 uid 或 non-dumpable 进程，如 `systemd --user`——属主自己也读不了）计入 `unobservable` 并在诊断中如实呈现，不影响完整性判定——与 Hub 同 uid 的普通可转储进程（helmx 派生的子代理/git/shell）永远可观测。旧版守护进程无此方法时显式失败，绝不静默回退本机扫描。当前只支持 Linux 的可见 `/proc` 视图，不读取命令行和环境变量，不自动终止进程；扫描是一次性快照，不是跨进程互斥。`builtin:workflow` 在删除 worktree 前使用该端口，详见[Worktree 清理规则](../workflows/worktree-and-gate.md)。
 
 ### 节点文件互斥
 
@@ -118,7 +118,7 @@ ipcSubscribe({ endpoint?, session?, line }, onLine, onClosed): Promise<() => voi
 
 - **`ctx.host.openTunnel(nodeId, { host?, port })` 是一等公民原语**：返回原始 Node.js `Duplex`（任意协议字节流；host 由目标节点解析与连接，省略默认 `127.0.0.1`；`local` 节点为 Hub 进程内 `net.connect` 直连）。活动隧道纳入插件在途任务跟踪（停用预检可见；停用/dispose 统一销毁不泄漏）；
 - **`ctx.host.nodeFetch(nodeId)` 是其上的 HTTP/HTTPS 适配层**：支持任意 host 与 `http`/`https`（HTTPS 在隧道 Duplex 上叠 `tls.connect`，`servername`/证书校验遵循 Node 默认链），保留 Response streaming、SSE、取消传播与状态码语义。4xx/5xx 是上游正常响应，原样构造 `Response` 交还调用方；只有建隧道失败、socket 异常中断、超时才抛错；
-- **Hub 侧前台端口转发**（`pnpm helm nodes forward`）在命令运行期于 Hub 主机按需监听，把本地端口逐连接转发到目标节点视角的 `host:port`，退出即关闭。
+- **Hub 侧前台端口转发**（`pnpm helmx nodes forward`）在命令运行期于 Hub 主机按需监听，把本地端口逐连接转发到目标节点视角的 `host:port`，退出即关闭。
 
 ### 握手时序
 
@@ -128,7 +128,7 @@ ipcSubscribe({ endpoint?, session?, line }, onLine, onClosed): Promise<() => voi
 sequenceDiagram
     participant Caller as Hub 插件
     participant Registry as NodeRegistry
-    participant Daemon as @helm/node
+    participant Daemon as @helmx/node
     participant Target as 节点视角 host:port
 
     Caller->>Registry: openTunnel(nodeId, { host, port }, signal)
@@ -181,20 +181,20 @@ sequenceDiagram
 
 ```bash
 # 监听 Hub 主机 127.0.0.1:8080，转发到节点 gpu-a 视角 127.0.0.1:8000
-pnpm helm nodes forward gpu-a 127.0.0.1:8080 127.0.0.1:8000
+pnpm helmx nodes forward gpu-a 127.0.0.1:8080 127.0.0.1:8000
 # 目标省略 host 时默认 127.0.0.1（节点视角）；IPv6 监听写 [::1]:8080
-pnpm helm nodes forward gpu-a "[::1]:8080" 8000
+pnpm helmx nodes forward gpu-a "[::1]:8080" 8000
 ```
 
-生命周期与语义：监听器只在命令运行期间存在（Hub 侧按需 `net.Server`，显式端口，不随机分配）；每个入站连接经 `openTunnel` 建立隧道并双向 pipe（背压原生传播）；CLI 前台运行并消费 NDJSON 事件流（started/connection/error），Ctrl-C/SIGTERM 或流断开时显式停止，Hub 关闭监听器与全部隧道。同权端点：`pnpm helm nodes forwards`（清单）、`pnpm helm nodes forward-inspect <id>`（详情）、`pnpm helm nodes forward-stop <id>`（停止）。监听冲突（EADDRINUSE）显式 `409 node_forward_listen_failed`，不静默换端口。
+生命周期与语义：监听器只在命令运行期间存在（Hub 侧按需 `net.Server`，显式端口，不随机分配）；每个入站连接经 `openTunnel` 建立隧道并双向 pipe（背压原生传播）；CLI 前台运行并消费 NDJSON 事件流（started/connection/error），Ctrl-C/SIGTERM 或流断开时显式停止，Hub 关闭监听器与全部隧道。同权端点：`pnpm helmx nodes forwards`（清单）、`pnpm helmx nodes forward-inspect <id>`（详情）、`pnpm helmx nodes forward-stop <id>`（停止）。监听冲突（EADDRINUSE）显式 `409 node_forward_listen_failed`，不静默换端口。
 
 ## 节点自升级与升级排空
 
-`@helm/node` 内置双包协同自升级引擎（npm 制品 `@team4u/helm-node` 与 `@team4u/helm-cli` 同版本绑定；远端机器首次安装走 `npm install -g @team4u/helm-node`，此后由升级机制接管），全程原子提交、失败自动回滚：
+`@helmx/node` 内置双包协同自升级引擎（npm 制品 `@helmx/node` 与 `@helmx/cli` 同版本绑定；远端机器首次安装走 `npm install -g @helmx/node`，此后由升级机制接管），全程原子提交、失败自动回滚：
 
 ```mermaid
 sequenceDiagram
-    participant Hub as Hub（pnpm helm nodes upgrade）
+    participant Hub as Hub（pnpm helmx nodes upgrade）
     participant Daemon as 旧守护进程
     participant Candidate as 候选进程
 
@@ -231,4 +231,4 @@ EnvFabric 的每条路径都遵循同一纪律：**不能兑现就显式失败�
 - 未知节点：返回等待重连的 Remote env，操作时显式失败，绝不把未知节点当 local；
 - 节点探测失败（如 worktree 目录存在性检查）不当作目录缺失；状态命令失败不当作成功。
 
-排查跨节点问题的第一步永远是确认靶点：`pnpm helm nodes list` 查看节点在线状态与健康快照，`bash` 工具的结构化结果附带执行节点与启动 cwd。
+排查跨节点问题的第一步永远是确认靶点：`pnpm helmx nodes list` 查看节点在线状态与健康快照，`bash` 工具的结构化结果附带执行节点与启动 cwd。

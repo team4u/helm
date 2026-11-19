@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * `helm-node` CLI entrypoint (argument parsing and command dispatch).
+ * `helmx-node` CLI entrypoint (argument parsing and command dispatch).
  *
  * - `runNodeCli(argv, io)` is the sole testable/embeddable entrypoint; direct execution runs only
  *   when `argv[1]` resolves to this module (supporting pnpm `.bin` symlinks).
@@ -8,7 +8,7 @@
  * - `--json` applies globally: JSON on stdout for success, JSON error envelope on stderr with exit code 1.
  * - Background control uses a per-instance IPC endpoint (`pid + instanceId + endpoint` in `node.pid`)
  *   instead of blindly sending signals to arbitrary PIDs.
- * - `start -d` reports readiness over native Node stdio IPC (`helm-node.ready`) and reads tokens from
+ * - `start -d` reports readiness over native Node stdio IPC (`helmx-node.ready`) and reads tokens from
  *   `0600` `node.json` (never passing tokens in argv).
  * - Foreground `start` without control env vars acts as a stable launcher (for systemd/launchd),
  *   tracking `node.pid` across upgrade handoffs and stopping the active instance cleanly on SIGTERM/SIGINT.
@@ -24,15 +24,15 @@ import { defaultSpawnDaemon } from './launcher.js';
 import { COMMANDS } from './commands/index.js';
 import type { ParsedCli } from './commands/shared.js';
 
-// Re-exported for tests and `@helm/node` consumers after modularization.
+// Re-exported for tests and `@helmx/node` consumers after modularization.
 export { defaultSpawnDaemon } from './launcher.js';
 export { resolveServiceEntry } from './service-entry.js';
 export { controlEndpoint, type DaemonReadyState } from './control.js';
 export type { NodeCliIo, PidRecord } from './cli-context.js';
 
-const USAGE = `helm-node - cross-platform managed node daemon for helm
+const USAGE = `helmx-node - cross-platform managed node daemon for helmx
 
-Usage: helm-node <command> [options]
+Usage: helmx-node <command> [options]
 
 Commands:
   connect <hubUrl> --token <token>      Bind JOIN token and run in foreground (--once exits after one attempt)
@@ -47,16 +47,16 @@ Commands:
 Options:
   --token <token>        JOIN token (nodeId:secret)
   --hub <url>            Hub URL
-  --data-dir <dir>       Data directory (defaults to $HELM_DATA_DIR or ~/.helm)
+  --data-dir <dir>       Data directory (defaults to $HELMX_DATA_DIR or ~/.helmx)
   --json                 Machine-readable JSON output
   --once                 In connect mode, exit immediately after the first registration attempt
   --version <ver>        Target version for upgrade (strict SemVer)
-  --registry <url>       npm registry URL for upgrade (defaults to official or HELM_NPM_REGISTRY)
+  --registry <url>       npm registry URL for upgrade (defaults to official or HELMX_NPM_REGISTRY)
   --check                Check available updates without starting a daemon or upgrading
   --force                Force upgrade (bypass downgrade guard, cooldown, and same-version check)
   --help, -h             Show this help
 
-Environment variables: HELM_DATA_DIR (default ~/.helm), HELM_HUB_URL, HERDR_SOCKET_PATH
+Environment variables: HELMX_DATA_DIR (default ~/.helmx), HELMX_HUB_URL, HERDR_SOCKET_PATH
 `;
 
 const VALUE_FLAGS = ['token', 'hub', 'data-dir', 'version', 'registry'] as const;
@@ -124,13 +124,13 @@ function parseCli(argv: readonly string[]): ParsedCli {
       } else if ((BOOL_FLAGS as readonly string[]).includes(name)) {
         flags.set(name, true);
       } else {
-        throw new UsageError(`unknown option --${name} (run helm-node --help for usage)`);
+        throw new UsageError(`unknown option --${name} (run helmx-node --help for usage)`);
       }
       i += 1;
       continue;
     }
     if (token.startsWith('-') && token !== '-') {
-      throw new UsageError(`unknown option ${token} (run helm-node --help for usage)`);
+      throw new UsageError(`unknown option ${token} (run helmx-node --help for usage)`);
     }
     positional.push(token);
     i += 1;
@@ -142,21 +142,21 @@ function parseCli(argv: readonly string[]): ParsedCli {
 function validateCli(parsed: ParsedCli): void {
   if (parsed.help) return;
   if (parsed.command === '') {
-    throw new UsageError('missing command (run helm-node --help for usage)');
+    throw new UsageError('missing command (run helmx-node --help for usage)');
   }
   const allowed = COMMAND_FLAGS[parsed.command];
   if (allowed === undefined) {
-    throw new UsageError(`unknown command: helm-node ${parsed.command} (run helm-node --help for usage)`, 'unknown_command');
+    throw new UsageError(`unknown command: helmx-node ${parsed.command} (run helmx-node --help for usage)`, 'unknown_command');
   }
   for (const name of parsed.flags.keys()) {
     if (!allowed.has(name)) {
-      throw new UsageError(`command ${parsed.command} does not support --${name} (run helm-node --help for usage)`);
+      throw new UsageError(`command ${parsed.command} does not support --${name} (run helmx-node --help for usage)`);
     }
   }
   const range = COMMAND_POSITIONALS[parsed.command]!;
   if (parsed.positional.length < range.min || parsed.positional.length > range.max) {
     throw new UsageError(
-      `command ${parsed.command} expects ${range.min === range.max ? String(range.min) : `${range.min}-${range.max}`} positional argument(s), got ${parsed.positional.length} (run helm-node --help for usage)`,
+      `command ${parsed.command} expects ${range.min === range.max ? String(range.min) : `${range.min}-${range.max}`} positional argument(s), got ${parsed.positional.length} (run helmx-node --help for usage)`,
     );
   }
   if (parsed.command === 'service') {
@@ -207,7 +207,7 @@ export async function runNodeCli(argv: readonly string[] = [], ioInput: Partial<
   const { resolveNodeDataDir } = await import('./daemon/index.js');
   const dataDir = resolveNodeDataDir(
     (typeof parsed.flags.get('data-dir') === 'string' ? (parsed.flags.get('data-dir') as string) : undefined) ??
-      io.env?.['HELM_DATA_DIR'],
+      io.env?.['HELMX_DATA_DIR'],
   );
 
   const emitError = (message: string, code: string): number => {

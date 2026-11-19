@@ -1,4 +1,4 @@
-import type { LocalizedText } from '@helm/protocol/browser'
+import type { LocalizedText } from '@helmx/protocol/browser'
 
 /** Defaults shared by host and plugin UI primitives. */
 export const uiCopy = {

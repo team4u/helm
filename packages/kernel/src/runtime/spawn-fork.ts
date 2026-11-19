@@ -16,7 +16,7 @@
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { Models } from '@earendil-works/pi-ai'
 import type { Harness } from '@earendil-works/pi-durable'
-import { HelmError, type AgentSpawnRequest } from '@helm/protocol'
+import { HelmxError, type AgentSpawnRequest } from '@helmx/protocol'
 import { clampThinkingLevelForModel, parseModelRef, type ModelRefParts } from './models.js'
 
 interface ForkAnchorContextMessage {
@@ -52,12 +52,12 @@ interface ForkModelAndThinkingResult {
 /** Validate `fork` field type and mutual exclusion between `fork` and `resume`. */
 export function assertSpawnForkFields(request: Pick<AgentSpawnRequest, 'fork' | 'resume'>): void {
   if (request.fork !== undefined && typeof request.fork !== 'boolean') {
-    throw new HelmError('validation_error', `fork must be a boolean (received ${typeof request.fork})`, 400, {
+    throw new HelmxError('validation_error', `fork must be a boolean (received ${typeof request.fork})`, 400, {
       fork: request.fork,
     })
   }
   if (request.fork === true && request.resume !== undefined) {
-    throw new HelmError(
+    throw new HelmxError(
       'validation_error',
       'fork and resume are mutually exclusive: cannot fork from parent conversation while resuming an existing sub-conversation',
       400,
@@ -232,14 +232,14 @@ export async function resolveCleanForkAnchor(
 ): Promise<number> {
   const conv = await harness.conversation(parentConversationId as never, BACKGROUND_CONTEXT)
   if (!conv) {
-    throw new HelmError('not_found', `Parent conversation not found: ${parentConversationId}`, 404, {
+    throw new HelmxError('not_found', `Parent conversation not found: ${parentConversationId}`, 404, {
       parentConversationId,
     })
   }
   const view = await conv.context(BACKGROUND_CONTEXT)
   const anchorEntryId = selectCleanForkAnchorEntryId(view)
   if (anchorEntryId === undefined) {
-    throw new HelmError(
+    throw new HelmxError(
       'fork_empty_history',
       'Parent conversation has no completed forkable context entries yet; cannot fork',
       409,

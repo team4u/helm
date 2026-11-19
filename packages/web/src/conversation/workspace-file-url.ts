@@ -7,7 +7,7 @@
  * and extracting optional line ranges from either an `#L<start>(C<col>)?(-L?<end>(C<col>)?)?`
  * fragment or a compiler-style trailing `:line(:col)?(-line(:col)?)?` suffix.
  */
-import { normalizeTargetPath, pathRulesForShape, targetPathShape } from '@helm/protocol/browser'
+import { normalizeTargetPath, pathRulesForShape, targetPathShape } from '@helmx/protocol/browser'
 
 export interface WorkspaceFileRef {
   path: string

@@ -14,7 +14,7 @@ import { mkdtempSync, rmSync, existsSync, writeFileSync, mkdirSync } from 'node:
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import assert from 'node:assert/strict'
-import { HelmError, type ConversationSummary, type PluginDefinition } from '@helm/protocol'
+import { HelmxError, type ConversationSummary, type PluginDefinition } from '@helmx/protocol'
 import { PluginHost, type PluginDocStore, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
 import { ProfileService } from '../../kernel/src/services/index.js'
 import { MAX_MEMORY_CHARS, createMemoryPlugin, isProfileMemoryEnabled, type MemoryPluginDoc } from '../src/memory.js'
@@ -22,7 +22,7 @@ import { MemoryStore } from '../src/memory/store.js'
 import { createProfilePlugin } from '../src/profile.js'
 import { createProfileFileHost } from '../../kernel/test/helpers/profile-file-host.js'
 import { createPluginHostBackendFixture } from '../../kernel/test/helpers/plugin-host-backend.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { MemoryDocStore, makeConversationSummary, makeFauxProvider, useTempDir } from './helpers/plugin-test-env.js'
 
 // ---------------------------------------------------------------------------
@@ -56,12 +56,12 @@ function makeBackend(): PluginHostBackend & {
     },
     getConversation(id: number) {
       const found = conversations.get(id)
-      if (!found) throw new HelmError('not_found', `会话不存在: ${id}`, 404, { conversationId: id })
+      if (!found) throw new HelmxError('not_found', `会话不存在: ${id}`, 404, { conversationId: id })
       return found
     },
     async updateConversation(id: number, patch: Partial<ConversationSummary>) {
       const found = conversations.get(id)
-      if (!found) throw new HelmError('not_found', `会话不存在: ${id}`, 404)
+      if (!found) throw new HelmxError('not_found', `会话不存在: ${id}`, 404)
       const next = { ...found, ...patch }
       conversations.set(id, next)
       return next
@@ -71,7 +71,7 @@ function makeBackend(): PluginHostBackend & {
     },
     markConversationOwnership() {},
     async createAsk() {
-      throw new HelmError('unsupported', 'test', 400)
+      throw new HelmxError('unsupported', 'test', 400)
     },
     async cancelAsk() {},
     registerAskSeqResolver() {
@@ -81,7 +81,7 @@ function makeBackend(): PluginHostBackend & {
       return () => {}
     },
     async abortConversation() {},
-    getConversationOwnership(): 'helm' | 'bot' | 'human' {
+    getConversationOwnership(): 'helmx' | 'bot' | 'human' {
       return 'human'
     },
     async spawnAgent() {
@@ -97,7 +97,7 @@ function makeBackend(): PluginHostBackend & {
       return {}
     },
     async execEnv() {
-      throw new HelmError('unsupported', 'fixture', 501)
+      throw new HelmxError('unsupported', 'fixture', 501)
     },
     emitEvent(type: string, payload: unknown) {
       if (type === 'notification') notifications.push(payload as { title: string; body: string; level: string })
@@ -144,7 +144,7 @@ async function setup(
 
 let scratchRoot: string
 test('memory 插件行为', { timeout: 60_000 }, async (t) => {
-  scratchRoot = mkdtempSync(join(tmpdir(), 'helm-memory-plugin-'))
+  scratchRoot = mkdtempSync(join(tmpdir(), 'helmx-memory-plugin-'))
   t.after(() => rmSync(scratchRoot, { recursive: true, force: true }))
 
   await t.test('get 动作：未初始化 Profile 返回空内容与开关状态', async () => {
@@ -159,7 +159,7 @@ test('memory 插件行为', { timeout: 60_000 }, async (t) => {
     // Profile 不存在显式 404
     await assert.rejects(
       () => host.invokeAction('builtin:memory', 'get', { profileId: 'no-such' }),
-      (err: unknown) => err instanceof HelmError && err.code === 'profile_not_found' && err.status === 404,
+      (err: unknown) => err instanceof HelmxError && err.code === 'profile_not_found' && err.status === 404,
     )
     // 非法 profileId（目录注入）显式拒绝
     await assert.rejects(
@@ -191,18 +191,18 @@ test('memory 插件行为', { timeout: 60_000 }, async (t) => {
     ] as const) {
       await assert.rejects(
         () => host.invokeAction('builtin:memory', actionId, input),
-        (err: unknown) => err instanceof HelmError && err.code === 'validation_error' && err.status === 400,
+        (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
         `${actionId} 缺少显式 Profile 与会话上下文时应返回 validation_error`,
       )
     }
     await assert.rejects(
       () => host.invokeAction('builtin:memory', 'get', { profileId: 'missing' }, { conversationId: 2 }),
-      (err: unknown) => err instanceof HelmError && err.code === 'profile_not_found' && err.status === 404,
+      (err: unknown) => err instanceof HelmxError && err.code === 'profile_not_found' && err.status === 404,
       '失效显式目标不得回退到当前会话 Profile',
     )
     await assert.rejects(
       () => host.invokeAction('builtin:memory', 'get', {}, { conversationId: 999 }),
-      (err: unknown) => err instanceof HelmError && err.code === 'not_found' && err.status === 404,
+      (err: unknown) => err instanceof HelmxError && err.code === 'not_found' && err.status === 404,
       '失效会话上下文不得回退到 assistant Profile',
     )
     await host.dispose()
@@ -224,7 +224,7 @@ test('memory 插件行为', { timeout: 60_000 }, async (t) => {
     await host.invokeAction('builtin:memory', 'configure', { profileId: 'coder', enabled: false })
     await assert.rejects(
       () => host.invokeAction('builtin:memory', 'set', { profileId: 'coder', text: 'x' }),
-      (err: unknown) => err instanceof HelmError && err.code === 'memory_disabled_for_profile' && err.status === 403,
+      (err: unknown) => err instanceof HelmxError && err.code === 'memory_disabled_for_profile' && err.status === 403,
     )
   })
 
@@ -286,7 +286,7 @@ test('memory 插件行为', { timeout: 60_000 }, async (t) => {
     await host.invokeAction('builtin:memory', 'configure', { profileId: 'coder', enabled: false })
     await assert.rejects(
       () => host.executeTool('update_memory', { text: 'x', mode: 'append' }, { conversationId: 2 }),
-      (err: unknown) => err instanceof HelmError && err.code === 'memory_disabled_for_profile' && err.status === 403,
+      (err: unknown) => err instanceof HelmxError && err.code === 'memory_disabled_for_profile' && err.status === 403,
     )
     assert.equal(existsSync(join(dir, 'profiles', 'coder', 'MEMORY.md')), false, '拒绝时不写盘')
     // 开启的 Profile 正常写入
@@ -320,11 +320,11 @@ test('memory 插件行为', { timeout: 60_000 }, async (t) => {
     // 动作与工具卸载
     await assert.rejects(
       () => host.executeTool('update_memory', { text: 'x', mode: 'append' }, { conversationId: 1 }),
-      (err: unknown) => err instanceof HelmError && err.code === 'unknown_tool',
+      (err: unknown) => err instanceof HelmxError && err.code === 'unknown_tool',
     )
     await assert.rejects(
       () => host.invokeAction('builtin:memory', 'get', { profileId: 'assistant' }),
-      (err: unknown) => err instanceof HelmError,
+      (err: unknown) => err instanceof HelmxError,
     )
     // 其他插件的 SYSTEM 注入不受影响
     const turn = makeTurn('assistant')
@@ -348,7 +348,7 @@ test('memory 插件行为', { timeout: 60_000 }, async (t) => {
     await store.updateMemory('assistant', 'x'.repeat(64_000 - 100), 'replace')
     await assert.rejects(
       () => host.invokeAction('builtin:memory', 'set', { profileId: 'assistant', text: 'y'.repeat(200), mode: 'append' }),
-      (err: unknown) => err instanceof HelmError && err.code === 'memory_limit_exceeded' && err.status === 400,
+      (err: unknown) => err instanceof HelmxError && err.code === 'memory_limit_exceeded' && err.status === 400,
     )
     assert.equal((await store.getMemory('assistant')).length, 64_000 - 100, '拒绝后文件保持旧值')
   })
@@ -364,7 +364,7 @@ test('memory 插件行为', { timeout: 60_000 }, async (t) => {
     await assert.rejects(
       () => runUpdate({ text: 'y'.repeat(20), mode: 'append' }),
       (err: unknown) => {
-        assert.ok(err instanceof HelmError)
+        assert.ok(err instanceof HelmxError)
         assert.equal(err.code, 'memory_limit_exceeded')
         assert.equal(err.status, 400)
         assert.ok(/replace/.test(err.message), '错误信息应提示用 replace 整理')
@@ -378,7 +378,7 @@ test('memory 插件行为', { timeout: 60_000 }, async (t) => {
     // 2) replace 直写超限：单次 text 即超。
     await assert.rejects(
       () => runUpdate({ text: 'z'.repeat(MAX_MEMORY_CHARS + 1), mode: 'replace' }),
-      (err: unknown) => err instanceof HelmError && err.code === 'memory_limit_exceeded',
+      (err: unknown) => err instanceof HelmxError && err.code === 'memory_limit_exceeded',
     )
 
     // 3) 合法 replace（恰在上限内）成功。
@@ -398,7 +398,7 @@ test('memory 插件行为', { timeout: 60_000 }, async (t) => {
     const sections = (result as { value: { sections: Array<{ id: string; text: string }> } }).value.sections
     const memory = sections.find((s) => s.id === 'memory.content')
     assert.ok(memory !== undefined, '超限仍应注入 memory.content section')
-    assert.ok(memory.text.includes('helm note: MEMORY.md exceeds'), '截断应附显式说明')
+    assert.ok(memory.text.includes('helmx note: MEMORY.md exceeds'), '截断应附显式说明')
     assert.ok(memory.text.length <= MAX_MEMORY_CHARS + 500, '注入内容应截断到上限附近（含说明）')
   })
 
@@ -483,12 +483,12 @@ test('memory 插件行为', { timeout: 60_000 }, async (t) => {
 // 真实组合层：单 Profile 开关跨重启持久（ctx.doc 经真实 SQLite）
 // ---------------------------------------------------------------------------
 
-test('memory 单 Profile 开关跨重启持久（真实 createHelm）', { timeout: 60_000 }, async (t) => {
-  const { createHelm } = await import('../../hub/src/app.js')
-  const dir = useTempDir(t, 'helm-memory-persist-')
+test('memory 单 Profile 开关跨重启持久（真实 createHelmx）', { timeout: 60_000 }, async (t) => {
+  const { createHelmx } = await import('../../hub/src/app.js')
+  const dir = useTempDir(t, 'helmx-memory-persist-')
   const build = async () => {
     const faux = makeFauxProvider()
-    return createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
+    return createHelmx({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
   }
   const first = await build()
     try {
@@ -533,11 +533,11 @@ test('memory 单 Profile 开关跨重启持久（真实 createHelm）', { timeou
 
 
 // ---------------------------------------------------------------------------
-// 动作清单（自动映射 helm memory get/set/configure 与 HTTP 端点）
+// 动作清单（自动映射 helmx memory get/set/configure 与 HTTP 端点）
 // ---------------------------------------------------------------------------
 
 test('memory 动作清单：get/set/configure 注册且默认 CLI 命令路径为 memory <action>', { timeout: 60_000 }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'helm-memory-manifest-'))
+  const dir = mkdtempSync(join(tmpdir(), 'helmx-memory-manifest-'))
   try {
     const { host } = await setup(dir)
     const manifests = host.listActions().filter((a) => a.pluginId === 'builtin:memory')

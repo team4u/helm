@@ -29,7 +29,7 @@ import { fileURLToPath } from 'node:url'
 
 import { createModels } from '@earendil-works/pi-ai/models'
 import type { Provider } from '@earendil-works/pi-ai'
-import { HelmError, resolveLocalizedText, type ConversationSummary } from '@helm/protocol'
+import { HelmxError, resolveLocalizedText, type ConversationSummary } from '@helmx/protocol'
 import { MAGPIE_COL_PROVIDER } from '../src/magpie/client/copy.js'
 import {
   PluginHost,
@@ -38,7 +38,7 @@ import {
 } from '../../kernel/src/plugins/index.js'
 import { hostBackendStub } from '../../kernel/test/helpers/host-backend-stub.js'
 import { createMagpiePlugin } from '../src/magpie.js'
-import { compilePluginClientModule, createPluginBuildProvider } from '@helm/plugin-build'
+import { compilePluginClientModule, createPluginBuildProvider } from '@helmx/plugin-build'
 import {
   MemoryConfigStore,
   MemoryDocStore,
@@ -164,7 +164,7 @@ function makeCliFixture(binDir: string): { binDir: string; logPath: string } {
     `const GROUPS = ${JSON.stringify(CLI_GROUPS)}`,
     `const SHOW = ${JSON.stringify(CLI_GROUP_SHOW)}`,
     'const args = process.argv.slice(2)',
-    'const log = process.env.HELM_MAGPIE_CLI_LOG',
+    'const log = process.env.HELMX_MAGPIE_CLI_LOG',
     "if (log) require('node:fs').appendFileSync(log, JSON.stringify(args) + '\\n')",
     "if (args[0] === 'groups') { process.stdout.write(GROUPS + '\\n'); process.exit(0) }",
     "if (args[0] === 'group') { process.stdout.write(SHOW + '\\n'); process.exit(0) }",
@@ -211,13 +211,13 @@ function makeHostApi(overrides: Partial<PluginHostBackend> = {}): PluginHostBack
     registerAskSeqResolver: () => () => {},
     onEvent: () => () => {},
     abortConversation: async () => {},
-    getConversationOwnership(): 'helm' | 'bot' | 'human' {
+    getConversationOwnership(): 'helmx' | 'bot' | 'human' {
       return 'human'
     },
     isClosing: () => false,
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
-    execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
+    execEnv: async () => { throw new HelmxError('unsupported', '本 fixture 不执行节点命令', 501) },
     withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') },
     emitEvent: () => {},
     ...overrides,
@@ -245,7 +245,7 @@ interface TestEnvInit extends Omit<TestEnv, 'close'> {
 }
 
 async function makeEnv(options: { backendAtDefault?: FakeBackend; hostApi?: Partial<PluginHostBackend> } = {}): Promise<TestEnv> {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-magpie-test-'))
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-magpie-test-'))
   const models = createModels()
   const backends = new Map<string, FakeBackend>([
     [new URL(DEFAULT_MAGPIE_ROOT).origin, options.backendAtDefault ?? { models: CATALOG, quotas: QUOTAS, trace: TRACE }],
@@ -254,10 +254,10 @@ async function makeEnv(options: { backendAtDefault?: FakeBackend; hostApi?: Part
   const fetchCalls = fetchMock.calls
   const { binDir, logPath } = makeCliFixture(join(dataDir, 'bin'))
   // PATH 前置 fixture bin：execFile('magpie') 解析到受控脚本（公开环境端口，
-  // 无 DI 后门）；调用记录经 HELM_MAGPIE_CLI_LOG 追加到日志文件。
+  // 无 DI 后门）；调用记录经 HELMX_MAGPIE_CLI_LOG 追加到日志文件。
   const savedPath = process.env.PATH
   process.env.PATH = `${binDir}:${process.env.PATH ?? ''}`
-  process.env.HELM_MAGPIE_CLI_LOG = logPath
+  process.env.HELMX_MAGPIE_CLI_LOG = logPath
   const readCliRuns = (): Array<readonly string[]> => {
     try {
       return readFileSync(logPath, 'utf8').split('\n').filter((l) => l.trim() !== '').map((l) => JSON.parse(l) as string[])
@@ -324,7 +324,7 @@ async function makeEnv(options: { backendAtDefault?: FakeBackend; hostApi?: Part
       fetchMock.restore()
       if (savedPath === undefined) delete process.env.PATH
       else process.env.PATH = savedPath
-      delete process.env.HELM_MAGPIE_CLI_LOG
+      delete process.env.HELMX_MAGPIE_CLI_LOG
       rmSync(dataDir, { recursive: true, force: true })
     }
   }
@@ -405,12 +405,12 @@ test('magpie2: toPiModels 完整映射——api/baseUrl/thinkingLevelMap/forceAd
   assert.equal(relay.magpieOwnedBy, 'opencode-go', 'owned_by 透传供配额归属')
 
   // 窗口来源诚实性：上游窗口为正数才标记已知；缺省兑底值不得冒充真实窗口。
-  assert.equal(gpt.helmContextWindowKnown, true, 'context_length 正数 → 已知窗口')
+  assert.equal(gpt.helmxContextWindowKnown, true, 'context_length 正数 → 已知窗口')
   assert.equal(gpt.contextWindow, 400_000)
-  assert.equal(byId.get('anthropic/claude-sonnet-4.6')!.helmContextWindowKnown, true, 'context_window 正数 → 已知窗口')
+  assert.equal(byId.get('anthropic/claude-sonnet-4.6')!.helmxContextWindowKnown, true, 'context_window 正数 → 已知窗口')
   for (const id of ['anthropic/claude-sonnet-4.5', 'kimi/k2-chat', 'group/relay']) {
     const model = byId.get(id)!
-    assert.equal(model.helmContextWindowKnown, false, `无上游窗口（${id}）必须标记未知`)
+    assert.equal(model.helmxContextWindowKnown, false, `无上游窗口（${id}）必须标记未知`)
     assert.equal(model.contextWindow, DEFAULT_CONTEXT_WINDOW, '兑底值仍满足 pi-ai Model 契约')
   }
 })
@@ -472,15 +472,15 @@ test('magpie5: resolveGateway 优先级 / configuredRoot 语义 / 非法显式 U
   // 诚实性：非法显式 gatewayUrl / 非法环境变量显式报错，绝不静默回退默认
   assert.throws(
     () => resolveGateway({ gatewayUrl: 'not a url' }, {}),
-    (err: unknown) => err instanceof HelmError && err.code === 'magpie_invalid_gateway_url' && err.status === 400,
+    (err: unknown) => err instanceof HelmxError && err.code === 'magpie_invalid_gateway_url' && err.status === 400,
   )
   assert.throws(
     () => resolveGateway({}, { MAGPIE_GW_URL: '::bad::' }),
-    (err: unknown) => err instanceof HelmError && err.code === 'magpie_invalid_gateway_url',
+    (err: unknown) => err instanceof HelmxError && err.code === 'magpie_invalid_gateway_url',
   )
   assert.throws(
     () => resolveGateway({}, { MAGPIE_ADDR: 'ftp://only' }),
-    (err: unknown) => err instanceof HelmError && err.code === 'magpie_invalid_gateway_url',
+    (err: unknown) => err instanceof HelmxError && err.code === 'magpie_invalid_gateway_url',
     '非 http(s) scheme 同样显式拒绝',
   )
   // 无配置（全空）永不抛：默认回环是合法回落
@@ -528,14 +528,14 @@ test('magpie6: 启用经 providers 端口挂载并拉取目录；停用后注销
     await env.host.disable(MAGPIE)
     assert.equal(env.models.getProvider('magpie'), undefined, '停用后 provider 真实注销')
     assert.deepEqual(env.host.listActions().filter((a) => a.pluginId === MAGPIE), [])
-    assert.throws(() => env.host.getPublicDoc(MAGPIE, 'status'), (e: unknown) => e instanceof HelmError && e.code === 'plugin_doc_not_found')
+    assert.throws(() => env.host.getPublicDoc(MAGPIE, 'status'), (e: unknown) => e instanceof HelmxError && e.code === 'plugin_doc_not_found')
   } finally {
     await env.close()
   }
 })
 
 test('magpie7: 宿主缺 providers 端口时启用显式 501（不静默降级）', { timeout: 60_000 }, async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-magpie-test-'))
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-magpie-test-'))
   const backends = new Map<string, FakeBackend>()
   const fetchMock = installFetchMock(backends)
   try {
@@ -553,7 +553,7 @@ test('magpie7: 宿主缺 providers 端口时启用显式 501（不静默降级�
     await assert.rejects(
       () => host.enable(MAGPIE),
       (err: unknown) => {
-        assert.ok(err instanceof HelmError)
+        assert.ok(err instanceof HelmxError)
         assert.equal(err.code, 'provider_port_unavailable')
         assert.equal(err.status, 501)
         return true
@@ -634,11 +634,11 @@ test('magpie9: 显式配置网关失败——refresh 动作显式抛错（不静
 
     await assert.rejects(
       () => env.host.invokeAction(MAGPIE, 'refresh', {}),
-      (err: unknown) => err instanceof HelmError && err.code === 'magpie_gateway_unreachable' && err.status === 502,
+      (err: unknown) => err instanceof HelmxError && err.code === 'magpie_gateway_unreachable' && err.status === 502,
     )
     await assert.rejects(
       () => env.host.invokeAction(MAGPIE, 'quota', {}),
-      (err: unknown) => err instanceof HelmError && err.code === 'magpie_gateway_unreachable',
+      (err: unknown) => err instanceof HelmxError && err.code === 'magpie_gateway_unreachable',
     )
   } finally {
     await env.close()
@@ -716,7 +716,7 @@ test('magpie12: 缓存与网关隔离——切 root 后旧缓存不冒充；挂�
 
     await assert.rejects(
       () => env.host.invokeAction(MAGPIE, 'refresh', {}),
-      (err: unknown) => err instanceof HelmError && err.code === 'magpie_gateway_unreachable',
+      (err: unknown) => err instanceof HelmxError && err.code === 'magpie_gateway_unreachable',
     )
     const doc = statusDoc(env)
     assert.equal(doc.gatewayUrl, 'http://10.255.255.1:3425', 'doc 指向新网关')
@@ -774,7 +774,7 @@ test('magpie14: 可达后失败——reachable:false 时 modelCount 不冒充实
     backend.failModels = 'gateway exploded'
     await env.host.invokeAction(MAGPIE, 'refresh', {}).then(
       () => assert.fail('故障后 refresh 必须拒绝'),
-      (err: unknown) => assert.ok(err instanceof HelmError && err.code === 'magpie_gateway_unreachable'),
+      (err: unknown) => assert.ok(err instanceof HelmxError && err.code === 'magpie_gateway_unreachable'),
     )
     const doc = statusDoc(env)
     assert.equal(doc.reachable, false)
@@ -806,7 +806,7 @@ test('magpie15: 远端网关数据源隔离——CLI 不被调用、groups 只�
 
     await assert.rejects(
       () => env.host.invokeAction(MAGPIE, 'group', { id: 'group/relay' }),
-      (err: unknown) => err instanceof HelmError && err.code === 'magpie_group_not_found' && err.status === 404,
+      (err: unknown) => err instanceof HelmxError && err.code === 'magpie_group_not_found' && err.status === 404,
     )
     assert.equal(env.cliRuns.length, 0, 'group 动作在远端网关同样不调 CLI')
   } finally {
@@ -941,7 +941,7 @@ test('magpie19: UI spec 无 Emoji、scope 绑定 magpie、client 轨道组件导
 
     // 真实编译：clientRoot 内 index.tsx 可编译为浏览器 ESM（面板含刷新按钮由 web 端 DOM 测试覆盖）
     const clientRoot = join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'magpie', 'client')
-    const cacheDir = mkdtempSync(join(tmpdir(), 'helm-magpie-client-'))
+    const cacheDir = mkdtempSync(join(tmpdir(), 'helmx-magpie-client-'))
     try {
       const { code } = await compilePluginClientModule(MAGPIE, clientRoot, 'index.tsx', cacheDir)
       assert.ok(code.length > 0, '编译产物非空')

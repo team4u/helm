@@ -10,7 +10,7 @@ import * as React from 'react'
 import { act } from 'react'
 import type { Root } from 'react-dom/client'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
-import type { ConversationEntry, ConversationSummary } from '@helm/protocol'
+import type { ConversationEntry, ConversationSummary } from '@helmx/protocol'
 import { makeTestStore } from './helpers/store.js'
 import { ConversationTimeline } from '../src/conversation/ConversationTimeline.js'
 
@@ -21,7 +21,7 @@ try {
 }
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
 const { createRoot } = await import('react-dom/client')
-const { HelmExternalStoreContext } = await import('./helpers/store.js')
+const { HelmxExternalStoreContext } = await import('./helpers/store.js')
 const e = React.createElement
 
 const savedResizeObserver = globalThis.ResizeObserver
@@ -65,7 +65,7 @@ async function renderTimeline(entries: ConversationEntry[]): Promise<HTMLElement
   await act(async () => {
     root!.render(
       e(
-        HelmExternalStoreContext.Provider,
+        HelmxExternalStoreContext.Provider,
         { value: store },
         e(ConversationTimeline, {
           conversation: conv,

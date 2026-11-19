@@ -1,5 +1,5 @@
 /**
- * `@helm/kernel` runtime entry point: `KernelRuntime` and internal mechanism modules.
+ * `@helmx/kernel` runtime entry point: `KernelRuntime` and internal mechanism modules.
  */
 
 export { KernelRuntime, type KernelRuntimeOptions } from './runtime.js'
@@ -20,7 +20,7 @@ export { EventHub, type SnapshotProvider } from './events.js'
 export { AskService } from './asks.js'
 export { ConversationTracker, deriveTitle, type TrackerEvents } from './conversations.js'
 export { toConversationEntry, deriveConversationLive, type EntryRecordLike } from './entries.js'
-export { openHelmDatabase, type HelmDatabase } from './sqlite.js'
+export { openHelmxDatabase, type HelmxDatabase } from './sqlite.js'
 export {
   createDiagnosticEmitter,
   defaultDiagnosticSink,
@@ -31,13 +31,13 @@ export {
   type KernelDiagnosticInput,
   type KernelDiagnosticSink,
 } from './diagnostics.js'
-export { HelmStore, convStatusOf, summaryOf, type ConvMeta } from './store.js'
+export { HelmxStore, convStatusOf, summaryOf, type ConvMeta } from './store.js'
 export { runShell, runGate, createBashTool, createReadTool, createWriteTool, createEditTool, createReadArtifactTool, createRegisterArtifactTool, type ShellRunResult } from './tools.js'
 export { runNativeSpawn, type NativeSpawnDeps } from './spawn.js'
 export { validateJsonSchema } from './structured-output.js'
 export { buildModels, parseModelRef, requireModelRef, listModelCatalog, listModelProviders, type ModelCatalogEntry } from './models.js'
 export { createFileModelsStore } from './models-store.js'
-export type { HelmToolDeps } from './tool-deps.js'
+export type { HelmxToolDeps } from './tool-deps.js'
 export { NodeManager } from './node-manager.js'
 export {
   shQuote,

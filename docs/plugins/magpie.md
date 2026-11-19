@@ -1,10 +1,10 @@
 # Magpie 动态模型网关插件
 
-`builtin:magpie` 解决「把 Magpie 网关的模型目录接入 Helm 并诊断配额与路由」的问题：经 `ctx.provider` 注册动态目录 Provider，把 `magpie/<model>` 形式的模型接入全局目录，并提供状态快照、目录刷新、配额查询与路由组诊断动作。适合使用 Magpie 多协议模型网关的使用者。本插件只做接入与诊断，不改变内核 Model/Auth 机制。
+`builtin:magpie` 解决「把 Magpie 网关的模型目录接入 Helmx 并诊断配额与路由」的问题：经 `ctx.provider` 注册动态目录 Provider，把 `magpie/<model>` 形式的模型接入全局目录，并提供状态快照、目录刷新、配额查询与路由组诊断动作。适合使用 Magpie 多协议模型网关的使用者。本插件只做接入与诊断，不改变内核 Model/Auth 机制。
 
 ## 当前状态
 
-默认启用，随 `createHelm()` 启动即挂载，可按需 `helm plugins disable builtin:magpie` 停用。Provider 由宿主在服务启动前挂载、停用后注销，插件内不绕宿主手动挂卸。
+默认启用，随 `createHelmx()` 启动即挂载，可按需 `helmx plugins disable builtin:magpie` 停用。Provider 由宿主在服务启动前挂载、停用后注销，插件内不绕宿主手动挂卸。
 
 ## 能力和入口
 
@@ -16,11 +16,11 @@
 
 | 动作 | CLI | 说明 |
 | :--- | :--- | :--- |
-| `status` | `helm magpie status` | 状态快照（可达性、模型数、配额、路由轨迹）；配置切换后 doc 指向旧 root 时如实返回新 root 的空结论，不冒充 |
-| `refresh` | `helm magpie refresh` | 强制刷新目录与配额路由；失败显式抛 `502 magpie_gateway_unreachable` |
-| `quota` | `helm magpie quota [--model <id>]` | 实时查询配额（`GET /v1/magpie/quotas`），可按模型归属 provider 过滤 |
-| `groups` | `helm magpie groups` | 路由组列表与最近命中；本机默认实例读 magpie CLI + 网关 trace（`source: 'cli+trace'`），其余只用所选网关 trace（`source: 'gateway-trace'`） |
-| `group` | `helm magpie group <id>` | 单组定义与最近路由决策；无可用信息显式 `404 magpie_group_not_found` |
+| `status` | `helmx magpie status` | 状态快照（可达性、模型数、配额、路由轨迹）；配置切换后 doc 指向旧 root 时如实返回新 root 的空结论，不冒充 |
+| `refresh` | `helmx magpie refresh` | 强制刷新目录与配额路由；失败显式抛 `502 magpie_gateway_unreachable` |
+| `quota` | `helmx magpie quota [--model <id>]` | 实时查询配额（`GET /v1/magpie/quotas`），可按模型归属 provider 过滤 |
+| `groups` | `helmx magpie groups` | 路由组列表与最近命中；本机默认实例读 magpie CLI + 网关 trace（`source: 'cli+trace'`），其余只用所选网关 trace（`source: 'gateway-trace'`） |
+| `group` | `helmx magpie group <id>` | 单组定义与最近路由决策；无可用信息显式 `404 magpie_group_not_found` |
 
 ### 状态文档与后台刷新
 
@@ -35,7 +35,7 @@
 
 诚实性契约（硬约束）：
 
-- **网络失败一律显式**：通用目录刷新（`helm models refresh`）把失败呈现在 `errors['magpie']`；插件 `service.start` 的后台刷新失败只更新 `reachable: false` / `lastError`，不阻断启用与内核启动；`reachable: false` 时 `modelCount` 是缓存计数，绝不冒充实时刷新成功；
+- **网络失败一律显式**：通用目录刷新（`helmx models refresh`）把失败呈现在 `errors['magpie']`；插件 `service.start` 的后台刷新失败只更新 `reachable: false` / `lastError`，不阻断启用与内核启动；`reachable: false` 时 `modelCount` 是缓存计数，绝不冒充实时刷新成功；
 - **配置快照代数守卫**：所有网关读取以「读取时刻冻结的 root + token 快照」执行，发布前 `sameGateway` 校验快照仍是当前生效配置——fetch 期间切换网关时旧结果不发布到新网关名下；
 - **数据源隔离**：非默认端口本机网关与远端网关不读本机 magpie CLI 数据（无法证明 CLI 指向同一实例），只用所选网关 trace 并如实标注 `source`。
 
@@ -56,5 +56,5 @@
 ## 相关文档
 
 - [插件系统设计与契约](overview.md)：`ctx.provider` 生命周期与配置 secret 分离
-- [CLI 命令参考](../cli/reference.md)：`helm magpie` / `helm models` 命令
+- [CLI 命令参考](../cli/reference.md)：`helmx magpie` / `helmx models` 命令
 - [安装与配置指南](../getting-started/installation.md)：模型网关与凭据规划

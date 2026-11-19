@@ -18,8 +18,8 @@ import { mkdtempSync, readFileSync, rmSync, existsSync, mkdirSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test, type TestContext } from 'node:test'
-import { HelmError } from '@helm/protocol'
-import { deferred } from '@helm/test-kit'
+import { HelmxError } from '@helmx/protocol'
+import { deferred } from '@helmx/test-kit'
 import { setImmediate as nextTurn } from 'node:timers/promises'
 import { assertNoUnhandledRejection } from './helpers/plugin-test-env.js'
 import {
@@ -51,7 +51,7 @@ test('agentJournalKey v3：cwd 参与指纹，未提供时键值稳定', timeout
 })
 
 test('agent 行携带 execution/gate 落盘可回读，不触发 actionUncertain；损坏形状计 ioError', timeout, async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), 'helm-journal-v3-'))
+  const dir = mkdtempSync(join(tmpdir(), 'helmx-journal-v3-'))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   const path = join(dir, 'workflow-wf_x.jsonl')
   const writer = new JournalWriter(path)
@@ -60,7 +60,7 @@ test('agent 行携带 execution/gate 落盘可回读，不触发 actionUncertain
     index: 0,
     key: 'k0', scopePath: 'root', scopeCallIndex: 0,
     ok: false,
-    execution: { conversationId: 7, effectiveCwd: '/w', worktree: { path: '/w', branch: 'helm/spawn-x' } },
+    execution: { conversationId: 7, effectiveCwd: '/w', worktree: { path: '/w', branch: 'helmx/spawn-x' } },
     gate: { ok: false, output: 'gate output', exitCode: null, timedOut: true },
   })
   // 每次重试独立 index：同 key 不同 index 各占一行，互不覆盖。
@@ -72,7 +72,7 @@ test('agent 行携带 execution/gate 落盘可回读，不触发 actionUncertain
   assert.equal(journal.entries.length, 2)
   const first = journal.entries[0] as Extract<(typeof journal.entries)[number], { type: 'agent' }>
   assert.equal(first.execution?.conversationId, 7)
-  assert.equal(first.execution?.worktree?.branch, 'helm/spawn-x')
+  assert.equal(first.execution?.worktree?.branch, 'helmx/spawn-x')
   assert.equal(first.gate?.timedOut, true)
   assert.equal(first.gate?.exitCode, null)
 
@@ -156,7 +156,7 @@ function makeEnv(
   hostOverrides?: Partial<WorkflowServiceHost>,
   stateOverride?: WorkflowStateStore,
 ) {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-wf-service-core-'))
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-wf-service-core-'))
   const docs = new Map<string, unknown>()
   const state: WorkflowStateStore = stateOverride ?? {
     get<T>(key: string, initial: T): T {
@@ -292,7 +292,7 @@ test('resumeFromRunId：新 run 接管原 run（resumedByRunId/autoResumeCount/n
   // 防重复：同一源 run 二次 resume 显式 409。
   await assert.rejects(
     () => env.service.run({ resumeFromRunId: first.id }),
-    (error: unknown) => error instanceof HelmError && error.code === 'conflict',
+    (error: unknown) => error instanceof HelmxError && error.code === 'conflict',
   )
 })
 
@@ -372,7 +372,7 @@ test('invokeSpawn 失败分支保留 executionInfo 与 gate 回报（不丢弃 W
     }
     request.onResolved?.({ conversationId: 7, effectiveCwd: '/work/dir' })
     request.onGateResult?.({ ok: false, output: '门禁输出' })
-    throw new HelmError('gate_failed', '门禁失败', 502)
+    throw new HelmxError('gate_failed', '门禁失败', 502)
   })
   const result = await callInvokeSpawn(custom, {
     agentId: 'a',
@@ -400,7 +400,7 @@ test('invokeSpawn timeoutMs：超时守卫中止子会话并返回 [agent_timeou
       observedReason = request.signal?.reason
     })
     return new Promise((_resolve, reject) => {
-      request.signal?.addEventListener('abort', () => reject(new HelmError('aborted', '回合中止', 409)), { once: true })
+      request.signal?.addEventListener('abort', () => reject(new HelmxError('aborted', '回合中止', 409)), { once: true })
     })
   })
   const result = await callInvokeSpawn(custom, {
@@ -429,7 +429,7 @@ test('invokeSpawn 超时：返回前等完自己触发的守卫中止（后续 r
       const request = proto as { onResolved?: (info: unknown) => void; signal?: AbortSignal }
       request.onResolved?.({ conversationId: 12 })
       return new Promise((_resolve, reject) => {
-        request.signal?.addEventListener('abort', () => reject(new HelmError('aborted', '回合中止', 409)), { once: true })
+        request.signal?.addEventListener('abort', () => reject(new HelmxError('aborted', '回合中止', 409)), { once: true })
       })
     },
     {
@@ -497,7 +497,7 @@ test('外部回合超时保留执行方诊断，不宣称底层进程已停止',
     const request = proto as { onResolved?: (info: unknown) => void; signal?: AbortSignal }
     request.onResolved?.({ nodeId: 'local', executionId: 'pane-timeout' })
     return new Promise((_resolve, reject) => {
-      request.signal?.addEventListener('abort', () => reject(new HelmError(
+      request.signal?.addEventListener('abort', () => reject(new HelmxError(
         'agent_timeout', '底层 CLI 可能仍在执行\n终端最后 40 行（脱敏）：\nworking at task', 408,
       )), { once: true })
     })
@@ -526,7 +526,7 @@ test('invokeSpawn timeoutMs 非法值在边界显式拒绝（1_000..3_600_000）
         agentType: '',
         timeoutMs: 100,
       }),
-    (error: unknown) => error instanceof HelmError && error.code === 'validation_error',
+    (error: unknown) => error instanceof HelmxError && error.code === 'validation_error',
   )
 })
 
@@ -605,7 +605,7 @@ function stateOver(docs: Map<string, unknown>): WorkflowStateStore {
 }
 
 test('跨重启 resume：失败 attempt 行的 execution.conversationId 经 resumeRef 直传 AgentSpawnRequest.resume（不拼 runId）', timeout, async (t) => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-wf-restart-resume-'))
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-wf-restart-resume-'))
   t.after(() => rmSync(dataDir, { recursive: true, force: true }))
   const convId = 9
   const priorRunId = 'wf_seedfail0001'
@@ -693,11 +693,11 @@ test('prepare/init 读取损坏索引：显式 workflow_index_corrupt 拒绝，�
   env.docs.set('workflow/runs', { not: 'an-array' })
   await assert.rejects(
     () => env.service.prepareRecovery(),
-    (error: unknown) => error instanceof HelmError && error.code === 'workflow_index_corrupt',
+    (error: unknown) => error instanceof HelmxError && error.code === 'workflow_index_corrupt',
   )
   await assert.rejects(
     () => env.service.init(),
-    (error: unknown) => error instanceof HelmError && error.code === 'workflow_index_corrupt',
+    (error: unknown) => error instanceof HelmxError && error.code === 'workflow_index_corrupt',
   )
   // 拒绝必须发生在任何记录修改之前：记录保持 running 原样、索引保持损坏
   // 原样（绝不静默重建/剪枝）、子会话未被守卫中止（屏障未越过索引读取）。
@@ -750,7 +750,7 @@ test('resume 幽灵接管标记：索引与磁盘均无痕迹才清标记重接�
   await assert.rejects(
     () => env.service.run({ resumeFromRunId: 'wf_orphanB0002' }),
     (error: unknown) =>
-      error instanceof HelmError &&
+      error instanceof HelmxError &&
       error.code === 'conflict' &&
       (error.details as { resumedByRunId?: string }).resumedByRunId === 'wf_keptj9998',
   )
@@ -781,7 +781,7 @@ test('resume 幽灵接管标记：索引与磁盘均无痕迹才清标记重接�
   await assert.rejects(
     () => env.service.run({ resumeFromRunId: 'wf_orphanC0003' }),
     (error: unknown) =>
-      error instanceof HelmError &&
+      error instanceof HelmxError &&
       error.code === 'conflict' &&
       (error.details as { resumedByRunId?: string }).resumedByRunId === 'wf_keptr9997',
   )
@@ -802,7 +802,7 @@ test('接管账本为失效符号链接时仍保留接管标记，不能当成�
   symlinkSync(join(env.dataDir, 'missing-journal'), join(env.dataDir, 'artifacts', '23', `workflow-${takeoverRunId}.jsonl`))
   await assert.rejects(
     () => env.service.run({ resumeFromRunId: 'wf_linkprior001' }),
-    (error: unknown) => error instanceof HelmError && error.code === 'conflict',
+    (error: unknown) => error instanceof HelmxError && error.code === 'conflict',
   )
 })
 
@@ -832,7 +832,7 @@ test('resume 并发防双接管：标记已落盘、新 run 快照未落盘窗�
   await assert.rejects(
     () => env.service.run({ resumeFromRunId: 'wf_conc0000001' }),
     (error: unknown) =>
-      error instanceof HelmError && error.code === 'conflict',
+      error instanceof HelmxError && error.code === 'conflict',
     '并发启动窗口内不得误判幽灵清标记（防双接管）',
   )
   releaseFlush!()
@@ -859,7 +859,7 @@ test('节点 gate.exitCode/timedOut 全链保留（进度折叠与脱敏不丢�
       }
       request.onResolved?.({ conversationId: 41 })
       request.onGateResult?.({ ok: false, output: 'gate 失败输出', exitCode: 3, timedOut: true })
-      throw new HelmError('gate_failed', '门禁失败', 502)
+      throw new HelmxError('gate_failed', '门禁失败', 502)
     },
     { runGate: async () => ({ ok: true, output: 'host-gate' }) },
   )
@@ -914,11 +914,11 @@ test('startWorkflowRun 命名优先级与 label 边界校验，及 invokeAgentSp
   // 1. label 边界校验：非字符串 / 空白拒绝
   await assert.rejects(
     () => env.service.run({ conversationId: 1, script: 'export const meta = { name: "m", description: "d" }\nreturn 1', label: '   ' }),
-    (err: unknown) => err instanceof HelmError && err.code === 'validation_error',
+    (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',
   )
   await assert.rejects(
     () => env.service.run({ conversationId: 1, script: 'export const meta = { name: "m", description: "d" }\nreturn 1', label: 123 as unknown as string }),
-    (err: unknown) => err instanceof HelmError && err.code === 'validation_error',
+    (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',
   )
 
   // 2. 优先级：trimmed request.label > meta.name；fresh agent() 传 title，resume 不传
@@ -1043,7 +1043,7 @@ test('停机屏障：init 完成后、active.set 前复查 closed，close 与 ru
     script: 'export const meta = { name: "closed-race", description: "test" }\nreturn 1',
   })
   const rejection = assert.rejects(runPromise, (err: unknown) => {
-    assert.ok(err instanceof HelmError)
+    assert.ok(err instanceof HelmxError)
     assert.equal(err.code, 'closed')
     return true
   })
@@ -1054,7 +1054,7 @@ test('停机屏障：init 完成后、active.set 前复查 closed，close 与 ru
 test('emitEvent 收口：宿主适配器 async 抛错时 run 生命周期不受影响且不产生 unhandledRejection', timeout, async (t) => {
   const env = makeEnv(t, async () => 'ok', {
     emitEvent: async () => {
-      throw new HelmError('workflow_index_corrupt', '读取工作流 run 索引失败（模拟）', 500)
+      throw new HelmxError('workflow_index_corrupt', '读取工作流 run 索引失败（模拟）', 500)
     },
   })
   await assertNoUnhandledRejection(async () => {

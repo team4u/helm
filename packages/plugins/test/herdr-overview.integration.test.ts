@@ -4,7 +4,7 @@
  * 被测对象：启用 builtin:herdr 后公开的 overview doc（version 2）：
  * - panes[] 覆盖本机全部窗格（含人类 shell），每行携带真实 agentStatus、
  *   仅 Agent 终端才有 stateChangeSeq（shell 未知即省略，绝不伪造）、
- *   cwd、ownedBy（helm/human）；human 行不带 Helm 任务 outcome；
+ *   cwd、ownedBy（helmx/human）；human 行不带 Helmx 任务 outcome；
  * - 事件驱动：SSE 先等 snapshot 后，窗格创建/状态/焦点/move/closed 变化
  *   应反映到 public doc；move 换 ID 后旧行消失、新行出现；
  * - 动态订阅：paneId 集合变化时主树接线会重建订阅（先全局后带 paneIds），
@@ -14,7 +14,7 @@
  * - 坏快照/订阅断开：doc 显式 stale+error 且保留最后成功数据，恢复即清除；
  * - 生命周期：stop 等待在途刷新后不再写旧 doc；重新启用新周期无旧回调污染。
  *
- * 基建：真实 createHelm/SQLite/PluginHost/HTTP/SSE/CLI 子进程 + 受控
+ * 基建：真实 createHelmx/SQLite/PluginHost/HTTP/SSE/CLI 子进程 + 受控
  * HerdrTransport（外部协议 fixture，非实现替身）+ faux provider 零真实模型。
  * fixture 记录每次 subscribe（target/第 4 参 options）供动态订阅断言。
  *
@@ -31,10 +31,10 @@ import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import assert from 'node:assert/strict'
 
-import { createHelm } from '../../hub/src/app.js'
+import { createHelmx } from '../../hub/src/app.js'
 import { startHub } from '../../kernel/src/http/index.js'
 import type { HerdrTarget, HerdrTransport, HerdrCallOptions, HerdrEvent } from '../src/herdr/contracts.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { makeFauxProvider, waitFor } from './helpers/plugin-test-env.js'
 
 const testDir = dirname(fileURLToPath(import.meta.url))
@@ -48,7 +48,7 @@ const DOC_NAME = 'overview'
 const PASSWORD = 'herdr验收密码八位'
 
 // ---------------------------------------------------------------------------
-// 受控 HerdrTransport fixture：真实 createHelm 走完整接线，仅外部协议可编程
+// 受控 HerdrTransport fixture：真实 createHelmx 走完整接线，仅外部协议可编程
 // ---------------------------------------------------------------------------
 
 /** 单个受控窗格：fixture 内部状态（快照行 + 可选 AgentInfo）。 */
@@ -221,12 +221,12 @@ function herdrFixture(initial: FixturePane[] = []) {
 }
 
 // ---------------------------------------------------------------------------
-// 组合环境：真实 createHelm + Hub HTTP + SSE
+// 组合环境：真实 createHelmx + Hub HTTP + SSE
 // ---------------------------------------------------------------------------
 
 interface Env {
   dataDir: string
-  app: Awaited<ReturnType<typeof createHelm>>
+  app: Awaited<ReturnType<typeof createHelmx>>
   hub: Awaited<ReturnType<typeof startHub>>
   base: string
   token: string
@@ -240,7 +240,7 @@ async function openEnv(dataDir: string, transport: HerdrTransport): Promise<Env>
   // 直连（组合层已无 herdrTransport 注入缝）。
   const socketPath = join(dataDir, 'herdr.sock')
   const served = await serveTransport(transport, socketPath)
-  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider] })
+  const app = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider] })
   await app.kernel.plugins.setConfig('builtin:herdr', { socketPath })
   const hub = await startHub({ kernel: app.kernel, port: 0 })
   const setup = await fetch(`${hub.url}/api/auth/setup`, {
@@ -289,7 +289,7 @@ interface OverviewRowShape {
   paneId: string
   tabId?: string
   workspaceId?: string
-  ownedBy: 'helm' | 'human'
+  ownedBy: 'helmx' | 'human'
   agentStatus: string
   stateChangeSeq?: number
   cwd?: string
@@ -411,9 +411,9 @@ function runCliChild(
 function cliEnv(env: Env): NodeJS.ProcessEnv {
   return {
     ...process.env,
-    HELM_HUB_URL: env.base,
-    HELM_DATA_DIR: join(env.dataDir, 'cli'),
-    HELM_TOKEN: env.credential.token,
+    HELMX_HUB_URL: env.base,
+    HELMX_DATA_DIR: join(env.dataDir, 'cli'),
+    HELMX_TOKEN: env.credential.token,
   }
 }
 
@@ -439,7 +439,7 @@ async function enableAndWait(env: Env, fixture: ReturnType<typeof herdrFixture>)
 // ---------------------------------------------------------------------------
 
 test('HO1: 启用即投射全部本机窗格（human Agent 有 seq、shell unknown 无 seq、无 outcome），HTTP 与真实 CLI 读到同一数据', { timeout: 60_000 }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'helm-ho1-'))
+  const dir = mkdtempSync(join(tmpdir(), 'helmx-ho1-'))
   const fixture = herdrFixture([
     pane('human-agent', { agentStatus: 'working', seq: 7, agentName: 'claude-main', agent: 'claude', cwd: '/home/me/proj', focused: true, label: '人类终端' }),
     pane('plain-shell', { agentStatus: 'unknown', cwd: '/tmp' }),
@@ -454,11 +454,11 @@ test('HO1: 启用即投射全部本机窗格（human Agent 有 seq、shell unkno
 
     const agentRow = doc.panes.find((p) => p.paneId === 'human-agent')!
     assert.ok(agentRow, 'human Agent 窗格应在 doc')
-    assert.equal(agentRow.ownedBy, 'human', '非 Helm 派生窗格一律 human')
+    assert.equal(agentRow.ownedBy, 'human', '非 Helmx 派生窗格一律 human')
     assert.equal(agentRow.agentStatus, 'working')
     assert.equal(agentRow.stateChangeSeq, 7, 'Agent 终端行携带真实 seq')
     assert.equal(agentRow.cwd, '/home/me/proj')
-    assert.equal(agentRow.outcome, undefined, 'human 行不得携带 Helm 任务 outcome')
+    assert.equal(agentRow.outcome, undefined, 'human 行不得携带 Helmx 任务 outcome')
     assert.equal('pendingAsk' in agentRow, false, 'human 行不得携带管理审批状态')
 
     const shellRow = doc.panes.find((p) => p.paneId === 'plain-shell')!
@@ -490,7 +490,7 @@ test('HO1: 启用即投射全部本机窗格（human Agent 有 seq、shell unkno
 // ---------------------------------------------------------------------------
 
 test('HO2: SSE 先等 snapshot，随后创建/更新/焦点/move/closed 事件反映到 public doc，最新订阅 paneIds 覆盖新窗格', { timeout: 60_000 }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'helm-ho2-'))
+  const dir = mkdtempSync(join(tmpdir(), 'helmx-ho2-'))
   const fixture = herdrFixture([pane('plain-shell')])
   const env = await openEnv(dir, fixture.transport)
   try {
@@ -505,7 +505,7 @@ test('HO2: SSE 先等 snapshot，随后创建/更新/焦点/move/closed 事件�
     await sse.ready
 
     // 创建新 Agent 窗格（事件驱动重取快照）
-    fixture.state.panes.set('new-agent', pane('new-agent', { agentStatus: 'idle', seq: 1, agentName: 'helm-wf-x1', agent: 'pi' }))
+    fixture.state.panes.set('new-agent', pane('new-agent', { agentStatus: 'idle', seq: 1, agentName: 'helmx-wf-x1', agent: 'pi' }))
     fixture.emit({ type: 'pane.created', paneId: 'new-agent' })
     await waitForOverview(env.base, env.token, (d) => d.panes.some((p) => p.paneId === 'new-agent' && p.agentStatus === 'idle'))
     // 主树动态接线：paneId 集合变化后最新订阅 options.paneIds 必须包含新 ID
@@ -529,7 +529,7 @@ test('HO2: SSE 先等 snapshot，随后创建/更新/焦点/move/closed 事件�
 
     // move：官方换 pane ID（旧 ID 消失、新 ID 加入）
     fixture.state.panes.delete('new-agent')
-    fixture.state.panes.set('moved-agent', pane('moved-agent', { agentStatus: 'working', seq: 1, agentName: 'helm-wf-x1', agent: 'pi', cwd: '/w' }))
+    fixture.state.panes.set('moved-agent', pane('moved-agent', { agentStatus: 'working', seq: 1, agentName: 'helmx-wf-x1', agent: 'pi', cwd: '/w' }))
     fixture.emit({ type: 'pane.moved', paneId: 'moved-agent' })
     await waitForOverview(env.base, env.token, (d) =>
       d.panes.some((p) => p.paneId === 'moved-agent') && !d.panes.some((p) => p.paneId === 'new-agent'),
@@ -572,7 +572,7 @@ test('HO2: SSE 先等 snapshot，随后创建/更新/焦点/move/closed 事件�
 // ---------------------------------------------------------------------------
 
 test('HO3: 无事件、同 seq 的 cwd 变化经 kernel.watchdogTick 重取快照后在 doc 可见', { timeout: 60_000 }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'helm-ho3-'))
+  const dir = mkdtempSync(join(tmpdir(), 'helmx-ho3-'))
   const fixture = herdrFixture([pane('human-agent', { agentStatus: 'working', seq: 5, agentName: 'claude-main', cwd: '/old' })])
   const env = await openEnv(dir, fixture.transport)
   try {
@@ -597,7 +597,7 @@ test('HO3: 无事件、同 seq 的 cwd 变化经 kernel.watchdogTick 重取快�
 // ---------------------------------------------------------------------------
 
 test('HO4: 人类窗格 blocked 只如实投射状态，不产生 Ask、不发送按键、不回收；停用/关停不向 human 窗格发指令', { timeout: 60_000 }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'helm-ho4-'))
+  const dir = mkdtempSync(join(tmpdir(), 'helmx-ho4-'))
   const fixture = herdrFixture([
     pane('human-blocked', { agentStatus: 'blocked', seq: 3, agentName: 'claude-main', agent: 'claude', cwd: '/p' }),
     pane('human-shell', { agentStatus: 'unknown', cwd: '/p' }),
@@ -637,7 +637,7 @@ test('HO4: 人类窗格 blocked 只如实投射状态，不产生 Ask、不发�
 // ---------------------------------------------------------------------------
 
 test('HO5: snapshot 读取失败与订阅断开都显式置 stale+error 并保留最后成功数据，恢复成功后清除', { timeout: 60_000 }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'helm-ho5-'))
+  const dir = mkdtempSync(join(tmpdir(), 'helmx-ho5-'))
   const fixture = herdrFixture([pane('human-agent', { agentStatus: 'idle', seq: 2, agentName: 'claude-main' })])
   const env = await openEnv(dir, fixture.transport)
   try {
@@ -678,7 +678,7 @@ function staleErrorMentions(doc: OverviewShape): boolean {
 // ---------------------------------------------------------------------------
 
 test('HO6: 停用后订阅全部释放且不再写旧 doc，重新启用进入新周期数据无旧回调污染', { timeout: 60_000 }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'helm-ho6-'))
+  const dir = mkdtempSync(join(tmpdir(), 'helmx-ho6-'))
   const fixture = herdrFixture([pane('p1', { agentStatus: 'idle', seq: 1, agentName: 'a1' })])
   const env = await openEnv(dir, fixture.transport)
   try {
@@ -717,7 +717,7 @@ test('HO6: 停用后订阅全部释放且不再写旧 doc，重新启用进入�
 // ---------------------------------------------------------------------------
 
 test('HO7: 初始快照与逐窗格订阅 ACK 之间的无事件状态变化经重读收敛', { timeout: 60_000 }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'helm-ho7-'))
+  const dir = mkdtempSync(join(tmpdir(), 'helmx-ho7-'))
   const fixture = herdrFixture([pane('race-1', { agentStatus: 'idle', seq: 4, agentName: 'r1' })])
   const env = await openEnv(dir, fixture.transport)
   try {

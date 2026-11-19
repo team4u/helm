@@ -14,7 +14,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
   CORE_CLI_COMMAND_PATHS,
-  HelmError,
+  HelmxError,
   PREBUILT_CLIENT_MANIFEST_VERSION,
   assertPrebuiltChunkName,
   assertPrebuiltClientManifest,
@@ -26,7 +26,7 @@ import {
   type PluginRemoveResult,
   type PluginSummary,
   type PluginUpdateResult,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 
 test('PluginPackageSource: npm/git/local three-variant discriminated union with type guards', { timeout: 60_000 }, () => {
   function describeSource(src: PluginPackageSource): string {
@@ -41,17 +41,17 @@ test('PluginPackageSource: npm/git/local three-variant discriminated union with 
   }
 
   assert.equal(
-    describeSource({ kind: 'npm', raw: 'npm:helm-plugin-foo@^1.2.0', spec: 'helm-plugin-foo@^1.2.0' }),
-    'npm:helm-plugin-foo@^1.2.0',
+    describeSource({ kind: 'npm', raw: 'npm:helmx-plugin-foo@^1.2.0', spec: 'helmx-plugin-foo@^1.2.0' }),
+    'npm:helmx-plugin-foo@^1.2.0',
   )
   assert.equal(
     describeSource({
       kind: 'git',
-      raw: 'git:https://github.com/u/helm-plugin-foo.git@v1.2.0',
-      repo: 'https://github.com/u/helm-plugin-foo.git',
+      raw: 'git:https://github.com/u/helmx-plugin-foo.git@v1.2.0',
+      repo: 'https://github.com/u/helmx-plugin-foo.git',
       ref: 'v1.2.0',
     }),
-    'git:https://github.com/u/helm-plugin-foo.git#v1.2.0',
+    'git:https://github.com/u/helmx-plugin-foo.git#v1.2.0',
   )
   assert.equal(
     describeSource({
@@ -63,8 +63,8 @@ test('PluginPackageSource: npm/git/local three-variant discriminated union with 
     'git:https://github.com/u/monorepo#packages/foo',
   )
   assert.equal(
-    describeSource({ kind: 'local', raw: '/abs/helm-plugin-foo', path: '/abs/helm-plugin-foo' }),
-    'local:/abs/helm-plugin-foo',
+    describeSource({ kind: 'local', raw: '/abs/helmx-plugin-foo', path: '/abs/helmx-plugin-foo' }),
+    'local:/abs/helmx-plugin-foo',
   )
 })
 
@@ -113,10 +113,10 @@ test('PrebuiltClientManifest validation and chunk path helpers enforce integrity
     prebuiltChunkFileName('index.tsx-a1b2c3.deadbeef.mjs', 'mermaid.core-123.js'),
     'index.tsx-a1b2c3.deadbeef.chunk.mermaid.core-123.js',
   )
-  assert.throws(() => assertPrebuiltChunkName('p', '../escape.js'), (e: unknown) => e instanceof HelmError && e.code === 'invalid_client_module')
-  assert.throws(() => assertPrebuiltRelativeFile('/dist-client', '../secret.mjs', 'entryFile'), (e: unknown) => e instanceof HelmError && e.code === 'prebuilt_client_invalid')
-  assert.throws(() => assertPrebuiltRelativeFile('/dist-client', '/abs.mjs', 'entryFile'), (e: unknown) => e instanceof HelmError && e.code === 'prebuilt_client_invalid')
-  assert.throws(() => assertPrebuiltRelativeFile('/dist-client', 'a\\b.mjs', 'entryFile'), (e: unknown) => e instanceof HelmError && e.code === 'prebuilt_client_invalid')
+  assert.throws(() => assertPrebuiltChunkName('p', '../escape.js'), (e: unknown) => e instanceof HelmxError && e.code === 'invalid_client_module')
+  assert.throws(() => assertPrebuiltRelativeFile('/dist-client', '../secret.mjs', 'entryFile'), (e: unknown) => e instanceof HelmxError && e.code === 'prebuilt_client_invalid')
+  assert.throws(() => assertPrebuiltRelativeFile('/dist-client', '/abs.mjs', 'entryFile'), (e: unknown) => e instanceof HelmxError && e.code === 'prebuilt_client_invalid')
+  assert.throws(() => assertPrebuiltRelativeFile('/dist-client', 'a\\b.mjs', 'entryFile'), (e: unknown) => e instanceof HelmxError && e.code === 'prebuilt_client_invalid')
 
   const valid = assertPrebuiltClientManifest(
     {
@@ -125,7 +125,7 @@ test('PrebuiltClientManifest validation and chunk path helpers enforce integrity
         'index.tsx': {
           entryFile: 'index.tsx-abc.hash1234.mjs',
           contentHash: 'hash1234',
-          exports: ['Panel', '__helmClientCss'],
+          exports: ['Panel', '__helmxClientCss'],
           chunks: ['chunk-1.js'],
         },
       },
@@ -148,6 +148,6 @@ test('PrebuiltClientManifest validation and chunk path helpers enforce integrity
     { version: 1, modules: { 'index.tsx': { entryFile: 'a.mjs', contentHash: 'abc', exports: [], chunks: ['a.js', 'a.js'] } } },
     { version: 1, modules: { 'index.tsx': { entryFile: 'a.mjs', contentHash: 'abc', exports: [], chunks: ['../evil.js'] } } },
   ]) {
-    assert.throws(() => assertPrebuiltClientManifest(bad, '/tmp/dist-client'), (e: unknown) => e instanceof HelmError)
+    assert.throws(() => assertPrebuiltClientManifest(bad, '/tmp/dist-client'), (e: unknown) => e instanceof HelmxError)
   }
 })

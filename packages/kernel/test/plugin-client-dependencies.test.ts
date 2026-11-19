@@ -1,13 +1,13 @@
 /**
  * Contract tests for managed frontend npm dependencies (`clientDependencies`) in external plugins:
  * - Manifest parsing: merges and deduplicates `plugin.json` clientDependencies and `package.json`
- *   helm.clientDependencies; rejects invalid specifiers (relative/absolute paths, `..` segments,
+ *   helmx.clientDependencies; rejects invalid specifiers (relative/absolute paths, `..` segments,
  *   non-strings) with plugin_manifest_invalid;
  * - normalizeDefinition: maps manifest specifiers to npmDependencies (resolved from plugin root dir)
  *   and strips any npmDependencies declared directly in code (blocking arbitrary resolution);
  * - assertExternalDefinition display-copy name: LocalizedText rule at the import
  *   boundary (pure-function drive, no fixture files — see test comment);
- * - Inter-plugin dependencies manifest (`plugin.json` dependencies / `package.json` helm.dependencies)
+ * - Inter-plugin dependencies manifest (`plugin.json` dependencies / `package.json` helmx.dependencies)
  *   merges into definition; top-level npm `package.json` dependencies are never misread as plugin deps;
  * - Real compilation pipeline: declared specifiers resolve into bundle from plugin node_modules;
  *   undeclared bare imports reject explicitly; declared-but-uninstalled modules emit clear diagnostics;
@@ -21,13 +21,13 @@ import test, { beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdirSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { HelmError, clientNpmRootsOf } from '@helm/protocol'
+import { HelmxError, clientNpmRootsOf } from '@helmx/protocol'
 import {
   buildPluginClientBundleDir,
   clearClientCompilerMemoryCache,
   compilePluginClientModule,
   createPluginBuildProvider,
-} from '@helm/plugin-build'
+} from '@helmx/plugin-build'
 import {
   assertExternalDefinition,
   importPluginDefinition,
@@ -35,7 +35,7 @@ import {
   resolvePluginEntry,
   verifyDeclaredPrebuiltDir,
 } from '../src/plugins/external-loader.js'
-import { readHelmClientDependencies } from '../src/plugins/plugin-manifest.js'
+import { readHelmxClientDependencies } from '../src/plugins/plugin-manifest.js'
 import { doctorPluginDir } from '../src/plugins/plugin-doctor.js'
 import { PluginPackageManager, type PackageRunner } from '../src/plugins/package-manager.js'
 import { PluginPackageManagerStore } from '../src/plugins/package-store.js'
@@ -45,7 +45,7 @@ import { cleanupDir, makePluginSummary, makeTempDir, useTempDir } from './helper
 let workDir: string
 
 beforeEach(async () => {
-  workDir = await makeTempDir('helm-client-deps-')
+  workDir = await makeTempDir('helmx-client-deps-')
 })
 
 afterEach(async () => {
@@ -120,14 +120,14 @@ async function importNormalized(dir: string) {
   return normalizeDefinition(await importPluginDefinition(dir, entry), dir)
 }
 
-function throwsCode(fn: () => unknown, code: string): HelmError {
+function throwsCode(fn: () => unknown, code: string): HelmxError {
   let caught: unknown
   try {
     fn()
   } catch (err) {
     caught = err
   }
-  assert.ok(caught instanceof HelmError, `expected HelmError, got ${String(caught)}`)
+  assert.ok(caught instanceof HelmxError, `expected HelmxError, got ${String(caught)}`)
   assert.equal(caught.code, code)
   return caught
 }
@@ -136,25 +136,25 @@ function throwsCode(fn: () => unknown, code: string): HelmError {
 // Manifest parsing and normalization
 // ---------------------------------------------------------------------------
 
-test('plugin.json and package.json helm.clientDependencies merge and deduplicate; invalid specifiers reject explicitly', { timeout: 60_000 }, async () => {
+test('plugin.json and package.json helmx.clientDependencies merge and deduplicate; invalid specifiers reject explicitly', { timeout: 60_000 }, async () => {
   const dir = makePluginDir({ clientDeps: ['fake-chart-lib'] })
   writeJson(join(dir, 'package.json'), {
     name: 'chart-plugin-pkg',
-    helm: { clientDependencies: ['fake-chart-lib', 'other-lib'] },
+    helmx: { clientDependencies: ['fake-chart-lib', 'other-lib'] },
   })
-  assert.deepEqual(readHelmClientDependencies(dir), ['fake-chart-lib', 'other-lib'])
+  assert.deepEqual(readHelmxClientDependencies(dir), ['fake-chart-lib', 'other-lib'])
 
   const bad = makePluginDir({ clientDeps: ['../escape'] })
-  throwsCode(() => readHelmClientDependencies(bad), 'plugin_manifest_invalid')
+  throwsCode(() => readHelmxClientDependencies(bad), 'plugin_manifest_invalid')
   const badAbs = makePluginDir({ clientDeps: ['/abs/path'] })
-  throwsCode(() => readHelmClientDependencies(badAbs), 'plugin_manifest_invalid')
+  throwsCode(() => readHelmxClientDependencies(badAbs), 'plugin_manifest_invalid')
 
   const badPkg = makePluginDir()
-  writeJson(join(badPkg, 'package.json'), { name: 'x', helm: { clientDependencies: [42] } })
-  throwsCode(() => readHelmClientDependencies(badPkg), 'plugin_manifest_invalid')
+  writeJson(join(badPkg, 'package.json'), { name: 'x', helmx: { clientDependencies: [42] } })
+  throwsCode(() => readHelmxClientDependencies(badPkg), 'plugin_manifest_invalid')
 
   const badName = makePluginDir({ clientDeps: ['foo:bar'] })
-  throwsCode(() => readHelmClientDependencies(badName), 'plugin_manifest_invalid')
+  throwsCode(() => readHelmxClientDependencies(badName), 'plugin_manifest_invalid')
 })
 
 test('normalizeDefinition maps manifest specifiers to npmDependencies (plugin dir) and strips code-level declarations', { timeout: 60_000 }, async () => {
@@ -170,7 +170,7 @@ test('normalizeDefinition maps manifest specifiers to npmDependencies (plugin di
 
   assert.throws(
     () => normalizeDefinition({ ...raw, dependencies: 'not-an-array' as unknown as string[] }, dir),
-    (err: unknown) => err instanceof HelmError && err.code === 'invalid_plugin_definition',
+    (err: unknown) => err instanceof HelmxError && err.code === 'invalid_plugin_definition',
   )
 })
 
@@ -179,10 +179,10 @@ test('inter-plugin dependencies: manifest declarations merge into definition; to
   writeJson(join(dir, 'package.json'), {
     name: 'chart-plugin-pkg',
     dependencies: { 'some-runtime-lib': '^1.0.0' },
-    helm: { dependencies: ['builtin:profile', 'another-plugin'] },
+    helmx: { dependencies: ['builtin:profile', 'another-plugin'] },
   })
   const normalized = await importNormalized(dir)
-  // npm top-level dependencies must never enter plugin dependencies; helm.dependencies does.
+  // npm top-level dependencies must never enter plugin dependencies; helmx.dependencies does.
   assert.deepEqual(normalized.dependencies, ['builtin:profile', 'another-plugin'])
 
   // plugin.json dependencies parses identically and deduplicates when merged with code declarations.
@@ -206,7 +206,7 @@ test('inter-plugin dependencies: manifest declarations merge into definition; to
   })
   await assert.rejects(
     importNormalized(dir),
-    (err: unknown) => err instanceof HelmError && err.code === 'plugin_manifest_invalid',
+    (err: unknown) => err instanceof HelmxError && err.code === 'plugin_manifest_invalid',
   )
 })
 
@@ -235,7 +235,7 @@ test('assertExternalDefinition: display-copy name follows the LocalizedText rule
     assert.throws(
       () => assertExternalDefinition({ ...base, name: value }, '/ws/chart-plugin'),
       (err: unknown) =>
-        err instanceof HelmError &&
+        err instanceof HelmxError &&
         err.code === 'invalid_plugin_definition' &&
         err.message.includes('name provide when must be display copy'),
       `expected rejection for name=${JSON.stringify(value)}`,
@@ -268,7 +268,7 @@ test('compile pipeline: bundles declared specifiers from plugin node_modules; re
   await assert.rejects(
     compilePluginClientModule('chart-plugin', normalized.clientRoot!, 'index.tsx', join(workDir, 'cache2')),
     (err: unknown) =>
-      err instanceof HelmError && err.code === 'client_compile_failed' && err.message.includes('reject bare dependency'),
+      err instanceof HelmxError && err.code === 'client_compile_failed' && err.message.includes('reject bare dependency'),
   )
 
   // Declared yet uninstalled: diagnostic points clearly to resolution/install failure rather than misreporting as undeclared.
@@ -283,7 +283,7 @@ test('compile pipeline: bundles declared specifiers from plugin node_modules; re
       { npmRoots: clientNpmRootsOf(noLibNormalized.npmDependencies) },
     ),
     (err: unknown) =>
-      err instanceof HelmError &&
+      err instanceof HelmxError &&
       err.code === 'client_compile_failed' &&
       err.message.includes('cannot parse') &&
       err.message.includes('not installed'),
@@ -323,7 +323,7 @@ test('disk cache reuses across memory isolation boundary and invalidates stale b
       cacheDir,
     ),
     (err: unknown) =>
-      err instanceof HelmError &&
+      err instanceof HelmxError &&
       err.code === 'client_compile_failed' &&
       err.message.includes('reject bare dependency'),
     'removing clientDependencies declaration must not fall back to stale disk cache bundle',
@@ -365,7 +365,7 @@ function makeTestPackageManager(dataDir: string, pluginId: string, runner: Packa
         return { summary: makePluginSummary({ id: pluginId, name: 'x', enabled: false }), pluginId }
       },
       async enableManagedPlugin() {
-        throw new HelmError('unused', 'this test does not enable', 500)
+        throw new HelmxError('unused', 'this test does not enable', 500)
       },
       assertManagedPluginUpdateSafe() {},
       async updateManagedPlugin() {
@@ -387,7 +387,7 @@ test('managed install installs declared frontend deps with --no-save using packa
     calls.push({ cmd, args, cwd: opts.cwd })
     return { code: 0, stdout: '', stderr: '' }
   }
-  const dataDir = useTempDir(t, 'helm-pkg-client-deps-')
+  const dataDir = useTempDir(t, 'helmx-pkg-client-deps-')
   const srcDir = join(workDir, 'src-plugin')
   mkdirSync(srcDir)
   writeJson(join(srcDir, 'plugin.json'), { id: 'managed-client-dep', main: 'index.ts' })
@@ -402,7 +402,7 @@ test('managed install installs declared frontend deps with --no-save using packa
     version: '1.0.0',
     dependencies: { 'runtime-lib': '^1.0.0' },
     devDependencies: { 'client-chart': '^4.2.0' },
-    helm: { clientDependencies: ['client-chart', 'client-extra/subpath'] },
+    helmx: { clientDependencies: ['client-chart', 'client-extra/subpath'] },
   })
 
   const manager = makeTestPackageManager(dataDir, 'managed-client-dep', runner)
@@ -421,7 +421,7 @@ test('without frontend dependency declaration, install keeps original command (-
     calls.push({ cmd, args, cwd: opts.cwd })
     return { code: 0, stdout: '', stderr: '' }
   }
-  const dataDir = useTempDir(t, 'helm-pkg-plain-')
+  const dataDir = useTempDir(t, 'helmx-pkg-plain-')
   const srcDir = join(workDir, 'plain-plugin')
   mkdirSync(srcDir)
   writeJson(join(srcDir, 'plugin.json'), { id: 'plain-plugin', main: 'index.ts' })
@@ -451,7 +451,7 @@ test('managed install with valid prebuilt dist-client skips clientDependencies (
       version: '1.0.0',
       ...(backendDeps ? { dependencies: backendDeps } : {}),
       devDependencies: { 'heavy-chart': '^12.0.0' },
-      helm: { clientDependencies: ['heavy-chart', 'extra-widget/subpath'] },
+      helmx: { clientDependencies: ['heavy-chart', 'extra-widget/subpath'] },
     })
     writeFileSync(
       join(srcDir, 'index.ts'),
@@ -480,7 +480,7 @@ test('managed install with valid prebuilt dist-client skips clientDependencies (
       calls.push({ cmd, args, cwd: opts.cwd })
       return { code: 0, stdout: '', stderr: '' }
     }
-    const dataDir = useTempDir(t, 'helm-pkg-prebuilt-only-')
+    const dataDir = useTempDir(t, 'helmx-pkg-prebuilt-only-')
     const srcDir = await buildPluginWithPrebuilt('prebuilt-frontend-only')
     const manager = makeTestPackageManager(dataDir, 'prebuilt-frontend-only', runner)
     const result = await manager.install(srcDir)
@@ -495,7 +495,7 @@ test('managed install with valid prebuilt dist-client skips clientDependencies (
       calls.push({ cmd, args, cwd: opts.cwd })
       return { code: 0, stdout: '', stderr: '' }
     }
-    const dataDir = useTempDir(t, 'helm-pkg-prebuilt-backend-')
+    const dataDir = useTempDir(t, 'helmx-pkg-prebuilt-backend-')
     const srcDir = await buildPluginWithPrebuilt('prebuilt-with-backend-deps', { 'backend-sdk': '^2.0.0' })
     const manager = makeTestPackageManager(dataDir, 'prebuilt-with-backend-deps', runner)
     const result = await manager.install(srcDir)
@@ -513,7 +513,7 @@ test('managed install rejects corrupt prebuilt dist-client explicitly without si
     calls.push({ cmd, args, cwd: opts.cwd })
     return { code: 0, stdout: '', stderr: '' }
   }
-  const dataDir = useTempDir(t, 'helm-pkg-prebuilt-corrupt-')
+  const dataDir = useTempDir(t, 'helmx-pkg-prebuilt-corrupt-')
   const srcDir = join(workDir, 'corrupt-prebuilt-plugin')
   mkdirSync(join(srcDir, 'dist-client'), { recursive: true })
   writeJson(join(srcDir, 'plugin.json'), {
@@ -527,7 +527,7 @@ test('managed install rejects corrupt prebuilt dist-client explicitly without si
   const manager = makeTestPackageManager(dataDir, 'corrupt-prebuilt-plugin', runner)
   await assert.rejects(
     manager.install(srcDir),
-    (err: unknown) => err instanceof HelmError && err.code === 'prebuilt_client_invalid',
+    (err: unknown) => err instanceof HelmxError && err.code === 'prebuilt_client_invalid',
   )
   assert.equal(calls.length, 0, 'corrupt prebuilt bundle must reject before invoking npm install')
 })
@@ -586,7 +586,7 @@ test('external-loader allows alias/symlinked plugin parent paths (e.g. Windows 8
   assert.equal(calls.length, 0)
 
   // 3. Nested symlink escape under a non-existent clientRoot segment still rejects
-  const outsideDir = useTempDir(t, 'helm-ext-outside-')
+  const outsideDir = useTempDir(t, 'helmx-ext-outside-')
   symlinkSync(outsideDir, join(aliasPluginDir, 'sym-out'), 'junction')
   writeJson(join(aliasPluginDir, 'plugin.json'), {
     id: 'alias-prebuilt-plugin',
@@ -595,6 +595,6 @@ test('external-loader allows alias/symlinked plugin parent paths (e.g. Windows 8
   })
   assert.throws(
     () => normalizeDefinition({ id: 'alias-prebuilt-plugin', definePlugin() {} }, aliasPluginDir),
-    (err: unknown) => err instanceof HelmError && err.code === 'invalid_plugin_definition',
+    (err: unknown) => err instanceof HelmxError && err.code === 'invalid_plugin_definition',
   )
 })

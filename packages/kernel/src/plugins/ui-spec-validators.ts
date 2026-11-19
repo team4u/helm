@@ -11,13 +11,13 @@ import { Type, type TObject, type TProperties } from 'typebox';
 import { Compile, type Validator } from 'typebox/compile';
 import type { TLocalizedValidationError } from 'typebox/error';
 import {
-  HelmError,
+  HelmxError,
   RESERVED_SLASH_COMMANDS,
   parseNonEmptyLocalizedText,
   type PluginUiContribution,
   type UiActionSpec,
-} from '@helm/protocol';
-import { isPlainObject } from '@helm/protocol';
+} from '@helmx/protocol';
+import { isPlainObject } from '@helmx/protocol';
 
 /** Host-reserved command slash triggers (`skill:` prefix is also reserved). */
 const RESERVED_COMMAND_SLASH: ReadonlySet<string> = new Set(RESERVED_SLASH_COMMANDS);
@@ -87,7 +87,7 @@ function runCompiledUiSchema<T extends TProperties>(
 ): void {
   if (validator.Check(spec)) return;
   const { message, details } = resolveError(validator.Errors(spec), spec, id, ctx);
-  throw new HelmError('invalid_ui_spec', message, 400, details);
+  throw new HelmxError('invalid_ui_spec', message, 400, details);
 }
 
 /** Picks the first matching error path according to an explicit precedence list. */
@@ -109,7 +109,7 @@ function assertUniqueStrings(
   details: Record<string, unknown>,
 ): void {
   if (new Set(values).size !== values.length) {
-    throw new HelmError('invalid_ui_spec', `plugin ${pluginId} ${message}`, 400, details);
+    throw new HelmxError('invalid_ui_spec', `plugin ${pluginId} ${message}`, 400, details);
   }
 }
 
@@ -154,7 +154,7 @@ function validateUiActionSpec(spec: Record<string, unknown>, id: string, ctx: Ui
   const target = UI_ACTION_TARGET_BY_SURFACE[ctx.surface];
   if (target === undefined) return;
   if (spec['actionId'] === undefined && spec['client'] === undefined) {
-    throw new HelmError(
+    throw new HelmxError(
       'invalid_ui_spec',
       `plugin ${pluginId} ui.action(${target}) must at least provide actionId or client of one`,
       400,
@@ -232,7 +232,7 @@ function validateCommandPaletteSpec(spec: Record<string, unknown>, id: string, c
   const slash = spec['slash'] as string | undefined;
   if (slash !== undefined) {
     if (RESERVED_COMMAND_SLASH.has(slash) || slash.startsWith('skill:')) {
-      throw new HelmError(
+      throw new HelmxError(
         'invalid_ui_spec',
         `plugin ${pluginId} ui.command  slash "${slash}" and host keep command conflict (new/clear/compact and skill: prefix)`,
         400,
@@ -241,7 +241,7 @@ function validateCommandPaletteSpec(spec: Record<string, unknown>, id: string, c
     }
     for (const u of ctx.siblings) {
       if (u.surface === 'commandPalette' && (u.spec as { slash?: unknown }).slash === slash) {
-        throw new HelmError('duplicate_command_slash', `plugin ${pluginId} duplicate declaration slash trigger term /${slash}`, 409, {
+        throw new HelmxError('duplicate_command_slash', `plugin ${pluginId} duplicate declaration slash trigger term /${slash}`, 409, {
           pluginId,
           slash,
         });
@@ -250,10 +250,10 @@ function validateCommandPaletteSpec(spec: Record<string, unknown>, id: string, c
   }
   const actionId = spec['actionId'];
   if (slash !== undefined && actionId === undefined) {
-    throw new HelmError('invalid_ui_spec', `plugin ${pluginId} ui.command declaration slash when must bind set actionId`, 400);
+    throw new HelmxError('invalid_ui_spec', `plugin ${pluginId} ui.command declaration slash when must bind set actionId`, 400);
   }
   if (actionId === undefined && spec['client'] === undefined) {
-    throw new HelmError(
+    throw new HelmxError(
       'invalid_ui_spec',
       `plugin ${pluginId} ui.command must at least provide actionId or client of one (command must can trigger)`,
       400,
@@ -274,7 +274,7 @@ function validateProfileRuntimeSpec(spec: Record<string, unknown>, id: string, c
     details: { pluginId, id, kind: String(spec['kind']) },
   }));
   if (parseNonEmptyLocalizedText(spec['label']) === undefined) {
-    throw new HelmError('invalid_ui_spec', `plugin ${pluginId} ui.profileRuntime need to non-empty display label`, 400, {
+    throw new HelmxError('invalid_ui_spec', `plugin ${pluginId} ui.profileRuntime need to non-empty display label`, 400, {
       pluginId,
       id,
     });
@@ -286,7 +286,7 @@ function validateProfileRuntimeSpec(spec: Record<string, unknown>, id: string, c
   const kind = spec['kind'] as string;
   for (const u of ctx.siblings) {
     if (u.surface === 'profile.runtime' && (u.spec as { kind?: unknown }).kind === kind) {
-      throw new HelmError(
+      throw new HelmxError(
         'duplicate_profile_runtime_kind',
         `plugin ${pluginId} duplicate declaration profile.runtime kind "${kind}"`,
         409,
@@ -309,7 +309,7 @@ function validateSlotSpec(spec: Record<string, unknown>, id: string, ctx: UiSpec
   const target = spec['target'] as string;
   const slash = target.indexOf('/');
   if (slash <= 0 || slash !== target.lastIndexOf('/')) {
-    throw new HelmError(
+    throw new HelmxError(
       'invalid_ui_spec',
       `plugin ${pluginId} ui.slot  target "${target}" must exactly contains a '/'(<ownerPluginId>/<slotName>)`,
       400,
@@ -319,7 +319,7 @@ function validateSlotSpec(spec: Record<string, unknown>, id: string, ctx: UiSpec
   const owner = target.slice(0, slash);
   const slotName = target.slice(slash + 1);
   if (!/^[A-Za-z0-9:_-]+$/.test(owner) || !/^[A-Za-z0-9._-]+$/.test(slotName)) {
-    throw new HelmError(
+    throw new HelmxError(
       'invalid_ui_spec',
       `plugin ${pluginId} ui.slot  target "${target}" segment identifier illegal (ownerPluginId allows : _ -,slotName allows . _ -)`,
       400,
@@ -341,7 +341,7 @@ const TIMELINE_RENDERER_CHECKER = Compile(
 function validateTimelineRendererSpec(spec: Record<string, unknown>, id: string, ctx: UiSpecContext): void {
   const { pluginId } = ctx;
   if (spec['matchMeta'] !== undefined && !isPlainObject(spec['matchMeta'])) {
-    throw new HelmError('invalid_ui_spec', `plugin ${pluginId} ui.timelineRenderer  matchMeta only allows { renderer: non-empty string }`, 400);
+    throw new HelmxError('invalid_ui_spec', `plugin ${pluginId} ui.timelineRenderer  matchMeta only allows { renderer: non-empty string }`, 400);
   }
   runCompiledUiSchema(TIMELINE_RENDERER_CHECKER, spec, id, ctx, () => ({
     message: `plugin ${pluginId} ui.timelineRenderer  matchMeta only allows { renderer: non-empty string }`,
@@ -365,7 +365,7 @@ function validateMarkdownCodeBlockSpec(spec: Record<string, unknown>, id: string
     id,
   });
   if (spec['client'] === undefined) {
-    throw new HelmError(
+    throw new HelmxError(
       'invalid_ui_spec',
       `plugin ${pluginId} ui.markdownCodeBlock must declaration client component reference (without declaration style track path)`,
       400,
@@ -410,7 +410,7 @@ const ARTIFACT_MATCH_EXPECT: Readonly<Record<'mimeTypes' | 'extensions', string>
 function validateArtifactPreviewerSpec(spec: Record<string, unknown>, id: string, ctx: UiSpecContext): void {
   const { pluginId, fnName } = ctx;
   if (parseNonEmptyLocalizedText(spec['label']) === undefined) {
-    throw new HelmError('invalid_ui_spec', `plugin ${pluginId} ui.artifactPreviewer need to non-empty display label`, 400, {
+    throw new HelmxError('invalid_ui_spec', `plugin ${pluginId} ui.artifactPreviewer need to non-empty display label`, 400, {
       pluginId,
       id,
     });
@@ -468,14 +468,14 @@ const COMPLETER_TRIGGER_AND_SOURCE_CHECKER = Compile(
 function validateComposerCompleterSpec(spec: Record<string, unknown>, id: string, ctx: UiSpecContext): void {
   const { pluginId } = ctx;
   if (parseNonEmptyLocalizedText(spec['label']) === undefined) {
-    throw new HelmError('invalid_ui_spec', `plugin ${pluginId} ui.composerCompleter need to non-empty display label`, 400, {
+    throw new HelmxError('invalid_ui_spec', `plugin ${pluginId} ui.composerCompleter need to non-empty display label`, 400, {
       pluginId,
       id,
     });
   }
   // '/' is reserved for host command and skill completion; completer renders uniformly without client track.
   if (spec['client'] !== undefined) {
-    throw new HelmError(
+    throw new HelmxError(
       'invalid_ui_spec',
       `plugin ${pluginId} ui.composerCompleter disallows declaration client(completion by host unify render, only accept declaration style data source)`,
       400,
@@ -541,7 +541,7 @@ function validateComposerCompleterSpec(spec: Record<string, unknown>, id: string
   });
   const source = spec['source'] as Record<string, unknown>;
   if (!isPlainObject(source)) {
-    throw new HelmError(
+    throw new HelmxError(
       'invalid_ui_spec',
       `plugin ${pluginId} ui.composerCompleter need to source({ kind: 'action' | 'doc' | 'sessionDoc', ... })`,
       400,
@@ -552,7 +552,7 @@ function validateComposerCompleterSpec(spec: Record<string, unknown>, id: string
     (source['kind'] === 'doc' || source['kind'] === 'sessionDoc') &&
     UNSAFE_TOP_LEVEL_KEYS.has(source['itemsField'] as string)
   ) {
-    throw new HelmError(
+    throw new HelmxError(
       'invalid_ui_spec',
       `plugin ${pluginId} ui.composerCompleter  itemsField must be security top-level key (refuse __proto__/constructor/prototype and very rule character)`,
       400,
@@ -580,7 +580,7 @@ const WORKBENCH_PANEL_CHECKER = Compile(
 function validateWorkbenchPanelSpec(spec: Record<string, unknown>, id: string, ctx: UiSpecContext): void {
   const { pluginId } = ctx;
   if (spec['badge'] !== undefined && !isPlainObject(spec['badge'])) {
-    throw new HelmError(
+    throw new HelmxError(
       'invalid_ui_spec',
       `plugin ${pluginId} ui.workbenchPanel  badge only allows { doc, countField?, toneField?, byConversationField? }`,
       400,

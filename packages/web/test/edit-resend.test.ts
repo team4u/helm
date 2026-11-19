@@ -13,7 +13,7 @@ import test from 'node:test'
 import { readFileSync } from 'node:fs'
 import * as React from 'react'
 import { renderToString } from 'react-dom/server'
-import type { ConversationEntry } from '@helm/protocol'
+import type { ConversationEntry } from '@helmx/protocol'
 import {
   attachmentsOfEditTarget,
   draftVersionOf,
@@ -181,9 +181,9 @@ test('非 human 输入收起铅笔：agent/trigger 汇报不提供编辑入口�
 
 test('SSR 行为：human 消息渲染编辑铅笔，agent/trigger 消息不渲染铅笔但保留复制', { timeout: 60_000 }, () => {
   const entries: ConversationEntry[] = [
-    { id: '1', kind: 'helm.input', data: { text: '人类提问', origin: 'human' } },
-    { id: '2', kind: 'helm.input', data: { text: 'Worker 已完成', origin: 'agent' } },
-    { id: '3', kind: 'helm.input', data: { text: 'cron 触发', origin: 'trigger' } },
+    { id: '1', kind: 'helmx.input', data: { text: '人类提问', origin: 'human' } },
+    { id: '2', kind: 'helmx.input', data: { text: 'Worker 已完成', origin: 'agent' } },
+    { id: '3', kind: 'helmx.input', data: { text: 'cron 触发', origin: 'trigger' } },
   ]
   const html = renderTimelineHtml(entries)
   assert.match(html, /人类提问/)

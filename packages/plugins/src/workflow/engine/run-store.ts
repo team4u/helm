@@ -3,7 +3,7 @@
  *
  * Responsibilities:
  * - Single-store design: the run index lives in the injected state store (a namespace doc of the
- *   @helm/kernel's single state.sqlite); full RunRecords land atomically in files (same directory
+ *   @helmx/kernel's single state.sqlite); full RunRecords land atomically in files (same directory
  *   dataDir/artifacts/<convId>/workflow-<runId>.record.json);
  * - Shape-validation discipline: the index and records are persistence-layer external input;
  *   readers validate explicitly, and corruption is always workflow_index_corrupt /
@@ -29,7 +29,7 @@ import {
   writeSync,
 } from 'node:fs'
 import { join } from 'node:path'
-import { HelmError, type AgentExecutionInfo, type JsonSchema } from '@helm/protocol'
+import { HelmxError, type AgentExecutionInfo, type JsonSchema } from '@helmx/protocol'
 import type {
   WorkflowProgressEntry,
   WorkflowRunStatus,
@@ -437,9 +437,9 @@ export class RunStore {
       } catch {
         // already consumed by rename, or never existed
       }
-      if (error instanceof HelmError) throw error
+      if (error instanceof HelmxError) throw error
       const err = error as NodeJS.ErrnoException
-      throw new HelmError('io_error', `failed to write workflow run record ${target}: ${err.message}`, 500, {
+      throw new HelmxError('io_error', `failed to write workflow run record ${target}: ${err.message}`, 500, {
         path: target,
         code: err.code,
       })
@@ -456,18 +456,18 @@ export class RunStore {
     try {
       record = JSON.parse(readFileSync(path, 'utf-8'))
     } catch (error) {
-      if (error instanceof HelmError) throw error
+      if (error instanceof HelmxError) throw error
       const err = error as NodeJS.ErrnoException
       if (err.code === 'ENOENT') {
         // Index points to a missing file: persistence-layer inconsistency; never silently degrade as a ledger gap.
-        throw new HelmError(
+        throw new HelmxError(
           'workflow_record_corrupt',
           `workflow run ${runId}'s record file is missing (index points to ${path}); check dataDir integrity`,
           500,
           { runId, path },
         )
       }
-      throw new HelmError(
+      throw new HelmxError(
         'workflow_record_corrupt',
         `failed to read workflow run ${runId}'s record file: ${errorMessage(error)}`,
         500,
@@ -476,7 +476,7 @@ export class RunStore {
     }
     // Verify it's an object before accessing id: null/primitives/arrays must never TypeError on record.id.
     if (record === null || typeof record !== 'object' || Array.isArray(record)) {
-      throw new HelmError(
+      throw new HelmxError(
         'workflow_record_corrupt',
         `workflow run ${runId}'s record file is corrupted (not an object structure: ${Array.isArray(record) ? 'array' : typeof record})`,
         500,
@@ -486,7 +486,7 @@ export class RunStore {
     const asRecord = record as Record<string, unknown>
     if (asRecord['id'] !== runId) {
       // Index hit but the file's id was tampered with: persistence-layer inconsistency; never disguise it as "not found".
-      throw new HelmError(
+      throw new HelmxError(
         'workflow_record_corrupt',
         `workflow run ${runId}'s record file is corrupted (id mismatch)`,
         500,
@@ -499,7 +499,7 @@ export class RunStore {
     // RunRecord contract is validated, with no old-format adaptation.
     const problem = runRecordProblem(record)
     if (problem !== undefined) {
-      throw new HelmError(
+      throw new HelmxError(
         'workflow_record_corrupt',
         `workflow run ${runId}'s persisted record is corrupted (${problem})`,
         500,
@@ -516,8 +516,8 @@ export class RunStore {
     try {
       index = this.readIndex()
     } catch (error) {
-      if (error instanceof HelmError && error.code === 'workflow_index_corrupt') {
-        throw new HelmError(
+      if (error instanceof HelmxError && error.code === 'workflow_index_corrupt') {
+        throw new HelmxError(
           error.code,
           `failed to read the run index needed for workflow run ${runId}: ${error.message}`,
           500,
@@ -528,7 +528,7 @@ export class RunStore {
     }
     const entry = index.find((candidate) => candidate.id === runId)
     if (entry === undefined) {
-      throw new HelmError('not_found', `workflow run ${runId} does not exist`, 404, { runId })
+      throw new HelmxError('not_found', `workflow run ${runId} does not exist`, 404, { runId })
     }
     return this.loadByEntry(entry)
   }
@@ -543,7 +543,7 @@ export class RunStore {
     try {
       raw = this.state.get<RunIndexEntry[]>(INDEX_KEY, [])
     } catch (error) {
-      throw new HelmError(
+      throw new HelmxError(
         'workflow_index_corrupt',
         `failed to read the workflow run index: ${errorMessage(error)}`,
         500,
@@ -556,8 +556,8 @@ export class RunStore {
   }
 
   /** Index-corruption diagnostics (no automatic index/record deletion: repairs are human-confirmed). */
-  indexCorruptError(runId: string, reason: string): HelmError {
-    return new HelmError(
+  indexCorruptError(runId: string, reason: string): HelmxError {
+    return new HelmxError(
       'workflow_index_corrupt',
       `workflow run index is corrupted (${reason}); check the state store (the index and records are not auto-deleted)`,
       500,
@@ -587,7 +587,7 @@ export class RunStore {
       this.load(takeoverRunId)
       return { ghost: false, reason: "the takeover run's record still exists" }
     } catch (error) {
-      if (!(error instanceof HelmError && error.code === 'not_found')) throw error
+      if (!(error instanceof HelmxError && error.code === 'not_found')) throw error
     }
     // The index no longer has this run: on-disk files are the last side-effect facts (a missing index
     // may be corruption/rebuild; if files exist, conservatively treat side effects as produced).
@@ -600,7 +600,7 @@ export class RunStore {
         traces.push(`${label} ${path}`)
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue
-        throw new HelmError('io_error', `cannot confirm the ${label} of takeover run ${takeoverRunId}: ${errorMessage(error)}`, 500, {
+        throw new HelmxError('io_error', `cannot confirm the ${label} of takeover run ${takeoverRunId}: ${errorMessage(error)}`, 500, {
           runId: takeoverRunId, path,
         })
       }

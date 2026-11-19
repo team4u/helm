@@ -3,7 +3,7 @@
  *
  * Covers incremental pruneDist (preserving valid artifacts, trimming stale files and
  * empty directories, mirroring/trimming plugin client assets), full cleanup on --force /
- * HELM_CLEAN_DIST=1 with tsbuildinfo removal, AST purity checks (type-import exemption,
+ * HELMX_CLEAN_DIST=1 with tsbuildinfo removal, AST purity checks (type-import exemption,
  * parenthesized globalThis, process.env[] writes, aliased fs imports, cycle-safe recursive
  * helper tracing), extraArgs fallback, and LPT shard balancing.
  *
@@ -36,7 +36,7 @@ function touch(root: string, rel: string, content = ''): string {
 }
 
 test('pruneDist: preserves valid artifacts and prunes orphaned artifacts, stale files, and empty directories', { timeout: 60_000 }, () => {
-  const pkgRoot = mkdtempSync(path.join(tmpdir(), 'helm-prune-dist-'))
+  const pkgRoot = mkdtempSync(path.join(tmpdir(), 'helmx-prune-dist-'))
   try {
     touch(pkgRoot, 'tsconfig.json', JSON.stringify({
       compilerOptions: { outDir: 'dist', tsBuildInfoFile: './cache/pkg.tsbuildinfo' },
@@ -116,7 +116,7 @@ test('pruneDist: preserves valid artifacts and prunes orphaned artifacts, stale 
 })
 
 test('pruneDist(preserveClients): mirrors src/<name>/client/** assets and deletes removed or mistakenly compiled client files', { timeout: 60_000 }, () => {
-  const pkgRoot = mkdtempSync(path.join(tmpdir(), 'helm-prune-clients-'))
+  const pkgRoot = mkdtempSync(path.join(tmpdir(), 'helmx-prune-clients-'))
   try {
     touch(pkgRoot, 'src/index.ts', 'export {}')
     touch(pkgRoot, 'src/apps/client/index.tsx', 'export default function App() {}')
@@ -144,19 +144,19 @@ test('pruneDist(preserveClients): mirrors src/<name>/client/** assets and delete
   }
 })
 
-test('pruneDist: --force / HELM_CLEAN_DIST=1 and empty dist always clear tsbuildinfo to prevent tsc incremental skips', { timeout: 60_000 }, () => {
-  const pkgRoot = mkdtempSync(path.join(tmpdir(), 'helm-prune-force-'))
+test('pruneDist: --force / HELMX_CLEAN_DIST=1 and empty dist always clear tsbuildinfo to prevent tsc incremental skips', { timeout: 60_000 }, () => {
+  const pkgRoot = mkdtempSync(path.join(tmpdir(), 'helmx-prune-force-'))
   try {
     touch(pkgRoot, 'tsconfig.json', JSON.stringify({
       compilerOptions: { outDir: 'dist', tsBuildInfoFile: './cache/pkg.tsbuildinfo' },
     }))
     const buildInfo = resolveTsBuildInfoFile(pkgRoot)!
 
-    // 1. Full wipe via HELM_CLEAN_DIST=1
+    // 1. Full wipe via HELMX_CLEAN_DIST=1
     touch(pkgRoot, 'src/a.ts', 'export const a = 1')
     touch(pkgRoot, 'dist/a.js', 'compiled')
     touch(pkgRoot, 'cache/pkg.tsbuildinfo', '{}')
-    const rEnv = pruneDist({ pkgRoot, env: { HELM_CLEAN_DIST: '1' } })
+    const rEnv = pruneDist({ pkgRoot, env: { HELMX_CLEAN_DIST: '1' } })
     assert.equal(rEnv.mode, 'wiped')
     assert.ok(!existsSync(path.join(pkgRoot, 'dist')))
     assert.ok(!existsSync(buildInfo), 'forced wipe must remove tsbuildinfo')
@@ -188,7 +188,7 @@ test('test-sharding: AST purity check allows in-memory unit tests and isolates D
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import type { Window } from 'happy-dom'
-import type { KernelRuntime } from '@helm/kernel'
+import type { KernelRuntime } from '@helmx/kernel'
 const PATH_VAL = process.env['PATH']
 test('ok', { timeout: 60_000 }, () => {
   const obj = { window: 1, document: 'text' }
@@ -210,7 +210,7 @@ test('ok', { timeout: 60_000 }, () => {
     ['spawn / child_process', `import { spawn } from 'node:child_process'\nspawn('echo', ['hi'])`],
     ['aliased fs write import', `import { writeFileSync as wf } from 'node:fs'\nwf('a', 'b')`],
     ['http createServer / listen', `import http from 'node:http'\nhttp.createServer().listen(0)`],
-    ['KernelRuntime / createHelm / DatabaseSync', `import { DatabaseSync } from 'node:sqlite'\nnew DatabaseSync(':memory:')`],
+    ['KernelRuntime / createHelmx / DatabaseSync', `import { DatabaseSync } from 'node:sqlite'\nnew DatabaseSync(':memory:')`],
     ['timer overrides and t.mock.timers', `test('x', { timeout: 60_000 }, (t) => { t.mock.timers.enable({ apis: ['setTimeout'] }) })`],
     ['Object.assign mutating an imported object', `import { cfg } from '../src/cfg.js'\nObject.assign(cfg, { a: 1 })`],
   ]
@@ -236,7 +236,7 @@ test('test concurrency: defaults to four workers, honors explicit overrides, and
 })
 
 test('test-sharding: recursive helper tracing (with cycle guard), flag fallback conditions, and balanced LPT sharding', { timeout: 60_000 }, () => {
-  const root = mkdtempSync(path.join(tmpdir(), 'helm-shard-disk-'))
+  const root = mkdtempSync(path.join(tmpdir(), 'helmx-shard-disk-'))
   try {
     const pureTest = touch(root, 'packages/a/test/pure.test.ts', `import test from 'node:test'\nimport { helper } from './helpers/pure-helper.js'\ntest('p', { timeout: 60_000 }, () => { void helper })`)
     touch(root, 'packages/a/test/helpers/pure-helper.ts', `import { other } from './cycle.js'\nexport const helper = () => other`)

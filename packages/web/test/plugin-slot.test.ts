@@ -7,7 +7,7 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import type { ConversationSummary, PluginUiContribution } from '@helm/protocol'
+import type { ConversationSummary, PluginUiContribution } from '@helmx/protocol'
 import { ensureHappyDom } from './helpers/dom-harness.js'
 
 ensureHappyDom()
@@ -16,13 +16,13 @@ const React = await import('react')
 const { act } = React
 const { createRoot } = await import('react-dom/client')
 type Root = import('react-dom/client').Root
-const { PluginClientContext, createPluginClientContext, usePluginContext, PluginSlot } = await import('@helm/plugin-client')
+const { PluginClientContext, createPluginClientContext, usePluginContext, PluginSlot } = await import('@helmx/plugin-client')
 const { groupUiContributions, matchesUiScope } = await import('../src/lib/types.js')
-type HelmStoreValue = import('../src/lib/types.js').HelmStoreValue
+type HelmxStoreValue = import('../src/lib/types.js').HelmxStoreValue
 const { collectSlotItems, isValidSlotTarget } = await import('../src/ui/plugin-slot-model.js')
 const { seedPluginClientModule } = await import('../src/lib/plugin-client.js')
 const { makeTestStore } = await import('./helpers/store.js')
-type HelmExternalStore = import('../src/lib/helm-store.js').HelmExternalStore
+type HelmxExternalStore = import('../src/lib/helmx-store.js').HelmxExternalStore
 const { HostStoreProviders } = await import('./helpers/host-store.js')
 const { createPluginClientHostPort } = await import('../src/lib/plugin-client-host.js')
 
@@ -68,7 +68,7 @@ test('collectSlotItems：target 全等 + scope 过滤 + priority 降序 order �
 // 渲染（client 轨 + JSON 轨）
 // ---------------------------------------------------------------------------
 
-function slotContributionUi(contributions: PluginUiContribution[]): HelmExternalStore {
+function slotContributionUi(contributions: PluginUiContribution[]): HelmxExternalStore {
   return makeTestStore({
     uiContributions: contributions,
   })

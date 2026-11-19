@@ -1,8 +1,8 @@
 /**
- * 架构边界守护：@helm/plugins 源码只能依赖「包内相对导入 + 公开包
- * （@helm/protocol / @helm/plugin-client / SDK / 前端受控依赖 / node 内置）」，
- * 不得越出本包 src 目录，也不得经包名或相对路径导入 @helm/kernel /
- * @helm/hub（插件不依赖内核实现，产品组合归组合根）。
+ * 架构边界守护：@helmx/plugins 源码只能依赖「包内相对导入 + 公开包
+ * （@helmx/protocol / @helmx/plugin-client / SDK / 前端受控依赖 / node 内置）」，
+ * 不得越出本包 src 目录，也不得经包名或相对路径导入 @helmx/kernel /
+ * @helmx/hub（插件不依赖内核实现，产品组合归组合根）。
  *
  * 防呆（防测试自身空洞）：扫描到的文件数与导入数做下限断言——目录
  * 改名后本测试必须显式失败，而不是静默变成零扫描。
@@ -17,7 +17,7 @@ const pkgRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const pluginsSrc = join(pkgRoot, 'src')
 
 /** 禁止经包名触达的宿主/兄弟包（插件不依赖 kernel 实现与 hub 组合）。 */
-const FORBIDDEN_PACKAGES = ['@helm/kernel', '@helm/hub'] as const
+const FORBIDDEN_PACKAGES = ['@helmx/kernel', '@helmx/hub'] as const
 
 /** 递归收集 plugins/src 下全部源码文件（.ts/.tsx）。 */
 function collectSourceFiles(dir: string): string[] {
@@ -57,7 +57,7 @@ interface Violation {
   reason: string
 }
 
-describe('@helm/plugins 架构边界守护', () => {
+describe('@helmx/plugins 架构边界守护', () => {
   it('扫描根与磁盘实际一致（目录改名后本测试须显式失败）', { timeout: 60_000 }, () => {
     assert.ok(existsSync(pluginsSrc), `plugins src 目录不存在：${pluginsSrc}`)
   })
@@ -75,10 +75,10 @@ describe('@helm/plugins 架构边界守护', () => {
     for (const file of files) {
       const source = readFileSync(file, 'utf8')
       for (const spec of importSpecifiersOf(source)) {
-        // 规则一：不得经包名导入内核实现或产品组合根（通用能力应下沉 @helm/protocol）。
+        // 规则一：不得经包名导入内核实现或产品组合根（通用能力应下沉 @helmx/protocol）。
         const forbidden = FORBIDDEN_PACKAGES.find((p) => spec === p || spec.startsWith(`${p}/`))
         if (forbidden !== undefined) {
-          violations.push({ file, spec, reason: `插件包禁止依赖 ${forbidden}（内核机制经 PluginDefinition 契约注入，组合归 @helm/hub）` })
+          violations.push({ file, spec, reason: `插件包禁止依赖 ${forbidden}（内核机制经 PluginDefinition 契约注入，组合归 @helmx/hub）` })
           continue
         }
         if (!spec.startsWith('.')) continue
@@ -88,11 +88,11 @@ describe('@helm/plugins 架构边界守护', () => {
         // 越出包 src：relative 结果回退到 '..'（或跨盘等绝对形态）。
         const escapes = rel !== '' && (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel))
         if (escapes) {
-          // 规则二：相对导入不得越出 @helm/plugins 包 src 目录（../../kernel 等一律拒绝）。
+          // 规则二：相对导入不得越出 @helmx/plugins 包 src 目录（../../kernel 等一律拒绝）。
           violations.push({
             file,
             spec,
-            reason: '相对导入越出 @helm/plugins src（跨边界依赖只允许 @helm/protocol 等公开包）',
+            reason: '相对导入越出 @helmx/plugins src（跨边界依赖只允许 @helmx/protocol 等公开包）',
           })
         }
       }
@@ -101,7 +101,7 @@ describe('@helm/plugins 架构边界守护', () => {
     assert.ok(relativeImportCount >= 10, `相对导入解析数异常（${relativeImportCount} < 10），import 提取正则可能失效`)
     if (violations.length > 0) {
       const detail = violations.map((v) => `${relative(pluginsSrc, v.file)}: ${v.spec}\n  -> ${v.reason}`).join('\n')
-      assert.fail(`@helm/plugins 存在 ${violations.length} 处越界导入：\n${detail}`)
+      assert.fail(`@helmx/plugins 存在 ${violations.length} 处越界导入：\n${detail}`)
     }
   })
 
@@ -114,6 +114,6 @@ describe('@helm/plugins 架构边界守护', () => {
     )
     const resolved = resolve(dirname(file), '../diagnostics.js')
     const rel = relative(pluginsSrc, resolved)
-    assert.ok(!rel.startsWith('..'), `diagnostics.js 应位于 @helm/plugins src 内（实际解析到 ${resolved}）`)
+    assert.ok(!rel.startsWith('..'), `diagnostics.js 应位于 @helmx/plugins src 内（实际解析到 ${resolved}）`)
   })
 })

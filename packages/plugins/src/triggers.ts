@@ -19,7 +19,7 @@
  *   doc.flush() really flushes before success; atomic exactly-once is not promised (the restart catch-up policy
  *   is declared in the cron module docs).
  */
-import { HelmError, type PluginDefinition } from '@helm/protocol'
+import { HelmxError, type PluginDefinition } from '@helmx/protocol'
 import { resolvePluginClientAssets } from './asset-paths.js'
 import { TRIGGERS_PLUGIN_ID } from './triggers/contracts.js'
 import { createDeliveryDispatch } from './triggers/delivery.js'

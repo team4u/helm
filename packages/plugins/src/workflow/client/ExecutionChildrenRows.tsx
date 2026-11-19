@@ -7,7 +7,7 @@
  */
 import { Fragment, useState } from 'react'
 import type { ReactNode } from 'react'
-import { StatusLight, formatDurationMs, resolveLocalizedText, usePluginContext, usePluginLocale } from '@helm/plugin-client'
+import { StatusLight, formatDurationMs, resolveLocalizedText, usePluginContext, usePluginLocale } from '@helmx/plugin-client'
 import { useElapsedNowMs } from './hooks.ts'
 import { Icon } from './WorkflowIcon.tsx'
 import { executionLightStatus } from './model-execution-status.ts'

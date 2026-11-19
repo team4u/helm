@@ -24,8 +24,8 @@ Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
 
 const { act } = await import('react')
 const { createRoot } = await import('react-dom/client')
-import type { ConversationSummary, PluginSummary, Profile, SkillSummary } from '@helm/protocol'
-import type { HelmExternalStore } from '../src/lib/helm-store.js'
+import type { ConversationSummary, PluginSummary, Profile, SkillSummary } from '@helmx/protocol'
+import type { HelmxExternalStore } from '../src/lib/helmx-store.js'
 import { slashMenuSkills } from '../src/conversation/slash-menu-skills.js'
 
 /** Real user typing path: native setter assignment + value tracker reset + input dispatch. */
@@ -105,7 +105,7 @@ interface MountOptions {
   plugins?: PluginSummary[]
 }
 
-function makeStore(conversation: ConversationSummary, opts: MountOptions): HelmExternalStore {
+function makeStore(conversation: ConversationSummary, opts: MountOptions): HelmxExternalStore {
   return makeTestStore({
     conversations: [conversation],
     plugins: opts.plugins ?? [

@@ -2,7 +2,7 @@
  * Hub payload staging strategy: how a published npm payload becomes a verified, immutable release
  * candidate. All generic machinery (immutable staging directories, `.complete` markers and cache
  * reuse, staging cleanup, registry metadata, verified download, npm runner) flows through the
- * `UpdateCore` port (`update-core.ts` binds it to the shared update engine in `@helm/env-io`; tests inject a
+ * `UpdateCore` port (`update-core.ts` binds it to the shared update engine in `@helmx/env-io`; tests inject a
  * port fake whose staging delegates to the real engine); this module only defines the Hub layout
  * policy inside the staged extractor:
  *
@@ -11,7 +11,7 @@
  *    the port) or an explicit copy of a local `--tarball` file;
  * 2. safely unpack the archive into the candidate root, stripping the npm-pack `package/`
  *    prefix (`tarball.ts` rejects links, escapes, and partial parses) — the payload ships its
- *    `@helm/*` dependency closure as bundled `file:./<pkg>.tgz` members, which only resolve after
+ *    `@helmx/*` dependency closure as bundled `file:./<pkg>.tgz` members, which only resolve after
  *    the outer archive is unpacked (`npm install <outer.tgz>` fails with ENOENT);
  * 3. `npm install --omit=dev --ignore-scripts` in the unpacked root (one install completes the
  *    whole dependency closure; esbuild platform binaries arrive via optionalDependencies);
@@ -30,8 +30,8 @@ import { spawn } from 'node:child_process';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
-import { killProcessTree } from '@helm/env-io';
-import { isStrictSemver } from '@helm/protocol';
+import { killProcessTree } from '@helmx/env-io';
+import { isStrictSemver } from '@helmx/protocol';
 import { DEFAULTS, assertInstallIsolation, pathsOf, resolveRegistryUrl } from './layout.js';
 import { resolveInsideRelease } from './records.js';
 import type { LauncherIo } from './io.js';

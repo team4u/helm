@@ -9,10 +9,10 @@
  */
 
 import {
-  HelmError,
+  HelmxError,
   type AgentExecutionInfo,
   type AgentSpawnRequest,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 import { randomUUID } from 'node:crypto'
 import {
   extractWorkflowExecutionMeta,
@@ -40,7 +40,7 @@ function isNonEmptyNonWhitespaceString(value: unknown): value is string {
 
 function assertPersistedHoldValid(raw: unknown, recordId: unknown): asserts raw is ManagedWorktreeHold {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
-    throw new HelmError(
+    throw new HelmxError(
       'worktree_doc_corrupted',
       `受管 worktree 文档 '${WORKTREES_DOC_KEY}' 损坏（记录 ${String(recordId)} 的 hold 非对象）`,
       500,
@@ -49,7 +49,7 @@ function assertPersistedHoldValid(raw: unknown, recordId: unknown): asserts raw 
   const obj = raw as Record<string, unknown>
   for (const key of Object.keys(obj)) {
     if (!ALLOWED_HOLD_KEYS.has(key)) {
-      throw new HelmError(
+      throw new HelmxError(
         'worktree_doc_corrupted',
         `受管 worktree 文档 '${WORKTREES_DOC_KEY}' 损坏（记录 ${String(recordId)} 的 hold 含未知字段 '${key}'）`,
         500,
@@ -64,7 +64,7 @@ function assertPersistedHoldValid(raw: unknown, recordId: unknown): asserts raw 
     !Number.isFinite(obj['acquiredAt']) ||
     obj['acquiredAt'] < 0
   ) {
-    throw new HelmError(
+    throw new HelmxError(
       'worktree_doc_corrupted',
       `受管 worktree 文档 '${WORKTREES_DOC_KEY}' 损坏（记录 ${String(recordId)} 的 hold 字段非法）`,
       500,
@@ -120,16 +120,16 @@ interface WorktreeStoreDeps {
 /** 校验 inspect / cleanup 共享的选择器互斥规则。 */
 export function validateWorktreeSelector(input: WorktreeRecordSelector, mode: WorktreeResolveMode): void {
   if (input.worktreeId === undefined && input.conversationId === undefined && input.path === undefined) {
-    throw new HelmError('validation_error', `${mode} 需提供 worktreeId、conversationId 或 path 之一`, 400)
+    throw new HelmxError('validation_error', `${mode} 需提供 worktreeId、conversationId 或 path 之一`, 400)
   }
   if (input.worktreeId !== undefined && (input.conversationId !== undefined || input.path !== undefined)) {
-    throw new HelmError('validation_error', 'worktreeId 与 conversationId/path 互斥（worktreeId 单独使用）', 400)
+    throw new HelmxError('validation_error', 'worktreeId 与 conversationId/path 互斥（worktreeId 单独使用）', 400)
   }
   if (input.nodeId !== undefined && input.path === undefined) {
-    throw new HelmError('validation_error', 'nodeId 仅可与 path 搭配使用（跨节点同名路径消歧）', 400)
+    throw new HelmxError('validation_error', 'nodeId 仅可与 path 搭配使用（跨节点同名路径消歧）', 400)
   }
   if (input.conversationId !== undefined && input.path !== undefined) {
-    throw new HelmError('validation_error', 'conversationId 与 path 择一提供', 400)
+    throw new HelmxError('validation_error', 'conversationId 与 path 择一提供', 400)
   }
 }
 
@@ -155,11 +155,11 @@ export class WorktreeStore {
   private loadDoc(): WorktreeDoc {
     const doc = this.docStore.get<WorktreeDoc>(WORKTREES_DOC_KEY, { version: 1, records: [] })
     if (doc === null || typeof doc !== 'object' || !Array.isArray(doc.records)) {
-      throw new HelmError('worktree_doc_corrupted', `受管 worktree 文档 '${WORKTREES_DOC_KEY}' 损坏（records 非数组）`, 500)
+      throw new HelmxError('worktree_doc_corrupted', `受管 worktree 文档 '${WORKTREES_DOC_KEY}' 损坏（records 非数组）`, 500)
     }
     for (const record of doc.records) {
       if (record === null || typeof record !== 'object' || Array.isArray(record)) {
-        throw new HelmError('worktree_doc_corrupted', `受管 worktree 文档 '${WORKTREES_DOC_KEY}' 损坏（record 非对象）`, 500)
+        throw new HelmxError('worktree_doc_corrupted', `受管 worktree 文档 '${WORKTREES_DOC_KEY}' 损坏（record 非对象）`, 500)
       }
       if ((record as { hold?: unknown }).hold !== undefined) {
         assertPersistedHoldValid((record as { hold: unknown }).hold, (record as { id?: unknown }).id)
@@ -190,7 +190,7 @@ export class WorktreeStore {
     const doc = this.loadDoc()
     const index = doc.records.findIndex((r) => r.id === id)
     if (index === -1) {
-      throw new HelmError('not_found', `受管 worktree 记录 ${id} 不存在（文档状态不一致）`, 404, { id })
+      throw new HelmxError('not_found', `受管 worktree 记录 ${id} 不存在（文档状态不一致）`, 404, { id })
     }
     doc.records[index] = mutate(doc.records[index]!)
     this.saveDoc(doc)
@@ -213,7 +213,7 @@ export class WorktreeStore {
     if (offenders.length > 0) {
       const identityEntries = Object.entries(identity).filter(([, v]) => v !== undefined && v !== '')
       const identityText = identityEntries.map(([k, v]) => `${k}: ${String(v)}`).join('，')
-      throw new HelmError(
+      throw new HelmxError(
         'worktree_metadata_secret',
         `受管 worktree 元数据疑似包含已登记机密，拒绝登记与原始落库（脱敏值：${offenders.join('；')}）${identityText !== '' ? `【定位：${identityText}】` : ''}；请调整路径/分支命名或先轮换机密`,
         400,
@@ -236,30 +236,30 @@ export class WorktreeStore {
     identity: Record<string, string | number | undefined> = {},
   ): ManagedWorktreeHold {
     if (hold === null || typeof hold !== 'object' || Array.isArray(hold)) {
-      throw new HelmError('validation_error', 'hold 必须为对象', 400)
+      throw new HelmxError('validation_error', 'hold 必须为对象', 400)
     }
     const raw = hold as Record<string, unknown>
     for (const key of Object.keys(raw)) {
       if (!ALLOWED_HOLD_KEYS.has(key)) {
-        throw new HelmError('validation_error', `hold 含未知字段 '${key}'`, 400, { key })
+        throw new HelmxError('validation_error', `hold 含未知字段 '${key}'`, 400, { key })
       }
     }
     if (!isNonEmptyNonWhitespaceString(raw['pluginId'])) {
-      throw new HelmError('validation_error', 'hold.pluginId 必须为非空字符串', 400)
+      throw new HelmxError('validation_error', 'hold.pluginId 必须为非空字符串', 400)
     }
     if (!isNonEmptyNonWhitespaceString(raw['holdId'])) {
-      throw new HelmError('validation_error', 'hold.holdId 必须为非空字符串', 400)
+      throw new HelmxError('validation_error', 'hold.holdId 必须为非空字符串', 400)
     }
     if (!isNonEmptyNonWhitespaceString(raw['label'])) {
-      throw new HelmError('validation_error', 'hold.label 必须为非空字符串', 400)
+      throw new HelmxError('validation_error', 'hold.label 必须为非空字符串', 400)
     }
     const acquiredAt = raw['acquiredAt'] ?? Date.now()
     if (typeof acquiredAt !== 'number' || !Number.isFinite(acquiredAt) || acquiredAt < 0) {
-      throw new HelmError('validation_error', 'hold.acquiredAt 必须为非负有限数值', 400)
+      throw new HelmxError('validation_error', 'hold.acquiredAt 必须为非负有限数值', 400)
     }
     const safeLabel = this.redact(raw['label'].trim())
     if (!isNonEmptyNonWhitespaceString(safeLabel)) {
-      throw new HelmError('validation_error', 'hold.label 脱敏后为空，拒绝登记', 400)
+      throw new HelmxError('validation_error', 'hold.label 脱敏后为空，拒绝登记', 400)
     }
     this.assertMetadataSecretFree(
       { holdPluginId: raw['pluginId'], holdId: raw['holdId'], holdLabel: safeLabel },
@@ -280,13 +280,13 @@ export class WorktreeStore {
     identity: Record<string, string | number | undefined> = {},
   ): ManagedWorktreeRecord {
     if (!isNonEmptyNonWhitespaceString(id)) {
-      throw new HelmError('validation_error', 'worktreeId 必须为非空字符串', 400)
+      throw new HelmxError('validation_error', 'worktreeId 必须为非空字符串', 400)
     }
     const normalized = this.prepareHold(hold, { worktreeId: id, ...identity })
     let updated: ManagedWorktreeRecord | undefined
     this.updateRecord(id, (record) => {
       if (record.status === 'removed') {
-        throw new HelmError(
+        throw new HelmxError(
           'worktree_missing',
           `受管 worktree '${record.path}' 已被清理，无法挂载持久持有锁`,
           409,
@@ -307,13 +307,13 @@ export class WorktreeStore {
    */
   releaseHold(id: string, pluginId: string, holdId: string): boolean {
     if (!isNonEmptyNonWhitespaceString(id)) {
-      throw new HelmError('validation_error', 'worktreeId 必须为非空字符串', 400)
+      throw new HelmxError('validation_error', 'worktreeId 必须为非空字符串', 400)
     }
     if (!isNonEmptyNonWhitespaceString(pluginId)) {
-      throw new HelmError('validation_error', 'pluginId 必须为非空字符串', 400)
+      throw new HelmxError('validation_error', 'pluginId 必须为非空字符串', 400)
     }
     if (!isNonEmptyNonWhitespaceString(holdId)) {
-      throw new HelmError('validation_error', 'holdId 必须为非空字符串', 400)
+      throw new HelmxError('validation_error', 'holdId 必须为非空字符串', 400)
     }
     const doc = this.loadDoc()
     const index = doc.records.findIndex((r) => r.id === id)
@@ -321,7 +321,7 @@ export class WorktreeStore {
     const record = doc.records[index]!
     if (record.hold === undefined) return false
     if (record.hold.pluginId !== pluginId || record.hold.holdId !== holdId) {
-      throw new HelmError(
+      throw new HelmxError(
         'worktree_hold_mismatch',
         `受管 worktree '${record.path}' 当前持有锁归属不匹配（持有方 ${record.hold.pluginId}:${record.hold.holdId}，请求释放方 ${pluginId}:${holdId}）`,
         409,
@@ -370,7 +370,7 @@ export class WorktreeStore {
       )
       const nodeIds = new Set(byPath.map((r) => r.nodeId))
       if (nodeIds.size > 1) {
-        throw new HelmError(
+        throw new HelmxError(
           'validation_error',
           `路径 ${query.path} 在多个节点存在 active 登记（${[...nodeIds].join(', ')}），查询需指定 nodeId 消歧`,
           400,
@@ -392,13 +392,13 @@ export class WorktreeStore {
     const records = this.loadDoc().records
     const scopeHint =
       mode === 'inspect'
-        ? 'inspect 仅检视 helm 登记的隔离 worktree'
-        : 'cleanup 仅清理 helm 登记的隔离 worktree，绝不触碰未登记目录'
+        ? 'inspect 仅检视 helmx 登记的隔离 worktree'
+        : 'cleanup 仅清理 helmx 登记的隔离 worktree，绝不触碰未登记目录'
 
     if (input.worktreeId !== undefined) {
       const record = records.find((r) => r.id === input.worktreeId)
       if (record === undefined) {
-        throw new HelmError('not_found', `未找到受管 worktree 记录 ${input.worktreeId}`, 404, {
+        throw new HelmxError('not_found', `未找到受管 worktree 记录 ${input.worktreeId}`, 404, {
           worktreeId: input.worktreeId,
         })
       }
@@ -407,7 +407,7 @@ export class WorktreeStore {
     if (input.conversationId !== undefined) {
       const record = this.getForConversation(input.conversationId)
       if (record === undefined) {
-        throw new HelmError(
+        throw new HelmxError(
           'not_found',
           `未找到会话 ${input.conversationId} 绑定的受管 worktree 记录；${scopeHint}`,
           404,
@@ -421,7 +421,7 @@ export class WorktreeStore {
     )
     if (matches.length === 0) {
       const suffix = mode === 'inspect' ? `${scopeHint}，不支持任意目录` : scopeHint
-      throw new HelmError(
+      throw new HelmxError(
         'not_found',
         `未找到路径 ${input.path}${input.nodeId !== undefined ? `（节点 ${input.nodeId}）` : ''} 的受管 worktree 记录；${suffix}`,
         404,
@@ -431,7 +431,7 @@ export class WorktreeStore {
     if (mode === 'inspect') {
       const nodeIds = new Set(matches.map((r) => r.nodeId))
       if (nodeIds.size > 1) {
-        throw new HelmError(
+        throw new HelmxError(
           'validation_error',
           `路径 ${input.path} 在多个节点存在登记（${[...nodeIds].join(', ')}），检视需指定 nodeId 消歧（或改用 worktreeId 精确指定）`,
           400,
@@ -443,7 +443,7 @@ export class WorktreeStore {
     const active = matches.filter((r) => r.status === 'active')
     const nodeIds = new Set(active.map((r) => r.nodeId))
     if (nodeIds.size > 1) {
-      throw new HelmError(
+      throw new HelmxError(
         'validation_error',
         `路径 ${input.path} 在多个节点存在 active 登记（${[...nodeIds].join(', ')}），清理需指定 nodeId 消歧（或改用 worktreeId 精确指定）`,
         400,
@@ -521,7 +521,7 @@ export class WorktreeStore {
       if (leasePath === undefined || !this.containsPath(path, leasePath)) continue
       const key = `${lease.info.executionId ?? ''}\u0000${lease.info.conversationId ?? ''}`
       if (!active.has(key)) {
-        throw new HelmError(
+        throw new HelmxError(
           'worktree_execution_unknown',
           '工作树存在重启中断或未确认停止的执行，不能清理；请先检视并续接收尾，或确认停止后在目标节点手动清理 Git 工作树',
           409,
@@ -713,7 +713,7 @@ export class WorktreeStore {
         try {
           stopped = !this.isConversationWorking(lease.info.conversationId)
         } catch (error) {
-          if (error instanceof HelmError && error.code === 'not_found') {
+          if (error instanceof HelmxError && error.code === 'not_found') {
             stopped = true
           } else {
             process.stderr.write(

@@ -9,8 +9,8 @@
  * trailing locale (defaulting to en so existing English assertions stay
  * valid) and resolve via copy.ts against it.
  */
-import type { ConversationSummary, TimelineRendererProps, ToolViewProps } from '@helm/protocol'
-import { DEFAULT_HELM_LOCALE, resolveLocalizedText, type HelmLocale } from '@helm/plugin-client'
+import type { ConversationSummary, TimelineRendererProps, ToolViewProps } from '@helmx/protocol'
+import { DEFAULT_HELMX_LOCALE, resolveLocalizedText, type HelmxLocale } from '@helmx/plugin-client'
 
 import { SA_OUTCOME_UNKNOWN } from './copy.ts'
 
@@ -123,7 +123,7 @@ export function outcomeTone(outcome: string | undefined): 'ok' | 'err' | 'warn' 
  * Outcome display text: raw outcome identifiers pass through verbatim; a
  * missing outcome resolves to the localized "Unknown" placeholder.
  */
-export function outcomeLabel(outcome: string | undefined, locale: HelmLocale = DEFAULT_HELM_LOCALE): string {
+export function outcomeLabel(outcome: string | undefined, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
   if (outcome === undefined || outcome === '') return resolveLocalizedText(SA_OUTCOME_UNKNOWN, locale)
   return outcome
 }

@@ -1,17 +1,17 @@
 /**
- * 内置插件共享契约（@helm/plugins contracts.ts）边界校验测试：
+ * 内置插件共享契约（@helmx/plugins contracts.ts）边界校验测试：
  * - extractWorkflowExecutionMeta：worktree / controls 业务形状（严格对象、
  *   非空 trim 坐标、未知键拒绝、克隆、孤立 controls 拒绝）与 envelope 复验；
  * - workflowExecutionMeta：合并语义（保留其他命名空间与 workflow 命名空间
  *   未提及的既有键；防御性克隆/校验合并基底）；
  * - parseWorkflowSpawnMeta / withWorkflowSpawnMeta：spawn meta 业务值
  *   schema 校验与合并写入。
- * （自 @helm/protocol 迁出后的业务形状权威测试归属 @helm/plugins；envelope
+ * （自 @helmx/protocol 迁出后的业务形状权威测试归属 @helmx/plugins；envelope
  *  层测试见 packages/protocol/test/agent-exec.test.ts。）
  */
 import { strict as assert } from 'node:assert'
 import { describe, it } from 'node:test'
-import { HelmError, type AgentExecutionInfo } from '@helm/protocol'
+import { HelmxError, type AgentExecutionInfo } from '@helmx/protocol'
 import {
   extractWorkflowExecutionMeta,
   parseWorkflowSpawnMeta,
@@ -30,14 +30,14 @@ describe('extractWorkflowExecutionMeta（execution meta 业务形状）', () => 
       effectiveCwd: '/tmp/work',
       meta: {
         [WORKFLOW_META_NAMESPACE]: {
-          worktree: { path: '/wt/main', branch: 'helm/wf-1' },
+          worktree: { path: '/wt/main', branch: 'helmx/wf-1' },
           controls: { steer: { pluginId: ' builtin:herdr ', actionId: 'steer' } },
         },
       },
     }
     const meta = extractWorkflowExecutionMeta(info)
     assert.deepEqual(meta.controls, { steer: { pluginId: 'builtin:herdr', actionId: 'steer' } })
-    assert.deepEqual(meta.worktree, { path: '/wt/main', branch: 'helm/wf-1' })
+    assert.deepEqual(meta.worktree, { path: '/wt/main', branch: 'helmx/wf-1' })
     // 克隆：改写源不影响已收敛结果。
     const source: AgentExecutionInfo = {
       nodeId: 'local',
@@ -56,7 +56,7 @@ describe('extractWorkflowExecutionMeta（execution meta 业务形状）', () => 
           executionId: 'ws:p1',
           meta: { [WORKFLOW_META_NAMESPACE]: { controls: { steer: { pluginId: 'p', actionId: 'a' } } } },
         } as never),
-      (error: unknown) => error instanceof HelmError && error.message.includes('executionId + nodeId'),
+      (error: unknown) => error instanceof HelmxError && error.message.includes('executionId + nodeId'),
     )
     assert.throws(
       () =>
@@ -64,7 +64,7 @@ describe('extractWorkflowExecutionMeta（execution meta 业务形状）', () => 
           nodeId: 'local',
           meta: { [WORKFLOW_META_NAMESPACE]: { controls: { steer: { pluginId: 'p', actionId: 'a' } } } },
         } as never),
-      (error: unknown) => error instanceof HelmError && error.message.includes('executionId + nodeId'),
+      (error: unknown) => error instanceof HelmxError && error.message.includes('executionId + nodeId'),
     )
     // 原生执行（conversationId 回传）不带 controls 不受影响。
     assert.deepEqual(extractWorkflowExecutionMeta({ conversationId: 5 }), {})
@@ -78,7 +78,7 @@ describe('extractWorkflowExecutionMeta（execution meta 业务形状）', () => 
           executionId: 'e',
           meta: { [WORKFLOW_META_NAMESPACE]: { runId: 'r1' } },
         }),
-      (error: unknown) => error instanceof HelmError && error.message.includes('未知字段 "runId"'),
+      (error: unknown) => error instanceof HelmxError && error.message.includes('未知字段 "runId"'),
     )
     assert.throws(
       () =>
@@ -87,7 +87,7 @@ describe('extractWorkflowExecutionMeta（execution meta 业务形状）', () => 
           executionId: 'e',
           meta: { [WORKFLOW_META_NAMESPACE]: { controls: { steer: { pluginId: 'p', actionId: 'a' }, abort: { pluginId: 'p' } } } },
         }),
-      (error: unknown) => error instanceof HelmError && error.message.includes('controls 未知字段 "abort"'),
+      (error: unknown) => error instanceof HelmxError && error.message.includes('controls 未知字段 "abort"'),
     )
     assert.throws(
       () =>
@@ -96,7 +96,7 @@ describe('extractWorkflowExecutionMeta（execution meta 业务形状）', () => 
           executionId: 'e',
           meta: { [WORKFLOW_META_NAMESPACE]: { controls: { steer: { pluginId: 'p', actionId: 'a', extra: 1 } } } },
         }),
-      (error: unknown) => error instanceof HelmError && error.message.includes('controls.steer 未知字段 "extra"'),
+      (error: unknown) => error instanceof HelmxError && error.message.includes('controls.steer 未知字段 "extra"'),
     )
   })
 
@@ -104,7 +104,7 @@ describe('extractWorkflowExecutionMeta（execution meta 业务形状）', () => 
     const bad = (slot: unknown) =>
       assert.throws(
         () => extractWorkflowExecutionMeta({ nodeId: 'local', executionId: 'e', meta: { [WORKFLOW_META_NAMESPACE]: slot } as never }),
-        (error: unknown) => error instanceof HelmError,
+        (error: unknown) => error instanceof HelmxError,
       )
     bad({ controls: null })
     bad({ controls: [] })
@@ -134,8 +134,8 @@ describe('extractWorkflowExecutionMeta（execution meta 业务形状）', () => 
             id: 'local:/wt',
             repoRoot: '/repo',
             baseCommit: 'c1',
-            baseBranch: 'helm/spawn-12ab34cd',
-            parentWorktreeId: 'local:/repo/../.helm-worktrees/repo-12ab34cd',
+            baseBranch: 'helmx/spawn-12ab34cd',
+            parentWorktreeId: 'local:/repo/../.helmx-worktrees/repo-12ab34cd',
             dirtySource: true,
           },
         },
@@ -147,8 +147,8 @@ describe('extractWorkflowExecutionMeta（execution meta 业务形状）', () => 
       id: 'local:/wt',
       repoRoot: '/repo',
       baseCommit: 'c1',
-      baseBranch: 'helm/spawn-12ab34cd',
-      parentWorktreeId: 'local:/repo/../.helm-worktrees/repo-12ab34cd',
+      baseBranch: 'helmx/spawn-12ab34cd',
+      parentWorktreeId: 'local:/repo/../.helmx-worktrees/repo-12ab34cd',
       dirtySource: true,
     })
   })
@@ -161,7 +161,7 @@ describe('extractWorkflowExecutionMeta（execution meta 业务形状）', () => 
           executionId: 'e',
           meta: { [WORKFLOW_META_NAMESPACE]: { worktree: { path: '/wt', branch: 'b' }, fn: () => 1 } } as never,
         }),
-      (error: unknown) => error instanceof HelmError && (error.code === 'meta_invalid' || error.message.includes('业务值非法')),
+      (error: unknown) => error instanceof HelmxError && (error.code === 'meta_invalid' || error.message.includes('业务值非法')),
     )
     // 其他命名空间坏形状同样拒绝（envelope 复验不区分命名空间归属）。
     assert.throws(
@@ -171,7 +171,7 @@ describe('extractWorkflowExecutionMeta（execution meta 业务形状）', () => 
           executionId: 'e',
           meta: { 'other-plugin': { bad: new Date(0) } } as never,
         }),
-      (error: unknown) => error instanceof HelmError && error.code === 'meta_invalid',
+      (error: unknown) => error instanceof HelmxError && error.code === 'meta_invalid',
     )
   })
 })
@@ -182,14 +182,14 @@ describe('workflowExecutionMeta（合并语义）', () => {
       'other-plugin': { keep: [1, { a: 'b' }] },
       [WORKFLOW_META_NAMESPACE]: { controls: { steer: { pluginId: 'builtin:herdr', actionId: 'steer' } } },
     }
-    const merged = workflowExecutionMeta({ worktree: { path: '/wt', branch: 'helm/wf-1', id: 'local:/wt' } }, existing)
+    const merged = workflowExecutionMeta({ worktree: { path: '/wt', branch: 'helmx/wf-1', id: 'local:/wt' } }, existing)
     assert.deepEqual(merged['other-plugin'], { keep: [1, { a: 'b' }] })
     // controls 未提及即保留；worktree 写入新值。
     assert.deepEqual(
       merged[WORKFLOW_META_NAMESPACE],
       {
         controls: { steer: { pluginId: 'builtin:herdr', actionId: 'steer' } },
-        worktree: { path: '/wt', branch: 'helm/wf-1', id: 'local:/wt' },
+        worktree: { path: '/wt', branch: 'helmx/wf-1', id: 'local:/wt' },
       },
     )
     // 合并结果仍经业务 schema 收敛。
@@ -206,7 +206,7 @@ describe('workflowExecutionMeta（合并语义）', () => {
     assert.deepEqual(merged['other-plugin'], { v: 1 })
     assert.throws(
       () => workflowExecutionMeta({ controls: { steer: { pluginId: 'p', actionId: 'a' } } }, { bad: { fn: () => 1 } } as never),
-      (error: unknown) => error instanceof HelmError && error.code === 'meta_invalid',
+      (error: unknown) => error instanceof HelmxError && error.code === 'meta_invalid',
     )
   })
 
@@ -231,7 +231,7 @@ describe('parseWorkflowSpawnMeta / withWorkflowSpawnMeta（spawn meta 业务值�
     const bad = (slot: unknown) =>
       assert.throws(
         () => parseWorkflowSpawnMeta({ [WORKFLOW_META_NAMESPACE]: slot } as never),
-        (error: unknown) => error instanceof HelmError && error.code === 'validation_error',
+        (error: unknown) => error instanceof HelmxError && error.code === 'validation_error',
       )
     bad({ unknown: 1 })
     bad({ runId: '' })

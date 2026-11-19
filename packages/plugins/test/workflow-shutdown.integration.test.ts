@@ -4,19 +4,19 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import type { WorkflowRunSummary } from '../src/contracts.js'
-import { createHelm } from '../../hub/src/app.js'
+import { createHelmx } from '../../hub/src/app.js'
 import { KernelRuntime } from '../../kernel/src/runtime/runtime.js'
-import { openHelmDatabase } from '../../kernel/src/runtime/sqlite.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { openHelmxDatabase } from '../../kernel/src/runtime/sqlite.js'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 
 async function verifyShutdownPersistence(options: { autoRecover: boolean }): Promise<void> {
-  const dataDir = await mkdtemp(join(tmpdir(), 'helm-workflow-shutdown-'))
-  let app: Awaited<ReturnType<typeof createHelm>> | undefined
+  const dataDir = await mkdtemp(join(tmpdir(), 'helmx-workflow-shutdown-'))
+  let app: Awaited<ReturnType<typeof createHelmx>> | undefined
   let reopened: KernelRuntime | undefined
-  let reopenedApp: Awaited<ReturnType<typeof createHelm>> | undefined
+  let reopenedApp: Awaited<ReturnType<typeof createHelmx>> | undefined
   const expectedStatus = options.autoRecover ? 'running' : 'aborted'
   try {
-    app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir })
+    app = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir })
     if (!options.autoRecover) {
       await app.kernel.plugins.setConfig('builtin:workflow', { autoRecoverOnRestart: false })
     }
@@ -50,16 +50,16 @@ async function verifyShutdownPersistence(options: { autoRecover: boolean }): Pro
     reopened = undefined
 
     // durable: false 契约：runs 与 run-badges 为纯内存瞬态投影，SQLite 零落库、零写放大。
-    const db = await openHelmDatabase(dataDir)
+    const db = await openHelmxDatabase(dataDir)
     try {
       const sessionRows = await db.db.all<{ plugin_id: string; name: string; conversation_id: number; value: string }>(
-        'SELECT plugin_id, name, conversation_id, value FROM helm_plugin_session_docs WHERE plugin_id = ? AND name = ?',
+        'SELECT plugin_id, name, conversation_id, value FROM helmx_plugin_session_docs WHERE plugin_id = ? AND name = ?',
         'builtin:workflow',
         'runs',
       )
       assert.equal(sessionRows.length, 0, `runs 瞬态分片不得写入 SQLite（实际 ${JSON.stringify(sessionRows)}）`)
       const badgeRows = await db.db.all<{ value: string }>(
-        'SELECT value FROM helm_plugin_docs WHERE plugin_id = ? AND name = ?',
+        'SELECT value FROM helmx_plugin_docs WHERE plugin_id = ? AND name = ?',
         '__global',
         'builtin:workflow:run-badges',
       )
@@ -68,8 +68,8 @@ async function verifyShutdownPersistence(options: { autoRecover: boolean }): Pro
       await db.close()
     }
 
-    // 经 createHelm 完整重开：start() 从私有持久层恢复并在内存中干净重投影 runs 与 run-badges。
-    reopenedApp = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir })
+    // 经 createHelmx 完整重开：start() 从私有持久层恢复并在内存中干净重投影 runs 与 run-badges。
+    reopenedApp = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir })
     const projection = reopenedApp.kernel.plugins.getPublicSessionDoc('builtin:workflow', 'runs', 1).value as {
       runs: Array<{ id: string; status: string }>
     }

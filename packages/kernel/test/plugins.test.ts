@@ -9,14 +9,14 @@ import { join } from 'node:path';
 import { SecretStash, AuthService } from '../src/services/index.js';
 import { createHubHandler, type KernelRuntimeLike } from '../src/http/index.js';
 import {
-  HelmError,
+  HelmxError,
   type ExternalTriggerEnvelope,
   type PluginConfigFieldSchema,
   type PluginDefinition,
   type PluginDocHandle,
   type PluginSessionDocHandle,
   type PluginSummary,
-} from '@helm/protocol';
+} from '@helmx/protocol';
 import {
   PluginHost,
   actionToolAlias,
@@ -30,8 +30,8 @@ import { HookPipeline } from '../src/plugins/hooks.js';
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js';
 import { pluginDataDirName } from '../src/plugins/plugin-dir-name.js';
 
-import { createPluginBuildProvider } from '@helm/plugin-build';
-import type { PluginBuildProvider } from '@helm/protocol';
+import { createPluginBuildProvider } from '@helmx/plugin-build';
+import type { PluginBuildProvider } from '@helmx/protocol';
 import {
   MemoryConfigStore,
   MemoryDocStore,
@@ -85,13 +85,13 @@ function makeHostApi(events: string[] = []): PluginHostBackend {
       events.push('unregister-workflow-settled');
     },
     abortConversation: async () => {},
-    getConversationOwnership(): 'helm' | 'bot' | 'human' {
+    getConversationOwnership(): 'helmx' | 'bot' | 'human' {
       return 'human'
     },
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
     execEnv: async () => {
-      throw new HelmError('unsupported', 'this fixture do not execute node command', 501);
+      throw new HelmxError('unsupported', 'this fixture do not execute node command', 501);
     },
     emitEvent: (type, payload) => {
       events.push(`event:${type}`);
@@ -116,10 +116,10 @@ let events: string[];
 /** emitEvent complete payload (plugin.changed  ui field etc. assertion use). */
 let eventPayloads: Array<{ type: string; payload: unknown }>;
 
-/** assertion sync function throw designate code  HelmError. */
+/** assertion sync function throw designate code  HelmxError. */
 function throwsCode(fn: () => unknown, code: string): void {
   assert.throws(fn, (err: unknown) => {
-    assert.ok(err instanceof HelmError, `expectation HelmError, actual:${String(err)}`);
+    assert.ok(err instanceof HelmxError, `expectation HelmxError, actual:${String(err)}`);
     assert.equal(err.code, code);
     return true;
   });
@@ -130,7 +130,7 @@ function makeHost(config?: PluginConfigStore, extra?: { buildProvider?: PluginBu
 }
 
 beforeEach(async () => {
-  dataDir = await makeTempDir('helm-plugins-test-');
+  dataDir = await makeTempDir('helmx-plugins-test-');
   docs = new MemoryDocStore();
   events = [];
   eventPayloads = [];
@@ -267,7 +267,7 @@ test('tool_call block carry reason short route;block missing reason explicit err
   await assert.rejects(
     host2.runHook('tool_call', { conversationId: 1, callId: 'c1', toolName: 'bash', input: {} }),
     (err: unknown) => {
-      assert.ok(err instanceof HelmError);
+      assert.ok(err instanceof HelmxError);
       assert.equal(err.code, 'invalid_hook_result');
       assert.equal(err.status, 500);
       return true;
@@ -292,7 +292,7 @@ test('before_turn return block explicit invalid_hook_result;turn_settled block r
       messages: [],
     }),
     (err: unknown) => {
-      assert.ok(err instanceof HelmError);
+      assert.ok(err instanceof HelmxError);
       assert.equal(err.code, 'invalid_hook_result');
       return true;
     },
@@ -365,7 +365,7 @@ test('hook return undefined etc. price continue;transform missing value / break 
     },
   });
   await assert.rejects(h3.runHook('trigger', makeEnvelope()), (err: unknown) => {
-    assert.ok(err instanceof HelmError);
+    assert.ok(err instanceof HelmxError);
     assert.equal(err.code, 'invalid_hook_result');
     return true;
   });
@@ -397,7 +397,7 @@ test('hook execute throw exception: wrap hook_execution_failed and not silently'
       input: { id: 'i1', text: 'hi', origin: 'human', createdAt: 1 },
     }),
     (err: unknown) => {
-      assert.ok(err instanceof HelmError);
+      assert.ok(err instanceof HelmxError);
       assert.equal(err.code, 'hook_execution_failed');
       assert.equal(err.status, 500);
       assert.match(err.message, /plugin internal crash/);
@@ -464,25 +464,25 @@ test('invokeAction: reference validation failed 400 validation_error, output vio
     },
   });
 
-  const ok = (await host.invokeAction('builtin:demo', 'echo', { name: 'helm' })) as { greeting: string };
-  assert.equal(ok.greeting, 'hello helm');
+  const ok = (await host.invokeAction('builtin:demo', 'echo', { name: 'helmx' })) as { greeting: string };
+  assert.equal(ok.greeting, 'hello helmx');
 
   await assert.rejects(host.invokeAction('builtin:demo', 'echo', {}), (err: unknown) => {
-    assert.ok(err instanceof HelmError);
+    assert.ok(err instanceof HelmxError);
     assert.equal(err.code, 'validation_error');
     assert.equal(err.status, 400);
     return true;
   });
 
   await assert.rejects(host.invokeAction('builtin:demo', 'bad-output', {}), (err: unknown) => {
-    assert.ok(err instanceof HelmError);
+    assert.ok(err instanceof HelmxError);
     assert.equal(err.code, 'invalid_plugin_output');
     assert.equal(err.status, 500);
     return true;
   });
 
   await assert.rejects(host.invokeAction('builtin:demo', 'missing', {}), (err: unknown) => {
-    assert.ok(err instanceof HelmError);
+    assert.ok(err instanceof HelmxError);
     assert.equal(err.code, 'unknown_action');
     assert.equal(err.status, 404);
     return true;
@@ -498,8 +498,8 @@ test('parseQualifiedActionId:pluginId contains ":" when by first "." correct spl
     pluginId: 'triggers',
     actionId: 'cron.create',
   });
-  assert.throws(() => PluginHost.parseQualifiedActionId('no-dot'), HelmError);
-  assert.throws(() => PluginHost.parseQualifiedActionId('trailing.'), HelmError);
+  assert.throws(() => PluginHost.parseQualifiedActionId('no-dot'), HelmxError);
+  assert.throws(() => PluginHost.parseQualifiedActionId('trailing.'), HelmxError);
 });
 
 test('listActions / listTools:manifest field accurate,exposeAsTool action derive tool', { timeout: 60_000 }, async () => {
@@ -556,7 +556,7 @@ test('listActions / listTools:manifest field accurate,exposeAsTool action derive
   await assert.rejects(
     host.executeTool('dedicated_tool', { q: 123 }, { conversationId: 1 }),
     (err: unknown) => {
-      assert.ok(err instanceof HelmError);
+      assert.ok(err instanceof HelmxError);
       assert.equal(err.code, 'validation_error');
       return true;
     },
@@ -579,7 +579,7 @@ test('action declaration missing inputSchema/outputSchema in register boundary e
       },
     }),
     (err: unknown) => {
-      assert.ok(err instanceof HelmError);
+      assert.ok(err instanceof HelmxError);
       assert.equal(err.code, 'invalid_action_spec');
       return true;
     },
@@ -605,7 +605,7 @@ test('definition display copy: name/description LocalizedText one rule at regist
         await assert.rejects(
           host.register({ id, [field]: value, definePlugin: () => {} } as unknown as PluginDefinition),
           (err: unknown) => {
-            assert.ok(err instanceof HelmError, `expected HelmError for ${field}=${JSON.stringify(value)}`);
+            assert.ok(err instanceof HelmxError, `expected HelmxError for ${field}=${JSON.stringify(value)}`);
             assert.equal(err.code, 'invalid_plugin_definition');
             assert.ok(err.message.includes(field), `message should locate field ${field}:${err.message}`);
             return true;
@@ -660,7 +660,7 @@ test('ctx.configSchema: label/description display copy validated at declaration 
           },
         }),
         (err: unknown) => {
-          assert.ok(err instanceof HelmError, `expected HelmError for ${copyField}=${JSON.stringify(value)}`);
+          assert.ok(err instanceof HelmxError, `expected HelmxError for ${copyField}=${JSON.stringify(value)}`);
           assert.equal(err.code, 'invalid_config_schema');
           assert.ok(err.message.includes(copyField), `message should locate field ${copyField}:${err.message}`);
           return true;
@@ -806,7 +806,7 @@ test('service start failed: already start inverse to stop, register whole rollba
       },
     }),
     (err: unknown) => {
-      assert.ok(err instanceof HelmError);
+      assert.ok(err instanceof HelmxError);
       assert.equal(err.code, 'plugin_service_start_failed');
       assert.equal(err.status, 500);
       return true;
@@ -847,7 +847,7 @@ test('locked plugin disable/unregister 403 plugin_locked', { timeout: 60_000 }, 
     definePlugin: () => {},
   });
   await assert.rejects(host.disable('builtin:profile'), (err: unknown) => {
-    assert.ok(err instanceof HelmError);
+    assert.ok(err instanceof HelmxError);
     assert.equal(err.code, 'plugin_locked');
     assert.equal(err.status, 403);
     return true;
@@ -886,7 +886,7 @@ test('setConfig explicitly rejects with 501 when ConfigStore is absent; persists
   const noStore = makeHost();
   await noStore.register({ id: 'p:cfg', definePlugin: () => {} });
   await assert.rejects(noStore.setConfig('p:cfg', { k: 1 }), (err: unknown) => {
-    assert.ok(err instanceof HelmError);
+    assert.ok(err instanceof HelmxError);
     assert.equal(err.code, 'config_store_unavailable');
     assert.equal(err.status, 501);
     return true;
@@ -1041,7 +1041,7 @@ test('UI seven class ten function unify collect can serialization spec; cannot s
       },
     }),
     (err: unknown) => {
-      assert.ok(err instanceof HelmError);
+      assert.ok(err instanceof HelmxError);
       assert.equal(err.code, 'invalid_ui_spec');
       return true;
     },
@@ -1473,9 +1473,9 @@ test('disable stop failure: already deactivated, still emits plugin.changed(enab
   assert.ok(events.includes('manage:p:dfail:7'));
 
   const changedBefore = changedPayloads().length;
-  let disableDiag: HelmError | undefined;
+  let disableDiag: HelmxError | undefined;
   await assert.rejects(host.disable('p:dfail'), (err: unknown) => {
-    assert.ok(err instanceof HelmError, `expected HelmError, got: ${String(err)}`);
+    assert.ok(err instanceof HelmxError, `expected HelmxError, got: ${String(err)}`);
     assert.equal(err.code, 'plugin_service_stop_failed');
     // Diagnostics are JSON-safe: service ID and stop error message survive HTTP serialization.
     const details = err.details as { pluginId: string; stopErrors: Array<{ serviceId: string; error: { message: string } }> };
@@ -1488,7 +1488,7 @@ test('disable stop failure: already deactivated, still emits plugin.changed(enab
     disableDiag = err;
     return true;
   });
-  assert.ok(disableDiag instanceof HelmError);
+  assert.ok(disableDiag instanceof HelmxError);
 
   // plugin.changed exactly once,enabled:false,ui:[](do not rely reconnect snapshot only then remove UI)
   const changed = changedPayloads();
@@ -1529,7 +1529,7 @@ test('unregister stop failure: plugin removed, still emits plugin.changed(enable
 
   const changedBefore = changedPayloads().length;
   await assert.rejects(host.unregister('p:ufail'), (err: unknown) => {
-    assert.ok(err instanceof HelmError && err.code === 'plugin_service_stop_failed');
+    assert.ok(err instanceof HelmxError && err.code === 'plugin_service_stop_failed');
     const details = err.details as { stopErrors: Array<{ serviceId: string; error: { message: string } }> };
     assert.deepEqual(
       details.stopErrors.map((e) => [e.serviceId, e.error.message]),
@@ -1566,9 +1566,9 @@ test('stop and event publish both fail: preserves stop diagnostics (adds eventEr
   await host.register(fullPlugin('p:double', () => { throw stopErr; }));
   emitBroken = true;
 
-  // Teardown failure stays `HelmError(plugin_service_stop_failed)` with JSON-safe diagnostics.
+  // Teardown failure stays `HelmxError(plugin_service_stop_failed)` with JSON-safe diagnostics.
   await assert.rejects(host.disable('p:double'), (err: unknown) => {
-    assert.ok(err instanceof HelmError, `expected HelmError, got: ${String(err)}`);
+    assert.ok(err instanceof HelmxError, `expected HelmxError, got: ${String(err)}`);
     assert.equal(err.code, 'plugin_service_stop_failed');
     const details = err.details as {
       stopErrors?: Array<{ serviceId: string; error: { name: string; message: string } }>;
@@ -1791,7 +1791,7 @@ test('ui spec boundary refuse Map/Date/BigInt/loop/undefined:structuredClone wil
     await assert.rejects(
       host.register({ id: `p:ui-json-${label}`, definePlugin: (ctx) => void ctx.ui.screen(spec as never) }),
       (err: unknown) => {
-        assert.ok(err instanceof HelmError, `${label} should refuse`);
+        assert.ok(err instanceof HelmxError, `${label} should refuse`);
         assert.equal(err.code, 'invalid_ui_spec', `${label} should invalid_ui_spec`);
         return true;
       },
@@ -1812,7 +1812,7 @@ test('ui spec boundary refuse Map/Date/BigInt/loop/undefined:structuredClone wil
 
 test('doc initial value/set/update boundary refuse non- JSON value; legal pure object/finite number array/null accept', { timeout: 60_000 }, async () => {
   const host = makeHost();
-  // initial value contains Map: register failed rollback (invalid_json_value is HelmError, original on throw)
+  // initial value contains Map: register failed rollback (invalid_json_value is HelmxError, original on throw)
   await assert.rejects(
     host.register({
       id: 'p:doc-bad-init',
@@ -1821,7 +1821,7 @@ test('doc initial value/set/update boundary refuse non- JSON value; legal pure o
       },
     }),
     (err: unknown) => {
-      assert.ok(err instanceof HelmError);
+      assert.ok(err instanceof HelmxError);
       assert.equal(err.code, 'invalid_json_value');
       return true;
     },
@@ -2068,7 +2068,7 @@ test('hook number field tight: non- integer/negative id/negative seq reject, leg
   });
   const expectInvalid = async (operation: Promise<unknown>) => {
     await assert.rejects(operation, (err: unknown) => {
-      assert.ok(err instanceof HelmError);
+      assert.ok(err instanceof HelmxError);
       assert.equal(err.code, 'invalid_hook_result');
       return true;
     });
@@ -2169,7 +2169,7 @@ test('ctx.action idempotent: register phase validate and manifest reverse reflec
       },
     }),
     (err: unknown) => {
-      assert.ok(err instanceof HelmError);
+      assert.ok(err instanceof HelmxError);
       assert.equal(err.code, 'validation_error');
       return true;
     },
@@ -2226,7 +2226,7 @@ test('prepareAction:Pre-flight pre- validate state,scope and inputSchema and ret
   });
 
   // 1) validate via, return define end idempotent: true
-  const prepOk = host.prepareAction('p:prep', 'safe-read', { name: 'helm' });
+  const prepOk = host.prepareAction('p:prep', 'safe-read', { name: 'helmx' });
   assert.equal(prepOk.idempotent, true);
 
   // 2) unknown action -> 404
@@ -2237,7 +2237,7 @@ test('prepareAction:Pre-flight pre- validate state,scope and inputSchema and ret
 
   // 4) plugin not enabled -> 409 plugin_disabled
   await host.disable('p:prep');
-  throwsCode(() => host.prepareAction('p:prep', 'safe-read', { name: 'helm' }), 'plugin_disabled');
+  throwsCode(() => host.prepareAction('p:prep', 'safe-read', { name: 'helmx' }), 'plugin_disabled');
 });
 
 test('doc lifecycle regression: same ID unload after re- register (epoch reset is 1), old doc handle all reject and no side effects, new handle available', { timeout: 60_000 }, async () => {
@@ -2285,7 +2285,7 @@ test('doc lifecycle regression: same ID unload after re- register (epoch reset i
     async () => {
       await oldHandle!.flush();
     },
-    (err: unknown) => err instanceof HelmError && err.code === 'plugin_context_expired',
+    (err: unknown) => err instanceof HelmxError && err.code === 'plugin_context_expired',
   );
 
   // 5. Rejected old handle produces no store mutation or event side effects
@@ -2318,7 +2318,7 @@ test('in-flight client module compile regression: unregister then re-register sa
         };
       },
       transformBackendTs: () => {
-        throw new HelmError('not_supported', 'test stub does not provide backend transpilation', 501);
+        throw new HelmxError('not_supported', 'test stub does not provide backend transpilation', 501);
       },
     },
   });
@@ -2354,7 +2354,7 @@ test('in-flight client module compile regression: unregister then re-register sa
   // 6. Verify stale in-flight compile rejects due to mismatched registration identity (409 plugin_client_unavailable)
   await assert.rejects(
     compilingPromise,
-    (err: unknown) => err instanceof HelmError && err.code === 'plugin_client_unavailable',
+    (err: unknown) => err instanceof HelmxError && err.code === 'plugin_client_unavailable',
   );
 });
 
@@ -2458,7 +2458,7 @@ test('clientHashes: precompile failure preserves explicit error and isolated fai
   // Non-isolated register rejects explicitly and leaves no plugin residue.
   await assert.rejects(
     host.register(brokenDef('p:broken-strict')),
-    (err: unknown) => err instanceof HelmError && err.code === 'client_compile_failed',
+    (err: unknown) => err instanceof HelmxError && err.code === 'client_compile_failed',
   );
   assert.equal(host.get('p:broken-strict'), undefined);
 
@@ -2487,7 +2487,7 @@ test('clientHashes: precompile failure preserves explicit error and isolated fai
   writeFileSync(join(toggleRoot, 'index.tsx'), 'export const Bad = (((\n');
   await assert.rejects(
     host.enable('ext-toggle-broken'),
-    (err: unknown) => err instanceof HelmError && err.code === 'client_compile_failed',
+    (err: unknown) => err instanceof HelmxError && err.code === 'client_compile_failed',
   );
   const rolledBack = host.get('ext-toggle-broken');
   assert.equal(rolledBack?.enabled, false);
@@ -2590,7 +2590,7 @@ test('HTTP client.mjs main module ?hash=: immutable cache on match, 304 on ETag,
   assert.equal(unhashed.status, 200);
   assert.equal(unhashed.headers.get('cache-control'), 'private, no-cache');
   assert.equal(unhashed.headers.get('etag'), `"${expectedHash}"`);
-  assert.equal(unhashed.headers.get('x-helm-client-hash'), expectedHash);
+  assert.equal(unhashed.headers.get('x-helmx-client-hash'), expectedHash);
   const unhashed304 = await callClient('module=index.tsx', { headers: { 'if-none-match': `"${expectedHash}"` } });
   assert.equal(unhashed304.status, 304);
   assert.equal(unhashed304.headers.get('cache-control'), 'private, no-cache');
@@ -2600,7 +2600,7 @@ test('HTTP client.mjs main module ?hash=: immutable cache on match, 304 on ETag,
   assert.equal(immutableRes.status, 200);
   assert.equal(immutableRes.headers.get('cache-control'), 'private, max-age=31536000, immutable');
   assert.equal(immutableRes.headers.get('etag'), `"${expectedHash}"`);
-  assert.equal(immutableRes.headers.get('x-helm-client-hash'), expectedHash);
+  assert.equal(immutableRes.headers.get('x-helmx-client-hash'), expectedHash);
   assert.match(await immutableRes.text(), /immutable-ok/);
 
   const immutableHead = await callClient(`module=index.tsx&hash=${encodeURIComponent(expectedHash)}`, { method: 'HEAD' });
@@ -2627,7 +2627,7 @@ test('HTTP client.mjs main module ?hash=: immutable cache on match, 304 on ETag,
   // 4. Direct PluginHost.getClientModule also enforces 409 client_module_stale on main module hash mismatch.
   await assert.rejects(
     httpHost.getClientModule('p:http-hash', 'index.tsx', { hash: 'stale-hash-000' }),
-    (err: unknown) => err instanceof HelmError && err.code === 'client_module_stale' && err.status === 409,
+    (err: unknown) => err instanceof HelmxError && err.code === 'client_module_stale' && err.status === 409,
   );
 });
 

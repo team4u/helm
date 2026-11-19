@@ -14,14 +14,14 @@ describe('process-env: cross-platform env variable casing primitives', { timeout
       Path: 'C:\\Windows\\System32;C:\\Program Files\\nodejs',
       TEMP: 'C:\\Temp',
     }
-    prependEnvPath(env, 'C:\\Users\\me\\.helm\\bin', 'win32')
+    prependEnvPath(env, 'C:\\Users\\me\\.helmx\\bin', 'win32')
     assert.deepEqual(
       Object.keys(env).filter((k) => k.toUpperCase() === 'PATH'),
       ['Path'],
     )
     assert.equal(
       env['Path'],
-      'C:\\Users\\me\\.helm\\bin;C:\\Windows\\System32;C:\\Program Files\\nodejs',
+      'C:\\Users\\me\\.helmx\\bin;C:\\Windows\\System32;C:\\Program Files\\nodejs',
     )
     assert.equal(env['PATH'], undefined)
     assert.equal(env['TEMP'], 'C:\\Temp')
@@ -32,31 +32,31 @@ describe('process-env: cross-platform env variable casing primitives', { timeout
       Path: 'C:\\Windows\\System32',
       PATH: 'D:\\Custom\\bin',
     }
-    prependEnvPath(collided, 'C:\\helm\\bin', 'win32')
+    prependEnvPath(collided, 'C:\\helmx\\bin', 'win32')
     assert.deepEqual(
       Object.keys(collided).filter((k) => k.toUpperCase() === 'PATH'),
       ['PATH'],
     )
-    assert.equal(collided['PATH'], 'C:\\helm\\bin;D:\\Custom\\bin')
+    assert.equal(collided['PATH'], 'C:\\helmx\\bin;D:\\Custom\\bin')
     assert.equal(collided['Path'], undefined)
 
     const empty: Record<string, string> = {}
-    prependEnvPath(empty, 'C:\\helm\\bin', 'win32')
-    assert.deepEqual(empty, { PATH: 'C:\\helm\\bin' })
+    prependEnvPath(empty, 'C:\\helmx\\bin', 'win32')
+    assert.deepEqual(empty, { PATH: 'C:\\helmx\\bin' })
   })
 
   it('win32: setEnvEntry / getEnvEntry / findEnvKey / deleteEnvEntry operate case-insensitively', { timeout: 60_000 }, () => {
-    const env: Record<string, string> = { Path: 'C:\\Win', helm_token: 'old' }
+    const env: Record<string, string> = { Path: 'C:\\Win', helmx_token: 'old' }
     assert.equal(findEnvKey(env, 'PATH', 'win32'), 'Path')
     assert.equal(getEnvEntry(env, 'PATH', 'win32'), 'C:\\Win')
 
     setEnvEntry(env, 'PATH', 'D:\\Override', 'win32')
-    assert.deepEqual(Object.keys(env), ['helm_token', 'PATH'])
+    assert.deepEqual(Object.keys(env), ['helmx_token', 'PATH'])
     assert.equal(env['PATH'], 'D:\\Override')
     assert.equal(env['Path'], undefined)
 
-    deleteEnvEntry(env, 'HELM_TOKEN', 'win32')
-    assert.equal('helm_token' in env, false)
+    deleteEnvEntry(env, 'HELMX_TOKEN', 'win32')
+    assert.equal('helmx_token' in env, false)
   })
 
   it('linux: Path and PATH stay distinct and separator is colon', { timeout: 60_000 }, () => {
@@ -64,19 +64,19 @@ describe('process-env: cross-platform env variable casing primitives', { timeout
       Path: '/not-system-path',
       PATH: '/usr/bin:/bin',
     }
-    prependEnvPath(env, '/home/me/.helm/bin', 'linux')
-    assert.equal(env['PATH'], '/home/me/.helm/bin:/usr/bin:/bin')
+    prependEnvPath(env, '/home/me/.helmx/bin', 'linux')
+    assert.equal(env['PATH'], '/home/me/.helmx/bin:/usr/bin:/bin')
     assert.equal(env['Path'], '/not-system-path')
 
     setEnvEntry(env, 'path', '/lowercase', 'linux')
-    assert.equal(env['PATH'], '/home/me/.helm/bin:/usr/bin:/bin')
+    assert.equal(env['PATH'], '/home/me/.helmx/bin:/usr/bin:/bin')
     assert.equal(env['Path'], '/not-system-path')
     assert.equal(env['path'], '/lowercase')
-    assert.equal(getEnvEntry(env, 'PATH', 'linux'), '/home/me/.helm/bin:/usr/bin:/bin')
+    assert.equal(getEnvEntry(env, 'PATH', 'linux'), '/home/me/.helmx/bin:/usr/bin:/bin')
     assert.equal(findEnvKey(env, 'nonexistent', 'linux'), undefined)
 
     deleteEnvEntry(env, 'Path', 'linux')
     assert.equal('Path' in env, false)
-    assert.equal(env['PATH'], '/home/me/.helm/bin:/usr/bin:/bin')
+    assert.equal(env['PATH'], '/home/me/.helmx/bin:/usr/bin:/bin')
   })
 })

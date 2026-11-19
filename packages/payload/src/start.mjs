@@ -3,7 +3,7 @@
  * Zero-dependency Hub payload launcher (ships inside the payload directory; Node >= 24, no npm deps).
  *
  * Commands:
- *   node start.mjs check   Validate the install state first (every node_modules/@helm/* manifest
+ *   node start.mjs check   Validate the install state first (every node_modules/@helmx/* manifest
  *                          entry must exist — otherwise exit 3 with the npm install completion
  *                          instruction), then validate manifest/entries/checksums (strictly relative
  *                          paths), resolve all dependencies from dist/package.json across the 7
@@ -15,13 +15,13 @@
  *                          load esbuild to transform a JS snippet (covering plugin client compilation).
  *                          check never starts the Hub.
  *   node start.mjs start   Verify dependencies, then spawn the hub entry
- *                          (node_modules/@helm/hub/dist/main.js), passing through environment
- *                          variables and signals; sets HELM_WEB_DIST_DIR when web/dist exists and is
+ *                          (node_modules/@helmx/hub/dist/main.js), passing through environment
+ *                          variables and signals; sets HELMX_WEB_DIST_DIR when web/dist exists and is
  *                          not explicitly configured (under the node_modules install layout the hub
  *                          package's sibling probe cannot find the payload web/dist, so start
  *                          declares it explicitly rather than silently disabling static hosting).
  *
- * Layout contract (tgz-only): the six @helm runtime packages ship as file:./<pkg>.tgz archives and
+ * Layout contract (tgz-only): the six @helmx runtime packages ship as file:./<pkg>.tgz archives and
  * exist unpacked only under consumer-side node_modules after `npm install --omit=dev
  * --ignore-scripts`; the payload root carries the archives, the cli bundle, web/dist and the contract
  * files. Manifest entries pointing under node_modules/ are checksummed against the exact bytes packed
@@ -145,12 +145,12 @@ function resolveProdDeps(entries) {
     process.exit(EXIT_ERROR);
   }
   const bases = {
-    hub: path.resolve(payloadRoot, entries.hub ?? 'node_modules/@helm/hub/dist/main.js'),
-    kernel: path.resolve(payloadRoot, entries.kernel ?? 'node_modules/@helm/kernel/dist/index.js'),
-    plugins: path.resolve(payloadRoot, entries.plugins ?? 'node_modules/@helm/plugins/dist/index.js'),
-    pluginBuild: path.resolve(payloadRoot, entries.pluginBuild ?? 'node_modules/@helm/plugin-build/dist/index.js'),
-    envIo: path.resolve(payloadRoot, entries.envIo ?? 'node_modules/@helm/env-io/dist/index.js'),
-    protocol: path.resolve(payloadRoot, entries.protocol ?? 'node_modules/@helm/protocol/dist/index.js'),
+    hub: path.resolve(payloadRoot, entries.hub ?? 'node_modules/@helmx/hub/dist/main.js'),
+    kernel: path.resolve(payloadRoot, entries.kernel ?? 'node_modules/@helmx/kernel/dist/index.js'),
+    plugins: path.resolve(payloadRoot, entries.plugins ?? 'node_modules/@helmx/plugins/dist/index.js'),
+    pluginBuild: path.resolve(payloadRoot, entries.pluginBuild ?? 'node_modules/@helmx/plugin-build/dist/index.js'),
+    envIo: path.resolve(payloadRoot, entries.envIo ?? 'node_modules/@helmx/env-io/dist/index.js'),
+    protocol: path.resolve(payloadRoot, entries.protocol ?? 'node_modules/@helmx/protocol/dist/index.js'),
     cli: path.resolve(payloadRoot, entries.cli ?? 'cli/dist/index.js'),
   };
   const requires = Object.fromEntries(
@@ -256,12 +256,12 @@ if (command === 'check') {
     process.exit(EXIT_DEPS_MISSING);
   }
   const hubEntry = path.resolve(payloadRoot, entries.hub);
-  // Export static hosting dir when web/dist exists and HELM_WEB_DIST_DIR is unset (see header; never silently fall back).
+  // Export static hosting dir when web/dist exists and HELMX_WEB_DIST_DIR is unset (see header; never silently fall back).
   const childEnv = { ...process.env };
   // The installed payload has no workspace tree for the managed CLI shim to resolve.
-  childEnv.HELM_CLI_ENTRY ??= path.resolve(payloadRoot, entries.cli);
-  if (childEnv.HELM_WEB_DIST_DIR === undefined && existsSync(path.join(payloadRoot, 'web/dist'))) {
-    childEnv.HELM_WEB_DIST_DIR = path.resolve(payloadRoot, 'web/dist');
+  childEnv.HELMX_CLI_ENTRY ??= path.resolve(payloadRoot, entries.cli);
+  if (childEnv.HELMX_WEB_DIST_DIR === undefined && existsSync(path.join(payloadRoot, 'web/dist'))) {
+    childEnv.HELMX_WEB_DIST_DIR = path.resolve(payloadRoot, 'web/dist');
   }
   const child = spawn(process.execPath, [hubEntry], { stdio: 'inherit', env: childEnv });
   const forward = (signal) => () => child.kill(signal);

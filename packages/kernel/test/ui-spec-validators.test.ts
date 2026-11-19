@@ -7,7 +7,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { HelmError, type PluginUiContribution } from '@helm/protocol';
+import { HelmxError, type PluginUiContribution } from '@helmx/protocol';
 import { validateUiSpecEarly, validateUiSpecLate, type UiSpecContext } from '../src/plugins/ui-spec-validators.js';
 
 function makeCtx(surface: string, siblings: PluginUiContribution[] = []): UiSpecContext {
@@ -21,7 +21,7 @@ function makeCtx(surface: string, siblings: PluginUiContribution[] = []): UiSpec
   };
 }
 
-const isHelmError = (code: string) => (err: unknown): boolean => err instanceof HelmError && err.code === code;
+const isHelmxError = (code: string) => (err: unknown): boolean => err instanceof HelmxError && err.code === code;
 
 function expectThrow(
   run: () => void,
@@ -29,7 +29,7 @@ function expectThrow(
   messageIncludes?: string,
 ): void {
   assert.throws(run, (err: unknown) => {
-    if (!(err instanceof HelmError)) return false;
+    if (!(err instanceof HelmxError)) return false;
     assert.equal(err.code, code);
     if (messageIncludes !== undefined) {
       assert.ok(err.message.includes(messageIncludes), `message should include "${messageIncludes}", got: ${err.message}`);

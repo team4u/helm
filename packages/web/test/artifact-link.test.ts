@@ -2,14 +2,14 @@ import assert from 'node:assert/strict'
 import test, { describe } from 'node:test'
 import * as React from 'react'
 import { renderToString } from 'react-dom/server'
-import { parseArtifactUrl, markdownUrlTransform } from '@helm/plugin-client'
+import { parseArtifactUrl, markdownUrlTransform } from '@helmx/plugin-client'
 import { groupUiContributions } from '../src/lib/types.js'
 
 ;(globalThis as Record<string, unknown>).React = React
 const { MarkdownView } = await import('../src/conversation/MarkdownView.js')
 const { HostStoreProviders } = await import('./helpers/host-store.js')
 const { makeTestStore } = await import('./helpers/store.js')
-type HelmExternalStore = import('../src/lib/helm-store.js').HelmExternalStore
+type HelmxExternalStore = import('../src/lib/helmx-store.js').HelmxExternalStore
 
 describe('artifact-link 纯函数解析与 URL 转换', { timeout: 60_000 }, () => {
   test('parseArtifactUrl：识别 artifact:<id> 合法形态', () => {
@@ -52,7 +52,7 @@ describe('artifact-link 纯函数解析与 URL 转换', { timeout: 60_000 }, () 
 })
 
 describe('MarkdownView 产物内联渲染', { timeout: 60_000 }, () => {
-  function makeMockStore(activeModalFn?: (modal: unknown) => void): HelmExternalStore {
+  function makeMockStore(activeModalFn?: (modal: unknown) => void): HelmxExternalStore {
     const store = makeTestStore({})
     if (activeModalFn !== undefined) {
       ;(store.actions as unknown as { setActiveModal: (modal: unknown) => void }).setActiveModal = activeModalFn
@@ -84,13 +84,13 @@ describe('MarkdownView 产物内联渲染', { timeout: 60_000 }, () => {
         HostStoreProviders,
         { value: store },
         React.createElement(MarkdownView, {
-          text: '访问官网：[Helm Docs](https://helm.dev)',
+          text: '访问官网：[Helmx Docs](https://helmx.dev)',
           conversationId: 1,
         }),
       ),
     )
-    assert.match(html, /<a href="https:\/\/helm\.dev"/)
-    assert.match(html, /Helm Docs/)
+    assert.match(html, /<a href="https:\/\/helmx\.dev"/)
+    assert.match(html, /Helmx Docs/)
     assert.doesNotMatch(html, /attachment-chip/)
   })
 

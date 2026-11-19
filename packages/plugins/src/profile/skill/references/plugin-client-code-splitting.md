@@ -1,6 +1,6 @@
 # Plugin client.tsx Performance and Code Splitting
 
-This manual targets AIs developing Helm plugins. Default principle: **the AI writes only standard TypeScript/React and standard ESM `import()`; the host handles compilation, chunking, auth, caching, preloading, and invalidation.**
+This manual targets AIs developing Helmx plugins. Default principle: **the AI writes only standard TypeScript/React and standard ESM `import()`; the host handles compilation, chunking, auth, caching, preloading, and invalidation.**
 
 ## First decide whether you need this manual
 
@@ -22,7 +22,7 @@ First-screen-critical, tiny code uses static imports:
 
 ```tsx
 import { useState } from 'react'
-import { usePluginContext } from '@helm/plugin-client'
+import { usePluginContext } from '@helmx/plugin-client'
 import './styles.css'
 ```
 
@@ -41,7 +41,7 @@ If a third-party library itself supports dynamic import, prefer loading the libr
 const { default: chart } = await import('chart-library')
 ```
 
-Built-in plugins can declare the dependency via controlled `npmDependencies`; external plugins declare each bare package name or subpath specifier in `plugin.json.clientDependencies` or `package.json.helm.clientDependencies` (the host maps them to controlled dependencies whose resolution root points at the plugin's own directory, and auto-installs them during managed installation); undeclared bare npm specifiers are explicitly rejected by the compiler.
+Built-in plugins can declare the dependency via controlled `npmDependencies`; external plugins declare each bare package name or subpath specifier in `plugin.json.clientDependencies` or `package.json.helmx.clientDependencies` (the host maps them to controlled dependencies whose resolution root points at the plugin's own directory, and auto-installs them during managed installation); undeclared bare npm specifiers are explicitly rejected by the compiler.
 
 ### Keep the entry module light
 
@@ -68,8 +68,8 @@ Do not hand-rewrite them into host bridge calls. The compiler analyzes dynamic i
 
 Plugin source must not:
 
-- call `globalThis.__helm_import_chunk` directly;
-- read or write `globalThis.__helm_chunk_share` directly;
+- call `globalThis.__helmx_import_chunk` directly;
+- read or write `globalThis.__helmx_chunk_share` directly;
 - hand-write `/api/plugins/<id>/client.mjs` chunk URLs;
 - read, splice, or forge `contentHash`;
 - put Bearer tokens into URLs;
@@ -82,7 +82,7 @@ These mechanisms belong to the host implementation. Plugins declare only normal 
 
 ## Import and shared-dependency rules
 
-Importing host shared hooks, components, and contexts from `@helm/plugin-client` is allowed; using the host-declared shared React, React DOM, and lucide-react specifiers is allowed. Do not copy React inside a plugin or hand-write host shared globals.
+Importing host shared hooks, components, and contexts from `@helmx/plugin-client` is allowed; using the host-declared shared React, React DOM, and lucide-react specifiers is allowed. Do not copy React inside a plugin or hand-write host shared globals.
 
 Plugin-local relative dependencies must live inside `clientRoot`. External plugins must not depend on undeclared bare npm packages; the compiler rejects them explicitly instead of silently searching node_modules.
 
@@ -126,25 +126,25 @@ Asynchronous render results must have unmount/parameter-change/cache-generation 
 External plugins run the real self-check first:
 
 ```bash
-helm plugins doctor <plugin-id-or-directory>
+helmx plugins doctor <plugin-id-or-directory>
 ```
 
 After code changes, use the controlled hot reload:
 
 ```bash
-helm plugins reload <plugin-id>
+helmx plugins reload <plugin-id>
 ```
 
 Inspect the entry artifact:
 
 ```bash
-helm plugins client <plugin-id> --module client.tsx --json
+helmx plugins client <plugin-id> --module client.tsx --json
 ```
 
 To inspect an async chunk:
 
 ```bash
-helm plugins client <plugin-id> --module client.tsx --chunk <chunk-name> --json
+helmx plugins client <plugin-id> --module client.tsx --chunk <chunk-name> --json
 ```
 
 Never judge optimization complete from source line counts or theoretical values. Judge by actual compilation results, gzip bytes, the browser Network panel, and real chart/feature operations.
@@ -153,9 +153,9 @@ Related tests:
 
 ```bash
 pnpm typecheck
-pnpm --filter @helm/kernel test test/plugin-client.test.ts
-pnpm --filter @helm/web test test/plugin-client-chunks.test.ts
-pnpm --filter @helm/web test test/plugin-client-css.test.ts test/plugin-client-runtime.test.ts
+pnpm --filter @helmx/kernel test test/plugin-client.test.ts
+pnpm --filter @helmx/web test test/plugin-client-chunks.test.ts
+pnpm --filter @helmx/web test test/plugin-client-css.test.ts test/plugin-client-runtime.test.ts
 ```
 
 Test cases follow project conventions, explicitly setting `{ timeout: 60_000 }`. When a command fails, report the failing items and logs honestly; never fake a pass with empty implementations, mock data, or silent degradation.
@@ -167,7 +167,7 @@ A plugin client.tsx change may only be declared complete when all of the followi
 - the entry and component exports satisfy the clientRoot / ClientComponentRef contract;
 - heavy low-frequency dependencies use standard dynamic imports, never unconditionally loaded on the first screen;
 - no direct touching of host chunk bridges, hashes, or Bearer URLs;
-- `helm plugins doctor` passes;
+- `helmx plugins doctor` passes;
 - related kernel/web tests pass;
 - failure paths still show clear diagnostics;
 - if you claim a performance optimization, provide actual gzip sizes of the main bundle and chunks, or browser network verification.

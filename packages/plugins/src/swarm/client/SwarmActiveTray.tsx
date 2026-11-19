@@ -17,9 +17,9 @@
  */
 import { useEffect, useId, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { ComposerScopeProps } from '@helm/protocol'
+import type { ComposerScopeProps } from '@helmx/protocol'
 import {
-  HelmIcon,
+  HelmxIcon,
   StatusLight,
   formatDurationMs,
   resolveLocalizedText,
@@ -29,7 +29,7 @@ import {
   usePluginDoc,
   usePluginLocale,
   usePluginSessionDoc,
-} from '@helm/plugin-client'
+} from '@helmx/plugin-client'
 import type { SwarmIndexDoc } from './models.ts'
 import { SWARM_WORKBENCH_PANEL_TARGET } from './models.ts'
 import { buildSwarmTraySummary, resolveSwarmTrayLiveSnippet, type SwarmTrayItem } from './model-tray.ts'
@@ -121,7 +121,7 @@ function SwarmTrayRow(props: {
             disabled={props.busy}
             onClick={() => props.onAbort(`abort:${item.name}`, item.name)}
           >
-            <HelmIcon name="square" size={11} />
+            <HelmxIcon name="square" size={11} />
             <span>{resolveLocalizedText(ACTION_ABORT, locale)}</span>
           </button>
         ) : null}
@@ -240,14 +240,14 @@ export function SwarmActiveTray(props: Partial<ComposerScopeProps>): ReactNode {
           {hudElapsed !== undefined ? (
             <span className="sw-tray-elapsed tabular-nums">{hudElapsed}</span>
           ) : null}
-          <HelmIcon name={expanded ? 'chevron-down' : 'chevron-up'} size={11} className="sw-tray-chevron" />
+          <HelmxIcon name={expanded ? 'chevron-down' : 'chevron-up'} size={11} className="sw-tray-chevron" />
         </button>
         <button
           type="button"
           className="btn btn-xs sw-tray-workbench"
           onClick={() => ctx.openWorkbench(SWARM_WORKBENCH_PANEL_TARGET)}
         >
-          <HelmIcon name="network" size={11} />
+          <HelmxIcon name="network" size={11} />
           <span>{resolveLocalizedText(TRAY_WORKBENCH, locale)}</span>
         </button>
       </div>

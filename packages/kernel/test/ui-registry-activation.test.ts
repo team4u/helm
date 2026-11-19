@@ -2,11 +2,11 @@ import assert from 'node:assert/strict'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import test from 'node:test'
-import { HelmError, type PluginDefinition } from '@helm/protocol'
+import { HelmxError, type PluginDefinition } from '@helmx/protocol'
 import { PluginHost, type PluginHostBackend } from '../src/plugins/index.js'
 import { UiRegistry } from '../src/plugins/ui-registry.js'
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { MemoryDocStore, deferred, useTempDir } from './helpers.js'
 
 function createHostBackend(): PluginHostBackend {
@@ -26,7 +26,7 @@ function createHostBackend(): PluginHostBackend {
 
 // Suspend both persistence calls before releasing so the preflight -> await -> commit window overlaps deterministically.
 test('concurrent enable with duplicate slash publishes only one plugin, rolls back loser toggle, and leaves zero UI contribution', { timeout: 60_000 }, async (t) => {
-  const dataDir = useTempDir(t, 'helm-ui-activation-')
+  const dataDir = useTempDir(t, 'helmx-ui-activation-')
   const enabled = new Map<string, boolean>()
   let arrived = 0
   const gate = deferred()
@@ -63,7 +63,7 @@ test('concurrent enable with duplicate slash publishes only one plugin, rolls ba
     const results = await Promise.allSettled(pending)
     assert.equal(results.filter((result) => result.status === 'fulfilled').length, 1)
     const failed = results.find((result): result is PromiseRejectedResult => result.status === 'rejected')!
-    assert.ok(failed.reason instanceof HelmError)
+    assert.ok(failed.reason instanceof HelmxError)
     assert.equal(failed.reason.code, 'duplicate_command_slash')
     const plugins = host.list()
     const winner = plugins.find((item) => item.enabled)!
@@ -78,7 +78,7 @@ test('concurrent enable with duplicate slash publishes only one plugin, rolls ba
 })
 
 test('UiRegistry: precompileClientModules caches hashes, updates on tracked recompile, and clears on clear/removePlugin', { timeout: 60_000 }, async (t) => {
-  const dataDir = useTempDir(t, 'helm-ui-hashes-')
+  const dataDir = useTempDir(t, 'helmx-ui-hashes-')
   const clientRoot = join(dataDir, 'client')
   mkdirSync(clientRoot, { recursive: true })
   writeFileSync(join(clientRoot, 'index.tsx'), 'export function Main() { return "v1" }\n')
@@ -119,7 +119,7 @@ test('UiRegistry: precompileClientModules caches hashes, updates on tracked reco
   // Mismatched hash without chunk explicitly rejects client_module_stale.
   await assert.rejects(
     ui.getClientModule('p1', 'index.tsx', { ...opts, hash: initialHashes['index.tsx'] }),
-    (err: unknown) => err instanceof HelmError && err.code === 'client_module_stale' && err.status === 409,
+    (err: unknown) => err instanceof HelmxError && err.code === 'client_module_stale' && err.status === 409,
   )
 
   // clear() and removePlugin() both discard cached hashes.

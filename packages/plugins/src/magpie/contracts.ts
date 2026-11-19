@@ -53,7 +53,7 @@ export function sameGateway(a: MagpieGatewayRef, b: MagpieGatewayRef): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// Public status doc (shared by composer.pill / settings.panel / the helm magpie status CLI)
+// Public status doc (shared by composer.pill / settings.panel / the helmx magpie status CLI)
 // ---------------------------------------------------------------------------
 
 /** One quota display row (one row per window of each subscription/plan/key). remainingPercent -1 means unknown. */
@@ -102,5 +102,5 @@ export const MAGPIE_STATUS_DOC = 'status'
 // ctx.provider contract
 // ---------------------------------------------------------------------------
 
-// The real host (@helm/protocol HelmPluginContext) ships ctx.provider registration natively;
+// The real host (@helmx/protocol HelmxPluginContext) ships ctx.provider registration natively;
 // ctx.host.refreshModels is the host's generic catalog-refresh port (delivered by kernel-host).

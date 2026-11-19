@@ -4,14 +4,14 @@
  * 职责：
  * - background 缺省与显式拒绝（subagent / SubagentWorkflow 工具共用）：
  *   人类交互会话缺省后台（父回合不阻塞，完成后 steer 插话汇报）；自动化
- *   会话（bot/helm：受管子代理、驻留 Worker、触发会话）缺省同步等待——
+ *   会话（bot/helmx：受管子代理、驻留 Worker、触发会话）缺省同步等待——
  *   后台完成汇报会驱动自动化会话早结算（把「后台已启动」当终态消费），
  *   显式 background=true 一律显式拒绝，绝不静默改写；
  * - 后台 run 结算汇报：经 submitInput(requestId) 向父会话投递（忙时 steer
  *   插话；跨重启幂等；父会话已删除时 notification 通知）；级联取消边界内的下级父会话
  *   不投递（防取消后复活），只向边界外拥有者单次结算汇报。
  */
-import { HelmError, safeResultText, type AgentExecutionInfo } from '@helm/protocol'
+import { HelmxError, safeResultText, type AgentExecutionInfo } from '@helmx/protocol'
 import type { WorkflowRunSummary } from '../contracts.js'
 import { executionOf } from './tool-result.js'
 
@@ -20,13 +20,13 @@ export const BACKGROUND_REPORT_RENDERER = 'workflow:background-report'
 
 /** background 缺省判定的权威归属端口（内核 getConversationOwnership）。 */
 interface BackgroundPolicyDeps {
-  getConversationOwnership(id: number): 'helm' | 'bot' | 'human'
+  getConversationOwnership(id: number): 'helmx' | 'bot' | 'human'
 }
 
 /**
  * 会话是否人类交互会话（subagent / SubagentWorkflow 的 background 缺省
  * 依据）：以内核权威归属 getConversationOwnership 为准——受管子代理/
- * 驻留 Worker 派生登记即标 helm，触发会话标 helm/bot；人类接管（归属翻
+ * 驻留 Worker 派生登记即标 helmx，触发会话标 helmx/bot；人类接管（归属翻
  * 转 human）后即按人类交互对待。不叠加 profileId / runtime kind / 受管
  * 登记表条件（登记表只表达派生深度事实，人类接管后强制同步会误伤），
  * 也不按 router/worker 等角色枚举便裁。
@@ -115,7 +115,7 @@ export function createBackgroundReporter(deps: BackgroundReporterDeps): Backgrou
       } catch (error) {
         // 仅「会话不存在」走 notification 降级；其他故障（store/IO/权限）上抛，
         // 由引擎 outbox（notifiedAt 不置位）下次 init 补发，绝不吞错。
-        if (error instanceof HelmError && error.code === 'not_found') {
+        if (error instanceof HelmxError && error.code === 'not_found') {
           parentExists = false
         } else {
           throw error
@@ -131,7 +131,7 @@ export function createBackgroundReporter(deps: BackgroundReporterDeps): Backgrou
         return
       }
       const isSubagent = run.kind === 'subagent'
-      const requestId = `helm:${isSubagent ? 'subagent' : 'workflow'}-report:${run.id}`
+      const requestId = `helmx:${isSubagent ? 'subagent' : 'workflow'}-report:${run.id}`
       const otherRunningTasks = deps
         .listActiveRuns()
         .filter((candidate) => candidate.id !== run.id && candidate.conversationId === info.parentConversationId && candidate.status === 'running')

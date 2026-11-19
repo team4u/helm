@@ -4,7 +4,7 @@
  * - `local`: reuses `pi-durable`'s `NodeExecutionEnv` in-process (no RPC);
  * - Remote BYOM nodes: `RemoteExecutionEnv` over `NodeRegistry` (WS+birpc);
  *   waits for reconnect when offline (cancellable) and **never falls back to local**;
- * - Env option injection (managed `HELM_TOKEN` / `HELM_HUB_URL` / `HELM_CONVERSATION_ID` /
+ * - Env option injection (managed `HELMX_TOKEN` / `HELMX_HUB_URL` / `HELMX_CONVERSATION_ID` /
  *   SecretStash secrets) via the `envOptions` callback: the secret service lives outside fabric,
  *   and fabric only consumes the callback output without holding secrets itself;
  * - IPC bridge (`ipcCall` / `ipcSubscribe`): lets optional plugins (e.g. `builtin:herdr`) connect
@@ -27,7 +27,7 @@ import type { ExecutionEnv } from '@earendil-works/pi-durable/env'
 import { createLocalExecutionEnv } from './local-host-env.js'
 import { BACKGROUND_CONTEXT, withAbortSignal, type Context } from '@earendil-works/chord/context'
 import {
-  HelmError,
+  HelmxError,
   type NodeEnvRpcFunctions,
   type NodeIpcCallInput,
   type NodeIpcSubscribeInput,
@@ -35,12 +35,12 @@ import {
   type NodePathUsageProcess,
   type NodeTunnelTarget,
   type RpcResult,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 import {
   createNodePathUsageIo,
   scanPathUsage,
   validatePosixScanPath,
-} from '@helm/env-io'
+} from '@helmx/env-io'
 import { randomUUID } from 'node:crypto'
 import type { Duplex } from 'node:stream'
 import { NodeRegistry, normalizeTunnelTarget } from './registry.js'
@@ -52,7 +52,7 @@ import { envWithFileMutationQueue } from './file-mutation-queue.js'
 export { ExecOutputHub } from './exec-output.js'
 export { NodeRegistry, tokenAuthenticator, sha256hex, normalizeTunnelTarget } from './registry.js'
 export type { NodeRegistryOptions, NodeConnection, RegisterOutcome, HubConnectionLocal, NodeSideFunctions, UpgradeWaiterHandle } from './registry.js'
-export { HelmUpgradeBusyError, HelmUpgradeTimeoutError, HelmUpgradeCancelledError } from './registry.js'
+export { HelmxUpgradeBusyError, HelmxUpgradeTimeoutError, HelmxUpgradeCancelledError } from './registry.js'
 export { RemoteExecutionEnv } from './remote-env.js'
 export type { NodeRpcResolver, RemoteExecutionEnvOptions } from './remote-env.js'
 export { attachNodeWsGateway } from './ws-gateway.js'
@@ -81,11 +81,11 @@ interface EnvFabricOptions {
   heartbeatIntervalMs?: number
   heartbeatTimeoutMs?: number
   /**
-   * Callback injecting extra env vars before exec (e.g. `HELM_HUB_URL`, `HELM_CONVERSATION_ID`,
-   * managed `HELM_TOKEN`, SecretStash secrets). Wired externally to the secret service—fabric holds no secrets.
+   * Callback injecting extra env vars before exec (e.g. `HELMX_HUB_URL`, `HELMX_CONVERSATION_ID`,
+   * managed `HELMX_TOKEN`, SecretStash secrets). Wired externally to the secret service—fabric holds no secrets.
    */
   envOptions?: EnvOptionsComposer
-  /** Directory prepended to PATH for local exec (helm CLI wrapper dir; defaults to none). */
+  /** Directory prepended to PATH for local exec (helmx CLI wrapper dir; defaults to none). */
   cliBinDir?: () => string | undefined
   /** Cap on waiting for reconnect during remote file RPCs (ms); see `remote-env.ts` for default. */
   remoteRpcWaitTimeoutMs?: number
@@ -115,7 +115,7 @@ export interface EnvFabric {
   /**
    * Conversation-scoped execution environment (preferred entrypoint): concurrent conversations sharing
    * `(nodeId, cwd)` each get an isolated env-option scope—every command invokes `envOptions` freshly
-   * (bound managed token / `HELM_CONVERSATION_ID` / SecretStash secrets) without caching or borrowing
+   * (bound managed token / `HELMX_CONVERSATION_ID` / SecretStash secrets) without caching or borrowing
    * another conversation's snapshot. Transport stays shared (one connection per node), while per-command
    * env options stay isolated. When `conversationId` is omitted, no secrets are injected (fail-closed)
    * and instances are short-lived (not cached); when `conversationId` is present, instances are cached
@@ -135,7 +135,7 @@ export interface EnvFabric {
   ipcCall(nodeId: string, input: NodeIpcCallInput, signal?: AbortSignal): Promise<RpcResult<string>>
   /**
    * Streaming local-IPC subscription on a node: `onLine` fires per line; `onClosed` fires exactly once
-   * on end/disconnect/cancel; returns a stop function. Throws if unsupported; throws `HelmError('node_draining', ..., 503)`
+   * on end/disconnect/cancel; returns a stop function. Throws if unsupported; throws `HelmxError('node_draining', ..., 503)`
    * if the node is draining for upgrade.
    */
   ipcSubscribe(
@@ -174,7 +174,7 @@ export interface EnvFabric {
    * First-class arbitrary TCP tunnel primitive: opens a raw Duplex to `host:port` on the target node.
    * - `local`: direct in-process `net.connect`;
    * - remote: reuses `registry.openTunnel` (served by the dedicated WS tunnel gateway without a second transport);
-   * - unknown/offline node: throws `HelmError('node_offline', ..., 409)` explicitly, never falling back to local;
+   * - unknown/offline node: throws `HelmxError('node_offline', ..., 409)` explicitly, never falling back to local;
    * - abort/timeout/error: throws explicitly and guarantees resource cleanup (no leaked Duplex).
    * `host` is resolved and connected on the node (defaults to `127.0.0.1` if omitted).
    */
@@ -184,7 +184,7 @@ export interface EnvFabric {
    * remote supports arbitrary hosts and http/https—http passes the tunnel Duplex to `node:http.request`
    * (`createConnection`), while https stacks `node:tls.connect` (SNI + cert verification) onto the tunnel
    * Duplex before handing it to `node:http.request`. 4xx/5xx return Responses intact; connect/transport/disconnect
-   * errors map to HelmError without ever falling back to local. Exposed to plugins via `ctx.host.nodeFetch`.
+   * errors map to HelmxError without ever falling back to local. Exposed to plugins via `ctx.host.nodeFetch`.
    */
   nodeFetch(nodeId: string): typeof fetch
   /**
@@ -196,7 +196,7 @@ export interface EnvFabric {
    *   errors or cap hits during observability return `complete=false` (callers must fail-closed rather than treating
    *   as zero usage); permission-blocked processes (cross-uid or non-dumpable like `systemd --user`) increment
    *   `unobservable` and appear in `diagnostics` without clearing `complete` (same-uid Hub-managed processes stay observable);
-   * - non-Linux platforms fail explicitly with `not_supported` (`HelmError('path_usage_not_supported')`).
+   * - non-Linux platforms fail explicitly with `not_supported` (`HelmxError('path_usage_not_supported')`).
    */
   inspectPathUsage(nodeId: string, path: string, signal?: AbortSignal): Promise<NodePathUsage>
   /**
@@ -219,8 +219,8 @@ export interface EnvFabric {
  * partial snapshots (an empty snapshot from another directory must never justify deleting this directory).
  */
 function validatePathUsageSnapshot(nodeId: string, expectedPath: string, value: unknown): NodePathUsage {
-  const fail = (reason: string): HelmError =>
-    new HelmError('node_path_usage_failed', `node ${nodeId} returned an invalid process-usage snapshot (${reason}); refusing to use it`, 502, {
+  const fail = (reason: string): HelmxError =>
+    new HelmxError('node_path_usage_failed', `node ${nodeId} returned an invalid process-usage snapshot (${reason}); refusing to use it`, 502, {
       nodeId,
       expectedPath,
     })
@@ -287,7 +287,7 @@ function validatePathUsageSnapshot(nodeId: string, expectedPath: string, value: 
 
 export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
   const { envOptions, cliBinDir } = options
-  const logReleaseError = options.logReleaseError ?? ((message: string) => console.error(`[helm] env fabric: ${message}`))
+  const logReleaseError = options.logReleaseError ?? ((message: string) => console.error(`[helmx] env fabric: ${message}`))
   // **Cache target backends only per conversation**: used solely by `envForTarget` with `conversationId`
   // (bounded by conversation lifetime via `evictConversation`). Unscoped targets always create fresh instances.
   const bases = new Map<string, ExecutionEnv>()
@@ -302,9 +302,9 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
   const remoteResolver = {
     getNodeEnvRpc: (nodeId: string): NodeEnvRpcFunctions | undefined => registry.getNodeEnvRpc(nodeId),
     waitForNodeOnline: (nodeId: string, context: Context) => registry.waitForNodeOnline(nodeId, context),
-    addOutputSink: (nodeId: string, sink: (event: import('@helm/protocol').EnvExecOutputEvent) => void) =>
+    addOutputSink: (nodeId: string, sink: (event: import('@helmx/protocol').EnvExecOutputEvent) => void) =>
       registry.addOutputSink(nodeId, sink),
-    removeOutputSink: (nodeId: string, sink: (event: import('@helm/protocol').EnvExecOutputEvent) => void) =>
+    removeOutputSink: (nodeId: string, sink: (event: import('@helmx/protocol').EnvExecOutputEvent) => void) =>
       registry.removeOutputSink(nodeId, sink),
   }
 
@@ -343,10 +343,10 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
 
   /** Require an online node's RPC (shared by IPC bridge; fails immediately when offline without waiting for reconnect). */
   const requireRpc = async (nodeId: string, signal?: AbortSignal): Promise<NodeEnvRpcFunctions> => {
-    if (signal?.aborted) throw new HelmError('aborted', 'IPC call cancelled', 499)
+    if (signal?.aborted) throw new HelmxError('aborted', 'IPC call cancelled', 499)
     const rpc = registry.getNodeEnvRpc(nodeId)
     if (rpc !== undefined) return rpc
-    throw new HelmError('node_offline', `node ${nodeId} is offline; cannot establish IPC channel`, 409, { nodeId })
+    throw new HelmxError('node_offline', `node ${nodeId} is offline; cannot establish IPC channel`, 409, { nodeId })
   }
 
   return {
@@ -383,7 +383,7 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
       const ipcCallFn = rpc.ipcCall
       const ipcAbort = rpc.ipcAbortCall
       if (ipcCallFn === undefined) {
-        throw new HelmError('ipc_not_supported', `node ${nodeId} daemon does not support local IPC calls`, 501, {
+        throw new HelmxError('ipc_not_supported', `node ${nodeId} daemon does not support local IPC calls`, 501, {
           nodeId,
         })
       }
@@ -393,7 +393,7 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
         void ipcAbort?.(callId).catch(() => undefined)
       }
       signal?.addEventListener('abort', onAbort, { once: true })
-      if (signal?.aborted) { onAbort(); throw new HelmError('aborted', 'IPC call cancelled', 499) }
+      if (signal?.aborted) { onAbort(); throw new HelmxError('aborted', 'IPC call cancelled', 499) }
       try {
         return await ipcCallFn({ ...input, callId })
       } finally {
@@ -412,7 +412,7 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
       const ipcSubscribeFn = rpc.ipcSubscribe
       const ipcUnsubscribeFn = rpc.ipcUnsubscribe
       if (ipcSubscribeFn === undefined || ipcUnsubscribeFn === undefined) {
-        throw new HelmError('ipc_not_supported', `node ${nodeId} daemon does not support local IPC subscriptions`, 501, {
+        throw new HelmxError('ipc_not_supported', `node ${nodeId} daemon does not support local IPC subscriptions`, 501, {
           nodeId,
         })
       }
@@ -451,21 +451,21 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
       let result: Awaited<ReturnType<typeof ipcSubscribeFn>>
       try { result = await ipcSubscribeFn({ ...input, subscribeId }) }
       catch (error) { closed = true; finish('node connection lost'); throw error }
-      if (signal?.aborted) { onAbort(); throw new HelmError('aborted', 'IPC subscription cancelled', 499) }
+      if (signal?.aborted) { onAbort(); throw new HelmxError('aborted', 'IPC subscription cancelled', 499) }
       if (!result.ok) {
         closed = true
         finish(result.error.message)
         // Node draining for upgrade: throw stable `node_draining` (503) to distinguish from ordinary `ipc_subscribe_failed`
         // rather than swallowing node state into a generic error.
         if (result.error.code === 'node_draining') {
-          throw new HelmError(
+          throw new HelmxError(
             'node_draining',
             `node ${nodeId} is draining for upgrade; rejecting new IPC subscription: ${result.error.message}`,
             503,
             { nodeId },
           )
         }
-        throw new HelmError('ipc_subscribe_failed', `node ${nodeId} IPC subscription failed: ${result.error.message}`, 502, {
+        throw new HelmxError('ipc_subscribe_failed', `node ${nodeId} IPC subscription failed: ${result.error.message}`, 502, {
           nodeId,
           code: result.error.code,
         })
@@ -494,10 +494,10 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
     async openTunnel(nodeId: string, target: NodeTunnelTarget, signal?: AbortSignal): Promise<Duplex> {
       const { host, port } = normalizeTunnelTarget(target)
       if (signal?.aborted) {
-        throw new HelmError('aborted', 'tunnel establishment cancelled', 499, { nodeId })
+        throw new HelmxError('aborted', 'tunnel establishment cancelled', 499, { nodeId })
       }
       if (closing.signal.aborted) {
-        throw new HelmError('node_offline', 'node tunnel service is closed', 409, { nodeId })
+        throw new HelmxError('node_offline', 'node tunnel service is closed', 409, { nodeId })
       }
       // Also track local tunnels for shutdown: including sockets still awaiting connect.
       if (nodeId === 'local') {
@@ -505,7 +505,7 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
         const duplex = await connectLocalTunnel(host ?? '127.0.0.1', port, connectSignal)
         if (closing.signal.aborted || signal?.aborted) {
           duplex.destroy()
-          throw new HelmError('aborted', 'tunnel establishment cancelled', 499, { nodeId })
+          throw new HelmxError('aborted', 'tunnel establishment cancelled', 499, { nodeId })
         }
         localTunnels.add(duplex)
         duplex.once('close', () => localTunnels.delete(duplex))
@@ -527,13 +527,13 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
     },
 
     async inspectPathUsage(nodeId: string, targetPath: string, signal?: AbortSignal): Promise<NodePathUsage> {
-      if (signal?.aborted) throw new HelmError('aborted', 'path usage scan cancelled', 499, { nodeId })
+      if (signal?.aborted) throw new HelmxError('aborted', 'path usage scan cancelled', 499, { nodeId })
       // Check actual node platform first so valid Windows drive paths are not misreported as invalid POSIX paths;
       // unsupported platforms reject explicitly, while offline remote nodes still report unreachable first.
       const rpc = nodeId === 'local' ? undefined : await requireRpc(nodeId, signal)
       const platform = nodeId === 'local' ? hubPlatform() : registry.get(nodeId)?.platform
       if (platform && platform !== 'linux') {
-        throw new HelmError(
+        throw new HelmxError(
           'path_usage_not_supported',
           `node ${nodeId} platform '${platform}' does not support process usage scanning (currently Linux /proc only); cannot verify zero usage for target path`,
           501,
@@ -543,12 +543,12 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
       // Normalize target path uniformly across supported platforms for matching against the RPC response.
       const normalized = validatePosixScanPath(targetPath)
       if (!normalized.ok) {
-        throw new HelmError('validation_error', `invalid path usage scan argument: ${normalized.message}`, 400, { nodeId })
+        throw new HelmxError('validation_error', `invalid path usage scan argument: ${normalized.message}`, 400, { nodeId })
       }
       const expectedPath = normalized.value
       if (nodeId === 'local') {
         // Real in-process scan on Hub (platform via `hubPlatform` port so tests can override while production
-        // uses `process.platform` without fabrication). Shares `@helm/env-io` implementation with remote daemons
+        // uses `process.platform` without fabrication). Shares `@helmx/env-io` implementation with remote daemons
         // rather than duplicating filesystem logic.
         const io = createNodePathUsageIo()
         const result = await scanPathUsage(expectedPath, {
@@ -558,9 +558,9 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
         })
         if (result.ok) return result.value
         const { code, message } = result.error
-        if (code === 'invalid') throw new HelmError('validation_error', `invalid path usage scan argument: ${message}`, 400, { nodeId })
+        if (code === 'invalid') throw new HelmxError('validation_error', `invalid path usage scan argument: ${message}`, 400, { nodeId })
         if (code === 'permission_denied') {
-          throw new HelmError(
+          throw new HelmxError(
             'node_path_usage_failed',
             `local process usage scan failed (permission denied): ${message}`,
             502,
@@ -568,20 +568,20 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
           )
         }
         if (code === 'not_supported') {
-          throw new HelmError(
+          throw new HelmxError(
             'path_usage_not_supported',
             `Hub platform '${hubPlatform()}' does not support process usage scanning (currently Linux /proc only; refusing to fabricate cross-platform result); cannot verify zero usage for target path`,
             501,
             { nodeId, platform: hubPlatform() },
           )
         }
-        if (code === 'aborted') throw new HelmError('aborted', message, 499, { nodeId })
-        throw new HelmError('node_path_usage_failed', `local process usage scan failed: ${message}`, 502, { nodeId })
+        if (code === 'aborted') throw new HelmxError('aborted', message, 499, { nodeId })
+        throw new HelmxError('node_path_usage_failed', `local process usage scan failed: ${message}`, 502, { nodeId })
       }
       // Remote: scan on the target node directly; never fall back to local.
       const fn = rpc!.envPathUsage
       if (fn === undefined) {
-        throw new HelmError(
+        throw new HelmxError(
           'path_usage_not_supported',
           `node ${nodeId} daemon does not support envPathUsage (outdated version?); cannot verify zero usage and will not fall back to local scan`,
           501,
@@ -589,7 +589,7 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
         )
       }
       // birpc may resolve to undefined (gateway absorbs missing-method errors on old daemons): explicitly allow undefined.
-      let result: RpcResult<import('@helm/protocol').NodePathUsage> | undefined
+      let result: RpcResult<import('@helmx/protocol').NodePathUsage> | undefined
       try {
         result = await fn({ path: expectedPath })
       } catch (error) {
@@ -598,14 +598,14 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
         // transport/timeout errors remain 502.
         const message = error instanceof Error ? error.message : String(error)
         if (message.includes('[birpc] function') && message.includes('not found')) {
-          throw new HelmError(
+          throw new HelmxError(
             'path_usage_not_supported',
             `node ${nodeId} daemon does not support envPathUsage (outdated version?); cannot verify zero usage and will not fall back to local scan`,
             501,
             { nodeId, cause: message },
           )
         }
-        throw new HelmError(
+        throw new HelmxError(
           'node_path_usage_failed',
           `node ${nodeId} path usage scan RPC failed: ${message}`,
           502,
@@ -615,7 +615,7 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
       if (result === undefined || result === null) {
         // Older daemon without `envPathUsage`: birpc gateway `onGeneralError` absorbed it as undefined—classify
         // as unsupported (501), never fall back to local and never treat as an empty snapshot.
-        throw new HelmError(
+        throw new HelmxError(
           'path_usage_not_supported',
           `node ${nodeId} daemon does not support envPathUsage (outdated version?); cannot verify zero usage and will not fall back to local scan`,
           501,
@@ -626,7 +626,7 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
       // `code`/`message`—invalid envelopes fail explicitly with `node_path_usage_failed` rather than TypeErrors later.
       const envelope = result as { ok?: unknown; value?: unknown; error?: unknown }
       if (typeof envelope.ok !== 'boolean') {
-        throw new HelmError(
+        throw new HelmxError(
           'node_path_usage_failed',
           `node ${nodeId} path usage scan returned an invalid envelope (ok is not a strict boolean; protocol violation)`,
           502,
@@ -640,14 +640,14 @@ export function createEnvFabric(options: EnvFabricOptions): EnvFabric {
           typeof e.code !== 'string' || e.code === '' ||
           typeof e.message !== 'string' || e.message === ''
         ) {
-          throw new HelmError(
+          throw new HelmxError(
             'node_path_usage_failed',
             `node ${nodeId} path usage scan returned an invalid error envelope (missing valid code/message; protocol violation)`,
             502,
             { nodeId },
           )
         }
-        throw new HelmError(
+        throw new HelmxError(
           'node_path_usage_failed',
           `node ${nodeId} path usage scan failed (${e.code}: ${e.message})`,
           502,

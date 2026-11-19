@@ -35,7 +35,7 @@
  *   状态翻转间隔，不含 working 内部活动，绝不能单独作为自动中止证据。
  */
 
-import { HelmError, type HelmPluginContext } from '@helm/protocol'
+import { HelmxError, type HelmxPluginContext } from '@helmx/protocol'
 import type { WatchdogProbe } from '../diagnostics.js'
 import type { SuperAgentWatchdogRuntime } from './contracts.js'
 import { ConversationActivityTracker } from './watchdog-activity.js'
@@ -65,7 +65,7 @@ export type {
 // ---------------------------------------------------------------------------
 
 export function registerSuperAgentWatchdog(
-  ctx: HelmPluginContext,
+  ctx: HelmxPluginContext,
   runtime: SuperAgentWatchdogRuntime,
 ): void {
   const dedupDoc = ctx.doc<WatchdogDedupDoc>('watchdog-dedup', { version: 1, fired: {} })
@@ -155,14 +155,14 @@ export function registerSuperAgentWatchdog(
         try {
           await ctx.host.cancelAsk(askId, 'cancelled')
         } catch (err) {
-          if (err instanceof HelmError && (err.code === 'ask_already_settled' || err.code === 'not_found')) {
+          if (err instanceof HelmxError && (err.code === 'ask_already_settled' || err.code === 'not_found')) {
             continue // 已结算/已清理：事实性终态，非故障
           }
           failures.push({ askId, error: err })
         }
       }
       if (failures.length > 0) {
-        throw new HelmError(
+        throw new HelmxError(
           'watchdog_ask_cancel_failed',
           `Watchdog 停用前取消挂起授权问询失败：${failures.map((f) => `${f.askId}（${f.error instanceof Error ? f.error.message : String(f.error)}）`).join('；')}`,
           500,

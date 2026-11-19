@@ -90,7 +90,7 @@ const WIRE_EVENT_TYPES = new Map<string, HerdrEvent['type']>(
 )
 const SUBSCRIBE_ACK_TIMEOUT_MS = 15_000
 /** Single-line request ID for remote RPC: wire validation must match it exactly. */
-const REMOTE_RPC_ID = 'helm-remote-1'
+const REMOTE_RPC_ID = 'helmx-remote-1'
 /** Node ID as a single safe token (incl. 'local'; empty strings and oversize values rejected explicitly). */
 const NODE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 

@@ -19,14 +19,14 @@
  *    会话的 failed 只通知，不再触发 wake）。
  * 9. 缺权威 seq：只读通知，绝不 abort / bridge。
  */
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  HelmError,
+  HelmxError,
   type AskCreateSpec,
   type AskResult,
   type BeforeTurnHookPayload,
@@ -37,7 +37,7 @@ import {
   type PluginToolSpec,
   type ToolCallHookPayload,
   type TurnSettledPayload,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 import {
   PluginHost,
   type PluginDocStore,
@@ -82,16 +82,16 @@ interface Recorded {
 /** 构造 watch 用的内核同构 guarded 端口（存在/归属/水位复核 + 记录）。 */
 function makeGuardedPorts(
   conversations: Map<number, ConversationSummary>,
-  ownershipOf: (id: number) => 'helm' | 'bot' | 'human',
+  ownershipOf: (id: number) => 'helmx' | 'bot' | 'human',
   onAbort: (id: number) => void,
   onSubmit: (id: number, text: string, o?: { origin?: string; whenBusy?: string }) => void,
 ): Pick<PluginHostBackend, 'abortConversationGuarded' | 'submitInputGuarded'> {
   const assertGuard = (id: number, guard?: GuardedMutationExpectation): void => {
     const conv = conversations.get(id)
-    if (!conv) throw new HelmError('not_found', `会话不存在：${id}`, 404, { conversationId: id })
+    if (!conv) throw new HelmxError('not_found', `会话不存在：${id}`, 404, { conversationId: id })
     const ownedBy = ownershipOf(id)
     if (ownedBy === 'human' || (guard?.expectedOwnership !== undefined && ownedBy !== guard.expectedOwnership)) {
-      throw new HelmError(
+      throw new HelmxError(
         'ownership_conflict',
         `会话 ${id} 当前归属 ${ownedBy}，拒绝自动化变更（human 红线）`,
         409,
@@ -99,7 +99,7 @@ function makeGuardedPorts(
       )
     }
     if (guard?.expectedStateSeq !== undefined && conv.stateChangeSeq !== guard.expectedStateSeq) {
-      throw new HelmError(
+      throw new HelmxError(
         'state_seq_conflict',
         `会话 ${id} 权威水位 ${conv.stateChangeSeq} 与期望 ${guard.expectedStateSeq} 不一致（探针事实已过期）`,
         409,
@@ -147,7 +147,7 @@ const makeConversationSummary = (id: number, over: Partial<ConversationSummary> 
 interface HarnessOptions {
   routerId?: number
   watchdogId?: number
-  ownership?: (id: number) => 'helm' | 'bot' | 'human'
+  ownership?: (id: number) => 'helmx' | 'bot' | 'human'
   isClosing?: () => boolean
   trackImpl?: <T>(label: string, task: () => Promise<T>) => Promise<T>
   /** createAsk 落地后、结算前的回调（模拟「授权期间目标变化」）。 */
@@ -167,7 +167,7 @@ async function makeHarness(opts: HarnessOptions = {}) {
   conversations.set(watchdogId, makeConversationSummary(watchdogId, { profileId: 'watchdog', title: '巡检看门狗' }))
   conversations.set(routerId, makeConversationSummary(routerId, { profileId: 'superagent', title: 'SuperAgent 中枢' }))
   conversations.set(1, makeConversationSummary(1, { title: 'Personal Assistant' }))
-  const ownership = new Map<number, 'helm' | 'bot' | 'human'>()
+  const ownership = new Map<number, 'helmx' | 'bot' | 'human'>()
   /** 会话活动统计驱动（与生产同源：经 ctx.host.onEvent 真实事件注入，
    * 不再经已删除的 getConversationActivity 端口）。 */
   const activitySeeded = new Map<number, number>()
@@ -185,7 +185,7 @@ async function makeHarness(opts: HarnessOptions = {}) {
     },
     ...makeGuardedPorts(
       conversations,
-      (id) => opts.ownership?.(id) ?? ownership.get(id) ?? (id === 1 ? 'human' : 'helm'),
+      (id) => opts.ownership?.(id) ?? ownership.get(id) ?? (id === 1 ? 'human' : 'helmx'),
       (id) => recorded.aborts.push(id),
       (id, text, o) => recorded.submits.push({ conversationId: id, text, origin: o?.origin, whenBusy: o?.whenBusy }),
     ),
@@ -198,7 +198,7 @@ async function makeHarness(opts: HarnessOptions = {}) {
     listConversations: () => [...conversations.values()],
     getConversation: (id) => {
       const found = conversations.get(id)
-      if (!found) throw new HelmError('not_found', `会话不存在：${id}`, 404, { conversationId: id })
+      if (!found) throw new HelmxError('not_found', `会话不存在：${id}`, 404, { conversationId: id })
       return found
     },
     getConversationDetail: async (id) => ({
@@ -209,7 +209,7 @@ async function makeHarness(opts: HarnessOptions = {}) {
     setPluginConfig: async () => {},
     manageConversation: () => () => {},
     markConversationOwnership: (id, owner) => ownership.set(id, owner),
-    getConversationOwnership: (id) => opts.ownership?.(id) ?? ownership.get(id) ?? (id === 1 ? 'human' : 'helm'),
+    getConversationOwnership: (id) => opts.ownership?.(id) ?? ownership.get(id) ?? (id === 1 ? 'human' : 'helmx'),
     isClosing: () => backendClosing || (opts.isClosing?.() ?? false),
     createAsk: async (spec) => {
       recorded.asks.push(spec)
@@ -250,7 +250,7 @@ async function makeHarness(opts: HarnessOptions = {}) {
   }
 
   const host = new PluginHost({ buildProvider: createPluginBuildProvider(),
-    dataDir: mkdtempSync(join(tmpdir(), 'helm-superagent-watchdog-')),
+    dataDir: mkdtempSync(join(tmpdir(), 'helmx-superagent-watchdog-')),
     host: backend,
     docs,
   })
@@ -406,7 +406,7 @@ function nativeProbe(conversationId: number, over: Partial<WatchdogProbe> = {}):
     targetId: String(conversationId),
     targetKind: 'conversation',
     conversationId,
-    ownedBy: 'helm',
+    ownedBy: 'helmx',
     status: 'working',
     stateChangeSeq: 10,
     facts: { pendingAskCount: 0 },
@@ -419,7 +419,7 @@ function externalProbe(nodeId: string, paneId: string, over: Partial<WatchdogPro
     targetId: paneId,
     targetKind: 'external',
     nodeId,
-    ownedBy: 'helm',
+    ownedBy: 'helmx',
     stateChangeSeq: 10,
     status: 'working',
     facts: { kind: 'herdr', parentConversationId: 300, pendingAskCount: 0, stalledBasis: 'since-last-state-change' },
@@ -437,7 +437,7 @@ test('自激排除：watchdog 自身 id 与 profileId=watchdog 直聊会话零�
   await h.tick(
     [
       nativeProbe(h.watchdogId, { status: 'error', stalledMs: 10_000_000 }),
-      nativeProbe(777, { status: 'error', stalledMs: 10_000_000, ownedBy: 'helm' }),
+      nativeProbe(777, { status: 'error', stalledMs: 10_000_000, ownedBy: 'helmx' }),
       nativeProbe(55, { status: 'error' }), // 对照组：普通 owned error 会被唤醒
     ],
     [watchdogChat, makeConversationSummary(55)],
@@ -650,11 +650,11 @@ test('活动统计：非法事件载荷丢弃不计入（边界校验）', { tim
 })
 
 test('两个节点同 paneId 独立去重，跨注册周期持久恢复，损坏文档显式拒绝', { timeout: 60_000 }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'helm-wd-dedup-'))
+  const dir = mkdtempSync(join(tmpdir(), 'helmx-wd-dedup-'))
   const sharedDocs = new MemoryDocStore()
   const recorded = makeRecorded()
   const opts: HarnessOptions = {
-    ownership: () => 'helm',
+    ownership: () => 'helmx',
     trackImpl: async (label, task) => {
       recorded.tracked.push(label)
       return task()
@@ -695,7 +695,7 @@ test('两个节点同 paneId 独立去重，跨注册周期持久恢复，损坏
   const h3 = await makeHarnessWithDocs(sharedDocs, makeRecorded(), opts)
   await assert.rejects(
     h3.tick([externalProbe('local', 'p1', { status: 'unreachable', consecutiveErrors: 8 })]),
-    (err: unknown) => err instanceof HelmError && err.code === 'superagent_doc_corrupt',
+    (err: unknown) => err instanceof HelmxError && err.code === 'superagent_doc_corrupt',
   )
 
   rmSync(dir, { recursive: true, force: true })
@@ -715,7 +715,7 @@ async function makeHarnessWithDocs(docs: PluginDocStore, recorded: Recorded, opt
     },
     ...makeGuardedPorts(
       conversations,
-      (id) => opts.ownership?.(id) ?? 'helm',
+      (id) => opts.ownership?.(id) ?? 'helmx',
       (id) => recorded.aborts.push(id),
       (id, text, o) => recorded.submits.push({ conversationId: id, text, origin: o?.origin, whenBusy: o?.whenBusy }),
     ),
@@ -723,7 +723,7 @@ async function makeHarnessWithDocs(docs: PluginDocStore, recorded: Recorded, opt
     listConversations: () => [...conversations.values()],
     getConversation: (id) => {
       const found = conversations.get(id)
-      if (!found) throw new HelmError('not_found', `会话不存在：${id}`, 404)
+      if (!found) throw new HelmxError('not_found', `会话不存在：${id}`, 404)
       return found
     },
     getConversationDetail: async (id) => ({ ...makeConversationSummary(id), entries: [] }),
@@ -731,7 +731,7 @@ async function makeHarnessWithDocs(docs: PluginDocStore, recorded: Recorded, opt
     setPluginConfig: async () => {},
     manageConversation: () => () => {},
     markConversationOwnership: () => {},
-    getConversationOwnership: (id) => opts.ownership?.(id) ?? 'helm',
+    getConversationOwnership: (id) => opts.ownership?.(id) ?? 'helmx',
     isClosing: () => opts.isClosing?.() ?? false,
     createAsk: async (spec) => {
       recorded.asks.push(spec)
@@ -765,7 +765,7 @@ async function makeHarnessWithDocs(docs: PluginDocStore, recorded: Recorded, opt
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
   }
-  const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir: mkdtempSync(join(tmpdir(), 'helm-saw-')), host: backend, docs })
+  const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir: mkdtempSync(join(tmpdir(), 'helmx-saw-')), host: backend, docs })
   const config: SuperAgentConfig = {
     routerMode: true,
     mutedSources: '',
@@ -824,7 +824,7 @@ async function makeHarnessWithDocs(docs: PluginDocStore, recorded: Recorded, opt
 // ---------------------------------------------------------------------------
 
 test('human native 与 human 外部窗格：完全零写操作（无 abort/无注入），仅通知', { timeout: 60_000 }, async () => {
-  const h = await makeHarness({ ownership: (id) => (id === 88 ? 'human' : 'helm') })
+  const h = await makeHarness({ ownership: (id) => (id === 88 ? 'human' : 'helmx') })
   await h.tick([
     nativeProbe(88, { ownedBy: 'human', status: 'error', stalledMs: 10_000_000, consecutiveErrors: 9 }),
     externalProbe('local', 'px', { ownedBy: 'human', status: 'unreachable', consecutiveErrors: 9 }),
@@ -966,7 +966,7 @@ test('bridge_to_ask：授权 abort 且现查仍 blocked 时中止；授权期间
 
 test('bridge_to_ask：已有人类接管（现查 human）不创建；探针水位过期不创建；同水位不重复创建', { timeout: 60_000 }, async () => {
   let owned = true
-  const h = await makeHarness({ ownership: (id) => (id === 55 ? (owned ? 'helm' : 'human') : 'helm') })
+  const h = await makeHarness({ ownership: (id) => (id === 55 ? (owned ? 'helmx' : 'human') : 'helmx') })
   h.conversations.set(55, makeConversationSummary(55, { status: 'blocked', stateChangeSeq: 10 }))
   owned = false
   await h.tick([nativeProbe(55, { status: 'blocked', stateChangeSeq: 10 })])
@@ -999,7 +999,7 @@ test('watchdog_inspect：原生会话现查归属与时间线；外部 probe 只
     { conversationId: h.watchdogId },
   )) as { kind: string; conversation: { ownedBy: string; stateChangeSeq: number } }
   assert.equal(native.kind, 'conversation')
-  assert.equal(native.conversation.ownedBy, 'helm')
+  assert.equal(native.conversation.ownedBy, 'helmx')
   assert.equal(native.conversation.stateChangeSeq, 3)
   // 外部 probe：先 tick 产生事实。
   await h.tick([externalProbe('local', 'p1', { status: 'working', stateChangeSeq: 3 })])
@@ -1017,12 +1017,12 @@ test('watchdog_inspect：原生会话现查归属与时间线；外部 probe 只
       { probe: { targetKind: 'external', nodeId: 'local', targetId: 'ghost' } },
       { conversationId: h.watchdogId },
     ),
-    (err: unknown) => err instanceof HelmError && err.status === 404,
+    (err: unknown) => err instanceof HelmxError && err.status === 404,
   )
 })
 
 test('watchdog_recover/abort：owned 会话实际调用注入依赖；human/root/中枢/自身拒绝 403', { timeout: 60_000 }, async () => {
-  const h = await makeHarness({ ownership: (id) => (id === 99 ? 'human' : id === 1 ? 'human' : 'helm') })
+  const h = await makeHarness({ ownership: (id) => (id === 99 ? 'human' : id === 1 ? 'human' : 'helmx') })
   h.conversations.set(55, makeConversationSummary(55))
   h.conversations.set(56, makeConversationSummary(56))
   await h.host.executeTool('watchdog_recover', { conversationId: 55, hint: '请重试' }, { conversationId: h.watchdogId })
@@ -1035,7 +1035,7 @@ test('watchdog_recover/abort：owned 会话实际调用注入依赖；human/root
     await assert.rejects(
       h.host.executeTool('watchdog_abort', { conversationId: bad }, { conversationId: h.watchdogId }),
       (err: unknown) =>
-        err instanceof HelmError &&
+        err instanceof HelmxError &&
         err.status === 403 &&
         (err.code === 'watchdog_target_human' || err.code === 'watchdog_target_protected'),
     )
@@ -1043,7 +1043,7 @@ test('watchdog_recover/abort：owned 会话实际调用注入依赖；human/root
 })
 
 test('专属工具仅实际 watchdog 会话可用：同 profile 直聊与非 watchdog 会话拒绝；HTTP/CLI 无上下文放行但目标守卫仍生效', { timeout: 60_000 }, async () => {
-  const h = await makeHarness({ ownership: () => 'helm' })
+  const h = await makeHarness({ ownership: () => 'helmx' })
   // 调用方会话 321：同 profile 直聊（profileId=watchdog 但非实际巡检会话）。
   // scope 命中（profile 匹配）后由模块自身守卫拒绝——验证直聊拿不到专属控制能力。
   h.conversations.set(321, makeConversationSummary(321, { profileId: 'watchdog' }))
@@ -1052,23 +1052,23 @@ test('专属工具仅实际 watchdog 会话可用：同 profile 直聊与非 wat
   h.conversations.set(55, makeConversationSummary(55))
   await assert.rejects(
     h.host.executeTool('watchdog_abort', { conversationId: 55 }, { conversationId: 322 }),
-    (err: unknown) => err instanceof HelmError && err.code === 'conversation_scope_violation',
+    (err: unknown) => err instanceof HelmxError && err.code === 'conversation_scope_violation',
   )
   // 同 profile 直聊：scope 命中但非实际巡检会话，模块守卫拒绝。
   await assert.rejects(
     h.host.executeTool('watchdog_abort', { conversationId: 55 }, { conversationId: 321 }),
-    (err: unknown) => err instanceof HelmError && err.code === 'watchdog_not_watchdog_session',
+    (err: unknown) => err instanceof HelmxError && err.code === 'watchdog_not_watchdog_session',
   )
   // 带 conversationId 的 action 调用（模拟 run_action / workflow 路径）同守卫。
   await assert.rejects(
     h.host.invokeAction(PLUGIN_ID, 'watchdog_abort', { conversationId: 55 }, { conversationId: 321 }),
-    (err: unknown) => err instanceof HelmError && err.code === 'watchdog_not_watchdog_session',
+    (err: unknown) => err instanceof HelmxError && err.code === 'watchdog_not_watchdog_session',
   )
   // 人工 HTTP/CLI（无 conversationId）：放行执行，但目标所有权守卫照样生效。
-  const h88 = await makeHarness({ ownership: (id) => (id === 88 ? 'human' : 'helm') })
+  const h88 = await makeHarness({ ownership: (id) => (id === 88 ? 'human' : 'helmx') })
   await assert.rejects(
     h88.host.invokeAction(PLUGIN_ID, 'watchdog_abort', { conversationId: 88 }, {}),
-    (err: unknown) => err instanceof HelmError && err.code === 'watchdog_target_human',
+    (err: unknown) => err instanceof HelmxError && err.code === 'watchdog_target_human',
   )
   await h.host.invokeAction(PLUGIN_ID, 'watchdog_recover', { conversationId: 55, hint: 'manual' }, {})
   assert.equal(h.recorded.submits.filter((s) => s.conversationId === 55 && s.text === 'manual').length, 1)
@@ -1205,7 +1205,7 @@ test('缺权威 seq：原生与外部目标都仅通知，不唤醒或变更', {
 test('fire-and-forget 底层失败：显式通知，不静默降级', { timeout: 60_000 }, async () => {
   const boom = new Error('track exploded')
   const h = await makeHarness({
-    ownership: () => 'helm',
+    ownership: () => 'helmx',
     trackImpl: async (label, task) => {
       if (label.startsWith('watchdog:auto-abort')) throw boom
       return task()
@@ -1257,13 +1257,13 @@ test('service：bridge 挂起计入 liveTasks；stop 取消 pending Ask', { time
     setPluginConfig: async () => {},
     manageConversation: () => () => {},
     markConversationOwnership: () => {},
-    getConversationOwnership: () => 'helm',
+    getConversationOwnership: () => 'helmx',
     isClosing: () => false,
     createAsk: (spec) =>
       new Promise<AskResult>((resolve, reject) => {
         recorded.asks.push(spec)
         releaseAsk = (r) => resolve(r)
-        setTimeout(() => reject(new HelmError('ask_wait_timeout', 'test timeout', 500)), 5_000)
+        setTimeout(() => reject(new HelmxError('ask_wait_timeout', 'test timeout', 500)), 5_000)
       }),
     cancelAsk: async (askId) => {
       cancelled.push(askId)
@@ -1277,7 +1277,7 @@ test('service：bridge 挂起计入 liveTasks；stop 取消 pending Ask', { time
     runGate: async () => ({ ok: true, output: '' }),
     emitEvent: () => {},
   }
-  const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir: mkdtempSync(join(tmpdir(), 'helm-saw-svc-')), host: backend, docs })
+  const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir: mkdtempSync(join(tmpdir(), 'helmx-saw-svc-')), host: backend, docs })
   const runtime: SuperAgentWatchdogRuntime = {
     getConfig: () => ({
       routerMode: true,
@@ -1303,7 +1303,7 @@ test('service：bridge 挂起计入 liveTasks；stop 取消 pending Ask', { time
   await new Promise((resolve) => setImmediate(resolve))
   assert.equal(recorded.asks.length, 1)
   // liveTasks 应包含挂起 bridge → disable 被 409 拒绝。
-  await assert.rejects(host.disable(PLUGIN_ID), (err: unknown) => err instanceof HelmError && err.code === 'plugin_has_live_tasks')
+  await assert.rejects(host.disable(PLUGIN_ID), (err: unknown) => err instanceof HelmxError && err.code === 'plugin_has_live_tasks')
   // 结算 Ask 后可停用；stop 路径的取消在另一断言验证。
   releaseAsk?.({ id: recorded.asks[0]!.id ?? 'a', status: 'cancelled', answers: {} })
   await new Promise((resolve) => setImmediate(resolve))
@@ -1315,7 +1315,7 @@ test('service：bridge 挂起计入 liveTasks；stop 取消 pending Ask', { time
   cancelled.length = 0
   // 新水位 seq=20：目标会话同步推进（与探针一致）。
   conversations.set(55, makeConversationSummary(55, { status: 'blocked', stateChangeSeq: 20 }))
-  const host2 = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir: mkdtempSync(join(tmpdir(), 'helm-saw-svc2-')), host: backend, docs })
+  const host2 = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir: mkdtempSync(join(tmpdir(), 'helmx-saw-svc2-')), host: backend, docs })
   await host2.register({
     id: PLUGIN_ID,
     definePlugin(ctx) {
@@ -1349,7 +1349,7 @@ test('回归：去重文档损坏（未知动作/非法 seq/非法结构）显�
     h.docs.store.set(`${PLUGIN_ID}:watchdog-dedup`, body)
     await assert.rejects(
       h.tick([nativeProbe(55, { status: 'error' })]),
-      (err: unknown) => err instanceof HelmError && err.code === 'superagent_doc_corrupt',
+      (err: unknown) => err instanceof HelmxError && err.code === 'superagent_doc_corrupt',
       `损坏文档 ${JSON.stringify(body)} 必须显式拒绝`,
     )
     assert.equal(h.recorded.aborts.length, 0, '拒绝后零处置')
@@ -1409,7 +1409,7 @@ test('回归：wake 提交失败/未就绪不消耗水位，下一 tick 补投�
   const recorded = makeRecorded()
   // 第一阶段：watchdog 会话未就绪（id undefined）→ 显式告知、不投递、不写水位。
   const hNotReady = await makeHarnessWithDocs(sharedDocs, recorded, {
-    ownership: () => 'helm',
+    ownership: () => 'helmx',
     watchdogId: undefined,
   })
   await hNotReady.tick([nativeProbe(55, { status: 'error', stateChangeSeq: 5 })])
@@ -1421,7 +1421,7 @@ test('回归：wake 提交失败/未就绪不消耗水位，下一 tick 补投�
   assert.equal(wakeMarks1.length, 0, '未就绪不消耗 wake 水位')
 
   // 第二阶段：就绪后（同一持久 docs），同水位补投一次并占坑；再 tick 不重复。
-  const h2 = await makeHarnessWithDocs(sharedDocs, makeRecorded(), { ownership: () => 'helm' })
+  const h2 = await makeHarnessWithDocs(sharedDocs, makeRecorded(), { ownership: () => 'helmx' })
   await h2.tick([nativeProbe(55, { status: 'error', stateChangeSeq: 5 })])
   assert.equal(h2.recorded.submits.filter((s) => s.conversationId === 200).length, 1, '水位未被消耗 → 恰好补投一次')
   await h2.tick([nativeProbe(55, { status: 'error', stateChangeSeq: 5 })])
@@ -1466,19 +1466,19 @@ test('回归：stop 取消挂起 Ask 失败时显式错误（不吞），已结�
     setPluginConfig: async () => {},
     manageConversation: () => () => {},
     markConversationOwnership: () => {},
-    getConversationOwnership: () => 'helm',
+    getConversationOwnership: () => 'helmx',
     isClosing: () => false,
     createAsk: (spec) =>
       new Promise<AskResult>((resolve, reject) => {
         recorded.asks.push(spec)
         releaseAsk = (r) => resolve(r)
-        setTimeout(() => reject(new HelmError('ask_wait_timeout', 'test timeout', 500)), 5_000)
+        setTimeout(() => reject(new HelmxError('ask_wait_timeout', 'test timeout', 500)), 5_000)
       }),
     cancelAsk: async (askId) => {
       cancelled.push(askId)
-      if (failMode === 'hard') throw new HelmError('store_io_error', 'disk exploded', 500)
-      if (failMode === 'settled') throw new HelmError('ask_already_settled', '已结算', 409)
-      if (failMode === 'missing') throw new HelmError('not_found', '不存在', 404)
+      if (failMode === 'hard') throw new HelmxError('store_io_error', 'disk exploded', 500)
+      if (failMode === 'settled') throw new HelmxError('ask_already_settled', '已结算', 409)
+      if (failMode === 'missing') throw new HelmxError('not_found', '不存在', 404)
     },
     registerAskSeqResolver: () => () => {},
     onEvent: () => () => {},
@@ -1501,7 +1501,7 @@ test('回归：stop 取消挂起 Ask 失败时显式错误（不吞），已结�
     track: async <T>(_label: string, task: () => Promise<T>) => task(),
   }
   const mkHost = async () => {
-    const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir: mkdtempSync(join(tmpdir(), 'helm-saw-cancel-')), host: backend, docs })
+    const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir: mkdtempSync(join(tmpdir(), 'helmx-saw-cancel-')), host: backend, docs })
     await host.register({
       id: PLUGIN_ID,
       definePlugin(ctx) {
@@ -1519,7 +1519,7 @@ test('回归：stop 取消挂起 Ask 失败时显式错误（不吞），已结�
   await assert.rejects(
     hostHard.dispose(),
     (err: unknown) =>
-      err instanceof HelmError &&
+      err instanceof HelmxError &&
       (err.code === 'plugin_dispose_failed' || err.code === 'plugin_service_stop_failed'),
     '取消硬失败必须显式上抛',
   )
@@ -1532,7 +1532,7 @@ test('回归：stop 取消挂起 Ask 失败时显式错误（不吞），已结�
     const seq = mode === 'settled' ? 11 : 12
     conversations.set(55, makeConversationSummary(55, { status: 'blocked', stateChangeSeq: seq }))
     const host2 = new PluginHost({ buildProvider: createPluginBuildProvider(),
-      dataDir: mkdtempSync(join(tmpdir(), 'helm-saw-cancel2-')),
+      dataDir: mkdtempSync(join(tmpdir(), 'helmx-saw-cancel2-')),
       host: backend,
       docs: new MemoryDocStore(),
     })
@@ -1554,7 +1554,7 @@ test('回归：stop 取消挂起 Ask 失败时显式错误（不吞），已结�
 test('唤醒前重新核对归属和水位，人类接管或过期事实不投递模型', { timeout: 60_000 }, async () => {
   // injectNativeAsExternal：探针事实与宿主现查解耦。注入后：55 现查 human
   //（人类接管）、66 会话已不存在（投递前现查 not_found）——两者都不得投递。
-  const h = await makeHarness({ injectNativeAsExternal: true, ownership: (id) => (id === 55 ? 'human' : 'helm') })
+  const h = await makeHarness({ injectNativeAsExternal: true, ownership: (id) => (id === 55 ? 'human' : 'helmx') })
   h.conversations.delete(66)
   await h.tick([
     nativeProbe(55, { status: 'error', stateChangeSeq: 10 }),
@@ -1590,7 +1590,7 @@ test('不同 tick 在同一权威水位提交尚未完成时也只投递一次',
 })
 
 test('授权桥不能为中枢等受保护入口创建自动干预问询', { timeout: 60_000 }, async () => {
-  const h = await makeHarness({ ownership: () => 'helm' })
+  const h = await makeHarness({ ownership: () => 'helmx' })
   h.conversations.set(h.routerId, makeConversationSummary(h.routerId, { profileId: 'superagent', status: 'blocked' }))
   await h.tick([nativeProbe(h.routerId, { status: 'blocked' })])
   assert.deepEqual(h.recorded.asks, [])
@@ -1607,7 +1607,7 @@ test('service 定时巡检：真实启停验证——start 后周期 tick 真实
   // 这里不等待 15s，而是验证启停生命周期结构：start 后手动触发同一入口、
   // stop 后拒绝。周期真实性由「start 调度 scheduleTick」+ 下方 singleflight
   // 测试间接覆盖（同一 runSingleflightTick 入口）。
-  const h = await makeHarness({ ownership: () => 'helm' })
+  const h = await makeHarness({ ownership: () => 'helmx' })
   h.conversations.set(55, makeConversationSummary(55, { status: 'error', stateChangeSeq: 10 }))
   // 手动动作与定时 tick 同一 runTick+evaluateCollection：处置路径已验证。
   await h.tick([nativeProbe(55, { status: 'error', stateChangeSeq: 10 })])
@@ -1618,7 +1618,7 @@ test('service 定时巡检：真实启停验证——start 后周期 tick 真实
   // 停用后手动动作显式拒绝（动作随插件停用消失，无幻影入口）。
   await assert.rejects(
     h.host.invokeAction(PLUGIN_ID, 'watchdog_tick', {}),
-    (err: unknown) => err instanceof HelmError,
+    (err: unknown) => err instanceof HelmxError,
     '停用后 watchdog_tick 动作必须显式拒绝',
   )
   // 重新启用：动作恢复（新启用周期）。
@@ -1636,7 +1636,7 @@ test('service stop 等待在途 tick 收敛（不撕裂进行中的巡检，不�
   const tickGate = new Promise<void>((resolve) => { releaseTick = resolve })
   let entered = false
   const h = await makeHarness({
-    ownership: () => 'helm',
+    ownership: () => 'helmx',
     // 手动 tick 动作不经 runtime.track；用外部采集监听器构造在途门（宿主事件
     // await 全部监听器，与定时 tick 的 emitEvent 同一语义）。
   })
@@ -1653,7 +1653,7 @@ test('service stop 等待在途 tick 收敛（不撕裂进行中的巡检，不�
     // 注：动作层在途任务由 PluginHost tracker 计入，与 service.liveTasks 并集。
     await assert.rejects(
       h.host.disable(PLUGIN_ID),
-      (err: unknown) => err instanceof HelmError && err.code === 'plugin_has_live_tasks',
+      (err: unknown) => err instanceof HelmxError && err.code === 'plugin_has_live_tasks',
       '在途巡检必须阻止停用（liveTasks 语义）',
     )
     releaseTick()
@@ -1667,11 +1667,11 @@ test('service stop 等待在途 tick 收敛（不撕裂进行中的巡检，不�
 })
 
 test('isClosing 守卫：宿主关闭中拒绝启动新巡检（不无边界等待）', { timeout: 60_000 }, async () => {
-  const h = await makeHarness({ ownership: () => 'helm' })
+  const h = await makeHarness({ ownership: () => 'helmx' })
   h.setBackendClosing(true)
   await assert.rejects(
     h.host.invokeAction(PLUGIN_ID, 'watchdog_tick', {}),
-    (err: unknown) => err instanceof HelmError && (err.code === 'plugin_disabled' || err.code === 'plugin_context_expired'),
+    (err: unknown) => err instanceof HelmxError && (err.code === 'plugin_disabled' || err.code === 'plugin_context_expired'),
     '宿主关闭中 tick 必须显式拒绝',
   )
   h.setBackendClosing(false)
@@ -1680,7 +1680,7 @@ test('isClosing 守卫：宿主关闭中拒绝启动新巡检（不无边界等�
 })
 
 test('外部采集监听器抛错：tick 显式失败并通知，不静默跳过', { timeout: 60_000 }, async () => {
-  const h = await makeHarness({ ownership: () => 'helm' })
+  const h = await makeHarness({ ownership: () => 'helmx' })
   const release = h.registerExternalCollector(() => {
     throw new Error('herdr collector exploded')
   })
@@ -1699,7 +1699,7 @@ test('外部采集监听器抛错：tick 显式失败并通知，不静默跳过
 })
 
 test('采集超时看护：挂死的 diagnostics.collect 监听器被有界放弃，singleflight 放行下一轮', { timeout: 60_000 }, async (t) => {
-  const h = await makeHarness({ ownership: () => 'helm' })
+  const h = await makeHarness({ ownership: () => 'helmx' })
   let entered = 0
   // 挂死监听器：进入后永不 settle（模拟跨插件采集方挂死）
   const release = h.registerExternalCollector(() => {
@@ -1715,7 +1715,7 @@ test('采集超时看护：挂死的 diagnostics.collect 监听器被有界放�
     t.mock.timers.tick(TICK_COLLECT_TIMEOUT_MS)
     await assert.rejects(
       pending,
-      (err: unknown) => err instanceof HelmError && err.code === 'watchdog_collect_timeout',
+      (err: unknown) => err instanceof HelmxError && err.code === 'watchdog_collect_timeout',
       '采集超时必须显式拒绝（不静默挂死）',
     )
   } finally {
@@ -1734,7 +1734,7 @@ test('采集超时看护：挂死的 diagnostics.collect 监听器被有界放�
 test('singleflight：手动与并发手动共用同一在途 Promise，skipped 返回真实采集计数（非 0 伪造）', { timeout: 60_000 }, async () => {
   let releaseCollector!: () => void
   const gate = new Promise<void>((resolve) => { releaseCollector = resolve })
-  const h = await makeHarness({ ownership: () => 'helm' })
+  const h = await makeHarness({ ownership: () => 'helmx' })
   const release = h.registerExternalCollector(async () => { await gate })
   try {
     const first = h.host.invokeAction(PLUGIN_ID, 'watchdog_tick', {}) as Promise<{
@@ -1765,14 +1765,14 @@ test('singleflight：手动与并发手动共用同一在途 Promise，skipped �
 })
 
 test('collection 形状校验：监听方注入非法探针 / 破坏 collection 结构 → tick 显式失败', { timeout: 60_000 }, async () => {
-  const h = await makeHarness({ ownership: () => 'helm' })
+  const h = await makeHarness({ ownership: () => 'helmx' })
   // 1) appendProbes 入口拦截非法探针。
   const r1 = h.registerExternalCollector((collection) => {
-    ;(collection.probes as unknown[]).push({ targetId: '', ownedBy: 'helm', status: 'x' })
+    ;(collection.probes as unknown[]).push({ targetId: '', ownedBy: 'helmx', status: 'x' })
   })
   await assert.rejects(
     h.host.invokeAction(PLUGIN_ID, 'watchdog_tick', {}),
-    (err: unknown) => err instanceof HelmError,
+    (err: unknown) => err instanceof HelmxError,
     '非法探针必须在采集边界拒绝',
   )
   r1()
@@ -1782,7 +1782,7 @@ test('collection 形状校验：监听方注入非法探针 / 破坏 collection 
   })
   await assert.rejects(
     h.host.invokeAction(PLUGIN_ID, 'watchdog_tick', {}),
-    (err: unknown) => err instanceof HelmError && err.code === 'invalid_diagnostics_collection',
+    (err: unknown) => err instanceof HelmxError && err.code === 'invalid_diagnostics_collection',
     'collection 结构破坏必须在终态复验拒绝',
   )
   r2()

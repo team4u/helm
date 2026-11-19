@@ -4,8 +4,8 @@
  * scraping), workflow run card phase grouping / log beacons / node summaries /
  * action availability and node stats (zero React/DOM dependencies).
  */
-import { DEFAULT_HELM_LOCALE, resolveLocalizedText, type HelmLocale } from '@helm/plugin-client'
-import type { ConversationSummary } from '@helm/protocol'
+import { DEFAULT_HELMX_LOCALE, resolveLocalizedText, type HelmxLocale } from '@helmx/plugin-client'
+import type { ConversationSummary } from '@helmx/protocol'
 import type { WorkflowNodeState, WorkflowRunSummary } from '../../contracts.js'
 import { firstLineOf, formatShortModelName, inputString, inspectString, isPlaceholderRunName } from './model-format.ts'
 import {
@@ -95,7 +95,7 @@ export function resolveWorkflowRunDisplayName(
 }
 
 /** Extract a readable title from the tool input when no run record is linked, avoiding blank space. */
-export function resolveWorkflowToolFallbackLabel(input: unknown, locale: HelmLocale = DEFAULT_HELM_LOCALE): string {
+export function resolveWorkflowToolFallbackLabel(input: unknown, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
   const label = inputString(input, 'label')
   if (label !== undefined) return firstLineOf(label, 60)
   const name = inputString(input, 'name')
@@ -159,7 +159,7 @@ export function resolveNodeSummaryText(
   childDoing?: string,
   childStatus?: ConversationSummary['status'],
   pendingAskTitle?: string,
-  locale: HelmLocale = DEFAULT_HELM_LOCALE,
+  locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
 ): NodeSummaryText {
   if (node.status === 'running' && childStatus === 'blocked') {
     return { text: nodeAwaitingApproval(pendingAskTitle ?? childDoing, locale), isError: false }
@@ -213,7 +213,7 @@ function sectionStatus(
   return runStatus === 'running' ? 'running' : 'pending'
 }
 
-export function buildWorkflowPhaseSections(run: WorkflowRunSummary, locale: HelmLocale = DEFAULT_HELM_LOCALE): WorkflowPhaseSection[] {
+export function buildWorkflowPhaseSections(run: WorkflowRunSummary, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): WorkflowPhaseSection[] {
   const nodes = run.nodes ?? []
   const allNodes = [...nodes]
   const defaultSectionTitle = resolveLocalizedText(DEFAULT_PHASE_TITLE, locale)
@@ -418,7 +418,7 @@ export function canDetachForegroundRun(run: WorkflowRunSummary, viewer: DetachVi
     run.detachedAt === undefined &&
     viewer?.conversationId === run.conversationId &&
     viewer.ownedBy !== 'bot' &&
-    viewer.ownedBy !== 'helm'
+    viewer.ownedBy !== 'helmx'
   )
 }
 

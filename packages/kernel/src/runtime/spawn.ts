@@ -22,8 +22,8 @@
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { AgentChange, Extension } from '@earendil-works/pi-durable'
 import type { ModelThinkingLevel } from '@earendil-works/pi-ai'
-import type { AgentSpawnRequest, ConversationPatch, ConversationSummary } from '@helm/protocol'
-import { HelmError, sanitizeAgentNamespacedMeta } from '@helm/protocol'
+import type { AgentSpawnRequest, ConversationPatch, ConversationSummary } from '@helmx/protocol'
+import { HelmxError, sanitizeAgentNamespacedMeta } from '@helmx/protocol'
 import type { Harness } from '@earendil-works/pi-durable'
 import type { Models } from '@earendil-works/pi-ai'
 import { parseModelRef, type ModelRefParts } from './models.js'
@@ -39,7 +39,7 @@ import {
   readSubmissionAssistantText,
   recoverAcceptedStructuredOutput,
 } from './spawn-reattach.js'
-import type { HelmToolDeps } from './tool-deps.js'
+import type { HelmxToolDeps } from './tool-deps.js'
 import { runGate, MAX_TIMEOUT_MS } from './tools.js'
 import {
   STRUCTURED_OUTPUT_EXTENSION_NAME,
@@ -67,7 +67,7 @@ const MAX_SPAWN_TITLE_LENGTH = 120
 export function assertSpawnRequestTitle(title: unknown): void {
   if (title === undefined) return
   if (typeof title !== 'string') {
-    throw new HelmError(
+    throw new HelmxError(
       'validation_error',
       `title must be a string (received ${title === null ? 'null' : typeof title})`,
       400,
@@ -76,7 +76,7 @@ export function assertSpawnRequestTitle(title: unknown): void {
   for (let i = 0; i < title.length; i += 1) {
     const code = title.charCodeAt(i)
     if (code < 0x20 || code === 0x7f) {
-      throw new HelmError('validation_error', 'title must not contain control characters', 400)
+      throw new HelmxError('validation_error', 'title must not contain control characters', 400)
     }
   }
 }
@@ -113,11 +113,11 @@ export interface ResolvedProfile {
  * Dependency ports for native spawn (host-injected; assembled in `runtime.ts`).
  * `resolveProfile` returning `undefined` means missing profile (throws explicitly instead of defaulting).
  */
-export interface NativeSpawnDeps extends HelmToolDeps {
+export interface NativeSpawnDeps extends HelmxToolDeps {
   harness: Harness
   /** `conversationId ->` latest assistant text (maintained by tracker). */
   getLastAssistantText(conversationId: number): string | undefined
-  /** Global default model `'provider/model'` (throws `HelmError` when unconfigured). */
+  /** Global default model `'provider/model'` (throws `HelmxError` when unconfigured). */
   resolveModel(): { provider: string; modelId: string }
   /**
    * Current `Models` catalog (used to clamp `thinkingLevel` capabilities; host injects `ModelRegistry.models`).
@@ -149,7 +149,7 @@ export interface NativeSpawnDeps extends HelmToolDeps {
    */
   structuredOutputSessions?: Map<number, StructuredOutputSession>
   /**
-   * Record parent-child relationship and validate profile: invalid `profileId` must throw `HelmError('not_found')`.
+   * Record parent-child relationship and validate profile: invalid `profileId` must throw `HelmxError('not_found')`.
    * `childCwd` is the effective cwd used by the child conversation (also used by Gate).
    * `modelMirror` is the resolved model snapshot (`'provider/model'` or `''` if unset).
    * `tags` are child conversation tags (decided by host; native spawn assigns no business role tags).
@@ -191,7 +191,7 @@ export interface NativeSpawnDeps extends HelmToolDeps {
    */
   getParentOfConversation(childId: number): number | undefined
   /**
-   * Read Helm conversation snapshot (`profileId` / `cwd` / `model` etc. true configuration).
+   * Read Helmx conversation snapshot (`profileId` / `cwd` / `model` etc. true configuration).
    * Sole source of truth for inherited config on resume; used on creation to fall back to parent cwd
    * (`request > Profile > parent > Hub` chain). Returns `undefined` if missing.
    */
@@ -249,7 +249,7 @@ function inTurnSet(harness: Harness): Set<number> {
 export function claimSpawnConversation(harness: Harness, childId: number): void {
   const set = inTurnSet(harness)
   if (set.has(childId)) {
-    throw new HelmError('subagent_in_use', `Child conversation ${childId} already has an execution in flight; concurrent resume is not allowed`, 409, { conversationId: childId })
+    throw new HelmxError('subagent_in_use', `Child conversation ${childId} already has an execution in flight; concurrent resume is not allowed`, 409, { conversationId: childId })
   }
   set.add(childId)
 }
@@ -276,7 +276,7 @@ export async function runNativeSpawn(deps: NativeSpawnDeps, request: AgentSpawnR
       ? undefined
       : resolveReattachRef(deps, request.reattach.conversationId, request.parentConversationId)
   if (reattachChildId !== undefined && request.requestId === undefined) {
-    throw new HelmError(
+    throw new HelmxError(
       'validation_error',
       'reattach.conversationId requires requestId for idempotent cross-restart reattachment',
       400,
@@ -287,7 +287,7 @@ export async function runNativeSpawn(deps: NativeSpawnDeps, request: AgentSpawnR
     // Status preflight complements `claim` as a second guard (covers historical in-flight runs outside this table).
     const status = deps.getConversation(resumeChildId)?.status
     if (status === 'working' || status === 'blocked') {
-      throw new HelmError('subagent_in_use', `Child conversation ${resumeChildId} already has an execution in flight; concurrent resume is not allowed`, 409, {
+      throw new HelmxError('subagent_in_use', `Child conversation ${resumeChildId} already has an execution in flight; concurrent resume is not allowed`, 409, {
         conversationId: resumeChildId,
       })
     }
@@ -340,7 +340,7 @@ async function runNativeSpawnTurn(
   const resume = resolveSpawnResume(deps, request)
   const parentSummary = deps.getConversation(request.parentConversationId)
   if (request.fork === true && parentSummary === undefined) {
-    throw new HelmError('not_found', `Parent conversation ${request.parentConversationId} not found; cannot fork`, 404, {
+    throw new HelmxError('not_found', `Parent conversation ${request.parentConversationId} not found; cannot fork`, 404, {
       parentConversationId: request.parentConversationId,
     })
   }
@@ -375,7 +375,7 @@ async function runNativeSpawnTurn(
   const structured = prepareStructuredSession(request)
   if (structured !== undefined && deps.structuredOutputSessions === undefined) {
     // Fail loudly on miswiring so structured outputs are never silently dropped.
-    throw new HelmError(
+    throw new HelmxError(
       'invalid_state',
       'Request specifies schema but host did not inject structuredOutputSessions (wiring defect): nowhere to register structured output slot',
       500,
@@ -400,7 +400,7 @@ async function runNativeSpawnTurn(
 
   const conversation = await deps.harness.conversation(childId as never, bg)
   if (!conversation) {
-    throw new HelmError('not_found', `Child conversation not found: ${childId}`, 404)
+    throw new HelmxError('not_found', `Child conversation not found: ${childId}`, 404)
   }
 
   // Attach structured-output extension on resume if original conversation didn't carry it.
@@ -426,7 +426,7 @@ async function runNativeReattachTurn(
   const existing = deps.getConversation(childId)
   const parent = deps.getParentOfConversation(childId)
   if (existing === undefined || parent === undefined || parent !== request.parentConversationId) {
-    throw new HelmError(
+    throw new HelmxError(
       'not_found',
       `Reattach target child conversation ${childId} does not exist or does not belong to parent conversation ${request.parentConversationId}`,
       404,
@@ -440,7 +440,7 @@ async function runNativeReattachTurn(
   deps.assertNodeAvailable?.(target.nodeId)
   const structured = prepareStructuredSession(request)
   if (structured !== undefined && deps.structuredOutputSessions === undefined) {
-    throw new HelmError(
+    throw new HelmxError(
       'invalid_state',
       'Request specifies schema but host did not inject structuredOutputSessions (wiring defect): nowhere to register structured output slot',
       500,
@@ -461,7 +461,7 @@ async function runNativeReattachTurn(
     if (structured !== undefined && deps.structuredOutputSessions?.get(childId) === structured) {
       deps.structuredOutputSessions.delete(childId)
     }
-    throw new HelmError('not_found', `Child conversation not found: ${childId}`, 404, { conversationId: childId })
+    throw new HelmxError('not_found', `Child conversation not found: ${childId}`, 404, { conversationId: childId })
   }
   if (structured !== undefined && structuredExtension !== undefined) {
     const agent = await conversation.agent(bg)
@@ -479,34 +479,34 @@ function assertSpawnRequestShape(request: AgentSpawnRequest): void {
   if (request.isolation !== undefined && request.isolation !== null && request.isolation !== '') {
     // Kernel has zero business branches: non-empty isolation reaching native execution means no plugin claimed it
     // via `agent_spawn` continuation (e.g., `builtin:workflow` disabled when worktree isolation was requested).
-    throw new HelmError(
+    throw new HelmxError(
       'unsupported_runtime',
       `isolation='${request.isolation}' is not supported here: native subagent execution does not implement isolated execution environments (handled by the corresponding plugin via the agent_spawn hook, which is currently unregistered or disabled)`,
       400,
     )
   }
   if (request.signal?.aborted) {
-    throw new HelmError('aborted', 'Spawn request aborted before child creation (signal already aborted)', 409)
+    throw new HelmxError('aborted', 'Spawn request aborted before child creation (signal already aborted)', 409)
   }
   const agentType = request.agentType ?? ''
   // Common namespace prefix rule: any '<namespace>:<kind>' external runtime (e.g. 'herdr:agy', 'docker:devbox')
   // must be claimed by an `agent_spawn` hook; without hardcoding plugin names, kernel always throws `unsupported_runtime`.
   if (agentType.includes(':')) {
-    throw new HelmError(
+    throw new HelmxError(
       'unsupported_runtime',
       `agentType '${agentType}' is a namespaced external runtime identifier that must be claimed via the agent_spawn hook (no matching runtime is currently registered)`,
       400,
     )
   }
   if (request.reattach !== undefined && request.reattach.conversationId === undefined) {
-    throw new HelmError(
+    throw new HelmxError(
       'unsupported_runtime',
       `Native subagent runner cannot reattach solely by executionId='${request.reattach.executionId ?? ''}' (requires the corresponding external runtime plugin to handle it)`,
       400,
     )
   }
   if (request.effort !== undefined && !THINKING_LEVELS.has(request.effort)) {
-    throw new HelmError(
+    throw new HelmxError(
       'validation_error',
       `Invalid effort '${request.effort}'; valid values: ${[...THINKING_LEVELS].join(' | ')}`,
       400,
@@ -521,7 +521,7 @@ function resolveSpawnResume(deps: NativeSpawnDeps, request: AgentSpawnRequest): 
   if (resumeRef === undefined) return { childId: undefined, isResume: false, existing: undefined }
   const childId = resolveResumeRef(deps, resumeRef, request.parentConversationId)
   if (childId === undefined) {
-    throw new HelmError(
+    throw new HelmxError(
       'not_found',
       `Resume target '${resumeRef}' was not found or does not belong to parent conversation ${request.parentConversationId}: ` +
         `neither an existing agentId mapping nor a valid child conversation ID; refusing to create a new conversation instead`,
@@ -530,7 +530,7 @@ function resolveSpawnResume(deps: NativeSpawnDeps, request: AgentSpawnRequest): 
   }
   const existing = deps.getConversation(childId)
   if (existing === undefined) {
-    throw new HelmError(
+    throw new HelmxError(
       'not_found',
       `Resumed conversation ${childId} has no snapshot record (inconsistent host state); refusing blind resume`,
       404,
@@ -544,7 +544,7 @@ function resolveSpawnResume(deps: NativeSpawnDeps, request: AgentSpawnRequest): 
 async function resolveProfileForSpawn(deps: NativeSpawnDeps, profileId: string): Promise<ResolvedProfile> {
   const profile = await deps.resolveProfile(profileId)
   if (profile === undefined) {
-    throw new HelmError(
+    throw new HelmxError(
       'not_found',
       `agentType '${profileId}' is not a registered Profile (profiles/${profileId} not found)`,
       404,
@@ -552,7 +552,7 @@ async function resolveProfileForSpawn(deps: NativeSpawnDeps, profileId: string):
   }
   if (profile.runtime) {
     // Profile explicitly declares an external runtime (such as herdr) without an active plugin handler -> refuse fallback.
-    throw new HelmError(
+    throw new HelmxError(
       'unsupported_runtime',
       `Profile '${profileId}' declares runtime.kind='${profile.runtime.kind}' (agent '${profile.runtime.agent}'), ` +
         `which requires its plugin to handle it; unsupported by the native subagent runner`,
@@ -684,14 +684,14 @@ async function createChildConversation(
         ? { thinkingLevel: null }
         : {}),
     // Extensions must pass extension objects (SDK retains names, resolving snapshots after installation);
-    // when forking without schema, strip inherited `helm-structured-output` from parent conversation.
+    // when forking without schema, strip inherited `helmx-structured-output` from parent conversation.
     ...(extensionsChange !== undefined ? { extensions: extensionsChange } : {}),
   }
   let conv
   if (request.fork === true) {
     const parentConv = await deps.harness.conversation(request.parentConversationId as never, bg)
     if (!parentConv) {
-      throw new HelmError('not_found', `Parent conversation not found: ${request.parentConversationId}`, 404, {
+      throw new HelmxError('not_found', `Parent conversation not found: ${request.parentConversationId}`, 404, {
         parentConversationId: request.parentConversationId,
       })
     }
@@ -782,11 +782,11 @@ async function runChildTurn(
     if (guarded !== undefined) return guarded(childId)
     return Promise.resolve(conversation.abort(bg)).then(() => undefined)
   }
-  let abortError: HelmError | undefined
+  let abortError: HelmxError | undefined
   /** Settle parent immediately if guard refuses abort (absorbs race errors and suppresses late child outcomes). */
-  let releaseParentOnGuardRefusal: ((error: HelmError) => void) | undefined
+  let releaseParentOnGuardRefusal: ((error: HelmxError) => void) | undefined
   const onAbort = () => {
-    abortError = new HelmError('aborted', 'Subagent execution was cancelled (request.signal aborted)', 499, {
+    abortError = new HelmxError('aborted', 'Subagent execution was cancelled (request.signal aborted)', 499, {
       conversationId: childId,
     })
     void abortChildTurn().then(
@@ -795,13 +795,13 @@ async function runChildTurn(
       },
       (guardError: unknown) => {
         const message = guardError instanceof Error ? guardError.message : String(guardError)
-        abortError = new HelmError(
+        abortError = new HelmxError(
           'aborted',
           `Subagent execution was cancelled; child conversation ${String(childId)} is guard-protected and was not aborted (${message})`,
           499,
           { conversationId: childId },
         )
-        process.stderr.write(`[helm] child conversation ${String(childId)} abort refused/failed: ${message}\n`)
+        process.stderr.write(`[helmx] child conversation ${String(childId)} abort refused/failed: ${message}\n`)
         releaseParentOnGuardRefusal?.(abortError)
       },
     )
@@ -814,12 +814,12 @@ async function runChildTurn(
     if (request.signal?.aborted) {
       await abortChildTurn().catch((error: unknown) => {
         process.stderr.write(
-          `[helm] child conversation ${String(childId)} startup abort refused/failed: ${
+          `[helmx] child conversation ${String(childId)} startup abort refused/failed: ${
             error instanceof Error ? error.message : String(error)
           }\n`,
         )
       })
-      throw new HelmError('aborted', 'Subagent execution cancelled during startup', 499, { conversationId: childId })
+      throw new HelmxError('aborted', 'Subagent execution cancelled during startup', 499, { conversationId: childId })
     }
     const turn = driveTurn(deps, request, conversation, childId, structured, gateCwd)
     // Suppress unhandled rejections if `guardRefusal` settles the race first.
@@ -949,7 +949,7 @@ Schema: ${JSON.stringify(structured.schema)}`,
       await settleGate(deps, request, gateCwd, childId)
       return retry.value
     }
-    throw new HelmError(
+    throw new HelmxError(
       'schema_validation_failed',
       `Subagent (conversation ${childId}) failed Schema validation twice; final output starts with: ${(retry.raw || lastText).slice(0, 200)}`,
       502,
@@ -960,7 +960,7 @@ Schema: ${JSON.stringify(structured.schema)}`,
   await settleGate(deps, request, gateCwd, childId)
   const text = await resolveTurnText(settled)
   if (text === undefined || text === '') {
-    throw new HelmError('subagent_failed', `Subagent (conversation ${childId}) completed without text output`, 502, {
+    throw new HelmxError('subagent_failed', `Subagent (conversation ${childId}) completed without text output`, 502, {
       conversationId: childId,
     })
   }
@@ -970,7 +970,7 @@ Schema: ${JSON.stringify(structured.schema)}`,
 /** Fail explicitly on incomplete turns (failed/aborted, etc.) instead of returning stale assistant text. */
 function assertNotUnanswered(settled: { status: string; reason?: string }, childId: number): void {
   if (settled.status !== 'unanswered') return
-  throw new HelmError(
+  throw new HelmxError(
     'subagent_failed',
     `Subagent (conversation ${childId}) turn did not complete: ${settled.reason}`,
     502,
@@ -1004,7 +1004,7 @@ async function settleGate(
   })
   if (!gate.ok) {
     const label = gate.timedOut ? 'timed out and was forcibly terminated' : `exitCode=${gate.exitCode}`
-    throw new HelmError(
+    throw new HelmxError(
       'gate_failed',
       `Verification command failed (${label}): ${request.gate}\n${gate.output.slice(-2000)}`,
       502,
@@ -1020,7 +1020,7 @@ async function settleGate(
 /** Validate `gateTimeoutMs`: must be integer in `(0, MAX_TIMEOUT_MS]` (matching `bash`/`runGate` limits). */
 function assertGateTimeoutMs(value: number): void {
   if (!Number.isInteger(value) || value <= 0 || value > MAX_TIMEOUT_MS) {
-    throw new HelmError(
+    throw new HelmxError(
       'validation_error',
       `gateTimeoutMs must be an integer in (0, ${MAX_TIMEOUT_MS}], received ${value}`,
       400,
@@ -1049,7 +1049,7 @@ function resolveResumeRef(deps: NativeSpawnDeps, ref: string, parentId: number):
  */
 function resolveReattachRef(deps: NativeSpawnDeps, convId: number, parentId: number): number {
   if (!Number.isSafeInteger(convId) || convId <= 0) {
-    throw new HelmError(
+    throw new HelmxError(
       'validation_error',
       `reattach.conversationId must be a positive safe integer (received ${String(convId)})`,
       400,
@@ -1059,7 +1059,7 @@ function resolveReattachRef(deps: NativeSpawnDeps, convId: number, parentId: num
   const parent = deps.getParentOfConversation(convId)
   const existing = deps.getConversation(convId)
   if (existing === undefined || parent === undefined || parent !== parentId) {
-    throw new HelmError(
+    throw new HelmxError(
       'not_found',
       `Reattach target child conversation ${convId} does not exist or does not belong to parent conversation ${parentId}; refusing to create a new conversation instead`,
       404,

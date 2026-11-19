@@ -22,7 +22,7 @@ import { after, before, describe, it } from 'node:test'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { HelmError, type AgentExecutionInfo } from '@helm/protocol'
+import { HelmxError, type AgentExecutionInfo } from '@helmx/protocol'
 import { withWorkflowSpawnMeta, type WorkflowRunSummary } from '../src/contracts.js'
 import { WorkflowService, type WorkflowServiceHost, type WorkflowStateStore } from '../src/workflow/engine/service.js'
 
@@ -106,7 +106,7 @@ function makeHost(options: { notifyFailTimes?: number } = {}): ProgrammableHost 
       if (behavior.kind === 'preResolveFail') throw behavior.error
       if (behavior.kind === 'noOnResolved') return behavior.result
       // 其余场景：先 onResolved，再挂起等待放行或被 signal 取消
-      //（与真实 spawn 行为一致：abort → HelmError('aborted') reject）。
+      //（与真实 spawn 行为一致：abort → HelmxError('aborted') reject）。
       request.onResolved?.(behavior.execution)
       const wait = new Promise<void>((resolve) => {
         releaseSpawn = resolve
@@ -114,12 +114,12 @@ function makeHost(options: { notifyFailTimes?: number } = {}): ProgrammableHost 
       const cancelled = new Promise<never>((_, reject) => {
         if (request.signal === undefined) return
         if (request.signal.aborted) {
-          reject(new HelmError('aborted', '子代理执行被取消', 409))
+          reject(new HelmxError('aborted', '子代理执行被取消', 409))
           return
         }
         request.signal.addEventListener(
           'abort',
-          () => reject(new HelmError('aborted', '子代理执行被取消', 409)),
+          () => reject(new HelmxError('aborted', '子代理执行被取消', 409)),
           { once: true },
         )
       })
@@ -133,19 +133,19 @@ function makeHost(options: { notifyFailTimes?: number } = {}): ProgrammableHost 
       spawnSettled = true
       void outcome
       if (behavior.kind === 'gateFail') {
-        throw new HelmError('gate_failed', 'gate 验收失败：exit 1', 422)
+        throw new HelmxError('gate_failed', 'gate 验收失败：exit 1', 422)
       }
       return behavior.result ?? 'done-result'
     },
     async invokeAction() {
-      throw new HelmError('unknown_action', '后台子代理测试不调用动作', 404)
+      throw new HelmxError('unknown_action', '后台子代理测试不调用动作', 404)
     },
     listActions() {
       return []
     },
     getConversation(id: number) {
       if (id >= 900) {
-        throw new HelmError('not_found', `会话 ${id} 不存在`, 404)
+        throw new HelmxError('not_found', `会话 ${id} 不存在`, 404)
       }
       return {
         id,
@@ -191,7 +191,7 @@ describe('startBackgroundAgent', () => {
       execution: {
         conversationId: 42,
         effectiveCwd: '/tmp/wt',
-        meta: { 'builtin:workflow': { worktree: { path: '/tmp/wt', branch: 'helm/spawn-1' } } },
+        meta: { 'builtin:workflow': { worktree: { path: '/tmp/wt', branch: 'helmx/spawn-1' } } },
       },
       result: 'slow-task-result',
     }
@@ -213,12 +213,12 @@ describe('startBackgroundAgent', () => {
     assert.deepEqual(execution, {
       conversationId: 42,
       effectiveCwd: '/tmp/wt',
-      meta: { 'builtin:workflow': { worktree: { path: '/tmp/wt', branch: 'helm/spawn-1' } } },
+      meta: { 'builtin:workflow': { worktree: { path: '/tmp/wt', branch: 'helmx/spawn-1' } } },
     })
     // 节点元数据已就位（getRun 实时视图）。
     const live = service.getRun(run.id)
     assert.equal(live.nodes?.[0]?.conversationId, 42)
-    assert.equal(live.nodes?.[0]?.worktree?.branch, 'helm/spawn-1')
+    assert.equal(live.nodes?.[0]?.worktree?.branch, 'helmx/spawn-1')
 
     // 慢任务完成 → wait 返回结果，run 终态 completed。
     host.release()
@@ -268,7 +268,7 @@ describe('startBackgroundAgent', () => {
 
   it('前置错误同步抛出：spawn 在 onResolved 前失败当场 reject，不留僵尸 running', timeout, async () => {
     const host = makeHost()
-    host.behavior = { kind: 'preResolveFail', error: new HelmError('not_a_git_repo', '目标目录不是 Git 仓库', 400) }
+    host.behavior = { kind: 'preResolveFail', error: new HelmxError('not_a_git_repo', '目标目录不是 Git 仓库', 400) }
     const state = makeStateStore()
     const service = new WorkflowService({ dataDir, host, state })
 
@@ -279,7 +279,7 @@ describe('startBackgroundAgent', () => {
           prompt: '建 worktree',
         }),
       (error: unknown) => {
-        assert.ok(error instanceof HelmError)
+        assert.ok(error instanceof HelmxError)
         assert.equal(error.code, 'not_a_git_repo')
         return true
       },
@@ -351,7 +351,7 @@ describe('startBackgroundAgent', () => {
         if (request.signal === undefined) return
         request.signal.addEventListener(
           'abort',
-          () => reject(new HelmError('aborted', '子代理执行被取消', 409)),
+          () => reject(new HelmxError('aborted', '子代理执行被取消', 409)),
           { once: true },
         )
       })
@@ -381,7 +381,7 @@ describe('startBackgroundAgent', () => {
     await assert.rejects(
       () => promise,
       (error: unknown) => {
-        assert.ok(error instanceof HelmError)
+        assert.ok(error instanceof HelmxError)
         assert.equal(error.code, 'aborted')
         return true
       },
@@ -457,7 +457,7 @@ describe('startBackgroundAgent', () => {
           prompt: 'x',
         }),
       (error: unknown) => {
-        assert.ok(error instanceof HelmError)
+        assert.ok(error instanceof HelmxError)
         assert.equal(error.code, 'not_found')
         return true
       },
@@ -472,7 +472,7 @@ describe('startBackgroundAgent', () => {
     await assert.rejects(
       () => service.startBackgroundAgent({ parentConversationId: 1, prompt: 'x' }),
       (error: unknown) => {
-        assert.ok(error instanceof HelmError)
+        assert.ok(error instanceof HelmxError)
         assert.equal(error.code, 'service_closed')
         return true
       },
@@ -487,7 +487,7 @@ describe('startBackgroundAgent', () => {
     await assert.rejects(
       () => service.startBackgroundAgent({ parentConversationId: 1, prompt: 'x', signal: signal.signal }),
       (error: unknown) => {
-        assert.ok(error instanceof HelmError)
+        assert.ok(error instanceof HelmxError)
         assert.equal(error.code, 'aborted')
         return true
       },
@@ -798,7 +798,7 @@ describe('startBackgroundAgent', () => {
     ])
     assert.throws(
       () => reopened.getRun(badId),
-      (err: unknown) => err instanceof HelmError && err.code === 'workflow_record_corrupt',
+      (err: unknown) => err instanceof HelmxError && err.code === 'workflow_record_corrupt',
     )
   })
 

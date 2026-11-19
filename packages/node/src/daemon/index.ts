@@ -9,7 +9,7 @@
  *   generations never mutate newer state.
  * - Heartbeat: budget = `clamp(interval * 3 / 4, 1s, 30s)`, non-overlapping; 2 consecutive timeouts
  *   or an explicit `false` reply retire the generation and trigger reconnect.
- * - Managed `helm` CLI PATH: locates the local `helm` binary directory and prepends it to `PATH`
+ * - Managed `helmx` CLI PATH: locates the local `helmx` binary directory and prepends it to `PATH`
  *   for remote shells; fails explicitly at startup if missing.
  * - Reconnect: exponential backoff (default 500ms..30s), unbounded retries, cancelled cleanly on
  *   `close()` which waits for all retiring generations to finish disposing.
@@ -40,9 +40,9 @@ import type {
   NodeUpgradeRpcInput,
   RpcEnvError,
   RpcResult,
-} from '@helm/protocol';
-import { DEFAULT_NODE_ID } from '@helm/protocol';
-import { atomicWriteJson, findEnvKey, getEnvEntry, prependEnvPath, setEnvEntry } from '@helm/env-io';
+} from '@helmx/protocol';
+import { DEFAULT_NODE_ID } from '@helmx/protocol';
+import { atomicWriteJson, findEnvKey, getEnvEntry, prependEnvPath, setEnvEntry } from '@helmx/env-io';
 import { createNodeEnvRpcServer, type NodeEnvRpcServer, type NodeEnvRpcServerOptions } from './env-rpc-server.js';
 import { createSocketBirpcEvents } from './birpc-events.js';
 import {
@@ -129,12 +129,12 @@ const TUNNEL_FIRST_FRAME_MAX_BYTES = 64 * 1024;
 const NODE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const JOIN_SECRET_PATTERN = /^[^\s\x00-\x1f\x7f]+$/;
 
-/** Resolve node data directory: explicit > `HELM_DATA_DIR` > `~/.helm`. */
+/** Resolve node data directory: explicit > `HELMX_DATA_DIR` > `~/.helmx`. */
 export function resolveNodeDataDir(explicit?: string): string {
   if (explicit !== undefined && explicit !== '') return explicit;
-  const fromEnv = process.env['HELM_DATA_DIR'];
+  const fromEnv = process.env['HELMX_DATA_DIR'];
   if (fromEnv !== undefined && fromEnv !== '') return fromEnv;
-  return path.join(os.homedir(), '.helm');
+  return path.join(os.homedir(), '.helmx');
 }
 
 /**
@@ -251,7 +251,7 @@ export async function readNodeIdentity(dataDir: string): Promise<NodeIdentity | 
   return parsed;
 }
 
-/** Atomically persist `<dataDir>/node.json` with `0600` permissions via the shared `@helm/env-io` primitive. */
+/** Atomically persist `<dataDir>/node.json` with `0600` permissions via the shared `@helmx/env-io` primitive. */
 export async function writeNodeIdentity(dataDir: string, identity: NodeIdentity): Promise<void> {
   assertValidIdentity(identity, 'invalid node identity');
   await atomicWriteJson(path.join(dataDir, 'node.json'), identity, { mode: 0o600 });
@@ -285,7 +285,7 @@ async function withIdentityLock<T>(dataDir: string, fn: () => Promise<T>): Promi
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
       throw new Error(
-        `concurrent identity bind conflict: ${lockPath} already exists (another helm-node connect is writing, or a previous bind crashed); confirm no bind is active and remove the lock file before retrying`,
+        `concurrent identity bind conflict: ${lockPath} already exists (another helmx-node connect is writing, or a previous bind crashed); confirm no bind is active and remove the lock file before retrying`,
       );
     }
   } catch (error) {
@@ -352,7 +352,7 @@ async function resolveRunIdentity(dataDir: string, input: NodeConnectInput): Pro
 }
 
 // ---------------------------------------------------------------------------
-// Managed `helm` CLI bin directory discovery
+// Managed `helmx` CLI bin directory discovery
 // ---------------------------------------------------------------------------
 
 export type ResolvedCliBinDir = { dir: string } | { error: string };
@@ -371,16 +371,16 @@ const statExecutable = async (target: string): Promise<boolean> => {
 };
 
 /**
- * Locate the directory containing the local `helm` CLI binary (prepended to `PATH` for remote bash):
- * explicit arg / `HELM_CLI_BIN_DIR` -> `PATH` -> ancestor `node_modules/.bin`.
+ * Locate the directory containing the local `helmx` CLI binary (prepended to `PATH` for remote bash):
+ * explicit arg / `HELMX_CLI_BIN_DIR` -> `PATH` -> ancestor `node_modules/.bin`.
  */
-export async function resolveManagedHelmBinDir(explicit?: string): Promise<ResolvedCliBinDir> {
+export async function resolveManagedHelmxBinDir(explicit?: string): Promise<ResolvedCliBinDir> {
   const describe = async (dir: string): Promise<ResolvedCliBinDir> => {
-    const entry = process.platform === 'win32' ? path.join(dir, 'helm.cmd') : path.join(dir, 'helm');
-    return (await statExecutable(entry)) ? { dir } : { error: `executable helm client not found in ${dir}` };
+    const entry = process.platform === 'win32' ? path.join(dir, 'helmx.cmd') : path.join(dir, 'helmx');
+    return (await statExecutable(entry)) ? { dir } : { error: `executable helmx client not found in ${dir}` };
   };
   if (explicit !== undefined && explicit !== '') return await describe(explicit);
-  const fromEnv = process.env['HELM_CLI_BIN_DIR'];
+  const fromEnv = process.env['HELMX_CLI_BIN_DIR'];
   if (fromEnv !== undefined && fromEnv !== '') return await describe(fromEnv);
   const inheritedPath = getEnvEntry(process.env, 'PATH') ?? '';
   for (const entry of inheritedPath.split(path.delimiter)) {
@@ -396,8 +396,8 @@ export async function resolveManagedHelmBinDir(explicit?: string): Promise<Resol
   }
   return {
     error:
-      'unable to locate local helm client bin directory (remote bash cannot invoke helm). ' +
-      'Install the standalone helm client on PATH or set HELM_CLI_BIN_DIR=<dir containing helm executable>',
+      'unable to locate local helmx client bin directory (remote bash cannot invoke helmx). ' +
+      'Install the standalone helmx client on PATH or set HELMX_CLI_BIN_DIR=<dir containing helmx executable>',
   };
 }
 
@@ -435,7 +435,7 @@ export async function createNodeDaemon(options: NodeDaemonOptions): Promise<Node
     envServer = {},
     reconnectBaseDelayMs = 500,
     reconnectMaxDelayMs = 30_000,
-    log: writeLog = (message) => console.error(`[helm-node] ${message}`),
+    log: writeLog = (message) => console.error(`[helmx-node] ${message}`),
   } = options;
 
   assertValidIdentity(identity, 'invalid node identity');
@@ -577,7 +577,7 @@ export async function createNodeDaemon(options: NodeDaemonOptions): Promise<Node
     });
   };
 
-  const cliBin = await resolveManagedHelmBinDir(envServer.shellEnv?.['HELM_CLI_BIN_DIR'] as string | undefined);
+  const cliBin = await resolveManagedHelmxBinDir(envServer.shellEnv?.['HELMX_CLI_BIN_DIR'] as string | undefined);
 
   let closed = false;
   let generation:
@@ -977,14 +977,14 @@ export async function createNodeDaemon(options: NodeDaemonOptions): Promise<Node
   };
 
   let baseShellEnv: Record<string, string | undefined> = {
-    HELM_HUB_URL: hubUrl,
-    HELM_DATA_DIR: dataDir,
+    HELMX_HUB_URL: hubUrl,
+    HELMX_DATA_DIR: dataDir,
     ...(envServer.shellEnv ?? {}),
   };
   if ('dir' in cliBin) {
     baseShellEnv = prependPath(cliBin.dir, baseShellEnv);
   } else {
-    log(`failed to locate helm client: ${cliBin.error}`);
+    log(`failed to locate helmx client: ${cliBin.error}`);
     throw new Error(cliBin.error);
   }
 
@@ -1173,7 +1173,7 @@ export async function createNodeDaemon(options: NodeDaemonOptions): Promise<Node
   return daemon;
 }
 
-/** CLI entrypoint (`helm-node connect`): runs in foreground until `signal` aborts. */
+/** CLI entrypoint (`helmx-node connect`): runs in foreground until `signal` aborts. */
 export async function runNodeDaemon(
   input: NodeConnectInput,
   options: { signal?: AbortSignal; dataDir?: string; envServer?: NodeDaemonOptions['envServer'] } = {},
@@ -1222,7 +1222,7 @@ export async function runNodeDaemonHandle(
   if (options.signal) {
     const signal = options.signal;
     const originalClose = daemon.close.bind(daemon);
-    const stop = (): void => { void daemon.close().catch(() => console.error('[helm-node] failed to close resources on abort signal')); };
+    const stop = (): void => { void daemon.close().catch(() => console.error('[helmx-node] failed to close resources on abort signal')); };
     daemon.close = () => {
       signal.removeEventListener('abort', stop);
       return originalClose();

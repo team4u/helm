@@ -2,11 +2,11 @@
  * client.tsx 轨道 Web 侧测试（.test.ts + React.createElement，无 JSX——node:test
  * 走 NodeNext 模块解析，不引 JSX 编译链）：
  * 1. 编译产物（kernel 侧真实 esbuild + 共享 shim）以 data: URL 动态 import，
- *    在 Node 进程内以全局 __helm_shared_* 命名空间供给同一份 React；
+ *    在 Node 进程内以全局 __helmx_shared_* 命名空间供给同一份 React；
  * 2. react-dom/server renderToString 真实渲染插件组件（共享 React 实例断言），
  *    覆盖代表槽位标准 Props（ScreenProps / ToolViewProps / WorkbenchPanelProps）；
- * 3. '@helm/plugin-client' 共享模块：编译产物内 import { usePluginContext,
- *    usePluginDoc } 从 __helm_shared_plugin_client 取宿主同一函数实例；
+ * 3. '@helmx/plugin-client' 共享模块：编译产物内 import { usePluginContext,
+ *    usePluginDoc } 从 __helmx_shared_plugin_client 取宿主同一函数实例；
  * 4. requireClientExport 导出缺失显式报错。
  *
  * 说明：Node 默认 ESM 加载器不支持 blob: URL，故用 data: URL 等价模拟浏览器
@@ -22,21 +22,21 @@ import * as ReactJsxRuntime from 'react/jsx-runtime'
 import * as LucideReact from 'lucide-react'
 import { renderToString } from 'react-dom/server'
 // 测试通过 tsx 执行当前 worktree 的真实编译器；生产 Web 不反向依赖 kernel。
-import { compilePluginClientModule } from '@helm/plugin-build'
+import { compilePluginClientModule } from '@helmx/plugin-build'
 import { requireClientExport } from '../src/lib/plugin-client.js'
-// '@helm/plugin-client' 共享模块实例：宿主挂载的是 web/src/lib/plugin-client-context.ts
-// 的模块命名空间（HelmStoreProvider 挂载同一对象）；测试直接 import 该模块挂到全局。
-import * as HelmPluginClient from '@helm/plugin-client'
+// '@helmx/plugin-client' 共享模块实例：宿主挂载的是 web/src/lib/plugin-client-context.ts
+// 的模块命名空间（HelmxStoreProvider 挂载同一对象）；测试直接 import 该模块挂到全局。
+import * as HelmxPluginClient from '@helmx/plugin-client'
 
 const e = React.createElement
 
-// 宿主共享命名空间：与 HelmStoreProvider 挂载的 __helm_shared_* 一致
+// 宿主共享命名空间：与 HelmxStoreProvider 挂载的 __helmx_shared_* 一致
 const g = globalThis as unknown as Record<string, unknown>
 let dataDir: string
 let clientRoot: string
 
 before(async () => {
-  dataDir = await mkdtemp(join(tmpdir(), 'helm-web-client-'))
+  dataDir = await mkdtemp(join(tmpdir(), 'helmx-web-client-'))
   clientRoot = join(dataDir, 'src')
   await mkdir(clientRoot, { recursive: true })
   await writeFile(
@@ -44,7 +44,7 @@ before(async () => {
     `
 import { useState } from 'react'
 import { Save } from 'lucide-react'
-import { usePluginContext, usePluginDoc } from '@helm/plugin-client'
+import { usePluginContext, usePluginDoc } from '@helmx/plugin-client'
 
 export function ScreenPanel(props: { pluginId: string; screenId: string }) {
   const [n, setN] = useState(3)
@@ -76,11 +76,11 @@ async function importCompiled(): Promise<Record<string, unknown>> {
   return (await import(url)) as Record<string, unknown>
 }
 
-test('编译产物动态 import：共享依赖经 __helm_shared_* 命名空间解析', { timeout: 60_000 }, async () => {
-  g.__helm_shared_react = React
-  g.__helm_shared_react_jsx_runtime = ReactJsxRuntime
-  g.__helm_shared_lucide_react = LucideReact
-  g.__helm_shared_plugin_client = HelmPluginClient
+test('编译产物动态 import：共享依赖经 __helmx_shared_* 命名空间解析', { timeout: 60_000 }, async () => {
+  g.__helmx_shared_react = React
+  g.__helmx_shared_react_jsx_runtime = ReactJsxRuntime
+  g.__helmx_shared_lucide_react = LucideReact
+  g.__helmx_shared_plugin_client = HelmxPluginClient
   const mod = await importCompiled()
   assert.equal(typeof mod.ScreenPanel, 'function')
   assert.equal(typeof mod.ToolCard, 'function')
@@ -109,15 +109,15 @@ test('共享 React 断言：插件组件与宿主使用同一 React 实例', { t
   const mod = await importCompiled()
   const shared = mod.sharedReact as { useState: unknown }
   assert.equal(shared.useState, React.useState, '插件必须持有宿主的同一个 hook 函数')
-  assert.equal(g.__helm_shared_react, React)
-  assert.equal(g.__helm_shared_react_jsx_runtime, ReactJsxRuntime)
+  assert.equal(g.__helmx_shared_react, React)
+  assert.equal(g.__helmx_shared_react_jsx_runtime, ReactJsxRuntime)
 })
 
-test("'@helm/plugin-client' 共享模块：产物内 hooks 与宿主为同一函数实例（usePluginContext/usePluginDoc）", { timeout: 60_000 }, async () => {
+test("'@helmx/plugin-client' 共享模块：产物内 hooks 与宿主为同一函数实例（usePluginContext/usePluginDoc）", { timeout: 60_000 }, async () => {
   const mod = await importCompiled()
   const hooks = mod.sharedHooks as { usePluginContext: unknown; usePluginDoc: unknown }
-  assert.equal(hooks.usePluginContext, HelmPluginClient.usePluginContext)
-  assert.equal(hooks.usePluginDoc, HelmPluginClient.usePluginDoc)
+  assert.equal(hooks.usePluginContext, HelmxPluginClient.usePluginContext)
+  assert.equal(hooks.usePluginDoc, HelmxPluginClient.usePluginDoc)
 })
 
 test('requireClientExport：导出缺失显式报错并列出可用导出', { timeout: 60_000 }, async () => {

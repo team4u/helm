@@ -1,22 +1,22 @@
-import { KernelRuntime, loadExternalPlugins } from '@helm/kernel';
-import { createPluginBuildProvider } from '@helm/plugin-build';
-import { createProfilePlugin } from '@helm/plugins/profile';
-import { createWorkflowPlugin } from '@helm/plugins/workflow';
-import { createSwarmPlugin } from '@helm/plugins/swarm';
-import { createMemoryPlugin } from '@helm/plugins/memory';
-import { createJsonRenderPlugin } from '@helm/plugins/json-render';
-import { createMermaidPlugin } from '@helm/plugins/mermaid';
-import { createHerdrPlugin } from '@helm/plugins/herdr';
-import { createSuperAgentPlugin } from '@helm/plugins/superagent';
-import { createTriggersPlugin } from '@helm/plugins/triggers';
-import { createMagpiePlugin } from '@helm/plugins/magpie';
-import { createAppsPlugin } from '@helm/plugins/apps';
-import { createTokenSpeedPlugin } from '@helm/plugins/token-speed';
+import { KernelRuntime, loadExternalPlugins } from '@helmx/kernel';
+import { createPluginBuildProvider } from '@helmx/plugin-build';
+import { createProfilePlugin } from '@helmx/plugins/profile';
+import { createWorkflowPlugin } from '@helmx/plugins/workflow';
+import { createSwarmPlugin } from '@helmx/plugins/swarm';
+import { createMemoryPlugin } from '@helmx/plugins/memory';
+import { createJsonRenderPlugin } from '@helmx/plugins/json-render';
+import { createMermaidPlugin } from '@helmx/plugins/mermaid';
+import { createHerdrPlugin } from '@helmx/plugins/herdr';
+import { createSuperAgentPlugin } from '@helmx/plugins/superagent';
+import { createTriggersPlugin } from '@helmx/plugins/triggers';
+import { createMagpiePlugin } from '@helmx/plugins/magpie';
+import { createAppsPlugin } from '@helmx/plugins/apps';
+import { createTokenSpeedPlugin } from '@helmx/plugins/token-speed';
 
-export type HelmOptions = Omit<NonNullable<Parameters<typeof KernelRuntime.open>[0]>, 'autoResume'>;
+export type HelmxOptions = Omit<NonNullable<Parameters<typeof KernelRuntime.open>[0]>, 'autoResume'>;
 
 /** Composition root only selects plugins and their default enabled states, providing no plugin-specific runtime dependencies. */
-export async function createHelm(options: HelmOptions = {}) {
+export async function createHelmx(options: HelmxOptions = {}) {
   // Default product composition injects the plugin build provider (`client.tsx` compilation + external TS transpilation);
   // callers may override via `options.buildProvider`. The kernel itself does not bundle esbuild (separating mechanism from
   // tooling) and explicitly rejects client UI / TS plugins when unwired (`unsupported_client_build`, etc.).

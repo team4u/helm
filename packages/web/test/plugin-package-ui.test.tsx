@@ -28,7 +28,7 @@ import type {
   PluginRemoveResult,
   PluginSummary,
   PluginUpdateResult,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 import { ApiClientError, pluginsApi } from '../src/lib/api.js'
 import { makeTestStore } from './helpers/store.js'
 const { HostStoreProviders } = await import('./helpers/host-store.js')
@@ -251,7 +251,7 @@ test('PluginInstallModal：真实 Hub 422 失败时从 details.report 结构化�
   const originalInstall = pluginsApi.install
 
   pluginsApi.install = async () => {
-    // 真实 Hub 安装预检失败形状：报告在 HelmError.details.report，
+    // 真实 Hub 安装预检失败形状：报告在 HelmxError.details.report，
     // 经 HTTP 错误信封解析为 ApiClientError.details.report
     throw new ApiClientError(
       'plugin_package_doctor_failed',

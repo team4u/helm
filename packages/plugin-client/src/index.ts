@@ -1,16 +1,16 @@
 /**
- * Public SDK entry of @helm/plugin-client.
+ * Public SDK entry of @helmx/plugin-client.
  *
  * Two consumers share the same module instance (never a second React bundle):
- * 1. the host (@helm/web): imports this package for shared primitives /
- *    context / hooks, and mounts __helm_shared_plugin_client = this module
- *    namespace inside HelmStoreProvider;
+ * 1. the host (@helmx/web): imports this package for shared primitives /
+ *    context / hooks, and mounts __helmx_shared_plugin_client = this module
+ *    namespace inside HelmxStoreProvider;
  * 2. plugin build artifacts: source code uses
- *    `import { ... } from '@helm/plugin-client'`; the compiler virtualizes
- *    that specifier into globalThis.__helm_shared_plugin_client.
+ *    `import { ... } from '@helmx/plugin-client'`; the compiler virtualizes
+ *    that specifier into globalThis.__helmx_shared_plugin_client.
  *
  * The single source of truth of plugin-facing runtime symbols is
- * PLUGIN_CLIENT_SHARED_EXPORTS in @helm/protocol (bi-directionally locked by
+ * PLUGIN_CLIENT_SHARED_EXPORTS in @helmx/protocol (bi-directionally locked by
  * services.test / this package's tests); host-facing symbols (host port,
  * context factory, explicitly-addressing hooks) are consumed only by the host
  * and tests, and are not part of the plugin contract list.
@@ -31,15 +31,15 @@ export { PluginClientContext, createPluginClientContext, usePluginContext } from
 // ---- i18n: locale & translation (plugin-consumable hooks + locale essentials) ----
 export { usePluginLocale, usePluginTranslator } from './i18n.js'
 export {
-  HELM_LOCALES,
-  DEFAULT_HELM_LOCALE,
-  isHelmLocale,
+  HELMX_LOCALES,
+  DEFAULT_HELMX_LOCALE,
+  isHelmxLocale,
   normalizeLocaleTag,
   parseLocalizedText,
   resolveLocalizedText,
   createLocaleTranslator,
 } from './i18n.js'
-export type { HelmLocale, LocalizedText, ExecutionText, LocaleTranslator } from './i18n.js'
+export type { HelmxLocale, LocalizedText, ExecutionText, LocaleTranslator } from './i18n.js'
 
 // ---- hooks: doc subscriptions / conversations / plugin list / tool activity ----
 export { usePluginDoc, usePluginDocValue, usePluginSessionDoc, usePluginSessionDocState, usePluginSessionDocValue } from './docs.js'
@@ -89,6 +89,6 @@ export { PluginSlot } from './plugin-slot.js'
 export type { PluginSlotProps } from './plugin-slot.js'
 
 // ---- Icons and formatting pure functions ----
-export { HelmIcon } from './icons.js'
-export type { HelmIconName, HelmIconProps } from './icons.js'
+export { HelmxIcon } from './icons.js'
+export type { HelmxIconName, HelmxIconProps } from './icons.js'
 export { formatTime, formatCompactTimestamp, formatDurationMs, formatBytes } from './format.js'

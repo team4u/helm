@@ -1,8 +1,8 @@
 /**
- * Shared test harness for `builtin:workflow` client tests inside `@helm/plugins/test`:
- * - Registers happy-dom and bridges React / ReactDOM / Lucide / @helm/plugin-client
+ * Shared test harness for `builtin:workflow` client tests inside `@helmx/plugins/test`:
+ * - Registers happy-dom and bridges React / ReactDOM / Lucide / @helmx/plugin-client
  *   onto `CLIENT_SHARED_GLOBALS` so real esbuild-compiled client modules share the host
- *   React & SDK instances without importing `@helm/web`;
+ *   React & SDK instances without importing `@helmx/web`;
  * - Supports both stub mode (`mountSharedPluginNamespaces()` + `setWorkflowClientStub`)
  *   and real SDK hook mode (`mountSharedPluginNamespaces({ realHooks: true })` +
  *   `createWorkflowHostHarness`), forwarding `useConversation(id, { includeDetail })`
@@ -13,14 +13,14 @@ import { createRequire } from 'node:module'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type * as ReactTypes from 'react'
-import type * as SDKTypes from '@helm/plugin-client'
+import type * as SDKTypes from '@helmx/plugin-client'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type {
   AskSpec,
   ConversationDetail,
   ConversationLive,
   ConversationSummary,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 import type { WorkflowRunSummary } from '../../src/contracts.js'
 
 if (typeof window === 'undefined' || typeof document === 'undefined') {
@@ -31,10 +31,10 @@ if (typeof window === 'undefined' || typeof document === 'undefined') {
   }
 }
 
-// Import React / ReactDOM / Radix-backed @helm/plugin-client only AFTER
+// Import React / ReactDOM / Radix-backed @helmx/plugin-client only AFTER
 // GlobalRegistrator registers window & document so Radix Popover's layout/DOM hooks see a real browser environment.
-const { CLIENT_SHARED_GLOBALS, compilePluginClientModule } = await import('@helm/plugin-build')
-const SDK = await import('@helm/plugin-client')
+const { CLIENT_SHARED_GLOBALS, compilePluginClientModule } = await import('@helmx/plugin-build')
+const SDK = await import('@helmx/plugin-client')
 
 const req = createRequire(new URL('../../../plugin-client/package.json', import.meta.url))
 export const React = req('react') as typeof ReactTypes
@@ -55,7 +55,7 @@ export { SDK }
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 export const WORKFLOW_CLIENT_ROOT = resolve(HERE, '../../src/workflow/client')
-export const WORKFLOW_CLIENT_CACHE_DIR = resolve(HERE, '../../../../node_modules/.cache/helm-test-workflow-clients')
+export const WORKFLOW_CLIENT_CACHE_DIR = resolve(HERE, '../../../../node_modules/.cache/helmx-test-workflow-clients')
 mkdirSync(WORKFLOW_CLIENT_CACHE_DIR, { recursive: true })
 
 export interface WorkflowClientStubOptions {
@@ -97,7 +97,7 @@ export function mountSharedPluginNamespaces(options: { realHooks?: boolean } = {
   g[CLIENT_SHARED_GLOBALS['react-dom/client']!] = ReactDOMClient
   g[CLIENT_SHARED_GLOBALS['react/jsx-runtime']!] = ReactJsxRuntime
   g[CLIENT_SHARED_GLOBALS['lucide-react']!] = LucideReact
-  g[CLIENT_SHARED_GLOBALS['@helm/plugin-client']!] =
+  g[CLIENT_SHARED_GLOBALS['@helmx/plugin-client']!] =
     options.realHooks === true ? SDK : stubPluginClientNamespace
 }
 
@@ -107,7 +107,7 @@ export async function importWorkflowClientModule(
 ): Promise<Record<string, unknown>> {
   const { code } = await compilePluginClientModule('builtin:workflow', WORKFLOW_CLIENT_ROOT, moduleRef, cacheDir)
   // Keep #stub and #real module instances distinct in Node's ESM cache because
-  // compiled bundles destructure @helm/plugin-client hooks at module load time.
+  // compiled bundles destructure @helmx/plugin-client hooks at module load time.
   return (await import(`data:text/javascript;base64,${Buffer.from(code, 'utf8').toString('base64')}#${currentHookMode}`)) as Record<
     string,
     unknown
@@ -164,7 +164,7 @@ export function createWorkflowHostHarness(init: {
   loadErrors?: Record<string, string>
   runsByConversation?: Record<number, WorkflowRunSummary[]>
   pluginDocs?: Record<string, unknown>
-  locale?: SDKTypes.HelmLocale
+  locale?: SDKTypes.HelmxLocale
   onAction?: (pluginId: string, actionId: string, input: unknown) => Promise<unknown> | unknown
 }) {
   const activeToolCallIds = new Set<string>()

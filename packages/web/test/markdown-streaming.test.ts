@@ -16,7 +16,7 @@ import { useEffect } from 'react'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
-import type { PluginUiContribution } from '@helm/protocol'
+import type { PluginUiContribution } from '@helmx/protocol'
 import {
   countHeadingsUpToH3,
   remarkHeadingIndices,
@@ -38,7 +38,7 @@ const realFetch: typeof globalThis.fetch = globalThis.fetch.bind(globalThis)
 globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
   if (url.includes('/client.mjs')) {
-    return new Response('', { status: 200, headers: { 'x-helm-client-hash': 'seeded' } })
+    return new Response('', { status: 200, headers: { 'x-helmx-client-hash': 'seeded' } })
   }
   return realFetch(input, init)
 }) as typeof globalThis.fetch

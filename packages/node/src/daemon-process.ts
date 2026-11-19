@@ -2,10 +2,10 @@
  * Daemon runtime loop shared by foreground `connect` and controlled background `start`:
  * - Prints "connecting" before registration completes; "registered" is reported only after Hub ACK.
  * - In controlled mode (`control`), starts the control IPC server before connecting so `status`
- *   works even before registration, reports readiness over stdio IPC (`helm-node.ready`), and on
+ *   works even before registration, reports readiness over stdio IPC (`helmx-node.ready`), and on
  *   `stop` aborts, awaits `handle.close()`, replies, and closes the control server.
- * - In upgrade candidate mode (`HELM_NODE_PENDING_ACTIVATION`), holds parent stdio IPC after
- *   registration until `helm-node.activate` arrives and passes context validation (`awaitActivate`).
+ * - In upgrade candidate mode (`HELMX_NODE_PENDING_ACTIVATION`), holds parent stdio IPC after
+ *   registration until `helmx-node.activate` arrives and passes context validation (`awaitActivate`).
  * - Always cleans up `handle`, control server, and signal listeners on exit.
  */
 import process from 'node:process';
@@ -45,11 +45,11 @@ function reportReady(control: { instanceId: string } | undefined, pendingActivat
   if (control === undefined || process.send === undefined) return;
   try {
     process.send({
-      type: 'helm-node.ready',
+      type: 'helmx-node.ready',
       pid: process.pid,
       instanceId: control.instanceId,
       state,
-    } satisfies { type: 'helm-node.ready'; pid: number; instanceId: string; state: DaemonReadyState });
+    } satisfies { type: 'helmx-node.ready'; pid: number; instanceId: string; state: DaemonReadyState });
   } catch {
     // Parent IPC channel already closed; normal controlled instances keep running and reconnecting.
   }
@@ -89,7 +89,7 @@ function checkActivate(activate: ActivateMessage, handoff: CandidateUpgradeHando
 /** Notify parent that activation was rejected (best-effort; ignored if parent disconnected). */
 function sendRejected(attemptId: string, reason: string): void {
   try {
-    process.send?.({ type: 'helm-node.activate-rejected', attemptId, reason });
+    process.send?.({ type: 'helmx-node.activate-rejected', attemptId, reason });
   } catch {
     // Parent disconnected.
   }
@@ -107,7 +107,7 @@ async function confirmAndDetach(handle: DaemonHandle | undefined, activate: Acti
       });
     }
     try {
-      process.send?.({ type: 'helm-node.activated', attemptId: activate.attemptId });
+      process.send?.({ type: 'helmx-node.activated', attemptId: activate.attemptId });
     } catch {
       // Parent lost the ACK, but local activation succeeded; candidate stays alive and retries Hub commit.
     }
@@ -124,7 +124,7 @@ async function confirmAndDetach(handle: DaemonHandle | undefined, activate: Acti
 }
 
 /**
- * Wait for `helm-node.activate` in candidate mode; rejects on parent disconnect or timeout so an
+ * Wait for `helmx-node.activate` in candidate mode; rejects on parent disconnect or timeout so an
  * unactivated candidate exits instead of claiming success to the Hub.
  */
 function awaitActivate(handle: DaemonHandle | undefined, handoff: CandidateUpgradeHandoff, controller: AbortController): Promise<void> {
@@ -262,7 +262,7 @@ export async function runDaemonProcess(options: {
   let stopFailure: string | undefined;
 
   const handoff = parseUpgradeHandoffEnv(io.env);
-  const pendingActivation = io.env?.['HELM_NODE_PENDING_ACTIVATION'] === '1' && handoff !== undefined;
+  const pendingActivation = io.env?.['HELMX_NODE_PENDING_ACTIVATION'] === '1' && handoff !== undefined;
   let upgradeReplaced = false;
 
   let controlServer: ControlServer | undefined;
@@ -278,7 +278,7 @@ export async function runDaemonProcess(options: {
   }
 
   if (!json && control === undefined) {
-    io.out(`helm-node connecting to ${hubUrl} (nodeId=${nodeId}); will begin serving once registration completes (Ctrl+C to exit)\n`);
+    io.out(`helmx-node connecting to ${hubUrl} (nodeId=${nodeId}); will begin serving once registration completes (Ctrl+C to exit)\n`);
   }
   try {
     handle = await runNodeDaemonHandle(

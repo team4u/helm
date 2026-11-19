@@ -1,7 +1,7 @@
 /**
  * Global model config and Profile inheritance regression tests (0507188 behavior lock):
  *
- * Model resolution chain: options.model > HELM_MODEL > config.json.model (all unset = unconfigured);
+ * Model resolution chain: options.model > HELMX_MODEL > config.json.model (all unset = unconfigured);
  * Effective conversation chain: conversation override > Profile.model > global; Profile.model='' is treated as
  * unset (inherits global); assistant Profile overrides global and persists across restarts.
  * Explicit error contract (never silently fall back): invalid config.model -> config_corrupt;
@@ -17,7 +17,7 @@ import { join } from 'node:path'
 import { after, before, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
-import { HelmError, type ConversationEntry } from '@helm/protocol'
+import { HelmxError, type ConversationEntry } from '@helmx/protocol'
 import { KernelRuntime } from '../src/runtime/index.js'
 import { cleanupDir, makeFauxModels, makeTempDir } from './helpers.js'
 
@@ -61,22 +61,22 @@ function assertRequestModel(entry: ConversationEntry, provider: string, modelId:
   assert.equal(message.model, modelId)
 }
 
-function isHelm(code: string): (err: unknown) => boolean {
-  return (err) => err instanceof HelmError && err.code === code
+function isHelmx(code: string): (err: unknown) => boolean {
+  return (err) => err instanceof HelmxError && err.code === code
 }
 
 let root: string
-let savedHelmModel: string | undefined
+let savedHelmxModel: string | undefined
 
 before(async () => {
-  root = await makeTempDir('helm-model-cfg-')
+  root = await makeTempDir('helmx-model-cfg-')
   // Manage all model sources explicitly in this file; isolate external env vars.
-  savedHelmModel = process.env['HELM_MODEL']
-  delete process.env['HELM_MODEL']
+  savedHelmxModel = process.env['HELMX_MODEL']
+  delete process.env['HELMX_MODEL']
 })
 
 after(async () => {
-  if (savedHelmModel !== undefined) process.env['HELM_MODEL'] = savedHelmModel
+  if (savedHelmxModel !== undefined) process.env['HELMX_MODEL'] = savedHelmxModel
   await cleanupDir(root)
 })
 
@@ -108,17 +108,17 @@ describe('config.json.model global model', { timeout: 60_000 }, () => {
     const dirNum = join(root, 'c2')
     mkdirSync(dirNum, { recursive: true })
     writeFileSync(join(dirNum, 'config.json'), JSON.stringify({ model: 123 }))
-    await assert.rejects(() => openRuntime(dirNum), isHelm('config_corrupt'))
+    await assert.rejects(() => openRuntime(dirNum), isHelmx('config_corrupt'))
 
     const dirBad = join(root, 'c3')
     mkdirSync(dirBad, { recursive: true })
     writeFileSync(join(dirBad, 'config.json'), JSON.stringify({ model: 'faux-1' }))
-    await assert.rejects(() => openRuntime(dirBad), isHelm('config_corrupt'))
+    await assert.rejects(() => openRuntime(dirBad), isHelmx('config_corrupt'))
   })
 })
 
 // ---------------------------------------------------------------------------
-// 2. options.model > HELM_MODEL > config.json.model
+// 2. options.model > HELMX_MODEL > config.json.model
 // ---------------------------------------------------------------------------
 
 describe('global model source priority', { timeout: 60_000 }, () => {
@@ -126,12 +126,12 @@ describe('global model source priority', { timeout: 60_000 }, () => {
     const dir = join(root, 'p2')
     mkdirSync(dir, { recursive: true })
     writeFileSync(join(dir, 'config.json'), JSON.stringify({ model: 'faux/faux-2' }))
-    process.env['HELM_MODEL'] = 'faux/faux-1'
+    process.env['HELMX_MODEL'] = 'faux/faux-1'
     let k1: RuntimeWithFaux | undefined
     try {
       k1 = await openRuntime(dir, { ids: ['faux-1', 'faux-2'] })
       const conv = await k1.createConversation({})
-      assert.equal(conv.model, 'faux/faux-1', 'HELM_MODEL should take precedence over config.json.model')
+      assert.equal(conv.model, 'faux/faux-1', 'HELMX_MODEL should take precedence over config.json.model')
       k1.__faux.setResponses([fauxAssistantMessage('env answer')])
       await k1.submitInput(conv.id, 'question')
       await k1.waitForIdle(conv.id)
@@ -152,7 +152,7 @@ describe('global model source priority', { timeout: 60_000 }, () => {
       }
     } finally {
       if (k1) await k1.close().catch(() => {})
-      delete process.env['HELM_MODEL']
+      delete process.env['HELMX_MODEL']
     }
   })
 })
@@ -235,7 +235,7 @@ describe('createConversation explicit profileId validation', { timeout: 60_000 }
       assert.equal((await kernel.createConversation()).profileId, 'assistant', 'omitted profileId defaults to assistant')
       await assert.rejects(
         () => kernel.createConversation({ profileId: 'default' }),
-        isHelm('validation_error'),
+        isHelmx('validation_error'),
       )
       writeProfile(dir, 'default', { name: 'D', model: 'faux/faux-1' })
       const conv = await kernel.createConversation({ profileId: 'default' })
@@ -244,7 +244,7 @@ describe('createConversation explicit profileId validation', { timeout: 60_000 }
       // Invalid model reference format also rejects explicitly.
       await assert.rejects(
         () => kernel.createConversation({ model: 'no-slash' }),
-        isHelm('validation_error'),
+        isHelmx('validation_error'),
       )
     } finally {
       await kernel.close()
@@ -270,15 +270,15 @@ describe('corrupt and missing Profile explicit errors', { timeout: 60_000 }, () 
       await assert.rejects(
         () => kernel.createConversation({ profileId: 'worker' }),
         (err: unknown) =>
-          err instanceof HelmError &&
+          err instanceof HelmxError &&
           err.code === 'profile_read_failed' &&
           (err.details as { profileId?: string })?.profileId === 'worker',
       )
       await assert.rejects(
         () => kernel.updateConversation(conv.id, { title: 'x' }),
-        isHelm('profile_read_failed'),
+        isHelmx('profile_read_failed'),
       )
-      await assert.rejects(() => kernel.submitInput(conv.id, 'question'), isHelm('profile_read_failed'))
+      await assert.rejects(() => kernel.submitInput(conv.id, 'question'), isHelmx('profile_read_failed'))
       assert.equal(kernel.__faux.state.callCount, 0, 'must not start model request when Profile is corrupt')
 
       // Existing conversation whose Profile is deleted: must still require the real Profile to exist.
@@ -286,12 +286,12 @@ describe('corrupt and missing Profile explicit errors', { timeout: 60_000 }, () 
       await assert.rejects(
         () => kernel.submitInput(conv.id, 'question'),
         (err: unknown) =>
-          err instanceof HelmError &&
+          err instanceof HelmxError &&
           err.code === 'profile_not_found' &&
           (err.details as { profileId?: string })?.profileId === 'worker',
       )
-      await assert.rejects(() => kernel.updateConversation(conv.id, { title: 'y' }), isHelm('profile_not_found'))
-      await assert.rejects(() => kernel.createConversation({ profileId: 'worker' }), isHelm('validation_error'))
+      await assert.rejects(() => kernel.updateConversation(conv.id, { title: 'y' }), isHelmx('profile_not_found'))
+      await assert.rejects(() => kernel.createConversation({ profileId: 'worker' }), isHelmx('validation_error'))
       assert.equal(kernel.__faux.state.callCount, 0, 'must not start model request when Profile is missing')
     } finally {
       await kernel.close()

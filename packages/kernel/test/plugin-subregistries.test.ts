@@ -9,7 +9,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { HelmError, type ConversationSummary } from '@helm/protocol';
+import { HelmxError, type ConversationSummary } from '@helmx/protocol';
 import {
   PluginDocRegistry,
   type PluginDocStore,
@@ -74,7 +74,7 @@ test('PluginDocRegistry handles document registration, isolation, change notific
 
   let usable = true;
   const assertUsable = () => {
-    if (!usable) throw new HelmError('plugin_context_expired', 'doc myDoc expired', 409);
+    if (!usable) throw new HelmxError('plugin_context_expired', 'doc myDoc expired', 409);
   };
 
   const handle = registry.registerDoc(
@@ -111,14 +111,14 @@ test('PluginDocRegistry handles document registration, isolation, change notific
   // Disabled state rejects reading public docs with 404
   assert.throws(
     () => registry.getPublicDoc('test-plugin', 'myDoc', false),
-    (err: unknown) => err instanceof HelmError && err.code === 'plugin_doc_not_found',
+    (err: unknown) => err instanceof HelmxError && err.code === 'plugin_doc_not_found',
   );
 
   // Expired lifecycle guard throws 409
   usable = false;
   assert.throws(
     () => handle.get(),
-    (err: unknown) => err instanceof HelmError && err.code === 'plugin_context_expired',
+    (err: unknown) => err instanceof HelmxError && err.code === 'plugin_context_expired',
   );
 });
 
@@ -135,7 +135,7 @@ function createSessionFixture() {
       sessionStore,
       assertConversationExists: (conversationId: number) => {
         if (!existing.has(conversationId)) {
-          throw new HelmError('conversation_not_found', `conversation ${conversationId} missing`, 404, {
+          throw new HelmxError('conversation_not_found', `conversation ${conversationId} missing`, 404, {
             conversationId,
           });
         }
@@ -147,7 +147,7 @@ function createSessionFixture() {
   );
   let usable = true;
   const assertUsable = () => {
-    if (!usable) throw new HelmError('plugin_context_expired', 'sessionDoc handle expired', 409);
+    if (!usable) throw new HelmxError('plugin_context_expired', 'sessionDoc handle expired', 409);
   };
   return { registry, store, sessionStore, sessionEvents, existing, setUsable: (v: boolean) => (usable = v), assertUsable };
 }
@@ -219,11 +219,11 @@ test('PluginDocRegistry: sessionDoc rejects missing conversations and invalid ID
   // Missing conversation passes through host conversation_not_found (guards against orphan re-creation after delete)
   assert.throws(
     () => handle.get(999),
-    (err: unknown) => err instanceof HelmError && err.code === 'conversation_not_found',
+    (err: unknown) => err instanceof HelmxError && err.code === 'conversation_not_found',
   );
   assert.throws(
     () => handle.set(999, { text: 'orphan' }),
-    (err: unknown) => err instanceof HelmError && err.code === 'conversation_not_found',
+    (err: unknown) => err instanceof HelmxError && err.code === 'conversation_not_found',
   );
   assert.equal(f.sessionStore.listConversationIds('test-plugin', 'convState').length, 0);
 
@@ -231,7 +231,7 @@ test('PluginDocRegistry: sessionDoc rejects missing conversations and invalid ID
   for (const bad of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
     assert.throws(
       () => handle.get(bad),
-      (err: unknown) => err instanceof HelmError && err.code === 'invalid_conversation_id',
+      (err: unknown) => err instanceof HelmxError && err.code === 'invalid_conversation_id',
       `conversationId=${String(bad)} should reject`,
     );
   }
@@ -240,11 +240,11 @@ test('PluginDocRegistry: sessionDoc rejects missing conversations and invalid ID
   f.setUsable(false);
   assert.throws(
     () => handle.get(101),
-    (err: unknown) => err instanceof HelmError && err.code === 'plugin_context_expired',
+    (err: unknown) => err instanceof HelmxError && err.code === 'plugin_context_expired',
   );
   assert.throws(
     () => handle.listConversationIds(),
-    (err: unknown) => err instanceof HelmError && err.code === 'plugin_context_expired',
+    (err: unknown) => err instanceof HelmxError && err.code === 'plugin_context_expired',
   );
 });
 
@@ -253,25 +253,25 @@ test('PluginDocRegistry: doc and sessionDoc share namespace and reject same-name
   f.registry.registerDoc('test-plugin', 'shared', { a: 1 }, undefined, f.assertUsable);
   assert.throws(
     () => f.registry.registerSessionDoc('test-plugin', 'shared', { b: 2 }, undefined, f.assertUsable),
-    (err: unknown) => err instanceof HelmError && err.code === 'duplicate_doc',
+    (err: unknown) => err instanceof HelmxError && err.code === 'duplicate_doc',
   );
 
   const f2 = createSessionFixture();
   f2.registry.registerSessionDoc('test-plugin', 'shared', { b: 2 }, undefined, f2.assertUsable);
   assert.throws(
     () => f2.registry.registerDoc('test-plugin', 'shared', { a: 1 }, undefined, f2.assertUsable),
-    (err: unknown) => err instanceof HelmError && err.code === 'duplicate_doc',
+    (err: unknown) => err instanceof HelmxError && err.code === 'duplicate_doc',
   );
   // Same-kind duplicate declaration rejects identically
   assert.throws(
     () => f2.registry.registerSessionDoc('test-plugin', 'shared', {}, undefined, f2.assertUsable),
-    (err: unknown) => err instanceof HelmError && err.code === 'duplicate_doc',
+    (err: unknown) => err instanceof HelmxError && err.code === 'duplicate_doc',
   );
 
   // Malformed opts rejected
   assert.throws(
     () => f2.registry.registerSessionDoc('test-plugin', 'ok', {}, { extra: 1 } as never, f2.assertUsable),
-    (err: unknown) => err instanceof HelmError && err.code === 'invalid_doc_spec',
+    (err: unknown) => err instanceof HelmxError && err.code === 'invalid_doc_spec',
   );
 });
 
@@ -280,7 +280,7 @@ test('PluginDocRegistry: missing sessionDoc ports reject explicitly with 501 wit
   const bare = new PluginDocRegistry(new MemoryDocStore(), () => {});
   assert.throws(
     () => bare.registerSessionDoc('p', 'doc1', {}, undefined, () => {}),
-    (err: unknown) => err instanceof HelmError && err.code === 'session_doc_store_unavailable' && err.status === 501,
+    (err: unknown) => err instanceof HelmxError && err.code === 'session_doc_store_unavailable' && err.status === 501,
   );
   // Existing global-doc callers remain unaffected
   bare.registerDoc('p', 'globalOnly', { ok: true }, undefined, () => {});
@@ -292,7 +292,7 @@ test('PluginDocRegistry: missing sessionDoc ports reject explicitly with 501 wit
   });
   assert.throws(
     () => noAssert.registerSessionDoc('p', 'doc1', {}, undefined, () => {}),
-    (err: unknown) => err instanceof HelmError && err.code === 'session_doc_port_unavailable' && err.status === 501,
+    (err: unknown) => err instanceof HelmxError && err.code === 'session_doc_port_unavailable' && err.status === 501,
   );
 
   // public:true without event emission port: explicit 501 instead of dropping updates silently
@@ -302,7 +302,7 @@ test('PluginDocRegistry: missing sessionDoc ports reject explicitly with 501 wit
   });
   assert.throws(
     () => noEmit.registerSessionDoc('p', 'doc1', {}, { public: true }, () => {}),
-    (err: unknown) => err instanceof HelmError && err.code === 'session_doc_port_unavailable' && err.status === 501,
+    (err: unknown) => err instanceof HelmxError && err.code === 'session_doc_port_unavailable' && err.status === 501,
   );
   // Private sessionDoc declares cleanly without the event port
   noEmit.registerSessionDoc('p', 'privateDoc', {}, undefined, () => {});
@@ -330,48 +330,48 @@ test('PluginDocRegistry: getPublicSessionDoc and kind mismatch diagnostics', { t
   // Disabled / private / undeclared all return 404 without leaking private storage
   assert.throws(
     () => f.registry.getPublicSessionDoc('test-plugin', 'convState', 101, false),
-    (err: unknown) => err instanceof HelmError && err.code === 'plugin_doc_not_found',
+    (err: unknown) => err instanceof HelmxError && err.code === 'plugin_doc_not_found',
   );
   assert.throws(
     () => f.registry.getPublicSessionDoc('test-plugin', 'privateConv', 101, true),
-    (err: unknown) => err instanceof HelmError && err.code === 'plugin_doc_not_found',
+    (err: unknown) => err instanceof HelmxError && err.code === 'plugin_doc_not_found',
   );
   assert.throws(
     () => f.registry.getPublicSessionDoc('test-plugin', 'nonExistent', 101, true),
-    (err: unknown) => err instanceof HelmError && err.code === 'plugin_doc_not_found',
+    (err: unknown) => err instanceof HelmxError && err.code === 'plugin_doc_not_found',
   );
 
   // Missing conversation passes through host port error (conversation_not_found)
   assert.throws(
     () => f.registry.getPublicSessionDoc('test-plugin', 'convState', 999, true),
-    (err: unknown) => err instanceof HelmError && err.code === 'conversation_not_found',
+    (err: unknown) => err instanceof HelmxError && err.code === 'conversation_not_found',
   );
 
   // Invalid conversation ID -> 400
   assert.throws(
     () => f.registry.getPublicSessionDoc('test-plugin', 'convState', 0, true),
-    (err: unknown) => err instanceof HelmError && err.code === 'invalid_conversation_id',
+    (err: unknown) => err instanceof HelmxError && err.code === 'invalid_conversation_id',
   );
 
   // getPublicDoc targeting public session doc hints that conversationId is required
   assert.throws(
     () => f.registry.getPublicDoc('test-plugin', 'convState', true),
-    (err: unknown) => err instanceof HelmError && err.code === 'session_doc_requires_conversation',
+    (err: unknown) => err instanceof HelmxError && err.code === 'session_doc_requires_conversation',
   );
   // getPublicDoc targeting private session doc returns 404 identically to undeclared (never leaks existence)
   assert.throws(
     () => f.registry.getPublicDoc('test-plugin', 'privateConv', true),
-    (err: unknown) => err instanceof HelmError && err.code === 'plugin_doc_not_found',
+    (err: unknown) => err instanceof HelmxError && err.code === 'plugin_doc_not_found',
   );
   // getPublicSessionDoc targeting public global doc hints to omit conversationId
   assert.throws(
     () => f.registry.getPublicSessionDoc('test-plugin', 'globalDoc', 101, true),
-    (err: unknown) => err instanceof HelmError && err.code === 'global_doc_unexpected_conversation',
+    (err: unknown) => err instanceof HelmxError && err.code === 'global_doc_unexpected_conversation',
   );
   // getPublicSessionDoc targeting private global/undeclared doc returns 404 without leaking existence
   assert.throws(
     () => f.registry.getPublicSessionDoc('test-plugin', 'noGlobal', 101, true),
-    (err: unknown) => err instanceof HelmError && err.code === 'plugin_doc_not_found',
+    (err: unknown) => err instanceof HelmxError && err.code === 'plugin_doc_not_found',
   );
 });
 
@@ -449,7 +449,7 @@ test('CapabilityRegistry: tool/action declaration, list projection, and scope va
     assertActive: () => {},
     getConversation: (id: number) => {
       if (id === 1) return fakeConv;
-      throw new HelmError('conversation_not_found', 'not found', 404);
+      throw new HelmxError('conversation_not_found', 'not found', 404);
     },
     tracker,
     isPluginRegistered: () => true,
@@ -512,7 +512,7 @@ test('CapabilityRegistry: tool/action declaration, list projection, and scope va
         getConversation: () => mismatchConv,
       });
     },
-    (err: unknown) => err instanceof HelmError && err.code === 'conversation_scope_violation',
+    (err: unknown) => err instanceof HelmxError && err.code === 'conversation_scope_violation',
   );
 });
 
@@ -530,7 +530,7 @@ test('UiRegistry: extension collection, parameter validation, and dependency che
     () => {
       ui.registerUi('p1', 'sidebar.item', { id: 'p1Sidebar', label: 'Dup' }, 'sidebarItem');
     },
-    (err: unknown) => err instanceof HelmError && err.code === 'duplicate_ui',
+    (err: unknown) => err instanceof HelmxError && err.code === 'duplicate_ui',
   );
 
   // docs assertion is a stub after declarative JSON track removal: no longer validates doc references

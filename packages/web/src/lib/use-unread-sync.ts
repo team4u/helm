@@ -3,7 +3,7 @@
  * first-load sync hook.
  */
 import { useCallback, useEffect, useRef, type MutableRefObject } from 'react'
-import type { ArtifactMetadata, ConversationDetail, ConversationSummary } from '@helm/protocol/browser'
+import type { ArtifactMetadata, ConversationDetail, ConversationSummary } from '@helmx/protocol/browser'
 import { conversationsApi } from './api.js'
 import { isPageActive } from './browser-notification.js'
 import { errorText } from './error-text.js'
@@ -57,7 +57,7 @@ export interface UseUnreadSyncOptions {
   loadConversationArtifacts: (conversationId: number, opts?: { silent?: boolean }) => Promise<ArtifactMetadata[] | undefined>
   pushNotice: (notice: Omit<ToastNotice, 'id' | 'createdAt'>) => void
   /**
-   * Locale seam: this hook runs inside HelmStoreProvider's own body (no
+   * Locale seam: this hook runs inside HelmxStoreProvider's own body (no
    * context access); the Provider does not pass `t` yet, so the English bridge
    * translator keeps today's behavior until the wiring lands.
    */

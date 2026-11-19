@@ -2,7 +2,7 @@
  * EventHub: event bus with globally persisted seq + SSE snapshot/incremental streams.
  *
  * Semantics (per design doc §1.2):
- * - seq increases monotonically and is persisted (helm_seq), never regressing across restarts; publish strictly orders
+ * - seq increases monotonically and is persisted (helmx_seq), never regressing across restarts; publish strictly orders
  *   assemble+redact -> encode -> persist nextSeq -> advance in-memory watermark -> append to ring -> broadcast;
  *   if any step fails, the watermark never advances and no partial state remains (never creates a bare seq gap without a ring entry);
  * - Each instance generates a random bootId (event epoch): both `?afterSeq` and `?bootId` credentials must validate before
@@ -16,36 +16,36 @@
  *   (fast consumers are never killed by the pending-byte limit; new frames arriving during flush count separately toward slow-consumer budget);
  * - Keeps publish and subscribe names (apps call kernel.events.publish(type, payload));
  * - response(request): standard SSE—subscribe+buffer first, then take synchronous snapshot (or ring+headSeq), emit initial
- *   `event: snapshot` (HelmSnapshot with bootId) or `event: resumed` (HelmResumedFrame), then frame-by-frame `event: <type>` + `data: {seq,event}`;
+ *   `event: snapshot` (HelmxSnapshot with bootId) or `event: resumed` (HelmxResumedFrame), then frame-by-frame `event: <type>` + `data: {seq,event}`;
  *   both Request.signal abort and ReadableStream.cancel unsubscribe and close the stream; stays open as a pure live stream when idle;
  * - sseStream(consume): programmatic consumer API (same snapshot-first semantics), returning an unsubscribe handle;
  *   if consumer returns false or throws, that subscription is isolated and cleaned up without affecting others;
  * - Payload boundary validation/assembly lives in event-validation.ts (pure functions); SSE encoding and byte backpressure
  *   primitives live in sse-stream.ts (shared with SessionDocEventHub);
- * - Unknown types pass through verbatim as CustomHelmEvent {type, payload} without masquerading as notifications;
+ * - Unknown types pass through verbatim as CustomHelmxEvent {type, payload} without masquerading as notifications;
  * - Bounded backpressure: exceeding pending frame/byte caps flags a slow client and closes the stream explicitly (client reconnects
  *   with snapshot to resync), never dropping frames silently; snapshot providers are synchronous, needing no async snapshot system.
  */
 
 import { randomUUID } from 'node:crypto'
-import { encodeSessionDocSubParam, HelmError } from '@helm/protocol'
+import { encodeSessionDocSubParam, HelmxError } from '@helmx/protocol'
 import type {
   ConversationLive,
   ConversationSummary,
-  HelmEvent,
-  HelmEventFrame,
-  HelmResumedFrame,
-  HelmSnapshot,
-  HelmTransientLiveFrame,
+  HelmxEvent,
+  HelmxEventFrame,
+  HelmxResumedFrame,
+  HelmxSnapshot,
+  HelmxTransientLiveFrame,
   MaybePromise,
   PublicPluginSessionDoc,
   SessionDocMultiplexAction,
   SessionDocMultiplexFrame,
   SessionDocSubscription,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 import { redactJsonValue } from '../redact.js'
 import {
-  assembleHelmEvent,
+  assembleHelmxEvent,
   assertSessionDocUpdateShape,
   pruneUndefined,
   validateAndRedactConversationLive,
@@ -56,7 +56,7 @@ import { byteBoundedWrite, closeControllerQuietly, encodeSseChunk, KEEPALIVE_CHU
  * Snapshot provider: omits bootId (injected by the EventHub instance as single source of truth);
  * seq is the provider-side known watermark, resolved via max against the hub's current seq.
  */
-export type SnapshotProvider = () => Omit<HelmSnapshot, 'bootId'>
+export type SnapshotProvider = () => Omit<HelmxSnapshot, 'bootId'>
 
 interface EventSubscription {
   unsubscribe(): void
@@ -65,7 +65,7 @@ interface EventSubscription {
 /** Result of a single publish delivery. */
 interface EventPublishResult {
   /** Validated and redacted event frame for this publish (already in SSE ring and broadcast). */
-  readonly frame: HelmEventFrame
+  readonly frame: HelmxEventFrame
   /** Internal host listener delivery promise/result (once; undefined if not installed). Callers can await
    * when needed (public emitEvent contract) or fire-and-forget on kernel auto-events (trackers, etc.,
    * where errors per listener are isolated internally and the returned promise never rejects). */
@@ -73,7 +73,7 @@ interface EventPublishResult {
 }
 
 /** SSE output frame: initial snapshot/resumed control frame or incremental {seq, event}. */
-export type SseFrame = HelmSnapshot | HelmEventFrame
+export type SseFrame = HelmxSnapshot | HelmxEventFrame
 
 /** Resume ring entry: immutable SSE bytes encoded at publish time (prevents subscriber mutation of replay data). */
 interface RingEntry {
@@ -81,9 +81,9 @@ interface RingEntry {
   chunk: Uint8Array
 }
 
-/** Event dispatched internally to plugin host listeners (`HelmEvent` plus transient `conversation.live`). */
+/** Event dispatched internally to plugin host listeners (`HelmxEvent` plus transient `conversation.live`). */
 export type HostDispatchedEvent =
-  | HelmEvent
+  | HelmxEvent
   | { type: 'conversation.live'; live: ConversationLive }
 
 /** Internal host event dispatcher installed by `KernelRuntime`. */
@@ -111,12 +111,12 @@ export class EventHub {
   private ringBytes = 0
   private readonly ringMaxFrames: number
   private readonly ringMaxBytes: number
-  private readonly subscribers = new Set<(frame: HelmEventFrame, chunk: Uint8Array) => void>()
+  private readonly subscribers = new Set<(frame: HelmxEventFrame, chunk: Uint8Array) => void>()
   /** Connected `/api/events` SSE stream transient live senders (excluded from durable `subscribers` / `seq` / `ring`). */
   private readonly transientStreamSenders = new Set<(chunk: Uint8Array) => void>()
   /** Programmatic transient `conversation.live` listeners (never consume durable `seq`). */
-  private readonly transientListeners = new Set<(frame: HelmTransientLiveFrame) => void>()
-  /** Latest active live views per conversation (reconciled into `HelmResumedFrame.conversationLives`). */
+  private readonly transientListeners = new Set<(frame: HelmxTransientLiveFrame) => void>()
+  /** Latest active live views per conversation (reconciled into `HelmxResumedFrame.conversationLives`). */
   private readonly latestLives = new Map<number, ConversationLive>()
   /** Internal host event dispatcher (installed by runtime; invoked once per publish as the single dispatch boundary). */
   private hostDispatcher: HostEventDispatcher | undefined
@@ -179,7 +179,7 @@ export class EventHub {
 
   /**
    * Install the internal host event dispatcher (single dispatch boundary for ctx.host.onEvent listeners):
-   * invoked exactly once after SSE broadcast per publish with the validated+redacted HelmEvent envelope
+   * invoked exactly once after SSE broadcast per publish with the validated+redacted HelmxEvent envelope
    * (matching protocol onEvent contract). Must return synchronously (may return a promise) and never throw
    * (listener errors are isolated internally), avoiding false errors after broadcast has already succeeded.
    */
@@ -200,7 +200,7 @@ export class EventHub {
   publish(type: string, payload: unknown): EventPublishResult {
     const nextSeq = this.seqValue + 1
     const event = this.buildEvent(type, payload)
-    const frame: HelmEventFrame = { seq: nextSeq, event }
+    const frame: HelmxEventFrame = { seq: nextSeq, event }
     // V8 cannot freeze non-empty TypedArray views; immutability is guaranteed structurally: the ring only retains these isolated
     // encoded bytes (never sharing mutable event object graphs with subscribers), and all internal consumers (ring replay /
     // controller.enqueue) treat them as read-only.
@@ -233,7 +233,7 @@ export class EventHub {
     } else {
       this.latestLives.delete(validated.conversationId)
     }
-    const frame: HelmTransientLiveFrame = { live: validated }
+    const frame: HelmxTransientLiveFrame = { live: validated }
     const chunk = encodeSseChunk('conversation.live', frame)
     for (const send of [...this.transientStreamSenders]) {
       try {
@@ -253,14 +253,14 @@ export class EventHub {
   }
 
   /** Subscribe to transient `conversation.live` frames (test / in-process consumption). */
-  subscribeTransientLive(listener: (frame: HelmTransientLiveFrame) => void): () => void {
+  subscribeTransientLive(listener: (frame: HelmxTransientLiveFrame) => void): () => void {
     this.transientListeners.add(listener)
     return () => {
       this.transientListeners.delete(listener)
     }
   }
 
-  private reconcileLatestLivesOnDurableEvent(event: HelmEvent): void {
+  private reconcileLatestLivesOnDurableEvent(event: HelmxEvent): void {
     if (event.type === 'conversation.upsert' && 'conversation' in event) {
       const conv = event.conversation as ConversationSummary
       if (conv.status !== 'working' && conv.status !== 'blocked') {
@@ -310,14 +310,14 @@ export class EventHub {
 
   /** Return the current snapshot (reused by HTTP GET and SSE initial frame) after pruning undefineds and applying
    * recursive redaction, injecting this instance's bootId as the single source of truth for the event epoch. */
-  currentSnapshot(): HelmSnapshot {
+  currentSnapshot(): HelmxSnapshot {
     const snap = this.snapshot()
-    const redacted = redactJsonValue(pruneUndefined(snap, new WeakSet()), (t) => this.redact(t)) as HelmSnapshot
+    const redacted = redactJsonValue(pruneUndefined(snap, new WeakSet()), (t) => this.redact(t)) as HelmxSnapshot
     return { ...redacted, seq: Math.max(snap.seq, this.seqValue), bootId: this.bootId }
   }
 
   /** Subscribe to incremental frames; returns an unsubscribe function (HTTP layer consumes response(); this entrypoint serves programmatic callers and tests). */
-  subscribe(listener: (frame: HelmEventFrame) => void): () => void {
+  subscribe(listener: (frame: HelmxEventFrame) => void): () => void {
     this.subscribers.add(listener)
     return () => {
       this.subscribers.delete(listener)
@@ -331,7 +331,7 @@ export class EventHub {
    */
   sseStream(consume: (frame: SseFrame) => boolean | void): EventSubscription {
     const handle = this.openStream((frame) => consume(frame) !== false)
-    let snap: HelmSnapshot
+    let snap: HelmxSnapshot
     try {
       snap = this.currentSnapshot()
     } catch (error) {
@@ -447,7 +447,7 @@ export class EventHub {
     if (resume !== undefined && this.canResume(resume)) {
       // Resume: sample headSeq + ring slice (subscription is already live so subsequent publishes enter flush queue or direct write without a gap).
       liveSeq = this.seqValue
-      const resumedFrame: HelmResumedFrame = {
+      const resumedFrame: HelmxResumedFrame = {
         bootId: this.bootId,
         seq: resume.afterSeq,
         headSeq: liveSeq,
@@ -456,7 +456,7 @@ export class EventHub {
       handshake = encodeSseChunk('resumed', resumedFrame)
       replay = this.ring.filter((entry) => entry.seq > resume.afterSeq).map((entry) => entry.chunk)
     } else {
-      let snap: HelmSnapshot
+      let snap: HelmxSnapshot
       try {
         snap = this.currentSnapshot()
       } catch (error) {
@@ -574,10 +574,10 @@ export class EventHub {
    * (write failure / overflow / consumer stop) or throws, unsubscribes immediately and invokes onStop.
    */
   private openStream(
-    onFrame: (frame: HelmEventFrame, chunk: Uint8Array) => boolean,
+    onFrame: (frame: HelmxEventFrame, chunk: Uint8Array) => boolean,
     onStop?: () => void,
   ): { unsubscribe(): void; goLive(snapshotSeq: number): boolean } {
-    let buffer: Array<{ seq: number; frame: HelmEventFrame; chunk: Uint8Array }> = []
+    let buffer: Array<{ seq: number; frame: HelmxEventFrame; chunk: Uint8Array }> = []
     let live = false
     let done = false
     const stop = (): void => {
@@ -587,7 +587,7 @@ export class EventHub {
       this.streamClosers.delete(stop)
       onStop?.()
     }
-    const deliver = (frame: HelmEventFrame, chunk: Uint8Array): void => {
+    const deliver = (frame: HelmxEventFrame, chunk: Uint8Array): void => {
       let ok = false
       try {
         ok = onFrame(frame, chunk)
@@ -596,7 +596,7 @@ export class EventHub {
       }
       if (!ok) stop()
     }
-    const push = (frame: HelmEventFrame, chunk: Uint8Array): void => {
+    const push = (frame: HelmxEventFrame, chunk: Uint8Array): void => {
       if (done) return
       if (!live) {
         if (buffer.length >= MAX_PENDING_EVENTS) {
@@ -628,8 +628,8 @@ export class EventHub {
   }
 
   /** Assemble + validate + redact (delegates to pure helpers in event-validation.ts with instance redactor). */
-  private buildEvent(type: string, payload: unknown): HelmEvent {
-    return assembleHelmEvent(type, payload, (t) => this.redact(t))
+  private buildEvent(type: string, payload: unknown): HelmxEvent {
+    return assembleHelmxEvent(type, payload, (t) => this.redact(t))
   }
 }
 
@@ -682,7 +682,7 @@ function startKeepaliveInterval(
  *
  * plugin.session_doc.updated never enters global /api/events (prevents write amplification and cross-conversation leaks);
  * this hub dispatches updates for a (pluginId, name, conversationId) tuple exclusively to streams subscribed to that tuple.
- * Frame shape matches the global stream (HelmEventFrame {seq, event}), while seq uses its own monotonic counter;
+ * Frame shape matches the global stream (HelmxEventFrame {seq, event}), while seq uses its own monotonic counter;
  * the initial snapshot frame is fetched via response's synchronous provider (e.g., kernel.plugins.getPublicSessionDoc) right after
  * subscribing, guaranteeing an atomic window without dropped or duplicated frames between snapshot and first delta.
  *
@@ -692,7 +692,7 @@ function startKeepaliveInterval(
  */
 export class SessionDocEventHub {
   private seqValue = 0
-  private readonly subscribers = new Map<string, Set<(frame: HelmEventFrame) => void>>()
+  private readonly subscribers = new Map<string, Set<(frame: HelmxEventFrame) => void>>()
   /** Close handles for each dedicated stream (used by close()/set-close; multiple connections to the same tuple register independently). */
   private readonly streams = new Set<SessionDocStreamEntry>()
   /** Max pending frames buffered between subscription setup and snapshot flush (overflow closes stream to reconnect). */
@@ -752,12 +752,12 @@ export class SessionDocEventHub {
   /**
    * Publish a session document update: dispatches only to listeners subscribed to that tuple.
    * Validates shape (pure helper in event-validation.ts) + applies JSON redaction at boundary (same discipline as
-   * EventHub.buildEvent); invalid payloads throw HelmError explicitly without advancing seq or falling back silently.
+   * EventHub.buildEvent); invalid payloads throw HelmxError explicitly without advancing seq or falling back silently.
    */
   dispatch(payload: unknown): void {
     const clean = redactJsonValue(assertSessionDocUpdateShape(payload), (t) => this.redactFn(t)) as PublicPluginSessionDoc
     this.seqValue += 1
-    const frame: HelmEventFrame = {
+    const frame: HelmxEventFrame = {
       seq: this.seqValue,
       event: { type: 'plugin.session_doc.updated', doc: clean },
     }
@@ -777,7 +777,7 @@ export class SessionDocEventHub {
    */
   subscribe(
     doc: { pluginId: string; name: string; conversationId: number },
-    listener: (frame: HelmEventFrame) => void,
+    listener: (frame: HelmxEventFrame) => void,
   ): () => void {
     const key = SessionDocEventHub.keyOf(doc)
     let set = this.subscribers.get(key)
@@ -796,7 +796,7 @@ export class SessionDocEventHub {
 
   /**
    * Dedicated SSE response: initial `event: snapshot` (PluginSessionDocSnapshot {seq, doc}),
-   * followed by incremental `event: plugin.session_doc.updated` + HelmEventFrame.
+   * followed by incremental `event: plugin.session_doc.updated` + HelmxEventFrame.
    *
    * Atomic window: registers buffered subscription first, then invokes synchronous options.snapshot provider
    * (provider also checks plugin/conversation existence; failures throw synchronously to HTTP), emits snapshot,
@@ -868,7 +868,7 @@ export class SessionDocEventHub {
     // Synchronous snapshot fetch (if provider fails or request aborted: unsubscribe synchronously without creating a stream or faking a snapshot).
     let snap: SessionDocSnapshot
     try {
-      if (request.signal.aborted) throw new HelmError('aborted', 'request aborted before subscription was established', 499)
+      if (request.signal.aborted) throw new HelmxError('aborted', 'request aborted before subscription was established', 499)
       snap = options.snapshot()
     } catch (error) {
       shutdown()
@@ -934,14 +934,14 @@ export class SessionDocEventHub {
     },
   ): Response {
     if (!Array.isArray(subs) || subs.length === 0) {
-      throw new HelmError('validation_error', 'session doc multiplex subscription requires at least one target', 400)
+      throw new HelmxError('validation_error', 'session doc multiplex subscription requires at least one target', 400)
     }
     const seen = new Set<string>()
     const targets: SessionDocSubscription[] = []
     for (const sub of subs) {
       const canonical = encodeSessionDocSubParam(sub)
       if (seen.has(canonical)) {
-        throw new HelmError('validation_error', `duplicate session doc subscription: ${canonical}`, 400)
+        throw new HelmxError('validation_error', `duplicate session doc subscription: ${canonical}`, 400)
       }
       seen.add(canonical)
       targets.push({ pluginId: sub.pluginId, name: sub.name, conversationId: sub.conversationId })
@@ -1013,7 +1013,7 @@ export class SessionDocEventHub {
     const snapshotChunks: Uint8Array[] = []
     try {
       if (request.signal.aborted) {
-        throw new HelmError('aborted', 'request aborted before subscription was established', 499)
+        throw new HelmxError('aborted', 'request aborted before subscription was established', 499)
       }
       for (const target of targets) {
         const key = SessionDocEventHub.keyOf(target)

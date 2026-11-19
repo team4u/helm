@@ -5,17 +5,17 @@
  * - The host exposes generic mechanisms on ctx.host: profiles / buildSpawnEnv / redact /
  *   runGate / getArtifact / completeText / nodeIpc / executionEnv -- with no
  *   Herdr semantics whatsoever;
- * - this module only does "dependency assembly": reads from ctx.host's real types (HelmHostApi;
+ * - this module only does "dependency assembly": reads from ctx.host's real types (HelmxHostApi;
  *   since core db1e447b, ports like nodeIpc/executionEnv are typed in protocol) and assembles
  *   HerdrPluginDependencies and HerdrNodeChannel (the Context semantics converge into the
  *   public port's AbortSignal); optional ports are omitted when absent (no degradation, no fabrication).
  */
 
-import type { HelmHostApi } from '@helm/protocol'
+import type { HelmxHostApi } from '@helmx/protocol'
 import type { HerdrNodeChannel, HerdrNodeEnv, HerdrPluginDependencies, HerdrTransport } from './contracts.js'
 import { createBlockedSnapshotAnalyzer } from './snapshot-analysis.js'
 
-export function nodeChannelFromHost(host: HelmHostApi): HerdrNodeChannel {
+export function nodeChannelFromHost(host: HelmxHostApi): HerdrNodeChannel {
   return {
     isOnline: (nodeId) => host.nodeIpc.isOnline(nodeId),
     getNodeHubUrl: (nodeId) => host.nodeIpc.getNodeHubUrl?.(nodeId),
@@ -36,7 +36,7 @@ export function nodeChannelFromHost(host: HelmHostApi): HerdrNodeChannel {
  * transport is injectable (test fixtures); production builds createHerdrTransport in the plugin entry.
  */
 export function assembleHerdrDepsFromHost(
-  host: HelmHostApi,
+  host: HelmxHostApi,
   options: { transport?: HerdrTransport } = {},
 ): HerdrPluginDependencies {
   const analyzer = createBlockedSnapshotAnalyzer({ completeConversationText: (input) => host.completeText(input) })

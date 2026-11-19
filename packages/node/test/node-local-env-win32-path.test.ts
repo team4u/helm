@@ -1,7 +1,7 @@
 /**
  * Regression tests for `LocalExecutionEnv` win32 target path resolution:
  *
- * - Reuses `@helm/protocol`'s `normalizeTargetPath`: `/mnt/<drive>/...` (WSL mount view)
+ * - Reuses `@helmx/protocol`'s `normalizeTargetPath`: `/mnt/<drive>/...` (WSL mount view)
  *   and `/<drive>/...` (Git Bash drive root view) deterministically convert to `<DRIVE>:\...`
  *   and never resolve to `<DRIVE>:\mnt\<drive>\...`;
  * - Native Windows / UNC / relative paths preserve existing semantics;

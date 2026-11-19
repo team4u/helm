@@ -32,7 +32,7 @@ import { handleApi } from './routes.js'
 import { decodeSegments, findPluginRoute, PathDecodeError } from './route-match.js'
 import { createStaticServe, type StaticServe } from './static.js'
 import { acceptsGzip, gzipJsonResponse } from './gzip.js'
-import { HelmError } from '@helm/protocol'
+import { HelmxError } from '@helmx/protocol'
 import type { KernelRuntimeLike } from './contracts.js'
 
 export interface HubHandlerOptions {
@@ -77,7 +77,7 @@ export function createHubHandler(
       serve = await createStaticServe(dir)
     } catch (err) {
       // Explicit invalid directory: throw structured diagnostic rather than silently disabling (honest discipline)
-      throw new HelmError(
+      throw new HelmxError(
         'web_dist_invalid',
         `static hosting directory unavailable: ${dir} (${err instanceof Error ? err.message : String(err)})`,
         500,

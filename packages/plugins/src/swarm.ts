@@ -8,11 +8,11 @@
  * - 纯 turn_settled 事件驱动自愈（失败自动上板 [blocker]、哑巴退场单次续催、6 条件 0-Token [stall] 守卫）。
  */
 import {
-  HelmError,
+  HelmxError,
   type ConversationSummary,
   type MaybePromise,
   type PluginDefinition,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 import { resolvePluginClientAssets } from './asset-paths.js'
 import { readSwarmSkillAsset } from './swarm/assets.js'
 import {
@@ -98,7 +98,7 @@ export function createSwarmPlugin(): PluginDefinition {
 
       async function track<T>(label: string, task: () => MaybePromise<T>): Promise<T> {
         if (shutdown) {
-          throw new HelmError('plugin_disabled', `${SWARM_PLUGIN_ID} 已停用，拒绝后台任务 ${label}`, 409, {
+          throw new HelmxError('plugin_disabled', `${SWARM_PLUGIN_ID} 已停用，拒绝后台任务 ${label}`, 409, {
             pluginId: SWARM_PLUGIN_ID,
           })
         }
@@ -150,7 +150,7 @@ export function createSwarmPlugin(): PluginDefinition {
         try {
           return ctx.host.getConversation(id as number)
         } catch (err) {
-          if (err instanceof HelmError && err.code === 'not_found') return undefined
+          if (err instanceof HelmxError && err.code === 'not_found') return undefined
           throw err
         }
       }
@@ -215,7 +215,7 @@ export function createSwarmPlugin(): PluginDefinition {
               const s = ctx.host.getConversation(id)
               if (s.status === 'working' || s.status === 'blocked') labels.push(`worker-run:${id}`)
             } catch (err) {
-              if (err instanceof HelmError && err.code === 'not_found') continue
+              if (err instanceof HelmxError && err.code === 'not_found') continue
               throw err
             }
           }

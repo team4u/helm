@@ -1,5 +1,5 @@
 /**
- * Hook bridge: maps SDK `GenerationTask` / `ToolTask` hooks to helm's 7 lifecycle hook pipelines.
+ * Hook bridge: maps SDK `GenerationTask` / `ToolTask` hooks to helmx's 7 lifecycle hook pipelines.
  *
  * Extracted from `runtime.ts`. Bridges `tool_call`, `tool_result`, and `before_turn` into `PluginHost.runHook`;
  * terminal cleanup (`handled` takeover leftovers) for `turn_settled` is injected by the host via callbacks.
@@ -21,8 +21,8 @@ import type {
   HookName,
   HookPayloadMap,
   HookResult,
-} from '@helm/protocol'
-import { HelmError, matchesConversationScope } from '@helm/protocol'
+} from '@helmx/protocol'
+import { HelmxError, matchesConversationScope } from '@helmx/protocol'
 import { randomUUID } from 'node:crypto'
 import { getCurrentTools } from '@earendil-works/pi-ai/utils/transcript'
 import type { PluginHost } from '../plugins/index.js'
@@ -85,7 +85,7 @@ export class HookBridge {
   install(): void {
     this.options.registry.install(
       defineExtension({
-        name: 'helm-hook-bridge',
+        name: 'helmx-hook-bridge',
         hooks: [
           hook(ToolTask, {
             /** `tool_call`: transform args or block execution. */
@@ -129,11 +129,11 @@ export class HookBridge {
                 let effective = result
                 if (outcome?.action === 'transform') {
                   const transformed = normalizeToolResult(outcome.value.result)
-                  if (!transformed) throw new HelmError('invalid_hook_result', 'tool_result must return a valid tool result', 500)
+                  if (!transformed) throw new HelmxError('invalid_hook_result', 'tool_result must return a valid tool result', 500)
                   effective = transformed as ToolExecutionResult
                 } else if (outcome?.action === 'handled') {
                   const handled = normalizeToolResult(outcome.result)
-                  if (!handled) throw new HelmError('invalid_hook_result', 'tool_result handled payload is not a valid tool result', 500)
+                  if (!handled) throw new HelmxError('invalid_hook_result', 'tool_result handled payload is not a valid tool result', 500)
                   effective = handled as ToolExecutionResult
                 }
                 return await this.options.prepareToolResult(api.conversationId, effective)
@@ -173,7 +173,7 @@ export class HookBridge {
   ): Promise<{ readonly messages: readonly Message[] } | undefined> {
     const host = this.options.pluginHost()
     const runtimeTools = getCurrentTools(request.messages)
-    // Scope filtering: plugin tools are registered globally on the harness (`helm-plugins`), so out-of-scope
+    // Scope filtering: plugin tools are registered globally on the harness (`helmx-plugins`), so out-of-scope
     // conversations must not see their declarations — filter to available tools for this conversation before
     // entering hooks while retaining kernel tools.
     const effectiveTools = host !== undefined ? this.scopeLocalTools(host, summary, runtimeTools) : runtimeTools
@@ -229,7 +229,7 @@ export class HookBridge {
   }
 
   /**
-   * Scope-trim plugin tools: among globally registered plugin tools (`helm-plugins`), strip declarations whose
+   * Scope-trim plugin tools: among globally registered plugin tools (`helmx-plugins`), strip declarations whose
    * scope does not match this conversation before entering the hook chain (retaining kernel tools and matching
    * plugin tools). Runtime `assertScopeAllows` still enforces at execution; this eliminates request-level leaks.
    */
@@ -336,8 +336,8 @@ export class HookBridge {
    */
   runHookAround(
     name: 'agent_spawn',
-    payload: import('@helm/protocol').AgentSpawnRequest,
-    defaultRun: (finalPayload: import('@helm/protocol').AgentSpawnRequest) => Promise<unknown>,
+    payload: import('@helmx/protocol').AgentSpawnRequest,
+    defaultRun: (finalPayload: import('@helmx/protocol').AgentSpawnRequest) => Promise<unknown>,
   ): Promise<unknown> {
     const host = this.options.pluginHost()
     if (!host) return defaultRun(payload)

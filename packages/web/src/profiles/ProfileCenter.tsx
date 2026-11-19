@@ -9,7 +9,7 @@ import {
 } from './profile-center-model.js'
 import { ProfileCard } from './ProfileCard.js'
 import { ProfileDetailDrawer } from './ProfileDetailDrawer.js'
-import { HelmIcon } from '@helm/plugin-client'
+import { HelmxIcon } from '@helmx/plugin-client'
 import { assetsApi } from '../lib/api.js'
 import {
   useAuthenticated,
@@ -172,7 +172,7 @@ export function ProfileCenter({
       <div className="primary-center-topbar pane-topbar">
         <div className="primary-center-title-wrap pane-title-group">
           <div className="primary-center-title">
-            <HelmIcon name="bot" size={14} />
+            <HelmxIcon name="bot" size={14} />
             <span>{t('profiles.center.title')}</span>
           </div>
         </div>
@@ -183,7 +183,7 @@ export function ProfileCenter({
             className="btn btn-sm"
             onClick={handleCreateNew}
           >
-            <HelmIcon name="plus" size={12} />
+            <HelmxIcon name="plus" size={12} />
             <span className="pane-action-label">{t('profiles.center.newProfile')}</span>
           </button>
           {isSplit ? (
@@ -200,7 +200,7 @@ export function ProfileCenter({
       {/* Toolbar: search and category tabs */}
       <div className="primary-center-toolbar">
         <div className="primary-search-box">
-          <HelmIcon name="search" size={14} />
+          <HelmxIcon name="search" size={14} />
           <input
             type="text"
             placeholder={t('profiles.center.searchPlaceholder')}
@@ -216,7 +216,7 @@ export function ProfileCenter({
               aria-label={t('profiles.center.clearSearch')}
               onClick={() => setQuery('')}
             >
-              <HelmIcon name="x" size={12} />
+              <HelmxIcon name="x" size={12} />
             </button>
           )}
         </div>
@@ -263,7 +263,7 @@ export function ProfileCenter({
         ) : (
           <div className="primary-center-empty">
             <div className="primary-center-empty-icon">
-              <HelmIcon name="search" size={28} />
+              <HelmxIcon name="search" size={28} />
             </div>
             <div className="primary-center-empty-text">{t('profiles.center.emptyTitle')}</div>
             <div className="primary-center-empty-hint">{t('profiles.center.emptyHint')}</div>
@@ -273,7 +273,7 @@ export function ProfileCenter({
                 className="btn btn-sm"
                 onClick={handleResetFilters}
               >
-                <HelmIcon name="rotate-ccw" size={12} />
+                <HelmxIcon name="rotate-ccw" size={12} />
                 <span>{t('profiles.center.resetFilters')}</span>
               </button>
             )}

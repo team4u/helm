@@ -4,7 +4,7 @@
  * frontline activity and descendant approval digests (zero React/DOM
  * dependencies).
  */
-import { DEFAULT_HELM_LOCALE, resolveLocalizedText, type HelmLocale } from '@helm/plugin-client'
+import { DEFAULT_HELMX_LOCALE, resolveLocalizedText, type HelmxLocale } from '@helmx/plugin-client'
 import type { ExecutionNode } from './model-execution-tree.ts'
 import { compactCardTitle } from './model-subagent-card.ts'
 import {
@@ -94,7 +94,7 @@ function readableExecutionNodeName(node: ExecutionNode): string | undefined {
 }
 
 /** Node display title: user title > run name / run node label / prompt > conversation and run fallbacks (never invented). */
-export function executionNodeTitle(node: ExecutionNode, locale: HelmLocale = DEFAULT_HELM_LOCALE): string {
+export function executionNodeTitle(node: ExecutionNode, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
   const readable = readableExecutionNodeName(node)
   if (readable !== undefined) return readable
   if (node.kind === 'conversation') {
@@ -116,7 +116,7 @@ export interface ExecutionFrontlineItem {
   text: string
 }
 
-function executionFrontlineText(node: ExecutionNode, hasDeeper: boolean, locale: HelmLocale): string | undefined {
+function executionFrontlineText(node: ExecutionNode, hasDeeper: boolean, locale: HelmxLocale): string | undefined {
   if (node.status !== 'working') return undefined
   if (node.kind === 'conversation') {
     const name = readableExecutionNodeName(node)
@@ -151,7 +151,7 @@ function executionFrontlineText(node: ExecutionNode, hasDeeper: boolean, locale:
 export function collectExecutionFrontline(
   nodes: ReadonlyArray<ExecutionNode>,
   limit = 2,
-  locale: HelmLocale = DEFAULT_HELM_LOCALE,
+  locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
 ): ExecutionFrontlineItem[] {
   const items: ExecutionFrontlineItem[] = []
   const seen = new Set<string>()
@@ -192,7 +192,7 @@ export interface ExecutionApprovalItem {
 export function collectExecutionApprovals(
   nodes: ReadonlyArray<ExecutionNode>,
   limit = 3,
-  locale: HelmLocale = DEFAULT_HELM_LOCALE,
+  locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
 ): ExecutionApprovalItem[] {
   const items: ExecutionApprovalItem[] = []
   const seen = new Set<string>()

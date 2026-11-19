@@ -1,7 +1,7 @@
 /**
  * Plugin service start barrier (`prepare -> start`, with fault isolation for external plugins) and reverse-topology shutdown.
  */
-import { HelmError } from '@helm/protocol';
+import { HelmxError } from '@helmx/protocol';
 import {
   prepareServices,
   startServiceBarrier,
@@ -84,7 +84,7 @@ export async function stopEnabledPluginServices(enabledInOrder: PluginState[]): 
     }
   }
   if (errors.length > 0) {
-    throw new HelmError(
+    throw new HelmxError(
       'plugin_service_stop_failed',
       `Failed to stop plugin services: ${errors.map((e) => e.pluginId).join(', ')}`,
       500,

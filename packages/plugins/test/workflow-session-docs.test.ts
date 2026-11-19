@@ -18,17 +18,17 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  HelmError,
+  HelmxError,
   type ConversationSummary,
   type PluginSessionDocHandle,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 import { PluginHost } from '../../kernel/src/plugins/index.js'
 import { PluginHostBackendFixtureBase } from '../../kernel/test/helpers/plugin-host-backend.js'
 import type { WorkflowRunBadgesDocState, WorkflowRunSessionDocState, WorkflowRunSummary } from '../src/contracts.js'
 import { createWorkflowPlugin } from '../src/workflow.js'
 import { createRunsProjection, MAX_PROJECTED_RUNS_PER_CONVERSATION } from '../src/workflow/projection.js'
-import { createHelm } from '../../hub/src/app.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { createHelmx } from '../../hub/src/app.js'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { MemoryDocStore, makeConversationSummary } from './helpers/plugin-test-env.js'
 
 const makeConversation = (id: number, parent?: number): ConversationSummary =>
@@ -52,13 +52,13 @@ class FakeBackend extends PluginHostBackendFixtureBase {
   listConversations(): ConversationSummary[] { return [...this.conversations.values()] }
   getConversation(id: number): ConversationSummary {
     const found = this.conversations.get(id)
-    if (found === undefined) throw new HelmError('not_found', `会话不存在: ${id}`, 404)
+    if (found === undefined) throw new HelmxError('not_found', `会话不存在: ${id}`, 404)
     return found
   }
   updateConversation(id: number): Promise<ConversationSummary> { return Promise.resolve(this.getConversation(id)) }
   abortConversation(): Promise<void> { return Promise.resolve() }
   getConversationActivity(): { consecutiveErrors: number } { return { consecutiveErrors: 0 } }
-  getConversationOwnership(): 'helm' | 'bot' | 'human' { return 'human' }
+  getConversationOwnership(): 'helmx' | 'bot' | 'human' { return 'human' }
   spawnAgent(): Promise<unknown> { return Promise.resolve('spawned') }
   runGate(): Promise<{ ok: boolean; output: string }> { return Promise.resolve({ ok: true, output: '' }) }
   cleanupWorktree(): Promise<{ removed: boolean; worktreeId: string; path: string; branch: string; nodeId: string; branchDeleted: boolean }> {
@@ -66,12 +66,12 @@ class FakeBackend extends PluginHostBackendFixtureBase {
   }
   invokeAction(): Promise<unknown> { return Promise.resolve({}) }
   prepareAction(): { idempotent: boolean } { return { idempotent: false } }
-  execEnv(): Promise<never> { return Promise.reject(new HelmError('unsupported', '本 fixture 不执行节点命令', 501)) }
+  execEnv(): Promise<never> { return Promise.reject(new HelmxError('unsupported', '本 fixture 不执行节点命令', 501)) }
   withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') }
   listActions(): never[] { return [] }
   manageConversation(): () => void { return () => {} }
   markConversationOwnership(): void {}
-  createAsk(): Promise<never> { return Promise.reject(new HelmError('unsupported', '测试后端不提供 ask', 501)) }
+  createAsk(): Promise<never> { return Promise.reject(new HelmxError('unsupported', '测试后端不提供 ask', 501)) }
   cancelAsk(): Promise<void> { return Promise.resolve() }
   registerAskSeqResolver(): () => void { return () => {} }
   onEvent(type: string, listener: (payload: unknown) => void): () => void {
@@ -136,7 +136,7 @@ function makeHost(): PluginHost {
 const META = (name: string) => `export const meta = { name: "${name}", description: "test" }\n`
 
 beforeEach(() => {
-  dataDir = mkdtempSync(join(tmpdir(), 'helm-wf-shard-'))
+  dataDir = mkdtempSync(join(tmpdir(), 'helmx-wf-shard-'))
   backend = new FakeBackend()
   docs = new MemoryDocStore()
   sessionDocs = new MemorySessionDocStore()
@@ -171,7 +171,7 @@ function badgeDocEvents(): unknown[] {
 }
 
 test('真实内核全局流不旁路广播 workflow.updated/settled 的完整输出，内部监听器仍收到终态', { timeout: 60_000 }, async () => {
-  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir })
+  const app = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir })
   const frames: unknown[] = []
   const release = app.kernel.events.subscribe((frame) => frames.push(frame))
   const settled: unknown[] = []
@@ -276,7 +276,7 @@ test('删除的父会话不重建孤儿 doc；存活会话无 runs 时清到空'
   backend.conversations.delete(2)
   assert.throws(
     () => host.getPublicSessionDoc('builtin:workflow', 'runs', 2),
-    (err: unknown) => err instanceof HelmError && err.code === 'not_found',
+    (err: unknown) => err instanceof HelmxError && err.code === 'not_found',
   )
   // 触发一次投影（会话 1 新 run）：会话 2 的孤儿分片不得被重建。
   await host.invokeAction('builtin:workflow', 'run', { script: `${META('after-del')}return 1` }, { conversationId: 1 })
@@ -590,7 +590,7 @@ test('conversation.deleted 同时清理受管子代理登记表与已移除 work
           nodeId: 'local',
           repoRoot: '/repo',
           path: '/wt/removed-21',
-          branch: 'helm/spawn-21',
+          branch: 'helmx/spawn-21',
           baseBranch: 'main',
           baseCommit: 'abc1234',
           conversationId: 21,
@@ -603,7 +603,7 @@ test('conversation.deleted 同时清理受管子代理登记表与已移除 work
           nodeId: 'local',
           repoRoot: '/repo',
           path: '/wt/active-21',
-          branch: 'helm/spawn-active-21',
+          branch: 'helmx/spawn-active-21',
           baseBranch: 'main',
           baseCommit: 'abc1234',
           conversationId: 21,

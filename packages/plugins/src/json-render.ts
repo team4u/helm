@@ -11,7 +11,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { HelmError, type PluginDefinition } from '@helm/protocol'
+import { HelmxError, type PluginDefinition } from '@helmx/protocol'
 import { resolvePluginClientAssets } from './asset-paths.js'
 
 const JSON_RENDER_PLUGIN_ID = 'builtin:json-render'
@@ -26,7 +26,7 @@ function resolveSkillDir(): string {
   const pkgRoot = dirname(here)
   const srcFallback = join(pkgRoot, 'src', 'json-render', 'skill')
   if (existsSync(srcFallback)) return srcFallback
-  throw new HelmError('json_render_skill_missing', `内置插件 ${JSON_RENDER_PLUGIN_ID} 找不到技能资产目录`, 500)
+  throw new HelmxError('json_render_skill_missing', `内置插件 ${JSON_RENDER_PLUGIN_ID} 找不到技能资产目录`, 500)
 }
 
 /** 读取技能资产并渲染模板占位符（与 profile/assets 同机制，保持严格失败）。 */

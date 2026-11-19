@@ -1,17 +1,17 @@
 import type {
   ArtifactMetadata,
-  HelmHostApi,
+  HelmxHostApi,
   TurnOutcome,
   TurnSettledPayload,
-} from '@helm/protocol'
-import { redactJsonValue } from '@helm/protocol'
+} from '@helmx/protocol'
+import { redactJsonValue } from '@helmx/protocol'
 import { entryDigestText, lastAssistantText, recentEntrySummaries, truncate } from '../entry-text.js'
 
 export { entryDigestText, recentEntrySummaries, truncate }
 
 /** 从真实会话详情与产物列表收集结算摘要（不调用模型）。 */
 export async function collectWorkerSettlement(
-  host: Pick<HelmHostApi, 'getConversationDetail' | 'listArtifacts' | 'redact'>,
+  host: Pick<HelmxHostApi, 'getConversationDetail' | 'listArtifacts' | 'redact'>,
   payload: TurnSettledPayload,
 ): Promise<{ summary: string; artifacts: ArtifactMetadata[]; keywords: string[] }> {
   const id = payload.conversation.id

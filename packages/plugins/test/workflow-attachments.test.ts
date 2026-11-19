@@ -21,7 +21,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
 
-import { HelmError } from '@helm/protocol'
+import { HelmxError } from '@helmx/protocol'
 import { agentJournalKey, type JournalWriteInput } from '../src/workflow/engine/journal.js'
 import {
   runWorkflow,
@@ -500,7 +500,7 @@ describe('workflow agent attachments: service adapter to AgentSpawnRequest', () 
     const realSpawn = host.spawnAgent.bind(host)
     host.spawnAgent = async (request) => {
       if (request.attachments?.includes('foreign') === true) {
-        throw new HelmError('artifact_forbidden', '产物 foreign 不属于会话 1 或其父会话链，拒绝越权挂载', 403)
+        throw new HelmxError('artifact_forbidden', '产物 foreign 不属于会话 1 或其父会话链，拒绝越权挂载', 403)
       }
       return realSpawn(request)
     }

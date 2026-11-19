@@ -1,14 +1,14 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { ComposerScopeProps, ConversationSummary } from '@helm/protocol/browser'
-import { COMPOSER_DOCK_SLOT, COMPOSER_STATUS_SLOT, resolveLocalizedText } from '@helm/protocol/browser'
+import type { ComposerScopeProps, ConversationSummary } from '@helmx/protocol/browser'
+import { COMPOSER_DOCK_SLOT, COMPOSER_STATUS_SLOT, resolveLocalizedText } from '@helmx/protocol/browser'
 import { conversationsApi } from '../lib/api.js'
 import { buildSlashMenuItems, pluginSlashCommandsFor } from '../lib/commands-model.js'
-import { HelmIcon, PluginSlot } from '@helm/plugin-client'
+import { HelmxIcon, PluginSlot } from '@helmx/plugin-client'
 import { matchesUiScope } from '../lib/types.js'
 import {
   useConversationDetail,
   useGroupedUi,
-  useHelmExternalStore,
+  useHelmxExternalStore,
   useModels,
   usePlugins,
   useProfilesSlice,
@@ -81,7 +81,7 @@ function ContextUsageStatus({ conversation }: { conversation: ConversationSummar
 }
 
 export function Composer({ conversation, prefill, onSendingChange, onNewThread }: ComposerProps) {
-  const externalStore = useHelmExternalStore()
+  const externalStore = useHelmxExternalStore()
   const detail = useConversationDetail(conversation.id)
   const groupedUi = useGroupedUi()
   const plugins = usePlugins()
@@ -402,7 +402,7 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
           {editingEntryId !== null ? (
             <div className="composer-edit-banner" role="status">
               <span className="composer-edit-banner-text">
-                <HelmIcon name="edit" size={12} />
+                <HelmxIcon name="edit" size={12} />
                 <span>{working
                   ? t('conv.composer.editingWorking')
                   : t('conv.composer.editingIdle')}</span>
@@ -413,7 +413,7 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
                 onClick={cancelEdit}
                 title={t('conv.composer.cancelEditTitle')}
               >
-                <HelmIcon name="x" size={12} />
+                <HelmxIcon name="x" size={12} />
                 <span>{t('common.cancel')}</span>
                 <span className="kbd-hint composer-inline-kbd">Esc</span>
               </button>
@@ -423,7 +423,7 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
             <div className="composer-attachments">
               {attachments.map((att) => (
                 <span key={att.artifactId} className="attachment-chip">
-                  <HelmIcon name="paperclip" size={11} />
+                  <HelmxIcon name="paperclip" size={11} />
                   <span>{att.name}</span>
                   <span className="mono tabular-nums">{formatBytes(att.size)}</span>
                   <Tooltip content={t('composer.standby.removeAttachmentTitle', { name: att.name })} side="top">
@@ -434,7 +434,7 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
                       aria-label={t('composer.standby.removeAttachmentTitle', { name: att.name })}
                       onClick={() => removeAttachment(att.artifactId)}
                     >
-                      <HelmIcon name="x" size={10} />
+                      <HelmxIcon name="x" size={10} />
                     </button>
                   </Tooltip>
                 </span>
@@ -485,7 +485,7 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
                   aria-label={t('conv.composer.uploadAttachment')}
                   onClick={() => fileInputRef.current?.click()}
                 >
-                  <HelmIcon name="plus" size={19} />
+                  <HelmxIcon name="plus" size={19} />
                 </button>
               </Tooltip>
               <ModelPicker conversation={conversation} />
@@ -530,7 +530,7 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
               ) : pills.length > 0 || widgets.length > 0 ? (
                 <details className="composer-extras" ref={extrasRef}>
                   <summary className="btn btn-ghost btn-sm composer-icon-button" aria-label={t('conv.composer.toolsLabel')} title={t('conv.composer.toolsLabel')}>
-                    <HelmIcon name="more" size={18} />
+                    <HelmxIcon name="more" size={18} />
                   </summary>
                   <div className="composer-popover composer-extras-popover">
                     {pills.map((p) => (
@@ -555,7 +555,7 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
                           event.currentTarget.closest('details')?.removeAttribute('open')
                         }}
                       >
-                        <HelmIcon name="layers" size={15} />
+                        <HelmxIcon name="layers" size={15} />
                         {(() => {
                           const target = widgets.length === 1
                             ? resolveLocalizedText(widgets[0]!.spec.title ?? '', locale) || t('conv.composer.panels')

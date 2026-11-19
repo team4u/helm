@@ -1,8 +1,8 @@
 /**
- * 初始会话可删除与缺省触发器投递端到端验证（真实 createHelm + faux provider）。
+ * 初始会话可删除与缺省触发器投递端到端验证（真实 createHelmx + faux provider）。
  */
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
-import { HelmError } from '@helm/protocol'
+import { HelmxError } from '@helmx/protocol'
 import assert from 'node:assert/strict'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -17,7 +17,7 @@ function initialConvOf(app: HubTestApp) {
 }
 
 test('删除初始人类会话成功且重启不复活，零会话下仍可新建', { timeout: 60_000 }, async (t) => {
-  const dir = join(useTempDir(t, 'helm-initial-del-'), 'restart')
+  const dir = join(useTempDir(t, 'helmx-initial-del-'), 'restart')
   const first = await createHubTestApp({ dataDir: dir, cwd: dir })
   const initial = initialConvOf(first.app)
   try {
@@ -39,7 +39,7 @@ test('删除初始人类会话成功且重启不复活，零会话下仍可新�
 })
 
 test('HTTP 删除、受管保护与触发器路由契约（无显式目标投递 / 全删空按需新建 / 失效显式目标 404 不静默改投）', { timeout: 60_000 }, async () => {
-  const env = await openHubHttpEnv({ prefix: 'helm-initial-http-' })
+  const env = await openHubHttpEnv({ prefix: 'helmx-initial-http-' })
   try {
     const initial = initialConvOf(env.app)
 
@@ -47,7 +47,7 @@ test('HTTP 删除、受管保护与触发器路由契约（无显式目标投递
     const release = env.kernel.manageConversation(initial.id, 'test:owner')
     await assert.rejects(
       () => env.kernel.deleteConversation(initial.id),
-      (err: unknown) => err instanceof HelmError && err.code === 'conversation_managed_by_plugin',
+      (err: unknown) => err instanceof HelmxError && err.code === 'conversation_managed_by_plugin',
     )
     release()
 
@@ -62,7 +62,7 @@ test('HTTP 删除、受管保护与触发器路由契约（无显式目标投递
     await env.kernel.waitForIdle(initial.id)
     const detail1 = await env.kernel.getConversationDetail(initial.id, { limit: 10 })
     assert.ok(
-      detail1.entries.some((e) => e.kind === 'helm.input' && JSON.stringify(e.data).includes('by default target event')),
+      detail1.entries.some((e) => e.kind === 'helmx.input' && JSON.stringify(e.data).includes('by default target event')),
     )
 
     // 3. HTTP 删除初始会话成功（无 ID 级删除豁免），二次读取 404
@@ -85,7 +85,7 @@ test('HTTP 删除、受管保护与触发器路由契约（无显式目标投递
     await env.kernel.waitForIdle(rebuiltId)
     const detail2 = await env.kernel.getConversationDetail(rebuiltId, { limit: 10 })
     assert.ok(
-      detail2.entries.some((e) => e.kind === 'helm.input' && JSON.stringify(e.data).includes('delete empty after by default event')),
+      detail2.entries.some((e) => e.kind === 'helmx.input' && JSON.stringify(e.data).includes('delete empty after by default event')),
     )
 
     // 5. 显式指定已删目标的触发器显式 404，绝不静默改投其他会话
@@ -101,11 +101,11 @@ test('HTTP 删除、受管保护与触发器路由契约（无显式目标投递
           targetConversationId: rebuiltId,
           createdAt: Date.now(),
         }),
-      (err: unknown) => err instanceof HelmError && err.code === 'not_found',
+      (err: unknown) => err instanceof HelmxError && err.code === 'not_found',
     )
     const otherDetail = await env.kernel.getConversationDetail(other.id, { limit: 10 })
     assert.equal(
-      otherDetail.entries.filter((e) => e.kind === 'helm.input' && JSON.stringify(e.data).includes('points to already delete conversation event')).length,
+      otherDetail.entries.filter((e) => e.kind === 'helmx.input' && JSON.stringify(e.data).includes('points to already delete conversation event')).length,
       0,
     )
   } finally {

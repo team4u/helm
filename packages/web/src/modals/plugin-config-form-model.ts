@@ -12,7 +12,7 @@
  *    the field is only submitted when the user types a new value.
  */
 
-import type { PluginConfigFieldSchema, PluginConfigFieldSource } from '@helm/protocol/browser'
+import type { PluginConfigFieldSchema, PluginConfigFieldSource } from '@helmx/protocol/browser'
 
 export type ConfigValue = string | number | boolean
 

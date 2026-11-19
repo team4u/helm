@@ -18,7 +18,7 @@ import {
   PENDING_DIFF_MAX_EDIT_LENGTH,
   PENDING_DIFF_MAX_ROWS,
 } from '../src/conversation/edit-diff-model.js'
-import type { ToolDiffRow } from '@helm/protocol'
+import type { ToolDiffRow } from '@helmx/protocol'
 
 function validEditResult(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {

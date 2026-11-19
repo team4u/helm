@@ -16,7 +16,7 @@ import {
   isConversationAbortable,
   isInlineInputEscapeTarget,
   resolveFocusedPanel,
-  type HelmShortcutDetail,
+  type HelmxShortcutDetail,
 } from '../shell/shortcuts-model.js'
 
 export interface UseGlobalShortcutsOptions {
@@ -118,8 +118,8 @@ export function useGlobalShortcuts({
       if (isCtrlOnly && keyLower === 'l') {
         if (hasNonModelPickerDialogOpen()) return
         event.preventDefault()
-        const detail: HelmShortcutDetail = { action: 'toggle-model-picker', panel }
-        window.dispatchEvent(new CustomEvent<HelmShortcutDetail>('helm:shortcut', { detail }))
+        const detail: HelmxShortcutDetail = { action: 'toggle-model-picker', panel }
+        window.dispatchEvent(new CustomEvent<HelmxShortcutDetail>('helmx:shortcut', { detail }))
         return
       }
 
@@ -127,8 +127,8 @@ export function useGlobalShortcuts({
 
       if (isCtrlOnly && keyLower === 'o') {
         event.preventDefault()
-        const detail: HelmShortcutDetail = { action: 'toggle-process-groups', panel }
-        window.dispatchEvent(new CustomEvent<HelmShortcutDetail>('helm:shortcut', { detail }))
+        const detail: HelmxShortcutDetail = { action: 'toggle-process-groups', panel }
+        window.dispatchEvent(new CustomEvent<HelmxShortcutDetail>('helmx:shortcut', { detail }))
       }
     }
     window.addEventListener('keydown', keydown)

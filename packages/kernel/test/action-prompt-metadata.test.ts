@@ -11,7 +11,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { HelmError, type ConversationSummary, type PluginActionSpec, type PluginToolSpec } from '@helm/protocol';
+import { HelmxError, type ConversationSummary, type PluginActionSpec, type PluginToolSpec } from '@helmx/protocol';
 import {
   CapabilityRegistry,
   actionToolAlias,
@@ -58,9 +58,9 @@ function baseTool(over: Partial<PluginToolSpec> = {}): PluginToolSpec {
   };
 }
 
-function expectHelmError(code: string, field: string): (err: unknown) => boolean {
+function expectHelmxError(code: string, field: string): (err: unknown) => boolean {
   return (err: unknown): boolean => {
-    assert.ok(err instanceof HelmError, `expected HelmError, got ${String(err)}`);
+    assert.ok(err instanceof HelmxError, `expected HelmxError, got ${String(err)}`);
     assert.equal(err.code, code);
     assert.ok(err.message.includes(field), `error message should reference field ${field}: ${err.message}`);
     return true;
@@ -73,47 +73,47 @@ test('malformed prompt metadata rejects explicitly at registration boundary for 
   // action: whitespace-only / non-string snippet; empty / non-array / whitespace-element / non-string / sparse guidelines
   assert.throws(
     () => cap.registerAction('p', baseAction({ promptSnippet: '   \t ' })),
-    expectHelmError('invalid_action_spec', 'promptSnippet'),
+    expectHelmxError('invalid_action_spec', 'promptSnippet'),
   );
   assert.throws(
     () => cap.registerAction('p', baseAction({ promptSnippet: 42 as unknown as string })),
-    expectHelmError('invalid_action_spec', 'promptSnippet'),
+    expectHelmxError('invalid_action_spec', 'promptSnippet'),
   );
   assert.throws(
     () => cap.registerAction('p', baseAction({ promptGuidelines: [] })),
-    expectHelmError('invalid_action_spec', 'promptGuidelines'),
+    expectHelmxError('invalid_action_spec', 'promptGuidelines'),
   );
   assert.throws(
     () => cap.registerAction('p', baseAction({ promptGuidelines: 'x' as unknown as string[] })),
-    expectHelmError('invalid_action_spec', 'promptGuidelines'),
+    expectHelmxError('invalid_action_spec', 'promptGuidelines'),
   );
   assert.throws(
     () => cap.registerAction('p', baseAction({ promptGuidelines: ['ok', '  '] })),
-    expectHelmError('invalid_action_spec', 'promptGuidelines'),
+    expectHelmxError('invalid_action_spec', 'promptGuidelines'),
   );
   assert.throws(
     () => cap.registerAction('p', baseAction({ promptGuidelines: [1] as unknown as string[] })),
-    expectHelmError('invalid_action_spec', 'promptGuidelines'),
+    expectHelmxError('invalid_action_spec', 'promptGuidelines'),
   );
 
   assert.throws(
     () => cap.registerAction('p', baseAction({ promptGuidelines: new Array<string>(1) })),
-    expectHelmError('invalid_action_spec', 'promptGuidelines'),
+    expectHelmxError('invalid_action_spec', 'promptGuidelines'),
   );
 
   // tool: same validation rules (invalid_tool_spec)
   assert.throws(
     () => cap.registerTool('p', baseTool({ promptSnippet: '\n' })),
-    expectHelmError('invalid_tool_spec', 'promptSnippet'),
+    expectHelmxError('invalid_tool_spec', 'promptSnippet'),
   );
   assert.throws(
     () => cap.registerTool('p', baseTool({ promptGuidelines: [' '] })),
-    expectHelmError('invalid_tool_spec', 'promptGuidelines'),
+    expectHelmxError('invalid_tool_spec', 'promptGuidelines'),
   );
 
   assert.throws(
     () => cap.registerTool('p', baseTool({ promptGuidelines: new Array<string>(1) })),
-    expectHelmError('invalid_tool_spec', 'promptGuidelines'),
+    expectHelmxError('invalid_tool_spec', 'promptGuidelines'),
   );
 
   // Rejected declarations leave no leftover registrations
@@ -215,7 +215,7 @@ test('exposeToPrompt rejects non-booleans at registration and preserves boolean 
   const cap = new CapabilityRegistry();
   assert.throws(
     () => cap.registerAction('p', baseAction({ exposeToPrompt: 'false' as unknown as boolean })),
-    expectHelmError('invalid_action_spec', 'exposeToPrompt'),
+    expectHelmxError('invalid_action_spec', 'exposeToPrompt'),
   );
   cap.registerAction('p', baseAction({ id: 'hidden', exposeToPrompt: false }));
   const hidden = cap.listActions(['p']).find((m) => m.id === 'hidden');

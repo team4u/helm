@@ -1,26 +1,26 @@
 /**
- * 测试 store 工厂（纯 web 模块，不引入 @helm/plugin-client 的 Radix 依赖图）：
+ * 测试 store 工厂（纯 web 模块，不引入 @helmx/plugin-client 的 Radix 依赖图）：
  * happy-dom 环境下需要交互式展开 Radix 浮层的测试遵循「GlobalRegistrator.register()
  * 之后再动态加载」约定；本模块可被静态导入而不破坏该约定。Provider 栈见
  * helpers/host-store.ts（复用生产 PluginClientHostBridge，需按约定动态加载）。
  *
- * 工厂构造真实 HelmExternalStore 并水合确定性默认值 + 用例覆写：
+ * 工厂构造真实 HelmxExternalStore 并水合确定性默认值 + 用例覆写：
  * - live / artifacts / loadErrors 经公开同步 setter（updateLive 等，与 SSE 同链路）；
  * - auth / prefs / catalog / nav / notices 经 store 内部补丁方法（TS private 仅编译期，
  *   这里以结构化类型访问并做运行时守卫；store 内部改名时此处显式报错而非静默造假）；
  * - 动作函数不可覆写——真实 store 提供真实动作，用例经可观察状态断言行为。
  */
-import { HelmExternalStore, type AuthSlice, type CatalogSlice, type NavSlice, type PrefsSlice } from '../../src/lib/helm-store.js'
+import { HelmxExternalStore, type AuthSlice, type CatalogSlice, type NavSlice, type PrefsSlice } from '../../src/lib/helmx-store.js'
 import { emptyLiveState } from '../../src/lib/live-state.js'
-import { HelmExternalStoreContext } from '../../src/lib/store-context.js'
-import type { HelmStoreValue, ToastNotice } from '../../src/lib/types.js'
+import { HelmxExternalStoreContext } from '../../src/lib/store-context.js'
+import type { HelmxStoreValue, ToastNotice } from '../../src/lib/types.js'
 
-export { HelmExternalStoreContext }
+export { HelmxExternalStoreContext }
 
 /** 状态覆写面：沿用历史字段名；groupedUi 由 store 从 uiContributions 派生（与生产同链路），
  * 动作函数不可覆写（真实 store 提供真实动作）——类型层显式排除，避免静默丢弃。 */
 export type TestStoreOverrides = Omit<
-  Partial<HelmStoreValue>,
+  Partial<HelmxStoreValue>,
   | 'groupedUi'
   | 'setTheme'
   | 'setThemePreference'
@@ -58,7 +58,7 @@ export type TestStoreOverrides = Omit<
   | 'invokePluginAction'
 >
 
-/** HelmExternalStore 的内部补丁面（仅测试水合使用）。 */
+/** HelmxExternalStore 的内部补丁面（仅测试水合使用）。 */
 interface StoreHydrationSurface {
   patchAuth(patch: Partial<AuthSlice>): void
   patchPrefs(patch: Partial<PrefsSlice>): void
@@ -67,17 +67,17 @@ interface StoreHydrationSurface {
   setNotices(update: ToastNotice[] | ((prev: ToastNotice[]) => ToastNotice[])): void
 }
 
-function hydrationSurface(store: HelmExternalStore): StoreHydrationSurface {
+function hydrationSurface(store: HelmxExternalStore): StoreHydrationSurface {
   const surface = store as unknown as StoreHydrationSurface
   for (const key of ['patchAuth', 'patchPrefs', 'patchCatalog', 'patchNav', 'setNotices'] as const) {
     if (typeof surface[key] !== 'function') {
-      throw new Error(`HelmExternalStore hydration surface changed: ${key} missing; update test/helpers/store.ts`)
+      throw new Error(`HelmxExternalStore hydration surface changed: ${key} missing; update test/helpers/store.ts`)
     }
   }
   return surface
 }
 
-export function makeTestStore(overrides: TestStoreOverrides = {}): HelmExternalStore {
+export function makeTestStore(overrides: TestStoreOverrides = {}): HelmxExternalStore {
   const {
     authReady, authConfigured, authenticated, authError, connectionError, sseConnected, kernelBootId,
     theme, themePreference, locale, localePreference, quietNotifyEnabled,
@@ -90,7 +90,7 @@ export function makeTestStore(overrides: TestStoreOverrides = {}): HelmExternalS
     notices,
   } = overrides
 
-  const store = new HelmExternalStore({
+  const store = new HelmxExternalStore({
     primaryTarget: primaryTarget ?? { kind: 'conversation', conversationId: 1 },
     splitTarget: splitTarget ?? null,
     workbenchOpen: workbenchOpen ?? false,

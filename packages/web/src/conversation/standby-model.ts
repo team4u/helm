@@ -15,7 +15,7 @@
  * useSyncExternalStore hook.
  */
 import { useSyncExternalStore } from 'react'
-import type { ArtifactMetadata, ConversationInit, ConversationSummary } from '@helm/protocol/browser'
+import type { ArtifactMetadata, ConversationInit, ConversationSummary } from '@helmx/protocol/browser'
 import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 import { envDraftError, parseCompactSlashCommand, type EnvDraft } from './composer-model.js'
 import { resolveEffectiveThinkingLevel } from './keybindings-model.js'

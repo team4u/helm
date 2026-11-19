@@ -579,14 +579,14 @@
   margin: 12px 0;
 }
 
-.msg-ai-body table:not(.helm-table):not(.jr-table) {
+.msg-ai-body table:not(.helmx-table):not(.jr-table) {
   width: 100%;
   border-collapse: collapse;
   font-size: 13.5px;
   font-variant-numeric: tabular-nums;
 }
 
-.msg-ai-body > table:not(.helm-table):not(.jr-table) {
+.msg-ai-body > table:not(.helmx-table):not(.jr-table) {
   display: block;
   overflow-x: auto;
   margin: 12px 0;
@@ -595,14 +595,14 @@
   background: var(--bg-elevated);
 }
 
-.msg-ai-body table:not(.helm-table):not(.jr-table) th,
-.msg-ai-body table:not(.helm-table):not(.jr-table) td {
+.msg-ai-body table:not(.helmx-table):not(.jr-table) th,
+.msg-ai-body table:not(.helmx-table):not(.jr-table) td {
   padding: 7px 12px;
   text-align: left;
   border-bottom: 1px solid var(--line-2);
 }
 
-.msg-ai-body table:not(.helm-table):not(.jr-table) th {
+.msg-ai-body table:not(.helmx-table):not(.jr-table) th {
   font-size: 12px;
   font-weight: 500;
   color: var(--fg-secondary);
@@ -611,7 +611,7 @@
   white-space: nowrap;
 }
 
-.msg-ai-body table:not(.helm-table):not(.jr-table) tr:last-child td {
+.msg-ai-body table:not(.helmx-table):not(.jr-table) tr:last-child td {
   border-bottom: none;
 }
 
@@ -625,7 +625,7 @@
 .msg-ai-body > blockquote:first-child,
 .msg-ai-body > .code-block-wrap:first-child,
 .msg-ai-body > .msg-md-table-wrap:first-child,
-.msg-ai-body > table:not(.helm-table):not(.jr-table):first-child,
+.msg-ai-body > table:not(.helmx-table):not(.jr-table):first-child,
 .msg-ai-body > hr:first-child,
 .msg-ai-body > pre:first-child {
   margin-top: 0;
@@ -641,7 +641,7 @@
 .msg-ai-body > blockquote:last-child,
 .msg-ai-body > .code-block-wrap:last-child,
 .msg-ai-body > .msg-md-table-wrap:last-child,
-.msg-ai-body > table:not(.helm-table):not(.jr-table):last-child,
+.msg-ai-body > table:not(.helmx-table):not(.jr-table):last-child,
 .msg-ai-body > hr:last-child,
 .msg-ai-body > pre:last-child {
   margin-bottom: 0;
@@ -917,7 +917,7 @@ pre {
 }
 
 /* 流式生成 / 等待响应呼吸指示（3 个 4px 圆点错峰脉冲） */
-@keyframes helmDotPulse {
+@keyframes helmxDotPulse {
   0%, 80%, 100% {
     opacity: 0.25;
     transform: scale(0.85);
@@ -962,7 +962,7 @@ pre {
   height: 4px;
   border-radius: 999px;
   background: currentColor;
-  animation: helmDotPulse 1.2s ease-in-out infinite;
+  animation: helmxDotPulse 1.2s ease-in-out infinite;
 }
 
 .msg-live-dots > :nth-child(1) {
@@ -1227,7 +1227,7 @@ pre {
   font-variant-numeric: tabular-nums;
 }
 
-.helm-tooltip-content.trace-group-time-tooltip {
+.helmx-tooltip-content.trace-group-time-tooltip {
   white-space: pre-line;
 }
 
@@ -1775,13 +1775,13 @@ pre {
 }
 
 /* 工作台抽屉页签与产物分栏（覆盖 modals.css 的 .tabs-bar / .tab-btn） */
-.helm-workbench .tabs-bar {
+.helmx-workbench .tabs-bar {
   justify-content: space-between;
   gap: 8px;
   padding: 4px 10px 0 12px;
   flex-shrink: 0;
 }
-.helm-workbench .workbench-tabs-scroll {
+.helmx-workbench .workbench-tabs-scroll {
   display: flex;
   align-items: center;
   gap: 4px;
@@ -1790,30 +1790,30 @@ pre {
   overflow-x: auto;
   scrollbar-width: none;
 }
-.helm-workbench .workbench-tabs-scroll::-webkit-scrollbar {
+.helmx-workbench .workbench-tabs-scroll::-webkit-scrollbar {
   display: none;
 }
-.helm-workbench .tab-btn {
+.helmx-workbench .tab-btn {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   flex-shrink: 0;
   white-space: nowrap;
 }
-.helm-workbench .workbench-close-btn {
+.helmx-workbench .workbench-close-btn {
   flex-shrink: 0;
   margin-left: auto;
   align-self: center;
 }
-.helm-workbench .workbench-body {
+.helmx-workbench .workbench-body {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
 }
-.helm-workbench .workbench-plugin-body {
+.helmx-workbench .workbench-plugin-body {
   padding: 10px;
 }
-.helm-workbench .workbench-footer {
+.helmx-workbench .workbench-footer {
   padding: 8px 12px;
   border-top: 1px solid var(--border);
   display: flex;

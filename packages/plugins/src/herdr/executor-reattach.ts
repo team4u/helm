@@ -4,7 +4,7 @@
  * 流程（设计文档 §3.3）：
  * 1. 按 (nodeId, executionId) 从 PaneRegistry 查回持久化的 ManagedPane
  *    （含 outputFileName）；缺失记录或缺少 outputFileName 时显式抛
- *    HelmError('herdr_reattach_missing')；
+ *    HelmxError('herdr_reattach_missing')；
  * 2. 先经 request.onResolved 回传既有窗格坐标（executionId / nodeId /
  *    effectiveCwd / worktree / steer controls）；
  * 3. 优先检查交接文件（PaneHandoff.tryReadValidOutput）：若重启窗口内
@@ -20,7 +20,7 @@
  *      屏幕脏文本冒充成功结果。
  */
 
-import { HelmError, type AgentExecutionInfo, type AgentSpawnRequest } from '@helm/protocol'
+import { HelmxError, type AgentExecutionInfo, type AgentSpawnRequest } from '@helmx/protocol'
 import { parseWorkflowSpawnMeta } from '../contracts.js'
 import type { HerdrPluginDependencies, HerdrTarget } from './contracts.js'
 import { targetNodeId } from './contracts.js'
@@ -86,7 +86,7 @@ export class ReattachCoordinator {
     this.assertPaneMatch(request, pane)
     const taskKey = paneStateKey(pane)
     if (this.port.hasActiveTask(taskKey)) {
-      throw new HelmError(
+      throw new HelmxError(
         'pane_busy',
         `pane ${pane.paneId} 正在被另一个执行或重挂占用（activeTasks），拒绝并发 reattach`,
         409,
@@ -120,14 +120,14 @@ export class ReattachCoordinator {
       } catch (error) {
         if (isPaneLostError(error)) {
           if (initialAttempt.kind === 'invalid') {
-            throw new HelmError(
+            throw new HelmxError(
               'herdr_output_contract_violation',
               `pane ${pane.paneId} 在重启期间已丢失且交接文件无效（${initialAttempt.reason}）`,
               502,
               { paneId: pane.paneId, reason: initialAttempt.reason },
             )
           }
-          throw new HelmError(
+          throw new HelmxError(
             'herdr_pane_lost',
             `pane ${pane.paneId} 在重启期间已丢失且未产出有效交接文件 ${pane.outputFileName}`,
             502,
@@ -138,7 +138,7 @@ export class ReattachCoordinator {
       }
 
       if (authority.paneId !== pane.paneId || authority.tabId !== pane.tabId || authority.name !== pane.agentName) {
-        throw new HelmError(
+        throw new HelmxError(
           'herdr_ownership_lost',
           `pane ${pane.paneId} 权威身份与受管登记不一致（name=${String(authority.name)} tab=${authority.tabId}），拒绝重挂接管`,
           409,
@@ -173,13 +173,13 @@ export class ReattachCoordinator {
         await this.port.settleThroughSteers(effectiveRequest, pane, pane.outputFileName!, authority)
         const latest = this.port.registry.get(nodeIdOf(pane), pane.paneId)
         if (latest?.outputFileName === undefined) {
-          throw new HelmError('herdr_context_unavailable', `pane ${pane.paneId} 的交接上下文已失效`, 409)
+          throw new HelmxError('herdr_context_unavailable', `pane ${pane.paneId} 的交接上下文已失效`, 409)
         }
         return this.port.finishHandoffAndGate(effectiveRequest, latest)
       }
 
       if (authority.agentStatus === 'unknown') {
-        throw new HelmError('herdr_agent_unsettled', `pane ${pane.paneId} 状态 unknown，无法确认完成`, 502)
+        throw new HelmxError('herdr_agent_unsettled', `pane ${pane.paneId} 状态 unknown，无法确认完成`, 502)
       }
 
       // 若此前停留在启动 launch_pending（首轮任务提示词尚未投递）且现在刚就绪为 idle：
@@ -202,7 +202,7 @@ export class ReattachCoordinator {
   ): Promise<SpawnRouting> {
     if (explicitRouting !== undefined) {
       if (explicitRouting.kind !== pane.routing.kind || explicitRouting.profileId !== pane.routing.profileId) {
-        throw new HelmError(
+        throw new HelmxError(
           'herdr_reattach_missing',
           `reattach 路由（kind=${explicitRouting.kind}, profile=${String(explicitRouting.profileId)}）与窗格记录（kind=${pane.routing.kind}, profile=${String(pane.routing.profileId)}）不一致`,
           409,
@@ -228,7 +228,7 @@ export class ReattachCoordinator {
 
   private assertPaneMatch(request: AgentSpawnRequest, pane: ManagedPane): void {
     if (pane.parentConversationId !== request.parentConversationId) {
-      throw new HelmError(
+      throw new HelmxError(
         'herdr_reattach_missing',
         `窗格 ${pane.paneId} 属于父会话 ${pane.parentConversationId}，与重挂请求父会话 ${request.parentConversationId} 不匹配`,
         409,
@@ -237,7 +237,7 @@ export class ReattachCoordinator {
     }
     const spawnRunId = parseWorkflowSpawnMeta(request.meta).runId
     if (pane.workflowRunId !== undefined && spawnRunId !== undefined && pane.workflowRunId !== spawnRunId) {
-      throw new HelmError(
+      throw new HelmxError(
         'herdr_reattach_missing',
         `窗格 ${pane.paneId} 属于 workflow ${pane.workflowRunId}，与重挂请求 ${spawnRunId} 不匹配`,
         409,
@@ -245,7 +245,7 @@ export class ReattachCoordinator {
       )
     }
     if (request.reattach?.effectiveCwd !== undefined && request.reattach.effectiveCwd !== pane.effectiveCwd) {
-      throw new HelmError(
+      throw new HelmxError(
         'herdr_reattach_missing',
         `重挂请求的 effectiveCwd '${request.reattach.effectiveCwd}' 与窗格实际工作目录 '${pane.effectiveCwd}' 不一致`,
         409,
@@ -253,7 +253,7 @@ export class ReattachCoordinator {
       )
     }
     if (pane.outcome === 'failed') {
-      throw new HelmError(
+      throw new HelmxError(
         'herdr_execution_failed',
         pane.failureNote ?? `窗格 ${pane.paneId} 重挂前已处于 failed 状态`,
         502,
@@ -261,7 +261,7 @@ export class ReattachCoordinator {
       )
     }
     if (pane.outcome !== 'running' || pane.outputFileName === undefined) {
-      throw new HelmError(
+      throw new HelmxError(
         'herdr_reattach_missing',
         `窗格 ${pane.paneId}（outcome=${pane.outcome}）缺少可重挂的持久化交接文件名 outputFileName`,
         409,

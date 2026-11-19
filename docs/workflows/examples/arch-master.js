@@ -11,7 +11,7 @@ export const meta = {
 phase("评审方案与提交共享接口")
 let effectiveArchSpec = args.archSpec
 if (args.reviewArchSpec) {
-  // 运行前先保存 cross-review.js：helm workflows save docs/workflows/examples/cross-review.js
+  // 运行前先保存 cross-review.js：helmx workflows save docs/workflows/examples/cross-review.js
   const archReview = await workflow("cross-review", {
     mode: "create_and_refine",
     modelB: args.modelB,
@@ -39,7 +39,7 @@ if (args.contractSpec) {
 phase("并发开发各模块")
 const modDeliveries = await parallel(
   args.modules.map((mod) => () =>
-    // 运行前先保存 module-dev.js：helm workflows save docs/workflows/examples/module-dev.js
+    // 运行前先保存 module-dev.js：helmx workflows save docs/workflows/examples/module-dev.js
     workflow("module-dev", {
       moduleName: mod.name,
       moduleScope: mod.scope,

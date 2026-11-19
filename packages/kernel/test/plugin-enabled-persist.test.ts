@@ -22,15 +22,15 @@ import {
   ConfigService,
   CredentialService,
 } from '../src/services/index.js';
-import { HelmPluginConfigStore } from '../src/runtime/plugin-config-store.js';
-import { HelmError, type PluginDefinition } from '@helm/protocol';
+import { HelmxPluginConfigStore } from '../src/runtime/plugin-config-store.js';
+import { HelmxError, type PluginDefinition } from '@helmx/protocol';
 import {
   PluginHost,
   type PluginConfigStore,
   type PluginHostBackend,
 } from '../src/plugins/index.js';
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js';
-import { createPluginBuildProvider } from '@helm/plugin-build';
+import { createPluginBuildProvider } from '@helmx/plugin-build';
 import {
   MemoryDocStore,
   assertRejectsCode,
@@ -68,12 +68,12 @@ function makeHostApi(events: string[]): PluginHostBackend & { __payload: Array<{
     registerAskSeqResolver: () => () => {},
     onEvent: () => () => {},
     abortConversation: async () => {},
-    getConversationOwnership(): 'helm' | 'bot' | 'human' {
+    getConversationOwnership(): 'helmx' | 'bot' | 'human' {
       return 'human'
     },
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
-    execEnv: async () => { throw new HelmError('unsupported', 'this fixture does not execute node commands', 501) },
+    execEnv: async () => { throw new HelmxError('unsupported', 'this fixture does not execute node commands', 501) },
     emitEvent: (type: string, p: unknown) => {
       events.push(`event:${type}`);
       payload.push({ type, payload: p });
@@ -164,7 +164,7 @@ function pluginChangedPayloads(recorder: Array<{ type: string; payload: unknown 
 }
 
 beforeEach(async () => {
-  dataDir = await makeTempDir('helm-plugin-toggle-test-');
+  dataDir = await makeTempDir('helmx-plugin-toggle-test-');
   docs = new MemoryDocStore();
   events = [];
 });
@@ -238,7 +238,7 @@ test('enabled:false registration runs declarations for schema without starting s
   await host.disable('probe:ctx');
   assert.throws(
     () => stolen!.configSchema({ a: { type: 'string' } }),
-    (err: unknown) => err instanceof HelmError && err.code === 'plugin_context_closed',
+    (err: unknown) => err instanceof HelmxError && err.code === 'plugin_context_closed',
   );
 });
 
@@ -361,12 +361,12 @@ test('unpersisted plugins do not write defaults on register; in-memory host beha
   assert.equal(bare.list().find((p) => p.id === 'p:bare')!.enabled, false);
 });
 
-test('HelmPluginConfigStore: pluginEnabled persists to config.json independently of plugins config/credentials across restarts', { timeout: 60_000 }, async () => {
+test('HelmxPluginConfigStore: pluginEnabled persists to config.json independently of plugins config/credentials across restarts', { timeout: 60_000 }, async () => {
   const credentialsDir = join(dataDir, 'cred');
   mkdirSync(credentialsDir, { recursive: true });
   const config = new ConfigService(dataDir);
   const credentials = new CredentialService(credentialsDir);
-  const store = new HelmPluginConfigStore({ config, credentials });
+  const store = new HelmxPluginConfigStore({ config, credentials });
   await store.load();
 
   assert.equal(store.getEnabled('builtin:herdr'), undefined, 'unpersisted plugin returns undefined');
@@ -381,7 +381,7 @@ test('HelmPluginConfigStore: pluginEnabled persists to config.json independently
   assert.deepEqual(raw['plugins'], { 'builtin:herdr': { endpoint: 'unix:///x' } }, 'pluginEnabled and plugins config are separate');
 
   // New instance (simulated restart): getEnabled can read synchronously after load warmup
-  const store2 = new HelmPluginConfigStore({ config: new ConfigService(dataDir), credentials: new CredentialService(credentialsDir) });
+  const store2 = new HelmxPluginConfigStore({ config: new ConfigService(dataDir), credentials: new CredentialService(credentialsDir) });
   await store2.load();
   assert.equal(store2.getEnabled('builtin:herdr'), false);
   assert.equal(store2.getEnabled('builtin:profile'), true);
@@ -389,7 +389,7 @@ test('HelmPluginConfigStore: pluginEnabled persists to config.json independently
   assert.equal(store2.get('builtin:herdr')['endpoint'], 'unix:///x');
 });
 
-test('HelmPluginConfigStore load: invalid structure or non-boolean pluginEnabled fails explicitly with config_corrupt', { timeout: 60_000 }, async () => {
+test('HelmxPluginConfigStore load: invalid structure or non-boolean pluginEnabled fails explicitly with config_corrupt', { timeout: 60_000 }, async () => {
   const credentialsDir = join(dataDir, 'cred');
   mkdirSync(credentialsDir, { recursive: true });
   const write = (content: unknown) =>
@@ -397,25 +397,25 @@ test('HelmPluginConfigStore load: invalid structure or non-boolean pluginEnabled
 
   write({ pluginEnabled: ['nope'] });
   await assert.rejects(
-    new HelmPluginConfigStore({ config: new ConfigService(dataDir), credentials: new CredentialService(credentialsDir) }).load(),
-    (err: unknown) => err instanceof HelmError && err.code === 'config_corrupt',
+    new HelmxPluginConfigStore({ config: new ConfigService(dataDir), credentials: new CredentialService(credentialsDir) }).load(),
+    (err: unknown) => err instanceof HelmxError && err.code === 'config_corrupt',
   );
 
   write({ pluginEnabled: { 'builtin:herdr': 'yes' } });
   await assert.rejects(
-    new HelmPluginConfigStore({ config: new ConfigService(dataDir), credentials: new CredentialService(credentialsDir) }).load(),
-    (err: unknown) => err instanceof HelmError && err.code === 'config_corrupt',
+    new HelmxPluginConfigStore({ config: new ConfigService(dataDir), credentials: new CredentialService(credentialsDir) }).load(),
+    (err: unknown) => err instanceof HelmxError && err.code === 'config_corrupt',
   );
 });
 
-test('HelmPluginConfigStore setEnabled: non-boolean argument fails 400 validation_error without disk write', { timeout: 60_000 }, async () => {
+test('HelmxPluginConfigStore setEnabled: non-boolean argument fails 400 validation_error without disk write', { timeout: 60_000 }, async () => {
   const credentialsDir = join(dataDir, 'cred');
   mkdirSync(credentialsDir, { recursive: true });
-  const store = new HelmPluginConfigStore({ config: new ConfigService(dataDir), credentials: new CredentialService(credentialsDir) });
+  const store = new HelmxPluginConfigStore({ config: new ConfigService(dataDir), credentials: new CredentialService(credentialsDir) });
   await store.load();
   await assert.rejects(
     store.setEnabled('p:x', 'true' as unknown as boolean),
-    (err: unknown) => err instanceof HelmError && err.code === 'validation_error' && err.status === 400,
+    (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
   );
   assert.equal(existsSync(join(dataDir, 'config.json')), false);
 });
@@ -452,7 +452,7 @@ test('disable persistence failure: plugin is still deactivated, emits plugin.cha
 
   const rec = recorder;
   const before = pluginChangedPayloads(rec).length;
-  const err = (await assertRejectsCode(() => host.disable('builtin:herdr'), 'plugin_enabled_persist_failed')) as HelmError;
+  const err = (await assertRejectsCode(() => host.disable('builtin:herdr'), 'plugin_enabled_persist_failed')) as HelmxError;
   assert.equal(err.status, 500);
   assert.match(err.message, /read-only disk/);
   assert.doesNotThrow(() => JSON.stringify(err.details));
@@ -479,7 +479,7 @@ test('disable dual failure (stop + persist): stop error is primary and persistEr
   );
   const rec = recorder;
   const before = pluginChangedPayloads(rec).length;
-  const err = (await assertRejectsCode(() => host.disable('builtin:herdr'), 'plugin_service_stop_failed')) as HelmError;
+  const err = (await assertRejectsCode(() => host.disable('builtin:herdr'), 'plugin_service_stop_failed')) as HelmxError;
   const details = err.details as {
     stopErrors: Array<{ serviceId: string; error: { message: string } }>;
     persistError: { message: string };
@@ -504,7 +504,7 @@ test('enable persistence failure: rolls back to disabled, emits no enabled event
   store.failSetEnabled = new Error('network disconnected');
   const rec = recorder;
   const before = pluginChangedPayloads(rec).length;
-  const err = (await assertRejectsCode(() => host.enable('builtin:herdr'), 'plugin_enabled_persist_failed')) as HelmError;
+  const err = (await assertRejectsCode(() => host.enable('builtin:herdr'), 'plugin_enabled_persist_failed')) as HelmxError;
   assert.match(err.message, /network disconnected/);
   assert.doesNotThrow(() => JSON.stringify(err.details));
 
@@ -534,13 +534,13 @@ test('liveTasks keep-alive gate blocks disable/unregister even without tracker t
   );
 
   panes.add('win-1');
-  const err = (await assertRejectsCode(() => host.disable('builtin:herdr'), 'plugin_has_live_tasks')) as HelmError;
+  const err = (await assertRejectsCode(() => host.disable('builtin:herdr'), 'plugin_has_live_tasks')) as HelmxError;
   assert.equal(err.status, 409);
   assert.deepEqual((err.details as { activeTasks: string[] }).activeTasks, ['pane:win-1']);
   // Rejected disable has no side effects: service stays running and toggle is not persisted
   assert.equal(host.list().find((p) => p.id === 'builtin:herdr')!.enabled, true);
   assert.equal(store.enabled.has('builtin:herdr'), false);
-  const errU = (await assertRejectsCode(() => host.unregister('builtin:herdr'), 'plugin_has_live_tasks')) as HelmError;
+  const errU = (await assertRejectsCode(() => host.unregister('builtin:herdr'), 'plugin_has_live_tasks')) as HelmxError;
   assert.deepEqual((errU.details as { activeTasks: string[] }).activeTasks, ['pane:win-1']);
 
   // Can disable once active tasks drain
@@ -559,7 +559,7 @@ test('liveTasks exception or invalid output fails explicitly with plugin_live_ta
       },
     }),
   );
-  const err = (await assertRejectsCode(() => host.disable('builtin:herdr'), 'plugin_live_tasks_check_failed')) as HelmError;
+  const err = (await assertRejectsCode(() => host.disable('builtin:herdr'), 'plugin_live_tasks_check_failed')) as HelmxError;
   assert.equal(err.status, 500);
   const details = err.details as { serviceId: string; error: { message: string } };
   assert.equal(details.serviceId, 'daemon');
@@ -590,7 +590,7 @@ test('liveTasks registration validation rejects non-function with invalid_servic
         });
       },
     }),
-    (err: unknown) => err instanceof HelmError && err.code === 'invalid_service_spec',
+    (err: unknown) => err instanceof HelmxError && err.code === 'invalid_service_spec',
   );
   assert.equal(host.list().find((p) => p.id === 'p:bad'), undefined, 'invalid declaration fails entire registration');
 
@@ -622,7 +622,7 @@ test('disabled registration and re-enable each retire old ctx and rebuild a new 
   );
   assert.throws(
     () => stolen!.configSchema({ a: { type: 'string' } }),
-    (err: unknown) => err instanceof HelmError && err.code === 'plugin_context_closed',
+    (err: unknown) => err instanceof HelmxError && err.code === 'plugin_context_closed',
   );
   // Enable enters a fresh cycle; subsequent disable expires that cycle's ctx as well
   await host.enable('builtin:herdr');
@@ -630,7 +630,7 @@ test('disabled registration and re-enable each retire old ctx and rebuild a new 
   await host.disable('builtin:herdr');
   assert.throws(
     () => stolen!.action({ id: 'x', description: 'x', inputSchema: { type: 'object' }, outputSchema: { type: 'object' }, handler: () => ({}) }),
-    (err: unknown) => err instanceof HelmError && err.code === 'plugin_context_closed',
+    (err: unknown) => err instanceof HelmxError && err.code === 'plugin_context_closed',
   );
 });
 

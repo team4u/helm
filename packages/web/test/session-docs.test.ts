@@ -8,7 +8,7 @@
  *   `snapshot` 重置该 tuple 基线，`updated` / `deleted` 按 seq 单调更新（迟到旧帧丢弃），
  *   单 tuple 帧格式错误仅影响该 tuple 不波及其他健康订阅；
  * - 30s 空闲看门狗（`readSseChunkWithDeadline`）对半开僵尸流检测与重连；
- * - 404/403 等非重试 4xx 显式报错不重连；5xx 按退避重连且重连 snapshot 对齐；401 发 helm:unauthorized；
+ * - 404/403 等非重试 4xx 显式报错不重连；5xx 按退避重连且重连 snapshot 对齐；401 发 helmx:unauthorized；
  * - delete 帧 value=initial（reset 语义）照常暴露初始值；
  * - evict（插件停用/会话删除）显式报错且条目保留至退订；reset（登出）立即中止共享流并清一切；
  * - retry 推进连接代际（旧连接迟到帧/旧 abort 不得写坏新连接）；
@@ -16,7 +16,7 @@
  */
 import assert from 'node:assert/strict'
 import { after, before, test } from 'node:test'
-import { encodeSessionDocSubParam, type SessionDocMultiplexFrame } from '@helm/protocol'
+import { encodeSessionDocSubParam, type SessionDocMultiplexFrame } from '@helmx/protocol'
 import {
   bindSessionDocRuntime,
   evictSessionDocSubscriptions,
@@ -374,7 +374,7 @@ test('404 显式终态报错且不无穷重连', { timeout: 60_000 }, async () =
   restore()
 })
 
-test('403 同样终态报错不重连；401 发 helm:unauthorized 且不再重连', { timeout: 60_000 }, async () => {
+test('403 同样终态报错不重连；401 发 helmx:unauthorized 且不再重连', { timeout: 60_000 }, async () => {
   resetSessionDocSubscriptions()
   let calls = 0
   const restore = bindSessionDocRuntime(async () => {
@@ -389,7 +389,7 @@ test('403 同样终态报错不重连；401 发 helm:unauthorized 且不再重�
   off()
   restore()
 
-  // 401：浏览器环境派发 helm:unauthorized（Node 无 window 直接短路）
+  // 401：浏览器环境派发 helmx:unauthorized（Node 无 window 直接短路）
   calls = 0
   let unauthorized = 0
   const events: string[] = []
@@ -406,8 +406,8 @@ test('403 同样终态报错不重连；401 发 helm:unauthorized 且不再重�
   try {
     const off2 = subscribeSessionDoc(key, () => {})
     await until(() => events.length > 0)
-    unauthorized = events.filter((t) => t === 'helm:unauthorized').length
-    assert.equal(unauthorized, 1, '401 派发 helm:unauthorized 一次')
+    unauthorized = events.filter((t) => t === 'helmx:unauthorized').length
+    assert.equal(unauthorized, 1, '401 派发 helmx:unauthorized 一次')
     assert.equal(getSessionDocState(key).error, undefined, '401 不置订阅错误（由宿主统一登出处理）')
     await new Promise((resolve) => setTimeout(resolve, 120))
     assert.equal(calls, 1, '401 后不再重连')

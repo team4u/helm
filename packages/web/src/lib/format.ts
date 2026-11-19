@@ -1,12 +1,12 @@
 /**
- * Web host formatting entry; shared implementations come from @helm/plugin-client.
+ * Web host formatting entry; shared implementations come from @helmx/plugin-client.
  */
 export {
   formatBytes,
   formatCompactTimestamp,
   formatDurationMs,
   formatTime,
-} from '@helm/plugin-client'
+} from '@helmx/plugin-client'
 
 /**
  * Compact human-readable token counts (strictly mirrors the pi agent footer formatTokens tiers,

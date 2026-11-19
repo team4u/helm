@@ -3,7 +3,7 @@
  * Simulates Hub HTTP contract (real fetch boundary + real SSE stream) to verify:
  * - route and query parameter construction with --json parity;
  * - --conversation and --current mutual exclusion;
- * - --current reading HELM_CONVERSATION_ID;
+ * - --current reading HELMX_CONVERSATION_ID;
  * - --watch consuming dedicated session doc SSE (snapshot + delta frames);
  * - 404 structured error passthrough.
  */
@@ -18,7 +18,7 @@ import {
 } from './helpers/cli-harness.js'
 
 test('plugins doc --conversation: appends conversationId query param and prints raw JSON with --json', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-sd-')
+  const dir = useTempDir(t, 'helmx-cli-sd-')
   const docBody = { pluginId: 'p:sd', name: 'metrics', conversationId: 7, value: { n: 3 } }
   const hub = await startMockHub(
     {
@@ -34,8 +34,8 @@ test('plugins doc --conversation: appends conversationId query param and prints 
   assert.equal(hub.hits[0]!.authorization, 'Bearer t-test')
 })
 
-test('plugins doc --current: reads HELM_CONVERSATION_ID; rejects when combined with --conversation', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-sd-')
+test('plugins doc --current: reads HELMX_CONVERSATION_ID; rejects when combined with --conversation', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helmx-cli-sd-')
   const docBody = { pluginId: 'p:sd', name: 'metrics', conversationId: 42, value: 'text-value' }
   const hub = await startMockHub(
     {
@@ -43,7 +43,7 @@ test('plugins doc --current: reads HELM_CONVERSATION_ID; rejects when combined w
     },
     { autoRegisterCleanup: t },
   )
-  const env = makeCliEnv(hub.url, dir, { HELM_CONVERSATION_ID: '42' })
+  const env = makeCliEnv(hub.url, dir, { HELMX_CONVERSATION_ID: '42' })
   const res = await runCliCaptured(['plugins', 'doc', 'p:sd', 'metrics', '--current', '--json'], env)
   assert.equal(res.code, 0, res.err)
   assert.deepEqual(JSON.parse(res.out), docBody)
@@ -60,7 +60,7 @@ test('plugins doc --current: reads HELM_CONVERSATION_ID; rejects when combined w
 })
 
 test('plugins doc --watch: subscribes to dedicated SSE and prints snapshot + delta frames (NDJSON)', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-sd-')
+  const dir = useTempDir(t, 'helmx-cli-sd-')
   const snapshot = { seq: 1, doc: { pluginId: 'p:sd', name: 'metrics', conversationId: 1, value: { n: 1 } } }
   const delta = { seq: 2, event: { type: 'plugin.session_doc.updated', doc: { pluginId: 'p:sd', name: 'metrics', conversationId: 1, value: { n: 2 } } } }
   const hub = await startMockHub(
@@ -72,7 +72,7 @@ test('plugins doc --watch: subscribes to dedicated SSE and prints snapshot + del
     },
     { autoRegisterCleanup: t },
   )
-  const env = makeCliEnv(hub.url, dir, { HELM_CONVERSATION_ID: '1' })
+  const env = makeCliEnv(hub.url, dir, { HELMX_CONVERSATION_ID: '1' })
   const r = await runCliCaptured(['plugins', 'doc', 'p:sd', 'metrics', '--current', '--watch', '--json'], env)
   assert.equal(r.code, 0, r.err)
   assert.equal(hub.hits.length, 1)
@@ -83,7 +83,7 @@ test('plugins doc --watch: subscribes to dedicated SSE and prints snapshot + del
 })
 
 test('plugins doc --watch without conversation target: errors explicitly without connecting', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-sd-')
+  const dir = useTempDir(t, 'helmx-cli-sd-')
   const hub = await startMockHub({}, { autoRegisterCleanup: t })
   const r = await runCliCaptured(['plugins', 'doc', 'p:sd', 'metrics', '--watch', '--json'], makeCliEnv(hub.url, dir))
   assert.notEqual(r.code, 0)
@@ -92,7 +92,7 @@ test('plugins doc --watch without conversation target: errors explicitly without
 })
 
 test('plugins doc 404 structured error passthrough (plugin disabled / conversation deleted: signals CLI to stop)', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-sd-')
+  const dir = useTempDir(t, 'helmx-cli-sd-')
   const hub = await startMockHub(
     {
       'GET /api/plugins/p%3Asd/docs/metrics?conversationId=9': () => ({

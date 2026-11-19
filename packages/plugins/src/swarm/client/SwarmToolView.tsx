@@ -13,9 +13,9 @@
  */
 import { useId, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { ToolViewProps } from '@helm/protocol'
+import type { ToolViewProps } from '@helmx/protocol'
 import {
-  HelmIcon,
+  HelmxIcon,
   StatusLight,
   formatDurationMs,
   resolveLocalizedText,
@@ -23,7 +23,7 @@ import {
   usePluginDoc,
   usePluginLocale,
   useToolActivity,
-} from '@helm/plugin-client'
+} from '@helmx/plugin-client'
 import type { SwarmIndexDoc } from './models.ts'
 import { isPlainObject, resolveConversationBoardLink } from './board-model.ts'
 import {
@@ -61,7 +61,7 @@ import {
   traceStatusError,
   traceStatusRunning,
 } from './copy.ts'
-import type { HelmLocale } from '@helm/plugin-client'
+import type { HelmxLocale } from '@helmx/plugin-client'
 
 const TOOL_TITLE_KEYS: Readonly<Record<string, typeof TRACE_DISPATCH>> = {
   swarm_create_group: TRACE_CREATE_GROUP,
@@ -77,7 +77,7 @@ const TOOL_TITLE_KEYS: Readonly<Record<string, typeof TRACE_DISPATCH>> = {
   swarm_close_group: TRACE_CLOSE_GROUP,
 }
 
-function toolTitleKey(toolName: string, locale: HelmLocale): string {
+function toolTitleKey(toolName: string, locale: HelmxLocale): string {
   const key = TOOL_TITLE_KEYS[toolName] ?? TRACE_UNKNOWN_TOOL
   return resolveLocalizedText(key, locale)
 }
@@ -89,7 +89,7 @@ function naturalPostTargets(targets: string[] | undefined): string | undefined {
     .join(', ')
 }
 
-function buildTraceSummary(facts: SwarmToolFacts, locale: HelmLocale): string {
+function buildTraceSummary(facts: SwarmToolFacts, locale: HelmxLocale): string {
   const parts: string[] = []
   switch (facts.toolName) {
     case 'swarm_create_group':
@@ -260,7 +260,7 @@ export function SwarmToolView(props: ToolViewProps): ReactNode {
         onClick={handleActivate}
       >
         <span className="trace-row-left">
-          <HelmIcon name={facts.toolName === 'swarm_dispatch_worker' ? 'bot' : 'network'} size={12} />
+          <HelmxIcon name={facts.toolName === 'swarm_dispatch_worker' ? 'bot' : 'network'} size={12} />
           <span className="trace-tool-name sw-trace-name" title={title}>{title}</span>
           {displaySummary !== '' ? (
             <span
@@ -279,7 +279,7 @@ export function SwarmToolView(props: ToolViewProps): ReactNode {
           {elapsedMs !== undefined ? (
             <span className="trace-duration tabular-nums">{formatDurationMs(elapsedMs)}</span>
           ) : null}
-          <HelmIcon
+          <HelmxIcon
             name={
               clickTarget?.kind === 'member'
                 ? 'external-link'

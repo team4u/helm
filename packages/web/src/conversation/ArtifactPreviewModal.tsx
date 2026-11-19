@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { ArtifactMetadata, ArtifactPreviewerProps } from '@helm/protocol/browser'
-import { resolveLocalizedText } from '@helm/protocol/browser'
+import type { ArtifactMetadata, ArtifactPreviewerProps } from '@helmx/protocol/browser'
+import { resolveLocalizedText } from '@helmx/protocol/browser'
 import { artifactsApi } from '../lib/api.js'
-import { HelmIcon, Select, SegmentedControl } from '@helm/plugin-client'
+import { HelmxIcon, Select, SegmentedControl } from '@helmx/plugin-client'
 import {
   useConversationArtifacts,
   useConversationSummary,
@@ -258,7 +258,7 @@ export function ArtifactPreviewModal({ artifactId, conversationId, onClose, inli
               onClick={() => setPreviewer('default')}
               title={t('conv.artifact.switchDefaultTitle')}
             >
-              <HelmIcon name="rotate-ccw" size={12} />
+              <HelmxIcon name="rotate-ccw" size={12} />
               {t('conv.artifact.defaultPreview')}
             </button>
           </div>

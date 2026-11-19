@@ -9,7 +9,7 @@
  * 持有门面实例形成环。
  */
 
-import { HelmError, type ConversationSummary } from '@helm/protocol'
+import { HelmxError, type ConversationSummary } from '@helmx/protocol'
 import type { WorkflowRunSummary } from '../../contracts.js'
 import type { ActiveRun } from './active-run.js'
 import type { CancellationTracker } from './cancellation-tracker.js'
@@ -62,8 +62,8 @@ export interface WorkflowCaps {
  * validation_error，绝不静默锐化；未提供的项不进入结果对象。
  */
 export function resolveCaps(options: WorkflowServiceOptions): WorkflowCaps {
-  const capError = (field: string, value: number): HelmError =>
-    new HelmError(
+  const capError = (field: string, value: number): HelmxError =>
+    new HelmxError(
       'validation_error',
       `工作流 ${field} 必须是正整数（收到 ${value}；零或负值会让 run 在首个调度点死锁）`,
       400,
@@ -110,7 +110,7 @@ export interface WorkflowServiceContext {
   caps: WorkflowCaps
   /** 服务停机屏障（close 后拒绝新 run / 后台结算通知跳过）。 */
   isClosed(): boolean
-  /** 停机屏障断言（closed 抛 HelmError('closed', 409)）。 */
+  /** 停机屏障断言（closed 抛 HelmxError('closed', 409)）。 */
   assertNotClosed(): void
   /** 启动恢复（interrupted 标记与通知 outbox 补发；幂等缓存于 service-recovery）。 */
   init(): Promise<void>
@@ -122,7 +122,7 @@ export interface WorkflowServiceContext {
   makeEngineHost(run: ActiveRun, parent: ConversationSummary): WorkflowHost
   /** 守卫中止 run 的子会话（human 红线由内核原子复核）。 */
   abortChildConversation(run: ActiveRun, conversationId: number): Promise<void>
-  /** 当前是否开启重启自动恢复（兼顾配置与 HELM_AUTO_RECOVER 逃生阀）。 */
+  /** 当前是否开启重启自动恢复（兼顾配置与 HELMX_AUTO_RECOVER 逃生阀）。 */
   isAutoRecoverOnRestart(): boolean
   /** 判定 run 是否正处于宿主关停优雅挂起路径（非用户取消）。 */
   isRunSuspending(run: ActiveRun): boolean

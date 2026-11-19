@@ -3,7 +3,7 @@
  * The dispatcher (index.ts) uses this table for exact core command matching — the basis for management-plane fault isolation.
  * The workflows / worktrees domains have been extracted into builtin:workflow plugin actions (dynamic commands).
  */
-import { CORE_CLI_COMMAND_PATHS } from '@helm/protocol'
+import { CORE_CLI_COMMAND_PATHS } from '@helmx/protocol'
 import type { CommandSpec } from './shared.js'
 import { CliError } from '../errors.js'
 import { authCommands } from './auth.js'
@@ -84,7 +84,7 @@ function assertCommandTableValid(commands: readonly CommandSpec[]): void {
   for (const key of seen.keys()) {
     if (!expected.has(key)) {
       throw new CliError(
-        `static command table internal error: new command "${key}" is not registered in @helm/protocol CORE_CLI_COMMAND_PATHS (and the built-in helm-cli skill)`,
+        `static command table internal error: new command "${key}" is not registered in @helmx/protocol CORE_CLI_COMMAND_PATHS (and the built-in helmx-cli skill)`,
         'command_table_conflict',
       )
     }

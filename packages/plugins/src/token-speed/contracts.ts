@@ -8,7 +8,7 @@
  *   subscription), never into global ctx.doc or the conversation summary (the write-amplification red line);
  * - Event payloads get shape guards at the boundary (invalid dropped with diagnostics); never trusted via crude as.
  */
-import { isJsonObject, type ConversationLiveMessage } from '@helm/protocol'
+import { isJsonObject, type ConversationLiveMessage } from '@helmx/protocol'
 
 export const TOKEN_SPEED_PLUGIN_ID = 'builtin:token-speed'
 
@@ -35,7 +35,7 @@ export type TokenSpeedSource = 'provider' | 'estimate' | 'mixed'
 export const CONTEXT_INVALIDATION_ENTRY_KINDS: ReadonlySet<string> = new Set([
   'pi.reset',
   'pi.compaction',
-  'helm.rewind',
+  'helmx.rewind',
 ])
 
 /** Envelope facts extracted by the conversation.entry event guard (validated before per-kind dispatch). */
@@ -116,7 +116,7 @@ interface TokenSpeedLiveFrame {
 }
 
 /**
- * conversation.live event guard (the minimal subset consumed by the speed policy): HelmEvent envelope +
+ * conversation.live event guard (the minimal subset consumed by the speed policy): HelmxEvent envelope +
  * live.{conversationId positive integer, generation an optional restricted shape (taskId+attempt positive
  * integers as required identity), updatedAt finite non-negative}. Invalid returns undefined (the caller drops
  * it); never trusted via crude as.
@@ -152,7 +152,7 @@ export function asConversationLiveFrame(payload: unknown): TokenSpeedLiveFrame |
 }
 
 /**
- * conversation.entry event envelope guard (before per-kind dispatch): HelmEvent envelope + conversationId
+ * conversation.entry event envelope guard (before per-kind dispatch): HelmxEvent envelope + conversationId
  * positive integer + entry.{kind non-empty string}. Invalid returns undefined.
  */
 export function asConversationEntryEnvelope(payload: unknown): ConversationEntryEnvelope | undefined {

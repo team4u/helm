@@ -14,8 +14,8 @@
  * language state, no localStorage).
  */
 import type { ReactNode } from 'react'
-import type { ComposerScopeProps } from '@helm/protocol'
-import { usePluginLocale, usePluginSessionDoc } from '@helm/plugin-client'
+import type { ComposerScopeProps } from '@helmx/protocol'
+import { usePluginLocale, usePluginSessionDoc } from '@helmx/plugin-client'
 import type { TokenSpeedStatus } from '../contracts.js'
 import { tokenSpeedLabelOf } from './label.ts'
 import './index.css'

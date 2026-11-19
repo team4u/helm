@@ -7,13 +7,13 @@ import type {
   ArtifactMetadata,
   ConversationDetail,
   ConversationSummary,
-  HelmEvent,
-  HelmEventFrame,
-  HelmResumedFrame,
-  HelmSnapshot,
-  HelmTransientLiveFrame,
+  HelmxEvent,
+  HelmxEventFrame,
+  HelmxResumedFrame,
+  HelmxSnapshot,
+  HelmxTransientLiveFrame,
   PluginSummary,
-} from '@helm/protocol/browser'
+} from '@helmx/protocol/browser'
 import { getStoredToken } from './api.js'
 import { errorText } from './error-text.js'
 import {
@@ -122,7 +122,7 @@ function sameClientHashes(
 
 function handleSnapshotFrame(payload: unknown, ctx: FrameHandlerContext): void {
   if (ctx.streamState.mode !== null) throw new Error('Live connection received a duplicate snapshot control frame')
-  const snap = payload as HelmSnapshot
+  const snap = payload as HelmxSnapshot
   if (snap === null || typeof snap !== 'object' || typeof snap.bootId !== 'string' || snap.bootId === '') {
     throw new Error('Invalid kernel live snapshot format (no valid bootId)')
   }
@@ -244,7 +244,7 @@ function handleSnapshotFrame(payload: unknown, ctx: FrameHandlerContext): void {
 
 function handleResumedFrame(payload: unknown, ctx: FrameHandlerContext): void {
   if (ctx.streamState.mode !== null) throw new Error('Live connection received a duplicate resumed control frame')
-  const resumed = payload as HelmResumedFrame
+  const resumed = payload as HelmxResumedFrame
   const current = ctx.sseCursorRef.current
   if (
     current === null ||
@@ -269,11 +269,11 @@ function handleResumedFrame(payload: unknown, ctx: FrameHandlerContext): void {
 
 function handleTransientLiveFrame(payload: unknown, ctx: FrameHandlerContext): void {
   if (ctx.streamState.mode === null) throw new Error('Live connection missing the initial snapshot')
-  ctx.updateLive((state) => applyTransientLiveFrame(state, payload as HelmTransientLiveFrame))
+  ctx.updateLive((state) => applyTransientLiveFrame(state, payload as HelmxTransientLiveFrame))
 }
 
 function dispatchFrameSideEffects(
-  event: HelmEvent,
+  event: HelmxEvent,
   deletedConversationId: number | undefined,
   deletedSummary: ConversationSummary | undefined,
   archivedSummary: ConversationSummary | undefined,
@@ -357,7 +357,7 @@ function dispatchFrameSideEffects(
 
 function handleEventFrame(payload: unknown, ctx: FrameHandlerContext): void {
   if (ctx.streamState.mode === null) throw new Error('Live connection missing the initial snapshot')
-  const frame = payload as HelmEventFrame
+  const frame = payload as HelmxEventFrame
   if (frame === null || typeof frame !== 'object' || frame.event === null || typeof frame.event !== 'object' || typeof frame.event.type !== 'string') {
     throw new Error('Invalid live event frame format (missing event)')
   }

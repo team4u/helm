@@ -34,22 +34,22 @@ import type {
   NodeRegisterInput,
   NodeTunnelHello,
   NodeTunnelTarget,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 import type { Context } from '@earendil-works/chord/context'
-import { HelmError } from '@helm/protocol'
+import { HelmxError } from '@helmx/protocol'
 import { TunnelTable, tunnelRpcFailureOf, type PendingTunnel } from './tunnel-table.js'
 import {
   UpgradeWaiterSet,
-  HelmUpgradeCancelledError,
+  HelmxUpgradeCancelledError,
   type UpgradeWaiterHandle,
 } from './upgrade-waiters.js'
 
 /* Upgrade waiters and error types moved to `upgrade-waiters.ts`; tunnel registry moved to `tunnel-table.ts`;
  * re-exported here to preserve existing env public exports (`env/index.ts`, `fabric.ts`). */
 export {
-  HelmUpgradeBusyError,
-  HelmUpgradeTimeoutError,
-  HelmUpgradeCancelledError,
+  HelmxUpgradeBusyError,
+  HelmxUpgradeTimeoutError,
+  HelmxUpgradeCancelledError,
   type UpgradeWaiterHandle,
 } from './upgrade-waiters.js'
 
@@ -166,14 +166,14 @@ const safeEqual = (a: string, b: string): boolean => {
   return ba.length === bb.length && timingSafeEqual(ba, bb)
 }
 
-/** Validate tunnel target at boundary: port must be 1..65535 safe integer; host (if present) must be non-empty, <=255 chars, without control chars or whitespace (invalid fails with HelmError `validation_error`, never silently mutated). */
+/** Validate tunnel target at boundary: port must be 1..65535 safe integer; host (if present) must be non-empty, <=255 chars, without control chars or whitespace (invalid fails with HelmxError `validation_error`, never silently mutated). */
 export function normalizeTunnelTarget(target: NodeTunnelTarget): { host: string | undefined; port: number } {
   if (target === null || typeof target !== 'object') {
-    throw new HelmError('validation_error', 'tunnel target must be a { host?, port } object', 400)
+    throw new HelmxError('validation_error', 'tunnel target must be a { host?, port } object', 400)
   }
   const { host, port } = target as Partial<NodeTunnelTarget>
   if (typeof port !== 'number' || !Number.isSafeInteger(port) || port < 1 || port > 65535) {
-    throw new HelmError('validation_error', 'tunnel target port must be an integer between 1 and 65535', 400, { port })
+    throw new HelmxError('validation_error', 'tunnel target port must be an integer between 1 and 65535', 400, { port })
   }
   if (host === undefined) return { host: undefined, port }
   if (
@@ -189,7 +189,7 @@ export function normalizeTunnelTarget(target: NodeTunnelTarget): { host: string 
       return code < 0x20 || code === 0x7f
     })
   ) {
-    throw new HelmError('validation_error', 'tunnel target host must be a non-empty string without whitespace or control characters (<= 255 characters)', 400, { host })
+    throw new HelmxError('validation_error', 'tunnel target host must be a non-empty string without whitespace or control characters (<= 255 characters)', 400, { host })
   }
   return { host, port }
 }
@@ -437,7 +437,7 @@ export class NodeRegistry {
    * Open a byte-stream pipe to `host:port` on a remote node (arbitrary TCP; `host` defaults to `127.0.0.1`,
    * resolved and connected on the node): calls `nodeTunnelOpen` on the current connection and **immediately**
    * awaits the dedicated gateway first-frame handshake (`acceptTunnel`), settling the RPC in the background
-   * so slow/closing RPCs don't stall timeouts or aborts. Failure semantics (all HelmError, never falls back to local):
+   * so slow/closing RPCs don't stall timeouts or aborts. Failure semantics (all HelmxError, never falls back to local):
    * - node offline / registry closed: `node_offline` (409);
    * - node does not implement `nodeTunnelOpen`: `node_tunnel_not_supported` (501);
    * - gateway callback timeout (default 10s): `node_tunnel_timeout` (504);
@@ -449,15 +449,15 @@ export class NodeRegistry {
   async openTunnel(nodeId: string, target: NodeTunnelTarget, signal?: AbortSignal): Promise<Duplex> {
     const { host, port } = normalizeTunnelTarget(target)
     if (this.#closed) {
-      throw new HelmError('node_offline', `node ${nodeId} is offline; cannot establish tunnel`, 409, { nodeId })
+      throw new HelmxError('node_offline', `node ${nodeId} is offline; cannot establish tunnel`, 409, { nodeId })
     }
     const conn = this.#connections.get(nodeId)
     if (conn === undefined) {
-      throw new HelmError('node_offline', `node ${nodeId} is offline; cannot establish tunnel`, 409, { nodeId })
+      throw new HelmxError('node_offline', `node ${nodeId} is offline; cannot establish tunnel`, 409, { nodeId })
     }
     const open = conn.rpc.nodeTunnelOpen
     if (open === undefined) {
-      throw new HelmError('node_tunnel_not_supported', `node ${nodeId} daemon does not support passthrough tunnels`, 501, { nodeId })
+      throw new HelmxError('node_tunnel_not_supported', `node ${nodeId} daemon does not support passthrough tunnels`, 501, { nodeId })
     }
     const tunnelId = randomUUID()
     const epoch = this.#epochOf(nodeId)
@@ -475,7 +475,7 @@ export class NodeRegistry {
       timeoutMs,
       timer: undefined as unknown as NodeJS.Timeout,
       grant: undefined as unknown as (duplex: Duplex) => void,
-      reject: undefined as unknown as (error: HelmError) => void,
+      reject: undefined as unknown as (error: HelmxError) => void,
       settled: false,
     }
     const pendingPromise = new Promise<Duplex>((resolve, reject) => {
@@ -507,7 +507,7 @@ export class NodeRegistry {
     pendingPromise.catch(() => undefined)
     pending.timer = setTimeout(() => {
       abortNode()
-      pending.reject(new HelmError(
+      pending.reject(new HelmxError(
         'node_tunnel_timeout',
         `node ${nodeId} tunnel ${tunnelId} did not connect back within ${timeoutMs}ms`,
         504,
@@ -519,7 +519,7 @@ export class NodeRegistry {
 
     const onAbort = (): void => {
       abortNode()
-      pending.reject(new HelmError('aborted', 'tunnel establishment cancelled', 499, { nodeId, tunnelId }))
+      pending.reject(new HelmxError('aborted', 'tunnel establishment cancelled', 499, { nodeId, tunnelId }))
     }
     signal?.addEventListener('abort', onAbort, { once: true })
 
@@ -531,7 +531,7 @@ export class NodeRegistry {
         if (result.ok) return
         const { code, status } = tunnelRpcFailureOf(result.error.code)
         abortNode()
-        pending.reject(new HelmError(
+        pending.reject(new HelmxError(
           code,
           `node ${nodeId} failed to establish tunnel: ${result.error.message}`,
           status,
@@ -541,7 +541,7 @@ export class NodeRegistry {
       (error: unknown) => {
         if (pending.settled) return
         abortNode()
-        pending.reject(new HelmError(
+        pending.reject(new HelmxError(
           'node_tunnel_connect_failed',
           `node ${nodeId} tunnel RPC failed: ${error instanceof Error ? error.message : String(error)}`,
           502,
@@ -682,13 +682,13 @@ export class NodeRegistry {
     // Reject all pending tunnels and destroy all active tunnel duplexes for this node on disconnect:
     // tunnel lifetime is tied to this connection's generation (epoch), so replacement invalidates it without leaks.
     this.#tunnels.finalize((owner) => owner === nodeId, {
-      pending: (owner, tunnelId) => new HelmError(
+      pending: (owner, tunnelId) => new HelmxError(
         'node_offline',
         `node ${owner} disconnected; tunnel ${tunnelId} establishment aborted`,
         409,
         { nodeId: owner, tunnelId },
       ),
-      active: (owner, tunnelId) => new HelmError(
+      active: (owner, tunnelId) => new HelmxError(
         'node_offline',
         `node ${owner} disconnected; tunnel ${tunnelId} closed`,
         409,
@@ -763,20 +763,20 @@ export class NodeRegistry {
     }
     // Settle all tunnels (reject pending; unregister active and destroy duplexes so consumers see disconnect).
     this.#tunnels.finalize(() => true, {
-      pending: (_nodeId, tunnelId) => new HelmError(
+      pending: (_nodeId, tunnelId) => new HelmxError(
         'node_offline',
         `registry closed; tunnel ${tunnelId} establishment aborted`,
         409,
         { tunnelId },
       ),
-      active: (_nodeId, tunnelId) => new HelmError(
+      active: (_nodeId, tunnelId) => new HelmxError(
         'node_offline',
         `registry closed; tunnel ${tunnelId} closed`,
         409,
         { tunnelId },
       ),
     })
-    this.#upgrades.rejectAll(new HelmUpgradeCancelledError('registry closed'))
+    this.#upgrades.rejectAll(new HelmxUpgradeCancelledError('registry closed'))
     for (const [nodeId, conn] of [...this.#connections]) {
       this.#evict(nodeId, conn, 'registry closed')
     }
@@ -793,4 +793,4 @@ export class NodeRegistry {
 }
 
 export type { NodeRegisterInput }
-export type { NodeHealthSnapshot, NodeHeartbeatInput } from '@helm/protocol'
+export type { NodeHealthSnapshot, NodeHeartbeatInput } from '@helmx/protocol'

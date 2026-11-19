@@ -11,8 +11,8 @@
  */
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import type { ComponentType, ReactNode } from 'react'
-import type { ClientComponentRef, ComposerController } from '@helm/protocol/browser'
-import { HelmIcon, createPluginClientContext, PluginClientContext, usePluginClientHost, ViewBoundary } from '@helm/plugin-client'
+import type { ClientComponentRef, ComposerController } from '@helmx/protocol/browser'
+import { HelmxIcon, createPluginClientContext, PluginClientContext, usePluginClientHost, ViewBoundary } from '@helmx/plugin-client'
 import { getCachedClientComponent, getPluginClientCacheRevision, loadPluginClientModule, PluginClientError, requireClientExport, subscribePluginClientCacheInvalidation } from '../lib/plugin-client.js'
 import { usePlugins } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
@@ -119,7 +119,7 @@ function ClientPluginUiView({
   if (client.phase === 'loading') {
     return (
       <div className="callout" style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12 }}>
-        <HelmIcon name="loader" size={13} className="spin-slow" />
+        <HelmxIcon name="loader" size={13} className="spin-slow" />
         <span>{t('ui.pluginUi.loading', { pluginId })}</span>
       </div>
     )
@@ -127,7 +127,7 @@ function ClientPluginUiView({
   if (client.phase === 'error') {
     return (
       <div className="callout callout--error" role="alert">
-        <HelmIcon name="alert-triangle" size={13} />
+        <HelmxIcon name="alert-triangle" size={13} />
         <div>
           <strong>{t('ui.pluginUi.loadFailedTitle', { pluginId })}</strong>
           <p className="selectable">{client.message}</p>
@@ -154,7 +154,7 @@ function MissingTrackError({ pluginId }: { pluginId: string }): ReactNode {
   const { t } = useWebLocale()
   return (
     <div className="callout callout--warning">
-      <HelmIcon name="alert-triangle" size={13} />
+      <HelmxIcon name="alert-triangle" size={13} />
       <span>{t('ui.pluginUi.missingClient', { pluginId })}</span>
     </div>
   )

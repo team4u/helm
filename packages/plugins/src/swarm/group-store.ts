@@ -13,12 +13,12 @@ import { randomUUID } from 'node:crypto'
 import { mkdir, open, readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
-  HelmError,
+  HelmxError,
   redactJsonValue,
-  type HelmPluginContext,
+  type HelmxPluginContext,
   type MaybePromise,
   type TurnOutcome,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 import {
   ACTIONABLE_WAKE_KINDS,
   BOARD_REPORT_RENDERER,
@@ -73,7 +73,7 @@ function isEnoent(err: unknown): boolean {
 
 function isLifecycleTeardownError(err: unknown): boolean {
   return (
-    err instanceof HelmError &&
+    err instanceof HelmxError &&
     (err.code === 'plugin_disabled' || err.code === 'plugin_context_expired' || err.code === 'plugin_host_disposed')
   )
 }
@@ -94,7 +94,7 @@ interface InflightWakeupEntry {
 }
 
 export function createCollabGroupRuntime(
-  ctx: HelmPluginContext,
+  ctx: HelmxPluginContext,
   getCoordinator: () => SwarmCoordinator,
 ): CollabGroupRuntime {
   const getGroupsRootDir = (): string => join(ctx.dataDir, 'groups')
@@ -367,7 +367,7 @@ export function createCollabGroupRuntime(
     const out = await runGroupLocked(validId, async () => {
       const current = groupsById.get(validId)
       if (current === undefined) {
-        throw new HelmError('swarm_group_not_found', `协作组 '${validId}' 不存在`, 404, {
+        throw new HelmxError('swarm_group_not_found', `协作组 '${validId}' 不存在`, 404, {
           pluginId: SWARM_PLUGIN_ID,
           groupId: validId,
         })
@@ -405,7 +405,7 @@ export function createCollabGroupRuntime(
     const createdPost = await runGroupLocked(validId, async () => {
       const current = groupsById.get(validId)
       if (current === undefined) {
-        throw new HelmError('swarm_group_not_found', `协作组 '${validId}' 不存在`, 404, {
+        throw new HelmxError('swarm_group_not_found', `协作组 '${validId}' 不存在`, 404, {
           pluginId: SWARM_PLUGIN_ID,
           groupId: validId,
         })
@@ -606,7 +606,7 @@ export function createCollabGroupRuntime(
             postCount: selected.length,
           },
         },
-        { expectedOwnership: 'helm' },
+        { expectedOwnership: 'helmx' },
       )
       await mutateGroup(groupId, (draft) => {
         const target = draft.members.find((m) => m.name === memberName)
@@ -800,7 +800,7 @@ export function createCollabGroupRuntime(
     lastCoordReportCompletionSeq.set(groupId, baseCompletionSeq)
     try {
       const ownership = ctx.host.getConversationOwnership(group.coordinatorConversationId)
-      if (ownership === 'helm' || ownership === 'bot') {
+      if (ownership === 'helmx' || ownership === 'bot') {
         await ctx.host.submitInputGuarded(
           group.coordinatorConversationId,
           envelope,
@@ -1064,7 +1064,7 @@ export function createCollabGroupRuntime(
       try {
         rawMetaText = await readFile(metaPathOf(groupId), 'utf8')
       } catch (err) {
-        throw new HelmError(
+        throw new HelmxError(
           'swarm_doc_corrupt',
           `协作组 '${groupId}' 缺少或无法读取 meta.json：${err instanceof Error ? err.message : String(err)}`,
           500,
@@ -1075,7 +1075,7 @@ export function createCollabGroupRuntime(
       try {
         parsedMeta = JSON.parse(rawMetaText)
       } catch (err) {
-        throw new HelmError(
+        throw new HelmxError(
           'swarm_doc_corrupt',
           `协作组 '${groupId}' meta.json JSON 解析失败：${err instanceof Error ? err.message : String(err)}`,
           500,
@@ -1084,7 +1084,7 @@ export function createCollabGroupRuntime(
       }
       let record = assertCollabGroupRecord(parsedMeta)
       if (record.id !== groupId) {
-        throw new HelmError(
+        throw new HelmxError(
           'swarm_doc_corrupt',
           `协作组目录 '${groupId}' 与 meta.json.id '${record.id}' 不一致`,
           500,
@@ -1114,7 +1114,7 @@ export function createCollabGroupRuntime(
       if (again !== undefined) return again
       const current = groupsById.get(validId)
       if (current === undefined) {
-        throw new HelmError('swarm_group_not_found', `协作组 '${validId}' 不存在`, 404, {
+        throw new HelmxError('swarm_group_not_found', `协作组 '${validId}' 不存在`, 404, {
           pluginId: SWARM_PLUGIN_ID,
           groupId: validId,
         })
@@ -1144,7 +1144,7 @@ export function createCollabGroupRuntime(
       } catch (err) {
         if (
           !(
-            err instanceof HelmError &&
+            err instanceof HelmxError &&
             (err.code === 'not_found' || err.code === 'plugin_disabled' || err.code === 'unknown_action')
           )
         ) {
@@ -1351,7 +1351,7 @@ export function createCollabGroupRuntime(
         try {
           entries = (await ctx.host.getConversationDetail(member.conversationId, { limit: 30 })).entries
         } catch (err) {
-          if (err instanceof HelmError && err.code === 'not_found') continue
+          if (err instanceof HelmxError && err.code === 'not_found') continue
           throw err
         }
       }
@@ -1558,7 +1558,7 @@ export function createCollabGroupRuntime(
       const validId = assertGroupId(groupId)
       const group = groupsById.get(validId)
       if (group === undefined) {
-        throw new HelmError('swarm_group_not_found', `协作组 '${validId}' 不存在`, 404, {
+        throw new HelmxError('swarm_group_not_found', `协作组 '${validId}' 不存在`, 404, {
           pluginId: SWARM_PLUGIN_ID,
           groupId: validId,
         })
@@ -1617,7 +1617,7 @@ export function createCollabGroupRuntime(
         if (input.createKey !== undefined && existing.createKey === input.createKey) {
           return existing
         }
-        throw new HelmError(
+        throw new HelmxError(
           'swarm_group_already_active',
           `会话 #${input.coordinatorConversationId} 已存在活跃协作组 '${existing.id}'（同会话限 1 个活跃组）`,
           409,
@@ -1670,14 +1670,14 @@ export function createCollabGroupRuntime(
     async updateGroup(groupId, patch): Promise<CollabGroupRecord> {
       return mutateGroup(groupId, (draft) => {
         if (draft.status !== 'active') {
-          throw new HelmError('swarm_group_closed', `协作组 '${draft.id}' 已结单，无法修改`, 409, {
+          throw new HelmxError('swarm_group_closed', `协作组 '${draft.id}' 已结单，无法修改`, 409, {
             pluginId: SWARM_PLUGIN_ID,
             groupId: draft.id,
           })
         }
         if (patch.title !== undefined) {
           const t = patch.title.trim()
-          if (t === '') throw new HelmError('validation_error', 'title 不能为空', 400, {})
+          if (t === '') throw new HelmxError('validation_error', 'title 不能为空', 400, {})
           draft.title = t
         }
         if (patch.objective !== undefined) {
@@ -1694,7 +1694,7 @@ export function createCollabGroupRuntime(
       const chName = assertChannelName(input.channel)
       return mutateGroup(groupId, (draft) => {
         if (draft.status !== 'active') {
-          throw new HelmError('swarm_group_closed', `协作组 '${draft.id}' 已结单，无法管理频道`, 409, {
+          throw new HelmxError('swarm_group_closed', `协作组 '${draft.id}' 已结单，无法管理频道`, 409, {
             pluginId: SWARM_PLUGIN_ID,
             groupId: draft.id,
           })
@@ -1706,7 +1706,7 @@ export function createCollabGroupRuntime(
               delete existing.archived
               if (input.topic !== undefined && input.topic.trim() !== '') existing.topic = input.topic.trim()
             } else {
-              throw new HelmError('swarm_channel_conflict', `频道 '${chName}' 已存在`, 409, {
+              throw new HelmxError('swarm_channel_conflict', `频道 '${chName}' 已存在`, 409, {
                 pluginId: SWARM_PLUGIN_ID,
                 groupId: draft.id,
                 channel: chName,
@@ -1720,11 +1720,11 @@ export function createCollabGroupRuntime(
           }
         } else if (input.op === 'archive') {
           if (chName === 'main') {
-            throw new HelmError('validation_error', "主频道 'main' 禁止归档", 400, { channel: chName })
+            throw new HelmxError('validation_error', "主频道 'main' 禁止归档", 400, { channel: chName })
           }
           const ch = draft.channels.find((c) => c.name === chName)
           if (ch === undefined) {
-            throw new HelmError('swarm_unknown_channel', `频道 '${chName}' 不存在`, 404, {
+            throw new HelmxError('swarm_unknown_channel', `频道 '${chName}' 不存在`, 404, {
               pluginId: SWARM_PLUGIN_ID,
               groupId: draft.id,
               channel: chName,
@@ -1733,21 +1733,21 @@ export function createCollabGroupRuntime(
           ch.archived = true
         } else if (input.op === 'subscribe' || input.op === 'unsubscribe') {
           if (input.op === 'unsubscribe' && chName === 'main') {
-            throw new HelmError('validation_error', "主频道 'main' 禁止退订", 400, { channel: chName })
+            throw new HelmxError('validation_error', "主频道 'main' 禁止退订", 400, { channel: chName })
           }
           if (typeof input.member !== 'string' || input.member.trim() === '') {
-            throw new HelmError('validation_error', `${input.op} 需指定目标成员 member`, 400, {})
+            throw new HelmxError('validation_error', `${input.op} 需指定目标成员 member`, 400, {})
           }
           const ch = draft.channels.find((c) => c.name === chName)
           if (ch === undefined) {
-            throw new HelmError('swarm_unknown_channel', `频道 '${chName}' 不存在`, 404, {
+            throw new HelmxError('swarm_unknown_channel', `频道 '${chName}' 不存在`, 404, {
               pluginId: SWARM_PLUGIN_ID,
               groupId: draft.id,
               channel: chName,
             })
           }
           if (input.op === 'subscribe' && ch.archived === true) {
-            throw new HelmError('swarm_channel_archived', `频道 '${chName}' 已归档，无法订阅`, 409, {
+            throw new HelmxError('swarm_channel_archived', `频道 '${chName}' 已归档，无法订阅`, 409, {
               pluginId: SWARM_PLUGIN_ID,
               groupId: draft.id,
               channel: chName,
@@ -1755,7 +1755,7 @@ export function createCollabGroupRuntime(
           }
           const member = draft.members.find((m) => m.name === input.member!.trim() && m.lifecycle === 'active')
           if (member === undefined) {
-            throw new HelmError('swarm_unknown_target', `活跃成员 '${input.member}' 不存在`, 404, {
+            throw new HelmxError('swarm_unknown_target', `活跃成员 '${input.member}' 不存在`, 404, {
               pluginId: SWARM_PLUGIN_ID,
               groupId: draft.id,
               member: input.member,
@@ -1777,7 +1777,7 @@ export function createCollabGroupRuntime(
       const added = await runGroupLocked(validId, async () => {
         const current = groupsById.get(validId)
         if (current === undefined) {
-          throw new HelmError('swarm_group_not_found', `协作组 '${validId}' 不存在`, 404, {
+          throw new HelmxError('swarm_group_not_found', `协作组 '${validId}' 不存在`, 404, {
             pluginId: SWARM_PLUGIN_ID,
             groupId: validId,
           })
@@ -1799,7 +1799,7 @@ export function createCollabGroupRuntime(
           }
         }
         if (current.status !== 'active') {
-          throw new HelmError('swarm_group_closed', `协作组 '${validId}' 已结单，无法招募新成员`, 409, {
+          throw new HelmxError('swarm_group_closed', `协作组 '${validId}' 已结单，无法招募新成员`, 409, {
             pluginId: SWARM_PLUGIN_ID,
             groupId: validId,
           })
@@ -1972,7 +1972,7 @@ export function createCollabGroupRuntime(
               whenBusy: 'followUp',
               requestId: nudgeRequestId,
             },
-            { expectedOwnership: 'helm' },
+            { expectedOwnership: 'helmx' },
           )
           await mutateGroup(input.groupId, (draft) => {
             const target = draft.members.find((m) => m.name === input.memberName)

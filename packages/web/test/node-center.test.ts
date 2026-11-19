@@ -5,7 +5,7 @@ import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import React, { act } from 'react'
 import { renderToStaticMarkup, renderToString } from 'react-dom/server'
-import type { HelmLocale } from '@helm/protocol/browser'
+import type { HelmxLocale } from '@helmx/protocol/browser'
 import { ensureHappyDom } from './helpers/dom-harness.js'
 
 ensureHappyDom()
@@ -48,7 +48,7 @@ function mockNodes(): Array<NodeInfo & { kind: 'local' | 'byom'; online: boolean
       version: '0.1.0',
       hostname: 'dev-box',
       cwd: '/root/code/helm',
-      hubUrl: 'ipc:///tmp/helm.sock',
+      hubUrl: 'ipc:///tmp/helmx.sock',
       tools: ['bash', 'read', 'write', 'edit'],
       health: {
         collectedAt: Date.now(),
@@ -75,7 +75,7 @@ function mockNodes(): Array<NodeInfo & { kind: 'local' | 'byom'; online: boolean
       os: 'linux',
       version: '0.2.1',
       hostname: 'gpu-server-01',
-      cwd: '/opt/helm-worker',
+      cwd: '/opt/helmx-worker',
       hubUrl: 'http://192.168.1.100:3202',
       tools: ['bash', 'read', 'write', 'edit', 'env_exec'],
       health: {
@@ -104,7 +104,7 @@ function mockNodes(): Array<NodeInfo & { kind: 'local' | 'byom'; online: boolean
       os: 'darwin',
       version: '0.1.8',
       hostname: 'mac-mini-m2',
-      cwd: '/Users/admin/helm',
+      cwd: '/Users/admin/helmx',
       tools: ['bash', 'read'],
     },
   ]
@@ -246,7 +246,7 @@ test('NodeCard: SSR renders node name, architecture badge, online indicator with
   assert.match(localHtml, /本机开发微内核/)
   assert.match(localHtml, /local/)
   assert.match(localHtml, /linux \/ x64/)
-  assert.match(localHtml, /helm-status-light-done[\s\S]*?Online/, '在线状态为单盏可见状态灯')
+  assert.match(localHtml, /helmx-status-light-done[\s\S]*?Online/, '在线状态为单盏可见状态灯')
   assert.match(localHtml, /Online/)
   assert.match(localHtml, /bash/)
   assert.match(localHtml, /read/)
@@ -370,7 +370,7 @@ test('NodeDetailDrawer: SSR renders system overview, health data, enrollment com
   assert.match(html, /CPU architecture/)
   assert.match(html, /arm64/)
   assert.match(html, /gpu-server-01/)
-  assert.match(html, /\/opt\/helm-worker/)
+  assert.match(html, /\/opt\/helmx-worker/)
 
   // 3. Health check and resource load
   assert.match(html, /Health check and resource load/)
@@ -381,10 +381,10 @@ test('NodeDetailDrawer: SSR renders system overview, health data, enrollment com
 
   // 4. Controlled machine enrollment command and one-line command
   assert.match(html, /Controlled machine enrollment command/)
-  assert.match(html, /helm-node start -d/)
+  assert.match(html, /helmx-node start -d/)
   assert.match(html, /--token/)
   assert.match(html, /Issue access token/)
-  assert.match(html, /helm-node doctor/)
+  assert.match(html, /helmx-node doctor/)
 
   // 5. Registered tools
   assert.match(html, /Registered tools/)

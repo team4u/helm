@@ -20,14 +20,14 @@
 import test, { beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  HelmError,
+  HelmxError,
   type ConversationSummary,
   type EnvExecResponse,
   type PluginDefinition,
   type PluginDocHandle,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 import { PluginHost, type PluginHostBackend } from '../src/plugins/index.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 import {
   MemoryDocStore,
   cleanupDir,
@@ -37,7 +37,7 @@ import {
 
 /** Shared assertion predicate for expired/outside-window plugin handle rejections. */
 function isContextExpired(err: unknown): boolean {
-  return err instanceof HelmError && err.code === 'plugin_context_expired'
+  return err instanceof HelmxError && err.code === 'plugin_context_expired'
 }
 
 /** Captures abort listener counts via `addEventListener` / `removeEventListener` wrappers. */
@@ -124,7 +124,7 @@ class StopWindowBackend implements PluginHostBackend {
   getConversation(id: number): ConversationSummary {
     this.record('getConversation')
     const found = this.conversations.get(id)
-    if (found === undefined) throw new HelmError('not_found', `conversation missing: ${id}`, 404)
+    if (found === undefined) throw new HelmxError('not_found', `conversation missing: ${id}`, 404)
     return found
   }
   async updateConversation(id: number): Promise<ConversationSummary> {
@@ -132,10 +132,10 @@ class StopWindowBackend implements PluginHostBackend {
   }
   async abortConversation(id: number): Promise<void> {
     this.record('abortConversation')
-    if (!this.conversations.has(id)) throw new HelmError('not_found', `conversation missing: ${id}`, 404)
+    if (!this.conversations.has(id)) throw new HelmxError('not_found', `conversation missing: ${id}`, 404)
   }
-  getConversationOwnership(): 'helm' | 'bot' | 'human' {
-    return 'helm'
+  getConversationOwnership(): 'helmx' | 'bot' | 'human' {
+    return 'helmx'
   }
   isClosing(): boolean {
     return false
@@ -175,7 +175,7 @@ class StopWindowBackend implements PluginHostBackend {
   markConversationOwnership(): void {}
   async createAsk(): Promise<never> {
     this.record('createAsk')
-    throw new HelmError('ask_unsupported', 'test backend does not provide ask creation', 501)
+    throw new HelmxError('ask_unsupported', 'test backend does not provide ask creation', 501)
   }
   async cancelAsk(): Promise<void> {
     this.record('cancelAsk')
@@ -208,10 +208,10 @@ class StopWindowBackend implements PluginHostBackend {
     return []
   }
   async createArtifact(): Promise<never> {
-    throw new HelmError('unsupported', 'fixture does not create artifacts', 501)
+    throw new HelmxError('unsupported', 'fixture does not create artifacts', 501)
   }
   async getArtifact(): Promise<never> {
-    throw new HelmError('not_found', 'no artifact', 404)
+    throw new HelmxError('not_found', 'no artifact', 404)
   }
   async completeText(): Promise<string> {
     this.record('completeText')
@@ -241,9 +241,9 @@ class StopWindowBackend implements PluginHostBackend {
   async atomicWriteFile(): Promise<void> {
     this.record('atomicWriteFile')
   }
-  async resolveSpawnTarget(): Promise<never> { throw new HelmError('unsupported', 'fixture does not resolve spawn targets', 501) }
+  async resolveSpawnTarget(): Promise<never> { throw new HelmxError('unsupported', 'fixture does not resolve spawn targets', 501) }
   listActiveSpawnExecutions(): [] { return [] }
-  async inspectNodePathUsage(): Promise<never> { throw new HelmError('unsupported', 'fixture does not inspect process occupancy', 501) }
+  async inspectNodePathUsage(): Promise<never> { throw new HelmxError('unsupported', 'fixture does not inspect process occupancy', 501) }
   redactText(text: string): string {
     return text
   }
@@ -255,7 +255,7 @@ class StopWindowBackend implements PluginHostBackend {
     list: async () => [{ id: 'assistant' }] as never,
     get: async (id: string) => ({ id }) as never,
     getSystem: async () => '',
-    save: async (p: import('@helm/protocol').Profile) => p,
+    save: async (p: import('@helmx/protocol').Profile) => p,
     directory: async (id: string) => `/data/profiles/${id}`,
   }
   readonly skills = {
@@ -311,7 +311,7 @@ function makeHost(): PluginHost {
 }
 
 beforeEach(async () => {
-  dataDir = await makeTempDir('helm-plugin-stop-host-')
+  dataDir = await makeTempDir('helmx-plugin-stop-host-')
   backend = new StopWindowBackend()
 })
 
@@ -563,7 +563,7 @@ test('epoch isolation: after re-enable old ctx rejects, new ctx works, and old c
 })
 
 test('cleanup I/O failures thrown inside stop preserve original error in stop diagnostics without swallowing', { timeout: 60_000 }, async () => {
-  const ioError = new HelmError('node_unreachable', 'node remote-9 failed to connect', 502)
+  const ioError = new HelmxError('node_unreachable', 'node remote-9 failed to connect', 502)
   const def: PluginDefinition = {
     id: 'test:stop-io',
     name: 'stop-io',
@@ -583,7 +583,7 @@ test('cleanup I/O failures thrown inside stop preserve original error in stop di
   await assert.rejects(
     host.disable('test:stop-io'),
     (err: unknown) => {
-      assert.ok(err instanceof HelmError, `expected HelmError, got: ${String(err)}`)
+      assert.ok(err instanceof HelmxError, `expected HelmxError, got: ${String(err)}`)
       assert.equal(err.code, 'plugin_service_stop_failed')
       const details = err.details as { stopErrors?: Array<{ serviceId: string; error: { code?: string; message?: string } }> }
       const first = details?.stopErrors?.[0]

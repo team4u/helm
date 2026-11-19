@@ -1,5 +1,5 @@
 /** Auth commands: setup / login / status. */
-import type { AuthStatus } from '@helm/protocol'
+import type { AuthStatus } from '@helmx/protocol'
 import { parseFlags } from '../args.js'
 import type { CommandContext, CommandSpec } from './shared.js'
 import { printResult, authAndSave, resolvePasswordFlag } from './shared.js'

@@ -18,8 +18,8 @@ import type {
   ConversationInput,
   GuardedMutationExpectation,
   WhenBusy,
-} from '@helm/protocol'
-import { HelmError } from '@helm/protocol'
+} from '@helmx/protocol'
+import { HelmxError } from '@helmx/protocol'
 import { randomUUID } from 'node:crypto'
 import { redactJsonValue } from '../redact.js'
 import type { SecretStash } from '../services/index.js'
@@ -27,11 +27,11 @@ import { deriveTitle, type ConversationTracker } from './conversations.js'
 import { normalizeBusyError } from './runtime-helpers.js'
 import { asConversationId } from './sdk-ids.js'
 import type { SubmitInputOptions } from './conversation-service.js'
-import type { ConvMeta, HelmStore } from './store.js'
+import type { ConvMeta, HelmxStore } from './store.js'
 
 interface ConversationInputPipelineHost {
   readonly harness: Harness
-  readonly store: HelmStore
+  readonly store: HelmxStore
   readonly tracker: ConversationTracker
   readonly stash: SecretStash
   readonly runInputHook: (payload: unknown) => Promise<{ action: string; value?: unknown; reason?: string; result?: unknown } | undefined>
@@ -68,7 +68,7 @@ export class ConversationInputPipeline {
   ): Promise<PreparedInputResult> {
     const origin = opts?.origin ?? 'human'
     if (opts?.requestId !== undefined && (typeof opts.requestId !== 'string' || opts.requestId.trim() === '')) {
-      throw new HelmError('validation_error', 'internal requestId must be a non-empty string', 400)
+      throw new HelmxError('validation_error', 'internal requestId must be a non-empty string', 400)
     }
     const inputId = opts?.requestId ?? randomUUID()
     const createdAt = Date.now()
@@ -92,7 +92,7 @@ export class ConversationInputPipeline {
     }
     const hookOutcome = await this.host.runInputHook(payload)
     if (hookOutcome?.action === 'block') {
-      throw new HelmError('input_blocked', hookOutcome.reason ?? 'input blocked by input hook')
+      throw new HelmxError('input_blocked', hookOutcome.reason ?? 'input blocked by input hook')
     }
     if (hookOutcome?.action === 'handled') {
       return { kind: 'handled', submissionId: `handled:${randomUUID()}` }
@@ -102,7 +102,7 @@ export class ConversationInputPipeline {
     if (hookOutcome?.action === 'transform') {
       const value = hookOutcome.value as typeof payload
       if (value.conversationId !== id) {
-        throw new HelmError(
+        throw new HelmxError(
           'input_identity_changed',
           `input hook must not change conversationId (${id} -> ${String(value.conversationId)})`,
           400,
@@ -195,7 +195,7 @@ export class ConversationInputPipeline {
         }
         if (live.run === undefined && (live.compactions?.length ?? 0) > 0 && prepared.whenIdle !== 'reject') {
           if (finalWhenBusy === 'reject') {
-            throw new HelmError(
+            throw new HelmxError(
               'conversation_busy',
               `conversation ${id} is currently compacting context; rejecting submission (whenBusy=reject)`,
               409,
@@ -216,7 +216,7 @@ export class ConversationInputPipeline {
             mode: finalWhenBusy === 'steer' ? 'steer' : 'followUp',
             content: copyJson(content, { omitUndefinedProperties: true }) as JsonRepresentation<UserInput>,
             entry: {
-              kind: 'helm.input',
+              kind: 'helmx.input',
               data: entryData,
             },
           })
@@ -241,7 +241,7 @@ export class ConversationInputPipeline {
           whenBusy: finalWhenBusy,
           ...(prepared.whenIdle !== undefined ? { whenIdle: prepared.whenIdle } : {}),
           entry: {
-            kind: 'helm.input',
+            kind: 'helmx.input',
             data: entryData,
           },
           requestId,

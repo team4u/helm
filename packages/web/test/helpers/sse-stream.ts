@@ -2,7 +2,7 @@
  * 测试专用「snapshot 后挂起」的 SSE 流工厂（/api/events 与 sessionDoc events 桩共用）。
  *
  * 真实内核 SSE 长连接发出 snapshot 后长期保持打开；测试的 fetch mock 若原样
- * 挂起且不响应请求的 AbortSignal，HelmStoreProvider 卸载时只 abort signal，
+ * 挂起且不响应请求的 AbortSignal，HelmxStoreProvider 卸载时只 abort signal，
  * 仍在 `readSseChunkWithDeadline` 挂起的 reader.read() 要空等 idleTimeoutMs
  * （60s）看门狗才解开——每个用例卸载后进程都多挂 60 秒。
  *

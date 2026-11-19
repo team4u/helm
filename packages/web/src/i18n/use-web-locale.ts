@@ -1,7 +1,7 @@
 /**
  * `useWebLocale`: the single Web-side locale hook.
  *
- * Reads the authoritative locale from the helm store (`useHelmStore`) — the
+ * Reads the authoritative locale from the helmx store (`useHelmxStore`) — the
  * same source that feeds `PluginClientHostContext` for SDK components — and
  * returns a stable `{ locale, t }` pair. Components must consume locale
  * exclusively through this hook (never prop-drill locale, never read storage,
@@ -13,18 +13,18 @@
  * English bridge default used at not-yet-migrated call sites.
  */
 import { useMemo } from 'react'
-import { DEFAULT_HELM_LOCALE, type HelmLocale } from '@helm/protocol/browser'
+import { DEFAULT_HELMX_LOCALE, type HelmxLocale } from '@helmx/protocol/browser'
 import { useOptionalLocale } from '../lib/store-context.js'
 import { createWebTranslator, type WebMessageTranslator } from './catalog.js'
 
 export interface WebLocaleValue {
-  /** Active UI locale (authoritative store state, or DEFAULT_HELM_LOCALE outside a provider). */
-  locale: HelmLocale
+  /** Active UI locale (authoritative store state, or DEFAULT_HELMX_LOCALE outside a provider). */
+  locale: HelmxLocale
   /** Full-catalog message translator bound to the active locale. */
   t: WebMessageTranslator
 }
 
 export function useWebLocale(): WebLocaleValue {
-  const locale = useOptionalLocale() ?? DEFAULT_HELM_LOCALE
+  const locale = useOptionalLocale() ?? DEFAULT_HELMX_LOCALE
   return useMemo(() => ({ locale, t: createWebTranslator(locale) }), [locale])
 }

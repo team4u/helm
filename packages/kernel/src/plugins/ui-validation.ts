@@ -1,11 +1,11 @@
 /**
  * PluginHost UI registration validation and action binding checks.
  */
-import { HelmError } from '@helm/protocol';
+import { HelmxError } from '@helmx/protocol';
 import type { UiRegistry } from './ui-registry.js';
 import type { CapabilityRegistry } from './capability-registry.js';
 import type { PluginState } from './types.js';
-import { isPlainObject } from '@helm/protocol';
+import { isPlainObject } from '@helmx/protocol';
 
 export function assertUiDocsRegistered(
   pluginId: string,
@@ -50,7 +50,7 @@ export function assertUiCompleterActionBindings(
       if (!target || !target.enabled) continue; // target not yet registered/enabled: allow deferred registration
       const binding = capabilityRegistry.getActionBinding(targetPluginId, actionId);
       if (binding === undefined) {
-        throw new HelmError(
+        throw new HelmxError(
           'invalid_ui_spec',
           `Plugin ${pluginId} completion source references undeclared action ${actionId} from plugin ${targetPluginId}`,
           400,
@@ -58,7 +58,7 @@ export function assertUiCompleterActionBindings(
         );
       }
       if (!binding.idempotent) {
-        throw new HelmError(
+        throw new HelmxError(
           'invalid_ui_spec',
           `Plugin ${pluginId} completion source action ${targetPluginId}.${actionId} must declare idempotent: true`,
           400,
@@ -69,7 +69,7 @@ export function assertUiCompleterActionBindings(
     }
     const binding = capabilityRegistry.getActionBinding(pluginId, actionId);
     if (binding === undefined) {
-      throw new HelmError(
+      throw new HelmxError(
         'invalid_ui_spec',
         `Plugin ${pluginId} completion source references undeclared action ${actionId}`,
         400,
@@ -77,7 +77,7 @@ export function assertUiCompleterActionBindings(
       );
     }
     if (!binding.idempotent) {
-      throw new HelmError(
+      throw new HelmxError(
         'invalid_ui_spec',
         `Plugin ${pluginId} completion source action ${actionId} must declare idempotent: true (completion queries must not trigger non-idempotent side effects)`,
         400,

@@ -7,7 +7,7 @@
  * honest sentence of latest progress plus optional worktree branch facts, the
  * recent handoff timeline, and retained branches after close.
  */
-import type { ConversationSummary } from '@helm/protocol'
+import type { ConversationSummary } from '@helmx/protocol'
 import {
   boardProgressOf,
   resolveMemberActivity,

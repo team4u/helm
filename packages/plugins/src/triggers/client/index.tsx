@@ -8,9 +8,9 @@
  *
  * Secret boundary: webhook secrets are never rendered from the doc (the
  * hasSecret boolean is the collaboration contract); creation and deletion
- * stay on the helm CLI / HTTP action endpoints. Generic structure reuses the
- * host design system and @helm/plugin-client primitives (Screen /
- * ScreenSection / KvGrid / Dialog / HelmIcon / .callout-error / .helm-table /
+ * stay on the helmx CLI / HTTP action endpoints. Generic structure reuses the
+ * host design system and @helmx/plugin-client primitives (Screen /
+ * ScreenSection / KvGrid / Dialog / HelmxIcon / .callout-error / .helmx-table /
  * .loading-state), no native selects, zero Emoji.
  *
  * Display copy resolves from copy.ts against the active host locale (no
@@ -20,7 +20,7 @@
 import { useState } from 'react'
 import './styles.css'
 import type { ReactNode } from 'react'
-import type { ScreenProps } from '@helm/protocol'
+import type { ScreenProps } from '@helmx/protocol'
 import {
   Dialog,
   DialogClose,
@@ -28,7 +28,7 @@ import {
   DialogOverlay,
   DialogPortal,
   DialogTitle,
-  HelmIcon,
+  HelmxIcon,
   KvGrid,
   Screen,
   ScreenSection,
@@ -37,7 +37,7 @@ import {
   usePluginDoc,
   usePluginLocale,
   usePluginTranslator,
-} from '@helm/plugin-client'
+} from '@helmx/plugin-client'
 import {
   formatTriggerTargetSummary,
   parseCronJobs,
@@ -99,7 +99,7 @@ import {
 function DocLoading({ label }: { label: string }): ReactNode {
   return (
     <div className="loading-state" role="status">
-      <HelmIcon name="loader" size={12} className="spin-slow" />
+      <HelmxIcon name="loader" size={12} className="spin-slow" />
       <span>{label}</span>
     </div>
   )
@@ -108,7 +108,7 @@ function DocLoading({ label }: { label: string }): ReactNode {
 function ActionError({ message }: { message: string }): ReactNode {
   return (
     <div className="callout callout-error" role="alert">
-      <HelmIcon name="alert-circle" size={13} />
+      <HelmxIcon name="alert-circle" size={13} />
       <span className="callout-text">{message}</span>
     </div>
   )
@@ -168,7 +168,7 @@ function RowAction({
       disabled={disabled === true}
       onClick={onClick}
     >
-      <HelmIcon
+      <HelmxIcon
         name={disabled === true ? 'loader' : iconName}
         size={11}
         className={disabled === true ? 'spin-slow' : undefined}
@@ -196,8 +196,8 @@ function CronTable({
   const { pending, run } = actions
   return (
     <div className="tg-table-wrap">
-      <div className="helm-table-wrap">
-        <table className="helm-table">
+      <div className="helmx-table-wrap">
+        <table className="helmx-table">
           <thead>
             <tr>
               <th>ID</th>
@@ -299,8 +299,8 @@ function WebhookTable({
   const { pending, run } = actions
   return (
     <div className="tg-table-wrap">
-      <div className="helm-table-wrap">
-        <table className="helm-table">
+      <div className="helmx-table-wrap">
+        <table className="helmx-table">
           <thead>
             <tr>
               <th>ID</th>
@@ -421,7 +421,7 @@ function TriggerDetailDrawer({
                 aria-label={t(TRIGGERS_CLOSE)}
                 title={t(TRIGGERS_CLOSE)}
               >
-                <HelmIcon name="x" size={14} />
+                <HelmxIcon name="x" size={14} />
               </button>
             </DialogClose>
           </div>
@@ -449,7 +449,7 @@ function TriggerDetailDrawer({
 
                 {cronJob.lastError !== undefined && cronJob.lastError !== '' ? (
                   <div className="callout callout-error" role="alert">
-                    <HelmIcon name="alert-circle" size={13} />
+                    <HelmxIcon name="alert-circle" size={13} />
                     <span className="callout-text selectable">{cronJob.lastError}</span>
                   </div>
                 ) : null}
@@ -475,7 +475,7 @@ function TriggerDetailDrawer({
                 disabled={actions.pending !== undefined}
                 onClick={() => actions.run(`delete:${cronJob.id}`, 'cron_delete', { id: cronJob.id })}
               >
-                <HelmIcon name="trash-2" size={12} />
+                <HelmxIcon name="trash-2" size={12} />
                 <span>{t(TRIGGERS_DELETE)}</span>
               </button>
               <button
@@ -484,7 +484,7 @@ function TriggerDetailDrawer({
                 disabled={actions.pending !== undefined}
                 onClick={() => actions.run(`trigger:${cronJob.id}`, 'cron_trigger', { id: cronJob.id })}
               >
-                <HelmIcon name="zap" size={12} />
+                <HelmxIcon name="zap" size={12} />
                 <span>{t(TRIGGERS_TRIGGER_NOW)}</span>
               </button>
             </div>
@@ -496,7 +496,7 @@ function TriggerDetailDrawer({
                 disabled={actions.pending !== undefined}
                 onClick={() => actions.run(`webhook-delete:${webhook.id}`, 'webhook_delete', { id: webhook.id })}
               >
-                <HelmIcon name="trash-2" size={12} />
+                <HelmxIcon name="trash-2" size={12} />
                 <span>{t(TRIGGERS_DELETE)}</span>
               </button>
             </div>
@@ -528,7 +528,7 @@ export function TriggersManagerScreen(
     <Screen
       title={
         <>
-          <HelmIcon name="clock" size={15} />
+          <HelmxIcon name="clock" size={15} />
           <span>{t(TRIGGERS_SCREEN_TITLE)}</span>
         </>
       }
@@ -544,7 +544,7 @@ export function TriggersManagerScreen(
       <ScreenSection
         title={
           <>
-            <HelmIcon name="clock" size={13} />
+            <HelmxIcon name="clock" size={13} />
             <span>{t(TRIGGERS_CRON_SECTION)}</span>
           </>
         }
@@ -561,7 +561,7 @@ export function TriggersManagerScreen(
       <ScreenSection
         title={
           <>
-            <HelmIcon name="webhook" size={13} />
+            <HelmxIcon name="webhook" size={13} />
             <span>{t(TRIGGERS_WEBHOOK_SECTION)}</span>
           </>
         }
@@ -604,7 +604,7 @@ export function TriggersSettingsPanel(): ReactNode {
       className="tg-settings"
       title={
         <>
-          <HelmIcon name="clock" size={13} />
+          <HelmxIcon name="clock" size={13} />
           <span>{t(TRIGGERS_SETTINGS_SECTION)}</span>
         </>
       }
@@ -626,7 +626,7 @@ export function TriggersSettingsPanel(): ReactNode {
           className="btn btn-xs"
           onClick={() => ctx.openScreen('screen:builtin:triggers/manager')}
         >
-          <HelmIcon name="external-link" size={11} />
+          <HelmxIcon name="external-link" size={11} />
           <span>{t(TRIGGERS_OPEN_MANAGER)}</span>
         </button>
       </div>

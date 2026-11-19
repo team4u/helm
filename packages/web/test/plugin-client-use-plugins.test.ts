@@ -1,10 +1,10 @@
 /**
- * usePlugins 共享 Hook 测试（真实 React 渲染路径 + HelmExternalStore）：
+ * usePlugins 共享 Hook 测试（真实 React 渲染路径 + HelmxExternalStore）：
  * - plugins 返回 store.plugins 同一引用（SSE 实时数据源，非拷贝非轮询）；
  * - screens 返回 store.groupedUi.screens 同一引用（已启用插件贡献，停用即时移除）；
  * - 无 PluginClientContext 时可用（应用中心类全屏视图无会话上下文）；
  * - store 更新（新 store 对象）后重渲染返回新快照（响应式语义）；
- * - 符号进入 @helm/plugin-client 共享 SDK 导出与 protocol PLUGIN_CLIENT_SHARED_EXPORTS 锁定清单。
+ * - 符号进入 @helmx/plugin-client 共享 SDK 导出与 protocol PLUGIN_CLIENT_SHARED_EXPORTS 锁定清单。
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
@@ -12,11 +12,11 @@ import * as React from 'react'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { renderToString } from 'react-dom/server'
-import { PLUGIN_CLIENT_SHARED_EXPORTS } from '@helm/protocol'
-import { PluginClientContext, createPluginClientContext, usePluginClientHost, usePluginConfig, usePlugins } from '@helm/plugin-client'
-import * as HelmPluginClient from '@helm/plugin-client'
-import type { HelmStoreValue } from '../src/lib/types.js'
-import type { HelmExternalStore } from '../src/lib/helm-store.js'
+import { PLUGIN_CLIENT_SHARED_EXPORTS } from '@helmx/protocol'
+import { PluginClientContext, createPluginClientContext, usePluginClientHost, usePluginConfig, usePlugins } from '@helmx/plugin-client'
+import * as HelmxPluginClient from '@helmx/plugin-client'
+import type { HelmxStoreValue } from '../src/lib/types.js'
+import type { HelmxExternalStore } from '../src/lib/helmx-store.js'
 import { makeTestStore } from './helpers/store.js'
 import { HostStoreProviders } from './helpers/host-store.js'
 
@@ -33,10 +33,10 @@ interface UiContributionLike {
   spec: Record<string, unknown>
 }
 
-function storeWithScreens(plugins: HelmStoreValue['plugins'], ui: UiContributionLike[]): HelmExternalStore {
+function storeWithScreens(plugins: HelmxStoreValue['plugins'], ui: UiContributionLike[]): HelmxExternalStore {
   return makeTestStore({
     plugins,
-    uiContributions: ui as HelmStoreValue['uiContributions'],
+    uiContributions: ui as HelmxStoreValue['uiContributions'],
   })
 }
 
@@ -125,17 +125,17 @@ test('usePlugins：store 快照更新后响应式返回新值（无缓存旧引�
   act(() => root?.unmount())
 })
 
-test('usePlugins 已加入 @helm/plugin-client 共享 SDK 与 protocol 导出锁定清单', { timeout: 60_000 }, async () => {
+test('usePlugins 已加入 @helmx/plugin-client 共享 SDK 与 protocol 导出锁定清单', { timeout: 60_000 }, async () => {
   assert.ok(
     (PLUGIN_CLIENT_SHARED_EXPORTS as readonly string[]).includes('usePlugins'),
     'PLUGIN_CLIENT_SHARED_EXPORTS 必须包含 usePlugins',
   )
-  assert.equal(typeof HelmPluginClient.usePlugins, 'function', '共享 SDK 必须真实导出 usePlugins 函数')
+  assert.equal(typeof HelmxPluginClient.usePlugins, 'function', '共享 SDK 必须真实导出 usePlugins 函数')
   assert.ok(
     (PLUGIN_CLIENT_SHARED_EXPORTS as readonly string[]).includes('usePluginConfig'),
     'PLUGIN_CLIENT_SHARED_EXPORTS 必须包含 usePluginConfig',
   )
-  assert.equal(typeof HelmPluginClient.usePluginConfig, 'function', '共享 SDK 必须真实导出 usePluginConfig 函数')
+  assert.equal(typeof HelmxPluginClient.usePluginConfig, 'function', '共享 SDK 必须真实导出 usePluginConfig 函数')
 })
 
 test('usePluginConfig：在 PluginClientContext + HostStoreProviders 下实时读取 publicConfig 且不泄漏 secret', { timeout: 60_000 }, () => {

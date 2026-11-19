@@ -6,8 +6,8 @@
  * Disable double-gate: re-checks plugin enabled status via summary before dispatch (409 if disabled)
  * and tracks handler execution in `liveTasks` (shared with actions/tools for disable blocking).
  */
-import { HelmError } from '@helm/protocol'
-import type { JsonSchema, PluginConfigFieldSchema, PublicPluginSessionDoc } from '@helm/protocol'
+import { HelmxError } from '@helmx/protocol'
+import type { JsonSchema, PluginConfigFieldSchema, PublicPluginSessionDoc } from '@helmx/protocol'
 import { gzipSync } from 'node:zlib'
 import { errorResponse, jsonOk, readJsonBody, type JsonRedactor } from './http-utils.js'
 import { decodeSegment, findPluginRoute } from './route-match.js'
@@ -282,7 +282,7 @@ async function sessionDocEventsResponse(
   }
   const port = kernel.sessionDocEvents
   if (port === undefined) {
-    throw new HelmError(
+    throw new HelmxError(
       'not_implemented',
       'Current runtime does not support sessionDoc event streams (sessionDocEvents port missing)',
       501,
@@ -306,7 +306,7 @@ function snapshotDocOf(
 ): PublicPluginSessionDoc {
   const result = kernel.plugins.getPublicSessionDoc(pluginId, name, conversationId)
   if (result instanceof Promise) {
-    throw new HelmError(
+    throw new HelmxError(
       'not_implemented',
       'Current runtime getPublicSessionDoc is async and cannot provide synchronous sessionDoc snapshots',
       501,
@@ -333,7 +333,7 @@ async function serveClientModule(
   const hash = url.searchParams.get('hash') ?? undefined
   if (chunk !== undefined) {
     if (!/^[A-Za-z0-9._-]+\.js$/.test(chunk) || chunk.includes('..')) {
-      throw new HelmError('invalid_client_module', 'Invalid chunk name (must match /^[A-Za-z0-9._-]+\\.js$/ without ..)', 400)
+      throw new HelmxError('invalid_client_module', 'Invalid chunk name (must match /^[A-Za-z0-9._-]+\\.js$/ without ..)', 400)
     }
   }
   const compiled = await kernel.plugins.getClientModule(pluginId, moduleRef, {
@@ -341,7 +341,7 @@ async function serveClientModule(
     ...(hash !== undefined ? { hash } : {}),
   })
   if (hash !== undefined && (hash.length === 0 || hash !== compiled.contentHash)) {
-    throw new HelmError(
+    throw new HelmxError(
       chunk !== undefined ? 'client_chunk_stale' : 'client_module_stale',
       `plugin ${pluginId} client module ${moduleRef} hash (${hash}) does not match current artifact hash (${compiled.contentHash})`,
       409,
@@ -369,7 +369,7 @@ async function serveClientModule(
       status: 304,
       headers: {
         etag,
-        'x-helm-client-hash': compiled.contentHash,
+        'x-helmx-client-hash': compiled.contentHash,
         'cache-control': cacheControl,
         vary: 'Accept-Encoding',
       },
@@ -378,7 +378,7 @@ async function serveClientModule(
 
   const headers: Record<string, string> = {
     'content-type': 'text/javascript; charset=utf-8',
-    'x-helm-client-hash': compiled.contentHash,
+    'x-helmx-client-hash': compiled.contentHash,
     etag,
     'cache-control': cacheControl,
     vary: 'Accept-Encoding',
@@ -423,7 +423,7 @@ async function dispatchPluginRoute(
   }
   const summary = kernel.plugins.get?.(found.pluginId)
   if (summary !== undefined && summary.enabled !== true) {
-    throw new HelmError('plugin_disabled', `Plugin ${found.pluginId} is disabled; route unavailable`, 409, {
+    throw new HelmxError('plugin_disabled', `Plugin ${found.pluginId} is disabled; route unavailable`, 409, {
       pluginId: found.pluginId,
     })
   }
@@ -432,7 +432,7 @@ async function dispatchPluginRoute(
     ? kernel.plugins.withTask(found.pluginId, `route:${found.route.method} ${found.route.path}`, invokeHandler)
     : invokeHandler())
   if (!(response instanceof Response)) {
-    throw new HelmError('invalid_route_handler_output', 'Plugin route handler must return a Response', 500)
+    throw new HelmxError('invalid_route_handler_output', 'Plugin route handler must return a Response', 500)
   }
   return response
 }

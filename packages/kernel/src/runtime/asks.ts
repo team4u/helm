@@ -24,12 +24,12 @@
  *   (never pretending plaintext can still be recovered).
  */
 
-import type { AskCreateSpec, AskFieldSpec, AskResult, AskSpec } from '@helm/protocol'
-import { HelmError, type MaybePromise, isValidEnvName } from '@helm/protocol'
+import type { AskCreateSpec, AskFieldSpec, AskResult, AskSpec } from '@helmx/protocol'
+import { HelmxError, type MaybePromise, isValidEnvName } from '@helmx/protocol'
 import { validateSecretLifetime } from '../services/secret-stash.js'
 import { randomUUID } from 'node:crypto'
 
-import type { HelmStore } from './store.js'
+import type { HelmxStore } from './store.js'
 import type { SecretStash } from '../services/secret-stash.js'
 
 /** External target seq resolver (e.g., registered by herdr plugin): askId -> target current seq. May be async (real watermark requires remote IO). */
@@ -45,7 +45,7 @@ interface AskSettled {
 type WaiterOutcome = AskSettled | { failure: unknown }
 
 export class AskService {
-  private readonly store: HelmStore
+  private readonly store: HelmxStore
   private readonly stash: SecretStash
   private readonly seqResolvers = new Set<AskSeqResolver>()
   private readonly waiters = new Map<string, Array<(outcome: WaiterOutcome) => void>>()
@@ -55,7 +55,7 @@ export class AskService {
   private readonly validateConversation?: (conversationId: number) => boolean | Promise<boolean>
 
   constructor(options: {
-    store: HelmStore
+    store: HelmxStore
     stash: SecretStash
     onEvent: (type: string, payload: unknown) => void
     onConvPendingChanged: (conversationId: number) => void
@@ -103,14 +103,14 @@ export class AskService {
     if (this.validateConversation) {
       const ok = await this.validateConversation(spec.conversationId)
       if (!ok) {
-        throw new HelmError('not_found', `conversation not found: ${spec.conversationId}`, 404)
+        throw new HelmxError('not_found', `conversation not found: ${spec.conversationId}`, 404)
       }
     }
     const id = spec.id ?? randomUUID()
     // A pre-allocated ID must never overwrite any existing AskDoc (whether pending or already settled).
     if (this.store.getAsk(id) !== undefined) {
       const existing = this.store.getAsk(id)!
-      throw new HelmError(
+      throw new HelmxError(
         'ask_id_conflict',
         `AskDoc ID '${id}' already exists (status ${existing.status}); cannot overwrite existing approval`,
         409,
@@ -193,14 +193,14 @@ export class AskService {
     expectedStateSeq?: number,
   ): Promise<AskSpec> {
     const row = this.store.getAsk(id)
-    if (!row) throw new HelmError('not_found', `AskDoc not found: ${id}`, 404)
+    if (!row) throw new HelmxError('not_found', `AskDoc not found: ${id}`, 404)
     if (row.status !== 'pending') {
-      throw new HelmError('ask_already_settled', `AskDoc is already in ${row.status} state`, 409)
+      throw new HelmxError('ask_already_settled', `AskDoc is already in ${row.status} state`, 409)
     }
 
     // Client-supplied seq differs from persisted watermark -> 409 stale view (never silently overwrite to bypass CAS).
     if (expectedStateSeq !== undefined && row.expectedStateSeq !== undefined && expectedStateSeq !== row.expectedStateSeq) {
-      throw new HelmError(
+      throw new HelmxError(
         'ask_state_conflict',
         `expectedStateSeq=${expectedStateSeq} does not match persisted AskDoc watermark ${row.expectedStateSeq} (stale client view)`,
         409,
@@ -217,7 +217,7 @@ export class AskService {
       if (fresh.expectedStateSeq !== undefined) {
         if (current === undefined) {
           // CAS watermark declared but no resolver matched: target state is unknowable, so never pretend validation passed.
-          throw new HelmError(
+          throw new HelmxError(
             'ask_state_unavailable',
             `AskDoc ${id} declares expectedStateSeq=${fresh.expectedStateSeq}, but no registered seq resolver matched; cannot validate target state`,
             409,
@@ -252,9 +252,9 @@ export class AskService {
 
   cancelAsk(id: string, reason: 'cancelled' | 'superseded' = 'cancelled'): Promise<AskSpec> {
     const row = this.store.getAsk(id)
-    if (!row) throw new HelmError('not_found', `AskDoc not found: ${id}`, 404)
+    if (!row) throw new HelmxError('not_found', `AskDoc not found: ${id}`, 404)
     if (row.status !== 'pending') {
-      throw new HelmError('ask_already_settled', `AskDoc is already in ${row.status} state`, 409)
+      throw new HelmxError('ask_already_settled', `AskDoc is already in ${row.status} state`, 409)
     }
     return this.settle(id, reason)
   }
@@ -287,15 +287,15 @@ export class AskService {
   /** Re-read row after awaiting an async resolver: deleted -> 404; no longer pending -> 409. */
   private recheckPendingRow(id: string, stale: { expectedStateSeq?: number }): { expectedStateSeq?: number; specJson: string } {
     const now = this.store.getAsk(id)
-    if (!now) throw new HelmError('not_found', `AskDoc not found: ${id}`, 404)
+    if (!now) throw new HelmxError('not_found', `AskDoc not found: ${id}`, 404)
     if (now.status !== 'pending') {
-      throw new HelmError('ask_already_settled', `AskDoc was already settled as ${now.status} while waiting for seq resolver`, 409, {
+      throw new HelmxError('ask_already_settled', `AskDoc was already settled as ${now.status} while waiting for seq resolver`, 409, {
         askId: id,
         settledStatus: now.status,
       })
     }
     if (stale.expectedStateSeq !== now.expectedStateSeq) {
-      throw new HelmError(
+      throw new HelmxError(
         'ask_state_conflict',
         `persisted AskDoc watermark changed from ${stale.expectedStateSeq} to ${now.expectedStateSeq} while waiting for seq resolver; deferring to new authoritative state`,
         409,
@@ -312,7 +312,7 @@ export class AskService {
       const value = await resolver(askId)
       if (value === undefined) continue
       if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || !Number.isSafeInteger(value)) {
-        throw new HelmError(
+        throw new HelmxError(
           'ask_seq_resolver_invalid',
           `seq resolver returned an invalid watermark for AskDoc ${askId} (must be a non-negative safe integer)`,
           500,
@@ -330,7 +330,7 @@ export class AskService {
     options: { answers?: Record<string, string> } = {},
   ): Promise<AskSpec> {
     const row = this.store.getAsk(id)
-    if (!row) throw new HelmError('not_found', `AskDoc not found: ${id}`, 404)
+    if (!row) throw new HelmxError('not_found', `AskDoc not found: ${id}`, 404)
     try {
       const spec = JSON.parse(row.specJson) as AskSpec
       const settledSpec: AskSpec = { ...spec, status }
@@ -365,7 +365,7 @@ export class AskService {
 /** Env var name for a secret field: preserve declared field.name; reject invalid names instead of silently normalizing. */
 function envNameOf(field: AskFieldSpec): string {
   if (!isValidEnvName(field.name)) {
-    throw new HelmError(
+    throw new HelmxError(
       'validation_error',
       `secret field name '${field.name}' is not a valid environment variable name (requires [A-Za-z_][A-Za-z0-9_]*; never auto-uppercases or merges)`,
       400,
@@ -377,51 +377,51 @@ function envNameOf(field: AskFieldSpec): string {
 /** Full boundary validation for AskCreateSpec (rejects every invalid shape before persisting). */
 function validateAskSpec(spec: AskCreateSpec): void {
   if (spec === null || typeof spec !== 'object') {
-    throw new HelmError('validation_error', 'AskDoc spec must be an object')
+    throw new HelmxError('validation_error', 'AskDoc spec must be an object')
   }
   // Caller-supplied ID must be a non-empty string without silent normalization.
   if (spec.id !== undefined) {
     if (typeof spec.id !== 'string' || spec.id === '' || spec.id.trim() === '') {
-      throw new HelmError('validation_error', 'AskDoc id must be a non-empty string')
+      throw new HelmxError('validation_error', 'AskDoc id must be a non-empty string')
     }
   }
   if (!Number.isInteger(spec.conversationId) || (spec.conversationId ?? 0) <= 0) {
-    throw new HelmError('validation_error', 'AskDoc requires conversationId (positive integer)')
+    throw new HelmxError('validation_error', 'AskDoc requires conversationId (positive integer)')
   }
   if (typeof spec.title !== 'string' || spec.title.trim() === '') {
-    throw new HelmError('validation_error', 'AskDoc requires title (non-empty string)')
+    throw new HelmxError('validation_error', 'AskDoc requires title (non-empty string)')
   }
   if (spec.description !== undefined && typeof spec.description !== 'string') {
-    throw new HelmError('validation_error', 'AskDoc description must be a string')
+    throw new HelmxError('validation_error', 'AskDoc description must be a string')
   }
   if (spec.ownerPluginId !== undefined && typeof spec.ownerPluginId !== 'string') {
-    throw new HelmError('validation_error', 'AskDoc ownerPluginId must be a string')
+    throw new HelmxError('validation_error', 'AskDoc ownerPluginId must be a string')
   }
   if (spec.expectedStateSeq !== undefined) {
     if (!Number.isInteger(spec.expectedStateSeq) || (spec.expectedStateSeq as number) < 0) {
-      throw new HelmError('validation_error', 'expectedStateSeq must be a non-negative integer')
+      throw new HelmxError('validation_error', 'expectedStateSeq must be a non-negative integer')
     }
   }
   if (!Array.isArray(spec.fields) || spec.fields.length === 0) {
-    throw new HelmError('validation_error', 'AskDoc requires at least one field')
+    throw new HelmxError('validation_error', 'AskDoc requires at least one field')
   }
   const names = new Set<string>()
   for (const field of spec.fields) {
     if (field === null || typeof field !== 'object') {
-      throw new HelmError('validation_error', 'field must be an object')
+      throw new HelmxError('validation_error', 'field must be an object')
     }
     if (typeof field.name !== 'string' || field.name.trim() === '') {
-      throw new HelmError('validation_error', 'field.name must be a non-empty string')
+      throw new HelmxError('validation_error', 'field.name must be a non-empty string')
     }
     if (names.has(field.name)) {
-      throw new HelmError('validation_error', `duplicate field.name: ${field.name}`)
+      throw new HelmxError('validation_error', `duplicate field.name: ${field.name}`)
     }
     names.add(field.name)
     if (typeof field.label !== 'string' || field.label === '') {
-      throw new HelmError('validation_error', `field '${field.name}' label must be a non-empty string`)
+      throw new HelmxError('validation_error', `field '${field.name}' label must be a non-empty string`)
     }
     if (field.type !== 'text' && field.type !== 'select' && field.type !== 'confirm') {
-      throw new HelmError(
+      throw new HelmxError(
         'validation_error',
         `invalid type for field '${field.name}': ${String(field.type)} (only text | select | confirm)`,
       )
@@ -432,7 +432,7 @@ function validateAskSpec(spec: AskCreateSpec): void {
         field.options.length === 0 ||
         field.options.some((o) => o === null || typeof o !== 'object' || typeof o.value !== 'string' || o.value === '')
       ) {
-        throw new HelmError('validation_error', `select field '${field.name}' requires non-empty options (each with a non-empty string value)`)
+        throw new HelmxError('validation_error', `select field '${field.name}' requires non-empty options (each with a non-empty string value)`)
       }
     }
     if (field.secret === true) {
@@ -442,7 +442,7 @@ function validateAskSpec(spec: AskCreateSpec): void {
     // secretLifetime is only permitted on secret fields; reject bad shape/enum/cap at boundary (no silent fallback).
     if (field.secretLifetime !== undefined) {
       if (field.secret !== true) {
-        throw new HelmError(
+        throw new HelmxError(
           'validation_error',
           `field '${field.name}' declares secretLifetime without secret: true (lifetime only constrains secret fields)`,
           400,
@@ -458,7 +458,7 @@ function validateAskSpec(spec: AskCreateSpec): void {
     const env = envNameOf(field)
     const existing = secretEnvNames.get(env)
     if (existing !== undefined) {
-      throw new HelmError(
+      throw new HelmxError(
         'validation_error',
         `secret fields '${existing}' and '${field.name}' map to the same environment variable '${env}'; refusing merge/overwrite`,
       )
@@ -470,35 +470,35 @@ function validateAskSpec(spec: AskCreateSpec): void {
 /** Answer boundary validation: unknown fields / non-strings / out-of-range select options / invalid confirm values. */
 function validateAnswersAgainstFields(spec: AskSpec, answers: Record<string, string>): void {
   if (answers === null || typeof answers !== 'object' || Array.isArray(answers)) {
-    throw new HelmError('validation_error', 'answers must be an object')
+    throw new HelmxError('validation_error', 'answers must be an object')
   }
   const byName = new Map(spec.fields.map((f) => [f.name, f]))
   for (const key of Object.keys(answers)) {
     const value = answers[key]
     if (!byName.has(key)) {
-      throw new HelmError('validation_error', `unknown answer field: ${key} (not declared on AskDoc)`)
+      throw new HelmxError('validation_error', `unknown answer field: ${key} (not declared on AskDoc)`)
     }
     if (typeof value !== 'string') {
-      throw new HelmError('validation_error', `answer field '${key}' must be a string (got ${typeof value})`)
+      throw new HelmxError('validation_error', `answer field '${key}' must be a string (got ${typeof value})`)
     }
   }
   for (const field of spec.fields) {
     const value = answers[field.name]
     if (field.required && (value === undefined || value === '')) {
-      throw new HelmError('validation_error', `missing required field: ${field.name}`)
+      throw new HelmxError('validation_error', `missing required field: ${field.name}`)
     }
     if (value === undefined || value === '') continue
     if (field.type === 'select') {
       const valid = (field.options ?? []).some((o) => o.value === value)
       if (!valid) {
-        throw new HelmError(
+        throw new HelmxError(
           'validation_error',
           `answer '${value}' for select field '${field.name}' is not among the allowed options`,
         )
       }
     }
     if (field.type === 'confirm' && value !== 'true' && value !== 'false') {
-      throw new HelmError(
+      throw new HelmxError(
         'validation_error',
         `answer for confirm field '${field.name}' must be 'true' | 'false' (got '${value}')`,
       )

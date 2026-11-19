@@ -1,5 +1,5 @@
 /**
- * Integration tests for cross-node process usage snapshot RPC (real Hub WS gateway + real @helm/node daemon).
+ * Integration tests for cross-node process usage snapshot RPC (real Hub WS gateway + real @helmx/node daemon).
  *
  * Coverage:
  * - Once real daemon (node-b) registers, fabric.inspectPathUsage performs a real node-side scan via
@@ -30,16 +30,16 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { WebSocket } from 'ws'
 import { createBirpc } from 'birpc'
-import type { NodeRegisterInput, NodeRegisterResult } from '@helm/protocol'
-import { HelmError } from '@helm/protocol'
+import type { NodeRegisterInput, NodeRegisterResult } from '@helmx/protocol'
+import { HelmxError } from '@helmx/protocol'
 import type { HubConnectionLocal } from '../src/env/registry.js'
 import { attachNodeWsGateway, createEnvFabric } from '../src/env/index.js'
-import { createNodeDaemon, type NodeDaemon, type NodeIdentity } from '@helm/node'
+import { createNodeDaemon, type NodeDaemon, type NodeIdentity } from '@helmx/node'
 
 let rootDir: string
 
 before(() => {
-  rootDir = mkdtempSync(join(tmpdir(), 'helm-pathusage-rpc-'))
+  rootDir = mkdtempSync(join(tmpdir(), 'helmx-pathusage-rpc-'))
 })
 
 after(() => {
@@ -48,7 +48,7 @@ after(() => {
 
 /** Asserts explicit not-supported rejection on non-Linux platforms (never fakes success or silently skips). */
 function assertNotSupportedOnNonLinux(err: unknown): boolean {
-  assert.ok(err instanceof HelmError, `expected HelmError (got ${String(err)})`)
+  assert.ok(err instanceof HelmxError, `expected HelmxError (got ${String(err)})`)
   assert.equal(err.code, 'path_usage_not_supported', 'non-Linux platforms must reject explicitly with not_supported')
   assert.equal(err.status, 501)
   return true
@@ -240,18 +240,18 @@ async function startHubWithFakeNode(envPathUsage: ((input: { path: string }) => 
 async function expectSnapshotRejected(
   fabric: ReturnType<typeof createEnvFabric>,
   path = '/wt',
-): Promise<HelmError> {
+): Promise<HelmxError> {
   let caught: unknown
   await assert.rejects(
     () => fabric.inspectPathUsage('node-old', path),
     (err: unknown) => {
       caught = err
-      assert.ok(err instanceof HelmError, `expected explicit HelmError (got ${String(err)})`)
-      assert.equal((err as HelmError).code, 'node_path_usage_failed', 'invalid snapshot/envelope must fail explicitly without TypeError')
+      assert.ok(err instanceof HelmxError, `expected explicit HelmxError (got ${String(err)})`)
+      assert.equal((err as HelmxError).code, 'node_path_usage_failed', 'invalid snapshot/envelope must fail explicitly without TypeError')
       return true
     },
   )
-  return caught as HelmError
+  return caught as HelmxError
 }
 
 describe('legacy daemon / offline node / argument validation (fails explicitly without local fallback)', { timeout: 60_000 }, () => {
@@ -261,7 +261,7 @@ describe('legacy daemon / offline node / argument validation (fails explicitly w
       await assert.rejects(
         () => hub.fabric.inspectPathUsage('node-old', '/wt'),
         (err: unknown) => {
-          assert.ok(err instanceof HelmError)
+          assert.ok(err instanceof HelmxError)
           assert.equal(err.code, 'path_usage_not_supported', 'legacy daemon without envPathUsage must fail explicitly and never fall back locally')
           assert.equal(err.status, 501)
           return true
@@ -278,7 +278,7 @@ describe('legacy daemon / offline node / argument validation (fails explicitly w
       await assert.rejects(
         () => fabric.inspectPathUsage('node-gone', '/wt'),
         (err: unknown) => {
-          assert.ok(err instanceof HelmError)
+          assert.ok(err instanceof HelmxError)
           assert.equal(err.code, 'node_offline')
           return true
         },
@@ -295,7 +295,7 @@ describe('legacy daemon / offline node / argument validation (fails explicitly w
         await assert.rejects(
           () => hub.fabric.inspectPathUsage('node-old', bad),
           (err: unknown) => {
-            assert.ok(err instanceof HelmError)
+            assert.ok(err instanceof HelmxError)
             assert.equal(err.code, 'validation_error', `invalid path must reject pre-RPC (${bad})`)
             return true
           },
@@ -447,9 +447,9 @@ describe('strict validation of node snapshots/envelopes (malformed payloads over
       await assert.rejects(
         () => hub.fabric.inspectPathUsage('node-old', '/wt'),
         (err: unknown) => {
-          assert.ok(err instanceof HelmError)
+          assert.ok(err instanceof HelmxError)
           assert.equal(err.code, 'node_path_usage_failed')
-          const details = (err as HelmError).details as { code?: string }
+          const details = (err as HelmxError).details as { code?: string }
           assert.equal(details?.code, 'permission_denied', 'raw node error code is preserved')
           return true
         },

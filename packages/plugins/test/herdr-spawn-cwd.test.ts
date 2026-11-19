@@ -14,7 +14,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
-import { HelmError, type Profile } from '@helm/protocol'
+import { HelmxError, type Profile } from '@helmx/protocol'
 import { normalizeStartupTimeoutMs, resolveCwd, type SpawnRouting } from '../src/herdr/spawn-rules.js'
 import { nodeChannelFromHost } from '../src/herdr/host-ports.js'
 import { LocalNodeChannel } from '../src/herdr/local-node-channel.js'
@@ -42,20 +42,20 @@ test('resolveCwd：platform 未知（undefined）——链语义与透传保持'
   assert.equal(resolveCwd(undefined, undefined, undefined, undefined), '', '链尾空串语义保持')
   assert.throws(
     () => resolveCwd('relative/ws', routing, undefined, undefined),
-    (e: unknown) => e instanceof HelmError && e.code === 'validation_error',
+    (e: unknown) => e instanceof HelmxError && e.code === 'validation_error',
   )
 })
 
 test('resolveCwd：win32 平台——request/workspace/parent 三级确定性转换与坏 POSIX 根拒绝', { timeout: 60_000 }, () => {
   const routing: SpawnRouting = { kind: 'agy', args: [], workspace: '/d/profile-ws', profileEnv: {} }
-  assert.equal(resolveCwd('/mnt/c/work/helm', routing, undefined, 'win32'), 'C:\\work\\helm')
+  assert.equal(resolveCwd('/mnt/c/work/helmx', routing, undefined, 'win32'), 'C:\\work\\helmx')
   assert.equal(resolveCwd(undefined, routing, undefined, 'win32'), 'D:\\profile-ws', 'workspace 回退按目标平台收口')
   assert.equal(resolveCwd(undefined, undefined, '/e/parent-dir', 'win32'), 'E:\\parent-dir')
   assert.equal(resolveCwd('//server/share/ws', undefined, undefined, 'win32'), '\\\\server\\share\\ws')
   for (const bad of ['/home/user', '/tmp/herdr']) {
     assert.throws(
       () => resolveCwd(bad, undefined, undefined, 'win32'),
-      (e: unknown) => e instanceof HelmError && e.code === 'unmappable_posix_root',
+      (e: unknown) => e instanceof HelmxError && e.code === 'unmappable_posix_root',
       `'${bad}' 无盘符对应必须显式失败`,
     )
   }
@@ -69,18 +69,18 @@ test('startupTimeoutMs 非法值显式 validation_error；父会话不存在时 
   for (const bad of [0, 3000, 300001, 1.5, NaN]) {
     assert.throws(
       () => normalizeStartupTimeoutMs(bad),
-      (e: unknown) => e instanceof HelmError && e.code === 'validation_error',
+      (e: unknown) => e instanceof HelmxError && e.code === 'validation_error',
     )
   }
   await assert.rejects(
     openHerdrUnitEnv({ config: { startupTimeoutMs: 0 } }),
-    (e: unknown) => (e as HelmError).code === 'validation_error',
+    (e: unknown) => (e as HelmxError).code === 'validation_error',
   )
   const env = await openHerdrUnitEnv()
   try {
     await assert.rejects(
       spawnHerdrDirect(env, { agentType: 'herdr:agy', cwd: undefined, parentConversationId: 999 }),
-      (e: unknown) => (e as HelmError).status === 404,
+      (e: unknown) => (e as HelmxError).status === 404,
     )
   } finally {
     await env.close()
@@ -167,14 +167,14 @@ class MemoryCwdTransport extends BaseFakeHerdrTransport {
       case 'tab.close':
         return { type: 'ok' }
       default:
-        throw new HelmError('method_not_found', `fake: ${method}`, 400)
+        throw new HelmxError('method_not_found', `fake: ${method}`, 400)
     }
   }
 
   override async readOutput(_target: HerdrTarget, cwd: string, fileName: string): Promise<string> {
     const content = this.outputs.get(`${cwd}\0${fileName}`)
     if (content === undefined) {
-      throw new HelmError('herdr_output_missing', `交接文件不存在: ${cwd}/.helm/${fileName}`, 404)
+      throw new HelmxError('herdr_output_missing', `交接文件不存在: ${cwd}/.helmx/${fileName}`, 404)
     }
     return content
   }
@@ -185,14 +185,14 @@ class MemoryCwdTransport extends BaseFakeHerdrTransport {
 }
 
 async function openExecutor(platforms: Record<string, string>) {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-herdr-cwd-'))
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-herdr-cwd-'))
   const transport = new MemoryCwdTransport()
   const nodeChannel: HerdrNodeChannel = {
     isOnline: () => true,
     getNodeHubUrl: () => 'http://127.0.0.1:3202',
     nodePlatform: (nodeId) => platforms[nodeId],
-    ipcCall: () => { throw new HelmError('unsupported', '本测试不经 IPC', 501) },
-    envFor: () => { throw new HelmError('unsupported', '本测试不用 envFor', 501) },
+    ipcCall: () => { throw new HelmxError('unsupported', '本测试不经 IPC', 501) },
+    envFor: () => { throw new HelmxError('unsupported', '本测试不用 envFor', 501) },
   }
   const profiles = new Map<string, Profile>()
   let doc: ManagedDoc = { ...EMPTY_MANAGED_DOC, panes: [...EMPTY_MANAGED_DOC.panes] }
@@ -205,13 +205,13 @@ async function openExecutor(platforms: Record<string, string>) {
     askConversationId: (id) => id,
     notify: () => undefined,
     startupTimeoutMs: () => 5_000,
-    createAsk: (() => { throw new HelmError('unsupported', 'happy path 无 Ask', 501) }) as never,
-    cancelAsk: (() => { throw new HelmError('unsupported', 'happy path 无 Ask', 501) }) as never,
+    createAsk: (() => { throw new HelmxError('unsupported', 'happy path 无 Ask', 501) }) as never,
+    cancelAsk: (() => { throw new HelmxError('unsupported', 'happy path 无 Ask', 501) }) as never,
   }
   const executor = new HerdrExecutor(
     {
       profiles: { get: async (id) => profiles.get(id) },
-      buildSpawnEnv: (_conversationId, cwd) => ({ HELM_CWD: cwd, HELM_ENV: '1' }),
+      buildSpawnEnv: (_conversationId, cwd) => ({ HELMX_CWD: cwd, HELMX_ENV: '1' }),
       redact: (t) => t,
       runLocalGate: async () => ({ ok: true, output: 'gate ok' }),
       nodeChannel,
@@ -245,7 +245,7 @@ test('executor：win32 节点 WSL 视图 cwd 建窗前规范化、坏 POSIX 根�
         agentType: 'herdr:agy@win-build',
         cwd: '/home/build',
       } as never),
-      (e: unknown) => e instanceof HelmError && e.code === 'unmappable_posix_root',
+      (e: unknown) => e instanceof HelmxError && e.code === 'unmappable_posix_root',
     )
     assert.equal(winEnv.transport.calls.length, 0, '拒绝发生在建窗副作用之前')
 
@@ -253,12 +253,12 @@ test('executor：win32 节点 WSL 视图 cwd 建窗前规范化、坏 POSIX 根�
       parentConversationId: 1,
       prompt: '构建它',
       agentType: 'herdr:agy@win-build',
-      cwd: '/mnt/c/work/helm',
+      cwd: '/mnt/c/work/helmx',
     } as never)) as { action: string; result: unknown }
     assert.equal(outcome.action, 'handled')
     assert.equal(outcome.result, 'herdr-done')
     const create = winEnv.transport.calls.find((c) => c.method === 'tab.create')!
-    assert.equal(create.params['cwd'], 'C:\\work\\helm', '建窗收到规范化 Windows 路径')
+    assert.equal(create.params['cwd'], 'C:\\work\\helmx', '建窗收到规范化 Windows 路径')
     assert.deepEqual(create.target, { nodeId: 'win-build' })
   } finally {
     await winEnv.close()

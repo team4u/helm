@@ -25,10 +25,10 @@ import type {
   ActionManifest,
   ConversationSummary,
   PluginUiContribution,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 import { conversationsApi } from '../src/lib/api.js'
 import { groupUiContributions } from '../src/lib/types.js'
-import type { ArtifactMetadata } from '@helm/protocol'
+import type { ArtifactMetadata } from '@helmx/protocol'
 import {
   COMPLETION_VISIBLE_LIMIT,
   buildCompletionActionCall,

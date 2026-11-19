@@ -25,7 +25,7 @@ import * as React from 'react'
 import { renderToString } from 'react-dom/server'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import type { ConversationSummary, HelmLocale, PluginUiContribution, WorkbenchPanelSpec } from '@helm/protocol'
+import type { ConversationSummary, HelmxLocale, PluginUiContribution, WorkbenchPanelSpec } from '@helmx/protocol'
 import { groupUiContributions } from '../src/lib/types.js'
 import { ARCHIVED_TAG, conversationStatusDotClass, conversationStatusTooltip } from '../src/shell/sidebar-model.js'
 import {
@@ -37,9 +37,9 @@ import {
   summarizeConversationBackgroundActivity,
   type ConversationBackgroundIndex,
 } from '../src/shell/background-activity-model.js'
-import { makeTestStore, HelmExternalStoreContext, type TestStoreOverrides } from './helpers/store.js'
-import { useHelmStore } from '../src/lib/store-context.js'
-import type { HelmExternalStore } from '../src/lib/helm-store.js'
+import { makeTestStore, HelmxExternalStoreContext, type TestStoreOverrides } from './helpers/store.js'
+import { useHelmxStore } from '../src/lib/store-context.js'
+import type { HelmxExternalStore } from '../src/lib/helmx-store.js'
 
 const e = React.createElement
 ;(globalThis as Record<string, unknown>).React = React
@@ -424,15 +424,15 @@ const BASE_PROFILES = [
   { id: 'coder', name: '编码专员' },
 ]
 
-function sidebarStore(overrides: TestStoreOverrides = {}): HelmExternalStore {
+function sidebarStore(overrides: TestStoreOverrides = {}): HelmxExternalStore {
   return makeTestStore({
     profiles: BASE_PROFILES,
     ...overrides,
   })
 }
 
-function renderSidebar(store: HelmExternalStore): string {
-  return renderToString(e(HelmExternalStoreContext.Provider, { value: store }, e(Sidebar)))
+function renderSidebar(store: HelmxExternalStore): string {
+  return renderToString(e(HelmxExternalStoreContext.Provider, { value: store }, e(Sidebar)))
 }
 
 /** Count conversation status lights (excluding the ActivityRail SSE status-dot-connected dot). */
@@ -782,7 +782,7 @@ test('after Sidebar mounts, ensurePluginDoc loads the badge docs of hit panels o
   try {
     await act(async () => {
       root = createRoot(container)
-      root.render(e(HelmExternalStoreContext.Provider, { value: store }, e(Sidebar)))
+      root.render(e(HelmxExternalStoreContext.Provider, { value: store }, e(Sidebar)))
     })
     assert.deepEqual(docUrls, ['/api/plugins/builtin%3Aworkflow/docs/run-badges'])
   } finally {
@@ -908,7 +908,7 @@ test('Sidebar DOM update: flipping a conversation compacting false -> true light
   let root: Root | undefined
   await act(async () => {
     root = createRoot(container)
-    root.render(e(HelmExternalStoreContext.Provider, { value: store }, e(Sidebar)))
+    root.render(e(HelmxExternalStoreContext.Provider, { value: store }, e(Sidebar)))
   })
   assert.ok(container.querySelector('.status-dot-background') === null, 'no hollow ring initially without compacting')
 
@@ -1187,11 +1187,11 @@ test('AgentStandingsGroup switches copy immediately on setLocale (en -> zh-CN ->
   // 真实 store.setLocale 驱动 prefs 领域订阅：Shell 铨印文案原位切换（与生产同一链路）。
   const store = sidebarStore({ locale: 'en' })
   function StandingsView(): React.JSX.Element {
-    const view = useHelmStore()
+    const view = useHelmxStore()
     return e(AgentStandingsGroup, { store: view, background: new Map() })
   }
   function Harness(): React.JSX.Element {
-    return e(HelmExternalStoreContext.Provider, { value: store }, e(StandingsView))
+    return e(HelmxExternalStoreContext.Provider, { value: store }, e(StandingsView))
   }
 
   const host = document.createElement('div')

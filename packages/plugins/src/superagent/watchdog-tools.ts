@@ -12,12 +12,12 @@
  */
 
 import {
-  HelmError,
+  HelmxError,
   type ConversationSummary,
   type GuardedMutationExpectation,
-  type HelmPluginContext,
-} from '@helm/protocol'
-import { redactJsonValue } from '@helm/protocol'
+  type HelmxPluginContext,
+} from '@helmx/protocol'
+import { redactJsonValue } from '@helmx/protocol'
 import type { WatchdogProbe } from '../diagnostics.js'
 import type { SuperAgentWatchdogRuntime } from './contracts.js'
 import { assertOwnedTarget } from './watchdog-guards.js'
@@ -63,7 +63,7 @@ interface WatchdogToolsDeps {
 /** 工具路径执行守卫：仅实际 watchdog 会话（防同 profile 直聊与旧调用绕过）。 */
 function assertToolCaller(runtime: SuperAgentWatchdogRuntime, conversationId: number): void {
   if (conversationId !== runtime.getWatchdogConversationId()) {
-    throw new HelmError(
+    throw new HelmxError(
       'watchdog_not_watchdog_session',
       `watchdog 专属工具仅限实际巡检会话调用（当前会话 ${conversationId}）`,
       403,
@@ -79,7 +79,7 @@ function assertActionCaller(runtime: SuperAgentWatchdogRuntime, context: { conve
 }
 
 export function registerWatchdogTools(
-  ctx: HelmPluginContext,
+  ctx: HelmxPluginContext,
   runtime: SuperAgentWatchdogRuntime,
   deps: WatchdogToolsDeps,
 ): void {
@@ -90,7 +90,7 @@ export function registerWatchdogTools(
     if (input.probe !== undefined && input.conversationId === undefined) {
       return inspectExternalProbe(input.probe)
     }
-    throw new HelmError(
+    throw new HelmxError(
       'validation_error',
       'watchdog_inspect 需要 conversationId（原生会话）或 probe（外部目标）二选一',
       400,
@@ -156,12 +156,12 @@ export function registerWatchdogTools(
 
   function inspectExternalProbe(probe: { targetKind: string; nodeId?: string; targetId: string }): Record<string, unknown> {
     if (probe.targetKind !== 'external') {
-      throw new HelmError('validation_error', 'watchdog_inspect 的 probe 仅支持 targetKind=external（外部目标只读诊断）', 400)
+      throw new HelmxError('validation_error', 'watchdog_inspect 的 probe 仅支持 targetKind=external（外部目标只读诊断）', 400)
     }
     const nodeId = probe.nodeId ?? 'local'
     const cached = deps.externalProbes.get(targetKey('external', nodeId, probe.targetId))
     if (cached === undefined) {
-      throw new HelmError(
+      throw new HelmxError(
         'not_found',
         `最近一轮巡检未观测到外部目标 ${probe.targetId}@${nodeId}（不猜测、不伪造事实）`,
         404,
@@ -332,7 +332,7 @@ export function registerWatchdogTools(
   ctx.tool<{ conversationId: number; hint: string; expectedStateSeq?: number }>({
     name: WATCHDOG_TOOL_RECOVER,
     description:
-      'Submit a recovery hint to an owned (helm/bot) native conversation (agent origin, without waiting for a model turn); ownership is atomically rechecked at the effect point via the kernel guarded port; human targets are rejected.',
+      'Submit a recovery hint to an owned (helmx/bot) native conversation (agent origin, without waiting for a model turn); ownership is atomically rechecked at the effect point via the kernel guarded port; human targets are rejected.',
     inputSchema: recoverSchema,
     scope: { profileIds: [WATCHDOG_PROFILE_ID] },
     async execute(input, context) {
@@ -344,7 +344,7 @@ export function registerWatchdogTools(
   ctx.tool<{ conversationId: number; reason?: string; expectedStateSeq?: number }>({
     name: WATCHDOG_TOOL_ABORT,
     description:
-      'Abort an owned (helm/bot) native conversation; ownership is atomically rechecked at the effect point via the kernel guarded port; human/root/hub/watchdog-itself are rejected. External panes can only be aborted indirectly via their owned parent conversation.',
+      'Abort an owned (helmx/bot) native conversation; ownership is atomically rechecked at the effect point via the kernel guarded port; human/root/hub/watchdog-itself are rejected. External panes can only be aborted indirectly via their owned parent conversation.',
     inputSchema: abortSchema,
     scope: { profileIds: [WATCHDOG_PROFILE_ID] },
     async execute(input, context) {
@@ -353,7 +353,7 @@ export function registerWatchdogTools(
     },
   })
 
-  // 同名 ctx.action 复用同一核心：HTTP/CLI 自动映射 `helm superagent watchdog_*`，
+  // 同名 ctx.action 复用同一核心：HTTP/CLI 自动映射 `helmx superagent watchdog_*`，
   // 人工调用无会话上下文放行（目标所有权守卫照样生效），不 exposeAsTool 防重复工具。
   ctx.action<{ conversationId?: number; probe?: { targetKind: 'external'; nodeId?: string; targetId: string } }, Record<string, unknown>>({
     id: WATCHDOG_TOOL_INSPECT,
@@ -398,7 +398,7 @@ export function registerWatchdogTools(
  * Profile 会话可用，人工 HTTP/CLI 无会话上下文放行）。
  */
 export function registerWatchdogTickAction(
-  ctx: HelmPluginContext,
+  ctx: HelmxPluginContext,
   runtime: SuperAgentWatchdogRuntime,
   singleflightTick: () => Promise<TickOutcome>,
 ): void {

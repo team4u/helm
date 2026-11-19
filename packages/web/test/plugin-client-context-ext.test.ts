@@ -12,7 +12,7 @@ import { test } from 'node:test'
 import * as React from 'react'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import type { ComposerController } from '@helm/protocol'
+import type { ComposerController } from '@helmx/protocol'
 import { getSessionDocState, resetSessionDocSubscriptions, subscribeSessionDoc, type SessionDocKey } from '../src/lib/session-docs.js'
 import { createPluginClientHostPort } from '../src/lib/plugin-client-host.js'
 import {
@@ -20,11 +20,11 @@ import {
   PluginClientContext,
   usePluginDoc,
   usePluginSessionDoc,
-} from '@helm/plugin-client'
+} from '@helmx/plugin-client'
 import { pluginsApi } from '../src/lib/api.js'
 import { makeTestStore } from './helpers/store.js'
 import { HostStoreProviders } from './helpers/host-store.js'
-import type { HelmExternalStore, HelmStoreActions } from '../src/lib/helm-store.js'
+import type { HelmxExternalStore, HelmxStoreActions } from '../src/lib/helmx-store.js'
 
 const e = React.createElement
 ;(globalThis as Record<string, unknown>).React = React
@@ -34,12 +34,12 @@ GlobalRegistrator.register()
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 
 /** 在 actions 包上替换具名动作（快照/端口构建前替换；调用契约断言需捕获入参）。 */
-function spyAction<K extends keyof HelmStoreActions>(store: HelmExternalStore, key: K, impl: HelmStoreActions[K]): void {
-  ;(store.actions as unknown as Record<K, HelmStoreActions[K]>)[key] = impl
+function spyAction<K extends keyof HelmxStoreActions>(store: HelmxExternalStore, key: K, impl: HelmxStoreActions[K]): void {
+  ;(store.actions as unknown as Record<K, HelmxStoreActions[K]>)[key] = impl
 }
 
 /** 在双 Provider 内挂载探针并回传 hooks 结果。 */
-function mountProbe<T>(store: HelmExternalStore, ctxValue: ReturnType<typeof createPluginClientContext>, use: () => T): { result: () => T | undefined; unmount: () => void } {
+function mountProbe<T>(store: HelmxExternalStore, ctxValue: ReturnType<typeof createPluginClientContext>, use: () => T): { result: () => T | undefined; unmount: () => void } {
   let captured: T | undefined
   function Probe(): React.ReactNode {
     captured = use()
@@ -185,7 +185,7 @@ test('composer：仅显式提供时存在于 ctx；透传同一实例', { timeou
 test('locale/translate：基础适配器未注入 locale 时上下文回退默认 en 并可解析显示文案', { timeout: 60_000 }, () => {
   const store = makeTestStore()
   const ctx = createPluginClientContext(createPluginClientHostPort(store.getSnapshot()), 'test:plugin', 1)
-  assert.equal(ctx.locale, 'en', '基础端口未带 locale：回退 DEFAULT_HELM_LOCALE')
+  assert.equal(ctx.locale, 'en', '基础端口未带 locale：回退 DEFAULT_HELMX_LOCALE')
   assert.equal(ctx.translate('plain'), 'plain')
   assert.equal(ctx.translate({ en: 'Hi', 'zh-CN': '你好' }), 'Hi')
   assert.equal(ctx.translate({ 'zh-CN': '你好' }), '你好', '仅声明项时按声明序回退')

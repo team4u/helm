@@ -8,16 +8,16 @@
 import type { ArtifactService } from '../services/artifacts.js'
 import type { EnvFabric } from '../env/index.js'
 
-export interface HelmToolDeps {
+export interface HelmxToolDeps {
   dataDir: string
   defaultCwd: string
-  /** Hub URL derived from `HELM_PORT` (e.g. `http://127.0.0.1:3202`; injectable for tests). */
+  /** Hub URL derived from `HELMX_PORT` (e.g. `http://127.0.0.1:3202`; injectable for tests). */
   hubUrl: string
   /** Inject conversation-scoped `SecretStash` environment variables. */
   stashEnvFor(conversationId: number): Record<string, string>
   /** Text redaction (stash plaintext -> marker; one-way only). */
   redact(text: string): string
-  /** Managed process token (read on each call via getter; omits `HELM_TOKEN` if unset or disposed). */
+  /** Managed process token (read on each call via getter; omits `HELMX_TOKEN` if unset or disposed). */
   processToken?: () => string | undefined
   /** Artifact service (matches `services.ArtifactService`: async `get`/`readContent`/`readBuffer`). */
   artifacts: Pick<ArtifactService, 'spill' | 'get' | 'readContent' | 'readBuffer'> &
@@ -32,7 +32,7 @@ export interface HelmToolDeps {
    * propagate explicitly (a corrupt profile.json already breaks the turn's persona injection).
    */
   restrictToCwdOf?: (conversationId: number) => Promise<boolean>
-  /** Directory containing `helm` CLI wrapper scripts (prepended to `PATH` so managed children can run `helm`). */
+  /** Directory containing `helmx` CLI wrapper scripts (prepended to `PATH` so managed children can run `helmx`). */
   cliBinDir?: string
 }
 

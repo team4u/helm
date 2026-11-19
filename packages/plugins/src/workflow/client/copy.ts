@@ -2,17 +2,17 @@
  * Display copy and visual badge/icon maps for the builtin:workflow client
  * (pure copy table + compact template builders, zero component exports — Fast Refresh friendly).
  */
-import { DEFAULT_HELM_LOCALE, resolveLocalizedText, type HelmLocale, type LocalizedText } from '@helm/plugin-client'
+import { DEFAULT_HELMX_LOCALE, resolveLocalizedText, type HelmxLocale, type LocalizedText } from '@helmx/plugin-client'
 import type { WorkflowPhaseSection } from './model-run.ts'
 
 const L = (en: string, zh: string): LocalizedText => ({ en, 'zh-CN': zh })
-const t0 = (en: string, zh: string) => (locale: HelmLocale = DEFAULT_HELM_LOCALE): string =>
+const t0 = (en: string, zh: string) => (locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string =>
   resolveLocalizedText(L(en, zh), locale)
-const t1 = <A>(fn: (a: A) => LocalizedText) => (a: A, locale: HelmLocale = DEFAULT_HELM_LOCALE): string =>
+const t1 = <A>(fn: (a: A) => LocalizedText) => (a: A, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string =>
   resolveLocalizedText(fn(a), locale)
-const t2 = <A, B>(fn: (a: A, b: B) => LocalizedText) => (a: A, b: B, locale: HelmLocale = DEFAULT_HELM_LOCALE): string =>
+const t2 = <A, B>(fn: (a: A, b: B) => LocalizedText) => (a: A, b: B, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string =>
   resolveLocalizedText(fn(a, b), locale)
-const t3 = <A, B, C>(fn: (a: A, b: B, c: C) => LocalizedText) => (a: A, b: B, c: C, locale: HelmLocale = DEFAULT_HELM_LOCALE): string =>
+const t3 = <A, B, C>(fn: (a: A, b: B, c: C) => LocalizedText) => (a: A, b: B, c: C, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string =>
   resolveLocalizedText(fn(a, b, c), locale)
 
 // ---------------------------------------------------------------------------
@@ -63,13 +63,13 @@ const SUBAGENT_BADGE_LABELS: Record<SubagentBadgeLabelKey, LocalizedText> = {
   pending: L('In progress', '进行中'),
 }
 
-export const runStatusLabel = (status: string, locale: HelmLocale = DEFAULT_HELM_LOCALE): string =>
+export const runStatusLabel = (status: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string =>
   resolveLocalizedText(RUN_STATUS_LABELS[status] ?? status, locale)
-export const nodeStatusLabel = (status: string, locale: HelmLocale = DEFAULT_HELM_LOCALE): string =>
+export const nodeStatusLabel = (status: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string =>
   resolveLocalizedText(NODE_STATUS_LABELS[status] ?? status, locale)
-export const executionStatusLabel = (status: string, locale: HelmLocale = DEFAULT_HELM_LOCALE): string =>
+export const executionStatusLabel = (status: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string =>
   resolveLocalizedText(EXECUTION_STATUS_LABELS[status] ?? status, locale)
-export const subagentBadgeLabel = (key: SubagentBadgeLabelKey, locale: HelmLocale = DEFAULT_HELM_LOCALE): string =>
+export const subagentBadgeLabel = (key: SubagentBadgeLabelKey, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string =>
   resolveLocalizedText(SUBAGENT_BADGE_LABELS[key], locale)
 export const runFailureFallbackLabel = t1((isTrueBackground: boolean) =>
   isTrueBackground ? L('Background run failed', '后台执行失败') : L('Execution failed', '执行失败'),
@@ -230,7 +230,7 @@ const EXTERNAL_IDLE_STATE: Record<'active' | 'error' | 'settled', LocalizedText>
   error: L('error', '异常'),
   settled: L('settled', '已结束'),
 }
-export const externalIdleLine = (state: 'active' | 'error' | 'settled', locale: HelmLocale = DEFAULT_HELM_LOCALE): string => {
+export const externalIdleLine = (state: 'active' | 'error' | 'settled', locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string => {
   const s = resolveLocalizedText(EXTERNAL_IDLE_STATE[state], locale)
   return resolveLocalizedText(L(`External run ${s} (no subagent)`, `外部执行${s}（无子会话）`), locale)
 }
@@ -320,7 +320,7 @@ export const NODE_KV_MODEL = L('Model', '模型')
 export const NODE_KV_DURATION = L('Duration', '耗时')
 export const NODE_KV_TOKENS = L('Tokens', 'Token')
 
-export function replayMeta(runId: string, conversationId: number, savedName: string | undefined, locale: HelmLocale = DEFAULT_HELM_LOCALE): string {
+export function replayMeta(runId: string, conversationId: number, savedName: string | undefined, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
   const sourceNote = resolveLocalizedText(
     savedName !== undefined
       ? L(`saved definition ${savedName} executes the latest file content`, `已保存定义 ${savedName} 按最新文件内容执行`)
@@ -348,7 +348,7 @@ export const REPLAY_SUBMIT_TITLE = L(
 )
 export const REPLAY_SUBMIT = L('Replay', '发起重放')
 
-export function nodeAwaitingApproval(pendingAskTitle: string | undefined, locale: HelmLocale = DEFAULT_HELM_LOCALE): string {
+export function nodeAwaitingApproval(pendingAskTitle: string | undefined, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
   const fallback = resolveLocalizedText(SNIPPET_AWAITING_HUMAN, locale)
   return `${resolveLocalizedText(L('Awaiting approval: ', '等待审批：'), locale)}${pendingAskTitle || fallback}`
 }
@@ -442,20 +442,20 @@ export const LIB_DELETE_TITLE = L('Delete the definition file (historical runs a
 export const libDrawerAria = t1((name: string) => L(`Workflow ${name} details`, `工作流 ${name} 详情`))
 export const libArgsInvalidJson = t1((err: string) => L(`args must be valid JSON: ${err}`, `args 需为合法 JSON：${err}`))
 
-export function workflowEditRequestLines(name: string, descriptionLine: string | undefined, locale: HelmLocale): string[] {
+export function workflowEditRequestLines(name: string, descriptionLine: string | undefined, locale: HelmxLocale): string[] {
   if (locale === 'zh-CN') {
     return [
       `请修改已保存工作流 ${name}（跨会话可复用资产）：`,
-      `- 先用 workflow get 动作（或 helm workflows get ${name} --json）读取当前源码与元数据；`,
-      `- 按需求修改后用 workflow save 动作（helm workflows save <文件或源码> --name ${name} --overwrite）写回；保存前校验会自动做语法预检，默认拒绝覆盖、需显式 overwrite；`,
+      `- 先用 workflow get 动作（或 helmx workflows get ${name} --json）读取当前源码与元数据；`,
+      `- 按需求修改后用 workflow save 动作（helmx workflows save <文件或源码> --name ${name} --overwrite）写回；保存前校验会自动做语法预检，默认拒绝覆盖、需显式 overwrite；`,
       ...(descriptionLine !== undefined ? [descriptionLine] : []),
       '- 修改完成后告诉我保存结果与变化点，不要静默改动。',
     ]
   }
   return [
     `Please modify the saved workflow ${name} (a cross-conversation reusable asset):`,
-    `- First read the current source and metadata via the workflow get action (or helm workflows get ${name} --json);`,
-    `- After applying the changes, write them back with the workflow save action (helm workflows save <file-or-source> --name ${name} --overwrite); the pre-save check runs a syntax preflight, overwriting is refused by default and requires an explicit overwrite;`,
+    `- First read the current source and metadata via the workflow get action (or helmx workflows get ${name} --json);`,
+    `- After applying the changes, write them back with the workflow save action (helmx workflows save <file-or-source> --name ${name} --overwrite); the pre-save check runs a syntax preflight, overwriting is refused by default and requires an explicit overwrite;`,
     ...(descriptionLine !== undefined ? [descriptionLine] : []),
     '- After saving, tell me the save result and what changed; do not modify anything silently.',
   ]
@@ -506,7 +506,7 @@ export const wtBaseValue = t2((baseCommit: string, diffBase: string) => {
 })
 export const WT_NO_BASE = L('No registered base (uncommitted changes inspected against HEAD)', '无登记基线（按 HEAD 检视未提交改动）')
 export const WT_KV_DIRTY = L('Uncommitted changes', '未提交修改')
-export function wtDirtyCount(count: number, truncated: boolean, locale: HelmLocale = DEFAULT_HELM_LOCALE): string {
+export function wtDirtyCount(count: number, truncated: boolean, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
   const suffix = truncated
     ? resolveLocalizedText(L(' (list truncated; showing the first items)', '（列表已截断，仅显示前若干项）'), locale)
     : ''
@@ -537,9 +537,9 @@ export function worktreeReviewLines(
     nodeId?: string
     baseCommit?: string
     taskLine?: string
-    inspectLine?: (locale: HelmLocale) => string[]
+    inspectLine?: (locale: HelmxLocale) => string[]
   },
-  locale: HelmLocale,
+  locale: HelmxLocale,
 ): string[] {
   const nodeSuffix = input.nodeId !== undefined && input.nodeId !== ''
     ? resolveLocalizedText(L(` (node ${input.nodeId})`, `（节点 ${input.nodeId}）`), locale)
@@ -567,7 +567,7 @@ export function worktreeReviewLines(
   ]
 }
 export const wtReviewTaskLine = t1((task: string) => L(`- Task: ${task}`, `- 任务：${task}`))
-export function wtReviewInspectMissing(removed: boolean, locale: HelmLocale = DEFAULT_HELM_LOCALE): string {
+export function wtReviewInspectMissing(removed: boolean, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
   const reason = resolveLocalizedText(removed ? L('registration cleaned up', '登记已清理') : L('directory missing', '不存在'), locale)
   return resolveLocalizedText(L(`- Inspection: ${reason}; nothing to inspect`, `- 检视：目录${reason}，无可检视改动`), locale)
 }
@@ -584,7 +584,7 @@ export const wtReviewBranchChanged = t1((currentBranch: string) =>
 // Active tray / execution tree rows / workbench panel
 // ---------------------------------------------------------------------------
 
-export function trayCount(blocked: number, running: number, active: number, locale: HelmLocale = DEFAULT_HELM_LOCALE): string {
+export function trayCount(blocked: number, running: number, active: number, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
   if (blocked > 0) {
     return running > 0
       ? resolveLocalizedText(L(`${blocked} awaiting approval · ${running} running`, `${blocked} 项待审批 · ${running} 项运行中`), locale)
@@ -595,7 +595,7 @@ export function trayCount(blocked: number, running: number, active: number, loca
 export const TRAY_REGION_ARIA = L('In-flight orchestration tasks', '在途编排任务')
 export const TRAY_COLLAPSE = L('Collapse', '收起')
 export const TRAY_EXPAND = L('Expand', '展开')
-export function trayToggleLabel(expanded: boolean, countText: string, locale: HelmLocale = DEFAULT_HELM_LOCALE): string {
+export function trayToggleLabel(expanded: boolean, countText: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
   return resolveLocalizedText(
     L(
       `${expanded ? 'Collapse' : 'Expand'} in-flight tasks — ${countText}`,
@@ -605,13 +605,13 @@ export function trayToggleLabel(expanded: boolean, countText: string, locale: He
   )
 }
 export const TRAY_WORKBENCH = L('Workbench', '工作台')
-export function trayRowOpenConversationLabel(id: number, locale: HelmLocale = DEFAULT_HELM_LOCALE): string {
+export function trayRowOpenConversationLabel(id: number, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
   return resolveLocalizedText(L(`Open conversation #${id} drawer`, `打开会话 #${id} 抽屉`), locale)
 }
-export function trayRowOpenRunLabel(runId: string, locale: HelmLocale = DEFAULT_HELM_LOCALE): string {
+export function trayRowOpenRunLabel(runId: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
   return resolveLocalizedText(L(`Open run ${runId} in workbench`, `在工作台打开运行 ${runId}`), locale)
 }
-export function trayActionFailed(action: 'abort' | 'detach', err: string, locale: HelmLocale = DEFAULT_HELM_LOCALE): string {
+export function trayActionFailed(action: 'abort' | 'detach', err: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
   const label = resolveLocalizedText(action === 'abort' ? ACTION_ABORT : ACTION_DETACH, locale)
   return resolveLocalizedText(L(`${label} failed: ${err}`, `${label}失败：${err}`), locale)
 }
@@ -675,7 +675,7 @@ export function execFrontlineNamed(
   name: string,
   id: number,
   doing: string | undefined,
-  locale: HelmLocale = DEFAULT_HELM_LOCALE,
+  locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
 ): string {
   if (doing !== undefined && doing !== '') {
     return `${name} (#${id}) · ${doing}`

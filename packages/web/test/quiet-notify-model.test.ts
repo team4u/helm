@@ -6,11 +6,11 @@
  *   (blocked); multiple root trees isolated from each other; badgeUnknown as
  *   the global unknown gate;
  * - composeTreeCompletionNotification: single-tree completion and finish (any
- *   error → "Helm conversation finished" plus "Has failures"); spawned child
+ *   error → "Helmx conversation finished" plus "Has failures"); spawned child
  *   conversations merge to the highest surviving ancestor (cycles / missing
  *   parent summaries terminate finitely); an empty accumulation produces no
  *   notice;
- * - composeTreeBlockedNotification: waiting notices ("Helm is waiting for
+ * - composeTreeBlockedNotification: waiting notices ("Helmx is waiting for
  *   you"); multiple blocked conversations in one tree dedupe by root and jump
  *   to the most recently updated one; accumulated errors flagged honestly;
  * - getBlockedWatermark: any advance of seq or pendingAskCount yields a new
@@ -20,7 +20,7 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import type { ConversationSummary } from '@helm/protocol'
+import type { ConversationSummary } from '@helmx/protocol'
 import {
   COMPLETED_NOTIFICATION_TITLE,
   composeTreeBlockedNotification,
@@ -214,7 +214,7 @@ test('an empty accumulated participant set (machine never active) produces no co
   assert.equal(draft, null)
 })
 
-test('single-tree successful completion: title "Helm conversation completed", body "#id title", jumps to the root conversation', { timeout: 60_000 }, () => {
+test('single-tree successful completion: title "Helmx conversation completed", body "#id title", jumps to the root conversation', { timeout: 60_000 }, () => {
   const conversations = [
     conv({ id: 2, title: '重构侧栏', updatedAt: 9_000, status: 'done' }),
     conv({ id: 1, title: '并行中的另一棵树', updatedAt: 5_000, status: 'working' }),
@@ -226,7 +226,7 @@ test('single-tree successful completion: title "Helm conversation completed", bo
   })
   assert.ok(draft)
   assert.equal(draft.title, COMPLETED_NOTIFICATION_TITLE)
-  assert.equal(draft.title, 'Helm conversation completed')
+  assert.equal(draft.title, 'Helmx conversation completed')
   assert.equal(draft.body, '#2 重构侧栏')
   assert.equal(draft.primaryConversationId, 2)
 })
@@ -261,7 +261,7 @@ test('spawned child conversations merge into the root: children are neither list
   assert.equal(draft.primaryConversationId, 5)
 })
 
-test('any accumulated participant (root or child) in error: the title becomes "Helm conversation finished" flagged "Has failures"', { timeout: 60_000 }, () => {
+test('any accumulated participant (root or child) in error: the title becomes "Helmx conversation finished" flagged "Has failures"', { timeout: 60_000 }, () => {
   const childFailed = composeTreeCompletionNotification({
     rootId: 1,
     accumulatedConversationIds: new Set([1, 12]),
@@ -272,7 +272,7 @@ test('any accumulated participant (root or child) in error: the title becomes "H
   })
   assert.ok(childFailed)
   assert.equal(childFailed.title, ENDED_NOTIFICATION_TITLE)
-  assert.equal(childFailed.title, 'Helm conversation finished')
+  assert.equal(childFailed.title, 'Helmx conversation finished')
   assert.equal(childFailed.body, '#1 父会话 · Has failures')
   assert.equal(childFailed.primaryConversationId, 1)
 
@@ -336,7 +336,7 @@ test('getBlockedWatermark: any advance of stateChangeSeq or pendingAskCount yiel
   assert.notEqual(getBlockedWatermark({ stateChangeSeq: 3, pendingAskCount: 2 }), base)
 })
 
-test('one blocked conversation in a tree: title "Helm is waiting for you", jumps to that conversation', { timeout: 60_000 }, () => {
+test('one blocked conversation in a tree: title "Helmx is waiting for you", jumps to that conversation', { timeout: 60_000 }, () => {
   const conversations = [
     conv({ id: 1, title: '部署检查', status: 'blocked', pendingAskCount: 1, updatedAt: 500 }),
   ]

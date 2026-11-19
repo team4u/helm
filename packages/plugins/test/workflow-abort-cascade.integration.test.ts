@@ -1,14 +1,14 @@
 /**
- * 工作流级联取消端到端集成验收（真实 createHelm + faux provider + 真内核）。
+ * 工作流级联取消端到端集成验收（真实 createHelmx + faux provider + 真内核）。
  *
  * 覆盖（全部真实链路，绝不 mock WorkflowService / spawnAgent）：
  * - 父会话 abort（turn aborted）→ builtin:workflow turn_settled 钩子级联取消
- *   该会话子树内属于它的后台 run；受管（helm-owned）子会话经内核
+ *   该会话子树内属于它的后台 run；受管（helmx-owned）子会话经内核
  *   abortConversationGuarded 原子复核被中止；
  * - human 红线（真实内核）：ownership 翻转 human 的后代在「后台 run 取消」
  *   与「同步 spawn 信号桥」两条真实路径上均不被中止；
  * - 取消后不复活：级联边界内的下级父会话不再被 submitInput 汇报唤醒
- *   （无新 helm.input 回合）；边界外拥有者照常收到单次结算汇报；
+ *   （无新 helmx.input 回合）；边界外拥有者照常收到单次结算汇报；
  * - 深层投影：多级子树的 run 聚合进祖先分片（原始归属保留）、角标聚合。
  *
  * runner: tsx --test；每项显式 timeout: 60_000。
@@ -21,10 +21,10 @@ import { join } from 'node:path'
 
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { AssistantMessage } from '@earendil-works/pi-ai'
-import type { ConversationSummary } from '@helm/protocol'
+import type { ConversationSummary } from '@helmx/protocol'
 import type { WorkflowRunSummary } from '../src/contracts.js'
-import { createHelm } from '../../hub/src/app.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { createHelmx } from '../../hub/src/app.js'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { makeFauxProvider } from './helpers/plugin-test-env.js'
 
 const ROOT = 1
@@ -35,7 +35,7 @@ interface TurnSettledRecord {
 }
 
 interface Env {
-  app: Awaited<ReturnType<typeof createHelm>>
+  app: Awaited<ReturnType<typeof createHelmx>>
   dataDir: string
   settled: TurnSettledRecord[]
   /** 父会话响应队列（router 动态 shift）。 */
@@ -47,9 +47,9 @@ interface Env {
 }
 
 async function makeEnv(onEmpty: 'hang' | 'end' = 'hang'): Promise<Env> {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-wf-cascade-e2e-'))
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-wf-cascade-e2e-'))
   const faux = makeFauxProvider()
-  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider] })
+  const app = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider] })
   const settled: TurnSettledRecord[] = []
   // turn.settled 发布在内核事件总线（非宿主内部事件）：经 events.subscribe 观察。
   app.kernel.events.subscribe((frame) => {
@@ -173,15 +173,15 @@ test('父会话 abort 级联：子树后台 run 取消、受管子会话被中�
     }, '后台 run 级联取消至 aborted')
     await until(
       () => env.settled.some((s) => s.conversationId === childId && s.outcome === 'aborted'),
-      '受管（helm-owned）子会话经守卫中止后回合 aborted',
+      '受管（helmx-owned）子会话经守卫中止后回合 aborted',
     )
     await env.app.kernel.waitForIdle(ROOT).catch(() => {})
 
-    // 不复活：无 agent report 重新唤醒父会话（无新 helm.input、水位稳定）。
-    const inputsBefore = (await inputEntries(env, ROOT)).filter((e) => e.kind === 'helm.input').length
+    // 不复活：无 agent report 重新唤醒父会话（无新 helmx.input、水位稳定）。
+    const inputsBefore = (await inputEntries(env, ROOT)).filter((e) => e.kind === 'helmx.input').length
     const seqBefore = env.app.kernel.getConversation(ROOT).completionSeq
     await new Promise((r) => setTimeout(r, 400))
-    const inputsAfter = (await inputEntries(env, ROOT)).filter((e) => e.kind === 'helm.input').length
+    const inputsAfter = (await inputEntries(env, ROOT)).filter((e) => e.kind === 'helmx.input').length
     assert.equal(inputsAfter, inputsBefore, '取消边界内的结算汇报不得重新投递输入（防复活）')
     assert.equal(inputsBefore, 1, '父会话只有最初一条输入（后台 run 的 aborted 汇报被跳过）')
     assert.equal(env.app.kernel.getConversation(ROOT).completionSeq, seqBefore, '取消后无新回合')
@@ -242,7 +242,7 @@ test('human 红线（后台路径）：归属翻转 human 的子会话在 run �
   }
 })
 
-test('human 红线（同步信号桥）：父会话 abort 不杀 human 子会话，helm 子会话照常中止', { timeout: 60_000 }, async () => {
+test('human 红线（同步信号桥）：父会话 abort 不杀 human 子会话，helmx 子会话照常中止', { timeout: 60_000 }, async () => {
   const env = await makeEnv('hang')
   try {
     // 第一轮：同步 subagent（工具阻塞等子会话）；子会话转 human 后中止父会话。
@@ -268,10 +268,10 @@ test('human 红线（同步信号桥）：父会话 abort 不杀 human 子会话
     await new Promise((r) => setTimeout(r, 300))
     assert.equal(env.app.kernel.getConversation(childA!).status, 'working', 'human 子会话不被信号桥中止（真实内核守卫）')
 
-    // 第二轮（对照）：helm-owned 同步子会话 → 父 abort 后子会话被守卫中止。
+    // 第二轮（对照）：helmx-owned 同步子会话 → 父 abort 后子会话被守卫中止。
     env.parentQueue.push(
       fauxAssistantMessage(
-        [fauxToolCall('subagent', { prompt: 'HANG-CHILD 同步任务二', background: false }, { id: 'call-sync-helm' })],
+        [fauxToolCall('subagent', { prompt: 'HANG-CHILD 同步任务二', background: false }, { id: 'call-sync-helmx' })],
         { stopReason: 'toolUse' },
       ),
     )
@@ -284,9 +284,9 @@ test('human 红线（同步信号桥）：父会话 abort 不杀 human 子会话
     await env.app.kernel.abortConversation(ROOT)
     await until(
       () => env.settled.some((s) => s.conversationId === childB! && s.outcome === 'aborted'),
-      'helm-owned 子会话经守卫中止',
+      'helmx-owned 子会话经守卫中止',
     )
-    assert.equal(env.app.kernel.getConversation(childB!).status !== 'working', true, 'helm 子会话已停止')
+    assert.equal(env.app.kernel.getConversation(childB!).status !== 'working', true, 'helmx 子会话已停止')
 
     // 收尾挂起的 human 子会话。
     await env.app.kernel.abortConversation(childA!)
@@ -337,7 +337,7 @@ test('多级后台：中段会话 abort 级联取消其子树 run，深层 runs/
 
     // 中止 D（其回合在途挂起）→ turn aborted → 级联取消 D 子树内的二级 run；
     // 一级 run（发起者是 ROOT，不在 D 子树内）不被该边界取消。
-    const inputsDBefore = (await inputEntries(env, childD!)).filter((e) => e.kind === 'helm.input').length
+    const inputsDBefore = (await inputEntries(env, childD!)).filter((e) => e.kind === 'helmx.input').length
     await env.app.kernel.abortConversation(childD!)
     await until(async () => {
       const run = (await listRuns(env)).find((r) => r.id === level2.run.id)
@@ -345,12 +345,12 @@ test('多级后台：中段会话 abort 级联取消其子树 run，深层 runs/
     }, '二级 run 级联取消至 aborted')
     await until(
       () => env.settled.some((s) => s.conversationId === childD2! && s.outcome === 'aborted'),
-      '孙会话 D2（helm-owned）经守卫中止',
+      '孙会话 D2（helmx-owned）经守卫中止',
     )
 
     // 下级父会话不复活：D 不因二级 run 的取消被重新投递汇报输入。
     await new Promise((r) => setTimeout(r, 400))
-    const inputsDAfter = (await inputEntries(env, childD!)).filter((e) => e.kind === 'helm.input').length
+    const inputsDAfter = (await inputEntries(env, childD!)).filter((e) => e.kind === 'helmx.input').length
     assert.equal(inputsDAfter, inputsDBefore, '取消边界内的下级父会话无新汇报输入（防复活）')
 
     // 投影（取消后）：两级 run 终态仍在根分片；D 分片含自己的 run。

@@ -9,7 +9,7 @@
 import { mkdir, readFile, readdir, realpath, rm, stat } from 'node:fs/promises'
 import { join, sep } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
-import { HelmError, type ArtifactKind, type ArtifactMetadata } from '@helm/protocol'
+import { HelmxError, type ArtifactKind, type ArtifactMetadata } from '@helmx/protocol'
 import {
   FileNotFoundError,
   atomicWriteFile,
@@ -90,7 +90,7 @@ export function sanitizeUploadFilename(raw: string): string {
     name.includes('\0') ||
     /[\x00-\x1f\x7f]/.test(name)
   ) {
-    throw new HelmError('validation_error', `invalid artifact filename: ${raw}`, 400)
+    throw new HelmxError('validation_error', `invalid artifact filename: ${raw}`, 400)
   }
   return name
 }
@@ -256,7 +256,7 @@ export class ArtifactService {
     this.assertConversationId(conversationId)
     const safeName = sanitizeUploadFilename(input.name)
     if (input.bytes.byteLength > MAX_ARTIFACT_BYTES) {
-      throw new HelmError(
+      throw new HelmxError(
         'artifact_too_large',
         `artifact size exceeds 15 MiB limit (${input.bytes.byteLength} > ${MAX_ARTIFACT_BYTES})`,
         413,
@@ -273,7 +273,7 @@ export class ArtifactService {
     // never recreate the directory of a deleted conversation as an orphan.
     return this.runOnConversationChain(conversationId, async () => {
       if (deps !== undefined && !(await deps.conversationExists(conversationId))) {
-        throw new HelmError('not_found', `conversation not found: ${conversationId}`, 404, { conversationId })
+        throw new HelmxError('not_found', `conversation not found: ${conversationId}`, 404, { conversationId })
       }
       const id = randomUUID()
       const storedName = `${id}-${safeName}`

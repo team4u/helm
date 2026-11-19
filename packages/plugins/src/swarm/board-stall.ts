@@ -3,7 +3,7 @@
  * - At-Most-Once Silent-Exit Nudge 判定（单次确定性续催 -> 二次命中代发 [blocker] 结清）；
  * - 6 条件全组静默检测与 3 类根因精确归因（未唤醒悬空产出 / 已读未回帖 / 全员待命未结单）。
  */
-import { escapeXml } from '@helm/protocol'
+import { escapeXml } from '@helmx/protocol'
 import type { BoardPost, CollabGroupRecord, GroupMemberState, MemberLiveState } from './contracts.js'
 
 export type SilentExitAction =

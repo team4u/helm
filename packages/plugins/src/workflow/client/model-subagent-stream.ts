@@ -3,8 +3,8 @@
  * tool lines and expansion of the live subagent stream (toolCall / toolResult
  * pairing, live stream merging, stat suffix; zero React/DOM dependencies).
  */
-import type { ConversationEntry, ConversationLive, ConversationSummary } from '@helm/protocol'
-import { DEFAULT_HELM_LOCALE, resolveLocalizedText, type HelmLocale } from '@helm/plugin-client'
+import type { ConversationEntry, ConversationLive, ConversationSummary } from '@helmx/protocol'
+import { DEFAULT_HELMX_LOCALE, resolveLocalizedText, type HelmxLocale } from '@helmx/plugin-client'
 import type { WorkflowRunSummary } from '../../contracts.js'
 import { firstLineOf, formatShortModelName, inputString } from './model-format.ts'
 import { statToolSteps, TOOL_TAG_EDIT, TOOL_TAG_FIND, TOOL_TAG_READ, TOOL_TAG_SEARCH, TOOL_TAG_WRITE } from './copy.ts'
@@ -58,7 +58,7 @@ export function formatSemanticToolAction(
   toolName: string,
   input: unknown,
   cwd?: string,
-  locale: HelmLocale = DEFAULT_HELM_LOCALE,
+  locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
 ): { tag: string; text: string } {
   switch (toolName) {
     case 'bash': {
@@ -131,8 +131,8 @@ export function buildSubagentStreamLines(
   let liveTextConsumed = false
   let seq = 0
   for (const entry of entries) {
-    if (entry.kind === 'helm.input' || entry.kind === 'pi.user') {
-      const text = entry.kind === 'helm.input'
+    if (entry.kind === 'helmx.input' || entry.kind === 'pi.user') {
+      const text = entry.kind === 'helmx.input'
         ? (entry.data !== null && typeof entry.data === 'object' && !Array.isArray(entry.data) ? (entry.data as Record<string, unknown>)['text'] : undefined)
         : undefined
       const finalText = typeof text === 'string' ? text : ''
@@ -281,7 +281,7 @@ export function buildSubagentStatSegments(
     modelOverride?: string
     tokensOverride?: number
   },
-  locale: HelmLocale = DEFAULT_HELM_LOCALE,
+  locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
 ): string[] {
   const segments: string[] = []
   const shortModel = formatShortModelName(input.modelOverride || input.summary?.model || input.backgroundRun?.nodes?.[0]?.model)

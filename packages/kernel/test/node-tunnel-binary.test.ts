@@ -14,7 +14,7 @@ import { execFile, spawn } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
-import { withTimeout } from '@helm/test-kit'
+import { withTimeout } from '@helmx/test-kit'
 import { mkdtempSync, rmSync } from 'node:fs'
 import {
   attachNodeWsGateway,
@@ -22,12 +22,12 @@ import {
   createEnvFabric,
   type EnvFabric,
 } from '../src/env/index.js'
-import { createNodeDaemon } from '@helm/node'
+import { createNodeDaemon } from '@helmx/node'
 
 let rootDir: string
 
 before(async () => {
-  rootDir = mkdtempSync(join(tmpdir(), 'helm-tunnel-bin-'))
+  rootDir = mkdtempSync(join(tmpdir(), 'helmx-tunnel-bin-'))
 })
 
 after(async () => {
@@ -123,7 +123,7 @@ test('arbitrary TCP: request-response-shutdown flushes completely without trunca
   // Server waits for 'req', writes a large response, then closes. Hub keeps the write side open and
   // closes only after reading the full response -- verifying shutdown flushes completely without tail loss.
   // (Note: WS tunnels lack TCP half-close -- duplex.end closes the whole stream, so FIN half-close is not
-  // tested here; node-side pipe end-flush semantics are covered by @helm/node's node-tunnel.test.ts.)
+  // tested here; node-side pipe end-flush semantics are covered by @helmx/node's node-tunnel.test.ts.)
   const response = Buffer.alloc(2 * 1024 * 1024, 0x52)
   const server = net.createServer((socket) => {
     socket.on('error', () => undefined)
@@ -228,8 +228,8 @@ test('nodeFetch HTTPS: local TLS fixture completes real TLS request over tunnel 
   // client verifies certificates via default trust store + test CA, never skipping TLS verification.
   const reqPhase = await runFixture(['request'], {
     NODE_EXTRA_CA_CERTS: paths.caCert,
-    HELM_TUNNEL_TLS_KEY: paths.key,
-    HELM_TUNNEL_TLS_CERT: paths.cert,
+    HELMX_TUNNEL_TLS_KEY: paths.key,
+    HELMX_TUNNEL_TLS_CERT: paths.cert,
   })
   let result: { ok?: boolean; status?: number; body?: string; error?: string }
   try {

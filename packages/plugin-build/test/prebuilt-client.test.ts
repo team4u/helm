@@ -1,7 +1,7 @@
 /**
  * Tests for `buildPluginClientBundleDir` and prebuilt chunk lookup via `installNodeChunkBridge`:
  * - Explicit `modules` vs auto-scanning `clientRoot` (ignoring `.d.ts` / `node_modules` / dotfiles);
- * - CSS bundling (`__helmClientCss`), shared host shims (`__helm_shared_*`), `.gz` pre-compression;
+ * - CSS bundling (`__helmxClientCss`), shared host shims (`__helmx_shared_*`), `.gz` pre-compression;
  * - Code splitting (`import()`) + controlled `npmRoots` + Node runtime execution via `installNodeChunkBridge`;
  * - Failing compilation leaves no half-written `outDir` behind.
  */
@@ -12,19 +12,19 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { gunzipSync } from 'node:zlib'
 import {
-  HelmError,
+  HelmxError,
   PLUGIN_CLIENT_CSS_EXPORT,
   PREBUILT_CLIENT_MANIFEST_FILE,
   PREBUILT_CLIENT_MANIFEST_VERSION,
   assertPrebuiltClientManifest,
   prebuiltChunkFileName,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 import { buildPluginClientBundleDir, installNodeChunkBridge } from '../src/index.js'
 
 let workDir: string
 
 beforeEach(() => {
-  workDir = mkdtempSync(join(tmpdir(), 'helm-prebuilt-client-'))
+  workDir = mkdtempSync(join(tmpdir(), 'helmx-prebuilt-client-'))
 })
 
 afterEach(() => {
@@ -70,7 +70,7 @@ test('buildPluginClientBundleDir: auto-scans non-declaration modules, writes man
   const jsText = readFileSync(join(outDir, indexEntry.entryFile), 'utf8')
   const gzBytes = readFileSync(join(outDir, `${indexEntry.entryFile}.gz`))
   assert.equal(gunzipSync(gzBytes).toString('utf8'), jsText)
-  assert.match(jsText, /__helm_shared_react/)
+  assert.match(jsText, /__helmx_shared_react/)
   assert.match(jsText, /prebuilt-card/)
 })
 
@@ -114,8 +114,8 @@ test('buildPluginClientBundleDir: supports explicit modules, controlled npmRoots
   }
 
   const g = globalThis as Record<string, unknown>
-  const prevBridge = g.__helm_import_chunk
-  const prevLookup = g.__helm_node_chunk_lookup
+  const prevBridge = g.__helmx_import_chunk
+  const prevLookup = g.__helmx_node_chunk_lookup
   try {
     installNodeChunkBridge([outDir])
     const entryJs = readFileSync(join(outDir, entry.entryFile), 'utf8')
@@ -124,8 +124,8 @@ test('buildPluginClientBundleDir: supports explicit modules, controlled npmRoots
     }
     assert.equal(await mod.renderAsync(), 'chart:prebuilt')
   } finally {
-    g.__helm_import_chunk = prevBridge
-    g.__helm_node_chunk_lookup = prevLookup
+    g.__helmx_import_chunk = prevBridge
+    g.__helmx_node_chunk_lookup = prevLookup
   }
 })
 
@@ -137,15 +137,15 @@ test('buildPluginClientBundleDir: rejects empty modules, missing clientRoot, and
 
   await assert.rejects(
     buildPluginClientBundleDir({ pluginId: 'test:empty', clientRoot, outDir, modules: [] }),
-    (err: unknown) => err instanceof HelmError && err.code === 'invalid_client_module',
+    (err: unknown) => err instanceof HelmxError && err.code === 'invalid_client_module',
   )
   await assert.rejects(
     buildPluginClientBundleDir({ pluginId: 'test:missing', clientRoot: join(workDir, 'nope'), outDir }),
-    (err: unknown) => err instanceof HelmError && err.code === 'client_root_invalid',
+    (err: unknown) => err instanceof HelmxError && err.code === 'client_root_invalid',
   )
   await assert.rejects(
     buildPluginClientBundleDir({ pluginId: 'test:syntax', clientRoot, outDir }),
-    (err: unknown) => err instanceof HelmError && err.code === 'client_compile_failed',
+    (err: unknown) => err instanceof HelmxError && err.code === 'client_compile_failed',
   )
   assert.equal(existsSync(outDir), false, 'failed prebuild must not leave partial outDir on disk')
 })

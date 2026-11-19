@@ -16,7 +16,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { access, mkdir } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { HelmError, type Profile } from '@helm/protocol'
+import { HelmxError, type Profile } from '@helmx/protocol'
 
 /** 托管本插件自举资产的插件 ID（managedByPlugin 标记值）。 */
 const SUPERAGENT_MANAGED_BY = 'builtin:superagent'
@@ -32,13 +32,13 @@ export function renderSkillTemplate(
   const rendered = template.replace(/\{\{\s*([A-Za-z0-9_]+)\s*\}\}/g, (_match, key: string) => {
     const val = vars[key]
     if (val === undefined) {
-      throw new HelmError('unreplaced_skill_placeholder', `技能模板存在未定义占位符: {{${key}}}`, 500, { key })
+      throw new HelmxError('unreplaced_skill_placeholder', `技能模板存在未定义占位符: {{${key}}}`, 500, { key })
     }
     return val
   })
   const remaining = rendered.match(/\{\{[^}]*\}\}/)
   if (remaining !== null) {
-    throw new HelmError(
+    throw new HelmxError(
       'unreplaced_skill_placeholder',
       `技能模板渲染后仍残留未替换占位符 ${remaining[0]}`,
       500,
@@ -58,7 +58,7 @@ function resolveSuperagentAssetsDir(): string {
   const candidate2 = join(pkgRoot, 'src', 'superagent', 'assets')
   if (existsSync(candidate2)) return candidate2
 
-  throw new HelmError(
+  throw new HelmxError(
     'superagent_asset_missing',
     `内置 superagent 资产目录未找到（tried: "${candidate1}", "${candidate2}"）`,
     500,

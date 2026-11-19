@@ -25,7 +25,7 @@
  *   超 64k 字符上限显式截断并附说明，绝不静默截断。
  */
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
-import { HelmError, escapeXml, pathRulesForShape, targetPathShape } from '@helm/protocol'
+import { HelmxError, escapeXml, pathRulesForShape, targetPathShape } from '@helmx/protocol'
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env'
 
 
@@ -48,7 +48,7 @@ export const MAX_AGENTS_MD_CHARS = 64_000
 export const MAX_AGENTS_MD_BYTES = 256 * 1024
 
 /** 超限截断显式说明（附在截断内容之后，绝不静默截断）。 */
-const AGENTS_MD_TRUNCATION_NOTE = `\n[ helm 提示：AGENTS.md 超过 ${MAX_AGENTS_MD_CHARS} 字符上限，以上为前 ${MAX_AGENTS_MD_CHARS} 字符 ]`
+const AGENTS_MD_TRUNCATION_NOTE = `\n[ helmx 提示：AGENTS.md 超过 ${MAX_AGENTS_MD_CHARS} 字符上限，以上为前 ${MAX_AGENTS_MD_CHARS} 字符 ]`
 
 /** AGENTS.md 正文按 UTF-8 解码（非法序列替换为 U+FFFD，与 readTextFile 同口径）。 */
 const AGENTS_MD_UTF8_DECODER = new TextDecoder('utf-8')
@@ -74,7 +74,7 @@ function unavailableSection(agentsPath: string, nodeId: string, body: string): A
 }
 
 function errorCodeOf(err: unknown): string {
-  return err instanceof HelmError ? err.code : 'unknown'
+  return err instanceof HelmxError ? err.code : 'unknown'
 }
 
 function errorMessageOf(err: unknown): string {

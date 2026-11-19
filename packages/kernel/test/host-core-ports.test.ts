@@ -18,7 +18,7 @@ import { PassThrough } from 'node:stream'
 import http from 'node:http'
 import net from 'node:net'
 import { setTimeout as delay } from 'node:timers/promises'
-import { HelmError, type HelmHostApi, type PluginDefinition } from '@helm/protocol'
+import { HelmxError, type HelmxHostApi, type PluginDefinition } from '@helmx/protocol'
 import {
   PluginHost,
   type PluginHostBackend,
@@ -26,7 +26,7 @@ import {
 import { projectToolPromptSections } from '../src/runtime/runtime-helpers.js'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { MemoryDocStore, deferred, makeConversationSummary, makeFauxModels, useTempDir } from './helpers.js'
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
 import { KernelRuntime } from '../src/runtime/index.js'
@@ -76,7 +76,7 @@ function makeBackend(over: {
       readFile: async () => '',
       directory: async (id) => {
         if (!/^[a-z0-9][a-z0-9-]*$/.test(id)) {
-          throw new HelmError('validation_error', `invalid skill id: ${id}`, 400, { skillId: id })
+          throw new HelmxError('validation_error', `invalid skill id: ${id}`, 400, { skillId: id })
         }
         return `/data/skills/${id}`
       },
@@ -119,9 +119,9 @@ function makeBackend(over: {
     getConversationDetail: async (id) => ({ ...makeConversation(id), entries: [] }) as never,
     updateConversation: async (id) => makeConversation(id),
     abortConversation: async () => {},
-    getConversationOwnership: () => 'helm',
+    getConversationOwnership: () => 'helmx',
     listArtifacts: async () => [],
-    getArtifact: async () => { throw new HelmError('not_found', 'no artifact', 404) },
+    getArtifact: async () => { throw new HelmxError('not_found', 'no artifact', 404) },
     refreshModels: async () => ({ providers: [], aborted: false, errors: {}, models: [], providerCatalog: [] }),
     withFileLock: async (_p, fn) => fn(),
     atomicWriteFile: async () => {},
@@ -159,7 +159,7 @@ function makeBackend(over: {
                 'abort',
                 () => {
                   clearTimeout(timer)
-                  reject(new HelmError('aborted', 'tunnel establishment aborted', 499))
+                  reject(new HelmxError('aborted', 'tunnel establishment aborted', 499))
                 },
                 { once: true },
               )
@@ -173,7 +173,7 @@ function makeBackend(over: {
 let dataDir: string
 
 test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
-  dataDir = useTempDir(t, 'helm-host-core-')
+  dataDir = useTempDir(t, 'helmx-host-core-')
 
   await t.test('epoch guard: post-disable calls on stale host handle reject 409 plugin_context_expired', async () => {
     const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: makeBackend({}), docs: new MemoryDocStore() })
@@ -206,7 +206,7 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
     ]
     for (const call of expired) {
       await assert.rejects(async () => call(), (err: unknown) => {
-        assert.ok(err instanceof HelmError, `expected HelmError, got ${String(err)}`)
+        assert.ok(err instanceof HelmxError, `expected HelmxError, got ${String(err)}`)
         assert.equal(err.code, 'plugin_context_expired')
         return true
       })
@@ -255,7 +255,7 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
     await new Promise((r) => setTimeout(r, 5))
     releaseFirst!()
     await assert.rejects(second, (err: unknown) =>
-      err instanceof HelmError &&
+      err instanceof HelmxError &&
       (err.code === 'plugin_context_expired' || err.code === 'plugin_host_disposed'),
     )
   })
@@ -316,13 +316,13 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
     assert.equal(stub.calls.length, 1, 'backend openTunnel invoked')
     await assert.rejects(
       host.disable('p:tunnel'),
-      (err: unknown) => err instanceof HelmError && err.code === 'plugin_has_live_tasks' && err.status === 409,
+      (err: unknown) => err instanceof HelmxError && err.code === 'plugin_has_live_tasks' && err.status === 409,
     )
     const duplex = await opening
     // 2) Active Duplex remains open after setup finishes: counter stays held (regression against immediate withTask release).
     await assert.rejects(
       host.disable('p:tunnel'),
-      (err: unknown) => err instanceof HelmError && err.code === 'plugin_has_live_tasks',
+      (err: unknown) => err instanceof HelmxError && err.code === 'plugin_has_live_tasks',
       'disable must return 409 while Duplex is active instead of dropping counter on setup resolve',
     )
     // 3) Duplex closes: task settles once and disable succeeds again.
@@ -332,7 +332,7 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
 
     // 4) Failure path (separate plugin to avoid epoch change invalidating handle):
     // setup failure ends task immediately without leaking count -> disable succeeds cleanly.
-    stub.failures.push(new HelmError('node_tunnel_connect_failed', 'setup failed', 502))
+    stub.failures.push(new HelmxError('node_tunnel_connect_failed', 'setup failed', 502))
     let hostApi2: typeof hostApi | undefined
     const defFail: PluginDefinition = {
       id: 'p:tunnel2',
@@ -343,7 +343,7 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
     await host.register(defFail, { enabled: true })
     await assert.rejects(
       hostApi2!.openTunnel('remote-1', { port: 5432 }),
-      (err: unknown) => err instanceof HelmError && err.code === 'node_tunnel_connect_failed',
+      (err: unknown) => err instanceof HelmxError && err.code === 'node_tunnel_connect_failed',
     )
     await host.disable('p:tunnel2')
     await host.unregister('p:tunnel').catch(() => {})
@@ -364,7 +364,7 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
     }, { highWaterMark: 0 })))) as typeof fetch
     const backend = makeBackend({ nodeFetch: () => raw })
     const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: backend, docs: new MemoryDocStore() })
-    let api!: HelmHostApi
+    let api!: HelmxHostApi
     await host.register({ id: 'p:fetch-flow', definePlugin(ctx) { api = ctx.host } }, { enabled: true })
     try {
       const response = await api.nodeFetch('remote-1')('http://example.test')
@@ -396,7 +396,7 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
       return response
     }) as typeof fetch
     const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: makeBackend({ nodeFetch: () => raw }), docs: new MemoryDocStore() })
-    let api!: HelmHostApi
+    let api!: HelmxHostApi
     await host.register({
       id: 'p:fetch-wrap-fail',
       definePlugin: (ctx) => { api = ctx.host },
@@ -423,7 +423,7 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
     }, { highWaterMark: 0 })))) as typeof fetch
     const backend = makeBackend({ nodeFetch: () => raw })
     const host = new PluginHost({ dataDir, host: backend, docs: new MemoryDocStore() })
-    let api!: HelmHostApi
+    let api!: HelmxHostApi
     await host.register({ id: 'p:fetch-abandon', definePlugin(ctx) { api = ctx.host } }, { enabled: true })
     try {
       const response = await api.nodeFetch('remote-1')('http://example.test')
@@ -464,7 +464,7 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
     const base = `http://127.0.0.1:${(server.address() as net.AddressInfo).port}`
     const backend = makeBackend({ nodeFetch: () => globalThis.fetch as typeof fetch })
     const host = new PluginHost({ dataDir, host: backend, docs: new MemoryDocStore() })
-    let api!: HelmHostApi
+    let api!: HelmxHostApi
     await host.register({ id: 'p:fetch-dispose', definePlugin(ctx) { api = ctx.host } }, { enabled: true })
     try {
       // --- Unending local body: abandoned (unconsumed/uncanceled); dispose actually closes connection ---
@@ -484,7 +484,7 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
 
       // --- Pre-header pending request: dispose rejects fetch promise with abort error ---
       const host2 = new PluginHost({ dataDir, host: makeBackend({ nodeFetch: () => globalThis.fetch as typeof fetch }), docs: new MemoryDocStore() })
-      let api2!: HelmHostApi
+      let api2!: HelmxHostApi
       await host2.register({ id: 'p:fetch-pending', definePlugin(ctx) { api2 = ctx.host } }, { enabled: true })
       const pending = api2.nodeFetch('local')(`${base}/pending`)
       await delay(50) // request sent, headers not yet returned
@@ -492,7 +492,7 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
       await assert.rejects(() => pending, (error: unknown) => {
         // Cleanup aborts using host disposal reason; undici rejects with signal.reason
         // (deterministic ownership); compatible layers may rethrow AbortError.
-        if (error instanceof HelmError && error.code === 'plugin_host_disposed') return true
+        if (error instanceof HelmxError && error.code === 'plugin_host_disposed') return true
         const name = error instanceof Error ? error.name : String(error)
         return name === 'AbortError' || /abort/i.test(String((error as { message?: string }).message ?? name))
       })
@@ -518,7 +518,7 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
     const base = `http://127.0.0.1:${(server.address() as net.AddressInfo).port}`
     const backend = makeBackend({ nodeFetch: () => globalThis.fetch as typeof fetch })
     const host = new PluginHost({ dataDir, host: backend, docs: new MemoryDocStore() })
-    let api!: HelmHostApi
+    let api!: HelmxHostApi
     await host.register({ id: 'p:fetch-signal', definePlugin(ctx) { api = ctx.host } }, { enabled: true })
     try {
       // 1) Request's original signal is aborted, but init supplies an active signal: request must succeed
@@ -573,7 +573,7 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
       },
     }
     const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: backend, docs: new MemoryDocStore() })
-    let api!: HelmHostApi
+    let api!: HelmxHostApi
     await host.register({
       id: 'p:cfg',
       definePlugin: (ctx) => { api = ctx.host },
@@ -595,7 +595,7 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
     for (const delayMs of [0, 20]) {
       const stub: OpenTunnelStub = { calls: [], delayMs, duplexes: [], failures: [] }
       const host = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: makeBackend({ openTunnel: stub }), docs: new MemoryDocStore() })
-      let api!: HelmHostApi
+      let api!: HelmxHostApi
       await host.register({ id: `p:tunnel-dispose-${delayMs}`, definePlugin(ctx) { api = ctx.host } }, { enabled: true })
       const opening = api.openTunnel('local', { port: 9000 })
       if (delayMs === 0) {
@@ -604,7 +604,7 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
         assert.equal(duplex.destroyed, true)
       } else {
         const rejected = assert.rejects(opening, (error: unknown) =>
-          error instanceof HelmError && (error.code === 'plugin_host_disposed' || error.code === 'plugin_context_expired'))
+          error instanceof HelmxError && (error.code === 'plugin_host_disposed' || error.code === 'plugin_context_expired'))
         await host.dispose()
         await rejected
         assert.equal(stub.duplexes[0]?.destroyed, true)
@@ -685,7 +685,7 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
     await delay(10)
     await assert.rejects(
       () => host.disable('p:fork-live'),
-      (err: unknown) => err instanceof HelmError && err.status === 409 && err.code === 'plugin_has_live_tasks',
+      (err: unknown) => err instanceof HelmxError && err.status === 409 && err.code === 'plugin_has_live_tasks',
     )
     resolveFork({ ...makeConversation(101), parentConversationId: 1, title: 'in-flight' })
     const stubForked = await pendingFork
@@ -694,11 +694,11 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
     await host.disable('p:fork-live')
     await assert.rejects(
       async () => liveHost!.forkConversation(1, { entryId: 1 }),
-      (err: unknown) => err instanceof HelmError && err.status === 409 && err.code === 'plugin_context_expired',
+      (err: unknown) => err instanceof HelmxError && err.status === 409 && err.code === 'plugin_context_expired',
     )
 
     // 2. Real KernelRuntime end-to-end wiring: 400/404 validation, normal inheritance on fork, and post-disable expiry.
-    const rtDir = useTempDir(sub, 'helm-host-fork-rt-')
+    const rtDir = useTempDir(sub, 'helmx-host-fork-rt-')
     const { models, faux } = makeFauxModels()
     faux.setResponses([fauxAssistantMessage('recorded passcode ALPHA-99')])
     const runtime = await KernelRuntime.open({
@@ -709,7 +709,7 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
       model: 'faux/faux-1',
     })
     try {
-      let realHost: HelmHostApi | undefined
+      let realHost: HelmxHostApi | undefined
       await runtime.plugins.register({
         id: 'p:fork-real',
         definePlugin(ctx) {
@@ -740,16 +740,16 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
       for (const badEntryId of [0, -1, 1.5]) {
         await assert.rejects(
           () => realHost!.forkConversation(parent.id, { entryId: badEntryId }),
-          (err: unknown) => err instanceof HelmError && err.status === 400 && err.code === 'validation_error',
+          (err: unknown) => err instanceof HelmxError && err.status === 400 && err.code === 'validation_error',
         )
       }
       await assert.rejects(
         () => realHost!.forkConversation(999999, { entryId: lastEntryId }),
-        (err: unknown) => err instanceof HelmError && err.status === 404 && err.code === 'not_found',
+        (err: unknown) => err instanceof HelmxError && err.status === 404 && err.code === 'not_found',
       )
       await assert.rejects(
         () => realHost!.forkConversation(parent.id, { entryId: 999999 }),
-        (err: unknown) => err instanceof HelmError && err.status === 404 && err.code === 'not_found',
+        (err: unknown) => err instanceof HelmxError && err.status === 404 && err.code === 'not_found',
       )
 
       const forked = await realHost!.forkConversation(parent.id, {
@@ -778,13 +778,13 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
       })
       await assert.rejects(
         () => realHost!.forkConversation(emptyParent.id),
-        (err: unknown) => err instanceof HelmError && err.status === 409 && err.code === 'fork_empty_history',
+        (err: unknown) => err instanceof HelmxError && err.status === 409 && err.code === 'fork_empty_history',
       )
 
       await runtime.plugins.disable('p:fork-real')
       await assert.rejects(
         async () => realHost!.forkConversation(parent.id, { entryId: lastEntryId }),
-        (err: unknown) => err instanceof HelmError && err.status === 409 && err.code === 'plugin_context_expired',
+        (err: unknown) => err instanceof HelmxError && err.status === 409 && err.code === 'plugin_context_expired',
       )
     } finally {
       await runtime.close()
@@ -792,7 +792,7 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
   })
 
   await t.test('ctx.host.createArtifact + submitInput attachments: real runtime wiring end-to-end', { timeout: 60_000 }, async (sub) => {
-    const rtDir = useTempDir(sub, 'helm-host-attach-rt-')
+    const rtDir = useTempDir(sub, 'helmx-host-attach-rt-')
     const { models, faux } = makeFauxModels()
     // Response factory echoes whether the attachment manifest reached the model transcript.
     faux.setResponses([
@@ -809,7 +809,7 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
       model: 'faux/faux-1',
     })
     try {
-      let realHost: HelmHostApi | undefined
+      let realHost: HelmxHostApi | undefined
       await runtime.plugins.register({
         id: 'p:attach-real',
         definePlugin(ctx) {
@@ -838,11 +838,11 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
       // Boundary rejections before any write: missing conversation, invalid filename.
       await assert.rejects(
         () => realHost!.createArtifact(999999, { name: 'a.txt', bytes: new TextEncoder().encode('x') }),
-        (err: unknown) => err instanceof HelmError && err.status === 404 && err.code === 'not_found',
+        (err: unknown) => err instanceof HelmxError && err.status === 404 && err.code === 'not_found',
       )
       await assert.rejects(
         () => realHost!.createArtifact(conv.id, { name: '../evil', bytes: new TextEncoder().encode('x') }),
-        (err: unknown) => err instanceof HelmError && err.status === 400 && err.code === 'validation_error',
+        (err: unknown) => err instanceof HelmxError && err.status === 400 && err.code === 'validation_error',
       )
 
       // Happy path: text artifact + image artifact, both visible via listArtifacts.
@@ -872,16 +872,16 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
       })
       await assert.rejects(
         () => realHost!.submitInput(conv.id, 'x', { attachments: [siblingMeta.id] }),
-        (err: unknown) => err instanceof HelmError && err.status === 403 && err.code === 'artifact_forbidden',
+        (err: unknown) => err instanceof HelmxError && err.status === 403 && err.code === 'artifact_forbidden',
       )
       await assert.rejects(
         () => realHost!.submitInput(conv.id, 'x', { attachments: ['no-such-artifact'] }),
-        (err: unknown) => err instanceof HelmError && err.status === 404 && err.code === 'not_found',
+        (err: unknown) => err instanceof HelmxError && err.status === 404 && err.code === 'not_found',
       )
       await assert.rejects(
         // Shape gate at the shared submission entry: non-string elements never reach resolution.
         () => realHost!.submitInput(conv.id, 'x', { attachments: [42] as unknown as string[] }),
-        (err: unknown) => err instanceof HelmError && err.status === 400 && err.code === 'validation_error',
+        (err: unknown) => err instanceof HelmxError && err.status === 400 && err.code === 'validation_error',
       )
 
       // Full relay: submitInput with attachments reaches the model with the [Attached Files] manifest.
@@ -909,14 +909,14 @@ test('host public mechanism suite', { timeout: 60_000 }, async (t) => {
       await runtime.deleteConversation(other.id)
       await assert.rejects(
         () => realHost!.createArtifact(other.id, { name: 'late.txt', bytes: new TextEncoder().encode('x') }),
-        (err: unknown) => err instanceof HelmError && err.status === 404 && err.code === 'not_found',
+        (err: unknown) => err instanceof HelmxError && err.status === 404 && err.code === 'not_found',
       )
 
       await runtime.plugins.disable('p:attach-real')
       // Wrap async: the epoch guard throws synchronously before entering the async backend call.
       await assert.rejects(
         async () => realHost!.createArtifact(conv.id, { name: 'late.txt', bytes: new TextEncoder().encode('x') }),
-        (err: unknown) => err instanceof HelmError && err.status === 409 && err.code === 'plugin_context_expired',
+        (err: unknown) => err instanceof HelmxError && err.status === 409 && err.code === 'plugin_context_expired',
       )
     } finally {
       await runtime.close()

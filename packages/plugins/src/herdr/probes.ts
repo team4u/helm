@@ -169,7 +169,7 @@ export class HerdrProbeCollector {
       targetId: pane.paneId,
       targetKind: 'external' as const,
       nodeId: nodeIdOf(pane) ?? 'local',
-      ownedBy: 'helm' as const,
+      ownedBy: 'helmx' as const,
       status,
       ...(authoritySeq !== undefined ? { stateChangeSeq: authoritySeq } : {}),
       stalledMs,

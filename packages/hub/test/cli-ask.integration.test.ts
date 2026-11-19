@@ -1,4 +1,4 @@
-/** 单次问答真实 CLI → HTTP → SDK 回合契约（共享单实例 createHelm + startHub）。 */
+/** 单次问答真实 CLI → HTTP → SDK 回合契约（共享单实例 createHelmx + startHub）。 */
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import assert from 'node:assert/strict'
 import { after, before, test } from 'node:test'
@@ -8,7 +8,7 @@ import { openHubHttpEnv, type HubHttpTestEnv } from './helpers/hub-test-env.js'
 let env: HubHttpTestEnv
 
 before(async () => {
-  env = await openHubHttpEnv({ prefix: 'helm-cli-ask-' })
+  env = await openHubHttpEnv({ prefix: 'helmx-cli-ask-' })
 }, { timeout: 60_000 })
 
 after(async () => {
@@ -19,7 +19,7 @@ async function ask(args: string[], stdinText?: string) {
   let out = ''
   let err = ''
   const code = await runCli(['ask', ...args, '--json'], {
-    env: { HELM_HUB_URL: env.hubUrl, HELM_TOKEN: env.token, HELM_DATA_DIR: env.dataDir },
+    env: { HELMX_HUB_URL: env.hubUrl, HELMX_TOKEN: env.token, HELMX_DATA_DIR: env.dataDir },
     stdout: (text) => { out += text },
     stderr: (text) => { err += text },
     stdin: { isTTY: stdinText === undefined, readAll: async () => stdinText ?? '' },
@@ -27,7 +27,7 @@ async function ask(args: string[], stdinText?: string) {
   return { code, out, err }
 }
 
-test('helm ask 真实回合：回答与持久条目同源，管道内容写入本次输入', { timeout: 60_000 }, async () => {
+test('helmx ask 真实回合：回答与持久条目同源，管道内容写入本次输入', { timeout: 60_000 }, async () => {
   env.faux.setResponses([fauxAssistantMessage('real question answer result')])
   const result = await ask(['analyze or fewer content'], 'log fragment')
   assert.equal(result.code, 0, result.err)
@@ -39,7 +39,7 @@ test('helm ask 真实回合：回答与持久条目同源，管道内容写入�
   assert.match(JSON.stringify(detail.entries), /analyze or fewer content\\n\\nlog fragment/)
 })
 
-test('helm ask --delete-on-success 真实删除本次会话并保留其他会话', { timeout: 60_000 }, async () => {
+test('helmx ask --delete-on-success 真实删除本次会话并保留其他会话', { timeout: 60_000 }, async () => {
   const beforeIds = env.kernel.listConversations().map((conversation) => conversation.id)
   env.faux.setResponses([fauxAssistantMessage('can clean up result')])
   const result = await ask(['mention question', '--delete-on-success'])
@@ -51,7 +51,7 @@ test('helm ask --delete-on-success 真实删除本次会话并保留其他会话
   assert.deepEqual(env.kernel.listConversations().map((conversation) => conversation.id), beforeIds)
 })
 
-test('helm ask 真实模型失败：非零退出并保留可排查会话', { timeout: 60_000 }, async () => {
+test('helmx ask 真实模型失败：非零退出并保留可排查会话', { timeout: 60_000 }, async () => {
   env.faux.setResponses([fauxAssistantMessage('failed', { errorMessage: 'ask integration failure', stopReason: 'error' })])
   const result = await ask(['mention question', '--delete-on-success'])
   assert.notEqual(result.code, 0)

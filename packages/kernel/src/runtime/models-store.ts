@@ -7,14 +7,14 @@
  * - Serialize read/write/delete per canonical file path inside the process via `withFileLock` + atomic
  *   writes (`0600`) so concurrent updates never clobber each other;
  * - Return an empty catalog when the file is missing (`ENOENT`); explicitly throw
- *   `HelmError('models_store_corrupted')` on malformed JSON or a non-plain-object top-level value rather
+ *   `HelmxError('models_store_corrupted')` on malformed JSON or a non-plain-object top-level value rather
  *   than silently treating it as empty (honesty discipline).
  *
  * This file contains no secrets (model catalog metadata is non-secret; `0600` is purely a consistency guard).
  */
 
 import type { ModelsStore, ModelsStoreEntry } from '@earendil-works/pi-ai'
-import { HelmError } from '@helm/protocol'
+import { HelmxError } from '@helmx/protocol'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { atomicWriteJson } from '../services/atomic-file.js'
@@ -48,14 +48,14 @@ async function loadRaw(path: string): Promise<StoreShape> {
   try {
     parsed = JSON.parse(text)
   } catch (err) {
-    throw new HelmError(
+    throw new HelmxError(
       'models_store_corrupted',
       `models-store.json is not valid JSON (${path}): ${err instanceof Error ? err.message : String(err)}`,
       500,
     )
   }
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-    throw new HelmError(
+    throw new HelmxError(
       'models_store_corrupted',
       `models-store.json top-level value must be an object (providerId -> catalog entry): ${path}`,
       500,

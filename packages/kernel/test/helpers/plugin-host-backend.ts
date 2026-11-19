@@ -12,11 +12,11 @@
  * - Method signatures derive from `Parameters`/`ReturnType` of `PluginHostBackend` directly so
  *   subclass overrides (including narrower return types) remain compatible without manual narrowing.
  */
-import { HelmError, type PluginSkillAsset } from '@helm/protocol'
+import { HelmxError, type PluginSkillAsset } from '@helmx/protocol'
 import type { PluginHostBackend } from '../../src/plugins/index.js'
 
 function unsupported(what: string): never {
-  throw new HelmError('unsupported', `test fixture does not implement host capability: ${what} (override in concrete fixture)`, 501)
+  throw new HelmxError('unsupported', `test fixture does not implement host capability: ${what} (override in concrete fixture)`, 501)
 }
 
 type Port<K extends keyof PluginHostBackend> = PluginHostBackend[K]
@@ -237,7 +237,7 @@ export class PluginHostBackendFixtureBase implements PluginHostBackend {
 
   execEnv(...args: Parameters<Port<'execEnv'>>): ReturnType<Port<'execEnv'>> {
     void args
-    throw new HelmError('unsupported', 'this fixture does not execute node commands', 501)
+    throw new HelmxError('unsupported', 'this fixture does not execute node commands', 501)
   }
 
   withFileMutationQueue<T>(
@@ -245,7 +245,7 @@ export class PluginHostBackendFixtureBase implements PluginHostBackend {
     _fn: () => Promise<T>,
     _opts?: { signal?: AbortSignal },
   ): Promise<T> {
-    throw new HelmError('unsupported', 'this fixture does not support file mutation queue', 501)
+    throw new HelmxError('unsupported', 'this fixture does not support file mutation queue', 501)
   }
 
   resolveSpawnTarget(

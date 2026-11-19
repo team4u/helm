@@ -1,40 +1,40 @@
 /**
- * PluginClientCompiler: host-side compiler for the `client.tsx` UI track (`@helm/plugin-build`).
+ * PluginClientCompiler: host-side compiler for the `client.tsx` UI track (`@helmx/plugin-build`).
  *
  * Implements `PluginBuildProvider.compileClientModule`, injected into the kernel `PluginHost` by the
- * product composition root (`@helm/hub`); the kernel itself stays independent of esbuild.
+ * product composition root (`@helmx/hub`); the kernel itself stays independent of esbuild.
  *
  * Responsibilities (pure mechanism):
  * - Compiles relative `.ts`/`.tsx` entrypoints under `clientRoot` into browser ESM (esbuild bundle + metafile);
  * - Tracks local and controlled-npm closures via esbuild metafile inputs (`export * from`, dynamic imports,
  *   `.js`, `.json`, `.css`), re-checking per-file sha256 on disk so unchanged sources reuse cached artifacts;
- * - Virtualizes host-shared dependencies (`react`, `react-dom`, `lucide-react`, `@helm/plugin-client`) via
- *   `module.exports = globalThis.__helm_shared_*` shims so esbuild emits valid ESM bindings across default,
+ * - Virtualizes host-shared dependencies (`react`, `react-dom`, `lucide-react`, `@helmx/plugin-client`) via
+ *   `module.exports = globalThis.__helmx_shared_*` shims so esbuild emits valid ESM bindings across default,
  *   named, namespace, aliased, and re-exported forms without bundling a second copy of React;
  * - Bundles local CSS via esbuild (virtual outfile with `write: false`), exporting merged CSS via the
- *   reserved export `__helmClientCss` (`PLUGIN_CLIENT_CSS_EXPORT`) without touching the DOM;
+ *   reserved export `__helmxClientCss` (`PLUGIN_CLIENT_CSS_EXPORT`) without touching the DOM;
  *   - CSS `url()` allows only `data:`, `http(s)://`, and protocol-relative `//` URLs (local relative,
  *     root-relative, and fragment URLs are explicitly rejected with a `data:` suggestion);
  *   - Remote `@import` is explicitly rejected; local `@import` enters the dependency closure and hash;
  * - Enforces realpath containment on every loaded file inside `clientRoot` or authorized controlled-npm
  *   package directories, rejecting undeclared bare specifiers explicitly;
- * - Writes artifacts atomically via the shared `@helm/env-io` primitive (hidden temp + fsync +
+ * - Writes artifacts atomically via the shared `@helmx/env-io` primitive (hidden temp + fsync +
  *   0600 + bounded rename retry) and deduplicates concurrent compiles
- *   for the same key. Compilation failures throw explicit `HelmError`s with diagnostics.
+ *   for the same key. Compilation failures throw explicit `HelmxError`s with diagnostics.
  */
 import { createHash } from 'node:crypto';
 import { mkdirSync, realpathSync, statSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { basename, isAbsolute, join, dirname, relative, resolve, sep } from 'node:path';
 import { gzipSync } from 'node:zlib';
 import {
-  HelmError,
+  HelmxError,
   PLUGIN_CLIENT_CSS_EXPORT,
   assertModuleRefShape,
   isAbsoluteTargetPath,
   type PluginClientBundle,
   type PluginClientNpmRoot,
-} from '@helm/protocol';
-import { atomicWriteFileSync } from '@helm/env-io';
+} from '@helmx/protocol';
+import { atomicWriteFileSync } from '@helmx/env-io';
 import { build, type Plugin as EsbuildPlugin } from 'esbuild';
 import {
   collectDynamicImportTargets,
@@ -44,7 +44,7 @@ import {
 
 /**
  * Host-shared browser runtime dependencies: resolved at compile time to virtual shims (never reading
- * plugin `node_modules`) and backed at runtime by `globalThis.__helm_shared_*`.
+ * plugin `node_modules`) and backed at runtime by `globalThis.__helmx_shared_*`.
  */
 export const CLIENT_SHARED_EXTERNALS = [
   'react',
@@ -52,23 +52,23 @@ export const CLIENT_SHARED_EXTERNALS = [
   'react-dom/client',
   'react/jsx-runtime',
   'lucide-react',
-  '@helm/plugin-client',
+  '@helmx/plugin-client',
 ] as const;
 
 /** Mapping from shared specifier to host global property name (mounted by host page or test harness). */
 export const CLIENT_SHARED_GLOBALS: Readonly<Record<string, string>> = Object.freeze({
-  react: '__helm_shared_react',
-  'react-dom': '__helm_shared_react_dom',
-  'react-dom/client': '__helm_shared_react_dom_client',
-  'react/jsx-runtime': '__helm_shared_react_jsx_runtime',
-  'lucide-react': '__helm_shared_lucide_react',
-  '@helm/plugin-client': '__helm_shared_plugin_client',
+  react: '__helmx_shared_react',
+  'react-dom': '__helmx_shared_react_dom',
+  'react-dom/client': '__helmx_shared_react_dom_client',
+  'react/jsx-runtime': '__helmx_shared_react_jsx_runtime',
+  'lucide-react': '__helmx_shared_lucide_react',
+  '@helmx/plugin-client': '__helmx_shared_plugin_client',
 });
 
 /**
  * Dependency manifest (`deps.json`) schema version:
  * v3: native esbuild CSS bundling; v4: controlled npm dependencies; v5: minify + pre-gzip;
- * v6: code splitting + async chunk bridge; v7: isolated `__helm_chunk_share` namespace bridge;
+ * v6: code splitting + async chunk bridge; v7: isolated `__helmx_chunk_share` namespace bridge;
  * v8: controlled npm declaration set recorded in cache credentials.
  */
 const DEPS_LIST_VERSION = 8;
@@ -165,7 +165,7 @@ interface DepsListFile {
   npmDependencies?: Array<{ root: string; path: string; sha256: string }>;
   /** Declared controlled npm specifiers (prevents reusing stale bundles after removing declarations). */
   npmSpecifiers?: string[];
-  /** Entry named exports (including `__helmClientCss` when CSS was bundled). */
+  /** Entry named exports (including `__helmxClientCss` when CSS was bundled). */
   exports?: string[];
   /** Async/shared chunk filenames emitted alongside the entry. */
   chunks?: string[];
@@ -272,9 +272,9 @@ async function compileUncached(
       ],
     });
   } catch (err) {
-    if (err instanceof HelmError) throw err;
+    if (err instanceof HelmxError) throw err;
     const message = err instanceof Error ? err.message : String(err);
-    throw new HelmError('client_compile_failed', `plugin ${pluginId} compile ${moduleRef} failed: ${message}`, 422, {
+    throw new HelmxError('client_compile_failed', `plugin ${pluginId} compile ${moduleRef} failed: ${message}`, 422, {
       pluginId,
       module: moduleRef,
     });
@@ -283,12 +283,12 @@ async function compileUncached(
   const pass1Metafile = pass1Result.metafile;
   const pass1OutputFiles = pass1Result.outputFiles;
   if (!pass1Metafile || !pass1OutputFiles) {
-    throw new HelmError('client_compile_failed', `plugin ${pluginId} Pass 1 build produced no metafile or outputFiles`, 500);
+    throw new HelmxError('client_compile_failed', `plugin ${pluginId} Pass 1 build produced no metafile or outputFiles`, 500);
   }
 
   // Guard the compiler-reserved CSS export name against accidental collision.
   if (Object.values(pass1Metafile.outputs).some((file) => file.exports?.includes(PLUGIN_CLIENT_CSS_EXPORT))) {
-    throw new HelmError(
+    throw new HelmxError(
       'client_compile_failed',
       `plugin ${pluginId} module ${moduleRef} uses reserved compiler export name "${PLUGIN_CLIENT_CSS_EXPORT}"; please rename that export`,
       422,
@@ -329,7 +329,7 @@ async function compileUncached(
     if (virtualFiles.size === 1) {
       entryBaseName = virtualFiles.keys().next().value!;
     } else {
-      throw new HelmError(
+      throw new HelmxError(
         'client_compile_failed',
         `plugin ${pluginId} compile ${moduleRef} could not uniquely locate entry JS output`,
         500,
@@ -385,9 +385,9 @@ async function compileUncached(
       });
       mainOutput = appendCssExport(pass2.outputFiles[0]!.text, css);
     } catch (err) {
-      if (err instanceof HelmError) throw err;
+      if (err instanceof HelmxError) throw err;
       const message = err instanceof Error ? err.message : String(err);
-      throw new HelmError('client_compile_failed', `plugin ${pluginId} compile ${moduleRef} convergence failed: ${message}`, 422, {
+      throw new HelmxError('client_compile_failed', `plugin ${pluginId} compile ${moduleRef} convergence failed: ${message}`, 422, {
         pluginId,
         module: moduleRef,
       });
@@ -422,7 +422,7 @@ async function compileUncached(
   const allUnits = new Set<string>([...sharedAsyncChunks, ...dynamicTargets]);
   const list = buildDepsList(rootReal, moduleRef, dependencies, npmDeps, npmRoots, entryExports, Array.from(allUnits));
 
-  // Namespace bridge registration into `globalThis.__helm_chunk_share`:
+  // Namespace bridge registration into `globalThis.__helmx_chunk_share`:
   // Each shared virtual chunk is wrapped in `import * as ns` so esbuild retains all exports (including
   // default expressions, re-exports, and string-named exports) without regex code generation, keyed
   // strictly by `pluginId\0moduleRef\0contentHash\0file` so multiple plugins stay isolated.
@@ -433,12 +433,12 @@ async function compileUncached(
   const chunkNsBridges = new Map<string, string>();
   for (const F of filesToRegister) {
     if (!virtualFiles.has(F)) continue;
-    const bridgeName = `__helm_ns__:${F}`;
+    const bridgeName = `__helmx_ns__:${F}`;
     chunkNsBridges.set(F, bridgeName);
     virtualFiles.set(
       bridgeName,
-      `import * as __helm_ns from ${JSON.stringify(`__helm_chunk__:${F}`)};\n` +
-        `;(globalThis.__helm_chunk_share ??= {})[${chunkShareKeyExpr(F)}] = __helm_ns;\n`,
+      `import * as __helmx_ns from ${JSON.stringify(`__helmx_chunk__:${F}`)};\n` +
+        `;(globalThis.__helmx_chunk_share ??= {})[${chunkShareKeyExpr(F)}] = __helmx_ns;\n`,
     );
   }
 
@@ -448,11 +448,11 @@ async function compileUncached(
     const isNsBridge = !isMain && sharedAsyncChunks.has(unitName);
     let unitCode = virtualFiles.get(isNsBridge ? chunkNsBridges.get(unitName)! : unitName);
     if (unitCode === undefined) {
-      throw new HelmError('client_compile_failed', `Missing virtual file ${unitName}`, 500);
+      throw new HelmxError('client_compile_failed', `Missing virtual file ${unitName}`, 500);
     }
     if (isMain && baseRegisterFiles.length > 0) {
       const regImports = baseRegisterFiles
-        .map((f) => `import ${JSON.stringify(`__helm_ns__:${f}`)};`)
+        .map((f) => `import ${JSON.stringify(`__helmx_ns__:${f}`)};`)
         .join('\n');
       unitCode = `${regImports}\n${unitCode}`;
     }
@@ -479,15 +479,15 @@ async function compileUncached(
             b.onResolve({ filter: /.*/ }, (args) => {
               if (args.kind === 'dynamic-import') {
                 const target = basename(args.path);
-                return { path: '__HELM_DYN_IMPORT__:' + target, external: true };
+                return { path: '__HELMX_DYN_IMPORT__:' + target, external: true };
               }
               if (args.kind === 'import-statement') {
                 // Namespace bridge target: resolves directly to the Pass 1 virtual chunk body.
-                if (args.path.startsWith('__helm_chunk__:')) {
-                  return { path: basename(args.path.slice('__helm_chunk__:'.length)), namespace: 'vfs' };
+                if (args.path.startsWith('__helmx_chunk__:')) {
+                  return { path: basename(args.path.slice('__helmx_chunk__:'.length)), namespace: 'vfs' };
                 }
                 // Pre-registration bridge imported by the main bundle.
-                if (args.path.startsWith('__helm_ns__:')) {
+                if (args.path.startsWith('__helmx_ns__:')) {
                   return { path: args.path, namespace: 'vfs' };
                 }
                 const target = basename(args.path);
@@ -507,7 +507,7 @@ async function compileUncached(
               const meta = metaByBase.get(T);
               const exports = meta?.exports || [];
               const proxyLines = [
-                `const __s = (globalThis.__helm_chunk_share ?? {})[${chunkShareKeyExpr(T)}] || {};`,
+                `const __s = (globalThis.__helmx_chunk_share ?? {})[${chunkShareKeyExpr(T)}] || {};`,
               ];
               for (const exp of exports) {
                 if (exp === 'default') {
@@ -533,9 +533,9 @@ async function compileUncached(
       ],
     });
     let out = res.outputFiles[0]!.text;
-    out = out.replace(/import\s*\(\s*["'`]__HELM_DYN_IMPORT__:([^"'`]+)["'`]\s*\)/g, (_match, target) => {
+    out = out.replace(/import\s*\(\s*["'`]__HELMX_DYN_IMPORT__:([^"'`]+)["'`]\s*\)/g, (_match, target) => {
       const deps = chunkDeps[target] ?? [];
-      return `globalThis.__helm_import_chunk(${JSON.stringify(pluginId)}, ${JSON.stringify(moduleRef)}, ${JSON.stringify(list.contentHash)}, ${JSON.stringify(target)}, ${JSON.stringify(deps)})`;
+      return `globalThis.__helmx_import_chunk(${JSON.stringify(pluginId)}, ${JSON.stringify(moduleRef)}, ${JSON.stringify(list.contentHash)}, ${JSON.stringify(target)}, ${JSON.stringify(deps)})`;
     });
     return out;
   }
@@ -545,9 +545,9 @@ async function compileUncached(
     mainJs = await bundleUnit(entryBaseName, true);
     mainJs = appendCssExport(mainJs, css);
   } catch (err) {
-    if (err instanceof HelmError) throw err;
+    if (err instanceof HelmxError) throw err;
     const message = err instanceof Error ? err.message : String(err);
-    throw new HelmError('client_compile_failed', `plugin ${pluginId} main bundle convergence failed for ${moduleRef}: ${message}`, 422, {
+    throw new HelmxError('client_compile_failed', `plugin ${pluginId} main bundle convergence failed for ${moduleRef}: ${message}`, 422, {
       pluginId,
       module: moduleRef,
     });
@@ -568,9 +568,9 @@ async function compileUncached(
       }),
     );
   } catch (err) {
-    if (err instanceof HelmError) throw err;
+    if (err instanceof HelmxError) throw err;
     const message = err instanceof Error ? err.message : String(err);
-    throw new HelmError('client_compile_failed', `plugin ${pluginId} chunk convergence failed for ${moduleRef}: ${message}`, 422, {
+    throw new HelmxError('client_compile_failed', `plugin ${pluginId} chunk convergence failed for ${moduleRef}: ${message}`, 422, {
       pluginId,
       module: moduleRef,
     });
@@ -649,10 +649,10 @@ function recordMemoryCache(
 // CSS: exported via reserved named binding (DOM injection owned by the loader)
 // ---------------------------------------------------------------------------
 
-/** Picks a non-colliding local identifier before exporting the merged CSS via `__helmClientCss`. */
+/** Picks a non-colliding local identifier before exporting the merged CSS via `__helmxClientCss`. */
 function appendCssExport(js: string, css: string): string {
   if (css.length === 0) return js;
-  let binding = '__helmCssText';
+  let binding = '__helmxCssText';
   while (js.includes(binding)) binding += '_';
   return `${js}\nconst ${binding} = ${JSON.stringify(css)};\nexport { ${binding} as ${PLUGIN_CLIENT_CSS_EXPORT} };\n`;
 }
@@ -662,20 +662,20 @@ function appendCssExport(js: string, css: string): string {
 // ---------------------------------------------------------------------------
 
 /**
- * Resolves host-shared bare specifiers to virtual `helm-shared` modules backed by
- * `module.exports = globalThis.__helm_shared_*`, delegating CJS/ESM interop to esbuild.
+ * Resolves host-shared bare specifiers to virtual `helmx-shared` modules backed by
+ * `module.exports = globalThis.__helmx_shared_*`, delegating CJS/ESM interop to esbuild.
  */
 function sharedShimPlugin(): EsbuildPlugin {
   return {
-    name: 'helm-shared-shim',
+    name: 'helmx-shared-shim',
     setup(b) {
       for (const spec of CLIENT_SHARED_EXTERNALS) {
         b.onResolve({ filter: exactLiteralFilter(spec) }, () => ({
           path: spec,
-          namespace: 'helm-shared',
+          namespace: 'helmx-shared',
         }));
       }
-      b.onLoad({ filter: /.*/, namespace: 'helm-shared' }, (args) => {
+      b.onLoad({ filter: /.*/, namespace: 'helmx-shared' }, (args) => {
         const globalName = CLIENT_SHARED_GLOBALS[args.path];
         if (globalName === undefined) {
           return { errors: [{ text: `unknown shared dependency specifier: ${args.path}` }] };
@@ -795,7 +795,7 @@ function containmentPlugin(
     return false;
   };
   return {
-    name: 'helm-containment',
+    name: 'helmx-containment',
     setup(b) {
       b.onResolve({ filter: /^[^./]/ }, (args) => {
         if (isAbsoluteTargetPath(args.path)) return null;
@@ -894,7 +894,7 @@ function findPackageDirOf(fileReal: string): string {
 
 function cssPolicyPlugin(pluginId: string): EsbuildPlugin {
   return {
-    name: 'helm-css-policy',
+    name: 'helmx-css-policy',
     setup(b) {
       b.onResolve({ filter: /.*/ }, (args) => {
         if (args.kind === 'url-token') {
@@ -1047,7 +1047,7 @@ function buildDepsList(
   chunks?: string[],
 ): DepsListFile {
   const hash = createHash('sha256');
-  hash.update(`helm-plugin-client-v${DEPS_LIST_VERSION}\n`);
+  hash.update(`helmx-plugin-client-v${DEPS_LIST_VERSION}\n`);
   hash.update(`module:${moduleRef}\n`);
   for (const specifier of npmSpecifiersKey(npmRoots)) {
     hash.update(`--npm-spec:${specifier}\n`);
@@ -1097,7 +1097,7 @@ export function realPathOrThrow(p: string, message: string): string {
     if (!st.isFile() && !st.isDirectory()) throw new Error('not a file or directory');
     return realpathSync(p);
   } catch {
-    throw new HelmError('client_root_invalid', message, 400, { path: p });
+    throw new HelmxError('client_root_invalid', message, 400, { path: p });
   }
 }
 
@@ -1109,13 +1109,13 @@ function assertEntryInsideRoot(pluginId: string, rootReal: string, moduleRef: st
     if (!st.isFile()) throw new Error('not a regular file');
     real = realpathSync(absPath);
   } catch {
-    throw new HelmError('client_root_invalid', `plugin ${pluginId} client module is missing: ${moduleRef}`, 400, {
+    throw new HelmxError('client_root_invalid', `plugin ${pluginId} client module is missing: ${moduleRef}`, 400, {
       pluginId,
       module: moduleRef,
     });
   }
   if (!isInside(rootReal, real)) {
-    throw new HelmError(
+    throw new HelmxError(
       'client_module_out_of_root',
       `plugin ${pluginId} client module escapes clientRoot (possible symlink escape): ${moduleRef}`,
       400,

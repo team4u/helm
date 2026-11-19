@@ -4,10 +4,10 @@
  */
 import test, { beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { HelmError, type ConversationSummary, type EnvExecResponse, type MaybePromise, type PluginDefinition } from '@helm/protocol';
+import { HelmxError, type ConversationSummary, type EnvExecResponse, type MaybePromise, type PluginDefinition } from '@helmx/protocol';
 import { PluginHost } from '../src/plugins/index.js';
 import { PluginHostBackendFixtureBase } from './helpers/plugin-host-backend.js';
-import { createPluginBuildProvider } from '@helm/plugin-build';
+import { createPluginBuildProvider } from '@helmx/plugin-build';
 import {
   MemoryDocStore,
   assertRejectsCode,
@@ -55,7 +55,7 @@ class FakeBackend extends PluginHostBackendFixtureBase {
   }
   getConversation(id: number): ConversationSummary {
     const found = this.conversations.get(id);
-    if (found === undefined) throw new HelmError('not_found', `conversation missing: ${id}`, 404);
+    if (found === undefined) throw new HelmxError('not_found', `conversation missing: ${id}`, 404);
     return found;
   }
   updateConversation(id: number): Promise<ConversationSummary> {
@@ -64,7 +64,7 @@ class FakeBackend extends PluginHostBackendFixtureBase {
   abortConversation(): Promise<void> {
     return Promise.resolve();
   }
-  getConversationOwnership(): 'helm' | 'bot' | 'human' {
+  getConversationOwnership(): 'helmx' | 'bot' | 'human' {
     return 'human';
   }
   spawnAgent(): Promise<unknown> {
@@ -82,7 +82,7 @@ class FakeBackend extends PluginHostBackendFixtureBase {
     return { idempotent: false };
   }
   execEnv(): Promise<EnvExecResponse> {
-    return Promise.reject(new HelmError('unsupported', 'this fixture does not execute node commands', 501));
+    return Promise.reject(new HelmxError('unsupported', 'this fixture does not execute node commands', 501));
   }
   withFileMutationQueue(): Promise<never> { throw new Error('this fixture does not support file mutation queue') }
   listActions(): [] {
@@ -96,7 +96,7 @@ class FakeBackend extends PluginHostBackendFixtureBase {
       this.managed.delete(key);
     };
   }
-  markConversationOwnership(id: number, owner: 'helm' | 'bot' | 'human'): void {
+  markConversationOwnership(id: number, owner: 'helmx' | 'bot' | 'human'): void {
     void id;
     void owner;
   }
@@ -133,7 +133,7 @@ function makeHost(): PluginHost {
 
 function throwsCode(fn: () => unknown, code: string): void {
   assert.throws(fn, (err: unknown) => {
-    assert.ok(err instanceof HelmError, `expected HelmError, got: ${String(err)}`);
+    assert.ok(err instanceof HelmxError, `expected HelmxError, got: ${String(err)}`);
     assert.equal(err.code, code);
     return true;
   });
@@ -174,7 +174,7 @@ function scopedToolName(pluginId: string): string {
 }
 
 beforeEach(async () => {
-  dataDir = await makeTempDir('helm-plugins-contract-');
+  dataDir = await makeTempDir('helmx-plugins-contract-');
   backend = new FakeBackend();
   docs = new MemoryDocStore();
 });
@@ -625,7 +625,7 @@ test('onEvent(workflow.settled): auto-unsubscribes on disable and counts in-flig
     id: 'p:wf',
     definePlugin: (ctx) => {
       void ctx.host.onEvent('workflow.settled', async (raw) => {
-        // Generic event bus: payload stays opaque to kernel (workflow.settled schema belongs to @helm/plugins).
+        // Generic event bus: payload stays opaque to kernel (workflow.settled schema belongs to @helmx/plugins).
         const run = raw as { id: string };
         await new Promise((r) => setTimeout(r, 10));
         settledRuns.push(run.id);
@@ -681,7 +681,7 @@ test('ctx.host wrapper forwards updateConversation / markConversationOwnership /
   const host = makeHost();
   const marked: Array<{ id: number; owner: string }> = [];
   const origMark = backend.markConversationOwnership.bind(backend);
-  backend.markConversationOwnership = (id: number, owner: 'helm' | 'bot' | 'human') => {
+  backend.markConversationOwnership = (id: number, owner: 'helmx' | 'bot' | 'human') => {
     marked.push({ id, owner });
     origMark(id, owner);
   };

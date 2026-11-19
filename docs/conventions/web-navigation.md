@@ -14,7 +14,7 @@
 | :--- | :--- | :--- |
 | 位置类型 | `packages/web/src/lib/types.ts` | `ResolvedTarget` / `ActiveModal` / `SidebarSpace`（含 `spaceForTarget` 推导） |
 | Hash 契约 | `packages/web/src/lib/url-hash-model.ts` | 唯一编解码真源（零 React/DOM 依赖的纯函数） |
-| 浏览器同步 | `packages/web/src/lib/HelmStoreProvider.tsx` | 唯一写回路径与历史策略 |
+| 浏览器同步 | `packages/web/src/lib/HelmxStoreProvider.tsx` | 唯一写回路径与历史策略 |
 
 组件统一调用 `store.openTarget / closeSplit / setScreenParams / setWorkbenchOpen / setWorkbenchTab / openSpace / setActiveModal` 导航。不得另建平行路由、直接操作 `history.*`，或用组件本地状态管理已有全局位置。
 
@@ -50,7 +50,7 @@
 
 `screen` 目标可携带字符串参数（`ResolvedTarget.params`），三类入口：
 
-1. 声明式目标字符串 `screen:<pluginId>/<screenId>?k1=v1`（`sidebarItem.target` / `helm:open` / `ctx.openScreen`）；
+1. 声明式目标字符串 `screen:<pluginId>/<screenId>?k1=v1`（`sidebarItem.target` / `helmx:open` / `ctx.openScreen`）；
 2. 地址栏命名空间参数：主屏 `sp.<k>=<v>`，分屏 `ssp.<k>=<v>`——两套命名空间互不冲突，同一 screen 双开时参数各自独立；
 3. 组件内 `setParams(patch, { push? })`——经 `store.setScreenParams` 消费，值为 `undefined` 时删除键。
 
@@ -78,7 +78,7 @@
 | :--- | :--- |
 | Hash 编解码纯函数 | `packages/web/src/lib/url-hash-model.ts` |
 | 位置类型与空间推导 | `packages/web/src/lib/types.ts` |
-| 浏览器同步与历史策略 | `packages/web/src/lib/HelmStoreProvider.tsx` |
+| 浏览器同步与历史策略 | `packages/web/src/lib/HelmxStoreProvider.tsx` |
 | 弹窗选中项决策 | `packages/web/src/modals/list-modal-selection.ts` |
 | 测试 | `packages/web/test/url-hash*.test.ts` |
 
@@ -86,4 +86,4 @@
 
 - [Web 前端设计系统](web-frontend.md)：视图形态与组件约定
 - [插件开发实战](../plugins/plugin-development.md)：`ctx.openScreen` 与声明式目标
-- [JSON 卡片渲染](../plugins/json-render.md)：`helm:open` 动作指令的目标语法
+- [JSON 卡片渲染](../plugins/json-render.md)：`helmx:open` 动作指令的目标语法

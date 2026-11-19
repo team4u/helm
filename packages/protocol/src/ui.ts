@@ -5,11 +5,11 @@
  */
 
 import type { ConversationAttachmentRef, ConversationEntry, ConversationScope, ConversationSummary, ToolResultTruncation, WhenBusy } from './conversation.js'
-import type { HelmLocale, LocaleTranslator, LocalizedText } from './locale.js'
+import type { HelmxLocale, LocaleTranslator, LocalizedText } from './locale.js'
 import type { PluginSummary } from './plugin-dto.js'
 
 /** Reserved CSS text export name kept by the compiler; the loader mounts it onto the page only after validating the module. */
-export const PLUGIN_CLIENT_CSS_EXPORT = '__helmClientCss' as const
+export const PLUGIN_CLIENT_CSS_EXPORT = '__helmxClientCss' as const
 
 /** Named export reference inside a plugin client.tsx build artifact. */
 export interface ClientComponentRef {
@@ -483,7 +483,7 @@ export function parsePluginUiContribution(
  * POST /api/actions, openScreen/openSplitScreen go through host navigation,
  * getPluginDoc is a one-shot read); no mocks.
  * For reactive doc subscriptions use usePluginDoc from the shared module
- * (import from '@helm/plugin-client').
+ * (import from '@helmx/plugin-client').
  */
 export interface CallActionOptions {
   pluginId?: string
@@ -519,22 +519,22 @@ export interface PluginClientContext {
   conversationId?: number
   /** Current host theme. */
   theme: 'light' | 'dark'
-  /** Current host UI locale (normalized via HELM_LOCALES / normalizeLocaleTag). */
-  locale: HelmLocale
+  /** Current host UI locale (normalized via HELMX_LOCALES / normalizeLocaleTag). */
+  locale: HelmxLocale
   /** Minimal translator: resolves LocalizedText display copy for the current locale. */
   translate: LocaleTranslator
 }
 
 /**
  * Host shared module importable by plugin client.tsx (the compiler virtualizes
- * it into the __helm_shared_plugin_client global namespace, sharing the same
+ * it into the __helmx_shared_plugin_client global namespace, sharing the same
  * mechanism as React — never bundles a second React copy).
  *
  * The single source of truth of exported symbols is PLUGIN_CLIENT_SHARED_EXPORTS:
  * - hooks: usePluginContext / usePluginLocale / usePluginTranslator / usePluginDoc / usePluginSessionDoc /
  *   useToolActivity / useConversations / useConversation / usePlugins;
  * - accessibility base components: Switch / Select / MultiSelect / Checkbox / Tabs family /
- *   SegmentedControl / HelmIcon / ViewBoundary / Callout;
+ *   SegmentedControl / HelmxIcon / ViewBoundary / Callout;
  * - StatusLight: unified status light (visually dot-only; the localized label
  *   becomes the screen-reader accessible name, never visible status text) for
  *   card main status slots, reusing the host .status-dot vocabulary;
@@ -547,7 +547,7 @@ export interface PluginClientContext {
  *   formatBytes (human-readable bytes, 1024-based);
  * - PluginSlot: inter-plugin sub-slot rendering primitive.
  */
-export const HELM_PLUGIN_CLIENT_SHARED_MODULE = '@helm/plugin-client'
+export const HELMX_PLUGIN_CLIENT_SHARED_MODULE = '@helmx/plugin-client'
 
 /** usePlugins(): reactive snapshot of host plugin list and Screen contributions (SSE driven, no polling). */
 export interface UsePluginsResult {
@@ -596,7 +596,7 @@ void _assertAllPluginUiMethodsListed
 /** Host reserved in-conversation slash command triggers (plugin command.slash must not occupy them). */
 export const RESERVED_SLASH_COMMANDS = ['new', 'clear', 'compact'] as const
 
-/** Single source of truth of runtime symbols exported by @helm/plugin-client for plugin client.tsx. */
+/** Single source of truth of runtime symbols exported by @helmx/plugin-client for plugin client.tsx. */
 export const PLUGIN_CLIENT_SHARED_EXPORTS = [
   'usePluginContext',
   'usePluginLocale',
@@ -618,7 +618,7 @@ export const PLUGIN_CLIENT_SHARED_EXPORTS = [
   'TabsTrigger',
   'TabsContent',
   'SegmentedControl',
-  'HelmIcon',
+  'HelmxIcon',
   'MarkdownView',
   'CodeBlockView',
   'CopyButton',

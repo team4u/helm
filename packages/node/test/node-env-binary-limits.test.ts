@@ -10,7 +10,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { useTempDir } from '@helm/test-kit/node';
+import { useTempDir } from '@helmx/test-kit/node';
 
 import { createNodeEnvRpcServer } from '../src/daemon/env-rpc-server.js';
 
@@ -89,7 +89,7 @@ test('envReadBinaryFile explicitly returns invalid when file exceeds limit inste
 });
 
 test('valid 64MiB base64 write succeeds without padding deducting from byte quota', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-base64-boundary-');
+  const dir = useTempDir(t, 'helmx-base64-boundary-');
   const server = createNodeEnvRpcServer({ defaultCwd: dir });
   t.after(() => server.dispose());
   const encodedLength = Math.ceil(LIMIT / 3) * 4;

@@ -13,8 +13,8 @@ import { test } from 'node:test'
 import * as React from 'react'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { act } from 'react'
-import type { ConversationSummary } from '@helm/protocol'
-import type { HelmExternalStore } from '../src/lib/helm-store.js'
+import type { ConversationSummary } from '@helmx/protocol'
+import type { HelmxExternalStore } from '../src/lib/helmx-store.js'
 
 GlobalRegistrator.register()
 const { HostStoreProviders } = await import('./helpers/host-store.js')
@@ -34,7 +34,7 @@ function conv(partial: Partial<ConversationSummary>): ConversationSummary {
   }
 }
 
-function makeStore(conversation: ConversationSummary): HelmExternalStore {
+function makeStore(conversation: ConversationSummary): HelmxExternalStore {
   return makeTestStore({
     conversations: [conversation],
     models: [

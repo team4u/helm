@@ -1,10 +1,10 @@
 /**
  * Shared plugin info-callout primitive (reuses the host's generic .callout
  * style, unrelated to any plugin DSL styling).
- * Exported by @helm/plugin-client; tone defaults to info.
+ * Exported by @helmx/plugin-client; tone defaults to info.
  */
 import type { ReactNode } from 'react'
-import { HelmIcon } from './icons.js'
+import { HelmxIcon } from './icons.js'
 
 export interface CalloutProps {
   tone?: 'info' | 'warn' | 'err' | 'ok'
@@ -29,7 +29,7 @@ const TONE_ICON: Record<NonNullable<CalloutProps['tone']>, string> = {
 export function Callout({ tone = 'info', title, children }: CalloutProps): ReactNode {
   return (
     <div className={TONE_CLASS[tone]}>
-      <HelmIcon name={TONE_ICON[tone]} size={13} />
+      <HelmxIcon name={TONE_ICON[tone]} size={13} />
       <div>
         {title !== undefined && title !== '' && <strong>{title}</strong>}
         {children}

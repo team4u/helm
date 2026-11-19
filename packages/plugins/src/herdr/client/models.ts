@@ -6,7 +6,7 @@
  * No display copy lives here: label-bearing builders (outcome labels, owner /
  * status filter options) moved to copy.ts, which can resolve LocalizedText
  * against the host locale — models.ts stays importable standalone (tests
- * compile and import it without the shared @helm/plugin-client runtime).
+ * compile and import it without the shared @helmx/plugin-client runtime).
  */
 /** Single row of the overview doc (OverviewDoc.panes element; version 2 contract). */
 export interface OverviewPaneRow {
@@ -14,7 +14,7 @@ export interface OverviewPaneRow {
   paneId: string
   tabId: string
   workspaceId: string
-  ownedBy: 'helm' | 'human'
+  ownedBy: 'helmx' | 'human'
   agentStatus: string
   cwd?: string
   foregroundCwd?: string
@@ -49,7 +49,7 @@ export function parseFilters(params: Readonly<Record<string, string>>): Overview
     typeof raw === 'string' && allowed.includes(raw) ? raw : 'all'
   return {
     node: typeof params['node'] === 'string' && params['node'] !== '' ? params['node'] : 'all',
-    owner: pick(params['owner'], ['all', 'helm', 'human']),
+    owner: pick(params['owner'], ['all', 'helmx', 'human']),
     status: pick(params['status'], ['all', 'working', 'idle', 'blocked', 'done', 'unknown']),
   }
 }
@@ -182,13 +182,13 @@ export function parseReadText(result: unknown): string {
 
 /**
  * Whether the pane accepts a focus action:
- * 1. origin check: it must be helm-managed (row.ownedBy === 'helm') — human
+ * 1. origin check: it must be helmx-managed (row.ownedBy === 'helmx') — human
  *    panes are not managed by builtin:herdr;
  * 2. state check: not already focused (!row.focused), the task has not
  *    settled (outcome !== 'settled') and the status is not done.
  */
 export function canFocusPane(row: OverviewPaneRow): boolean {
-  if (row.ownedBy !== 'helm') return false
+  if (row.ownedBy !== 'helmx') return false
   if (row.focused === true) return false
   if (row.outcome === 'settled') return false
   if (row.agentStatus === 'done') return false
@@ -197,19 +197,19 @@ export function canFocusPane(row: OverviewPaneRow): boolean {
 
 /**
  * Whether the pane accepts a read-only snapshot:
- * 1. origin check: it must be helm-managed (row.ownedBy === 'helm') — human
+ * 1. origin check: it must be helmx-managed (row.ownedBy === 'helmx') — human
  *    panes are not managed by builtin:herdr;
  * 2. state check: the task has not settled (outcome !== 'settled').
  */
 export function canSnapshotPane(row: OverviewPaneRow): boolean {
-  if (row.ownedBy !== 'helm') return false
+  if (row.ownedBy !== 'helmx') return false
   if (row.outcome === 'settled') return false
   return true
 }
 
-/** Ownership check: anything not managed by helm counts as human direct (strictly read-only diagnostics, no control actions). */
+/** Ownership check: anything not managed by helmx counts as human direct (strictly read-only diagnostics, no control actions). */
 export function isHumanOwnedPane(row: Pick<OverviewPaneRow, 'ownedBy'>): boolean {
-  return row.ownedBy !== 'helm'
+  return row.ownedBy !== 'helmx'
 }
 
 export function paneLocationText(row: Pick<OverviewPaneRow, 'title' | 'label' | 'workspaceId'>): string | undefined {

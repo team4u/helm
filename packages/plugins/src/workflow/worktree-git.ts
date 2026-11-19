@@ -7,7 +7,7 @@
  */
 
 import type { FileError, Result } from '@earendil-works/pi-durable/env'
-import { HelmError, pathRulesForShape, targetPathShape } from '@helm/protocol'
+import { HelmxError, pathRulesForShape, targetPathShape } from '@helmx/protocol'
 
 export interface WorktreeExecOptions {
   timeoutMs?: number
@@ -206,7 +206,7 @@ export async function dirExistsOnNode(ports: WorktreeNodePorts, nodeId: string, 
   } catch (error) {
     failure = error instanceof Error ? error.message : String(error)
   }
-  throw new HelmError(
+  throw new HelmxError(
     'worktree_check_failed',
     `无法探测节点 ${nodeId} 上 '${redact(path)}' 是否存在（${failure}）：节点离线/权限/超时一律不当作目录缺失，操作中止`,
     502,
@@ -219,7 +219,7 @@ export async function canonicalPathOnNode(ports: WorktreeNodePorts, nodeId: stri
   const redact = ports.redact ?? ((t: string) => t)
   const result = await ports.nodeCanonicalPath(nodeId, path)
   if (!result.ok) {
-    throw new HelmError('worktree_check_failed', `节点 ${nodeId} 无法确认真实路径 ${redact(path)}：${redact(result.error.message)}`, 502)
+    throw new HelmxError('worktree_check_failed', `节点 ${nodeId} 无法确认真实路径 ${redact(path)}：${redact(result.error.message)}`, 502)
   }
   return result.value
 }
@@ -241,7 +241,7 @@ export async function resolveRepoAuthority(
     const common = await gitExec(ports, nodeId, cwd, ['rev-parse', '--path-format=absolute', '--git-common-dir'], signal)
     commonDir = common.ok ? common.output.trim() : ''
     if (!common.ok || commonDir === '') {
-      throw new HelmError(
+      throw new HelmxError(
         'worktree_check_failed',
         `无法在节点 ${nodeId} 解析 '${redact(cwd)}' 的 git common-dir（不猜测主仓路径，操作中止）：\n${common.output.trim()}`,
         502,
@@ -251,7 +251,7 @@ export async function resolveRepoAuthority(
   }
   const list = await gitExec(ports, nodeId, cwd, ['worktree', 'list', '--porcelain', '-z'], signal)
   if (!list.ok) {
-    throw new HelmError(
+    throw new HelmxError(
       'worktree_check_failed',
       `无法在节点 ${nodeId} 读取 '${redact(cwd)}' 的权威 worktree 登记（git worktree list 失败，操作中止）：\n${list.output.trim()}`,
       502,
@@ -261,7 +261,7 @@ export async function resolveRepoAuthority(
   const entries = parseWorktreeList(list.output)
   const main = entries[0]
   if (main === undefined || main.path === '') {
-    throw new HelmError(
+    throw new HelmxError(
       'worktree_check_failed',
       `节点 ${nodeId} 上 '${redact(cwd)}' 的权威 worktree 登记为空（无法确定主工作树，操作中止）`,
       502,
@@ -270,7 +270,7 @@ export async function resolveRepoAuthority(
   }
   const rules = pathRulesForShape(targetPathShape(commonDir) ?? targetPathShape(main.path))
   if (rules.normalize(commonDir) !== rules.normalize(rules.join(main.path, '.git'))) {
-    throw new HelmError(
+    throw new HelmxError(
       'worktree_unsupported_layout',
       `仓库布局不受支持：git common-dir '${redact(commonDir)}' 不在主工作树 '${redact(main.path)}' 下（--separate-git-dir / 裸仓库等形态不猜测主仓路径，显式拒绝）`,
       400,
@@ -316,7 +316,7 @@ export async function resolveMergeReferenceHead(
     )
     const commit = verify.output.trim()
     if (!verify.ok || !/^[0-9a-f]{7,64}$/i.test(commit)) {
-      throw new HelmError(
+      throw new HelmxError(
         'validation_error',
         `mergedInto 指向的分支或提交不存在：${redact(mergedInto)}（不回退主工作树，操作中止）`,
         400,
@@ -356,7 +356,7 @@ export async function countUnmergedCommits(
     signal,
   )
   if (!unmerged.ok) {
-    throw new HelmError(
+    throw new HelmxError(
       'worktree_check_failed',
       `无法确认分支 ${branch} 相对参考提交 ${referenceHead} 的未合入提交（git rev-list 失败，清理中止）：\n${unmerged.output.trim()}`,
       502,

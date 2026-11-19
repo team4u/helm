@@ -1,5 +1,5 @@
 /**
- * Chord Context propagation, HTTP ?wait=1 disconnect abort wiring, harness.closed / HelmStore fatal
+ * Chord Context propagation, HTTP ?wait=1 disconnect abort wiring, harness.closed / HelmxStore fatal
  * storage circuit breaker, and DiagnosticSink centralized redaction & reporting tests.
  */
 
@@ -12,7 +12,7 @@ import {
 } from '@earendil-works/chord/context'
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import type { ToolExecutionApi } from '@earendil-works/pi-durable'
-import { HelmError, type HelmEventFrame } from '@helm/protocol'
+import { HelmxError, type HelmxEventFrame } from '@helmx/protocol'
 import assert from 'node:assert/strict'
 import { writeFileSync } from 'node:fs'
 import http from 'node:http'
@@ -24,9 +24,9 @@ import {
   createDiagnosticEmitter,
   type KernelDiagnosticEvent,
 } from '../src/runtime/index.js'
-import { openHelmDatabase } from '../src/runtime/sqlite.js'
-import { HelmStore } from '../src/runtime/store.js'
-import type { HelmToolDeps } from '../src/runtime/tool-deps.js'
+import { openHelmxDatabase } from '../src/runtime/sqlite.js'
+import { HelmxStore } from '../src/runtime/store.js'
+import type { HelmxToolDeps } from '../src/runtime/tool-deps.js'
 import {
   createBashTool,
   createEditTool,
@@ -45,7 +45,7 @@ import { cleanupDir, makeFauxModels, makeTempDir } from './helpers.js'
 let root: string
 
 before(async () => {
-  root = await makeTempDir('helm-ctx-faults-')
+  root = await makeTempDir('helmx-ctx-faults-')
 })
 
 after(async () => {
@@ -69,7 +69,7 @@ async function openTestRuntime(
   return Object.assign(runtime, { __faux: faux })
 }
 
-async function makeToolDeps(dir: string): Promise<HelmToolDeps> {
+async function makeToolDeps(dir: string): Promise<HelmxToolDeps> {
   await ensureDataDir(dir)
   const stash = new SecretStash()
   const artifacts = new ArtifactService(dir, new InMemoryArtifactRepository(), stash)
@@ -179,14 +179,14 @@ describe('waitForInput and HTTP ?wait=1 AbortSignal passthrough', { timeout: 60_
       controller.abort()
       await assert.rejects(
         () => waitPromise,
-        (err: unknown) => err instanceof HelmError && err.code === 'aborted' && err.status === 499,
+        (err: unknown) => err instanceof HelmxError && err.code === 'aborted' && err.status === 499,
       )
       assert.ok(Date.now() - t0 < 2_000, 'aborting waitForInput must unblock immediately')
 
       // Pre-aborted signal fails fast immediately
       await assert.rejects(
         () => kernel.waitForInput(1, submissionId, controller.signal),
-        (err: unknown) => err instanceof HelmError && err.code === 'aborted' && err.status === 499,
+        (err: unknown) => err instanceof HelmxError && err.code === 'aborted' && err.status === 499,
       )
 
       // Release latch: background durable turn was not cancelled, finishes cleanly, and re-awaiting receives full result
@@ -275,7 +275,7 @@ describe('waitForInput and HTTP ?wait=1 AbortSignal passthrough', { timeout: 60_
       }
       assert.ok(waitSettledAt !== undefined, 'client disconnect must unblock server waitForInput immediately')
       assert.ok(
-        waitError instanceof HelmError && waitError.code === 'aborted' && waitError.status === 499,
+        waitError instanceof HelmxError && waitError.code === 'aborted' && waitError.status === 499,
         `server side should reject with aborted 499 (got ${String(waitError)})`,
       )
 
@@ -293,12 +293,12 @@ describe('waitForInput and HTTP ?wait=1 AbortSignal passthrough', { timeout: 60_
   })
 })
 
-describe('harness.closed, HelmStore fatal storage circuit breaker, and DiagnosticSink', { timeout: 60_000 }, () => {
+describe('harness.closed, HelmxStore fatal storage circuit breaker, and DiagnosticSink', { timeout: 60_000 }, () => {
   it('normal close() does not set fatalError or emit fault diagnostics', { timeout: 60_000 }, async () => {
     const dir = join(root, 'normal-close')
     const diagnostics: KernelDiagnosticEvent[] = []
     const kernel = await openTestRuntime(dir, { onDiagnostic: (e) => diagnostics.push(e) })
-    const notifications: HelmEventFrame[] = []
+    const notifications: HelmxEventFrame[] = []
     kernel.events.subscribe((f) => {
       if (f.event.type === 'notification') notifications.push(f)
     })
@@ -313,7 +313,7 @@ describe('harness.closed, HelmStore fatal storage circuit breaker, and Diagnosti
     const dir = join(root, 'harness-failed')
     const diagnostics: KernelDiagnosticEvent[] = []
     const kernel = await openTestRuntime(dir, { onDiagnostic: (e) => diagnostics.push(e) })
-    const notifications: HelmEventFrame[] = []
+    const notifications: HelmxEventFrame[] = []
     kernel.events.subscribe((f) => {
       if (f.event.type === 'notification') notifications.push(f)
     })
@@ -321,7 +321,7 @@ describe('harness.closed, HelmStore fatal storage circuit breaker, and Diagnosti
     const secret = 'sk-harness-secret-leak-999'
     kernel.stash.addRedaction(secret)
 
-    // Break only Harness underlying storage.commit (leave HelmStore writable to test live EventHub notification)
+    // Break only Harness underlying storage.commit (leave HelmxStore writable to test live EventHub notification)
     const internals = kernel as unknown as {
       database: { storage: { commit: (...args: unknown[]) => Promise<unknown> } }
     }
@@ -336,7 +336,7 @@ describe('harness.closed, HelmStore fatal storage circuit breaker, and Diagnosti
         await new Promise((r) => setTimeout(r, 15))
       }
 
-      assert.ok(kernel.fatalError instanceof HelmError, 'should record readonly fatalError')
+      assert.ok(kernel.fatalError instanceof HelmxError, 'should record readonly fatalError')
       assert.ok(!kernel.fatalError.message.includes(secret), 'fatalError must be redacted')
       assert.ok(kernel.fatalError.message.includes('[REDACTED]'))
 
@@ -373,7 +373,7 @@ describe('harness.closed, HelmStore fatal storage circuit breaker, and Diagnosti
     }
   })
 
-  it('HelmStore instance-scoped onError isolates multiple KernelRuntime instances and routes diagnostics and internal notifications', { timeout: 60_000 }, async () => {
+  it('HelmxStore instance-scoped onError isolates multiple KernelRuntime instances and routes diagnostics and internal notifications', { timeout: 60_000 }, async () => {
     const dirA = join(root, 'multi-a')
     const dirB = join(root, 'multi-b')
     const diagA: KernelDiagnosticEvent[] = []
@@ -393,13 +393,13 @@ describe('harness.closed, HelmStore fatal storage circuit breaker, and Diagnosti
       hostNotesB.push(p)
     })
 
-    // Inject SQL write failure strictly into kernelA's HelmStore
+    // Inject SQL write failure strictly into kernelA's HelmxStore
     const internalsA = kernelA as unknown as {
       database: { db: { run: (sql: string, ...params: unknown[]) => Promise<unknown> } }
     }
     const origRun = internalsA.database.db.run.bind(internalsA.database.db)
     internalsA.database.db.run = (sql: string, ...params: unknown[]) => {
-      if (sql.includes('INSERT INTO helm_plugin_docs')) {
+      if (sql.includes('INSERT INTO helmx_plugin_docs')) {
         return Promise.reject(new Error(`injected store write failure: ${secretA}`))
       }
       return origRun(sql, ...params)
@@ -409,10 +409,10 @@ describe('harness.closed, HelmStore fatal storage circuit breaker, and Diagnosti
       kernelA.documentStore.set('pluginA:k', { ok: true })
       await assert.rejects(
         () => kernelA.documentStore.flush(),
-        (err: unknown) => err instanceof HelmError && err.code === 'store_flush_failed',
+        (err: unknown) => err instanceof HelmxError && err.code === 'store_flush_failed',
       )
 
-      assert.ok(kernelA.fatalError instanceof HelmError, 'kernelA should record fatalError')
+      assert.ok(kernelA.fatalError instanceof HelmxError, 'kernelA should record fatalError')
       assert.ok(!kernelA.fatalError.message.includes(secretA), 'fatalError must be redacted')
       assert.equal(kernelB.fatalError, undefined, 'kernelB must stay isolated from kernelA faults')
 
@@ -436,7 +436,7 @@ describe('harness.closed, HelmStore fatal storage circuit breaker, and Diagnosti
     } finally {
       await assert.rejects(
         () => kernelA.close(),
-        (err: unknown) => err instanceof HelmError && err.code === 'store_flush_failed',
+        (err: unknown) => err instanceof HelmxError && err.code === 'store_flush_failed',
       )
       await kernelB.close()
     }
@@ -484,10 +484,10 @@ describe('harness.closed, HelmStore fatal storage circuit breaker, and Diagnosti
       throwingEmit({ source: 'unit.throw', message: 'should not propagate' }),
     )
 
-    // Standalone HelmStore with onDiagnostic routes through per-instance sink without hitting globals
-    const db = await openHelmDatabase(join(root, 'standalone-store'))
+    // Standalone HelmxStore with onDiagnostic routes through per-instance sink without hitting globals
+    const db = await openHelmxDatabase(join(root, 'standalone-store'))
     const storeEvents: KernelDiagnosticEvent[] = []
-    const store = new HelmStore(db, {
+    const store = new HelmxStore(db, {
       onDiagnostic: (e) => storeEvents.push(e),
       redact: (t) => stash.redact(t),
     })
@@ -495,13 +495,13 @@ describe('harness.closed, HelmStore fatal storage circuit breaker, and Diagnosti
     const rawDb = (store as unknown as { db: { run: (sql: string, ...p: unknown[]) => Promise<void> } }).db
     const orig = rawDb.run.bind(rawDb)
     rawDb.run = (sql: string, ...p: unknown[]) => {
-      if (sql.includes('helm_plugin_docs')) {
+      if (sql.includes('helmx_plugin_docs')) {
         return Promise.reject(new Error('standalone super-secret-value'))
       }
       return orig(sql, ...p)
     }
     store.putPluginDoc('p', 'k', '{"a":1}')
-    await assert.rejects(() => store.flushPublic(), HelmError)
+    await assert.rejects(() => store.flushPublic(), HelmxError)
     assert.equal(storeEvents.length, 1)
     assert.equal(storeEvents[0]!.source, 'store')
     assert.ok(!(storeEvents[0]!.error ?? '').includes('super-secret-value'))

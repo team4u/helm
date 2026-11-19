@@ -1,4 +1,4 @@
-import { pathRulesForShape } from '@helm/protocol/browser'
+import { pathRulesForShape } from '@helmx/protocol/browser'
 import { isSameResolvedTarget, isPrototypeParamKey, SCREEN_PARAM_KEY_PATTERN, type ActiveModal, type ResolvedTarget } from './types.js'
 
 /**
@@ -8,7 +8,7 @@ import { isSameResolvedTarget, isPrototypeParamKey, SCREEN_PARAM_KEY_PATTERN, ty
  * decode / compare functions; the syntax contract lives in test/url-hash.test.ts.
  * Parse defaults (empty hash / invalid path -> profile center) stay unchanged;
  * "entries without an explicit primary target" are upgraded to a conversation
- * space target by the product layer (HelmStoreProvider landing); this module
+ * space target by the product layer (HelmxStoreProvider landing); this module
  * keeps that policy out.
  *
  * Path tree (hierarchical routing: sub-items are always path segments, never
@@ -40,7 +40,7 @@ type PersistedModal = Exclude<ActiveModal, null | { kind: 'command-palette' }>
  * `#/settings/profiles`; the historical conversation:1 default was removed
  * with the root-conversation redesign). The parse-layer default is unchanged;
  * a landing entry with "no explicit primary target and no modal" is upgraded
- * by HelmStoreProvider to the conversation-space default via replace once
+ * by HelmxStoreProvider to the conversation-space default via replace once
  * data is ready (see the landing effect).
  */
 const DEFAULT_PRIMARY: ResolvedTarget = { kind: 'profiles' }
@@ -379,7 +379,7 @@ function splitHash(rawHash: string): { path: string; params: URLSearchParams } {
  * query-only hashes and invalid paths are all false (the parse-default
  * fallback to the profile center is not an explicit target). The landing
  * decision consults only this function and modal deep links; the landing
- * policy itself belongs to the product layer (HelmStoreProvider).
+ * policy itself belongs to the product layer (HelmxStoreProvider).
  */
 export function hashHasPrimaryTarget(rawHash: string): boolean {
   return parseTargetValue(splitHash(rawHash).path) !== null
@@ -391,7 +391,7 @@ export function hashHasPrimaryTarget(rawHash: string): boolean {
  * `#/settings/profiles` / no split / workbench closed / no modal) — never
  * throws and never produces NaN; the landing upgrade for "entries without an
  * explicit primary target" (replace to the conversation space once auth and
- * data are ready) belongs to HelmStoreProvider; this function stays pure
+ * data are ready) belongs to HelmxStoreProvider; this function stays pure
  * parsing.
  */
 export function parseLocationHash(rawHash: string): WorkspaceLocationState {

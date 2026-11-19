@@ -10,7 +10,7 @@
  * - Distinguish "succeeded, keepalive pending settle" from "failed, keep the scene" (failure panes never join auto-cleanup).
  */
 
-import { HelmError } from '@helm/protocol'
+import { HelmxError } from '@helmx/protocol'
 import { targetNodeId, type HerdrTarget } from './contracts.js'
 import { OUTPUT_FILE_PATTERN } from './transport-output.js'
 
@@ -92,7 +92,7 @@ export function nodeIdOf(pane: { target?: HerdrTarget }): string | undefined {
 function assertValidManagedOutputFileName(outputFileName: unknown, paneId: string): string | undefined {
   if (outputFileName === undefined) return undefined
   if (typeof outputFileName !== 'string' || !OUTPUT_FILE_PATTERN.test(outputFileName)) {
-    throw new HelmError(
+    throw new HelmxError(
       'herdr_managed_invalid',
       `Herdr 受管记录包含非法交接文件名：${String(outputFileName)}`,
       500,
@@ -117,7 +117,7 @@ export class PaneRegistry {
     if (restored) {
       for (const pane of restored.panes) {
         if (!pane.target || !pane.routing || typeof pane.routing.kind !== 'string' || pane.routing.kind === '') {
-          throw new HelmError('herdr_managed_invalid', 'Herdr managed record is missing target/routing', 500)
+          throw new HelmxError('herdr_managed_invalid', 'Herdr managed record is missing target/routing', 500)
         }
         const outputFileName = assertValidManagedOutputFileName(pane.outputFileName, pane.paneId)
         this.panes.set(scopeKey(targetNodeId(pane.target), pane.paneId), {

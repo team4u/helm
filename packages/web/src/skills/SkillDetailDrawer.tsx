@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import type { SkillSummary } from '@helm/protocol/browser'
-import { HelmIcon, CopyButton, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle, Select } from '@helm/plugin-client'
-import type { SelectOption } from '@helm/plugin-client'
+import type { SkillSummary } from '@helmx/protocol/browser'
+import { HelmxIcon, CopyButton, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle, Select } from '@helmx/plugin-client'
+import type { SelectOption } from '@helmx/plugin-client'
 import { CodeBlockView, MarkdownView } from '../conversation/MarkdownView.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import {
@@ -184,7 +184,7 @@ export function SkillDetailDrawer({
                 aria-label={t('common.close')}
                 title={t('common.close')}
               >
-                <HelmIcon name="x" size={14} />
+                <HelmxIcon name="x" size={14} />
               </button>
             </DialogClose>
           </div>
@@ -212,7 +212,7 @@ export function SkillDetailDrawer({
                         />
                       ) : (
                         <span className="skill-reader-file-label mono" title={activeDisplayPath}>
-                          <HelmIcon name={isMarkdown ? 'file-text' : 'file-code'} size={13} />
+                          <HelmxIcon name={isMarkdown ? 'file-text' : 'file-code'} size={13} />
                           <span>{activeDisplayPath}</span>
                         </span>
                       )}
@@ -221,7 +221,7 @@ export function SkillDetailDrawer({
                     <div className="skill-reader-toolbar-meta">
                       {loading && (
                         <span className="skill-reader-loading text-subtle">
-                          <HelmIcon name="loader" size={12} className="spin" />
+                          <HelmxIcon name="loader" size={12} className="spin" />
                           <span>{t('common.loading')}</span>
                         </span>
                       )}
@@ -238,7 +238,7 @@ export function SkillDetailDrawer({
                             title={t('skills.drawer.richTitle')}
                             onClick={() => setViewMode('rich')}
                           >
-                            <HelmIcon name="eye" size={12} />
+                            <HelmxIcon name="eye" size={12} />
                             <span>{t('skills.drawer.richMode')}</span>
                           </button>
                           <button
@@ -248,7 +248,7 @@ export function SkillDetailDrawer({
                             title={t('skills.drawer.sourceTitle')}
                             onClick={() => setViewMode('source')}
                           >
-                            <HelmIcon name="code" size={12} />
+                            <HelmxIcon name="code" size={12} />
                             <span>{t('skills.drawer.sourceMode')}</span>
                           </button>
                         </div>
@@ -279,12 +279,12 @@ export function SkillDetailDrawer({
                     <div className="skill-reader-body" data-mode={richText ? 'rich' : 'source'}>
                       {error ? (
                         <div className="callout callout-error" role="alert">
-                          <HelmIcon name="alert-circle" size={13} />
+                          <HelmxIcon name="alert-circle" size={13} />
                           <span className="callout-text">{t('skills.drawer.readFailed', { error })}</span>
                         </div>
                       ) : loading && content === '' ? (
                         <div className="skill-reader-placeholder text-subtle">
-                          <HelmIcon name="loader" size={13} className="spin" />
+                          <HelmxIcon name="loader" size={13} className="spin" />
                           <span>{t('skills.drawer.readingContent')}</span>
                         </div>
                       ) : content === '' ? (

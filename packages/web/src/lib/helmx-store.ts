@@ -1,5 +1,5 @@
 /**
- * Domain-sliced external store for `@helm/web`: decouples high-frequency
+ * Domain-sliced external store for `@helmx/web`: decouples high-frequency
  * per-conversation live/detail/artifact updates from low-frequency catalog,
  * auth, preference, and navigation domains so React components subscribe via
  * `useSyncExternalStore` without full-tree re-render cascades.
@@ -13,7 +13,7 @@ import type {
   ConversationLive,
   ConversationSummary,
   CredentialSummary,
-  HelmLocale,
+  HelmxLocale,
   LocalizedText,
   NodeInfo,
   PluginSummary,
@@ -21,8 +21,8 @@ import type {
   Profile,
   ProviderConfig,
   SkillSummary,
-} from '@helm/protocol/browser'
-import { resolveLocalizedText } from '@helm/protocol/browser'
+} from '@helmx/protocol/browser'
+import { resolveLocalizedText } from '@helmx/protocol/browser'
 import {
   assetsApi,
   authApi,
@@ -79,7 +79,7 @@ import {
   type ActiveModal,
   type FocusedPanel,
   type GroupedUiSpecs,
-  type HelmStoreValue,
+  type HelmxStoreValue,
   type LocalePreference,
   type ResolvedTarget,
   type SidebarSpace,
@@ -128,7 +128,7 @@ export interface AuthSlice {
 export interface PrefsSlice {
   theme: ThemeMode
   themePreference: ThemePreference
-  locale: HelmLocale
+  locale: HelmxLocale
   localePreference: LocalePreference
   quietNotifyEnabled: boolean
 }
@@ -182,7 +182,7 @@ export interface NavSlice {
 export interface PluginHostPortSlice {
   authenticated: boolean
   theme: ThemeMode
-  locale: HelmLocale
+  locale: HelmxLocale
   conversations: ConversationSummary[]
   conversationDetails: Record<number, ConversationDetail>
   conversationLives: Record<number, ConversationLive>
@@ -193,10 +193,10 @@ export interface PluginHostPortSlice {
   pluginDocs: Record<string, unknown>
 }
 
-export type ResolvedAskEntry = HelmStoreValue['resolvedAsksByConv'][number][number]
+export type ResolvedAskEntry = HelmxStoreValue['resolvedAsksByConv'][number][number]
 
-export type HelmStoreActions = Pick<
-  HelmStoreValue,
+export type HelmxStoreActions = Pick<
+  HelmxStoreValue,
   | 'setTheme'
   | 'setThemePreference'
   | 'toggleTheme'
@@ -388,7 +388,7 @@ function shallowEqualAuth(a: AuthSlice, b: AuthSlice): boolean {
   )
 }
 
-export class HelmExternalStore {
+export class HelmxExternalStore {
   readonly requests = new StoreRequestManager()
   readonly sseCursorRef: { current: SseCursor | null } = { current: null }
   readonly lastSyncedLocation: { current: WorkspaceLocationState }
@@ -441,7 +441,7 @@ export class HelmExternalStore {
   private locationStateCache: WorkspaceLocationState
   private noticesState: ToastNotice[] = []
   private pluginHostPortSlice: PluginHostPortSlice
-  private fullSnapshotCache: HelmStoreValue | null = null
+  private fullSnapshotCache: HelmxStoreValue | null = null
 
   private noticeSequence = 0
   private spaceMemory: Partial<Record<SidebarSpace, ResolvedTarget>>
@@ -458,7 +458,7 @@ export class HelmExternalStore {
   private loadErrorListeners = new Map<string, Set<StoreListener>>()
   private pluginDocListeners = new Map<string, Set<StoreListener>>()
 
-  readonly actions: HelmStoreActions
+  readonly actions: HelmxStoreActions
 
   constructor(bootLocation: WorkspaceLocationState) {
     const themePreference = getStoredPreference()
@@ -637,7 +637,7 @@ export class HelmExternalStore {
   getAuthenticated = (): boolean => this.authState.authenticated
   getSseConnected = (): boolean => this.authState.sseConnected
   getPrefsSlice = (): PrefsSlice => this.prefsState
-  getLocale = (): HelmLocale => this.prefsState.locale
+  getLocale = (): HelmxLocale => this.prefsState.locale
   getCatalogSlice = (): CatalogSlice => this.catalogState
   getProfilesSlice = (): ProfilesSlice => this.profilesSlice
   getModels = (): ModelDescriptor[] => this.catalogState.models
@@ -683,9 +683,9 @@ export class HelmExternalStore {
   getPluginDoc = (docKey: string): unknown =>
     Object.hasOwn(this.liveState.pluginDocs, docKey) ? this.liveState.pluginDocs[docKey] : undefined
 
-  getSnapshot = (): HelmStoreValue => {
+  getSnapshot = (): HelmxStoreValue => {
     if (this.fullSnapshotCache !== null) return this.fullSnapshotCache
-    const next: HelmStoreValue = {
+    const next: HelmxStoreValue = {
       ...this.liveState,
       ...this.authState,
       ...this.prefsState,
@@ -1133,7 +1133,7 @@ export class HelmExternalStore {
     this.patchPrefs({ localePreference: next, locale: effective })
   }
 
-  setLocale = (next: HelmLocale): void => {
+  setLocale = (next: HelmxLocale): void => {
     this.setLocalePreference(next)
   }
 
@@ -1199,8 +1199,8 @@ export class HelmExternalStore {
       this.patchAuth({
         authReady: true,
         authError: this.translate({
-          en: `Cannot connect to the Helm kernel: ${errorText(error)}`,
-          'zh-CN': `无法连接 Helm 内核：${errorText(error)}`,
+          en: `Cannot connect to the Helmx kernel: ${errorText(error)}`,
+          'zh-CN': `无法连接 Helmx 内核：${errorText(error)}`,
         }),
       })
     }

@@ -1,5 +1,5 @@
 /** Model provider gateway and server-side credential commands: providers list/set, credentials list/set/delete. */
-import type { CredentialSummary, ProviderConfig } from '@helm/protocol'
+import type { CredentialSummary, ProviderConfig } from '@helmx/protocol'
 import { CliError } from '../errors.js'
 import { flagValue, parseFlags } from '../args.js'
 import type { CommandContext, CommandSpec } from './shared.js'

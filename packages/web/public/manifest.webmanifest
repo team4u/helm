@@ -1,8 +1,8 @@
 {
   "id": "/",
-  "name": "Helm",
-  "short_name": "Helm",
-  "description": "Helm 主控台",
+  "name": "Helmx",
+  "short_name": "Helmx",
+  "description": "Helmx 主控台",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

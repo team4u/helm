@@ -5,7 +5,7 @@
  * Parsing is lenient at the client boundary: a not-yet-arrived doc (undefined)
  * resolves to empty lists without fabricating placeholder data.
  */
-import type { ConversationSummary } from '@helm/protocol'
+import type { ConversationSummary } from '@helmx/protocol'
 import type { CollabGroupSummary } from './board-model.ts'
 
 /**

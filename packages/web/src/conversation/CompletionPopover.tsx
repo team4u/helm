@@ -16,7 +16,7 @@ import { useWebLocale } from '../i18n/use-web-locale.js'
 import type { MergedCompletionItem } from './composer-completion-model.js'
 import { COMPLETION_VISIBLE_LIMIT } from './composer-completion-model.js'
 import type { CompletionSourceSnapshot } from './use-composer-completion.js'
-import { Popover, PopoverAnchor, PopoverContent } from '@helm/plugin-client'
+import { Popover, PopoverAnchor, PopoverContent } from '@helmx/plugin-client'
 
 export interface CompletionPopoverProps {
   open: boolean

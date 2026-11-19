@@ -2,24 +2,24 @@
  * Model catalog contextWindow serialization and models.changed backfill pipeline (real KernelRuntime + HTTP):
  *
  * 1. GET /api/models (sharing source with kernel.listModels): includes contextWindow when truly known;
- *    omits silently defaulted (helmContextWindowKnown: false) and invalid (Infinity) values;
+ *    omits silently defaulted (helmxContextWindowKnown: false) and invalid (Infinity) values;
  * 2. Dynamic provider catalog updates (reloadModels -> rebuild -> models.changed): idle conversations
  *    receive usage cache backfills via event subscription (unknown -> known / known -> cleared) with
  *    no new user input; summaries deliver via SSE conversation.upsert without changing stateChangeSeq;
  * 3. Magpie-specific field parsing is tested separately (magpie-plugin.test locks official fields);
  *    here models mirror builtin:magpie toPiModel output (known windows carry no marker; unknown windows
- *    carry helmContextWindowKnown: false + defensive 128k default).
+ *    carry helmxContextWindowKnown: false + defensive 128k default).
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import type { Model, Provider } from '@earendil-works/pi-ai'
-import type { ConversationSummary } from '@helm/protocol'
+import type { ConversationSummary } from '@helmx/protocol'
 import { KernelRuntime } from '../src/runtime/index.js'
 import { startHub } from '../src/http/index.js'
 import { makeFauxModels, useTempDir, waitFor } from './helpers.js'
 
-/** Matches HelmModelSourceMeta / PiMagpieModel: unknown-window marker passes through via model objects. */
-type WindowedModel = Model<string> & { helmContextWindowKnown?: boolean }
+/** Matches HelmxModelSourceMeta / PiMagpieModel: unknown-window marker passes through via model objects. */
+type WindowedModel = Model<string> & { helmxContextWindowKnown?: boolean }
 
 /** Polls with bounded timeout until a conversation.upsert carrying expected window appears after afterIndex. */
 async function waitForUpsertWindow(
@@ -51,7 +51,7 @@ async function waitForUpsertWindow(
 }
 
 test('catalog contextWindow projection and models.changed backfill: unknown -> known -> cleared, keeping stateChangeSeq unchanged', { timeout: 60_000 }, async (t) => {
-  const dataDir = useTempDir(t, 'helm-models-window-')
+  const dataDir = useTempDir(t, 'helmx-models-window-')
   let hub: Awaited<ReturnType<typeof startHub>> | undefined
   let kernel: KernelRuntime | undefined
   try {
@@ -64,7 +64,7 @@ test('catalog contextWindow projection and models.changed backfill: unknown -> k
 
     // Dynamic provider (matching Magpie toPiModel output): mutable array simulates catalog refresh.
     const { faux } = makeFauxModels({ provider: 'win', models: [{ id: 'm-ctx' }, { id: 'm-bad' }] })
-    const unknownModel: WindowedModel = { ...faux.getModel('m-ctx')!, contextWindow: 128_000, helmContextWindowKnown: false }
+    const unknownModel: WindowedModel = { ...faux.getModel('m-ctx')!, contextWindow: 128_000, helmxContextWindowKnown: false }
     const badModel: WindowedModel = { ...faux.getModel('m-bad')!, contextWindow: Number.POSITIVE_INFINITY }
     const knownModel: WindowedModel = { ...faux.getModel('m-ctx')!, contextWindow: 400_000 }
     let current: WindowedModel[] = [unknownModel, badModel]

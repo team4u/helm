@@ -2,7 +2,7 @@
 /**
  * Pre-build cleanup: incrementally prunes stale artifacts in this package's dist that no longer have
  * matching source files, while preserving <plugin>/client/** assets that still exist.
- * Supports --force / HELM_CLEAN_DIST=1 for a full wipe.
+ * Supports --force / HELMX_CLEAN_DIST=1 for a full wipe.
  */
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';

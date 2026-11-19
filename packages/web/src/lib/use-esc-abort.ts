@@ -4,7 +4,7 @@
  * target switch / non-running state, and cleans timers on unmount.
  */
 import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react'
-import type { ConversationDetail, ConversationSummary } from '@helm/protocol/browser'
+import type { ConversationDetail, ConversationSummary } from '@helmx/protocol/browser'
 import { conversationsApi } from './api.js'
 import { errorText } from './error-text.js'
 import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
@@ -26,7 +26,7 @@ export interface UseEscAbortOptions {
   setNotices: Dispatch<SetStateAction<ToastNotice[]>>
   pushNotice: (notice: Omit<ToastNotice, 'id' | 'createdAt'>) => void
   /**
-   * Locale seam: this hook runs inside HelmStoreProvider's own body (no
+   * Locale seam: this hook runs inside HelmxStoreProvider's own body (no
    * context access); the Provider does not pass `t` yet, so the English bridge
    * translator keeps today's behavior until the wiring lands.
    */

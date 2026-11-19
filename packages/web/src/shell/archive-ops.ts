@@ -19,7 +19,7 @@
  *   even another client's archive follows the same rule; the sidebar list
  *   updates purely via conversation.upsert.
  */
-import type { ConversationPatch, ConversationSummary } from '@helm/protocol/browser'
+import type { ConversationPatch, ConversationSummary } from '@helmx/protocol/browser'
 import { conversationsApi } from '../lib/api.js'
 import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 import { archiveConversationTags, restoreConversationTags } from '../conversation/archive-model.js'

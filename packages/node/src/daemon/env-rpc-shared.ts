@@ -2,7 +2,7 @@
  * Shared RPC error envelope and validation helpers used by `env-rpc-server`, `env-rpc-ipc`,
  * and `env-rpc-tunnel` so error codes and formatting share one source of truth.
  */
-import type { RpcEnvError, RpcResult } from '@helm/protocol';
+import type { RpcEnvError, RpcResult } from '@helmx/protocol';
 
 export type RpcErrorCode = RpcEnvError['code'];
 

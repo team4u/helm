@@ -1,5 +1,5 @@
 /**
- * Screen 参数化导航：浏览器式交互历史测试（真实 HelmStoreProvider + happy-dom）。
+ * Screen 参数化导航：浏览器式交互历史测试（真实 HelmxStoreProvider + happy-dom）。
  *
  * 覆盖：
  * - 深链刷新恢复（含 sp. / ssp. 命名空间参数）；
@@ -14,10 +14,10 @@ import * as React from 'react'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
-import { HelmStoreProvider } from '../src/lib/HelmStoreProvider.js'
-import { useHelmStore } from '../src/lib/store-context.js'
+import { HelmxStoreProvider } from '../src/lib/HelmxStoreProvider.js'
+import { useHelmxStore } from '../src/lib/store-context.js'
 import { hangingEventStream } from './helpers/sse-stream.js'
-import type { HelmStoreValue } from '../src/lib/types.js'
+import type { HelmxStoreValue } from '../src/lib/types.js'
 
 GlobalRegistrator.register()
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
@@ -76,8 +76,8 @@ function stubFetch(): void {
 // ---------------------------------------------------------------------------
 
 interface ProbeSnapshot {
-  primaryTarget: HelmStoreValue['primaryTarget']
-  splitTarget: HelmStoreValue['splitTarget']
+  primaryTarget: HelmxStoreValue['primaryTarget']
+  splitTarget: HelmxStoreValue['splitTarget']
   hash: string
   historyLength: number
 }
@@ -111,7 +111,7 @@ function mountApp(): Mount {
 
   const makeScreenProbe = (isSplit: boolean) =>
     function ScreenProbe(): React.ReactNode {
-      const store = useHelmStore()
+      const store = useHelmxStore()
       const target = isSplit ? store.splitTarget : store.primaryTarget
       const matched =
         target !== null && target.kind === 'screen' && target.pluginId === 'test:nav' && target.screenId === 'board'
@@ -129,7 +129,7 @@ function mountApp(): Mount {
     }
 
   function App(): React.ReactNode {
-    const store = useHelmStore()
+    const store = useHelmxStore()
     captured = {
       primaryTarget: store.primaryTarget,
       splitTarget: store.splitTarget,
@@ -148,7 +148,7 @@ function mountApp(): Mount {
   let root: Root | undefined
   act(() => {
     root = createRoot(host)
-    root.render(e(HelmStoreProvider, null, e(App)))
+    root.render(e(HelmxStoreProvider, null, e(App)))
   })
   return {
     probe: () => ({ ...captured, hash: window.location.hash, historyLength: window.history.length }),
@@ -314,7 +314,7 @@ test('openTarget 字符串直携参数入栈，后退还原会话位置；非法
   try {
     await app.settle()
     const before = app.probe()
-    // sidebar target / helm:open 真实入口：screen:<pluginId>/<screenId>?k=v
+    // sidebar target / helmx:open 真实入口：screen:<pluginId>/<screenId>?k=v
     await act(async () => {
       app.openTarget('screen:test:nav/board?tab=logs&runId=wf_9')
     })

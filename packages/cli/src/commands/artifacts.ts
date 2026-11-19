@@ -1,5 +1,5 @@
 /** Artifact commands: artifacts list / put / get. */
-import type { ArtifactMetadata } from '@helm/protocol'
+import type { ArtifactMetadata } from '@helmx/protocol'
 import path from 'node:path'
 import { CliError } from '../errors.js'
 import { flagValue, parseFlags } from '../args.js'
@@ -16,7 +16,7 @@ import {
 } from './shared.js'
 import { printValue } from '../output.js'
 
-const convFlags = [{ name: 'current', type: 'boolean', help: 'use HELM_CONVERSATION_ID from environment' }] as const
+const convFlags = [{ name: 'current', type: 'boolean', help: 'use HELMX_CONVERSATION_ID from environment' }] as const
 
 export function artifactsCommands(): CommandSpec[] {
   const cmds: CommandSpec[] = []

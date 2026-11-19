@@ -2,7 +2,7 @@
  * Pure functions for sidebar space-memory verdicts, default jump-back targets,
  * delete fallbacks and Screen route-param patching (zero React dependencies).
  */
-import type { ConversationSummary, Profile } from '@helm/protocol/browser'
+import type { ConversationSummary, Profile } from '@helmx/protocol/browser'
 import { isConversationArchived } from '../conversation/archive-model.js'
 import {
   isPrototypeParamKey,

@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import type { PluginSummary } from '@helm/protocol/browser'
-import { resolveLocalizedText } from '@helm/protocol/browser'
+import type { PluginSummary } from '@helmx/protocol/browser'
+import { resolveLocalizedText } from '@helmx/protocol/browser'
 import { ApiClientError, pluginsApi } from '../lib/api.js'
-import { HelmIcon } from '@helm/plugin-client'
+import { HelmxIcon } from '@helmx/plugin-client'
 import { useLocationTargets, usePlugins, useStoreActions } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { PluginCard } from './PluginCard.js'
@@ -188,7 +188,7 @@ export function PluginCenter({
       <div className="primary-center-topbar pane-topbar">
         <div className="primary-center-title-wrap pane-title-group">
           <div className="primary-center-title">
-            <HelmIcon name="puzzle" size={14} />
+            <HelmxIcon name="puzzle" size={14} />
             <span>{t('plugins.center.title')}</span>
           </div>
         </div>
@@ -201,7 +201,7 @@ export function PluginCenter({
             aria-label={t('plugins.installPlugin')}
             onClick={() => setInstallOpen(true)}
           >
-            <HelmIcon name="download" size={12} />
+            <HelmxIcon name="download" size={12} />
             <span className="pane-action-label">{t('plugins.installPlugin')}</span>
           </button>
           {isSplit ? (
@@ -218,7 +218,7 @@ export function PluginCenter({
       {/* Search toolbar */}
       <div className="plugin-center-toolbar">
         <div className="plugin-search-box">
-          <HelmIcon name="search" size={14} />
+          <HelmxIcon name="search" size={14} />
           <input
             type="text"
             placeholder={t('plugins.center.searchPlaceholder')}
@@ -234,7 +234,7 @@ export function PluginCenter({
               aria-label={t('plugins.center.clearSearch')}
               onClick={() => setQuery('')}
             >
-              <HelmIcon name="x" size={12} />
+              <HelmxIcon name="x" size={12} />
             </button>
           )}
         </div>
@@ -287,7 +287,7 @@ export function PluginCenter({
         ) : (
           <div className="plugin-center-empty">
             <div className="plugin-center-empty-icon">
-              <HelmIcon name="search" size={28} />
+              <HelmxIcon name="search" size={28} />
             </div>
             <div className="plugin-center-empty-text">{t('plugins.center.emptyTitle')}</div>
             <div className="plugin-center-empty-hint text-subtle">
@@ -302,7 +302,7 @@ export function PluginCenter({
                   setStatusFilter('all')
                 }}
               >
-                <HelmIcon name="rotate-ccw" size={12} />
+                <HelmxIcon name="rotate-ccw" size={12} />
                 <span>{t('plugins.center.resetSearch')}</span>
               </button>
             )}
