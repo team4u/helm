@@ -59,7 +59,7 @@ helmx-node start -d --hub http://<hub-host>:3202 --token <nodeId>:<secret>
 所有命令直接从仓库运行：
 
 ```bash
-git clone https://github.com/team4u/helm.git && cd helm
+git clone https://github.com/team4u/helmx.git && cd helmx
 pnpm install
 pnpm build
 ```

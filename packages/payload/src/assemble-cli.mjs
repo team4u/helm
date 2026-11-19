@@ -121,7 +121,7 @@ export async function assembleCliArtifact({ repoRoot, version, enginesNode }) {
     type: 'module',
     description: 'helmx control CLI: full command surface over the Hub HTTP API plus local Hub payload lifecycle management (update / watch / status / stop)',
     license: 'MIT',
-    repository: { type: 'git', url: 'git+https://github.com/team4u/helm.git', directory: 'packages/payload' },
+    repository: { type: 'git', url: 'git+https://github.com/team4u/helmx.git', directory: 'packages/payload' },
     publishConfig: { access: 'public' },
     engines: { node: enginesNode },
     bin: { [binName]: './index.js' },

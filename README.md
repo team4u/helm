@@ -115,7 +115,7 @@ Helmx 采用微内核设计，所有扩展能力均由插件提供。停用插�
 
 ```bash
 # 1. 获取源码并安装依赖
-git clone https://github.com/team4u/helm.git && cd helm
+git clone https://github.com/team4u/helmx.git && cd helmx
 pnpm install
 pnpm build
 

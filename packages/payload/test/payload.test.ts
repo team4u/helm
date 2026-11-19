@@ -203,7 +203,7 @@ test('payload publish package contract: the dist root package.json is a standalo
   assert.equal(distPkg.name, '@helmx/hub', 'the default publish package name must be @helmx/hub');
   assert.equal(distPkg.type, 'module');
   assert.equal(distPkg.private, undefined, 'the publish package must not be marked private');
-  assert.equal(distPkg.repository.url, 'git+https://github.com/team4u/helm.git');
+  assert.equal(distPkg.repository.url, 'git+https://github.com/team4u/helmx.git');
   assert.equal(distPkg.license, 'MIT');
   // files explicit whitelist: the root gitignore dist/ rule must not let npm pack strip the archives
   // or the cli/web trees; the six @helmx runtime packages ride as archives only — no unpacked
@@ -580,7 +580,7 @@ test('node artifact assembly contract: dist-node is a four-external-dependency p
   const rootPkg = JSON.parse(readFileSync(path.join(repoRoot, 'package.json'), 'utf-8'));
   assert.equal(pkg.engines.node, rootPkg.engines?.node ?? '>=24.12.0');
   assert.equal(pkg.license, 'MIT');
-  assert.equal(pkg.repository.url, 'git+https://github.com/team4u/helm.git');
+  assert.equal(pkg.repository.url, 'git+https://github.com/team4u/helmx.git');
   assert.equal(pkg.repository.directory, 'packages/payload');
   assert.deepEqual(pkg.publishConfig, { access: 'public' }, 'the node artifact publishes public like the payload and cli artifacts');
   assert.equal(pkg.private, undefined, 'the publish package must not be marked private');

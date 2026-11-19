@@ -169,7 +169,7 @@ export async function assembleNodeArtifact({ repoRoot, version, enginesNode }) {
     type: 'module',
     description: 'helmx node daemon: remote node runtime for the Helmx Hub (bash/read/write/edit/gate/env exec over the reverse control gateway)',
     license: 'MIT',
-    repository: { type: 'git', url: 'git+https://github.com/team4u/helm.git', directory: 'packages/payload' },
+    repository: { type: 'git', url: 'git+https://github.com/team4u/helmx.git', directory: 'packages/payload' },
     publishConfig: { access: 'public' },
     engines: { node: enginesNode },
     bin: { 'helmx-node': './dist/cli.js' },

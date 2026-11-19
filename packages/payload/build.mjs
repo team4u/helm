@@ -189,7 +189,7 @@ const distPackageJson = {
   type: 'module',
   description: 'helmx Hub runtime payload (six @helmx runtime archives + cli bundle + web dist and a zero-dependency launch entry)',
   license: 'MIT',
-  repository: { type: 'git', url: 'git+https://github.com/team4u/helm.git', directory: 'packages/payload' },
+  repository: { type: 'git', url: 'git+https://github.com/team4u/helmx.git', directory: 'packages/payload' },
   publishConfig: { access: 'public' },
   engines: { node: rootPkg.engines?.node ?? '>=24.12.0' },
   files: ['hub.tgz', 'kernel.tgz', 'plugins.tgz', 'plugin-build.tgz', 'env-io.tgz', 'protocol.tgz', 'cli', 'web', 'start.mjs', 'manifest.json', 'LICENSE', 'THIRD_PARTY_NOTICES.md'],
