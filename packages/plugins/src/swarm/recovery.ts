@@ -25,7 +25,7 @@ import {
   type GroupMemberState,
 } from './contracts.js'
 import {
-  WORKFLOW_PLUGIN_ID,
+  WORKTREE_PLUGIN_ID,
   cleanupManagedWorktree,
   releaseWorktreeHoldById,
 } from './worktree-bridge.js'
@@ -352,7 +352,7 @@ export async function reconcileOrphanWorktreeHolds(
 ): Promise<boolean> {
   let listed: { worktrees?: ListedWorktreeEntry[] } | undefined
   try {
-    listed = (await ctx.host.invokeAction(WORKFLOW_PLUGIN_ID, 'list_worktrees', {})) as {
+    listed = (await ctx.host.invokeAction(WORKTREE_PLUGIN_ID, 'list_worktrees', {})) as {
       worktrees?: ListedWorktreeEntry[]
     }
   } catch (err) {

@@ -1,6 +1,6 @@
 /**
  * worktree runtime real integration test (new contract:WorktreeAllocator/cleanup_worktree
- * fully belongs to builtin:workflow plugin).
+ * fully belongs to builtin:worktree plugin).
  *
  * override (via real createHelmx + faux model + temporary real Git repository + plugin public API):
  * 1. real spawnAgent isolation:'worktree'(agent_spawn continuation by
@@ -42,7 +42,7 @@ import { join } from 'node:path'
 import { after, before, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { createHubHandler } from '../../kernel/src/http/index.js'
-import { extractWorkflowExecutionMeta } from '@helmx/plugins/contracts'
+import { extractWorktreeExecutionMeta } from '@helmx/plugins/contracts'
 import {
   createGitTemplate,
   createHubTestApp,
@@ -51,9 +51,9 @@ import {
   type HubTestApp,
 } from './helpers/hub-test-env.js'
 
-/** extract managed worktree description (execution meta  workflow naming empty between business value). */
+/** Extract managed worktree description (execution meta 'builtin:worktree' namespace business value). */
 function worktreeOf(info: AgentExecutionInfo | undefined) {
-  return info === undefined ? undefined : extractWorkflowExecutionMeta(info).worktree
+  return info === undefined ? undefined : extractWorktreeExecutionMeta(info).worktree
 }
 
 /**
@@ -134,16 +134,16 @@ async function openRuntime(dataDir: string, cwd?: string): Promise<RuntimeEnv> {
     token,
     invoke: {
       cleanupWorktree: (input) =>
-        kernel.plugins.invokeAction('builtin:workflow', 'cleanup_worktree', input) as never,
+        kernel.plugins.invokeAction('builtin:worktree', 'cleanup_worktree', input) as never,
       inspect: (runId) =>
         kernel.plugins.invokeAction('builtin:workflow', 'inspect', { runId }) as never,
     },
     pluginDoc: {
       // plugin doc durable layer key:`${pluginId}:${name}`(helmx_plugin_docs global naming empty between).
       get: <T>(key: string, initial: T): T =>
-        kernel.documentStore.get<T>(`builtin:workflow:worktree-state:${key}`, initial),
+        kernel.documentStore.get<T>(`builtin:worktree:worktree-state:${key}`, initial),
       set: <T>(key: string, value: T): void =>
-        kernel.documentStore.set(`builtin:workflow:worktree-state:${key}`, value),
+        kernel.documentStore.set(`builtin:worktree:worktree-state:${key}`, value),
       flush: () => kernel.documentStore.flush(),
     },
     async close() {
@@ -153,10 +153,10 @@ async function openRuntime(dataDir: string, cwd?: string): Promise<RuntimeEnv> {
   }
 }
 
-/** HTTP POST /api/actions/builtin:workflow/cleanup_worktree direct tune handler(real authentication + JSON parse). */
+/** HTTP POST /api/actions/builtin:worktree/cleanup_worktree direct tune handler(real authentication + JSON parse). */
 async function postCleanup(env: RuntimeEnv, input: unknown): Promise<{ status: number; json: any }> {
   const response = await env.handler(
-    new Request('http://127.0.0.1:3202/api/actions/builtin%3Aworkflow/cleanup_worktree', {
+    new Request('http://127.0.0.1:3202/api/actions/builtin%3Aworktree/cleanup_worktree', {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${env.token}` },
       body: JSON.stringify({ input }),
@@ -200,6 +200,55 @@ async function agentReports(
   }
   return out
 }
+
+// ---------------------------------------------------------------------------
+// disable matrix: builtin:worktree 停用面（工具消失 / 非隔离派生不受影响 / 隔离请求显式拒绝）
+// ---------------------------------------------------------------------------
+
+describe('builtin:worktree disable matrix', { timeout: 60_000 }, () => {
+  it('停用 builtin:worktree：cleanup_worktree 工具即时消失、非隔离 subagent 正常、isolation:worktree 显式 unsupported_runtime 不静默降级', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 't-disable-matrix')
+    const repo = gitTemplate.cloneTo(join(dir, 'repo'))
+    const env = await openRuntime(join(dir, 'data'), repo)
+    try {
+      await env.kernel.plugins.disable('builtin:worktree')
+      // 1) 工具面：cleanup_worktree 即时消失（无幻影工具）。
+      assert.ok(
+        !env.kernel.plugins.listTools().some((t) => t.name === 'cleanup_worktree'),
+        'builtin:worktree 停用后 cleanup_worktree 工具必须消失',
+      )
+      // 2) 非隔离 subagent 正常（builtin:workflow 不静态依赖 builtin:worktree）。
+      env.faux.setResponses([fauxAssistantMessage('plain subagent done')])
+      const plain = await env.kernel.spawnAgent({
+        parentConversationId: 1,
+        prompt: 'plain task without isolation',
+      } as AgentSpawnRequest)
+      assert.equal(plain, 'plain subagent done')
+
+      // 3) 显式请求 isolation: 'worktree' 必须显式失败（内核零业务分支兜底，
+      //    绝不静默降级为非隔离执行）。
+      await assert.rejects(
+        () =>
+          env.kernel.spawnAgent({
+            parentConversationId: 1,
+            prompt: 'task requiring isolation',
+            isolation: 'worktree',
+          } as AgentSpawnRequest),
+        (err: unknown) => err instanceof Error && (err as { code?: string }).code === 'unsupported_runtime',
+      )
+
+      // 4) 重新启用后工具恢复。
+      await env.kernel.plugins.enable('builtin:worktree')
+      assert.ok(
+        env.kernel.plugins.listTools().some((t) => t.name === 'cleanup_worktree'),
+        'builtin:worktree 重新启用后 cleanup_worktree 工具恢复',
+      )
+    } finally {
+      await env.close()
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
 
 // ---------------------------------------------------------------------------
 // 1. real spawnAgent isolation:'worktree' all link (continuation fall back)
@@ -249,7 +298,7 @@ describe('builtin:worktree isolated derive (agent_spawn continuation)', { timeou
       const child = env.kernel.getConversation(resolved!.conversationId!)
       assert.equal(child.cwd, worktree!.path, 'sub-conversation mirror cwd should be worktree directory')
 
-      // ---- clean up (builtin:workflow public action; by default keep branch).----
+      // ---- clean up (builtin:worktree public action; by default keep branch).----
       // uncommitted artifact in tree inside: explicit force discard (non- force dirty reject by native-worktree dedicated items override).
       if (PROCESS_SCAN_ON) {
         const cleaned = await env.invoke.cleanupWorktree({
@@ -635,7 +684,7 @@ describe('cleanup_worktree action boundary (HTTP Schema/authentication/pass-thro
     const env = await openRuntime(join(dir, 'data'), repo)
     try {
       const noAuth = await env.handler(
-        new Request('http://127.0.0.1:3202/api/actions/builtin%3Aworkflow/cleanup_worktree', {
+        new Request('http://127.0.0.1:3202/api/actions/builtin%3Aworktree/cleanup_worktree', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ input: { conversationId: 5 } }),
@@ -670,14 +719,14 @@ describe('external plugin agent_spawn handled and worktree unify register', { ti
         definePlugin(ctx) {
           ctx.hook.onAgentSpawn((payload, next) => {
             const request = payload as AgentSpawnRequest
-            // namespace:kind form = external runtime (builtin:workflow do not pre- allocate,
+            // namespace:kind form = external runtime (builtin:worktree do not pre- allocate,
             // only back fill register and lease, hand over by this take over fully negative duty execute).
             if (request.agentType !== 'test:external') return next(request) as unknown as void
             request.onResolved?.({
               nodeId: 'local',
               executionId: 'test-exec-1',
               effectiveCwd: wtPath,
-              meta: { 'builtin:workflow': { worktree: { path: wtPath, branch: 'helmx/wf-external-1' } } },
+              meta: { 'builtin:worktree': { worktree: { path: wtPath, branch: 'helmx/wf-external-1' } } },
             })
             return { action: 'handled', result: 'external task complete (real worktree inside artifact already write)' }
           })
@@ -738,7 +787,7 @@ describe('external plugin agent_spawn handled and worktree unify register', { ti
             const request = payload as AgentSpawnRequest
             if (request.agentType !== 'test:no-node') return next(request) as unknown as void
             // missing nodeId: must not assume local.
-            request.onResolved?.({ executionId: 'exec-no-node', meta: { 'builtin:workflow': { worktree: { path: '/srv/wt/x', branch: 'helmx/wf-x' } } } })
+            request.onResolved?.({ executionId: 'exec-no-node', meta: { 'builtin:worktree': { worktree: { path: '/srv/wt/x', branch: 'helmx/wf-x' } } } })
             return { action: 'handled', result: 'false succeeded: without node' }
           })
         },
@@ -944,8 +993,8 @@ describe('durable lease unknown occupy protect (fail-closed)', { timeout: 60_000
       // doc shape and produce same construct:worktree-state embed set map, inside layer key is allocator 
       // 'runtime/worktrees'({version, records}) and lease table 'worktree-leases'.
       const worktreeId = `local:${wtPath}`
-      const existing = env.kernel.documentStore.get<Record<string, unknown>>('builtin:workflow:worktree-state', {})
-      env.kernel.documentStore.set('builtin:workflow:worktree-state', {
+      const existing = env.kernel.documentStore.get<Record<string, unknown>>('builtin:worktree:worktree-state', {})
+      env.kernel.documentStore.set('builtin:worktree:worktree-state', {
         ...existing,
         'runtime/worktrees': {
           version: 1,
@@ -973,7 +1022,7 @@ describe('durable lease unknown occupy protect (fail-closed)', { timeout: 60_000
               nodeId: 'local',
               executionId: 'ext-pane-7',
               effectiveCwd: wtPath,
-              meta: { 'builtin:workflow': { worktree: { path: wtPath, branch: 'helmx/wf-lease-1' } } },
+              meta: { 'builtin:worktree': { worktree: { path: wtPath, branch: 'helmx/wf-lease-1' } } },
             },
             worktreeId,
             createdAt: Date.now(),

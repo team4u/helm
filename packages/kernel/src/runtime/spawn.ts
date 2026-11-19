@@ -478,7 +478,7 @@ function assertSpawnRequestShape(request: AgentSpawnRequest): void {
   assertSpawnRequestTitle(request.title)
   if (request.isolation !== undefined && request.isolation !== null && request.isolation !== '') {
     // Kernel has zero business branches: non-empty isolation reaching native execution means no plugin claimed it
-    // via `agent_spawn` continuation (e.g., `builtin:workflow` disabled when worktree isolation was requested).
+    // via `agent_spawn` continuation (e.g., `builtin:worktree` disabled when worktree isolation was requested).
     throw new HelmxError(
       'unsupported_runtime',
       `isolation='${request.isolation}' is not supported here: native subagent execution does not implement isolated execution environments (handled by the corresponding plugin via the agent_spawn hook, which is currently unregistered or disabled)`,

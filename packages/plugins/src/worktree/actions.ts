@@ -1,14 +1,15 @@
 /**
- * builtin:workflow 受管 Worktree 动作（cleanup_worktree / list_worktrees / inspect_worktree，
+ * builtin:worktree 受管 Worktree 动作（cleanup_worktree / list_worktrees / inspect_worktree，
  * 以及内部隐藏动作 acquire_worktree / release_worktree_hold）。
  */
 import { HelmxError, type HelmxPluginContext } from '@helmx/protocol'
-import type { WorkflowActionDeps } from './actions.js'
+import type { WorktreeIsolation } from './isolation.js'
 
-export function registerWorktreeActions(
-  ctx: HelmxPluginContext,
-  deps: Pick<WorkflowActionDeps, 'isolation'>,
-): void {
+export interface WorktreeActionDeps {
+  isolation: WorktreeIsolation
+}
+
+export function registerWorktreeActions(ctx: HelmxPluginContext, deps: WorktreeActionDeps): void {
   const { isolation } = deps
 
   ctx.action({
@@ -220,6 +221,7 @@ export function registerWorktreeActions(
     },
     cli: { hidden: true },
     exposeAsTool: false,
+    exposeToPrompt: false,
     async handler(input, context) {
       const a = input as {
         conversationId: number
@@ -285,6 +287,7 @@ export function registerWorktreeActions(
     },
     cli: { hidden: true },
     exposeAsTool: false,
+    exposeToPrompt: false,
     async handler(input) {
       const a = input as { worktreeId: string; pluginId: string; holdId: string }
       return isolation.releaseWorktreeHold({

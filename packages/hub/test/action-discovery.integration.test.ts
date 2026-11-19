@@ -422,3 +422,25 @@ test('describe 模式：真实 run_action 返回完整嵌套 Schema 且不执行
     await host.disable('demo:describe').catch(() => {})
   }
 })
+
+test('builtin:worktree 内部跨插件动作不进 <available_actions>：acquire/release 隐藏，公开动作列目录', { timeout: 60_000 }, async () => {
+  const conv = await env.kernel.createConversation({ title: 'worktree-actions-directory' })
+  requests.length = 0
+  env.faux.setResponses([capture()])
+  await submitAndWait(conv.id, 'show actions')
+  const section = actionsSection(requests[0]!)!
+  assert.ok(section.includes('<available_actions>'), 'run_action 在场时应渲染动作目录')
+  // 内部跨插件动作（swarm 经 invokeAction 消费）绝不进入模型提示词目录。
+  assert.ok(!section.includes('acquire_worktree'), 'acquire_worktree 不得出现在 <available_actions>')
+  assert.ok(!section.includes('release_worktree_hold'), 'release_worktree_hold 不得出现在 <available_actions>')
+  // 公开动作（CLI/HTTP/AI 五端复用）保持目录可见，且归属 builtin:worktree。
+  assert.ok(section.includes('builtin:worktree.cleanup_worktree'))
+  assert.ok(section.includes('builtin:worktree.list_worktrees'))
+  assert.ok(section.includes('builtin:worktree.inspect_worktree'))
+  // 全部请求段均不得泄漏内部动作名（防跨段残留）。
+  for (const [id, text] of Object.entries(requests[0]!.sectionsById)) {
+    if (id === 'prompt.actions') continue
+    assert.ok(!(text ?? '').includes('acquire_worktree'), `段 ${id} 不得泄漏 acquire_worktree`)
+    assert.ok(!(text ?? '').includes('release_worktree_hold'), `段 ${id} 不得泄漏 release_worktree_hold`)
+  }
+})

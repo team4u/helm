@@ -201,7 +201,7 @@ if (planOutput.strategy === "direct") {
           }
         }
         const cleanup = await action(
-          "builtin:workflow.cleanup_worktree",
+          "builtin:worktree.cleanup_worktree",
           { worktreeId: item.worktree.id, mergedInto: modWt.branch, deleteBranch: true },
           { idempotent: true, label: `cleanup-${item.task.id}`, phase: "合入与清理" },
         )

@@ -1,7 +1,7 @@
 /**
  * Static core command registry: aggregates coreCommands() across REST resource domains.
  * The dispatcher (index.ts) uses this table for exact core command matching — the basis for management-plane fault isolation.
- * The workflows / worktrees domains have been extracted into builtin:workflow plugin actions (dynamic commands).
+ * The workflows domain has been extracted into builtin:workflow plugin actions and worktrees into builtin:worktree plugin actions (dynamic commands).
  */
 import { CORE_CLI_COMMAND_PATHS } from '@helmx/protocol'
 import type { CommandSpec } from './shared.js'

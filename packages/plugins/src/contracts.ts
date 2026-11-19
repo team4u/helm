@@ -308,15 +308,23 @@ export interface ExternalSteerResult {
 }
 
 // ---------------------------------------------------------------------------
-// spawn / execution meta 的 'builtin:workflow' 命名空间业务形状与边界校验
+// spawn / execution meta 的 'builtin:workflow' / 'builtin:worktree' 命名空间业务形状与边界校验
 // ---------------------------------------------------------------------------
 
 /**
  * 编排命名空间键：AgentSpawnRequest.meta / AgentExecutionInfo.meta 中归
- * builtin:workflow 所有的业务槽（runId / 派生深度上限 / 受管 worktree /
- * 控制引用）。外部运行时插件（如 builtin:herdr）按本模块契约读写该槽。
+ * builtin:workflow 所有的业务槽（runId / 派生深度上限 / 控制引用）。
+ * 外部运行时插件（如 builtin:herdr）按本模块契约读写该槽。
  */
 export const WORKFLOW_META_NAMESPACE = WORKFLOW_PLUGIN_ID
+
+/**
+ * 受管工作树命名空间键：AgentExecutionInfo.meta 中归 builtin:worktree 所有的
+ * worktree 业务槽（隔离描述）。与 workflow 命名空间正交：外部运行时回传
+ * controls（workflow 槽）与 worktree（worktree 槽）可组合、互不覆盖。
+ */
+export const WORKTREE_PLUGIN_ID = 'builtin:worktree' as const
+export const WORKTREE_META_NAMESPACE = WORKTREE_PLUGIN_ID
 
 /** spawn meta 业务形状（meta['builtin:workflow']；派生请求侧）。 */
 type WorkflowSpawnMeta = {
@@ -346,12 +354,16 @@ export type WorktreeExecutionDescriptor = {
   dirtySource?: boolean
 }
 
-/** execution meta 业务形状（meta['builtin:workflow']；onResolved 回传侧）。 */
+/** execution meta 业务形状（meta['builtin:workflow']；onResolved 回传侧，仅控制引用）。 */
 type WorkflowExecutionMeta = {
-  /** isolation: 'worktree' 兑现后的隔离工作树描述。 */
-  worktree?: WorktreeExecutionDescriptor
   /** 外部执行控制动作引用（必须与 executionId + nodeId 同时回传）。 */
   controls?: AgentExecutionControls
+}
+
+/** execution meta 业务形状（meta['builtin:worktree']；onResolved 回传侧，仅隔离工作树描述）。 */
+export type WorktreeExecutionMeta = {
+  /** isolation: 'worktree' 兑现后的隔离工作树描述。 */
+  worktree?: WorktreeExecutionDescriptor
 }
 
 const workflowSpawnMetaSchema: JsonSchema = {
@@ -412,52 +424,54 @@ function requireTrimmedString(value: unknown): string | undefined {
   return trimmed === '' ? undefined : trimmed
 }
 
-function workflowMetaError(reason: string): HelmxError {
+function metaInvalidError(namespace: string, reason: string): HelmxError {
   return new HelmxError(
     'meta_invalid',
-    `execution meta['${WORKFLOW_META_NAMESPACE}'] 业务值非法：${reason}`,
+    `execution meta['${namespace}'] 业务值非法：${reason}`,
     502,
-    { namespace: WORKFLOW_META_NAMESPACE, reason },
+    { namespace, reason },
   )
 }
 
-/** 校验并克隆 controls（严格形状：拒绝未知键与非空 trim 字符串之外的任何值）。 */
+/** 校验并克隆 controls（严格形状：拒绝未知键和非空 trim 字符串之外的任何值）。 */
 function sanitizeControls(value: unknown): AgentExecutionControls {
+  const err = (reason: string): HelmxError => metaInvalidError(WORKFLOW_META_NAMESPACE, reason)
   const source = value as Partial<AgentExecutionControls> | null
   if (source === null || typeof source !== 'object' || Array.isArray(source)) {
-    throw workflowMetaError('controls 必须是对象')
+    throw err('controls 必须是对象')
   }
   for (const key of Object.keys(source)) {
     if (key !== 'steer') {
-      throw workflowMetaError(`controls 未知字段 "${key}"`)
+      throw err(`controls 未知字段 "${key}"`)
     }
   }
   const out: AgentExecutionControls = {}
   const steer = source.steer as Partial<NonNullable<AgentExecutionControls['steer']>> | undefined
   if (steer !== undefined) {
     if (steer === null || typeof steer !== 'object' || Array.isArray(steer)) {
-      throw workflowMetaError('controls.steer 必须是对象')
+      throw err('controls.steer 必须是对象')
     }
     for (const key of Object.keys(steer)) {
       if (key !== 'pluginId' && key !== 'actionId') {
-        throw workflowMetaError(`controls.steer 未知字段 "${key}"`)
+        throw err(`controls.steer 未知字段 "${key}"`)
       }
     }
     const pluginId = requireTrimmedString(steer.pluginId)
     const actionId = requireTrimmedString(steer.actionId)
     if (pluginId === undefined || actionId === undefined) {
-      throw workflowMetaError('controls.steer.pluginId/actionId 必须是非空 trim 字符串')
+      throw err('controls.steer.pluginId/actionId 必须是非空 trim 字符串')
     }
     out.steer = { pluginId, actionId }
   }
   if (out.steer === undefined) {
-    throw workflowMetaError('controls 至少包含 steer')
+    throw err('controls 至少包含 steer')
   }
   return out
 }
 
 /** 校验并克隆受管 worktree 描述（绝对路径 / 非空分支 / 可选登记字段）。 */
 function sanitizeWorktreeDescriptor(value: unknown): WorktreeExecutionDescriptor {
+  const err = (reason: string): HelmxError => metaInvalidError(WORKTREE_META_NAMESPACE, reason)
   const source = value as Partial<WorktreeExecutionDescriptor> | null
   if (
     source === null ||
@@ -469,20 +483,20 @@ function sanitizeWorktreeDescriptor(value: unknown): WorktreeExecutionDescriptor
     typeof source.branch !== 'string' ||
     source.branch.length === 0
   ) {
-    throw workflowMetaError('worktree 必须是 { path: 绝对路径, branch: 非空 }')
+    throw err('worktree 必须是 { path: 绝对路径, branch: 非空 }')
   }
   const out: WorktreeExecutionDescriptor = { path: source.path, branch: source.branch }
   for (const key of ['id', 'repoRoot', 'baseCommit', 'baseBranch', 'parentWorktreeId'] as const) {
     const field = source[key]
     if (field !== undefined) {
       if (typeof field !== 'string' || field === '' || (key === 'repoRoot' && !isAbsoluteAgentPath(field))) {
-        throw workflowMetaError(`worktree.${key} 非法`)
+        throw err(`worktree.${key} 非法`)
       }
       out[key] = field
     }
   }
   if (source.dirtySource !== undefined) {
-    if (typeof source.dirtySource !== 'boolean') throw workflowMetaError('worktree.dirtySource 必须是布尔值')
+    if (typeof source.dirtySource !== 'boolean') throw err('worktree.dirtySource 必须是布尔值')
     out.dirtySource = source.dirtySource
   }
   return out
@@ -491,9 +505,9 @@ function sanitizeWorktreeDescriptor(value: unknown): WorktreeExecutionDescriptor
 /**
  * 读取并校验 execution meta 的 workflow 命名空间业务值（消费方边界）。
  * 入参为已过内核 envelope 校验的 AgentExecutionInfo；命名空间缺失返回
- * 空对象；存在即严格校验 worktree 描述与 controls 形状，并保持通用安全
- * 不变量：控制引用只对外部执行有意义，必须与 executionId + nodeId 同时
- * 回传（孤立 controls 拒绝；原生执行的控制走内核 guarded 端口，不经 controls）。
+ * 空对象；存在即严格校验 controls 形状，并保持通用安全不变量：控制引用只对
+ * 外部执行有意义，必须与 executionId + nodeId 同时回传（孤立 controls 拒绝；
+ * 原生执行的控制走内核 guarded 端口，不经 controls）。
  */
 export function extractWorkflowExecutionMeta(info: AgentExecutionInfo): WorkflowExecutionMeta {
   if (info.meta === undefined) return {}
@@ -507,20 +521,20 @@ export function extractWorkflowExecutionMeta(info: AgentExecutionInfo): Workflow
   const slot = sanitized[WORKFLOW_META_NAMESPACE]
   if (slot === undefined) return {}
   if (slot === null || typeof slot !== 'object' || Array.isArray(slot)) {
-    throw workflowMetaError('命名空间的值必须是普通对象')
+    throw metaInvalidError(WORKFLOW_META_NAMESPACE, '命名空间的值必须是普通对象')
   }
   for (const key of Object.keys(slot)) {
-    if (key !== 'worktree' && key !== 'controls') {
-      throw workflowMetaError(`未知字段 "${key}"`)
+    if (key !== 'controls') {
+      throw metaInvalidError(WORKFLOW_META_NAMESPACE, `未知字段 "${key}"`)
     }
   }
   const out: WorkflowExecutionMeta = {}
   const raw = slot as Record<string, unknown>
-  if (raw['worktree'] !== undefined) out.worktree = sanitizeWorktreeDescriptor(raw['worktree'])
   if (raw['controls'] !== undefined) {
     out.controls = sanitizeControls(raw['controls'])
     if (info.executionId === undefined || info.nodeId === undefined) {
-      throw workflowMetaError(
+      throw metaInvalidError(
+        WORKFLOW_META_NAMESPACE,
         'controls 必须与 executionId + nodeId 同时回传（孤立控制引用拒绝；原生执行不需要 controls）',
       )
     }
@@ -530,10 +544,10 @@ export function extractWorkflowExecutionMeta(info: AgentExecutionInfo): Workflow
 
 /**
  * 构造/合并 execution meta 的 workflow 命名空间（生产方辅助；外部运行时如
- * builtin:herdr 回传 worktree / controls 时使用）。传入 existing 时合并进
- * 既有 meta：其他命名空间（其他插件注入的业务槽）经 envelope sanitizer
- * 防御性克隆/校验后原样保留；workflow 命名空间按键覆盖合并（未提及的
- * 既有键如 controls 保留），给其他插件链留出的命名空间不因本轮写入丢失。
+ * builtin:herdr 回传 controls 时使用）。传入 existing 时合并进既有 meta：
+ * 其他命名空间（其他插件注入的业务槽，如 builtin:worktree 的 worktree 槽）
+ * 经 envelope sanitizer 防御性克隆/校验后原样保留；workflow 命名空间按键
+ * 覆盖合并（未提及的既有键保留），给其他插件链留出的命名空间不因本轮写入丢失。
  */
 export function workflowExecutionMeta(
   value: WorkflowExecutionMeta,
@@ -548,14 +562,67 @@ export function workflowExecutionMeta(
         }) }
   const previous = merged[WORKFLOW_META_NAMESPACE] ?? {}
   const slot: { [key: string]: JsonSafeValue | undefined } = { ...previous }
-  if (value.worktree !== undefined) slot['worktree'] = value.worktree
   if (value.controls !== undefined) slot['controls'] = value.controls
   merged[WORKFLOW_META_NAMESPACE] = slot as JsonSafeObject
   return merged
 }
 
+/**
+ * 读取并校验 execution meta 的 worktree 命名空间业务值（消费方边界）。
+ * 入参为已过内核 envelope 校验的 AgentExecutionInfo；命名空间缺失返回
+ * 空对象；存在即严格校验 worktree 描述形状，坏值显式拒绝、绝不静默丢弃。
+ */
+export function extractWorktreeExecutionMeta(info: AgentExecutionInfo): WorktreeExecutionMeta {
+  if (info.meta === undefined) return {}
+  // envelope 复验（与 parseWorkflowSpawnMeta 同理）：不信任中间链改写后的
+  // 形状，坏 envelope 在业务消费前显式拒绝。
+  const sanitized = sanitizeAgentNamespacedMeta(info.meta, {
+    agentId: WORKTREE_META_NAMESPACE,
+    field: 'onResolved meta',
+  })
+  const slot = sanitized[WORKTREE_META_NAMESPACE]
+  if (slot === undefined) return {}
+  if (slot === null || typeof slot !== 'object' || Array.isArray(slot)) {
+    throw metaInvalidError(WORKTREE_META_NAMESPACE, '命名空间的值必须是普通对象')
+  }
+  for (const key of Object.keys(slot)) {
+    if (key !== 'worktree') {
+      throw metaInvalidError(WORKTREE_META_NAMESPACE, `未知字段 "${key}"`)
+    }
+  }
+  const out: WorktreeExecutionMeta = {}
+  const raw = slot as Record<string, unknown>
+  if (raw['worktree'] !== undefined) out.worktree = sanitizeWorktreeDescriptor(raw['worktree'])
+  return out
+}
+
+/**
+ * 构造/合并 execution meta 的 worktree 命名空间（生产方辅助；隔离层回填
+ * 受管登记 id 与外部运行时如 builtin:herdr 回传 worktree 时使用）。传入
+ * existing 时合并进既有 meta：其他命名空间（如 builtin:workflow 的 controls
+ * 槽）经 envelope sanitizer 防御性克隆/校验后原样保留；worktree 命名空间按
+ * 键覆盖合并（未提及的既有键保留），给其他插件链留出的命名空间不因本轮写
+ * 入丢失。
+ */
+export function worktreeExecutionMeta(
+  value: WorktreeExecutionMeta,
+  existing?: AgentNamespacedMeta,
+): AgentNamespacedMeta {
+  const merged: Record<string, JsonSafeObject> =
+    existing === undefined
+      ? {}
+      : { ...sanitizeAgentNamespacedMeta(existing, {
+          agentId: WORKTREE_META_NAMESPACE,
+          field: 'execution meta 合并基底',
+        }) }
+  const previous = merged[WORKTREE_META_NAMESPACE] ?? {}
+  const slot: { [key: string]: JsonSafeValue | undefined } = { ...previous }
+  if (value.worktree !== undefined) slot['worktree'] = value.worktree
+  merged[WORKTREE_META_NAMESPACE] = slot as JsonSafeObject
+  return merged
+}
 // ---------------------------------------------------------------------------
-// 受管 Git Worktree 共享契约（builtin:workflow 真源产出，builtin:swarm 等跨插件消费）
+// 受管 Git Worktree 共享契约（builtin:worktree 真源产出，builtin:swarm 等跨插件消费）
 // ---------------------------------------------------------------------------
 
 /** 跨回合持久持有锁（供上层协同插件阻止空闲期 worktree 被误清理）。 */
@@ -599,7 +666,7 @@ export interface ManagedWorktreeRecord {
   hold?: ManagedWorktreeHold
 }
 
-/** builtin:workflow inspect_worktree 只读检视结果契约。 */
+/** builtin:worktree inspect_worktree 只读检视结果契约。 */
 export interface WorktreeInspectResult {
   record: ManagedWorktreeRecord
   exists: boolean
@@ -619,7 +686,7 @@ export interface WorktreeInspectResult {
   diffBase: 'baseCommit' | 'HEAD'
 }
 
-/** builtin:workflow acquire_worktree 动作返回结果契约。 */
+/** builtin:worktree acquire_worktree 动作返回结果契约。 */
 export interface AcquireWorktreeResult {
   worktreeId: string
   path: string

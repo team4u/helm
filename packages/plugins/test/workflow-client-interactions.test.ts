@@ -367,10 +367,10 @@ test('中止 / 清理按钮 stopPropagation：点击按钮不触发整卡打开�
         ? { summary: child11, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} }
         : { summary: undefined, detail: undefined, live: undefined, pendingAsks: [], loadError: undefined, reload: () => {} },
   })
-  const actionCalls: Array<[string, unknown]> = []
+  const actionCalls: Array<[string, unknown, string | undefined]> = []
   const spy = makeSpyCtx()
-  spy.callAction = async (actionId, input) => {
-    actionCalls.push([actionId, input])
+  spy.callAction = async (actionId, input, options) => {
+    actionCalls.push([actionId, input, options?.pluginId])
     return undefined
   }
   const mod = await importWorkflowClientModule('index.tsx')
@@ -389,7 +389,10 @@ test('中止 / 清理按钮 stopPropagation：点击按钮不触发整卡打开�
     const cleanup = host.querySelector('[aria-label="Clean up isolated worktree"]') as HTMLElement | null
     assert.ok(cleanup !== null)
     await act(async () => { cleanup!.click() })
-    assert.deepEqual(actionCalls, [['abort', { runId: 'wf_bg' }], ['cleanup_worktree', { path: '/wt/x' }]])
+    assert.deepEqual(actionCalls, [
+      ['abort', { runId: 'wf_bg' }, undefined],
+      ['cleanup_worktree', { path: '/wt/x' }, 'builtin:worktree'],
+    ], 'abort 走本插件；cleanup_worktree 必须跨插件寻址 builtin:worktree')
     for (const button of [abortBtn!, cleanup!]) {
       for (const key of ['Enter', ' ']) {
         act(() => { button.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })) })

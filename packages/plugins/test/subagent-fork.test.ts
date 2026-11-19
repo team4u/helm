@@ -268,7 +268,7 @@ describe('subagent fork 与 Git Worktree 集成（createHelmx 端到端）', { t
       assert.equal((forkResult.details?.['execution'] as Record<string, unknown> | undefined)?.['conversationId'], child.id)
       assert.ok(forkResult.text.includes('已写入标记文件'))
 
-      const wtAfterFork = (await app.kernel.plugins.invokeAction('builtin:workflow', 'list_worktrees', {})) as {
+      const wtAfterFork = (await app.kernel.plugins.invokeAction('builtin:worktree', 'list_worktrees', {})) as {
         worktrees: Array<{ conversationId: number; path: string }>
       }
       assert.equal(wtAfterFork.worktrees.length, 1)
@@ -374,7 +374,7 @@ describe('subagent fork 与 Git Worktree 集成（createHelmx 端到端）', { t
       assert.ok(r1.text.includes('unsupported_runtime') || r1.text.includes('fork'), `r1 应显式报错：${r1.text}`)
       assert.ok(r2.text.includes('unsupported_runtime') || r2.text.includes('fork'), `r2 应显式报错：${r2.text}`)
 
-      const wt = (await app.kernel.plugins.invokeAction('builtin:workflow', 'list_worktrees', {})) as {
+      const wt = (await app.kernel.plugins.invokeAction('builtin:worktree', 'list_worktrees', {})) as {
         worktrees: unknown[]
       }
       assert.deepEqual(wt.worktrees, [], '拒绝的 fork 不得分配或残留 worktree 登记')
@@ -592,7 +592,7 @@ describe('subagent fork 与 Git Worktree 集成（createHelmx 端到端）', { t
       assert.equal(res.isError, true)
       assert.ok(res.text.includes('unsupported_runtime') || res.text.includes('fork'), `应拒绝改写后请求：${res.text}`)
 
-      const wt = (await app.kernel.plugins.invokeAction('builtin:workflow', 'list_worktrees', {})) as {
+      const wt = (await app.kernel.plugins.invokeAction('builtin:worktree', 'list_worktrees', {})) as {
         worktrees: unknown[]
       }
       assert.deepEqual(wt.worktrees, [], 'WorktreeIsolation 拦截后不得分配或残留 worktree 登记')

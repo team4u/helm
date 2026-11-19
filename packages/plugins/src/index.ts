@@ -1,5 +1,5 @@
 /**
- * @helmx/plugins 聚合出口：十二个内置插件的生产者侧工厂与公开契约。
+ * @helmx/plugins 聚合出口：十三个内置插件的生产者侧工厂与公开契约。
  *
  * 消费方向（包拓扑铁律）：本包只依赖 @helmx/protocol 与外部 SDK，绝不依赖
  * @helmx/kernel 实现；产品组合（注册顺序与缺省启停）由 @helmx/hub 负责。
@@ -9,6 +9,7 @@ export { createProfilePlugin } from './profile.js';
 export { createMemoryPlugin, MEMORY_PLUGIN_ID } from './memory.js';
 export { createHerdrPlugin } from './herdr.js';
 export { createWorkflowPlugin, WORKFLOW_PLUGIN_ID } from './workflow.js';
+export { createWorktreePlugin, WORKTREE_PLUGIN_ID } from './worktree.js';
 export { WORKFLOW_SKILL_ID } from './contracts.js';
 export { createSwarmPlugin, SWARM_PLUGIN_ID } from './swarm.js';
 export {

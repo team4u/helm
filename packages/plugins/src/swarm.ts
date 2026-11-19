@@ -3,7 +3,7 @@
  *
  * 架构边界（Option A — 零全局常驻会话、零轮询 Watchdog、谁派生谁负责）：
  * - 零启动时常驻会话与零后台巡检定时器，所有协同组按需在顶层人类会话上创建；
- * - 零静态 dependencies（空闲时不阻塞停用 builtin:workflow；持锁工作树由 ManagedWorktreeHold 保护）；
+ * - 零静态 dependencies（空闲时不阻塞停用 builtin:workflow / builtin:worktree；持锁工作树由 ManagedWorktreeHold 保护）；
  * - 单真源 <dataDir>/groups/<groupId>/{meta.json, board.jsonl} 派生 index / board-badges / board-view；
  * - 纯 turn_settled 事件驱动自愈（失败自动上板 [blocker]、哑巴退场单次续催、6 条件 0-Token [stall] 守卫）。
  */

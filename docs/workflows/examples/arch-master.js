@@ -88,7 +88,7 @@ for (const mod of modDeliveries) {
     }
   }
   const cleanup = await action(
-    "builtin:workflow.cleanup_worktree",
+    "builtin:worktree.cleanup_worktree",
     { worktreeId: mod.worktreeId, mergedInto: "HEAD", deleteBranch: true },
     { idempotent: true, label: `root-cleanup-${mod.moduleName}` },
   )

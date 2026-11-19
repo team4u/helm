@@ -164,7 +164,7 @@ function withWorktree(
   const executionInfo: AgentExecutionInfo = {
     ...(result.executionInfo ?? {}),
     effectiveCwd: worktree.path,
-    meta: { 'builtin:workflow': { worktree } },
+    meta: { 'builtin:worktree': { worktree } },
   }
   return { ...result, executionInfo }
 }
@@ -210,7 +210,7 @@ const execOkActions = {
     if (command.includes('pnpm test')) return envExecResult(true, 'module gate pass')
     throw new Error(`fake host：未预期的 env.exec 命令 "${command}"`)
   },
-  'builtin:workflow.cleanup_worktree': cleanupResult,
+  'builtin:worktree.cleanup_worktree': cleanupResult,
 }
 
 // ---------------------------------------------------------------------------
@@ -417,7 +417,7 @@ describe('module-dev example', () => {
     assert.ok(merges.some((merge) => String(merge.input.command).includes('"helmx/task-t2"')))
 
     // 子工作树清理：带 mergedInto=模块分支，无需 force。
-    const cleanups = actionCalls.filter((call) => call.actionId === 'builtin:workflow.cleanup_worktree')
+    const cleanups = actionCalls.filter((call) => call.actionId === 'builtin:worktree.cleanup_worktree')
     assert.deepEqual(
       cleanups.map((call) => call.input),
       [
@@ -452,7 +452,7 @@ describe('module-dev example', () => {
           if (command === MOD_ARGS.gateCmd) return envExecResult(false, '2 tests failed')
           throw new Error(`fake host：未预期的 env.exec 命令 "${command}"`)
         },
-        'builtin:workflow.cleanup_worktree': cleanupResult,
+        'builtin:worktree.cleanup_worktree': cleanupResult,
       },
     })
     const result = await runWorkflow({ script: example('module-dev'), args: MOD_ARGS, host })
@@ -541,7 +541,7 @@ describe('arch-master example', () => {
           if (command === 'pnpm check') return envExecResult(false, 'typecheck failed')
           throw new Error(`fake host：未预期的 env.exec 命令 "${command}"`)
         },
-        'builtin:workflow.cleanup_worktree': cleanupResult,
+        'builtin:worktree.cleanup_worktree': cleanupResult,
       },
       workflows: { 'module-dev': example('module-dev') },
     })
@@ -569,7 +569,7 @@ describe('arch-master example', () => {
       (call) => call.actionId === 'env.exec' && String(call.input.command).includes('merge-base --is-ancestor'),
     )!
     assert.ok(String(merge.input.command).includes('"helmx/mod-auth"'))
-    const cleanup = actionCalls.find((call) => call.actionId === 'builtin:workflow.cleanup_worktree')!
+    const cleanup = actionCalls.find((call) => call.actionId === 'builtin:worktree.cleanup_worktree')!
     assert.deepEqual(cleanup.input, { worktreeId: 'wt-mod', mergedInto: 'HEAD', deleteBranch: true })
   })
 
@@ -590,7 +590,7 @@ describe('arch-master example', () => {
           if (command === 'pnpm check') return envExecResult(true, 'all green')
           throw new Error(`fake host：未预期的 env.exec 命令 "${command}"`)
         },
-        'builtin:workflow.cleanup_worktree': cleanupResult,
+        'builtin:worktree.cleanup_worktree': cleanupResult,
       },
       workflows: { 'module-dev': example('module-dev') },
     })

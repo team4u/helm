@@ -1,9 +1,12 @@
 /**
  * 内置插件共享契约（@helmx/plugins contracts.ts）边界校验测试：
- * - extractWorkflowExecutionMeta：worktree / controls 业务形状（严格对象、
- *   非空 trim 坐标、未知键拒绝、克隆、孤立 controls 拒绝）与 envelope 复验；
- * - workflowExecutionMeta：合并语义（保留其他命名空间与 workflow 命名空间
- *   未提及的既有键；防御性克隆/校验合并基底）；
+ * - extractWorkflowExecutionMeta：controls 业务形状（严格对象、非空 trim
+ *   坐标、未知键拒绝、克隆、孤立 controls 拒绝）与 envelope 复验；
+ * - extractWorktreeExecutionMeta：worktree 业务形状（绝对路径 / 非空分支 /
+ *   可选登记字段、未知键拒绝、克隆）与 envelope 复验（'builtin:worktree'
+ *   命名空间与 workflow 命名空间正交）；
+ * - workflowExecutionMeta / worktreeExecutionMeta：合并语义（保留其他命名空
+ *   空间与本命名空间未提及的既有键；防御性克隆/校验合并基底）；
  * - parseWorkflowSpawnMeta / withWorkflowSpawnMeta：spawn meta 业务值
  *   schema 校验与合并写入。
  * （自 @helmx/protocol 迁出后的业务形状权威测试归属 @helmx/plugins；envelope
@@ -14,30 +17,41 @@ import { describe, it } from 'node:test'
 import { HelmxError, type AgentExecutionInfo } from '@helmx/protocol'
 import {
   extractWorkflowExecutionMeta,
+  extractWorktreeExecutionMeta,
   parseWorkflowSpawnMeta,
   workflowExecutionMeta,
+  worktreeExecutionMeta,
   withWorkflowSpawnMeta,
   WORKFLOW_META_NAMESPACE,
+  WORKTREE_META_NAMESPACE,
 } from '../src/contracts.js'
 
 const timeout = { timeout: 60_000 } as const
 
 describe('extractWorkflowExecutionMeta（execution meta 业务形状）', () => {
-  it('合法 worktree + controls 通过并深克隆（trim 收敛坐标）', timeout, () => {
+  it('合法 controls 通过并深克隆（trim 收敛坐标）', timeout, () => {
     const info: AgentExecutionInfo = {
       nodeId: 'local',
       executionId: 'ws:p1',
       effectiveCwd: '/tmp/work',
       meta: {
         [WORKFLOW_META_NAMESPACE]: {
-          worktree: { path: '/wt/main', branch: 'helmx/wf-1' },
           controls: { steer: { pluginId: ' builtin:herdr ', actionId: 'steer' } },
         },
       },
     }
     const meta = extractWorkflowExecutionMeta(info)
     assert.deepEqual(meta.controls, { steer: { pluginId: 'builtin:herdr', actionId: 'steer' } })
-    assert.deepEqual(meta.worktree, { path: '/wt/main', branch: 'helmx/wf-1' })
+    // worktree 槽已迁至 'builtin:worktree' 命名空间：workflow 命名空间内出现即未知字段拒绝。
+    assert.throws(
+      () =>
+        extractWorkflowExecutionMeta({
+          nodeId: 'local',
+          executionId: 'e',
+          meta: { [WORKFLOW_META_NAMESPACE]: { worktree: { path: '/wt', branch: 'b' } } } as never,
+        }),
+      (error: unknown) => error instanceof HelmxError && error.message.includes('未知字段 "worktree"'),
+    )
     // 克隆：改写源不影响已收敛结果。
     const source: AgentExecutionInfo = {
       nodeId: 'local',
@@ -100,7 +114,7 @@ describe('extractWorkflowExecutionMeta（execution meta 业务形状）', () => 
     )
   })
 
-  it('非对象 / 空对象 / 坏坐标 / 坏 worktree 拒绝', timeout, () => {
+  it('非对象 / 空对象 / 坏坐标拒绝', timeout, () => {
     const bad = (slot: unknown) =>
       assert.throws(
         () => extractWorkflowExecutionMeta({ nodeId: 'local', executionId: 'e', meta: { [WORKFLOW_META_NAMESPACE]: slot } as never }),
@@ -113,21 +127,40 @@ describe('extractWorkflowExecutionMeta（execution meta 业务形状）', () => 
     bad({ controls: { steer: { pluginId: '', actionId: 'a' } } })
     bad({ controls: { steer: { pluginId: 'p', actionId: '   ' } } })
     bad({ controls: { steer: { pluginId: 1, actionId: 'a' } } })
-    bad({ worktree: null })
-    bad({ worktree: { path: 'rel/path', branch: 'b' } })
-    bad({ worktree: { path: '/wt', branch: '' } })
-    bad({ worktree: { path: '/wt', branch: 'b', repoRoot: 'rel' } })
-    bad({ worktree: { path: '/wt', branch: 'b', dirtySource: 'yes' } })
-    bad({ worktree: { path: '/wt', branch: 'b', baseBranch: '' } })
-    bad({ worktree: { path: '/wt', branch: 'b', baseBranch: 7 } })
-    bad({ worktree: { path: '/wt', branch: 'b', parentWorktreeId: '' } })
-    bad({ worktree: { path: '/wt', branch: 'b', parentWorktreeId: false } })
-    // 可选登记字段合法形状通过（含多级派生父子字段）。
-    const ok = extractWorkflowExecutionMeta({
+  })
+
+  it('envelope 复验：坏 JSON-safe meta 在业务消费前显式拒绝（不当空处理）', timeout, () => {
+    assert.throws(
+      () =>
+        extractWorkflowExecutionMeta({
+          nodeId: 'local',
+          executionId: 'e',
+          meta: { [WORKFLOW_META_NAMESPACE]: { controls: { steer: { pluginId: 'p', actionId: 'a' } }, fn: () => 1 } } as never,
+        }),
+      (error: unknown) => error instanceof HelmxError && (error.code === 'meta_invalid' || error.message.includes('业务值非法')),
+    )
+    // 其他命名空间坏形状同样拒绝（envelope 复验不区分命名空间归属）。
+    assert.throws(
+      () =>
+        extractWorkflowExecutionMeta({
+          nodeId: 'local',
+          executionId: 'e',
+          meta: { 'other-plugin': { bad: new Date(0) } } as never,
+        }),
+      (error: unknown) => error instanceof HelmxError && error.code === 'meta_invalid',
+    )
+  })
+})
+
+describe('extractWorktreeExecutionMeta（worktree 命名空间业务形状）', () => {
+  it('合法 worktree 通过并深克隆；缺失命名空间返回空对象', timeout, () => {
+    assert.deepEqual(extractWorktreeExecutionMeta({ conversationId: 5 }), {})
+    assert.deepEqual(extractWorktreeExecutionMeta({}), {})
+    const ok = extractWorktreeExecutionMeta({
       nodeId: 'local',
       executionId: 'e',
       meta: {
-        [WORKFLOW_META_NAMESPACE]: {
+        [WORKTREE_META_NAMESPACE]: {
           worktree: {
             path: '/wt',
             branch: 'b',
@@ -151,68 +184,102 @@ describe('extractWorkflowExecutionMeta（execution meta 业务形状）', () => 
       parentWorktreeId: 'local:/repo/../.helmx-worktrees/repo-12ab34cd',
       dirtySource: true,
     })
+    // 与 workflow 命名空间正交：controls 槽不影响 worktree 提取。
+    const both = extractWorktreeExecutionMeta({
+      nodeId: 'local',
+      executionId: 'e',
+      meta: {
+        [WORKFLOW_META_NAMESPACE]: { controls: { steer: { pluginId: 'p', actionId: 'a' } } },
+        [WORKTREE_META_NAMESPACE]: { worktree: { path: '/wt2', branch: 'b2' } },
+      },
+    })
+    assert.deepEqual(both.worktree, { path: '/wt2', branch: 'b2' })
   })
 
-  it('envelope 复验：坏 JSON-safe meta 在业务消费前显式拒绝（不当空处理）', timeout, () => {
+  it('坏 worktree 形状与未知字段拒绝', timeout, () => {
+    const bad = (slot: unknown) =>
+      assert.throws(
+        () => extractWorktreeExecutionMeta({ nodeId: 'local', executionId: 'e', meta: { [WORKTREE_META_NAMESPACE]: slot } as never }),
+        (error: unknown) => error instanceof HelmxError,
+      )
+    bad({ worktree: null })
+    bad({ worktree: [] })
+    bad({ worktree: { path: 'rel/path', branch: 'b' } })
+    bad({ worktree: { path: '/wt', branch: '' } })
+    bad({ worktree: { path: '/wt', branch: 'b', repoRoot: 'rel' } })
+    bad({ worktree: { path: '/wt', branch: 'b', dirtySource: 'yes' } })
+    bad({ worktree: { path: '/wt', branch: 'b', baseBranch: '' } })
+    bad({ worktree: { path: '/wt', branch: 'b', baseBranch: 7 } })
+    bad({ worktree: { path: '/wt', branch: 'b', parentWorktreeId: '' } })
+    bad({ worktree: { path: '/wt', branch: 'b', parentWorktreeId: false } })
+    bad({ worktree: { path: '/wt', branch: 'b' }, lease: 'x' })
+  })
+
+  it('envelope 复验：坏 JSON-safe meta 在业务消费前显式拒绝', timeout, () => {
     assert.throws(
       () =>
-        extractWorkflowExecutionMeta({
+        extractWorktreeExecutionMeta({
           nodeId: 'local',
           executionId: 'e',
-          meta: { [WORKFLOW_META_NAMESPACE]: { worktree: { path: '/wt', branch: 'b' }, fn: () => 1 } } as never,
-        }),
-      (error: unknown) => error instanceof HelmxError && (error.code === 'meta_invalid' || error.message.includes('业务值非法')),
-    )
-    // 其他命名空间坏形状同样拒绝（envelope 复验不区分命名空间归属）。
-    assert.throws(
-      () =>
-        extractWorkflowExecutionMeta({
-          nodeId: 'local',
-          executionId: 'e',
-          meta: { 'other-plugin': { bad: new Date(0) } } as never,
+          meta: { [WORKTREE_META_NAMESPACE]: { worktree: { path: '/wt', branch: 'b' }, fn: () => 1 } } as never,
         }),
       (error: unknown) => error instanceof HelmxError && error.code === 'meta_invalid',
     )
   })
 })
 
-describe('workflowExecutionMeta（合并语义）', () => {
-  it('合并保留其他命名空间与 workflow 命名空间未提及的既有键', timeout, () => {
+describe('workflowExecutionMeta / worktreeExecutionMeta（合并语义）', () => {
+  it('合并保留其他命名空间与本命名空间未提及的既有键', timeout, () => {
     const existing = {
       'other-plugin': { keep: [1, { a: 'b' }] },
       [WORKFLOW_META_NAMESPACE]: { controls: { steer: { pluginId: 'builtin:herdr', actionId: 'steer' } } },
     }
-    const merged = workflowExecutionMeta({ worktree: { path: '/wt', branch: 'helmx/wf-1', id: 'local:/wt' } }, existing)
+    const merged = worktreeExecutionMeta({ worktree: { path: '/wt', branch: 'helmx/wf-1', id: 'local:/wt' } }, existing)
     assert.deepEqual(merged['other-plugin'], { keep: [1, { a: 'b' }] })
-    // controls 未提及即保留；worktree 写入新值。
+    // 其他命名空间（含 workflow 槽）原样保留；worktree 写入新命名空间。
     assert.deepEqual(
       merged[WORKFLOW_META_NAMESPACE],
-      {
-        controls: { steer: { pluginId: 'builtin:herdr', actionId: 'steer' } },
-        worktree: { path: '/wt', branch: 'helmx/wf-1', id: 'local:/wt' },
-      },
+      { controls: { steer: { pluginId: 'builtin:herdr', actionId: 'steer' } } },
     )
-    // 合并结果仍经业务 schema 收敛。
+    assert.deepEqual(
+      merged[WORKTREE_META_NAMESPACE],
+      { worktree: { path: '/wt', branch: 'helmx/wf-1', id: 'local:/wt' } },
+    )
+    // 合并结果仍经业务 schema 收敛（两命名空间各自可提取）。
     const info: AgentExecutionInfo = { nodeId: 'local', executionId: 'e', meta: merged }
-    const parsed = extractWorkflowExecutionMeta(info)
-    assert.equal(parsed.controls?.steer?.pluginId, 'builtin:herdr')
-    assert.equal(parsed.worktree?.id, 'local:/wt')
+    assert.equal(extractWorkflowExecutionMeta(info).controls?.steer?.pluginId, 'builtin:herdr')
+    assert.equal(extractWorktreeExecutionMeta(info).worktree?.id, 'local:/wt')
+  })
+
+  it('workflowExecutionMeta 写 controls 保留既有 worktree 命名空间（herdr 双槽生产方语义）', timeout, () => {
+    const withWorktree = worktreeExecutionMeta({ worktree: { path: '/wt', branch: 'b' } })
+    const merged = workflowExecutionMeta({ controls: { steer: { pluginId: 'builtin:herdr', actionId: 'steer' } } }, withWorktree)
+    assert.deepEqual(merged[WORKFLOW_META_NAMESPACE], {
+      controls: { steer: { pluginId: 'builtin:herdr', actionId: 'steer' } },
+    })
+    assert.deepEqual(merged[WORKTREE_META_NAMESPACE], { worktree: { path: '/wt', branch: 'b' } })
   })
 
   it('合并基底防御性克隆/校验：改写 existing 不影响产物；坏基底显式拒绝', timeout, () => {
     const existing = { 'other-plugin': { v: 1 } } as Record<string, { v: number }>
-    const merged = workflowExecutionMeta({ worktree: { path: '/wt', branch: 'b' } }, existing)
+    const merged = worktreeExecutionMeta({ worktree: { path: '/wt', branch: 'b' } }, existing)
     existing['other-plugin']!['v'] = 2
     assert.deepEqual(merged['other-plugin'], { v: 1 })
     assert.throws(
       () => workflowExecutionMeta({ controls: { steer: { pluginId: 'p', actionId: 'a' } } }, { bad: { fn: () => 1 } } as never),
       (error: unknown) => error instanceof HelmxError && error.code === 'meta_invalid',
     )
+    assert.throws(
+      () => worktreeExecutionMeta({ worktree: { path: '/wt', branch: 'b' } }, { bad: { fn: () => 1 } } as never),
+      (error: unknown) => error instanceof HelmxError && error.code === 'meta_invalid',
+    )
   })
 
-  it('无基底时仅含 workflow 命名空间（herdr 生产方直接可用）', timeout, () => {
+  it('无基底时仅含本命名空间（生产方直接可用）', timeout, () => {
     const meta = workflowExecutionMeta({ controls: { steer: { pluginId: 'builtin:herdr', actionId: 'steer' } } })
     assert.deepEqual(Object.keys(meta), [WORKFLOW_META_NAMESPACE])
+    const wtMeta = worktreeExecutionMeta({ worktree: { path: '/wt', branch: 'b' } })
+    assert.deepEqual(Object.keys(wtMeta), [WORKTREE_META_NAMESPACE])
   })
 })
 

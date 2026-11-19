@@ -103,6 +103,7 @@ async function spawnSigkillSeeder(
 }
 
 const WORKFLOW_ID = 'builtin:workflow'
+const WORKTREE_ID = 'builtin:worktree'
 
 const gitTemplate = createGitTemplate()
 test.after(() => gitTemplate.cleanup())
@@ -214,11 +215,15 @@ test('swarm-int1: default-enabled zero-resident boot, idle workflow-disable free
     assert.ok(coexistingToolNames.includes('swarm_board_post'), 'swarm_board_post coexists cleanly')
     await kernel.plugins.disable('builtin:superagent')
 
-    //    - Idle builtin:swarm has NO static dependency on builtin:workflow -> disabling & re-enabling builtin:workflow succeeds!
+    //    - Idle builtin:swarm has NO static dependency on builtin:workflow / builtin:worktree -> disabling & re-enabling both succeeds!
     await kernel.plugins.disable(WORKFLOW_ID)
     assert.equal(kernel.plugins.list().find((p) => p.id === WORKFLOW_ID)?.enabled, false)
     await kernel.plugins.enable(WORKFLOW_ID)
     assert.equal(kernel.plugins.list().find((p) => p.id === WORKFLOW_ID)?.enabled, true)
+    await kernel.plugins.disable(WORKTREE_ID)
+    assert.equal(kernel.plugins.list().find((p) => p.id === WORKTREE_ID)?.enabled, false)
+    await kernel.plugins.enable(WORKTREE_ID)
+    assert.equal(kernel.plugins.list().find((p) => p.id === WORKTREE_ID)?.enabled, true)
 
     const coord = await kernel.createConversation({ title: 'Feature Chat', profileId: 'assistant', cwd: env.repoDir })
 
@@ -528,13 +533,16 @@ test('swarm-int2: Author(worktree) + Verifier(readonly) handoff, hold blocks wor
     const verifierDetail = await kernel.getConversationDetail(verifier.workerConversationId, { limit: 20 })
     assert.match(JSON.stringify(verifierDetail.entries), /swarm:board-wakeup/)
 
-    // Held worktree enforces 409 plugin_in_use on disable('builtin:workflow') AND 409 worktree_in_use on cleanup_worktree(force: true)!
+    // Held worktree enforces 409 plugin_in_use on disable('builtin:worktree') AND 409 worktree_in_use on cleanup_worktree(force: true)!
+    // workflow keeps zero static dependency on worktree: disabling builtin:workflow under a live hold stays free.
     await assert.rejects(
-      () => kernel.plugins.disable(WORKFLOW_ID),
+      () => kernel.plugins.disable(WORKTREE_ID),
       (err: unknown) => err instanceof HelmxError && err.code === 'plugin_in_use' && err.status === 409,
     )
+    await assert.doesNotReject(() => kernel.plugins.disable(WORKFLOW_ID))
+    await kernel.plugins.enable(WORKFLOW_ID)
     await assert.rejects(
-      () => kernel.plugins.invokeAction(WORKFLOW_ID, 'cleanup_worktree', { worktreeId: author.worktreeId, force: true }),
+      () => kernel.plugins.invokeAction(WORKTREE_ID, 'cleanup_worktree', { worktreeId: author.worktreeId, force: true }),
       (err: unknown) =>
         err instanceof HelmxError &&
         err.code === 'worktree_in_use' &&
@@ -548,7 +556,7 @@ test('swarm-int2: Author(worktree) + Verifier(readonly) handoff, hold blocks wor
       (err: unknown) => err instanceof HelmxError && err.code === 'swarm_worktree_unmerged' && err.status === 409,
     )
     await assert.rejects(
-      () => kernel.plugins.invokeAction(WORKFLOW_ID, 'cleanup_worktree', { worktreeId: author.worktreeId, force: true }),
+      () => kernel.plugins.invokeAction(WORKTREE_ID, 'cleanup_worktree', { worktreeId: author.worktreeId, force: true }),
       (err: unknown) => err instanceof HelmxError && err.code === 'worktree_in_use',
     )
 
@@ -635,6 +643,94 @@ test('swarm-int2: Author(worktree) + Verifier(readonly) handoff, hold blocks wor
     const finalPosts = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'board_read', { groupId })) as { posts: BoardPost[] }
     assert.ok(finalPosts.posts.length >= 4)
   } finally {
+    await env.close()
+  }
+})
+
+test('swarm-int13: builtin:workflow 停用 + builtin:worktree 启用 —— swarm 隔离派工、交接快照与释放清理完全正常（零静态依赖）', { timeout: 60_000 }, async (t) => {
+  const env = await openSwarmEnv(useTempDir(t, 'helmx-swarm-no-workflow-'))
+  try {
+    const { kernel } = env.app
+    // 前置：builtin:workflow 停用（swarm 与其零静态依赖），builtin:worktree 保持启用。
+    await kernel.plugins.disable(WORKFLOW_ID)
+    assert.equal(kernel.plugins.list().find((p) => p.id === WORKFLOW_ID)?.enabled, false)
+
+    const coord = await kernel.createConversation({ title: 'No-Workflow Coord', profileId: 'assistant', cwd: env.repoDir })
+    const { groupId } = (await kernel.plugins.invokeAction(
+      SWARM_PLUGIN_ID,
+      'create_group',
+      { title: 'Worktree-Only Squad', conversationId: coord.id },
+    )) as { groupId: string }
+
+    // 单 worker：worktree 内提交一个文件并 done（快照来自 builtin:worktree inspect）。
+    let coderStep = 0
+    env.faux.setResponses(Array.from({ length: 8 }, () => (ctx: { messages: unknown[] }) => {
+      const meta = captureRequestMeta(ctx.messages as unknown as Record<string, unknown>[])
+      const groupSec = meta.sectionsById['swarm.active_group'] ?? ''
+      if (!groupSec.includes('name="coder"')) return fauxAssistantMessage('coordinator idle')
+      coderStep += 1
+      if (coderStep === 1) {
+        return fauxAssistantMessage(
+          [fauxToolCall('bash', { command: 'printf "no-workflow-payload\n" > feature.txt && git add feature.txt && git commit -m "feat: no-workflow"' })],
+          { stopReason: 'toolUse' },
+        )
+      }
+      return fauxAssistantMessage(
+        [fauxToolCall('swarm_board_post', { to: ['coordinator'], kind: 'done', body: 'Committed feature.txt in isolated worktree.' })],
+        { stopReason: 'toolUse' },
+      )
+    }))
+
+    const coder = (await kernel.plugins.invokeAction(
+      SWARM_PLUGIN_ID,
+      'dispatch_worker',
+      { prompt: 'Commit feature.txt in your isolated worktree, then post done.', name: 'coder', access: 'readwrite', isolation: 'worktree' },
+      { conversationId: coord.id },
+    )) as { workerConversationId: number; worktreeId: string }
+    assert.ok(typeof coder.worktreeId === 'string' && coder.worktreeId.length > 0, 'worktree 停用 workflow 时派工仍应绑定受管 worktree')
+
+    await waitFor(async () => {
+      const status = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'board_status', { groupId })) as BoardViewDoc
+      return status.posts.some((p) => p.kind === 'done' && p.from === 'coder')
+    })
+    await kernel.waitForIdle(coder.workerConversationId)
+    await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+    await kernel.waitForIdle(coord.id)
+
+    // 交接快照事实来自 builtin:worktree 的权威 inspect（commitsAhead 为真实值）。
+    const read = (await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'board_read', { groupId })) as { posts: BoardPost[] }
+    const donePost = read.posts.find((p) => p.from === 'coder' && p.kind === 'done')
+    assert.ok(donePost !== undefined, 'worker done 帖应存在')
+    const inspected = (await kernel.plugins.invokeAction(WORKTREE_ID, 'inspect_worktree', {
+      worktreeId: coder.worktreeId,
+      diff: false,
+    })) as { exists: boolean; commitsAhead?: number }
+    assert.equal(inspected.exists, true)
+    assert.equal(inspected.commitsAhead, 1, 'worktree 内应有 1 个未合入提交')
+
+    // 关组释放持有锁（keepWorktree 保留工作树），随后显式清理（force 覆盖未合入保护）。
+    const closed = (await kernel.plugins.invokeAction(
+      SWARM_PLUGIN_ID,
+      'close_group',
+      { groupId, keepWorktree: true, summary: 'Merged no-workflow squad' },
+      { conversationId: coord.id },
+    )) as { closed: boolean; retainedWorktrees: Array<{ worktreeId: string }> }
+    assert.equal(closed.closed, true)
+    assert.equal(closed.retainedWorktrees.length, 1)
+    const cleaned = (await kernel.plugins.invokeAction(WORKTREE_ID, 'cleanup_worktree', {
+      worktreeId: coder.worktreeId,
+      force: true,
+      deleteBranch: true,
+    })) as { removed: boolean; branchDeleted: boolean }
+    assert.equal(cleaned.removed, true, '锁释放后 cleanup_worktree 必须可清理')
+    assert.equal(cleaned.branchDeleted, true)
+    const after = (await kernel.plugins.invokeAction(WORKTREE_ID, 'inspect_worktree', {
+      worktreeId: coder.worktreeId,
+      diff: false,
+    })) as { exists: boolean }
+    assert.equal(after.exists, false)
+  } finally {
+    await env.app.kernel.plugins.enable(WORKFLOW_ID).catch(() => {})
     await env.close()
   }
 })
@@ -1399,8 +1495,8 @@ test('swarm-int11: done non-race catch-up, failed-turn queued wakeup delivery, a
       statusAfterReconcile.posts.some((p) => p.from === 'system' && p.kind === 'blocker' && p.body.includes('@delta')),
       'must emit system [blocker] when worker conversation was deleted while plugin disabled',
     )
-    // Released hold means workflow cleanup succeeds without hold lock error!
-    await kernel.plugins.invokeAction(WORKFLOW_ID, 'cleanup_worktree', { worktreeId: wtWorker.worktreeId, force: true })
+    // Released hold means worktree cleanup succeeds without hold lock error!
+    await kernel.plugins.invokeAction(WORKTREE_ID, 'cleanup_worktree', { worktreeId: wtWorker.worktreeId, force: true })
   } finally {
     await env.close()
   }
@@ -1727,7 +1823,7 @@ test('swarm-int7: real SIGKILL mid-turn resumes streaming worktree worker with z
     await app.kernel.waitForIdle(seeded.coordId)
 
     // Worktree stayed alive during recovery and cleanup runs cleanly on close_group.
-    const inspectedBeforeClose = (await app.kernel.plugins.invokeAction('builtin:workflow', 'inspect_worktree', {
+    const inspectedBeforeClose = (await app.kernel.plugins.invokeAction('builtin:worktree', 'inspect_worktree', {
       worktreeId: preCoder.worktreeId,
       diff: false,
     })) as { exists: boolean }
@@ -1751,7 +1847,7 @@ test('swarm-int7: real SIGKILL mid-turn resumes streaming worktree worker with z
     assert.match(JSON.stringify(reports[0]!.data ?? ''), /\[done\] @coder/)
 
     await app.kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'close_group', { groupId: seeded.groupId })
-    const inspectedAfterClose = (await app.kernel.plugins.invokeAction('builtin:workflow', 'inspect_worktree', {
+    const inspectedAfterClose = (await app.kernel.plugins.invokeAction('builtin:worktree', 'inspect_worktree', {
       worktreeId: preCoder.worktreeId,
       diff: false,
     })) as { exists: boolean }
@@ -1895,7 +1991,7 @@ test('swarm-int8: SIGKILL before toolResult commit replays swarm_dispatch_worker
     await waitFor(() => appA.kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
     await appA.kernel.waitForIdle(infoA.coordId)
 
-    const wtList = (await appA.kernel.plugins.invokeAction('builtin:workflow', 'list_worktrees', {})) as {
+    const wtList = (await appA.kernel.plugins.invokeAction('builtin:worktree', 'list_worktrees', {})) as {
       worktrees: Array<{ status: string }>
     }
     assert.equal(
@@ -2099,7 +2195,7 @@ test('swarm-int9: boot reconciliation rolls back uncommitted WAL tail, converges
       profileId: 'assistant',
       cwd: env1.repoDir,
     })
-    const swarmWt = (await env1.app.kernel.plugins.invokeAction('builtin:workflow', 'acquire_worktree', {
+    const swarmWt = (await env1.app.kernel.plugins.invokeAction('builtin:worktree', 'acquire_worktree', {
       conversationId: wtSwarmConv.id,
       parentConversationId: coord.id,
       requestCwd: env1.repoDir,
@@ -2112,7 +2208,7 @@ test('swarm-int9: boot reconciliation rolls back uncommitted WAL tail, converges
       profileId: 'assistant',
       cwd: env1.repoDir,
     })
-    const workflowWt = (await env1.app.kernel.plugins.invokeAction('builtin:workflow', 'acquire_worktree', {
+    const workflowWt = (await env1.app.kernel.plugins.invokeAction('builtin:worktree', 'acquire_worktree', {
       conversationId: wtWorkflowConv.id,
       parentConversationId: coord.id,
       requestCwd: env1.repoDir,
@@ -2188,12 +2284,12 @@ test('swarm-int9: boot reconciliation rolls back uncommitted WAL tail, converges
     assert.equal(app2.kernel.getConversation(orphanWorkerId).tags.includes(WORKER_TAG), false)
 
     // 3) Orphaned builtin:swarm worktree hold was released and removed; builtin:workflow hold remained intact.
-    const swarmWtInspect = (await app2.kernel.plugins.invokeAction('builtin:workflow', 'inspect_worktree', {
+    const swarmWtInspect = (await app2.kernel.plugins.invokeAction('builtin:worktree', 'inspect_worktree', {
       worktreeId: swarmOrphanWtId,
       diff: false,
     })) as { exists: boolean }
     assert.equal(swarmWtInspect.exists, false)
-    const workflowWtInspect = (await app2.kernel.plugins.invokeAction('builtin:workflow', 'inspect_worktree', {
+    const workflowWtInspect = (await app2.kernel.plugins.invokeAction('builtin:worktree', 'inspect_worktree', {
       worktreeId: workflowWtId,
       diff: false,
     })) as { exists: boolean }

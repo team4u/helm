@@ -191,7 +191,7 @@ describe('startBackgroundAgent', () => {
       execution: {
         conversationId: 42,
         effectiveCwd: '/tmp/wt',
-        meta: { 'builtin:workflow': { worktree: { path: '/tmp/wt', branch: 'helmx/spawn-1' } } },
+        meta: { 'builtin:worktree': { worktree: { path: '/tmp/wt', branch: 'helmx/spawn-1' } } },
       },
       result: 'slow-task-result',
     }
@@ -213,7 +213,7 @@ describe('startBackgroundAgent', () => {
     assert.deepEqual(execution, {
       conversationId: 42,
       effectiveCwd: '/tmp/wt',
-      meta: { 'builtin:workflow': { worktree: { path: '/tmp/wt', branch: 'helmx/spawn-1' } } },
+      meta: { 'builtin:worktree': { worktree: { path: '/tmp/wt', branch: 'helmx/spawn-1' } } },
     })
     // 节点元数据已就位（getRun 实时视图）。
     const live = service.getRun(run.id)

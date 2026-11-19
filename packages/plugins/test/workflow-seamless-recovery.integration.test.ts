@@ -29,6 +29,7 @@ import { startHub } from '../../kernel/src/http/index.js'
 import { KernelRuntime } from '../../kernel/src/runtime/index.js'
 import type { WorkflowRunSummary } from '../src/contracts.js'
 import { createWorkflowPlugin } from '../src/workflow.js'
+import { createWorktreePlugin } from '../src/worktree.js'
 import { readJournal } from '../src/workflow/engine/journal.js'
 import { WorkflowService, type WorkflowServiceHost, type WorkflowStateStore } from '../src/workflow/engine/service.js'
 import {
@@ -46,6 +47,7 @@ const PI_AI_DIR = join(KERNEL_DIR, 'node_modules/@earendil-works/pi-ai')
 const KERNEL_SRC = pathToFileURL(join(KERNEL_DIR, 'src/runtime/index.ts')).href
 const PI_AI_FAUX_URL = pathToFileURL(join(PI_AI_DIR, 'dist/providers/faux.js')).href
 const WORKFLOW_SRC = pathToFileURL(new URL('../src/workflow.ts', import.meta.url).pathname).href
+const WORKTREE_SRC = pathToFileURL(new URL('../src/worktree.ts', import.meta.url).pathname).href
 const PLUGIN_BUILD_URL = import.meta.resolve('@helmx/plugin-build')
 const CLI_ENTRY = new URL('../../cli/src/index.ts', import.meta.url).pathname
 const TSX_CLI = require.resolve('tsx/cli')
@@ -154,6 +156,7 @@ test('T1-A: 原生后台单子代理（isolation:worktree + schema + gate）经 
       autoResume: false,
     })
     await k1.plugins.register(createWorkflowPlugin())
+    await k1.plugins.register(createWorktreePlugin())
     await k1.plugins.register({
       id: 'test:t1-hold',
       name: 'T1 Hold Tool',
@@ -244,6 +247,7 @@ test('T1-A: 原生后台单子代理（isolation:worktree + schema + gate）经 
     })
 
     await k2.plugins.register(createWorkflowPlugin())
+    await k2.plugins.register(createWorktreePlugin())
     await k2.plugins.register({
       id: 'test:t1-hold',
       name: 'T1 Hold Tool',
@@ -276,11 +280,11 @@ test('T1-A: 原生后台单子代理（isolation:worktree + schema + gate）经 
     const childUsers = childDetail.entries.filter((e) => e.kind === 'pi.user')
     assert.equal(childUsers.length, 1, 'requestId 幂等保证子会话绝无重复用户消息或重复 worktreeContextPrompt')
 
-    const worktrees = (await k2.plugins.invokeAction('builtin:workflow', 'list_worktrees', {})) as { worktrees: Array<{ path: string }> }
+    const worktrees = (await k2.plugins.invokeAction('builtin:worktree', 'list_worktrees', {})) as { worktrees: Array<{ path: string }> }
     assert.equal(worktrees.worktrees.length, 1, '绝不重复分配第二个 Worktree')
     assert.equal(worktrees.worktrees[0]!.path, worktreePath)
 
-    const postWtState = k2.documentStore.get<Record<string, unknown>>('builtin:workflow:worktree-state', {})
+    const postWtState = k2.documentStore.get<Record<string, unknown>>('builtin:worktree:worktree-state', {})
     assert.deepEqual(postWtState['worktree-leases'] ?? {}, {}, '任务完成后 Worktree running 租约应正常释放')
 
     await waitFor(() => parentReports.includes('subagent_report'), { timeoutMs: 10_000 })
@@ -305,6 +309,7 @@ import { fauxAssistantMessage, fauxProvider } from ${JSON.stringify(PI_AI_FAUX_U
 import { KernelRuntime } from ${JSON.stringify(KERNEL_SRC)}
 import { createPluginBuildProvider } from ${JSON.stringify(PLUGIN_BUILD_URL)}
 import { createWorkflowPlugin } from ${JSON.stringify(WORKFLOW_SRC)}
+import { createWorktreePlugin } from ${JSON.stringify(WORKTREE_SRC)}
 
 const dataDir = process.env.HELMX_DATA_DIR!
 const repoDir = process.env.HELMX_REPO_DIR!
@@ -312,6 +317,7 @@ const faux = fauxProvider({ tokensPerSecond: 1, tokenSize: { min: 1, max: 1 } })
 faux.setResponses([fauxAssistantMessage('这是一段极慢速流式回复用于在流式中途触发真实SIGKILL强杀现场验证后台子代理原位重挂恢复')])
 const kernel = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(), dataDir, cwd: repoDir, model: 'faux/faux-1', providers: [faux.provider], autoResume: false })
 await kernel.plugins.register(createWorkflowPlugin())
+await kernel.plugins.register(createWorktreePlugin())
 await kernel.start()
 const res = await kernel.plugins.executeTool('subagent', { prompt: '慢任务', isolation: 'worktree' }, { conversationId: 1, callId: 'call-sigkill-t1' })
 const runId = res.structuredOutput.runId
@@ -346,7 +352,10 @@ process.kill(process.pid, 'SIGKILL')
     autoResume: false,
   })
   try {
+    // T1-B 的子代理带 isolation: 'worktree'：重启侧同样先注册 workflow 再注册
+    // worktree（reattach 依赖 builtin:worktree 的 agent_spawn around 钩子）。
     await k2.plugins.register(createWorkflowPlugin())
+    await k2.plugins.register(createWorktreePlugin())
     await k2.start()
 
     await waitFor(async () => {

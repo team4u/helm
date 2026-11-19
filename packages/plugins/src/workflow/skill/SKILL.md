@@ -6,7 +6,7 @@ managedByPlugin: builtin:workflow
 
 # Workflow Orchestration
 
-Use `builtin:workflow` for focused task delegation and deterministic multi-agent pipelines where the execution graph is known up front and branches pass structured results rather than negotiating peer-to-peer. The plugin owns the tools, actions, run ledger, worktree lifecycle, background reports, and recovery semantics described here.
+Use `builtin:workflow` for focused task delegation and deterministic multi-agent pipelines where the execution graph is known up front and branches pass structured results rather than negotiating peer-to-peer. The plugin owns the tools, actions, run ledger, background reports, and recovery semantics described here; managed Git worktrees (`isolation: "worktree"`, `cleanup_worktree`, the `helmx worktrees` CLI) are owned by the sibling `builtin:worktree` plugin and stay available while it is enabled.
 
 ## Choose the execution surface
 
