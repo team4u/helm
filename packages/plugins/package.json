@@ -77,6 +77,14 @@
     "./token-speed/contracts": {
       "types": "./dist/token-speed/contracts.d.ts",
       "import": "./dist/token-speed/contracts.js"
+    },
+    "./tasks": {
+      "types": "./dist/tasks.d.ts",
+      "import": "./dist/tasks.js"
+    },
+    "./tasks/contracts": {
+      "types": "./dist/tasks/contracts.d.ts",
+      "import": "./dist/tasks/contracts.js"
     }
   },
   "scripts": {
