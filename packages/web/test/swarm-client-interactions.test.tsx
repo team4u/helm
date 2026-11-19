@@ -3,13 +3,14 @@
  *
  * 覆盖（收敛后形态：无独立 BoardScreen，编排心智模型对齐 builtin:workflow）：
  * 1. UI 扩展注册不变量（registerSwarmUi：toolView 覆盖全部 swarm_* 工具且 replaceRow、
- *    COMPOSER_DOCK_SLOT 活动托盘、workbench.panel 'groups' 仅参与者作用域、
+ *    COMPOSER_DOCK_SLOT 活动托盘仅主控作用域、workbench.panel 'groups' 仅参与者作用域、
  *    swarm:board-report / swarm:board-wakeup 单行回执渲染器、@/# composerCompleter、
  *    零 screen / 零顶栏 action / 零 sidebarItem、双语 LocalizedText、零 Emoji）；
  * 2. SwarmToolView 26px 工具轨迹行：dispatch 完成态点击打开成员会话抽屉、黑板发布行点击
  *    打开协同工作台面板、无法定目标的行展开原始详情、错误态如实展示首行、zh-CN 自然语言；
  * 3. SwarmActiveTray：无活跃事项返回 null；working/blocked 成员渲染 32px HUD（人数、进度、
- *    自然语言动态、时长），展开行点击打开 ConversationDrawer，主控视角才出现中止按钮；
+ *    自然语言动态、时长），展开行点击打开 ConversationDrawer，中止按钮恒为主控动作，
+ *    worker 会话即便被直接挂载也返回 null（防御路径，零订阅零渲染）；
  * 4. SwarmWorkbenchPanel：实时 board-view 渲染编排卡（目标、自然状态、成员行点击开抽屉、
  *    最近动态自然 kind 标签、worktree 分支事实），无实时投影时显式 board_status 一次性回退
  *    （失败可重试、不白屏不伪造运行中），完整记录展开按需 board_read；
@@ -202,7 +203,6 @@ function setStubState(options: {
   if (options.loadErrors !== undefined) stubLoadErrors = options.loadErrors
 }
 
-const noopUnsubscribe = (): (() => void) => () => {}
 const noopEnsurePluginDoc = async (): Promise<unknown> => undefined
 const noopLoadConversationDetail = async (): Promise<void> => {}
 
@@ -210,7 +210,7 @@ async function mount(
   ctx: PluginClientContextType,
   element: React.ReactElement,
   conversations: ConversationSummary[] = DEFAULT_CONVERSATIONS,
-): Promise<{ host: HTMLElement; unmount: () => void }> {
+): Promise<{ host: HTMLElement; unmount: () => void; subscribedSessionKeys: PluginSessionDocKey[] }> {
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root = createRoot(host)
@@ -220,6 +220,11 @@ async function mount(
       pluginDocs[`builtin:swarm/${k}`] = v
     }
   }
+  const subscribedSessionKeys: PluginSessionDocKey[] = []
+  const subscribeSessionDoc = (key: PluginSessionDocKey): (() => void) => {
+    subscribedSessionKeys.push(key)
+    return () => {}
+  }
   const getSessionDocState = (key: PluginSessionDocKey) =>
     stubSessionStates[`${key.pluginId}/${key.docName}/${key.conversationId}`] ?? EMPTY_SESSION_DOC_STATE
   const hostPort = {
@@ -227,7 +232,7 @@ async function mount(
     conversations,
     pluginDocs,
     ensurePluginDoc: noopEnsurePluginDoc,
-    subscribeSessionDoc: noopUnsubscribe,
+    subscribeSessionDoc,
     getSessionDocState,
     conversationDetails: {},
     conversationLives: stubConversationLives,
@@ -247,6 +252,7 @@ async function mount(
   await act(async () => {})
   return {
     host,
+    subscribedSessionKeys,
     unmount: () => {
       act(() => root.unmount())
       host.remove()
@@ -458,8 +464,8 @@ test('UI 注册契约：toolView/slot/workbenchPanel/回执/补全源，零 scre
   const slots = recorded.filter((r) => r.method === 'slot')
   assert.deepEqual(
     slots.map((s) => ({ target: s.spec['target'], scope: s.spec['scope'] })),
-    [{ target: COMPOSER_DOCK_SLOT, scope: { tags: ['swarm-coordinator', 'swarm-worker'] } }],
-    'COMPOSER_DOCK_SLOT 活动托盘仅对协同会话挂载',
+    [{ target: COMPOSER_DOCK_SLOT, scope: { tags: ['swarm-coordinator'] } }],
+    'COMPOSER_DOCK_SLOT 活动托盘仅对主控会话挂载',
   )
 
   const panels = recorded.filter((r) => r.method === 'workbenchPanel').map((r) => r.spec)
@@ -700,19 +706,18 @@ test('SwarmActiveTray：无活跃事项返回 null；working/blocked 成员渲�
     coordMount.unmount()
   }
 
-  // Worker 视角：可见展开行但无中止按钮（权限如实）
+  // Worker 视角：即便编组在飞且 board-view 有实时投影，worker 会话直接挂载也返回 null
+  //（防御路径：组件自身强制主控身份，内层订阅组件不挂载，零渲染）
   const workerSpy = makeSpyCtx({ conversationId: 51 })
   const workerMount = await mount(
     workerSpy,
     e(components.SwarmActiveTray, { conversation: convSummary(51, 'author', { tags: ['swarm-worker'] }) }),
   )
   try {
-    const toggle = workerMount.host.querySelector<HTMLButtonElement>('.sw-tray-bar-toggle')!
-    await act(async () => {
-      toggle.click()
-    })
-    assert.ok(workerMount.host.querySelector('.btn-danger') === null, 'Worker 视角不出现中止按钮')
-    assert.ok(workerMount.host.querySelector('.sw-tray-workbench') !== null, '工作台入口保留')
+    assert.equal(workerMount.host.textContent ?? '', '', 'Worker 会话直接挂载返回 null（0px 占位）')
+    assert.ok(workerMount.host.querySelector('.sw-tray') === null, 'Worker 会话不渲染组级 HUD')
+    assert.ok(workerMount.host.querySelector('.sw-tray-workbench') === null, 'Worker 会话不渲染托盘工作台入口')
+    assert.deepEqual(workerMount.subscribedSessionKeys, [], 'Worker 会话直接挂载不建立任何 board-view sessionDoc 订阅')
   } finally {
     workerMount.unmount()
   }

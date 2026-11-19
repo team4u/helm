@@ -1,21 +1,26 @@
 /**
  * builtin:swarm composer activity tray (COMPOSER_DOCK_SLOT contribution):
- * renders a compact 32px single-line HUD only when the current conversation's
- * swarm group has in-flight members (working / blocked); returns null (0px)
- * otherwise. Structurally identical to the workflow active tray — the main
- * region is one real toggle <button> (aria-expanded / aria-controls), the
- * workbench action is a sibling button, and every expanded row is one real
- * detail-entry <button> opening the ConversationDrawer, with abort as a
- * trailing sibling action for the coordinator viewer on both working and
- * blocked members (the backend abortWorker supports both; never nested).
+ * renders a compact 32px single-line HUD only in the group's *coordinator*
+ * conversation while its swarm group has in-flight members (working /
+ * blocked); returns null (0px) otherwise — a worker conversation never docks
+ * the group HUD (the slot's semantics are "this conversation's own in-flight
+ * dispatches", matching the workflow active tray; worker viewers get group
+ * context from the on-demand workbench panel). Structurally identical to the
+ * workflow active tray — the main region is one real toggle <button>
+ * (aria-expanded / aria-controls), the workbench action is a sibling button,
+ * and every expanded row is one real detail-entry <button> opening the
+ * ConversationDrawer, with abort as a trailing sibling action on both working
+ * and blocked members (the backend abortWorker supports both; never nested).
  *
- * Data: public `index` doc resolves the conversation's group; the live
- * per-coordinator `board-view` session doc provides member states (swarm keeps
- * this high-frequency state out of global docs by design).
+ * Data: the outer shell only reads the public `index` doc to resolve the
+ * conversation's group and gate on coordinator identity; the inner tray (which
+ * subscribes the live per-coordinator `board-view` session doc — swarm keeps
+ * this high-frequency state out of global docs by design) is not mounted at
+ * all for non-coordinators, so a worker mount costs zero session-doc SSE.
  *
  * Component & type exports only (Fast Refresh compliant).
  */
-import { useEffect, useId, useMemo, useState } from 'react'
+import { useId, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ComposerScopeProps } from '@helmx/protocol'
 import {
@@ -84,7 +89,6 @@ function SwarmTrayLiveLine(props: {
 
 function SwarmTrayRow(props: {
   item: SwarmTrayItem
-  isCoordinatorViewer: boolean
   busy: boolean
   onAbort: (key: string, memberName: string) => void
 }): ReactNode {
@@ -114,55 +118,44 @@ function SwarmTrayRow(props: {
         />
       </button>
       <div className="sw-tray-row-actions">
-        {props.isCoordinatorViewer ? (
-          <button
-            type="button"
-            className="btn btn-xs btn-danger"
-            disabled={props.busy}
-            onClick={() => props.onAbort(`abort:${item.name}`, item.name)}
-          >
-            <HelmxIcon name="square" size={11} />
-            <span>{resolveLocalizedText(ACTION_ABORT, locale)}</span>
-          </button>
-        ) : null}
+        <button
+          type="button"
+          className="btn btn-xs btn-danger"
+          disabled={props.busy}
+          onClick={() => props.onAbort(`abort:${item.name}`, item.name)}
+        >
+          <HelmxIcon name="square" size={11} />
+          <span>{resolveLocalizedText(ACTION_ABORT, locale)}</span>
+        </button>
       </div>
     </div>
   )
 }
 
-export function SwarmActiveTray(props: Partial<ComposerScopeProps>): ReactNode {
+/** Coordinator-side in-flight tray; mounted only for the group's coordinator conversation. */
+function SwarmCoordinatorTray(props: { conversationId: number; groupId: string }): ReactNode {
   const ctx = usePluginContext()
   const locale = usePluginLocale()
-  const conversationId = props.conversation?.id ?? ctx.conversationId
+  const { conversationId, groupId } = props
   const conversations = useConversations()
-  const index = usePluginDoc<SwarmIndexDoc>('index')
   const [expanded, setExpanded] = useState(false)
   const [busyKey, setBusyKey] = useState<string | undefined>(undefined)
   const listId = useId()
 
-  useEffect(() => {
-    setExpanded(false)
-  }, [conversationId])
-
-  const link = useMemo(
-    () => resolveConversationBoardLink(conversationId, index),
-    [conversationId, index],
-  )
-
-  const rawBoard = usePluginSessionDoc<BoardViewDoc | null>(
-    'board-view',
-    link !== undefined ? { conversationId: link.coordinatorConversationId } : undefined,
-  )
+  // The shell has already proved this conversation IS the coordinator, so the
+  // board-view subscription key below is the conversation's own id.
+  const rawBoard = usePluginSessionDoc<BoardViewDoc | null>('board-view', { conversationId })
   const board = useMemo(() => {
     // hasValue=false (or deleted) means no live projection yet: render nothing
     // instead of fabricating an in-flight state.
     if (rawBoard === undefined) return undefined
     const parsed = parseBoardView(rawBoard)
     if (parsed === undefined) return undefined
-    if (link !== undefined && parsed.group.id !== link.groupId) return undefined
+    if (parsed.group.id !== groupId) return undefined
+    if (parsed.group.coordinatorConversationId !== conversationId) return undefined
     if (parsed.group.status !== 'active') return undefined
     return parsed
-  }, [rawBoard, link])
+  }, [rawBoard, conversationId, groupId])
 
   const summary = useMemo(
     () => (board !== undefined ? buildSwarmTraySummary(board, conversations) : undefined),
@@ -172,11 +165,10 @@ export function SwarmActiveTray(props: Partial<ComposerScopeProps>): ReactNode {
   const hasElapsed = summary !== undefined && summary.items.length > 0 && summary.groupStartedAt !== undefined
   const nowMs = useElapsedNowMs(hasElapsed)
 
-  if (conversationId === undefined || summary === undefined || summary.items.length === 0) {
+  if (summary === undefined || summary.items.length === 0 || board === undefined) {
     return null
   }
 
-  const isCoordinatorViewer = conversationId === board?.group.coordinatorConversationId
   const hasBlocked = summary.blockedCount > 0
   const countText = trayCount(summary.blockedCount, summary.workingCount, locale)
   const runAbort = (key: string, memberName: string): void => {
@@ -257,7 +249,6 @@ export function SwarmActiveTray(props: Partial<ComposerScopeProps>): ReactNode {
             <SwarmTrayRow
               key={item.key}
               item={item}
-              isCoordinatorViewer={isCoordinatorViewer}
               busy={busyKey !== undefined}
               onAbort={runAbort}
             />
@@ -266,4 +257,22 @@ export function SwarmActiveTray(props: Partial<ComposerScopeProps>): ReactNode {
       ) : null}
     </div>
   )
+}
+
+export function SwarmActiveTray(props?: Partial<ComposerScopeProps>): ReactNode {
+  const ctx = usePluginContext()
+  const conversationId = props?.conversation?.id ?? ctx.conversationId
+  const index = usePluginDoc<SwarmIndexDoc>('index')
+  const link = useMemo(
+    () => resolveConversationBoardLink(conversationId, index),
+    [conversationId, index],
+  )
+
+  // Coordinator-only mounting, enforced in the component itself as a defensive
+  // guard independent of the slot scope: a worker conversation (or any
+  // non-coordinator mount) renders nothing and never mounts the board-view
+  // subscribing inner tray.
+  if (conversationId === undefined) return null
+  if (link === undefined || link.coordinatorConversationId !== conversationId) return null
+  return <SwarmCoordinatorTray key={conversationId} conversationId={conversationId} groupId={link.groupId} />
 }

@@ -12,9 +12,16 @@ const SWARM_PARTICIPANT_SCOPE: ConversationScope = {
   tags: [SWARM_COORDINATOR_TAG, SWARM_WORKER_TAG],
 }
 
-// 结单历史 tag（含历史主控与已归档 Worker）仅放行工作台编排面板查看历史编组；活动托盘与 @/# 补全仍限活跃参与者。
+// 结单历史 tag（含历史主控与已归档 Worker）仅放行工作台编排面板查看历史编组；@/# 补全仍限活跃参与者。
 const SWARM_HISTORY_VIEWER_SCOPE: ConversationScope = {
   tags: [SWARM_COORDINATOR_TAG, SWARM_COORDINATOR_ARCHIVED_TAG, SWARM_WORKER_TAG, SWARM_WORKER_ARCHIVED_TAG],
+}
+
+// 活动托盘仅主控会话挂载：composer dock 槽的语义是「本会话派出的在飞事项」（与
+// builtin:workflow 的 runs 同构），worker 视角的组上下文由会话自身状态灯与按需
+// 打开的工作台面板提供，不在 worker 输入区重复 dock 组级 HUD。
+const SWARM_COORDINATOR_SCOPE: ConversationScope = {
+  tags: [SWARM_COORDINATOR_TAG],
 }
 
 /** Model-facing swarm tool names (single source for the toolView trace registration). */
@@ -53,7 +60,7 @@ export function registerSwarmUi(ctx: HelmxPluginContext): void {
   ctx.ui.slot({
     id: 'swarm-active-tray',
     target: COMPOSER_DOCK_SLOT,
-    scope: SWARM_PARTICIPANT_SCOPE,
+    scope: SWARM_COORDINATOR_SCOPE,
     client: { module: 'index.tsx', export: 'SwarmActiveTray' },
   })
   ctx.ui.workbenchPanel({

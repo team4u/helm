@@ -5,7 +5,8 @@
  *   tools (member rows open the conversation drawer, orchestration rows open
  *   the workbench panel, unknown targets expand raw details);
  * - SwarmActiveTray: composer dock in-flight HUD (working/blocked members of
- *   the current conversation's active group; null when idle);
+ *   the current conversation's active group; null when idle or when the
+ *   current conversation is not the group's coordinator);
  * - SwarmWorkbenchPanel: conversation-scoped orchestration card in the right
  *   workbench drawer;
  * - SwarmBoardReportPill / SwarmBoardWakeupPill: compact 1-line receipt pills
