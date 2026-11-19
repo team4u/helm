@@ -35,6 +35,18 @@
  *    shuts it down cleanly — the only place the CLI artifact and the real payload artifact meet
  *    before a release ships.
  *
+ * The same assembly also produces the node daemon artifact (dist-node/, the remote-machine install
+ * target: bin helm-node → dist/cli.js; @helm/node + @helm/env-io + @helm/protocol inlined, exactly
+ * four external exact-version dependencies):
+ * 9. node assembly contract: shebang single-file bundle, bin/name/version/engines (name overridable
+ *    via HELM_NODE_PACKAGE, bin single-sourced from packages/node/package.json), dependencies
+ *    exactly the four external packages pinned to the repository's installed versions (never
+ *    floating ranges), overrides consistent with those pins, exact files whitelist;
+ * 10. node bundle runs for real (`helm-node --help` on an isolated data dir; `restart --json`
+ *    without a bound identity reports an honest error envelope) and installs from a real tarball
+ *    via `npm install -g` into an isolated prefix (network-gated like the payload e2e: the four
+ *    external dependencies download from the registry — PAYLOAD_NPM_SMOKE=1).
+ *
  * These live in this single file on purpose: the runner executes test files as separate concurrent
  * processes, and both artifact suites share the one build.mjs run (which wipes and rebuilds
  * packages/payload/dist and dist-cli) performed by the first test below.
@@ -55,7 +67,9 @@ const payloadPkgRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(payloadPkgRoot, '../..');
 const stagingDir = path.join(payloadPkgRoot, 'dist');
 const cliStagingDir = path.join(payloadPkgRoot, 'dist-cli');
+const nodeStagingDir = path.join(payloadPkgRoot, 'dist-node');
 const cliPackageName = process.env.HELM_CLI_PACKAGE ?? '@team4u/helm-cli';
+const nodePackageName = process.env.HELM_NODE_PACKAGE ?? '@team4u/helm-node';
 
 /** Minimal type shape of the manifest contract (validated isomorphically on the start.mjs side). */
 interface PayloadManifest {
@@ -133,6 +147,9 @@ test('payload assembly: missing build artifacts are rebuilt on demand, then buil
   }
   if (!existsSync(path.join(repoRoot, 'packages/env-io/dist/index.js'))) {
     runCommand('pnpm', ['--filter', '@helm/env-io', 'run', 'build'], repoRoot, 180_000);
+  }
+  if (!existsSync(path.join(repoRoot, 'packages/node/dist/cli.js'))) {
+    runCommand('pnpm', ['--filter', '@helm/node', 'run', 'build'], repoRoot, 240_000);
   }
   if (!existsSync(path.join(repoRoot, 'packages/plugin-build/dist/index.js'))) {
     runCommand('pnpm', ['--filter', '@helm/plugin-build', 'run', 'build'], repoRoot, 240_000);
@@ -469,6 +486,152 @@ test('cli tarball acceptance: npm pack → npm install -g into an isolated prefi
     });
     assert.equal(res.status, 0, `installed helm --help expected exit 0, got ${res.status}\nstdout: ${res.stdout}\nstderr: ${res.stderr}`);
     assert.match(res.stdout, /Usage: helm <command>/, 'the installed bin must run the bundled CLI');
+  } finally {
+    rmSync(outsideRoot, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Node daemon artifact (dist-node): the remote-machine install target with exactly four external
+// exact-version dependencies.
+// ---------------------------------------------------------------------------
+
+test('node artifact assembly contract: dist-node is a four-external-dependency publish package with a shebang single-file bundle', { timeout: 60_000 }, () => {
+  const pkg = JSON.parse(readFileSync(path.join(nodeStagingDir, 'package.json'), 'utf-8'));
+  assert.equal(pkg.name, nodePackageName);
+  const payloadPkg = JSON.parse(readFileSync(path.join(payloadPkgRoot, 'package.json'), 'utf-8'));
+  assert.equal(pkg.version, payloadPkg.version, 'node artifact version shares the payload single source');
+  assert.equal(pkg.type, 'module');
+  const rootPkg = JSON.parse(readFileSync(path.join(repoRoot, 'package.json'), 'utf-8'));
+  assert.equal(pkg.engines.node, rootPkg.engines?.node ?? '>=24.12.0');
+  assert.equal(pkg.license, 'MIT');
+  assert.equal(pkg.repository.url, 'git+https://github.com/team4u/helm.git');
+  assert.equal(pkg.repository.directory, 'packages/payload');
+  assert.deepEqual(pkg.publishConfig, { access: 'public' }, 'the node artifact publishes public like the payload and cli artifacts');
+  assert.equal(pkg.private, undefined, 'the publish package must not be marked private');
+
+  // the bin name and target are single-sourced from the node workspace package (exactly one entry)
+  const nodePkg = JSON.parse(readFileSync(path.join(repoRoot, 'packages/node/package.json'), 'utf-8'));
+  assert.deepEqual(nodePkg.bin, { 'helm-node': './dist/cli.js' }, 'the workspace node package must declare exactly one bin entry: helm-node → ./dist/cli.js');
+  assert.deepEqual(pkg.bin, { 'helm-node': './dist/cli.js' }, 'the bin shape is single-sourced from the node workspace package');
+
+  // the dual-package self-upgrade contract: dependencies are exactly the four external packages at
+  // the repository's installed versions — no fifth dependency, no floating ranges.
+  const EXTERNAL_DEPS = ['@earendil-works/chord', '@earendil-works/pi-durable', 'birpc', 'ws'];
+  assert.deepEqual(Object.keys(pkg.dependencies ?? {}).sort(), [...EXTERNAL_DEPS].sort(), 'the node artifact must declare exactly the four external dependencies');
+  for (const name of EXTERNAL_DEPS) {
+    const spec = pkg.dependencies[name];
+    assert.match(spec, /^\d/, `node external dependency ${name} must be an exact version, got ${spec}`);
+    const realPkgJson = JSON.parse(
+      readFileSync(path.join(realpathSync(path.join(repoRoot, 'packages/node/node_modules', name)), 'package.json'), 'utf-8'),
+    );
+    assert.equal(realPkgJson.version, spec, `${name} repository-installed version disagrees with the dist-node contract`);
+  }
+  // overrides (peer-unification for consumer-side npm install, e.g. chord's ws peer pin) must stay
+  // consistent with the exact pins above — never introduce a version npm would reject.
+  for (const [name, spec] of Object.entries<string>(pkg.overrides ?? {})) {
+    assert.ok(EXTERNAL_DEPS.includes(name), `node overrides must only touch the four external dependencies, found ${name}`);
+    assert.equal(pkg.dependencies[name], spec, `node override for ${name} must equal its exact dependency pin`);
+  }
+
+  const bundle = readFileSync(path.join(nodeStagingDir, 'dist/cli.js'), 'utf-8');
+  assert.ok(bundle.startsWith('#!/usr/bin/env node'), 'the bundle must keep the shebang to work as a bin target');
+  // Text-level gates mirroring the cli artifact: no workspace: specifiers and no literal dynamic
+  // imports of workspace packages may remain (the authoritative external-closure gate runs
+  // build-side on esbuild's metafile).
+  assert.ok(!/workspace:/.test(bundle), 'the bundle must not carry workspace: specifiers');
+  for (const match of bundle.matchAll(/import\(\s*['"](@helm\/[^'"]+)['"]/g)) {
+    assert.fail(`the bundle must not carry a literal dynamic import of an unpackaged workspace package: ${match[1]}`);
+  }
+  assert.deepEqual(pkg.files.slice().sort(), ['LICENSE', 'THIRD_PARTY_NOTICES.md', 'dist/cli.js']);
+  for (const file of pkg.files) {
+    assert.ok(existsSync(path.join(nodeStagingDir, file)), `files whitelist entry missing on disk: ${file}`);
+  }
+});
+
+test('node bundle: help and honest error paths run for real from the single file', { timeout: 60_000 }, () => {
+  const dataDir = mkdtempSync(path.join(path.dirname(repoRoot), 'helm-node-bundle-'));
+  try {
+    // isolated data dir: help must never touch the network or the Hub and exit 0.
+    const help = spawnSync(process.execPath, [path.join(nodeStagingDir, 'dist/cli.js'), '--help'], {
+      cwd: dataDir,
+      encoding: 'utf8',
+      timeout: 50_000,
+      env: { ...process.env, HELM_DATA_DIR: dataDir },
+    });
+    assert.equal(help.status, 0, `helm-node --help expected exit 0, got ${help.status}\nstdout: ${help.stdout}\nstderr: ${help.stderr}`);
+    assert.match(help.stdout, /Usage: helm-node <command>/, 'core help must print the usage header');
+
+    // an unbound data dir must surface an explicit error envelope, never a fabricated result:
+    // --json puts the envelope on stderr with a non-zero exit.
+    const restart = spawnSync(process.execPath, [path.join(nodeStagingDir, 'dist/cli.js'), 'restart', '--json'], {
+      cwd: dataDir,
+      encoding: 'utf8',
+      timeout: 50_000,
+      env: { ...process.env, HELM_DATA_DIR: dataDir },
+    });
+    assert.notEqual(restart.status, 0, 'restart without a bound identity must not exit 0');
+    assert.match(restart.stderr, /"error"/, 'the --json failure envelope must land on stderr');
+    assert.match(restart.stderr, /missing_identity/, 'the honest failure code must identify the missing identity binding');
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('node tarball acceptance: npm pack → npm install -g into an isolated prefix → installed bin runs with its four dependencies', {
+  timeout: 240_000,
+  skip: process.env.PAYLOAD_NPM_SMOKE !== '1'
+    ? 'the real npm network acceptance runs as a dedicated CI step with PAYLOAD_NPM_SMOKE=1 (the four external dependencies download from the registry)'
+    : process.platform === 'win32'
+      ? 'bin link execution via shebang is verified on POSIX lanes'
+      : false,
+}, () => {
+  const outsideRoot = mkdtempSync(path.join(path.dirname(repoRoot), 'helm-node-tgz-'));
+  try {
+    const packDir = path.join(outsideRoot, 'pack');
+    mkdirSync(packDir, { recursive: true });
+    const packRes = runCommand('npm', ['pack', '--json', '--pack-destination', packDir], nodeStagingDir, 120_000);
+    const packInfo = JSON.parse(packRes.stdout);
+    assert.equal(packInfo.length, 1, `expected a single tarball: ${packRes.stdout}`);
+    const tgz = path.join(packDir, packInfo[0].filename);
+
+    // Tarball shape: package-root manifest (not a dist-node/ prefix), no node_modules payload.
+    const members = runCommand('tar', ['-tzf', tgz], outsideRoot, 30_000).stdout.split('\n').filter(Boolean);
+    for (const member of members) {
+      assert.ok(member.startsWith('package/'), `tarball member escapes the package/ prefix: ${member}`);
+    }
+    for (const must of ['package/package.json', 'package/dist/cli.js', 'package/LICENSE', 'package/THIRD_PARTY_NOTICES.md']) {
+      assert.ok(members.includes(must), `node tarball is missing ${must}`);
+    }
+    assert.ok(!members.some((m) => m.includes('node_modules')), 'the node tarball must not carry node_modules');
+
+    // The one-shot story itself: install -g from the real tarball into an isolated prefix (the four
+    // external dependencies resolve and download from the registry).
+    const prefix = path.join(outsideRoot, 'global-prefix');
+    runCommand('npm', ['install', '-g', tgz, '--prefix', prefix, '--no-audit', '--no-fund'], outsideRoot, 180_000);
+    const binPath = path.join(prefix, 'bin', 'helm-node');
+    assert.ok(existsSync(binPath), `npm install -g must create the helm-node bin link under ${prefix}/bin`);
+
+    // Dependency resolution proof at the installed location: the four external packages landed
+    // beside the bundle and resolved to the exact pinned versions (transitive dependencies of
+    // those packages are npm's business, not this artifact's contract).
+    const installedPkgDir = path.join(prefix, 'lib', 'node_modules', ...nodePackageName.split('/'));
+    assert.ok(existsSync(path.join(installedPkgDir, 'dist/cli.js')), 'the installed package must carry the bundled entry');
+    const distPkg = JSON.parse(readFileSync(path.join(nodeStagingDir, 'package.json'), 'utf-8'));
+    for (const [name, spec] of Object.entries<string>(distPkg.dependencies)) {
+      const installedJson = JSON.parse(readFileSync(path.join(installedPkgDir, 'node_modules', name, 'package.json'), 'utf-8'));
+      assert.equal(installedJson.version, spec, `installed ${name} must match the exact pin ${spec}`);
+    }
+
+    const dataDir = path.join(outsideRoot, 'data');
+    const res = spawnSync(binPath, ['--help'], {
+      cwd: outsideRoot,
+      encoding: 'utf8',
+      timeout: 50_000,
+      env: { ...process.env, HELM_DATA_DIR: dataDir },
+    });
+    assert.equal(res.status, 0, `installed helm-node --help expected exit 0, got ${res.status}\nstdout: ${res.stdout}\nstderr: ${res.stderr}`);
+    assert.match(res.stdout, /Usage: helm-node <command>/, 'the installed bin must run the bundled daemon CLI');
   } finally {
     rmSync(outsideRoot, { recursive: true, force: true });
   }
