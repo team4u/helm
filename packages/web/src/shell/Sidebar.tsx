@@ -341,6 +341,9 @@ function ActivityRail({
         ? t('shell.theme.light')
         : t('shell.theme.dark')
   const attentionSummary = composeAttentionSummary(attentionIndicator, t)
+  const overviewTooltipLabel =
+    attentionSummary !== '' ? `${t('shell.overview.railTooltip')} · ${attentionSummary}` : t('shell.overview.railTooltip')
+  const overviewPresence = resolveSidebarTargetPresence(store, (target) => target.kind === 'overview')
 
   return (
     <nav className="activity-rail" aria-label={t('shell.sidebar.mainNavigation')}>
@@ -387,6 +390,26 @@ function ActivityRail({
           )
         })}
       </div>
+      {/* 宿主「会话总览」直达按钮（#/overview，对话空间）：紧邻态势微标，
+          桌面折叠 Rail 与移动抽屉同源一键直达；tone 灯点复用同源 indicator。 */}
+      <Tooltip content={overviewTooltipLabel} side="right">
+        <button
+          type="button"
+          className={`rail-btn rail-overview-btn${overviewPresence.active ? ' rail-btn-active' : ''}`}
+          title={overviewTooltipLabel}
+          aria-label={overviewTooltipLabel}
+          aria-current={overviewPresence.active ? 'page' : undefined}
+          onClick={() => {
+            store.openTarget({ kind: 'overview' })
+            onNavigate?.()
+          }}
+        >
+          <HelmxIcon name="activity" size={16} />
+          {attentionIndicator.tone !== null && (
+            <span className="rail-overview-dot" data-tone={attentionIndicator.tone} />
+          )}
+        </button>
+      </Tooltip>
       {quickEntries.length > 0 && (
         <div className="activity-rail-quick">
           {quickEntries.map((entry) => {

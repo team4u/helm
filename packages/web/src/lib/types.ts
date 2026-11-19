@@ -58,6 +58,7 @@ export type ResolvedTarget =
   | { kind: 'conversation'; conversationId: number }
   | { kind: 'agent'; profileId: string; nodeId?: string; cwd?: string }
   | { kind: 'screen'; pluginId: string; screenId: string; params?: Record<string, string> }
+  | { kind: 'overview' }
   | { kind: 'plugins'; pluginId?: string }
   | { kind: 'profiles'; profileId?: string }
   | { kind: 'skills'; skillId?: string }

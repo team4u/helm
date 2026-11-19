@@ -36,6 +36,7 @@ import {
   type WorkspaceLocationState,
 } from './lib/url-hash-model.js'
 import { ScreenHost } from './screens/ScreenHost.js'
+import { ConversationOverview } from './overview/ConversationOverview.js'
 import { AuthGate } from './shell/AuthGate.js'
 import { Sidebar } from './shell/Sidebar.js'
 import { ToastOverlay } from './shell/ToastOverlay.js'
@@ -376,6 +377,8 @@ function HelmxShellInner() {
                         pluginId={primaryTarget.pluginId}
                         screenId={primaryTarget.screenId}
                       />
+                    ) : primaryTarget.kind === 'overview' ? (
+                      <ConversationOverview key="primary-overview" />
                     ) : primaryTarget.kind === 'plugins' ? (
                       <PluginCenter key="primary-plugins" />
                     ) : primaryTarget.kind === 'profiles' ? (
@@ -425,6 +428,8 @@ function HelmxShellInner() {
                       isSplit
                       onCloseSplit={closeSplit}
                     />
+                  ) : splitTarget.kind === 'overview' ? (
+                    <ConversationOverview key="split-overview" isSplit onCloseSplit={closeSplit} />
                   ) : splitTarget.kind === 'plugins' ? (
                     <PluginCenter key="split-plugins" isSplit onCloseSplit={closeSplit} />
                   ) : splitTarget.kind === 'profiles' ? (

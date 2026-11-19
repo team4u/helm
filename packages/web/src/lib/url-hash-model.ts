@@ -217,6 +217,9 @@ function parseTargetValue(raw: string): ResolvedTarget | null {
     if (profileId === null) return null
     return { kind: 'agent', profileId }
   }
+  if (raw === 'overview') {
+    return { kind: 'overview' }
+  }
   if (raw.startsWith('views/')) {
     const rest = raw.slice('views/'.length)
     const slashIdx = rest.indexOf('/')
@@ -279,6 +282,7 @@ function parseModelsSubTarget(sub: string): ResolvedTarget | null {
 function formatTargetValue(target: ResolvedTarget): string {
   if (target.kind === 'conversation') return `c/${target.conversationId}`
   if (target.kind === 'agent') return `a/${encodeSegment(target.profileId)}`
+  if (target.kind === 'overview') return 'overview'
   if (target.kind === 'screen') return `views/${encodeSegment(target.pluginId)}/${encodeSegment(target.screenId)}`
   if (target.kind === 'plugins') {
     return target.pluginId === undefined || target.pluginId === '' ? 'settings/plugins' : `settings/plugins/${encodeSegment(target.pluginId)}`
@@ -613,6 +617,7 @@ export function serializeHash(input: HashSerializable): string {
     (input.kind === 'conversation' ||
       input.kind === 'agent' ||
       input.kind === 'screen' ||
+      input.kind === 'overview' ||
       input.kind === 'plugins' ||
       input.kind === 'profiles' ||
       input.kind === 'skills' ||
