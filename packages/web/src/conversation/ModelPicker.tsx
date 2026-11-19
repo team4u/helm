@@ -42,8 +42,9 @@ export interface ModelPickerControlProps {
   buttonId?: string
   buttonAriaLabel?: string
   placeholderLabel?: string
-  /** Popover placement side and whether Ctrl+L / Shift+Tab hints are active (true for composer, false for settings forms). */
+  /** Popover placement side. */
   popoverSide?: 'top' | 'bottom'
+  /** Enable Ctrl+L in the composer. */
   enableShortcut?: boolean
   disabled?: boolean
   pending?: boolean
@@ -345,9 +346,6 @@ export function ModelPickerControl({
                     {t('composer.model.thinkingHeader')}
                     <span className="composer-model-thinking-name"> · {shortName}</span>
                   </span>
-                  {enableShortcut ? (
-                    <span className="kbd-hint popover-kbd-hint">{COMPOSER_SHORTCUTS.cycleThinkingLevel}</span>
-                  ) : null}
                 </div>
                 <ThinkingLevelControl
                   value={effectiveLevel}

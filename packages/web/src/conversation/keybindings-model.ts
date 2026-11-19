@@ -6,8 +6,6 @@
  * - Ctrl+L: dispatched globally through the host HelmxStoreProvider as a
  *   helmx:shortcut (toggle-model-picker) event; matches data-helmx-panel and
  *   toggles the corresponding panel's ModelPicker;
- * - Shift+Tab: preventDefault() immediately and cycle the thinking level (no
- *   Ctrl+T alias);
  * - ↑: with an empty draft on the first line, prefer withdrawing the newest
  *   human queued input of this conversation; only fall back to history editing
  *   when the queue is empty (no Alt+Up alias);
@@ -38,7 +36,6 @@ export interface HelmxShortcutEventDetail {
  * and tooltips; multi-key aliases are forbidden). */
 export const COMPOSER_SHORTCUTS = {
   toggleModelPicker: 'Ctrl+L',
-  cycleThinkingLevel: 'Shift+Tab',
   recallQueuedOrHistory: '↑',
   sendOrSteer: 'Enter',
   followUpWhenBusy: '⌘/Ctrl+Enter',
@@ -52,11 +49,6 @@ export interface KeyModifiersShape {
   ctrlKey: boolean
   metaKey: boolean
   altKey: boolean
-}
-
-/** Strictly match Shift+Tab (no Ctrl/Meta/Alt) so other chords never alias. */
-export function isShiftTabEvent(e: KeyModifiersShape): boolean {
-  return e.key === 'Tab' && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey
 }
 
 /** Strictly match the plain ↑ key (no Shift/Ctrl/Meta/Alt); Alt+Up and other
@@ -125,20 +117,6 @@ export function latestHumanQueuedInput(
 export function resolveEffectiveThinkingLevel(levels: ReadonlyArray<string>, activeLevel: string): string {
   const fallback = levels.includes('off') ? 'off' : (levels[0] ?? '')
   return levels.includes(activeLevel) ? activeLevel : fallback
-}
-
-/**
- * Cycle to the next thinking level on Shift+Tab:
- * - returns null when the model supports a single level or only off (no
- *   meaningless switch requests);
- * - steps in list order, wrapping back to the first item at the end.
- */
-export function nextThinkingLevel(levels: ReadonlyArray<string>, currentLevel: string): string | null {
-  if (levels.length <= 1) return null
-  if (!levels.some((level) => level !== 'off')) return null
-  const idx = levels.indexOf(currentLevel)
-  if (idx < 0) return levels[0] ?? null
-  return levels[(idx + 1) % levels.length] ?? null
 }
 
 /** When the ModelPicker opens or its filter changes, the highlight index
