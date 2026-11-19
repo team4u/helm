@@ -2,8 +2,7 @@
  * `helmx-node` self-upgrade adapter over the shared update engine in `@helmx/env-io`.
  *
  * Node-specific policy kept here:
- * - the dual-package release layout (`@helmx/node` + `@helmx/cli`, package
- *   names via `HELMX_NPM_PACKAGE` / `HELMX_NPM_CLI_PACKAGE`, read at call time);
+ * - the node package release layout (`@helmx/node`, package name via `HELMX_NPM_PACKAGE`, read at call time);
  * - the launcher-compatible flat `current.json` disk contract
  *   `{version, entryPath, cliBinDir?, updatedAt}` — an already-installed launcher reads
  *   `entryPath` directly after a self-upgrade, so the shared entries-map state stays an
@@ -72,8 +71,8 @@ export interface StagedNodeRelease {
   releaseDir: string;
   /** Absolute path to the node package's `dist/cli.js` entrypoint. */
   entryPath: string;
-  /** Absolute path to `node_modules/.bin` containing the staged `helmx` CLI binary. */
-  cliBinDir: string;
+  /** Optional path to `node_modules/.bin` if staged by a legacy extractor. */
+  cliBinDir?: string;
 }
 
 export type PreparedNodeReplacement = PreparedReplacement;
@@ -85,7 +84,7 @@ export interface PerformNodeUpgradeOptions {
   attemptId?: string;
   currentVersion?: string;
   fetchFn?: typeof fetch;
-  stageExtractor?: (stagingDir: string, targetVersion: string) => Promise<{ entryPath: string; cliBinDir: string }>;
+  stageExtractor?: (stagingDir: string, targetVersion: string) => Promise<{ entryPath: string; cliBinDir?: string }>;
   prepareReplacement?: (
     release: StagedNodeRelease,
     context: { attemptId: string; previousVersion: string; targetVersion: string },
@@ -101,7 +100,7 @@ export interface StageReleaseOptions {
   registryUrl?: string;
   fetchFn?: typeof fetch;
   /** Test-only extractor returning relative paths inside `stagingDir` (validated against traversal). */
-  stageExtractor?: (stagingDir: string, targetVersion: string) => Promise<{ entryPath: string; cliBinDir: string }>;
+  stageExtractor?: (stagingDir: string, targetVersion: string) => Promise<{ entryPath: string; cliBinDir?: string }>;
   /** Bypass `.complete` cache and build a new immutable release directory without deleting older ones. */
   force?: boolean;
 }
@@ -232,26 +231,21 @@ const nodeStateOps: UpdateStateOps = {
 };
 
 // ---------------------------------------------------------------------------
-// Dual-package layout + update source
+// Node package layout + update source
 // ---------------------------------------------------------------------------
 
 const nodePackageName = (): string => process.env.HELMX_NPM_PACKAGE || '@helmx/node';
-const cliPackageName = (): string => process.env.HELMX_NPM_CLI_PACKAGE || '@helmx/cli';
 
-/** Dual `@helmx/node` + `@helmx/cli` staging layout; mirrors the previous local validation order. */
+/** Single `@helmx/node` staging layout. */
 function makeNodeReleaseLayout(): ReleaseLayout {
   const nodePkg = nodePackageName();
-  const cliPkg = cliPackageName();
   const packages: NpmPackageSpec[] = [
     { name: nodePkg, requiredFiles: ['dist/cli.js'] },
-    // The published CLI artifact ships a root-level single-file bundle (bin `helmx` -> `./index.js`).
-    { name: cliPkg, requiredFiles: ['index.js'], requiredBins: ['helmx'] },
   ];
   return {
     packages,
     resolveEntries: () => ({
       [ENTRY_KEY]: path.join('node_modules', ...nodePkg.split('/'), 'dist', 'cli.js'),
-      [CLI_BIN_KEY]: 'node_modules/.bin',
     }),
   };
 }
@@ -270,23 +264,26 @@ function makeNodeUpdateSpec(): UpdateSpec {
 // ---------------------------------------------------------------------------
 
 function wrapNodeExtractor(
-  extractor: (stagingDir: string, targetVersion: string) => Promise<{ entryPath: string; cliBinDir: string }>,
+  extractor: (stagingDir: string, targetVersion: string) => Promise<{ entryPath: string; cliBinDir?: string }>,
 ): StageExtractor {
   return async (stagingDir, targetVersion) => {
-    const { entryPath, cliBinDir } = await extractor(stagingDir, targetVersion);
-    return { [ENTRY_KEY]: entryPath, [CLI_BIN_KEY]: cliBinDir };
+    const res = await extractor(stagingDir, targetVersion);
+    return {
+      [ENTRY_KEY]: res.entryPath,
+      ...(res.cliBinDir !== undefined ? { [CLI_BIN_KEY]: res.cliBinDir } : {}),
+    };
   };
 }
 
 function toStagedNodeRelease(staged: StagedRelease): StagedNodeRelease {
   const entryPath = staged.entries[ENTRY_KEY];
-  const cliBinDir = staged.entries[CLI_BIN_KEY];
-  if (entryPath === undefined || cliBinDir === undefined) {
+  if (entryPath === undefined) {
     throw new Error(
-      `staged release entries missing ${ENTRY_KEY}/${CLI_BIN_KEY}: ${JSON.stringify(Object.keys(staged.entries))}`,
+      `staged release entries missing ${ENTRY_KEY}: ${JSON.stringify(Object.keys(staged.entries))}`,
     );
   }
-  return { version: staged.version, releaseDir: staged.releaseDir, entryPath, cliBinDir };
+  const cliBinDir = staged.entries[CLI_BIN_KEY];
+  return { version: staged.version, releaseDir: staged.releaseDir, entryPath, ...(cliBinDir !== undefined ? { cliBinDir } : {}) };
 }
 
 export async function checkNodeUpgrade(

@@ -205,7 +205,7 @@ function inheritExecArgv(): string[] {
 async function resolveDaemonLaunchTarget(
   dataDir: string,
   selfEntry: string,
-): Promise<{ entryPath: string; cliBinDir?: string }> {
+): Promise<{ entryPath: string }> {
   const { readCurrentRelease } = await import('./daemon/upgrader.js');
   const current = await readCurrentRelease(dataDir);
   if (current === null) return { entryPath: selfEntry };
@@ -216,7 +216,7 @@ async function resolveDaemonLaunchTarget(
       `current.json points to a missing entry (${current.entryPath}, version ${current.version}): staged release may be corrupted; fix current.json or re-upgrade instead of falling back to an older entry`,
     );
   }
-  return { entryPath: current.entryPath, ...(current.cliBinDir !== undefined ? { cliBinDir: current.cliBinDir } : {}) };
+  return { entryPath: current.entryPath };
 }
 
 /** Ensure no live daemon or unverified PID owns `node.pid`; cleans up confirmed-dead stale records. */
@@ -265,7 +265,6 @@ export async function startDaemon(
         ...(io.env ?? {}),
         HELMX_NODE_INSTANCE_ID: instanceId,
         HELMX_NODE_CONTROL_ENDPOINT: endpoint,
-        ...(target.cliBinDir !== undefined ? { HELMX_CLI_BIN_DIR: target.cliBinDir } : {}),
       },
       instanceId,
       endpoint,

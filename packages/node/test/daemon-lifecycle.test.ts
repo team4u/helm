@@ -30,7 +30,6 @@ import {
   createNodeDaemon,
   parseJoinToken,
   readNodeIdentity,
-  resolveManagedHelmxBinDir,
   writeNodeIdentity,
 } from '../src/daemon/index.js';
 
@@ -523,20 +522,8 @@ test('createNodeDaemon rejects invalid identity or hubUrl', { timeout: 60_000 },
   }
 });
 
-test('resolveManagedHelmxBinDir locates workspace bin dir containing executable helmx', { timeout: 60_000 }, async () => {
-  const resolved = await resolveManagedHelmxBinDir();
-  assert.ok('dir' in resolved, `should locate managed helmx bin (result: ${JSON.stringify(resolved)})`);
-  if ('dir' in resolved) {
-    const entry = path.join(resolved.dir, process.platform === 'win32' ? 'helmx.cmd' : 'helmx');
-    await fs.access(entry);
-  }
-  // Explicitly bad directory returns explicit diagnostics instead of false success
-  const bad = await resolveManagedHelmxBinDir(path.join(os.tmpdir(), 'helmx-no-such-bin-dir'));
-  assert.ok('error' in bad && bad.error.length > 0, 'invalid directory must produce explicit diagnostic');
-});
-
-test('daemon shellEnv prepends managed helmx bin to PATH (remote bash can run helmx)', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helmx-dlc-helmxpath-');
+test('daemon shellEnv carries hubUrl and dataDir without requiring local helmx client', { timeout: 60_000 }, async () => {
+  const dir = await tempDir('helmx-dlc-env-');
   const hub = await startHub({ heartbeatMs: 15_000 });
   const daemon = await createNodeDaemon({
     hubUrl: hub.url,
@@ -544,16 +531,9 @@ test('daemon shellEnv prepends managed helmx bin to PATH (remote bash can run he
     dataDir: dir,
   });
   try {
-    assert.equal(await daemon.waitUntilRegistered(10_000), true, 'prepended bin resolution failure prevents startup');
+    assert.equal(await daemon.waitUntilRegistered(10_000), true, 'daemon must register successfully');
     const rpc = hub.nodeRpc();
     assert.ok(rpc !== undefined);
-    // Remote bash runs helmx directly: prepended managed bin on PATH must resolve (--help needs no Hub).
-    const output = await rpc!.envExec({
-      execId: 'helmx-path-2',
-      command: 'command -v helmx && helmx --help >/dev/null && echo helmx-runs',
-      timeout: 60,
-    });
-    assert.equal(output.ok, true, output.ok ? '' : output.error.message);
     // Environment carries the node's actual hubUrl / dataDir
     const envProbe = await rpc!.envExec({
       execId: 'helmx-path-3',

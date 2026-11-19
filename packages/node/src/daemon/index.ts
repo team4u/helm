@@ -9,8 +9,6 @@
  *   generations never mutate newer state.
  * - Heartbeat: budget = `clamp(interval * 3 / 4, 1s, 30s)`, non-overlapping; 2 consecutive timeouts
  *   or an explicit `false` reply retire the generation and trigger reconnect.
- * - Managed `helmx` CLI PATH: locates the local `helmx` binary directory and prepends it to `PATH`
- *   for remote shells; fails explicitly at startup if missing.
  * - Reconnect: exponential backoff (default 500ms..30s), unbounded retries, cancelled cleanly on
  *   `close()` which waits for all retiring generations to finish disposing.
  */
@@ -19,7 +17,6 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
-import { fileURLToPath } from 'node:url';
 import type { Duplex } from 'node:stream';
 import { WebSocket, createWebSocketStream } from 'ws';
 import { createBirpc, type BirpcReturn } from 'birpc';
@@ -42,7 +39,7 @@ import type {
   RpcResult,
 } from '@helmx/protocol';
 import { DEFAULT_NODE_ID } from '@helmx/protocol';
-import { atomicWriteJson, findEnvKey, getEnvEntry, prependEnvPath, setEnvEntry } from '@helmx/env-io';
+import { atomicWriteJson } from '@helmx/env-io';
 import { createNodeEnvRpcServer, type NodeEnvRpcServer, type NodeEnvRpcServerOptions } from './env-rpc-server.js';
 import { createSocketBirpcEvents } from './birpc-events.js';
 import {
@@ -351,72 +348,8 @@ async function resolveRunIdentity(dataDir: string, input: NodeConnectInput): Pro
   return bindIdentityFromJoinToken(dataDir, input.token, input.hubUrl);
 }
 
-// ---------------------------------------------------------------------------
-// Managed `helmx` CLI bin directory discovery
-// ---------------------------------------------------------------------------
-
-export type ResolvedCliBinDir = { dir: string } | { error: string };
-
 type RegisterOutcome = { kind: 'ack'; result: NodeRegisterResult } | { kind: 'timeout' } | { kind: 'error' };
 type HeartbeatOutcome = { kind: 'ack'; alive: boolean } | { kind: 'timeout' };
-
-const statExecutable = async (target: string): Promise<boolean> => {
-  try {
-    const st = await fs.stat(target);
-    if (process.platform === 'win32') return st.isFile();
-    return st.isFile() && (st.mode & 0o111) !== 0;
-  } catch {
-    return false;
-  }
-};
-
-/**
- * Locate the directory containing the local `helmx` CLI binary (prepended to `PATH` for remote bash):
- * explicit arg / `HELMX_CLI_BIN_DIR` -> `PATH` -> ancestor `node_modules/.bin`.
- */
-export async function resolveManagedHelmxBinDir(explicit?: string): Promise<ResolvedCliBinDir> {
-  const describe = async (dir: string): Promise<ResolvedCliBinDir> => {
-    const entry = process.platform === 'win32' ? path.join(dir, 'helmx.cmd') : path.join(dir, 'helmx');
-    return (await statExecutable(entry)) ? { dir } : { error: `executable helmx client not found in ${dir}` };
-  };
-  if (explicit !== undefined && explicit !== '') return await describe(explicit);
-  const fromEnv = process.env['HELMX_CLI_BIN_DIR'];
-  if (fromEnv !== undefined && fromEnv !== '') return await describe(fromEnv);
-  const inheritedPath = getEnvEntry(process.env, 'PATH') ?? '';
-  for (const entry of inheritedPath.split(path.delimiter)) {
-    if (!entry) continue;
-    const result = await describe(entry);
-    if ('dir' in result) return result;
-  }
-  const selfDir = path.dirname(fileURLToPath(import.meta.url));
-  for (let dir = selfDir, depth = 0; dir !== path.dirname(dir) && depth < 16; dir = path.dirname(dir), depth += 1) {
-    const candidate = path.join(dir, 'node_modules', '.bin');
-    const result = await describe(candidate);
-    if ('dir' in result) return result;
-  }
-  return {
-    error:
-      'unable to locate local helmx client bin directory (remote bash cannot invoke helmx). ' +
-      'Install the standalone helmx client on PATH or set HELMX_CLI_BIN_DIR=<dir containing helmx executable>',
-  };
-}
-
-/** Prepend `binDir` to `PATH` inside `shellEnv` while preserving Windows host `Path` casing. */
-const prependPath = (binDir: string, shellEnv: Record<string, string | undefined>): Record<string, string | undefined> => {
-  const next: Record<string, string | undefined> = {};
-  for (const [key, value] of Object.entries(shellEnv)) {
-    if (value !== undefined) setEnvEntry(next, key, value);
-  }
-  if (findEnvKey(next, 'PATH') === undefined) {
-    const inherited = getEnvEntry(process.env, 'PATH');
-    if (inherited !== undefined) {
-      const hostKey = findEnvKey(process.env, 'PATH') ?? 'PATH';
-      setEnvEntry(next, hostKey, inherited);
-    }
-  }
-  prependEnvPath(next, binDir);
-  return next;
-};
 
 async function withinBudget<T>(operation: Promise<T>, timeoutMs: number, expired: T): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
@@ -576,8 +509,6 @@ export async function createNodeDaemon(options: NodeDaemonOptions): Promise<Node
       ws.once('close', () => cleanup());
     });
   };
-
-  const cliBin = await resolveManagedHelmxBinDir(envServer.shellEnv?.['HELMX_CLI_BIN_DIR'] as string | undefined);
 
   let closed = false;
   let generation:
@@ -976,17 +907,11 @@ export async function createNodeDaemon(options: NodeDaemonOptions): Promise<Node
     startConnect();
   };
 
-  let baseShellEnv: Record<string, string | undefined> = {
+  const baseShellEnv: Record<string, string | undefined> = {
     HELMX_HUB_URL: hubUrl,
     HELMX_DATA_DIR: dataDir,
     ...(envServer.shellEnv ?? {}),
   };
-  if ('dir' in cliBin) {
-    baseShellEnv = prependPath(cliBin.dir, baseShellEnv);
-  } else {
-    log(`failed to locate helmx client: ${cliBin.error}`);
-    throw new Error(cliBin.error);
-  }
 
   let closePromise: Promise<void> | undefined;
 

@@ -52,7 +52,7 @@ npm install -g @helmx/node
 helmx-node start -d --hub http://<hub-host>:3202 --token <nodeId>:<secret>
 ```
 
-节点制品的外部依赖恰为四个精确版本（`@earendil-works/chord` / `@earendil-works/pi-durable` / `birpc` / `ws`），`npm install -g` 即完成全部准备。后续版本由 Hub 侧 `helmx nodes upgrade` 驱动：守护进程把 `@helmx/node` 与 `@helmx/cli` 双包同版本绑定升级，无需再手工重装（升级机制见 [EnvFabric 分布式执行底座](../architecture/envfabric.md)）。
+节点制品的外部依赖恰为四个精确版本（`@earendil-works/chord` / `@earendil-works/pi-durable` / `birpc` / `ws`），`npm install -g` 即完成全部准备。后续版本由 Hub 侧 `helmx nodes upgrade` 驱动：守护进程独立自升级，无需再手工重装（升级机制见 [EnvFabric 分布式执行底座](../architecture/envfabric.md)）。
 
 ## 源代码模式安装
 

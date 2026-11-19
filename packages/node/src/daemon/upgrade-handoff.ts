@@ -140,7 +140,6 @@ export async function prepareNodeReplacement(
   for (const key of Object.keys(childEnv)) {
     if (key.toUpperCase() === 'HELMX_TOKEN') delete childEnv[key];
   }
-  childEnv['HELMX_CLI_BIN_DIR'] = release.cliBinDir;
   childEnv['HELMX_NODE_UPGRADE_ATTEMPT'] = context.attemptId;
   childEnv['HELMX_NODE_UPGRADE_PREVIOUS_VERSION'] = context.previousVersion;
   childEnv['HELMX_NODE_UPGRADE_TARGET_VERSION'] = context.targetVersion;

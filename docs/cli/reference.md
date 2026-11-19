@@ -146,7 +146,7 @@ PUT 为整体替换契约：update 走语义化标志时 CLI 先 GET 完整 Prof
 
 **`helmx nodes remove <nodeId>`** — 注销节点并断开连接。
 
-**`helmx nodes upgrade [<nodeId>] [--check] [--version <v>] [--registry <url>] [--force] [--current]`** — 检查或执行节点自升级（守护进程把 `@helmx/node` 与 `@helmx/cli` 双包同版本绑定升级；远端首次安装走 `npm install -g @helmx/node`）；`--current` 读 `HELMX_NODE_ID`；执行禁用客户端超时。
+**`helmx nodes upgrade [<nodeId>] [--check] [--version <v>] [--registry <url>] [--force] [--current]`** — 检查或执行节点自升级（远端首次安装走 `npm install -g @helmx/node`）；`--current` 读 `HELMX_NODE_ID`；执行禁用客户端超时。
 
 **`helmx nodes forward [<nodeId> | --current] <listenHost:listenPort> [<targetHost>:]<targetPort>`** — 前台本地 TCP 端口转发：Hub 主机按需监听并将连接经节点隧道转发到目标节点视角的 `host:port`（目标 host 缺省 `127.0.0.1`），Ctrl-C 退出即关闭。
 
@@ -244,7 +244,7 @@ PUT 为整体替换契约：update 走语义化标志时 CLI 先 GET 完整 Prof
 
 **`helmx-node status`** — 节点绑定信息、后台进程 PID、`instanceId` 与运行态摘要。
 
-**`helmx-node upgrade [--check] [--version <v>] [--registry <url>] [--force]`** — 自升级：`@helmx/node` 与 `@helmx/cli` 双包同版本绑定 → 双阶段 SHA-512 校验 → 离线安装至不可变候选目录 → 金丝雀握手 → `upgradeCommit` 唯一提交点 → 失败自动回滚并写 `update-blocked.json` 隔离。
+**`helmx-node upgrade [--check] [--version <v>] [--registry <url>] [--force]`** — 自升级：`@helmx/node` 自升级 → 双阶段 SHA-512 校验 → 离线安装至不可变候选目录 → 金丝雀握手 → `upgradeCommit` 唯一提交点 → 失败自动回滚并写 `update-blocked.json` 隔离。
 
 **`helmx-node doctor`** — 无副作用只读自检：`node.json` 权限（0600）、工作空间磁盘写入权限、Hub 端口连通性、Herdr 本地 IPC 管道状态。
 

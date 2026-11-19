@@ -58,7 +58,7 @@ managedByPlugin: {{MANAGED_BY}}
 
 ### Nodes and cross-machine execution
 - `helmx nodes list`: nodes and online status; `helmx nodes issue <nodeId>`: issue a join token (the plaintext is returned exactly once); `helmx nodes remove <nodeId>`; `helmx nodes upgrade <nodeId> [--check]`: check or perform a node upgrade; `helmx nodes forward [<nodeId> | --current] <listenHost:listenPort> [<targetHost>:]<targetPort>`: foreground local TCP port forwarding (the event stream is the holder; Ctrl-C exits and closes); `helmx nodes forwards` / `helmx nodes forward-inspect <forwardId>` / `helmx nodes forward-stop <forwardId>`: active forward list/detail/stop.
-- Remote machines join as nodes with a one-time npm install of the node daemon (`npm install -g @helmx/node`) followed by `helmx-node start -d --hub <url> --token <nodeId>:<secret>`; later versions arrive via `helmx nodes upgrade` (the daemon binds the `@helmx/node` + `@helmx/cli` npm artifacts at one version).
+- Remote machines join as nodes with a one-time npm install of the node daemon (`npm install -g @helmx/node`) followed by `helmx-node start -d --hub <url> --token <nodeId>:<secret>`; later versions arrive via `helmx nodes upgrade` (the daemon upgrades the `@helmx/node` npm artifact).
 - `helmx env exec [--node <id>] [--cwd <dir>] [--timeout <ms>] [--stream] [--current] -- <command...>`: execute a command directly across nodes; the timeout unit is milliseconds.
 
 ### Plugins and actions

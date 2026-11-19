@@ -190,7 +190,7 @@ pnpm helmx nodes forward gpu-a "[::1]:8080" 8000
 
 ## 节点自升级与升级排空
 
-`@helmx/node` 内置双包协同自升级引擎（npm 制品 `@helmx/node` 与 `@helmx/cli` 同版本绑定；远端机器首次安装走 `npm install -g @helmx/node`，此后由升级机制接管），全程原子提交、失败自动回滚：
+`@helmx/node` 内置独立自升级引擎（npm 制品 `@helmx/node`；远端机器首次安装走 `npm install -g @helmx/node`，此后由升级机制接管），全程原子提交、失败自动回滚：
 
 ```mermaid
 sequenceDiagram
@@ -200,7 +200,7 @@ sequenceDiagram
 
     Hub->>Daemon: nodeUpgrade RPC { attemptId }
     Daemon->>Daemon: 排空在途命令，拒绝受理新命令（node_draining）
-    Daemon->>Daemon: 下载双包 tarball + 双阶段 SHA-512 校验
+    Daemon->>Daemon: 下载 tarball + 双阶段 SHA-512 校验
     Daemon->>Daemon: 离线安装至 releases/<ver>/<uuid>/
     Daemon->>Candidate: stdio IPC 拉起候选（upgradeAttemptId）
     Candidate->>Hub: 注册（携带 attemptId 对账）
@@ -214,7 +214,7 @@ sequenceDiagram
 
 关键设计：
 
-1. **双包同版本绑定**：对两个包的 registry 元数据 `dist.integrity`（SHA-512）与下载后的 tarball 哈希做双阶段校验，再以本地 tgz 离线安装到同一 staging 目录——安装过程不依赖网络可用性。
+1. **版本精确校验**：对 registry 元数据 `dist.integrity`（SHA-512）与下载后的 tarball 哈希做双阶段校验，再以本地 tgz 离线安装到 staging 目录——安装过程不依赖网络可用性。
 2. **不可变候选目录**：staging 原子改名为 `releases/<ver>/<uuid>/`，永不复用、永不删除；正在执行的旧版本文件永不被覆写。
 3. **金丝雀握手与唯一提交点**：仅「候选收到 activate 并向 Hub 提交 `upgradeCommit` 心跳成功」才算升级完成——「已注册未激活」不算提交。失败时终止候选、回滚旧版本，并把该版本写入 `update-blocked.json` 隔离（后续 `upgrade/check` 会携带 blocked 记录）。
 4. **排空判据**：在途命令、IPC 调用与隧道都归零后才切换（包括 IPC call 与 subscription），防止长耗时操作被自升级生硬切断。

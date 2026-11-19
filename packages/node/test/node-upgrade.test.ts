@@ -6,7 +6,7 @@
  * Everything here locks Node external behavior only: own version resolution
  * (`getNodeVersion` / `resolveEffectiveNodeVersion`), the launcher-compatible flat
  * `current.json` disk contract, dual-package name wiring (`HELMX_NPM_PACKAGE` /
- * `HELMX_NPM_CLI_PACKAGE`), staged-entry adaptation (`StagedNodeRelease`), delegation
+ * `HELMX_NPM_PACKAGE`), staged-entry adaptation (`StagedNodeRelease`), delegation
  * of engine hooks through `performNodeUpgrade`, verbatim rollback of the flat record
  * on commit failure, and error-class identity with the shared engine module.
  *
@@ -38,7 +38,6 @@ import {
 } from '../src/daemon/upgrader.js';
 
 const NODE_PACKAGE_NAME = '@helmx/node';
-const CLI_PACKAGE_NAME = '@helmx/cli';
 
 function makeReplacement(pid: number, opts?: { commitError?: Error; abortError?: Error }) {
   const calls: string[] = [];
@@ -56,14 +55,13 @@ function makeReplacement(pid: number, opts?: { commitError?: Error; abortError?:
   return { replacement, calls };
 }
 
-/** stageExtractor: create a fake dual-package layout inside stagingDir. */
-async function fakeExtractor(stagingDir: string, _version: string): Promise<{ entryPath: string; cliBinDir: string }> {
+/** stageExtractor: create a fake package layout inside stagingDir. */
+async function fakeExtractor(stagingDir: string, _version: string): Promise<{ entryPath: string }> {
   const nodePkgDir = path.join(stagingDir, 'node_modules', ...NODE_PACKAGE_NAME.split('/'));
   await fs.mkdir(path.join(nodePkgDir, 'dist'), { recursive: true });
-  await fs.mkdir(path.join(stagingDir, 'node_modules', '.bin'), { recursive: true });
   await fs.writeFile(path.join(nodePkgDir, 'dist', 'cli.js'), '#!/usr/bin/env node\n', 'utf8');
   await fs.writeFile(path.join(nodePkgDir, 'package.json'), JSON.stringify({ name: NODE_PACKAGE_NAME, version: _version }), 'utf8');
-  return { entryPath: path.join('node_modules', ...NODE_PACKAGE_NAME.split('/'), 'dist', 'cli.js'), cliBinDir: 'node_modules/.bin' };
+  return { entryPath: path.join('node_modules', ...NODE_PACKAGE_NAME.split('/'), 'dist', 'cli.js') };
 }
 
 function makeRegistryFetch(latest: string) {
@@ -81,35 +79,25 @@ const offlineFetch: typeof fetch = async () => {
 };
 
 /** Hand-build an npm-origin `.complete` cache (no network, no npm) for revalidation through the Node layout. */
-async function makeNpmReleaseCache(dir: string, version: string, nodePkg = NODE_PACKAGE_NAME, cliPkg = CLI_PACKAGE_NAME) {
+async function makeNpmReleaseCache(dir: string, version: string, nodePkg = NODE_PACKAGE_NAME) {
   const versionRoot = path.join(dir, 'releases', version);
   const candidateDir = path.join(versionRoot, '11111111-2222-3333-4444-555555555555');
   const nodePkgDir = path.join(candidateDir, 'node_modules', ...nodePkg.split('/'));
-  const cliPkgDir = path.join(candidateDir, 'node_modules', ...cliPkg.split('/'));
   await fs.mkdir(path.join(nodePkgDir, 'dist'), { recursive: true });
-  await fs.mkdir(cliPkgDir, { recursive: true });
-  await fs.mkdir(path.join(candidateDir, 'node_modules', '.bin'), { recursive: true });
   await fs.writeFile(path.join(nodePkgDir, 'dist', 'cli.js'), '#!/usr/bin/env node\n', 'utf8');
   await fs.writeFile(path.join(nodePkgDir, 'package.json'), JSON.stringify({ name: nodePkg, version }), 'utf8');
-  // The published CLI artifact ships its single-file bundle at the package root (bin `helmx` -> `./index.js`).
-  await fs.writeFile(path.join(cliPkgDir, 'index.js'), '#!/usr/bin/env node\n', 'utf8');
-  await fs.writeFile(
-    path.join(cliPkgDir, 'package.json'),
-    JSON.stringify({ name: cliPkg, version, bin: { helmx: './index.js' } }),
-    'utf8',
-  );
   await fs.writeFile(
     path.join(versionRoot, '.complete'),
     JSON.stringify({
       version,
       candidateDir,
-      entries: { entryPath: path.join(nodePkgDir, 'dist', 'cli.js'), cliBinDir: path.join(candidateDir, 'node_modules', '.bin') },
+      entries: { entryPath: path.join(nodePkgDir, 'dist', 'cli.js') },
       completedAt: new Date().toISOString(),
       origin: 'npm',
     }),
     'utf8',
   );
-  return { candidateDir, nodePkgDir, cliPkgDir };
+  return { candidateDir, nodePkgDir };
 }
 
 interface UpgradeLog {
@@ -221,12 +209,10 @@ test('checkNodeUpgrade: queries the @helmx/node package latest and falls back to
   await fs.rm(dir2, { recursive: true, force: true });
 });
 
-test('dual package names: HELMX_NPM_PACKAGE / HELMX_NPM_CLI_PACKAGE drive registry URL and staged layout', { timeout: 60_000 }, async () => {
+test('single package name: HELMX_NPM_PACKAGE drives registry URL and staged layout', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helmx-node-upgrade-');
   const prevNodePkg = process.env.HELMX_NPM_PACKAGE;
-  const prevCliPkg = process.env.HELMX_NPM_CLI_PACKAGE;
   process.env.HELMX_NPM_PACKAGE = '@custom/node';
-  process.env.HELMX_NPM_CLI_PACKAGE = '@custom/cli';
   try {
     // Latest check queries the overridden node package
     const { fetchFn, urls } = makeRegistryFetch('2.0.0');
@@ -234,17 +220,13 @@ test('dual package names: HELMX_NPM_PACKAGE / HELMX_NPM_CLI_PACKAGE drive regist
     assert.equal(check.latestVersion, '2.0.0');
     assert.match(urls[0]!, /@custom%2Fnode\/latest|@custom\/node\/latest/);
 
-    // npm-origin cache revalidation validates both overridden packages through the staged layout
-    // (default names would fail name/version revalidation against the overridden layout)
-    await makeNpmReleaseCache(dir, '2.0.0', '@custom/node', '@custom/cli');
+    // npm-origin cache revalidation validates overridden package through the staged layout
+    await makeNpmReleaseCache(dir, '2.0.0', '@custom/node');
     const staged = await stageReleaseFromNpm(dir, '2.0.0', { fetchFn: offlineFetch });
     assert.ok(staged.entryPath.endsWith(path.join('node_modules', '@custom', 'node', 'dist', 'cli.js')), staged.entryPath);
-    assert.ok(staged.cliBinDir.endsWith('node_modules/.bin'));
   } finally {
     if (prevNodePkg === undefined) delete process.env.HELMX_NPM_PACKAGE;
     else process.env.HELMX_NPM_PACKAGE = prevNodePkg;
-    if (prevCliPkg === undefined) delete process.env.HELMX_NPM_CLI_PACKAGE;
-    else process.env.HELMX_NPM_CLI_PACKAGE = prevCliPkg;
   }
   await fs.rm(dir, { recursive: true, force: true });
 });
@@ -273,7 +255,7 @@ test('performNodeUpgrade: success path delegates engine hooks and adapts staged 
   // The Node adapter hands prepareReplacement a StagedNodeRelease with adapted entry fields
   assert.equal(releases[0]?.version, '1.2.3');
   assert.ok(await fs.access(releases[0]!.entryPath).then(() => true, () => false), 'adapted entryPath must exist on disk');
-  assert.ok(releases[0]?.cliBinDir.endsWith('node_modules/.bin'));
+  assert.equal(releases[0]?.cliBinDir, undefined);
   assert.ok(contexts[0]?.attemptId);
   assert.equal(contexts[0]?.previousVersion, '1.0.0');
   assert.equal(contexts[0]?.targetVersion, '1.2.3');
@@ -284,7 +266,7 @@ test('performNodeUpgrade: success path delegates engine hooks and adapts staged 
   const current = await readCurrentRelease(dir);
   assert.equal(current?.version, '1.2.3');
   assert.equal(current?.entryPath, releases[0]?.entryPath);
-  assert.equal(current?.cliBinDir, releases[0]?.cliBinDir);
+  assert.equal(current?.cliBinDir, undefined);
   assert.equal(await readBlockedRelease(dir), null);
   await fs.rm(dir, { recursive: true, force: true });
 });
