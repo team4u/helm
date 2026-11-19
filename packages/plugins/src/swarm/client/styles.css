@@ -247,19 +247,15 @@
   color: var(--fg-subtle);
 }
 
+/* 实况行与横栏 frontline 同构：单行省略。行高恒定——实况文本长度变化
+   （1↔2 行翻转）不再引起托盘/输入区高度跳动；完整内容走 title 悬浮与行点击抽屉。 */
 .sw-tray-row-live {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
+  min-width: 0;
   overflow: hidden;
-  white-space: normal;
-  overflow-wrap: anywhere;
-  word-break: break-word;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--fg-muted);
   font-size: 11.5px;
-  line-height: 1.45;
-  min-width: 0;
 }
 
 .sw-tray-row-actions {

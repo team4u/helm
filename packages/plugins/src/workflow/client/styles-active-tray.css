@@ -111,7 +111,7 @@
 
 /* 行主体即详情入口：真实 button 覆盖整行主要信息位（无嵌套交互）；
    detach / 中止为右侧同级 sibling 按钮组。两层布局：主行承载标题/编号/
-   进度/耗时，当前实际执行内容独立为第二行（可读至少两行，标题不抢占）。 */
+   进度/耗时，当前实际执行内容独立为第二行（单行省略，标题不抢占）。 */
 .workflow-active-tray-row-main {
   flex: 1;
   min-width: 0;
@@ -168,20 +168,16 @@ button.workflow-active-tray-row-clickable:focus-visible {
 }
 
 /* 第二行实际执行内容：live 工具语义/输出/思考/审批标题或模型降级摘要；
-   独占行宽（动作按钮不与它同列抢宽），至少可读两行后截断。 */
+   独占行宽（动作按钮不与它同列抢宽）。与横栏 frontline 同构的单行省略：
+   行高恒定，实况长度变化（1↔2 行翻转）不再引起托盘/输入区高度跳动；
+   完整内容走 title 悬浮与行点击（抽屉/workbench 聚焦）。 */
 .workflow-active-tray-row-live {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
+  min-width: 0;
   overflow: hidden;
-  white-space: normal;
-  overflow-wrap: anywhere;
-  word-break: break-word;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--fg-muted);
   font-size: 11.5px;
-  line-height: 1.45;
-  min-width: 0;
 }
 
 .workflow-active-tray-row-actions {
