@@ -19,7 +19,9 @@ import {
 // ModelPicker (extracted from Composer.tsx): model and thinking level picking
 // in a Radix Popover. Conversation mode and the standby pane share
 // ModelPickerControl with unified keyboard navigation, Ctrl+L focus and
-// catalog refresh.
+// catalog refresh. Picking a model keeps the popover open so its thinking
+// level can be adjusted in the same session (re-picking the shown model, Esc
+// or an outside click closes).
 // ---------------------------------------------------------------------------
 
 export interface ModelPickerControlProps {
@@ -80,6 +82,9 @@ export function ModelPickerControl({
   const [open, setOpen] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [query, setQuery] = useState('')
+  // Optimistic model picked inside this popover session: drives the button label,
+  // row highlight and the thinking section before the (async) prop catches up.
+  const [previewModel, setPreviewModel] = useState<string | undefined>(undefined)
   const rootRef = useRef<HTMLSpanElement | null>(null)
   const searchInputRef = useRef<HTMLInputElement | null>(null)
   const itemRefs = useRef<Array<HTMLButtonElement | null>>([])
@@ -101,20 +106,23 @@ export function ModelPickerControl({
 
   const filteredModels = models.filter((model) => model.available && model.disabled !== true && model.id.toLowerCase().includes(query.toLowerCase()))
   const filteredKeys = filteredModels.map((model) => model.id).join('|')
+  // Model shown while the popover session is live: the just-picked preview wins
+  // over the (possibly still in-flight) effective prop.
+  const displayModel = previewModel ?? effectiveModel
   const [activeIndex, setActiveIndex] = useState(() => initialModelActiveIndex(filteredModels, effectiveModel))
 
   useEffect(() => {
-    if (!open) return
     setQuery('')
+    setPreviewModel(undefined)
     interactedOutsideRef.current = false
   }, [open])
 
   useEffect(() => {
     if (!open) return
-    setActiveIndex(initialModelActiveIndex(filteredModels, effectiveModel))
+    setActiveIndex(initialModelActiveIndex(filteredModels, displayModel))
     // filteredKeys precisely expresses changes of the filtered result set
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, query, filteredKeys, effectiveModel])
+  }, [open, query, filteredKeys, displayModel])
 
   useEffect(() => {
     if (!open || activeIndex < 0) return
@@ -160,8 +168,16 @@ export function ModelPickerControl({
 
   const pickThinking = (level: string): Promise<void> => Promise.resolve(onPickThinking(level))
 
+  // Picking a model keeps the popover open so the thinking level for that very
+  // model can be adjusted in the same session (one open, model + level); the
+  // pick commits immediately and is previewed locally until the prop catches
+  // up. Re-picking the already-effective model acts as "confirm" and closes.
   const chooseModel = (modelId: string): void => {
-    setOpen(false)
+    if (modelId === displayModel) {
+      setOpen(false)
+      return
+    }
+    setPreviewModel(modelId)
     void onPickModel(modelId)
   }
 
@@ -171,12 +187,12 @@ export function ModelPickerControl({
   }
 
   const rawShortName =
-    effectiveModel !== undefined && effectiveModel !== ''
-      ? effectiveModel.split('/').pop() ?? effectiveModel
+    displayModel !== undefined && displayModel !== ''
+      ? displayModel.split('/').pop() ?? displayModel
       : ''
   const shortName = rawShortName.trim() !== '' ? rawShortName : (placeholderLabel ?? t('composer.model.defaultLabel'))
-  const currentModel = effectiveModel !== undefined && effectiveModel !== ''
-    ? models.find((model) => model.id === effectiveModel)
+  const currentModel = displayModel !== undefined && displayModel !== ''
+    ? models.find((model) => model.id === displayModel)
     : undefined
   const currentLevels = currentModel?.thinkingLevels ?? ['off']
   const supportsThinking = currentLevels.some((level) => level !== 'off')
@@ -308,7 +324,7 @@ export function ModelPickerControl({
                 title={m.id}
                 type="button"
                 disabled={disabled}
-                aria-current={m.id === (selectedModel ?? effectiveModel) ? 'true' : undefined}
+                aria-current={m.id === (previewModel ?? selectedModel ?? effectiveModel) ? 'true' : undefined}
                 className={`popover-item${idx === activeIndex ? ' popover-item-active' : ''}`}
                 onMouseEnter={() => setActiveIndex(idx)}
                 onClick={() => chooseModel(m.id)}

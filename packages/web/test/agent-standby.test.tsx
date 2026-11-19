@@ -578,11 +578,13 @@ test('model & thinking level: the model rides with create; the thinking level pa
   assert.ok(glm, 'an available model exists in the catalog')
   await act(async () => { glm!.click() })
   await settle()
+  // The popover STAYS OPEN after the model pick: the level for the very model is set
+  // in the same session (no reopen round trip)
   const modelBtn = document.querySelector<HTMLButtonElement>('button.composer-model-button')
   assert.ok(modelBtn!.textContent?.includes('glm-4.6'), 'the button shows the explicit pick')
-  await act(async () => { modelBtn!.click() })
-  const popover2 = document.body.querySelector<HTMLElement>('.composer-model-popover')
-  const high = [...popover2!.querySelectorAll<HTMLButtonElement>('.segmented-control-btn')]
+  const stayingPopover = document.body.querySelector<HTMLElement>('.composer-model-popover')
+  assert.ok(stayingPopover !== null, 'the model popover stays open after the pick')
+  const high = [...stayingPopover!.querySelectorAll<HTMLButtonElement>('.segmented-control-btn')]
     .find((btn) => btn.textContent?.trim() === 'high')
   assert.ok(high, 'the thinking-level control renders')
   await act(async () => { high!.click() })
@@ -620,9 +622,10 @@ test('model selection restores defaults: after an explicit pick you can still re
   await act(async () => { glm!.click() })
   await settle()
   assert.ok(document.querySelector('button.composer-model-button')?.textContent?.includes('glm-4.6'))
-  await act(async () => { clickButton('button.composer-model-button') })
-  const popover2 = document.body.querySelector<HTMLElement>('.composer-model-popover')
-  const resetBtn = [...popover2!.querySelectorAll<HTMLButtonElement>('button.popover-item')]
+  // The popover stays open after the pick; the restore-default item is reachable directly
+  const stayingPopover = document.body.querySelector<HTMLElement>('.composer-model-popover')
+  assert.ok(stayingPopover !== null, 'the model popover stays open after the pick')
+  const resetBtn = [...stayingPopover!.querySelectorAll<HTMLButtonElement>('button.popover-item')]
     .find((btn) => btn.textContent?.includes('Follow profile default'))
   assert.ok(resetBtn, 'the restore-default item exists')
   assert.equal(resetBtn!.disabled, false, 'after an explicit pick you can still return to following the default')

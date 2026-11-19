@@ -36,11 +36,14 @@ export function ThinkingLevelControl({
   const { t } = useWebLocale()
   if (levels.length === 0) return null
   const safeValue = levels.includes(value) ? value : (levels[0] ?? '')
+  // Single pick channel: the Tabs root onValueChange (mouse clicks route through the SDK
+  // trigger context; keyboard activation goes through the root). A per-trigger onClick would
+  // double-fire onPick for every value-changing click.
   return (
     <Tabs value={safeValue} onValueChange={onPick} variant="segmented" style={{ width: '100%' }}>
       <TabsList className={`segmented-control ${className}`.trim()} aria-label={ariaLabel ?? t('ui.thinking.levelLabel')}>
         {levels.map((level) => (
-          <TabsTrigger key={level} value={level} disabled={disabled} onClick={() => onPick(level)}>
+          <TabsTrigger key={level} value={level} disabled={disabled}>
             {level}
           </TabsTrigger>
         ))}

@@ -318,7 +318,8 @@ test('Ctrl+L: precisely toggles the ModelPicker per data-helmx-panel in split vi
   assert.equal(modelBtns.length, 3)
   assert.equal(modelBtns[1]!.classList.contains('popover-item-active'), true, 'the initial highlight points at the effective model m2')
 
-  // ArrowDown inside the search moves to m3; Enter picks, closes and calls patch
+  // ArrowDown inside the search moves to m3; Enter picks: the patch fires while the popover
+  // STAYS OPEN so m3's thinking level can be adjusted in the same session
   await act(async () => {
     searchInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }))
   })
@@ -329,7 +330,30 @@ test('Ctrl+L: precisely toggles the ModelPicker per data-helmx-panel in split vi
   })
   assert.equal(patched.length, 1)
   assert.deepEqual(patched[0], { id: 2, body: { model: 'faux/m3' } })
-  assert.ok(document.body.querySelector('.composer-model-popover') === null, 'the popover closes after the Enter pick')
+  const stayingPopover = document.body.querySelector<HTMLElement>('.composer-model-popover')
+  assert.ok(stayingPopover !== null, 'the popover stays open after the model pick (level adjustable in the same session)')
+  assert.equal(modelBtns[2]!.getAttribute('aria-current'), 'true', 'the picked row is marked current via the optimistic preview')
+  assert.ok(document.activeElement === searchInput, 'focus stays in the search input for further filtering')
+
+  // The thinking section re-targets the just-picked m3 (levels off/max); picking max patches
+  // the level in the same session, without reopening the picker
+  const maxChip = Array.from(stayingPopover.querySelectorAll<HTMLButtonElement>('.segmented-control-btn'))
+    .find((btn) => btn.textContent?.trim() === 'max')
+  assert.ok(maxChip !== undefined, 'm3 thinking levels render inside the still-open popover')
+  await act(async () => {
+    maxChip!.click()
+  })
+  assert.equal(patched.length, 2)
+  assert.deepEqual(patched[1], { id: 2, body: { thinkingLevel: 'max' } })
+  assert.ok(document.body.querySelector('.composer-model-popover') !== null, 'a level pick keeps the popover open')
+
+  // Clicking the model already shown (optimistic preview) acts as "confirm" and closes; the
+  // focus returns to the current panel Composer textarea
+  await act(async () => {
+    modelBtns[2]!.click()
+  })
+  assert.equal(patched.length, 2, 'the confirm click fires no extra patch')
+  assert.ok(document.body.querySelector('.composer-model-popover') === null, 'clicking the already-shown model closes the picker')
   await waitForCondition(() => document.activeElement === splitTa)
   assert.ok(document.activeElement === splitTa, 'focus returns to the current panel Composer textarea after close')
 
