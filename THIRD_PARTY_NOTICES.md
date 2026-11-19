@@ -74,7 +74,7 @@ SOFTWARE.
 - **来源**：<https://github.com/isaacs/node-tar>
 - **版本**：7.5.23（npm 包 `tar@7.5.23`）
 - **许可**：Blue Oak Model License 1.0.0（原文见 npm 包随附 LICENSE）
-- **用途**：`@helm/hub-launcher` 的 payload staging 用 tar 解包 Hub payload
+- **用途**：`packages/cli/src/launcher` 的 payload staging 用 tar 解包 Hub payload
   tarball（安全边界：仅接受 `package/` 前缀内的常规文件/目录，拒绝链接与
   路径逃逸）。`packages/payload` 组装的 launcher npm 制品
   （`dist-cli/index.js` 单文件 bundle）内联其预打包发布物
