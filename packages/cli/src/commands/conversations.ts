@@ -2,7 +2,7 @@
  * Conversation commands: conversations list/get/create/update/delete/reset/compact/fork,
  * send, abort, and events watch. create/update support --node <nodeId> to bind a compute node.
  */
-import type { ConversationSummary } from '@helmx/protocol'
+import type { ConversationStatus, ConversationSummary, ConversationDeletedEvent, ConversationUpsertEvent } from '@helmx/protocol'
 import { CliError } from '../errors.js'
 import { flagValue, parseFlags, type FlagSpec } from '../args.js'
 import type { CommandContext, CommandSpec } from './shared.js'
@@ -559,7 +559,188 @@ export function conversationsCommands(): CommandSpec[] {
     },
   })
 
+  // ---- conversations watch (block until the current turn settles) ----
+  cmds.push({
+    path: ['conversations', 'watch'],
+    description:
+      'Watch a conversation until its current turn settles (global SSE filtered by id; exit 0 on done/idle, 1 on error, 124 on --timeout)',
+    flags: [
+      ...convFlags,
+      { name: 'timeout', type: 'number', help: 'give up after this many milliseconds and exit 124' },
+      { name: 'quiet', type: 'boolean', help: 'print only the final result line (scripting)' },
+    ],
+    positional: '[id]',
+    async run(ctx: CommandContext) {
+      const parsed = parseFlags(
+        [
+          { name: 'current', type: 'boolean' },
+          { name: 'timeout', type: 'number' },
+          { name: 'quiet', type: 'boolean' },
+        ],
+        ctx.args,
+      )
+      const id = resolveConversationTarget(parsed.flags, parsed.positionals[0], ctx.env)
+      assertNoExtraPositionals(parsed.positionals, 1)
+      const timeoutMs = flagValue<number>(parsed.flags, 'timeout')
+      if (timeoutMs !== undefined && (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0)) {
+        throw new CliError(`--timeout must be a positive integer (milliseconds), got "${timeoutMs}"`, 'invalid_flag_value')
+      }
+      const quiet = parsed.flags.get('quiet') === true
+      const hub = await ctx.hub()
+
+      const startedAt = Date.now()
+      const controller = new AbortController()
+      let timedOut = false
+      let cancelled = false
+      const onSignal = () => {
+        cancelled = true
+        controller.abort()
+      }
+      process.once('SIGINT', onSignal)
+      process.once('SIGTERM', onSignal)
+      const timer =
+        timeoutMs !== undefined
+          ? setTimeout(() => {
+              timedOut = true
+              controller.abort()
+            }, timeoutMs)
+          : undefined
+      timer?.unref?.()
+
+      let snapshotSeen = false
+      let missing = false
+      let deleted = false
+      let settled: ConversationStatus | undefined
+      let lastStatus: ConversationStatus | undefined
+      let lastDoing: string | undefined
+      let summary: ConversationSummary | undefined
+
+      const progress = (text: string, jsonValue: Record<string, unknown>): void => {
+        if (quiet) return
+        if (ctx.json) ctx.io.out(`${JSON.stringify(jsonValue)}\n`)
+        else ctx.io.out(`${text}\n`)
+      }
+      const applySummary = (next: ConversationSummary): void => {
+        summary = next
+        if (next.status !== lastStatus) {
+          const from = lastStatus
+          lastStatus = next.status
+          if (from === undefined) {
+            progress(`watching #${next.id} ${next.title} (${next.status})`, { type: 'watch', conversation: next })
+          } else {
+            progress(`[${clock(new Date())}] status: ${from} -> ${next.status}`, { type: 'status', conversationId: next.id, status: next.status })
+          }
+        }
+        if (next.doing !== lastDoing) {
+          lastDoing = next.doing
+          if (next.doing) progress(`  doing: ${next.doing}`, { type: 'doing', conversationId: next.id, doing: next.doing })
+        }
+        if (WATCH_SETTLED_STATUSES.has(next.status)) {
+          settled = next.status
+          controller.abort()
+        }
+      }
+
+      try {
+        await hub.streamEvents({
+          signal: controller.signal,
+          onFrame: ({ event, data }) => {
+            let payload: unknown
+            try {
+              payload = JSON.parse(data)
+            } catch {
+              ctx.io.err(`helmx: ignoring non-JSON SSE frame (${data.slice(0, 120)})\n`)
+              return
+            }
+            if (settled !== undefined || deleted || missing) return
+            if (event === 'snapshot') {
+              snapshotSeen = true
+              const snap = payload as { conversations?: unknown }
+              const found = Array.isArray(snap.conversations)
+                ? (snap.conversations as ConversationSummary[]).find((c) => c?.id === id)
+                : undefined
+              if (!found) {
+                missing = true
+                controller.abort()
+                return
+              }
+              applySummary(found)
+              return
+            }
+            const inner = (payload as { event?: { type?: string } }).event
+            if (inner?.type === 'conversation.upsert') {
+              const conversation = (inner as unknown as ConversationUpsertEvent).conversation
+              if (conversation && conversation.id === id) applySummary(conversation)
+              return
+            }
+            if (inner?.type === 'conversation.deleted') {
+              if ((inner as unknown as ConversationDeletedEvent).conversationId === id) {
+                deleted = true
+                controller.abort()
+              }
+            }
+          },
+        })
+      } catch (err) {
+        // Settle/timeout/signal aborts surface as 'aborted'; anything else is a real failure and propagates
+        if (!(err instanceof CliError && err.code === 'aborted')) throw err
+      } finally {
+        if (timer !== undefined) clearTimeout(timer)
+        process.off('SIGINT', onSignal)
+        process.off('SIGTERM', onSignal)
+      }
+
+      if (cancelled) return 0
+      if (deleted) {
+        throw new CliError(`conversation #${id} was deleted while watching`, 'conversation_deleted')
+      }
+      if (!snapshotSeen) {
+        if (timedOut) throw new CliError(`conversation #${id} did not settle within ${timeoutMs}ms (no snapshot received)`, 'watch_timeout', 124)
+        throw new CliError('event stream ended before the snapshot frame arrived', 'stream_closed')
+      }
+      if (missing) {
+        throw new CliError(`conversation #${id} not found in the snapshot (it may have been deleted already)`, 'conversation_not_found')
+      }
+      if (settled === undefined) {
+        const doingSuffix = lastDoing ? `, doing: ${lastDoing}` : ''
+        if (timedOut) {
+          throw new CliError(`conversation #${id} did not settle within ${timeoutMs}ms (last status: ${lastStatus ?? '?'}${doingSuffix})`, 'watch_timeout', 124)
+        }
+        throw new CliError(`event stream ended before conversation #${id} settled (last status: ${lastStatus ?? '?'})`, 'stream_closed')
+      }
+
+      // Settled: the final line is always printed (even with --quiet) so scripted consumers keep the outcome.
+      const elapsedMs = Date.now() - startedAt
+      if (ctx.json) {
+        const result: Record<string, unknown> = { type: 'result', conversationId: id, status: settled, elapsedMs }
+        if (settled === 'error' && summary?.lastError !== undefined) result.lastError = summary.lastError
+        ctx.io.out(`${JSON.stringify(result)}\n`)
+      } else {
+        const errorSuffix = settled === 'error' && summary?.lastError ? ` — ${summary.lastError}` : ''
+        ctx.io.out(`#${id} ${summary?.title ?? ''} settled: ${settled}${errorSuffix} (in ${formatDuration(elapsedMs)})\n`)
+      }
+      return settled === 'error' ? 1 : 0
+    },
+  })
+
   return cmds
+}
+
+/** Turn-terminal statuses for `conversations watch`: blocked keeps waiting (an Ask may still resolve it). */
+const WATCH_SETTLED_STATUSES = new Set<ConversationStatus>(['done', 'idle', 'error'])
+
+/** Local wall-clock time as HH:MM:SS (display-only progress prefix). */
+function clock(date: Date): string {
+  return date.toTimeString().slice(0, 8)
+}
+
+/** Compact human duration (1s / 4m32s / 2h07m). */
+function formatDuration(ms: number): string {
+  const totalSeconds = Math.max(1, Math.round(ms / 1000))
+  if (totalSeconds < 60) return `${totalSeconds}s`
+  const minutes = Math.floor(totalSeconds / 60)
+  if (minutes < 60) return `${minutes}m${totalSeconds % 60}s`
+  return `${Math.floor(minutes / 60)}h${minutes % 60}m`
 }
 
 /** Concatenate assistant reply text blocks from ConversationInputResult.entry.model. */

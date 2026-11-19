@@ -80,6 +80,7 @@ export const CORE_CLI_COMMAND_PATHS = [
   'conversations reset',
   'conversations compact',
   'conversations fork',
+  'conversations watch',
   'ask',
   'send',
   'conversations withdraw',

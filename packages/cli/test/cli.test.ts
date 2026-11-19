@@ -672,6 +672,128 @@ test('events watch: SSE snapshot + deltas, --json emits one line per event', { t
   assert.match(human.out, /notification/)
 })
 
+test('conversations watch: settles via SSE upserts; --json NDJSON frames; --quiet prints only the final line', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helmx-cli-test-')
+  const conv = makeConversationSummary({ id: 7, title: 'deploy', status: 'working' })
+  const upsert = (seq: number, patch: Record<string, unknown>) =>
+    `event: conversation.upsert\ndata: ${JSON.stringify({ seq, event: { type: 'conversation.upsert', conversation: { ...conv, ...patch } } })}\n\n`
+  const hub = await startMockHub(
+    {
+      'GET /api/events': (_body, _req, res) => {
+        res.writeHead(200, { 'content-type': 'text/event-stream' })
+        res.write(`event: snapshot\ndata: ${JSON.stringify({ bootId: 'b1', seq: 5, conversations: [conv], pendingAsks: [], plugins: [] })}\n\n`)
+        res.write(upsert(6, { doing: 'bash: pnpm test' }))
+        res.write(upsert(7, { status: 'blocked' }))
+        res.write(upsert(8, { status: 'done', unread: true, doing: undefined }))
+        res.end()
+        return null
+      },
+    },
+    { autoRegisterCleanup: t },
+  )
+  const env = makeCliEnv(hub.url, dir)
+
+  const human = await runCliCaptured(['conversations', 'watch', '7'], env)
+  assert.equal(human.code, 0, human.err)
+  assert.match(human.out, /watching #7 deploy \(working\)/)
+  assert.match(human.out, /doing: bash: pnpm test/)
+  assert.match(human.out, /status: working -> blocked/)
+  assert.match(human.out, /status: blocked -> done/)
+  assert.match(human.out, /settled: done/)
+
+  const json = await runCliCaptured(['conversations', 'watch', '7', '--json'], env)
+  assert.equal(json.code, 0, json.err)
+  const lines = json.out.trim().split('\n').map((l) => JSON.parse(l) as Record<string, unknown>)
+  assert.equal(lines[0]?.['type'], 'watch')
+  assert.deepEqual(lines[1], { type: 'doing', conversationId: 7, doing: 'bash: pnpm test' })
+  assert.deepEqual(lines[2], { type: 'status', conversationId: 7, status: 'blocked' })
+  assert.deepEqual(lines[3], { type: 'status', conversationId: 7, status: 'done' })
+  const result = lines.at(-1) as Record<string, unknown>
+  assert.equal(result['type'], 'result')
+  assert.equal(result['status'], 'done')
+
+  const quiet = await runCliCaptured(['conversations', 'watch', '7', '--quiet'], env)
+  assert.equal(quiet.code, 0, quiet.err)
+  assert.equal(quiet.out.trim().split('\n').length, 1)
+  assert.match(quiet.out, /settled: done/)
+})
+
+test('conversations watch: error settle exits 1, not-found, stream_closed, and --timeout exits 124', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helmx-cli-test-')
+  const conv = makeConversationSummary({ id: 9, title: 'boom', status: 'working' })
+  const snapshot = `event: snapshot\ndata: ${JSON.stringify({ bootId: 'b1', seq: 5, conversations: [conv], pendingAsks: [], plugins: [] })}\n\n`
+  const hub = await startMockHub(
+    {
+      'GET /api/events': (_body, _req, res) => {
+        res.writeHead(200, { 'content-type': 'text/event-stream' })
+        res.write(snapshot)
+        res.write(`event: conversation.upsert\ndata: ${JSON.stringify({ seq: 6, event: { type: 'conversation.upsert', conversation: { ...conv, status: 'error', lastError: 'model_error: boom' } } })}\n\n`)
+        res.end()
+        return null
+      },
+    },
+    { autoRegisterCleanup: t },
+  )
+  const env = makeCliEnv(hub.url, dir)
+
+  const failed = await runCliCaptured(['conversations', 'watch', '9'], env)
+  assert.equal(failed.code, 1)
+  assert.match(failed.out, /settled: error — model_error: boom/)
+
+  const jsonFailed = await runCliCaptured(['conversations', 'watch', '9', '--json', '--quiet'], env)
+  assert.equal(jsonFailed.code, 1)
+  const result = JSON.parse(jsonFailed.out.trim()) as Record<string, unknown>
+  assert.equal(result['type'], 'result')
+  assert.equal(result['status'], 'error')
+  assert.equal(result['lastError'], 'model_error: boom')
+
+  // Missing from the snapshot: explicit not-found, never fabricate a wait.
+  const missing = await runCliCaptured(['conversations', 'watch', '404', '--json'], env)
+  assert.equal(missing.code, 1)
+  assert.equal(parseCliError(missing).code, 'conversation_not_found')
+
+  // Stream ends mid-turn without settle: explicit stream_closed.
+  const closed = await startMockHub(
+    {
+      'GET /api/events': (_body, _req, res) => {
+        res.writeHead(200, { 'content-type': 'text/event-stream' })
+        res.write(snapshot)
+        res.end()
+        return null
+      },
+    },
+    { autoRegisterCleanup: t },
+  )
+  const cut = await runCliCaptured(['conversations', 'watch', '9', '--json'], makeCliEnv(closed.url, dir))
+  assert.equal(cut.code, 1)
+  assert.equal(parseCliError(cut).code, 'stream_closed')
+
+  // --timeout with a stream that never settles: give up with exit 124 (coreutils convention).
+  const stalled = await startMockHub(
+    {
+      'GET /api/events': (_body, _req, res) => {
+        res.writeHead(200, { 'content-type': 'text/event-stream' })
+        res.on('error', () => {})
+        res.write(snapshot)
+        // Bounded safety end: the CLI aborts at its --timeout well before this fires; ending the
+        // response also guarantees server.close() completes in cleanup.
+        const endTimer = setTimeout(() => res.end(), 5_000)
+        endTimer.unref?.()
+        return null
+      },
+    },
+    { autoRegisterCleanup: t },
+  )
+  const timed = await runCliCaptured(['conversations', 'watch', '9', '--timeout', '150', '--json'], makeCliEnv(stalled.url, dir))
+  assert.equal(timed.code, 124)
+  assert.equal(parseCliError(timed).code, 'watch_timeout')
+
+  // Invalid --timeout is rejected client-side.
+  const badTimeout = await runCliCaptured(['conversations', 'watch', '9', '--timeout', '0', '--json'], env)
+  assert.equal(badTimeout.code, 1)
+  assert.equal(parseCliError(badTimeout).code, 'invalid_flag_value')
+})
+
 test('hub unreachable and 401 suggest login', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helmx-cli-test-')
   const unreachable = await runCliCaptured(['conversations', 'list', '--json'], makeCliEnv('http://127.0.0.1:1', dir, { HELMX_TOKEN: 'x' }))
