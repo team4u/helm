@@ -25,7 +25,7 @@ export const meta = {
 变量、函数调用、扩展运算符、模板插值（`${...}`）都是非法的，违规声明会在求值时抛错并拒绝执行。动态输入经全局 `args` 访问，CLI 传入的 JSON 字符串会被自动解包（最多两层，防模型双重序列化）：
 
 ```bash
-pnpm helmx workflows run ./review.js --args '{"pr": 1024, "strict": true}'
+pnpm helmx workflows run ./review.js --args '{"pr": 1024, "strict": true}' --conversation-id 1
 ```
 
 最小可运行示例见仓库 [`demo/hello-orchestra.workflow.js`](../../demo/hello-orchestra.workflow.js)（并行两路翻译 + 汇总）；进阶示例见 [`docs/workflows/examples/`](examples/)（`cross-review.js` 多视角交叉审查、`module-dev.js` 单模块开发、`arch-master.js` 多模块总控）。
