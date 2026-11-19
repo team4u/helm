@@ -9,6 +9,7 @@
 | 安装 Hub、添加模型、连接节点或用 Docker 部署 | [安装与配置](getting-started/installation.md) |
 | 让几个助手一起改代码、互相审查 | [Swarm 实战与编排选型](getting-started/orchestration-guide.md) |
 | 用 JavaScript 跑一次并行任务 | [第一个工作流](getting-started/first-workflow.md) |
+| 把聊好的需求派出去，按项目查看进度和验收 | [从对话创建任务](getting-started/orchestration-guide.md#把聊好的需求交给独立执行会话) |
 | 查命令和参数 | [CLI 命令参考](cli/reference.md) |
 
 ## 工作流参考
